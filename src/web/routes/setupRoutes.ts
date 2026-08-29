@@ -16,6 +16,9 @@ import { join, dirname, sep } from 'node:path';
 import { homedir, platform, tmpdir } from 'node:os';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
+// Integration resolves the package root via PackageResourceLocator rather than
+// import.meta.url/__dirname (#2339 must not reintroduce cwd/module-URL path
+// assumptions). sep/tmpdir are used by the NVM launcher self-heal below.
 const _locator = new PackageResourceLocator();
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -51,11 +54,14 @@ function isMissingPathError(error: unknown): boolean {
 // Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
 const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 const LICENSE_WORKER_DIRECT_PATH = '/direct-verification';
+const CLAUDE_CODE_CLIENT_ID = 'claude-code';
+const GEMINI_CLI_CLIENT_ID = 'gemini-cli';
+const DOLLHOUSE_HOME_DIRECTORY = '.dollhouse';
 
 /** Supported client identifiers for one-click setup. */
 const ALLOWED_CLIENTS = new Set([
   'claude',
-  'claude-code',
+  CLAUDE_CODE_CLIENT_ID,
   'cursor',
   'vscode',
   'cline',
@@ -63,7 +69,7 @@ const ALLOWED_CLIENTS = new Set([
   'windsurf',
   'witsy',
   'enconvo',
-  'gemini-cli',
+  GEMINI_CLI_CLIENT_ID,
   'goose',
   'zed',
   'warp',
@@ -73,13 +79,13 @@ const ALLOWED_CLIENTS = new Set([
 
 type ConfigPathClient =
   | 'claude'
-  | 'claude-code'
+  | typeof CLAUDE_CODE_CLIENT_ID
   | 'cursor'
   | 'vscode'
   | 'windsurf'
   | 'cline'
   | 'lmstudio'
-  | 'gemini-cli'
+  | typeof GEMINI_CLI_CLIENT_ID
   | 'codex';
 
 type SetupSupportLevel =
@@ -90,12 +96,12 @@ type SetupSupportLevel =
 
 const SETUP_SUPPORT_LEVELS: Record<string, SetupSupportLevel> = {
   'claude': 'unsupported',
-  'claude-code': 'full_native',
+  [CLAUDE_CODE_CLIENT_ID]: 'full_native',
   'cursor': 'partial_native',
   'cline': 'mcp_only',
   'windsurf': 'partial_native',
   'lmstudio': 'mcp_only',
-  'gemini-cli': 'partial_native',
+  [GEMINI_CLI_CLIENT_ID]: 'partial_native',
   'codex': 'partial_native',
 };
 
@@ -119,13 +125,13 @@ const installLimiter = new SlidingWindowRateLimiter(5, 60_000);
 function getConfigPath(client: string, home = homedir()): string | null {
   const plat = platform();
 
-  const paths: Record<ConfigPathClient, () => string | null> = {
+  const paths: Partial<Record<ConfigPathClient, () => string | null>> = {
     'claude': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
       if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
       return join(home, '.config', 'Claude', 'claude_desktop_config.json');
     },
-    'claude-code': () => join(home, '.claude.json'),
+    [CLAUDE_CODE_CLIENT_ID]: () => join(home, '.claude.json'),
     'cursor': () => join(home, '.cursor', 'mcp.json'),
     'vscode': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
@@ -139,7 +145,7 @@ function getConfigPath(client: string, home = homedir()): string | null {
       return join(home, '.config', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
     },
     'lmstudio': () => join(home, '.lmstudio', 'mcp.json'),
-    'gemini-cli': () => join(home, '.gemini', 'settings.json'),
+    [GEMINI_CLI_CLIENT_ID]: () => join(home, '.gemini', 'settings.json'),
     'codex': () => join(home, '.codex', 'config.toml'),
   };
 
@@ -179,7 +185,7 @@ function openInEditor(filePath: string): Promise<string> {
 
 /** Clients whose config files we can locate and open */
 const OPENABLE_CLIENTS = new Set([
-  'claude', 'claude-code', 'cursor', 'cline', 'windsurf', 'lmstudio', 'gemini-cli', 'codex',
+  'claude', CLAUDE_CODE_CLIENT_ID, 'cursor', 'cline', 'windsurf', 'lmstudio', GEMINI_CLI_CLIENT_ID, 'codex',
 ]);
 
 /**
@@ -456,12 +462,12 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
   });
   let installId: string;
   try {
-    const idPath = join(homedir(), '.dollhouse', '.telemetry-id');
+    const idPath = join(homedir(), DOLLHOUSE_HOME_DIRECTORY, '.telemetry-id');
     installId = (await readFile(idPath, 'utf-8')).trim();
   } catch {
     installId = uuidv4();
   }
-  const eventType = (licenseData.eventType as string) ?? 'activation';
+  const eventType = typeof licenseData.eventType === 'string' ? licenseData.eventType : 'activation';
   posthog.capture({
     distinctId: installId,
     event: 'license_activation',
@@ -616,13 +622,13 @@ export function createSetupRoutes(opts?: {
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
     const clients = [
       { id: 'claude', name: 'Claude Desktop' },
-      { id: 'claude-code', name: 'Claude Code' },
+      { id: CLAUDE_CODE_CLIENT_ID, name: 'Claude Code' },
       { id: 'cursor', name: 'Cursor' },
       { id: 'vscode', name: 'VS Code' },
       { id: 'cline', name: 'Cline' },
       { id: 'windsurf', name: 'Windsurf' },
       { id: 'lmstudio', name: 'LM Studio' },
-      { id: 'gemini-cli', name: 'Gemini CLI' },
+      { id: GEMINI_CLI_CLIENT_ID, name: 'Gemini CLI' },
       { id: 'codex', name: 'Codex' },
     ];
 
@@ -635,7 +641,7 @@ export function createSetupRoutes(opts?: {
           support: { level: SETUP_SUPPORT_LEVELS[id] },
           ...detection,
         };
-        if (id === 'claude-code' || id === 'cursor' || id === 'vscode' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
+        if (id === CLAUDE_CODE_CLIENT_ID || id === 'cursor' || id === 'vscode' || id === 'windsurf' || id === GEMINI_CLI_CLIENT_ID || id === 'codex') {
           const hookStatus = await hookStatusReconciler(id);
           result.hookInstalled = hookStatus.installed;
           result.hookAssetsPrepared = hookStatus.assetsPrepared;
@@ -799,7 +805,7 @@ export function createSetupRoutes(opts?: {
   };
 
   // ── License selection ────────────────────────────────────────────────
-  const licenseConfigPath = join(homedir(), '.dollhouse', 'license.json');
+  const licenseConfigPath = join(homedir(), DOLLHOUSE_HOME_DIRECTORY, 'license.json');
 
   async function readLicense(): Promise<Record<string, unknown>> {
     try {
@@ -811,7 +817,7 @@ export function createSetupRoutes(opts?: {
   }
 
   async function writeLicense(data: Record<string, unknown>): Promise<void> {
-    const dir = join(homedir(), '.dollhouse');
+    const dir = join(homedir(), DOLLHOUSE_HOME_DIRECTORY);
     await mkdir(dir, { recursive: true });
     await writeFile(licenseConfigPath, JSON.stringify(data, null, 2), { mode: 0o600 });
   }
@@ -944,7 +950,9 @@ export function createSetupRoutes(opts?: {
     }
 
     // Check max attempts
-    const attempts = ((license.verificationAttempts as number) ?? 0) + 1;
+    const attempts = (typeof license.verificationAttempts === 'number'
+      ? license.verificationAttempts
+      : 0) + 1;
     if (attempts > VERIFICATION_MAX_ATTEMPTS) {
       license.status = 'expired';
       await writeLicense(license);
@@ -972,7 +980,7 @@ export function createSetupRoutes(opts?: {
     const verifiedAt = new Date().toISOString();
     const requestedAt = license.verificationRequestedAt as string | undefined;
     const timeToVerifyMs = requestedAt ? Date.now() - new Date(requestedAt).getTime() : undefined;
-    const attemptsUsed = ((license.verificationAttempts as number) ?? 0) + 1;
+    const attemptsUsed = attempts;
 
     license.status = 'active';
     license.verifiedAt = verifiedAt;
@@ -1076,7 +1084,7 @@ function captureInstallAnalytics(event: string, properties: Record<string, unkno
     flushAt: 1,
     flushInterval: 5000,
   });
-  readFile(join(homedir(), '.dollhouse', '.telemetry-id'), 'utf-8')
+  readFile(join(homedir(), DOLLHOUSE_HOME_DIRECTORY, '.telemetry-id'), 'utf-8')
     .then(id => id.trim())
     .catch(() => 'anonymous')
     .then(installId => {
@@ -1109,7 +1117,7 @@ export type NvmLauncherResult = 'applied' | 'not-applicable' | 'failed';
  * excluded because its config is TOML, which patchConfigForNvmLauncher skips.
  */
 const JSON_FORMAT_CLIENTS = [
-  'claude', 'claude-code', 'cursor', 'vscode', 'cline', 'windsurf', 'lmstudio', 'gemini-cli',
+  'claude', CLAUDE_CODE_CLIENT_ID, 'cursor', 'vscode', 'cline', 'windsurf', 'lmstudio', GEMINI_CLI_CLIENT_ID,
 ] as const;
 
 /**
@@ -1348,7 +1356,7 @@ function resolveNvmDir(home = homedir()): string {
  * @param nvmDirOverride - Override the resolved NVM path (injectable for tests)
  */
 export async function ensureNvmLauncher(home = homedir(), nvmDirOverride?: string): Promise<string> {
-  const binDir = join(home, '.dollhouse', 'bin');
+  const binDir = join(home, DOLLHOUSE_HOME_DIRECTORY, 'bin');
   const wrapperPath = join(binDir, 'dollhousemcp-nvm.sh');
   const nvmDir = nvmDirOverride ?? resolveNvmDir(home);
 

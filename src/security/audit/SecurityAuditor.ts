@@ -20,13 +20,30 @@ import { MarkdownReporter } from './reporters/MarkdownReporter.js';
 import { JsonReporter } from './reporters/JsonReporter.js';
 import { shouldSuppress } from './config/suppressions.js';
 import { ErrorHandler } from '../../utils/ErrorHandler.js';
-import * as path from 'path';
-import { IFileOperationsService } from '../../services/FileOperationsService.js';
+import * as path from 'node:path';
+import type { IFileOperationsService } from '../../services/FileOperationsService.js';
+
+function logLevelForSeverity(severity: SeverityLevel): 'error' | 'warn' | 'info' {
+  if (severity === 'critical' || severity === 'high') return 'error';
+  if (severity === 'medium') return 'warn';
+  return 'info';
+}
+
+interface SuppressionDecision {
+  suppressed: boolean;
+  reason?: string;
+}
+
+interface SuppressedFinding {
+  rule: string;
+  file?: string;
+  reason?: string;
+}
 
 export class SecurityAuditor {
-  private config: SecurityAuditConfig;
-  private scanners: SecurityScanner[] = [];
-  private suppressions: Map<string, Set<string>> = new Map();
+  private readonly config: SecurityAuditConfig;
+  private readonly scanners: SecurityScanner[] = [];
+  private readonly suppressions: Map<string, Set<string>> = new Map();
   private readonly fileOperations: IFileOperationsService;
   private logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
 
@@ -69,10 +86,12 @@ export class SecurityAuditor {
 
     for (const suppression of this.config.suppressions) {
       const key = suppression.file || '*';
-      if (!this.suppressions.has(key)) {
-        this.suppressions.set(key, new Set());
+      let suppressedRules = this.suppressions.get(key);
+      if (!suppressedRules) {
+        suppressedRules = new Set();
+        this.suppressions.set(key, suppressedRules);
       }
-      this.suppressions.get(key)!.add(suppression.rule);
+      suppressedRules.add(suppression.rule);
     }
   }
 
@@ -116,8 +135,7 @@ export class SecurityAuditor {
 
     // Notify listener per finding
     for (const finding of allFindings) {
-      const findingLevel = finding.severity === 'critical' || finding.severity === 'high' ? 'error'
-        : finding.severity === 'medium' ? 'warn' : 'info';
+      const findingLevel = logLevelForSeverity(finding.severity);
       this.logListener?.(findingLevel, finding.message, {
         ruleId: finding.ruleId,
         severity: finding.severity,
@@ -146,89 +164,81 @@ export class SecurityAuditor {
    * Filter out suppressed findings
    */
   private filterSuppressions(findings: SecurityFinding[]): SecurityFinding[] {
-    const suppressedFindings: Array<{rule: string; file?: string; reason?: string}> = [];
-    
-    const filtered = findings.filter(finding => {
-      try {
-        // Check comprehensive suppressions (includes both file-based and pattern-based)
-        if (shouldSuppress(finding.ruleId, finding.file)) {
-          // Log suppression for audit trail if verbose mode is enabled
-          if (this.config.reporting?.verbose) {
-            suppressedFindings.push({
-              rule: finding.ruleId,
-              file: finding.file
-            });
-          }
-          return false;
-        }
-        
-        // Check legacy config-based suppressions if they exist
-        // This maintains backward compatibility with existing configs
-        if (this.config.suppressions && this.config.suppressions.length > 0) {
-          const globalSuppressions = this.suppressions.get('*');
-          if (globalSuppressions?.has(finding.ruleId)) {
-            if (this.config.reporting?.verbose) {
-              suppressedFindings.push({
-                rule: finding.ruleId,
-                file: finding.file,
-                reason: 'Config-based global suppression'
-              });
-            }
-            return false;
-          }
-
-          if (finding.file) {
-            const fileSuppressions = this.suppressions.get(finding.file);
-            if (fileSuppressions?.has(finding.ruleId) || this.matchesConfiguredSuppression(finding)) {
-              if (this.config.reporting?.verbose) {
-                suppressedFindings.push({
-                  rule: finding.ruleId,
-                  file: finding.file,
-                  reason: 'Config-based file suppression'
-                });
-              }
-              return false;
-            }
-          }
-        }
-
-        return true;
-      } catch (error) {
-        // If suppression check fails, log error but don't suppress the finding
-        ErrorHandler.logError('SecurityAuditor.applySuppression', error, { 
-          ruleId: finding.ruleId, 
-          file: finding.file 
-        });
-        return true;
-      }
-    });
+    const suppressedFindings: SuppressedFinding[] = [];
+    const filtered = findings.filter(finding =>
+      this.shouldRetainFinding(finding, suppressedFindings)
+    );
     
     // Log suppression summary if verbose and suppressions were applied
-    if (this.config.reporting?.verbose && suppressedFindings.length > 0) {
+    if (this.config.reporting.verbose && suppressedFindings.length > 0) {
       logger.debug(`SecurityAuditor: Suppressed ${suppressedFindings.length} findings:`);
       suppressedFindings.forEach(s => {
-        logger.debug(`  - ${s.rule} in ${s.file || 'global'}${s.reason ? ` (${s.reason})` : ''}`);
+        const reasonSuffix = s.reason ? ` (${s.reason})` : '';
+        logger.debug(`  - ${s.rule} in ${s.file || 'global'}${reasonSuffix}`);
       });
     }
     
     return filtered;
   }
 
+  private shouldRetainFinding(
+    finding: SecurityFinding,
+    suppressedFindings: SuppressedFinding[]
+  ): boolean {
+    try {
+      const decision = this.getSuppressionDecision(finding);
+      if (!decision.suppressed) return true;
+
+      if (this.config.reporting.verbose) {
+        suppressedFindings.push({
+          rule: finding.ruleId,
+          file: finding.file,
+          reason: decision.reason
+        });
+      }
+      return false;
+    } catch (error) {
+      // If suppression check fails, log error but don't suppress the finding
+      ErrorHandler.logError('SecurityAuditor.applySuppression', error, {
+        ruleId: finding.ruleId,
+        file: finding.file
+      });
+      return true;
+    }
+  }
+
+  private getSuppressionDecision(finding: SecurityFinding): SuppressionDecision {
+    // Check comprehensive suppressions (includes both file-based and pattern-based)
+    if (shouldSuppress(finding.ruleId, finding.file)) {
+      return { suppressed: true };
+    }
+
+    // Check legacy config-based suppressions if they exist. This maintains backward compatibility.
+    if (!this.config.suppressions?.length) return { suppressed: false };
+
+    const globalSuppressions = this.suppressions.get('*');
+    if (globalSuppressions?.has(finding.ruleId)) {
+      return { suppressed: true, reason: 'Config-based global suppression' };
+    }
+
+    if (!finding.file) return { suppressed: false };
+    const fileSuppressions = this.suppressions.get(finding.file);
+    const suppressedForFile = fileSuppressions?.has(finding.ruleId)
+      || this.matchesConfiguredSuppression(finding);
+    return suppressedForFile
+      ? { suppressed: true, reason: 'Config-based file suppression' }
+      : { suppressed: false };
+  }
+
   private matchesConfiguredSuppression(finding: SecurityFinding): boolean {
     if (!finding.file || !this.config.suppressions?.length) return false;
+    const findingFile = finding.file;
 
-    for (const suppression of this.config.suppressions) {
-      if (suppression.rule !== '*' && suppression.rule !== finding.ruleId) {
-        continue;
-      }
-      if (!suppression.file) {
-        return true;
-      }
-      if (configuredSuppressionFileMatches(suppression.file, finding.file)) {
-        return true;
-      }
-    }
-    return false;
+    return this.config.suppressions.some(suppression => {
+      if (suppression.rule !== '*' && suppression.rule !== finding.ruleId) return false;
+      if (!suppression.file) return true;
+      return configuredSuppressionFileMatches(suppression.file, findingFile);
+    });
   }
 
   /**
@@ -289,7 +299,7 @@ export class SecurityAuditor {
 
           case 'markdown': {
             const markdownReporter = new MarkdownReporter(result);
-            const mdReport = markdownReporter.generate() as string;
+            const mdReport = markdownReporter.generate();
             await this.fileOperations.writeFile('security-audit-report.md', mdReport, {
               source: 'SecurityAuditor.generateReports'
             });
@@ -304,8 +314,10 @@ export class SecurityAuditor {
             });
             break;
           }
-            
-          // SARIF format would be implemented similarly
+
+          case 'sarif':
+            // Reserved configuration value; no reporter exists yet.
+            break;
         }
       } catch (error) {
         ErrorHandler.logError('SecurityAuditor.generateReports', error, { format });
@@ -370,7 +382,14 @@ export class SecurityAuditor {
         code: {
           enabled: true,
           rules: ['OWASP-Top-10', 'CWE-Top-25', 'DollhouseMCP-Security'],
-          exclude: ['**/node_modules/**', '**/dist/**', '**/coverage/**']
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/coverage/**',
+            'src/web-console/ui/vendor/purify.min.js',
+            'src/web-console/ui/vendor/marked.min.js',
+            'src/web-console/ui/vendor/js-yaml.min.js'
+          ]
         },
         dependencies: {
           enabled: true,

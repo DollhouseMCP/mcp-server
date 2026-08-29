@@ -76,12 +76,12 @@ export class ElementValidation {
    * Validate and sanitize a description field
    *
    * @param description - Raw description value
-   * @param maxLength - Maximum length (default: YAML/frontmatter limit)
+   * @param maxLength - Maximum length (default: frontmatter-aware description limit)
    * @returns Sanitized description or undefined
    */
   static validateDescription(
     description: any,
-    maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH
+    maxLength: number = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
   ): string | undefined {
     if (!description) {
       return undefined;
@@ -133,7 +133,7 @@ export class ElementValidation {
     return tags
       .filter(tag => tag !== null && tag !== undefined && tag !== '') // Filter out null/undefined/empty BEFORE converting
       .map(tag => sanitizeInput(String(tag), VALIDATION_CONSTANTS.MAX_TAG_LENGTH))
-      .filter((tag): tag is string => tag !== null && tag.length > 0);
+      .filter(tag => tag.length > 0);
   }
 
   /**
@@ -296,13 +296,13 @@ export class ElementValidation {
   ): number {
     // Reject null/undefined explicitly
     if (value === null || value === undefined) {
-      throw new Error(`Invalid number: ${value}`);
+      throw new TypeError(`Invalid number: ${value}`);
     }
 
     const num = Number(value);
 
-    if (isNaN(num)) {
-      throw new Error(`Invalid number: ${value}`);
+    if (Number.isNaN(num)) {
+      throw new TypeError(`Invalid number: ${value}`);
     }
 
     if (num < min || num > max) {

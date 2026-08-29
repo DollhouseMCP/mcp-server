@@ -7,22 +7,27 @@ import {
   cloneBuffer,
   cloneDate,
 } from './ConsoleStoreValidation.js';
-import type { UserIntegrationProvider } from '../../database/schema/webConsole.js';
+import type {
+  UserIntegrationProvider,
+  UserIntegrationStatus,
+  UserIntegrationErrorReason,
+} from '../../database/schema/webConsole.js';
 
-export type { UserIntegrationProvider };
+// The schema layer is the single source of truth for these persisted integration
+// domain types (the user_integrations column is annotated with them). Re-exported
+// here so store-layer consumers keep a stable import site.
+export type {
+  UserIntegrationProvider,
+  UserIntegrationStatus,
+  UserIntegrationErrorReason,
+};
 export const GITHUB_USER_INTEGRATION_PROVIDER = 'github' as const;
-export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
-export type UserIntegrationErrorReason =
-  | 'token_exchange_failed'
-  | 'token_refresh_failed'
-  | 'revocation_failed'
-  | 'scope_denied'
-  | 'provider_unavailable';
 
 export interface UserIntegrationRecord {
   readonly id: string;
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId?: string | null;
   readonly externalAccountLabel: string | null;
   readonly externalInstallationId: string | null;
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
@@ -36,6 +41,34 @@ export interface UserIntegrationRecord {
   readonly revokedAt: Date | null;
 }
 
+/**
+ * A record is usable only if it is connected AND not revoked. Shared so the
+ * gateway, remote-MCP bridge, and operation catalog apply the same predicate —
+ * a revoked-but-stale record (status still 'connected' during a revocation race)
+ * must never be treated as connected.
+ */
+export function isIntegrationConnected(
+  record: UserIntegrationRecord | null,
+): record is UserIntegrationRecord {
+  return record?.status === 'connected' && record.revokedAt === null;
+}
+
+/** A configured credential may only be used by the descriptor that created it. */
+export function isIntegrationConnectedToDescriptor(
+  record: UserIntegrationRecord | null,
+  descriptorId: string,
+): record is UserIntegrationRecord {
+  return isIntegrationConnected(record) && record.integrationDescriptorId === descriptorId;
+}
+
+/** True while an unrevoked row still holds credential material requiring cleanup. */
+export function hasIntegrationCredentials(
+  record: UserIntegrationRecord | null,
+): record is UserIntegrationRecord {
+  return record?.revokedAt === null
+    && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null);
+}
+
 export interface IUserIntegrationStore {
   listByUser(
     userId: string,
@@ -43,14 +76,24 @@ export interface IUserIntegrationStore {
   ): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
+  /** Atomically persist a credential only while its descriptor revision is current. */
+  connectDescriptorCredential?(input: DescriptorCredentialConnectInput): Promise<UserIntegrationRecord | null>;
+  /**
+   * Atomically verify a descriptor-bound callback and persist its credentials.
+   * PostgreSQL implements this to serialize callback completion with descriptor
+   * rotation; stores without shared descriptor state may omit it.
+   */
+  connectDescriptorCallback?(input: DescriptorCallbackConnectInput): Promise<UserIntegrationRecord | null>;
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord | null>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
+  revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number>;
 }
 
 export interface UserIntegrationConnectInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId?: string | null;
   readonly externalAccountLabel: string | null;
   readonly externalInstallationId: string | null;
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
@@ -60,9 +103,23 @@ export interface UserIntegrationConnectInput {
   readonly connectedAt: Date;
 }
 
+export interface DescriptorCallbackConnectInput {
+  readonly transactionIdHash: Buffer;
+  readonly descriptorId: string;
+  readonly descriptorFingerprint: string;
+  readonly connection: UserIntegrationConnectInput;
+}
+
+export interface DescriptorCredentialConnectInput {
+  readonly descriptorId: string;
+  readonly descriptorFingerprint: string;
+  readonly connection: UserIntegrationConnectInput;
+}
+
 export interface UserIntegrationRefreshInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId: string | null;
   readonly staleAccessTokenCiphertext: Buffer;
   readonly refreshedAt: Date;
   readonly refresh: (record: UserIntegrationRecord) => Promise<UserIntegrationRefreshDecision>;
@@ -98,6 +155,7 @@ export interface UserIntegrationErrorInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
   readonly expectedActiveRecordId: string | null;
+  readonly integrationDescriptorId?: string | null;
   readonly errorReason: UserIntegrationErrorReason;
   readonly occurredAt: Date;
 }
@@ -106,6 +164,9 @@ export function validateUserIntegrationRecord(record: UserIntegrationRecord): vo
   assertUuid(record.id, 'id');
   assertUuid(record.userId, 'userId');
   assertUserIntegrationProvider(record.provider);
+  if (record.integrationDescriptorId) {
+    assertUuid(record.integrationDescriptorId, 'integrationDescriptorId');
+  }
   if (!['connected', 'revoked', 'error'].includes(record.status)) {
     throw new ConsoleStoreValidationError(`unsupported integration status '${record.status}'`);
   }

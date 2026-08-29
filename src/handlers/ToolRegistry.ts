@@ -25,10 +25,11 @@ import type { ConfigHandler } from './ConfigHandler.js';
 import type { SyncHandler } from './SyncHandlerV2.js';
 import type { EnhancedIndexHandler } from './EnhancedIndexHandler.js';
 import type { MCPAQLHandler } from './mcp-aql/MCPAQLHandler.js';
-import type { IntegrationRequestGateway } from '../web-console/modules/integrations/IntegrationRequestGateway.js';
-import type { IntegrationRequestPolicyEnforcer } from '../web-console/modules/integrations/IntegrationRequestPolicy.js';
-import type { IntegrationOperationCatalog } from '../web-console/modules/integrations/IntegrationOperationCatalog.js';
-import type { IntegrationRemoteMcpBridge } from '../web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
+import type {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
+} from '../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 
 // Re-export types for backward compatibility
 export type { ToolDefinition, ToolHandler };
@@ -40,8 +41,8 @@ export type ToolRegistryChangeListener = (event: {
 }) => void;
 
 export class ToolRegistry {
-  private tools: Map<string, ToolDefinition> = new Map();
-  private changeListeners = new Set<ToolRegistryChangeListener>();
+  private readonly tools: Map<string, ToolDefinition> = new Map();
+  private readonly changeListeners = new Set<ToolRegistryChangeListener>();
 
   /**
    * Register a tool with its definition and handler
@@ -126,33 +127,28 @@ export class ToolRegistry {
   }
 
   registerIntegrationTools(
-    gateway: IntegrationRequestGateway,
-    policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
-    operationCatalog?: IntegrationOperationCatalog | null,
+    gateway: AuthorizedIntegrationGateway,
+    operationCatalog?: AuthorizedIntegrationOperationCatalog | null,
   ): void {
-    this.registerMany(getIntegrationTools(gateway, policyEnforcer, operationCatalog));
+    this.registerMany(getIntegrationTools(gateway, operationCatalog));
   }
 
   async registerPromotedIntegrationTools(
-    gateway: IntegrationRequestGateway,
-    operationCatalog: IntegrationOperationCatalog,
-    policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+    gateway: AuthorizedIntegrationGateway,
+    operationCatalog: AuthorizedIntegrationOperationCatalog,
   ): Promise<void> {
     this.registerMany(await getPromotedIntegrationTools(
       gateway,
       operationCatalog,
-      policyEnforcer,
       new Set(this.tools.keys()),
     ));
   }
 
   async registerRemoteMcpBridgeTools(
-    bridge: IntegrationRemoteMcpBridge,
-    policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+    bridge: AuthorizedIntegrationRemoteMcpBridge,
   ): Promise<void> {
     this.registerMany(await getRemoteMcpBridgeTools(
       bridge,
-      policyEnforcer,
       new Set(this.tools.keys()),
     ));
   }

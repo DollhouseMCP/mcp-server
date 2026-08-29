@@ -3,7 +3,7 @@
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 
 import { Agent } from './Agent.js';
 import {
@@ -24,7 +24,7 @@ import {
   normalizeResilienceKeys,
   normalizeGoalKeys,
 } from './constants.js';
-import {
+import type {
   AgentMetadata,
   AgentState,
   ExecuteAgentResult,
@@ -32,9 +32,12 @@ import {
   AgentGoalParameter,
   AgentMetadataV2,
   AgentGoal,
-  DEFAULT_SAFETY_CONFIG,
   ExecutionContext,
   AutonomyDirective,
+  DangerZoneBlocker,
+} from './types.js';
+import {
+  DEFAULT_SAFETY_CONFIG
 } from './types.js';
 import { getGatheredData, type GatheredData } from './gatheredData.js';
 import { evaluateAutonomy } from './autonomyEvaluator.js';
@@ -49,7 +52,7 @@ import {
   createDangerZoneOperation,
   createExecutionContext,
 } from './safetyTierService.js';
-import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
+import { BaseElementManager, type ElementManagerDeps } from '../base/BaseElementManager.js';
 import { isWritableStorageLayer, type StorageScanOptions } from '../../storage/IStorageLayer.js';
 import {
   AGENT_STATE_MAX_YAML_SIZE,
@@ -81,7 +84,7 @@ export interface AgentManagerDeps extends ElementManagerDeps {
   /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
   elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
-  dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  dangerZoneEnforcer?: DangerZoneBlocker;
   /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
   verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 }
@@ -100,10 +103,10 @@ import { InputNormalizer } from '../../security/InputNormalizer.js';
 import { SafeRegex } from '../../security/dosProtection.js';
 import { logger } from '../../utils/logger.js';
 import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
-import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../../services/validation/ValidationService.js';
-import { SerializationService } from '../../services/SerializationService.js';
-import { MetadataService } from '../../services/MetadataService.js';
+import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../../services/validation/ValidationService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError, ErrorCategory, ErrorHandler } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
@@ -146,6 +149,8 @@ interface ActivationResult {
   activationWarnings: Array<{ elementType: string; elementName: string; error: string }>;
 }
 
+type AgentStepOutcome = 'success' | 'failure' | 'partial';
+
 interface ExecutionGenerationEntry {
   token: object;
   activeExecutions: number;
@@ -172,17 +177,17 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Covers direct/legacy manager entry points that bypass AgentExecutionHandler.
   private readonly stateOperationLock = new AsyncKeyedLock();
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
+  private readonly metadataService: MetadataService;
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActiveAgentNames: Set<string> = new Set();
   private readonly _localAgentNamesByIdentity = new Map<string, string>();
 
   // Issue #1948: Instance-injected dependencies (replaces static resolvers)
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
-  private _dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  private _dangerZoneEnforcer?: DangerZoneBlocker;
   private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
   private static warnedDbModeOrphanedStateFiles = false;
 
@@ -263,7 +268,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /** Issue #1948: Set DangerZoneEnforcer on this instance. */
-  setDangerZoneEnforcerInstance(enforcer: import('./types.js').DangerZoneBlocker): void {
+  setDangerZoneEnforcerInstance(enforcer: DangerZoneBlocker): void {
     this._dangerZoneEnforcer = enforcer;
   }
 
@@ -336,10 +341,10 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Issue #613: Check metadata name uniqueness (not just filename)
       const existingAgents = await this.list();
-      const duplicate = existingAgents.find(a =>
+      const duplicateExists = existingAgents.some(a =>
         a.metadata.name.toLowerCase() === sanitizedInput.name.toLowerCase()
       );
-      if (duplicate) {
+      if (duplicateExists) {
         return {
           success: false,
           message: `Agent '${sanitizedInput.name}' already exists`
@@ -409,7 +414,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (!validationResult.isValid) {
       return AgentManager.createFailure(`Validation failed: ${validationResult.errors.join(', ')}`);
     }
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Agent creation warnings: ${validationResult.warnings.join(', ')}`);
     }
     return null;
@@ -426,7 +431,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     );
     return {
       name: sanitizeInput(UnicodeValidator.normalize(name).normalizedContent, 100),
-      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH),
+      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH),
       instructions: contentValidation.sanitizedContent || '',
     };
   }
@@ -445,9 +450,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent.extensions = {
       ...agent.extensions,
       specializations: normalizedMetadata.specializations ?? agent.extensions?.specializations ?? [],
-      decisionFramework: normalizedMetadata.decisionFramework ?? agent.extensions?.decisionFramework,
+      decisionFramework: (normalizedMetadata as Record<string, unknown>).decisionFramework ??
+        (agent.extensions as Record<string, unknown>).decisionFramework,
       riskTolerance: normalizedMetadata.riskTolerance ?? agent.extensions?.riskTolerance,
-      learningEnabled: normalizedMetadata.learningEnabled ?? agent.extensions?.learningEnabled,
+      learningEnabled: (normalizedMetadata as Record<string, unknown>).learningEnabled ??
+        (agent.extensions as Record<string, unknown>).learningEnabled,
     };
     agent.instructions = sanitizedInput.instructions;
     agent.extensions.instructions = sanitizedInput.instructions;
@@ -546,12 +553,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       );
 
       // Pass 2: slug match (handles dashes, underscores, casing differences)
-      if (!match) {
-        match = agents.find((a) => {
-          const slug = this.normalizeFilename(a.metadata.name);
-          return slug === searchSlug || slug === searchLower;
-        });
-      }
+      match ??= agents.find((a) => {
+        const slug = this.normalizeFilename(a.metadata.name);
+        return slug === searchSlug || slug === searchLower;
+      });
 
       if (match) {
         logger.warn(
@@ -594,7 +599,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Agent update warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -679,7 +684,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Import an agent from serialized content.
    */
-  async importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<Agent> {
+  importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<Agent> {
     if (format === 'json') {
       const parsed = this.serializationService.parseJson(data, {
         source: 'AgentManager.importElement'
@@ -692,7 +697,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         ...agent.extensions,
         instructions: parsed.instructions || ''
       };
-      return agent;
+      return Promise.resolve(agent);
     }
 
     // Use SerializationService for frontmatter parsing
@@ -703,11 +708,16 @@ export class AgentManager extends BaseElementManager<Agent> {
     });
 
     const agent = new Agent(result.data as AgentMetadata, this.metadataService);
+    const metadataInstructions = typeof result.data.instructions === 'string'
+      ? result.data.instructions
+      : undefined;
+    agent.instructions = metadataInstructions ?? result.content.trim();
+    agent.content = metadataInstructions ? result.content.trim() : '';
     agent.extensions = {
       ...agent.extensions,
-      instructions: result.content.trim()
+      instructions: agent.instructions
     };
-    return agent;
+    return Promise.resolve(agent);
   }
 
   /**
@@ -876,11 +886,23 @@ export class AgentManager extends BaseElementManager<Agent> {
       : this.normalizeAgentFilePath(filePath);
     // State-file name derives from the agent's logical name in DB mode, or
     // from the stripped filename in file mode.
-    const existing = await this.load(sanitizedPath).catch(() => null);
+    // DB callers may still supply the canonical filename used by the portfolio
+    // adapter. Resolve it by logical name so we can recover elements.id before
+    // deleting the associated UUID-keyed state rows.
+    const lookupPath = isDb ? this.stripExtension(sanitizedPath) : sanitizedPath;
+    const existing = isDb
+      ? await this.findByName(lookupPath).catch(() => null)
+      : await this.load(lookupPath).catch(() => null);
     const name = isDb
       ? existing?.metadata.name ?? sanitizedPath
       : this.stripExtension(sanitizedPath);
-    const agentElementId = isDb ? sanitizedPath : existing?.id ?? sanitizedPath;
+    // Agent.id is a logical runtime identifier, not necessarily elements.id.
+    // The DB storage index maps the resolved metadata name to the actual UUID
+    // path used by the elements and agent_states foreign-key columns.
+    const indexedElementId = isDb && existing
+      ? this.storageLayer.getPathByName(existing.metadata.name)
+      : undefined;
+    const agentElementId = indexedElementId ?? existing?.id ?? sanitizedPath;
     await super.delete(sanitizedPath);
 
     await this.stateStore.delete({ name, agentElementId });
@@ -924,13 +946,14 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     for (const agent of agents) {
       const identity = this.getActivationIdentity(agent);
-      if (
+      const shouldBeActive =
         (identity && this.getActivationSet().has(identity.value)) ||
-        this.getActivationSet().has(agent.metadata.name)
+        this.getActivationSet().has(agent.metadata.name);
+      if (
+        shouldBeActive &&
+        (typeof agent.getStatus !== 'function' || agent.getStatus() !== ElementStatus.ACTIVE)
       ) {
-        if (typeof agent.getStatus !== 'function' || agent.getStatus() !== ElementStatus.ACTIVE) {
-          await agent.activate();
-        }
+        await agent.activate();
       }
     }
 
@@ -1219,8 +1242,8 @@ export class AgentManager extends BaseElementManager<Agent> {
           author: agent.metadata.author,
           safetyTier: result.safetyTier,
           riskScore: safetyTierResult?.riskScore,
-          parameterKeys: Object.keys(parameters || {}),
-          goalCount: metadata.goal?.parameters?.length || 0,
+          parameterKeys: Object.keys(parameters),
+          goalCount: (metadata.goal as Partial<AgentGoalConfig>).parameters?.length ?? 0,
         }
       });
 
@@ -1244,6 +1267,20 @@ export class AgentManager extends BaseElementManager<Agent> {
   private getAgentStateOperationKey(name: string): string {
     const userId = this.contextTracker?.getSessionContext()?.userId ?? 'local-user';
     return `${userId}:${this.canonicalizeExecutionName(name)}`;
+  }
+
+  /**
+   * Agent definitions are user-scoped, but DB-backed runtime state is scoped
+   * to an individual transport session. Keep each session's hydrated Agent
+   * instance separate while preserving the existing shared cache in file mode.
+   */
+  protected override getCacheNamespace(): string {
+    const userNamespace = super.getCacheNamespace();
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return userNamespace;
+    }
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId ?? 'no-session';
+    return `${userNamespace}:agent-session:${sessionId}`;
   }
 
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
@@ -1315,7 +1352,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const metadata = agent.metadata as AgentMetadataV2;
-    if (metadata.goal?.template) {
+    const goal = (metadata as Partial<AgentMetadataV2>).goal;
+    if (goal?.template) {
       return agent;
     }
     await this.convertLegacyAgentForExecution(agent, name, metadata);
@@ -1384,7 +1422,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (!cyclePath) {
       return;
     }
-    const cycleStart = cyclePath.indexOf(cyclePath[cyclePath.length - 1]);
+    const cycleEnd = cyclePath.at(-1);
+    if (cycleEnd === undefined) {
+      return;
+    }
+    const cycleStart = cyclePath.indexOf(cycleEnd);
     const cycle = cyclePath.slice(cycleStart);
     throw new Error(AgentManager.formatCircularActivationError(cycle));
   }
@@ -1579,9 +1621,9 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private validateParameterSecurity(parameters: Record<string, unknown>): void {
     // 1. Prototype pollution check — reject dangerous keys
-    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+    const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
     for (const key of Object.keys(parameters)) {
-      if (FORBIDDEN_KEYS.includes(key)) {
+      if (FORBIDDEN_KEYS.has(key)) {
         SecurityMonitor.logSecurityEvent({
           type: 'TOKEN_VALIDATION_FAILURE',
           severity: 'HIGH',
@@ -1631,7 +1673,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): void {
-    const paramDefs = goalConfig.parameters || [];
+    const paramDefs = (goalConfig as Partial<AgentGoalConfig>).parameters ?? [];
     this.assertRequiredParametersPresent(paramDefs, parameters, context);
     for (const [key, value] of Object.entries(parameters)) {
       this.validateProvidedParameter(key, value, paramDefs);
@@ -1675,10 +1717,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const actualType = typeof value;
-    if (
-      (paramDef.type === 'string' || paramDef.type === 'number' || paramDef.type === 'boolean') &&
-      paramDef.type !== actualType
-    ) {
+    if (paramDef.type !== actualType) {
       throw new Error(`Parameter '${key}' must be a ${paramDef.type}, got ${actualType}`);
     }
     this.warnForOversizedStringParameter(key, value, actualType);
@@ -1751,7 +1790,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     for (const [key, value] of Object.entries(parameters)) {
       // Escape key to prevent regex metacharacters from causing ReDoS (Issue #103)
       const escapedKey = SafeRegex.escape(key);
-      rendered = rendered.replace(new RegExp(`\\{${escapedKey}\\}`, 'g'), String(value));
+      rendered = rendered.replaceAll(new RegExp(String.raw`\{${escapedKey}\}`, 'g'), String(value));
     }
 
     // Cap rendered goal length to prevent oversized payloads
@@ -1773,7 +1812,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @private
    */
   private detectUnmatchedPlaceholders(rendered: string): string[] {
-    const placeholderPattern = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+    const placeholderPattern = /\{([a-zA-Z_]\w*)\}/g;
     const unmatched: string[] = [];
     let match: RegExpExecArray | null;
     while ((match = placeholderPattern.exec(rendered)) !== null) {
@@ -1787,7 +1826,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Used by both the static pre-flight check and the runtime chain check.
    */
   private static formatCircularActivationError(cyclePath: string[]): string {
-    const agentName = cyclePath[cyclePath.length - 1];
+    const agentName = cyclePath.at(-1);
     return (
       `Circular agent activation detected (cycle of ${cyclePath.length - 1}): ` +
       `${cyclePath.join(' → ')}. ` +
@@ -2201,7 +2240,10 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<number> {
     const agent = typeof agentOrName === 'string' ? null : agentOrName;
     const name = typeof agentOrName === 'string' ? agentOrName : nameOrState as string;
-    const state = typeof agentOrName === 'string' ? nameOrState as AgentState : maybeState!;
+    const state = typeof agentOrName === 'string' ? nameOrState as AgentState : maybeState;
+    if (!state) {
+      throw new Error('Agent state is required when saving state for an agent instance');
+    }
     return this.stateStore.save(
       { name, agentElementId: agent ? this.getAgentElementId(agent, name) : name },
       state,
@@ -2440,7 +2482,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     await defaultFileStore.warnIfOrphanedStateFiles();
   }
 
-  protected override async parseMetadata(data: any): Promise<AgentMetadata> {
+  protected override parseMetadata(data: any): Promise<AgentMetadata> {
     const metadata = { ...data };
     this.normalizeAndValidateMetadataHeader(metadata);
     this.validateMetadataTextFields(metadata);
@@ -2456,7 +2498,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.validateResilienceMetadata(metadata, agentName);
     this.validateTagsMetadata(metadata, agentName);
 
-    return metadata as AgentMetadata;
+    return Promise.resolve(metadata as AgentMetadata);
   }
 
   private normalizeAndValidateMetadataHeader(metadata: Record<string, any>): void {
@@ -2482,7 +2524,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
@@ -2504,10 +2546,10 @@ export class AgentManager extends BaseElementManager<Agent> {
         maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
         allowSpaces: true
       });
-      if (!result.isValid) {
+      if (!result.isValid || result.sanitizedValue === undefined) {
         throw new Error(`Invalid specialization "${value}": ${result.errors?.join(', ')}`);
       }
-      validatedSpecializations.push(result.sanitizedValue!);
+      validatedSpecializations.push(result.sanitizedValue);
     }
     metadata.specializations = validatedSpecializations;
   }
@@ -2750,7 +2792,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     return agent;
   }
 
-  protected override async serializeElement(agent: Agent): Promise<string> {
+  protected override serializeElement(agent: Agent): Promise<string> {
     const metadata = this.buildBaseSerializedMetadata(agent);
     const metadataV2 = agent.metadata as AgentMetadataV2;
     this.addSerializedV2Metadata(metadata, metadataV2);
@@ -2766,13 +2808,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
     const body = agent.content || this.buildDefaultBody(agent);
 
-    return this.serializationService.createFrontmatter(metadata, body, {
+    return Promise.resolve(this.serializationService.createFrontmatter(metadata, body, {
       method: 'manual',
       schema: 'json',  // Use JSON schema to preserve booleans/numbers in v2 metadata
       cleanMetadata: true,
       cleaningStrategy: 'remove-both',  // Remove both null and undefined
       sortKeys: true
-    });
+    }));
   }
 
   private buildBaseSerializedMetadata(agent: Agent): Record<string, unknown> {
@@ -2793,7 +2835,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     metadata: Record<string, unknown>,
     metadataV2: AgentMetadataV2
   ): void {
-    if (metadataV2.goal) metadata.goal = metadataV2.goal;
+    const goal = (metadataV2 as unknown as Record<string, unknown>).goal;
+    if (goal) metadata.goal = goal;
     if (metadataV2.activates) metadata.activates = metadataV2.activates;
     if (metadataV2.tools) metadata.tools = metadataV2.tools;
     if (metadataV2.systemPrompt) metadata.systemPrompt = metadataV2.systemPrompt;
@@ -2806,13 +2849,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     metadata: Record<string, unknown>,
     metadataV2: AgentMetadataV2
   ): void {
-    if (metadataV2.goal) {
+    const legacyMetadata = metadataV2 as unknown as Record<string, unknown>;
+    if (legacyMetadata.goal) {
       return;
     }
-    if (metadataV2.decisionFramework) metadata.decisionFramework = metadataV2.decisionFramework;
-    if (metadataV2.riskTolerance) metadata.riskTolerance = metadataV2.riskTolerance;
-    if (metadataV2.learningEnabled !== undefined) metadata.learningEnabled = metadataV2.learningEnabled;
-    if (metadataV2.maxConcurrentGoals !== undefined) metadata.maxConcurrentGoals = metadataV2.maxConcurrentGoals;
+    if (legacyMetadata.decisionFramework) metadata.decisionFramework = legacyMetadata.decisionFramework;
+    if (legacyMetadata.riskTolerance) metadata.riskTolerance = legacyMetadata.riskTolerance;
+    if (legacyMetadata.learningEnabled !== undefined) metadata.learningEnabled = legacyMetadata.learningEnabled;
+    if (legacyMetadata.maxConcurrentGoals !== undefined) metadata.maxConcurrentGoals = legacyMetadata.maxConcurrentGoals;
   }
 
   private addSerializedCommonMetadata(
@@ -2824,22 +2868,22 @@ export class AgentManager extends BaseElementManager<Agent> {
       metadata.tags = metadataV2.tags;
     }
     if (metadataV2.triggers) metadata.triggers = metadataV2.triggers;
-    if (metadataV2.ruleEngineConfig !== undefined) metadata.ruleEngineConfig = metadataV2.ruleEngineConfig;
+    const legacyRuleEngineConfig = (metadataV2 as unknown as Record<string, unknown>).ruleEngineConfig;
+    if (legacyRuleEngineConfig !== undefined) metadata.ruleEngineConfig = legacyRuleEngineConfig;
   }
 
   private buildDefaultInstructions(agent: Agent): string {
     const nameHeader = agent.metadata.name ? `# ${agent.metadata.name}\n\n` : '';
-    const description = agent.metadata.description ?? '';
+    const description = agent.metadata.description;
     return `${nameHeader}${description}`.trim();
   }
 
   private buildDefaultBody(agent: Agent): string {
-    const name = (agent.metadata.name ?? '').trim();
-    const description = (agent.metadata.description ?? '').trim();
-    const lines: string[] = [];
-    if (name) {
-      lines.push(`# ${name}`);
-      lines.push('');
+    const name = agent.metadata.name.trim();
+    const description = agent.metadata.description.trim();
+      const lines: string[] = [];
+      if (name) {
+        lines.push(`# ${name}`, '');
     }
     if (description) {
       lines.push(description);
@@ -2882,17 +2926,19 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateTools(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
-    if (metadata.tools === undefined) {
+    const tools = (metadata as Record<string, unknown>).tools;
+    if (tools === undefined) {
       return;
     }
-    if (typeof metadata.tools !== 'object' || Array.isArray(metadata.tools) || metadata.tools === null) {
+    if (typeof tools !== 'object' || Array.isArray(tools) || tools === null) {
       errors.push('tools must be an object with allowed/denied arrays');
       return;
     }
-    if (!Array.isArray(metadata.tools.allowed)) {
+    const toolConfig = tools as Record<string, unknown>;
+    if (!Array.isArray(toolConfig.allowed)) {
       errors.push('tools.allowed is required and must be an array of strings');
     }
-    if (metadata.tools.denied !== undefined && !Array.isArray(metadata.tools.denied)) {
+    if (toolConfig.denied !== undefined && !Array.isArray(toolConfig.denied)) {
       errors.push('tools.denied must be an array of strings');
     }
   }
@@ -2914,15 +2960,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateAutonomy(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
-    if (metadata.autonomy === undefined) {
+    const autonomy = (metadata as Record<string, unknown>).autonomy;
+    if (autonomy === undefined) {
       return;
     }
-    if (typeof metadata.autonomy !== 'object' || Array.isArray(metadata.autonomy) || metadata.autonomy === null) {
+    if (typeof autonomy !== 'object' || Array.isArray(autonomy) || autonomy === null) {
       errors.push('autonomy must be an object');
       return;
     }
 
-    const a = metadata.autonomy as Record<string, unknown>;
+    const a = autonomy as Record<string, unknown>;
     normalizeAutonomyKeys(a);
     this.addEnumValidationError(a, 'riskTolerance', RISK_TOLERANCE_LEVELS, 'autonomy.riskTolerance', errors);
     this.addTypeValidationError(a, 'maxAutonomousSteps', 'number', 'autonomy.maxAutonomousSteps', errors);
@@ -2931,15 +2978,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateResilience(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
-    if (metadata.resilience === undefined) {
+    const resilience = (metadata as Record<string, unknown>).resilience;
+    if (resilience === undefined) {
       return;
     }
-    if (typeof metadata.resilience !== 'object' || Array.isArray(metadata.resilience) || metadata.resilience === null) {
+    if (typeof resilience !== 'object' || Array.isArray(resilience) || resilience === null) {
       errors.push('resilience must be an object');
       return;
     }
 
-    const r = metadata.resilience as Record<string, unknown>;
+    const r = resilience as Record<string, unknown>;
     normalizeResilienceKeys(r);
     this.addEnumValidationError(r, 'onStepLimitReached', STEP_LIMIT_ACTIONS, 'resilience.onStepLimitReached', errors);
     this.addEnumValidationError(r, 'onExecutionFailure', EXECUTION_FAILURE_ACTIONS, 'resilience.onExecutionFailure', errors);
@@ -2950,9 +2998,10 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateActivates(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
+    const activates = (metadata as Record<string, unknown>).activates;
     if (
-      metadata.activates !== undefined &&
-      (typeof metadata.activates !== 'object' || Array.isArray(metadata.activates) || metadata.activates === null)
+      activates !== undefined &&
+      (typeof activates !== 'object' || Array.isArray(activates) || activates === null)
     ) {
       errors.push('activates must be an object with skills/personas/memories/templates/ensembles arrays');
     }
@@ -3096,7 +3145,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     /** Internal lifecycle owner selected by AgentExecutionHandler. */
     goalId?: string;
     stepDescription: string;
-    outcome: "success" | "failure" | "partial";
+    outcome: AgentStepOutcome;
     /** Optional findings or results from this step */
     findings?: string;
     confidence?: number;
@@ -3117,7 +3166,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       reasoning: string;
       framework: string;
       confidence: number;
-      outcome: "success" | "failure" | "partial";
+      outcome: AgentStepOutcome;
     };
     state: {
       goalCount: number;
@@ -3184,9 +3233,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     // 8. Evaluate autonomy - should we continue or pause?
     // Issue #402: Pass DI-injected DangerZoneEnforcer via context
     // Issue #447: Apply runtime maxAutonomousSteps override if provided
-    const autonomyConfig = params.maxStepsOverride !== undefined
-      ? { ...agentMetadata.autonomy, maxAutonomousSteps: params.maxStepsOverride }
-      : agentMetadata.autonomy;
+    const autonomyConfig = params.maxStepsOverride === undefined
+      ? agentMetadata.autonomy
+      : { ...agentMetadata.autonomy, maxAutonomousSteps: params.maxStepsOverride };
 
     const autonomyDirective = evaluateAutonomy({
       agentName: params.agentName,
@@ -3237,7 +3286,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   async completeAgentGoal(params: {
     agentName: string;
     goalId?: string;
-    outcome: "success" | "failure" | "partial";
+    outcome: AgentStepOutcome;
     summary: string;
   }) {
     return this.runSerializedAgentStateOperation(
@@ -3361,6 +3410,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
     const completedGoal = completedGoalSnapshot;
+    if (!completedGoal.completedAt) {
+      throw new Error(`Completed goal '${goal.id}' is missing its completion timestamp`);
+    }
 
     return {
       success: true,
@@ -3370,7 +3422,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         description: completedGoal.description,
         status: completedGoal.status as "completed" | "failed",
         createdAt: completedGoal.createdAt.toISOString(),
-        completedAt: completedGoal.completedAt!.toISOString(),
+        completedAt: completedGoal.completedAt.toISOString(),
         estimatedEffort: completedGoal.estimatedEffort,
         actualEffort: completedGoal.actualEffort
       },
@@ -3485,7 +3537,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     archivedGoalIds: string[],
     archivedGoalSnapshots: AgentGoal[],
   ): Promise<number> {
-    while (true) {
+    for (;;) {
       try {
         return await this.saveAgentStateForRecovery(agent, sanitizedName);
       } catch (error) {

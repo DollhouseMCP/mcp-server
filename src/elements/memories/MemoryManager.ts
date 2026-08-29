@@ -10,16 +10,18 @@
  * 5. MEDIUM: Path validation prevents directory traversal attacks
  */
 
-import { Memory, MemoryMetadata } from './Memory.js';
-import { ElementValidationResult } from '../../types/elements/IElement.js';
+import type { MemoryMetadata } from './Memory.js';
+import { Memory } from './Memory.js';
+import type { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
-import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
+import type { ElementManagerDeps } from '../base/BaseElementManager.js';
+import { BaseElementManager } from '../base/BaseElementManager.js';
 import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
-import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _packageLocator = new PackageResourceLocator();
@@ -36,13 +38,13 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
-import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../../services/validation/ValidationService.js';
-import { SerializationService } from '../../services/SerializationService.js';
-import { MetadataService } from '../../services/MetadataService.js';
-import * as path from 'path';
+import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../../services/validation/ValidationService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
+import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
@@ -87,6 +89,15 @@ interface ParsedMemoryData {
   content: string;
 }
 
+interface BackupCleanupResult {
+  scanned: number;
+  deleted: number;
+  errors: number;
+  deletedFiles: string[];
+  keptFiles: string[];
+  errorDetails: Array<{ file: string; error: string }>;
+}
+
 export class MemoryManager extends BaseElementManager<Memory> {
   /**
    * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
@@ -104,21 +115,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.elementDir;
   }
   // Phase 2: Bounded content hash index replaces unbounded Map
-  private contentHashIndex = new LRUCache<string>({
+  private readonly contentHashIndex = new LRUCache<string>({
     name: 'memory:contentHash',
     maxSize: 5000,
     maxMemoryMB: 5,
     ttlMs: 0,
   });
-  private contentHashByPath = new LRUCache<string>({
+  private readonly contentHashByPath = new LRUCache<string>({
     name: 'memory:contentHashReverse',
     maxSize: 5000,
     maxMemoryMB: 5,
     ttlMs: 0,
   });
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
   /** Issue #1948: Retention policy service ref, passed to Memory instances at construction. */
   private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
@@ -177,7 +188,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   // MemoryManager has its own backup system (moveToUserBackup) and its
   // save/delete don't call super — no-op the universal backup hooks.
   protected override async createBackupBeforeSave(): Promise<void> { /* no-op */ }
-  protected override async createBackupBeforeDelete(): Promise<boolean> { return false; }
+  protected override createBackupBeforeDelete(): Promise<boolean> { return Promise.resolve(false); }
 
   /**
    * Override clearCache to also clear memory-specific caches.
@@ -209,7 +220,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   private async resolveMemoryPath(filePath: string): Promise<string> {
     // Check if it's a relative path (no date folder)
-    if (!filePath.includes(path.sep) || !filePath.match(/^\d{4}-\d{2}-\d{2}/)) {
+    if (!filePath.includes(path.sep) || !/^\d{4}-\d{2}-\d{2}/.test(filePath)) {
       // Search in system/ folder first
       const systemPath = path.join(this.memoriesDir, 'system', filePath);
       if (await this.fileOperations.exists(systemPath)) {
@@ -305,7 +316,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       schema: 'json',  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
     });
 
-    return { data: parsed.data as Record<string, unknown>, content: parsed.content ?? '' };
+    return { data: parsed.data as Record<string, unknown>, content: parsed.content };
   }
 
   /**
@@ -342,7 +353,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (!parsedData) return; // Defensive — base always supplies it, but the hook is optional.
 
     // Fix #918: Read instructions from root-level YAML
-    const rootInstructions = parsedData.data?.instructions;
+    const rootInstructions = parsedData.data.instructions;
     if (rootInstructions && typeof rootInstructions === 'string') {
       memory.instructions = rootInstructions;
     }
@@ -351,7 +362,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     delete (memory.metadata as any).format_version;
 
     // Load saved entries if present (from pure YAML entries array)
-    const entries = parsedData.data?.entries;
+    const entries = parsedData.data.entries;
     if (Array.isArray(entries) && entries.length > 0) {
       memory.deserialize(JSON.stringify({
         id: memory.id,
@@ -365,7 +376,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // If markdown content exists after frontmatter, add it as a memory entry.
     // Preserves content from seed memories and memory files with markdown sections.
-    if (parsedData.content?.trim()) {
+    if (parsedData.content.trim()) {
       await memory.addEntry(
         parsedData.content.trim(),
         [],  // tags
@@ -386,7 +397,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     await this.fileOperations.createDirectory(backupDir);
 
     const filename = path.basename(existingPath);
-    const timestamp = date.toISOString().replace(/[:.]/g, '-');
+    const timestamp = date.toISOString().replaceAll(/[:.]/g, '-');
     const backupName = filename.replace('.yaml', `.backup-${timestamp}.yaml`);
 
     await this.fileOperations.renameFile(existingPath, path.join(backupDir, backupName));
@@ -741,22 +752,37 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Memories are pure YAML (no frontmatter delimiters), so they need different
    * validation than frontmatter-based elements. The base class validateSerializedContent
    * handles frontmatter elements; this override handles pure YAML memories.
-   * Shared by save() (via super.save) and assertPersistable() so the pre-flight
-   * check and the actual write can never disagree.
+   *
+   * Called by the base class from super.save() before any write. Delegates to
+   * validateSerializedMemoryYaml so the on-save check and the assertPersistable()
+   * preflight can never disagree.
    */
   protected override validateSerializedContent(content: string): void {
+    this.validateSerializedMemoryYaml(content);
+  }
+
+  /**
+   * Validation applied to serialized memory YAML before any disk write.
+   * Shared by save() (via validateSerializedContent) and assertPersistable() so the
+   * pre-flight check and the actual write can never disagree.
+   *
+   * Checks: size enforcement (Fix #916/#918), YAML bomb detection (Fix #908/#918),
+   * and gatekeeper policy validation.
+   */
+  private validateSerializedMemoryYaml(yamlContent: string): void {
     // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
     // limit parseContent() enforces on load. The previous 2MB cap allowed writing
     // files the loader would then reject.
-    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+    if (yamlContent.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
-        source: 'MemoryManager.validateSerializedContent',
-        details: `Memory exceeds maximum serialized size (${content.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
+        source: 'MemoryManager.validateSerializedMemoryYaml',
+        details: `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
+        metadata: { contentLength: yamlContent.length, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE }
       });
       throw new Error(
-        `Memory exceeds maximum serialized size (${content.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
+        `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
         `This memory is full — start a new memory for additional entries.`
       );
     }
@@ -766,19 +792,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // limit), so every save of a memory whose serialized YAML exceeded 64KB threw
     // here, and the deferred save path swallowed the error while addEntry kept
     // reporting success. The cap now matches the memory size limit enforced above
-    // and on load. parseRawYaml runs ContentValidator.validateYamlContent with the
-    // same cap internally (Fix #908/#918), so bomb detection covers every size —
-    // the previous `<= MAX_YAML_LENGTH` guard skipped it for content over 64KB.
+    // and on load. parseRawYaml applies safe-schema parsing plus expanded-graph
+    // complexity limits with the same cap internally. Scalar entry text is
+    // governed by memory policy, while control fields remain subject to the
+    // content scanner below.
     const validationStart = Date.now();
-    // Entries are stored as UNTRUSTED and scanned asynchronously (#1315).
-    // Blocking every append on all historical prose lets scanner-rule changes
-    // permanently brick an append-only memory (#2440). Keep structural YAML,
-    // Unicode, bomb, safe-schema, size, and Gatekeeper validation enabled.
-    const parsedYaml = SecureYamlParser.parseRawYaml(
-      content,
-      MEMORY_CONSTANTS.MAX_YAML_SIZE,
-      { detectContentPatterns: false },
-    );
+    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, {
+      maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      contentPolicy: 'structure-only',
+    });
     if (!validateMemoryControlFields(parsedYaml)) {
       throw new Error(
         'Malicious YAML content detected in memory metadata, instructions, or auxiliary entry fields'
@@ -786,7 +808,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
-      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${content.length} bytes`);
+      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
     }
     const gatekeeperErrors = [
       ...getGatekeeperAuthoringErrors(parsedYaml),
@@ -807,7 +829,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Post-save hook: set the persisted file path and update content hash tracking.
    * In DB mode, filePath is the element UUID. In file mode, it's the relative path.
    */
-  protected override async afterSave(element: Memory, filePath: string): Promise<void> {
+  protected override afterSave(element: Memory, filePath: string): Promise<void> {
+    try {
     // Set the persisted file path on the element (FIX #1320)
     element.setFilePath(filePath);
 
@@ -831,6 +854,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
       source: 'MemoryManager.afterSave',
       details: `Saved memory '${element.metadata.name}' with ${stats.totalEntries} entries`,
     });
+    return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   /**
@@ -841,13 +868,18 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * delete and `element:delete:success` via event dispatcher on commit, but
    * external SIEM consumers filter on the memory-specific event type.
    */
-  protected override async afterDelete(filePath: string): Promise<void> {
+  protected override afterDelete(filePath: string): Promise<void> {
+    try {
     SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_DELETED,
       severity: 'MEDIUM',
       source: 'MemoryManager.afterDelete',
       details: `Deleted memory: ${filePath}`,
     });
+    return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
   /**
    * Handle memory load failure
@@ -1150,22 +1182,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
     targetDir?: string,
     dryRun: boolean = false,
     onProgress?: (processed: number, total: number, current?: string) => void
-  ): Promise<{
-    scanned: number;
-    deleted: number;
-    errors: number;
-    deletedFiles: string[];
-    keptFiles: string[];
-    errorDetails: Array<{ file: string; error: string }>;
-  }> {
+  ): Promise<BackupCleanupResult> {
     const dir = targetDir || path.join(this.memoriesDir, 'system');
-    const result = {
+    const result: BackupCleanupResult = {
       scanned: 0,
       deleted: 0,
       errors: 0,
-      deletedFiles: [] as string[],
-      keptFiles: [] as string[],
-      errorDetails: [] as Array<{ file: string; error: string }>
+      deletedFiles: [],
+      keptFiles: [],
+      errorDetails: []
     };
 
     logger.info(`[MemoryManager] Issue #39: Starting backup cleanup in ${dir}${dryRun ? ' (DRY RUN)' : ''}...`);
@@ -1173,59 +1198,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
     try {
       const files = await this.fileOperations.listDirectory(dir);
       result.scanned = files.length;
-
-      // Group backup files by base name
-      const backupGroups = new Map<string, string[]>();
-
-      for (const file of files) {
-        // Match versioned backup files: name.backup-YYYY-MM-DD-HH-mm-ss-SSS-vN.yaml
-        const versionedMatch = file.match(/^(.+\.backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-\d{3})-v(\d+)\.yaml$/);
-        if (versionedMatch) {
-          const baseName = versionedMatch[1];
-          const existing = backupGroups.get(baseName) || [];
-          existing.push(file);
-          backupGroups.set(baseName, existing);
-        }
-      }
-
-      // Delete all versioned backup files
-      let processed = 0;
-      const totalVersionedFiles = Array.from(backupGroups.values()).reduce((sum, files) => sum + files.length, 0);
-
-      for (const [baseName, versionedFiles] of backupGroups) {
-        // Keep the base backup file (without -vN), delete all versioned ones
-        const baseBackupFile = `${baseName}.yaml`;
-        if (files.includes(baseBackupFile)) {
-          result.keptFiles.push(baseBackupFile);
-        }
-
-        for (const versionedFile of versionedFiles) {
-          processed++;
-
-          // Report progress
-          if (onProgress) {
-            onProgress(processed, totalVersionedFiles, versionedFile);
-          }
-
-          const fullPath = path.join(dir, versionedFile);
-          try {
-            if (!dryRun) {
-              await this.fileOperations.deleteFile(fullPath, ElementType.MEMORY, {
-                source: 'MemoryManager.cleanupExcessiveBackups'
-              });
-            }
-            result.deleted++;
-            result.deletedFiles.push(versionedFile);
-            logger.debug(`[MemoryManager] Issue #39: ${dryRun ? 'Would delete' : 'Deleted'} ${versionedFile}`);
-          } catch (error) {
-            result.errors++;
-            result.errorDetails.push({
-              file: versionedFile,
-              error: error instanceof Error ? error.message : String(error)
-            });
-            logger.error(`[MemoryManager] Issue #39: Failed to delete ${versionedFile}:`, error);
-          }
-        }
+      const backupGroups = this.groupVersionedBackups(files);
+      this.recordKeptBackups(files, backupGroups, result);
+      const versionedFiles = Array.from(backupGroups.values()).flat();
+      for (const [index, versionedFile] of versionedFiles.entries()) {
+        onProgress?.(index + 1, versionedFiles.length, versionedFile);
+        await this.removeVersionedBackup(dir, versionedFile, dryRun, result);
       }
 
       logger.info(
@@ -1252,6 +1230,58 @@ export class MemoryManager extends BaseElementManager<Memory> {
     } catch (error) {
       logger.error('[MemoryManager] Issue #39: Backup cleanup failed:', error);
       throw error;
+    }
+  }
+
+  private groupVersionedBackups(files: string[]): Map<string, string[]> {
+    const backupGroups = new Map<string, string[]>();
+    for (const file of files) {
+      const match = /^(.+\.backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-\d{3})-v(\d+)\.yaml$/.exec(file);
+      if (!match) continue;
+
+      const baseName = match[1];
+      const existing = backupGroups.get(baseName) ?? [];
+      existing.push(file);
+      backupGroups.set(baseName, existing);
+    }
+    return backupGroups;
+  }
+
+  private recordKeptBackups(
+    files: string[],
+    backupGroups: Map<string, string[]>,
+    result: BackupCleanupResult
+  ): void {
+    for (const baseName of backupGroups.keys()) {
+      const baseBackupFile = `${baseName}.yaml`;
+      if (files.includes(baseBackupFile)) result.keptFiles.push(baseBackupFile);
+    }
+  }
+
+  private async removeVersionedBackup(
+    directory: string,
+    versionedFile: string,
+    dryRun: boolean,
+    result: BackupCleanupResult
+  ): Promise<void> {
+    try {
+      if (!dryRun) {
+        await this.fileOperations.deleteFile(
+          path.join(directory, versionedFile),
+          ElementType.MEMORY,
+          { source: 'MemoryManager.cleanupExcessiveBackups' }
+        );
+      }
+      result.deleted++;
+      result.deletedFiles.push(versionedFile);
+      logger.debug(`[MemoryManager] Issue #39: ${dryRun ? 'Would delete' : 'Deleted'} ${versionedFile}`);
+    } catch (error) {
+      result.errors++;
+      result.errorDetails.push({
+        file: versionedFile,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      logger.error(`[MemoryManager] Issue #39: Failed to delete ${versionedFile}:`, error);
     }
   }
 
@@ -1500,59 +1530,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Backup existing if it has user content, then install fresh seed
 
       logger.info(`[MemoryManager] Step 6: Checking for existing seed memory in portfolio...`);
-      let existingMemory: Memory | undefined;
-
-      try {
-        // Try to load existing memory
-        existingMemory = await this.load(seedFileName);
-        logger.info(`[MemoryManager] ✅ Step 7: Found existing seed memory '${seedFileName}'`);
-        const existingPath = existingMemory.getFilePath();
-        logger.info(`[MemoryManager] Existing file location: ${existingPath}`);
-      } catch {
-        // Memory doesn't exist - proceed with fresh installation
-        logger.info(`[MemoryManager] ℹ️  Step 7: Seed memory '${seedFileName}' not found in portfolio, will install fresh`);
-      }
+      const existingMemory = await this.findExistingSeedMemory(seedFileName);
 
       // If existing memory found, check if we need to reinstall
-      if (existingMemory) {
-        logger.info(`[MemoryManager] Step 8: Analyzing existing seed memory content...`);
-        const entries = existingMemory.getAllEntries();
-        logger.debug(`[MemoryManager] Found ${entries.length} entries in existing memory`);
-
-        // Check if memory has meaningful content (not just "entries: []")
-        // Empty files often have just the "entries: []" YAML field as content
-        let hasContent = entries.length > 0;
-
-        if (hasContent && entries.length === 1) {
-          const firstEntry = entries[0];
-          const content = firstEntry.content?.trim() || '';
-          logger.debug(`[MemoryManager] Single entry content length: ${content.length} chars`);
-          // If only content is "entries: []", consider it empty
-          if (content === 'entries: []' || content === '') {
-            hasContent = false;
-            logger.info(`[MemoryManager] Entry appears empty (entries: [] or blank)`);
-          }
-        }
-
-        if (hasContent) {
-          // FIX #1430: Skip reinstallation if seed already exists with content
-          // Reinstalling deletes the memory from cache, losing activation status
-          logger.info(`[MemoryManager] ✅ Seed memory already installed with content - skipping reinstallation`);
-          logger.info(`[MemoryManager] 🎉 Seed memory installation check complete (already installed)`);
-          return;
-        } else {
-          logger.info(`[MemoryManager] Step 9: Existing seed memory is empty (${entries.length} entries), will reinstall`);
-        }
-
-        // Delete existing (will be replaced with latest)
-        logger.info(`[MemoryManager] Step 10: Removing existing seed memory...`);
-        try {
-          await this.delete(seedFileName);
-          logger.info(`[MemoryManager] ✅ Removed existing seed memory, will install latest version`);
-        } catch (deleteError) {
-          logger.error(`[MemoryManager] ❌ Failed to delete existing seed memory:`, deleteError);
-          throw deleteError;
-        }
+      if (existingMemory && await this.prepareExistingSeedForInstall(existingMemory, seedFileName)) {
+        return;
       }
 
       // Read the seed file
@@ -1562,35 +1544,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Parse and create memory instance
       logger.info(`[MemoryManager] Step 12: Parsing seed content and creating memory instance...`);
-      let memory: Memory;
-      try {
-        memory = await this.importElement(seedContent, 'yaml');
-        logger.info(`[MemoryManager] ✅ Successfully parsed seed memory`);
-        logger.debug(`[MemoryManager] Memory name: ${memory.metadata.name}`);
-      } catch (parseError) {
-        logger.error(`[MemoryManager] ❌ Failed to parse seed content:`, parseError);
-        throw parseError;
-      }
+      const memory = await this.parseSeedMemory(seedContent);
 
       // Set memory type to SYSTEM and ensure autoLoad is enabled
-      logger.info(`[MemoryManager] Step 13: Setting memory type to SYSTEM and autoLoad...`);
-      const memoryMeta = memory.metadata as MemoryMetadata;
-      memoryMeta.memoryType = MemoryType.SYSTEM;
-      memoryMeta.autoLoad = true; // Ensure seed memories auto-load
-      memoryMeta.priority = 1;   // High priority for baseline knowledge
-      logger.debug(`[MemoryManager] Memory type: ${memoryMeta.memoryType}, autoLoad: ${memoryMeta.autoLoad}, priority: ${memoryMeta.priority}`);
+      this.configureSeedMemory(memory);
 
       // Save to portfolio (this will use system/ folder based on memoryType)
       logger.info(`[MemoryManager] Step 14: Saving seed memory to portfolio (should go to system/ folder)...`);
-      try {
-        await this.save(memory);
-        logger.info(`[MemoryManager] ✅ Successfully saved seed memory`);
-        const savedPath = memory.getFilePath();
-        logger.info(`[MemoryManager] Saved to: ${savedPath}`);
-      } catch (saveError) {
-        logger.error(`[MemoryManager] ❌ Failed to save seed memory:`, saveError);
-        throw saveError;
-      }
+      await this.saveSeedMemory(memory);
 
       logger.info(`[MemoryManager] 🎉 Step 15: Seed memory installation COMPLETE!`);
 
@@ -1605,6 +1566,92 @@ export class MemoryManager extends BaseElementManager<Memory> {
         source: 'MemoryManager.installSeedMemories',
         details: `Failed to install seed memories: ${error}`
       });
+    }
+  }
+
+  private async findExistingSeedMemory(seedFileName: string): Promise<Memory | undefined> {
+    try {
+      const memory = await this.load(seedFileName);
+      logger.info(`[MemoryManager] ✅ Step 7: Found existing seed memory '${seedFileName}'`);
+      logger.info(`[MemoryManager] Existing file location: ${memory.getFilePath()}`);
+      return memory;
+    } catch {
+      logger.info(`[MemoryManager] ℹ️  Step 7: Seed memory '${seedFileName}' not found in portfolio, will install fresh`);
+      return undefined;
+    }
+  }
+
+  private async prepareExistingSeedForInstall(
+    existingMemory: Memory,
+    seedFileName: string
+  ): Promise<boolean> {
+    logger.info(`[MemoryManager] Step 8: Analyzing existing seed memory content...`);
+    const entries = existingMemory.getAllEntries();
+    logger.debug(`[MemoryManager] Found ${entries.length} entries in existing memory`);
+
+    if (this.seedEntriesHaveContent(entries)) {
+      // FIX #1430: Reinstalling deletes the memory from cache, losing activation status.
+      logger.info(`[MemoryManager] ✅ Seed memory already installed with content - skipping reinstallation`);
+      logger.info(`[MemoryManager] 🎉 Seed memory installation check complete (already installed)`);
+      return true;
+    }
+
+    logger.info(`[MemoryManager] Step 9: Existing seed memory is empty (${entries.length} entries), will reinstall`);
+    await this.deleteExistingSeedMemory(seedFileName);
+    return false;
+  }
+
+  private seedEntriesHaveContent(entries: ReturnType<Memory['getAllEntries']>): boolean {
+    if (entries.length === 0) return false;
+    if (entries.length > 1) return true;
+
+    const content = entries[0].content.trim();
+    logger.debug(`[MemoryManager] Single entry content length: ${content.length} chars`);
+    const hasContent = content !== 'entries: []' && content !== '';
+    if (!hasContent) logger.info(`[MemoryManager] Entry appears empty (entries: [] or blank)`);
+    return hasContent;
+  }
+
+  private async deleteExistingSeedMemory(seedFileName: string): Promise<void> {
+    logger.info(`[MemoryManager] Step 10: Removing existing seed memory...`);
+    try {
+      await this.delete(seedFileName);
+      logger.info(`[MemoryManager] ✅ Removed existing seed memory, will install latest version`);
+    } catch (error) {
+      logger.error(`[MemoryManager] ❌ Failed to delete existing seed memory:`, error);
+      throw error;
+    }
+  }
+
+  private async parseSeedMemory(seedContent: string): Promise<Memory> {
+    try {
+      const memory = await this.importElement(seedContent, 'yaml');
+      logger.info(`[MemoryManager] ✅ Successfully parsed seed memory`);
+      logger.debug(`[MemoryManager] Memory name: ${memory.metadata.name}`);
+      return memory;
+    } catch (error) {
+      logger.error(`[MemoryManager] ❌ Failed to parse seed content:`, error);
+      throw error;
+    }
+  }
+
+  private configureSeedMemory(memory: Memory): void {
+    logger.info(`[MemoryManager] Step 13: Setting memory type to SYSTEM and autoLoad...`);
+    const metadata = memory.metadata as MemoryMetadata;
+    metadata.memoryType = MemoryType.SYSTEM;
+    metadata.autoLoad = true;
+    metadata.priority = 1;
+    logger.debug(`[MemoryManager] Memory type: ${metadata.memoryType}, autoLoad: ${metadata.autoLoad}, priority: ${metadata.priority}`);
+  }
+
+  private async saveSeedMemory(memory: Memory): Promise<void> {
+    try {
+      await this.save(memory);
+      logger.info(`[MemoryManager] ✅ Successfully saved seed memory`);
+      logger.info(`[MemoryManager] Saved to: ${memory.getFilePath()}`);
+    } catch (error) {
+      logger.error(`[MemoryManager] ❌ Failed to save seed memory:`, error);
+      throw error;
     }
   }
 
@@ -1705,16 +1752,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Memory creation warnings: ${validationResult.warnings.join(', ')}`);
     }
 
     // Check for duplicate (moved from createElement handler)
     const existingMemories = await this.list();
-    const duplicate = existingMemories.find(m =>
-      m.metadata.name?.toLowerCase() === metadata.name?.toLowerCase()
+    const duplicateExists = existingMemories.some(m =>
+      m.metadata.name.toLowerCase() === metadata.name?.toLowerCase()
     );
-    if (duplicate) {
+    if (duplicateExists) {
       throw new Error(`A memory named "${metadata.name}" already exists`);
     }
 
@@ -1870,12 +1917,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
   /**
    * Export a memory to YAML string
    */
-  override async exportElement(
+  override exportElement(
     element: Memory,
     format: 'json' | 'yaml' | 'markdown' = 'yaml'
   ): Promise<string> {
+    try {
     if (format === 'json') {
-      return element.serialize();
+      return Promise.resolve(element.serialize());
     }
 
     const stats = element.getStats();
@@ -1894,17 +1942,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // SECURITY FIX: Use secure YAML dumping
     // FIX #1430: Use JSON_SCHEMA to preserve booleans (autoLoad) and numbers (priority)
     // JSON_SCHEMA = FAILSAFE + bool/int/float/null (safer than DEFAULT which adds timestamps)
-    return this.serializationService.dumpYaml(data, {
+    return Promise.resolve(this.serializationService.dumpYaml(data, {
       schema: 'json',
       noRefs: true,
       skipInvalid: true,
       sortKeys: true
-    });
+    }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
-  protected override async parseMetadata(data: any): Promise<MemoryMetadata> {
+  protected override parseMetadata(data: any): Promise<MemoryMetadata> {
+    try {
     const { metadata } = this.parseMemoryFile({ data, content: '' });
-    return metadata;
+    return Promise.resolve(metadata);
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   protected override createElement(metadata: MemoryMetadata, _content: string): Memory {
@@ -1917,7 +1972,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return memory;
   }
 
-  protected override async serializeElement(element: Memory): Promise<string> {
+  protected override serializeElement(element: Memory): Promise<string> {
+    try {
     const stats = element.getStats();
     // Issue #755: Serialize type as singular and persist unique_id
     const metadata = { ...element.metadata };
@@ -1943,12 +1999,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // FIX #1430: Use JSON_SCHEMA to preserve booleans (autoLoad) and numbers (priority)
     // JSON_SCHEMA = FAILSAFE + bool/int/float/null (safer than DEFAULT which adds timestamps)
-    return this.serializationService.dumpYaml(payload, {
+    return Promise.resolve(this.serializationService.dumpYaml(payload, {
       schema: 'json',
       noRefs: true,
       skipInvalid: true,
       sortKeys: true
-    });
+    }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
   
   /**
@@ -2008,7 +2067,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When file extension is not allowed (.md, .yaml, .yml)
    * @throws {Error} When resolved path would be outside memories directory
    */
-  private async validateAndResolvePath(filePath: string): Promise<string> {
+  private validateAndResolvePath(filePath: string): Promise<string> {
+    try {
     // SECURITY FIX: Comprehensive path validation
     // Enhanced validation inspired by Jeet Singh (@jeetsingh008) - PR #1035
 
@@ -2054,7 +2114,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
       throw new Error('File path must be within memories directory');
     }
     
-    return fullPath;
+    return Promise.resolve(fullPath);
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
   
   private parseMemoryFile(parsed: ParsedMemoryData): { metadata: MemoryMetadata; content: string } {
@@ -2064,7 +2127,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // parsed.content = markdown content after frontmatter
 
     // For pure YAML memory files, we need to check if metadata is directly in data
-    const yamlData = parsed.data || {};
+    const yamlData = parsed.data;
 
     // Memory files saved by the system have metadata as a top-level key
     const metadataSource = yamlData.metadata || yamlData;
@@ -2076,7 +2139,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true
     });
-    if (!nameResult.isValid) {
+    const sanitizedName = nameResult.sanitizedValue;
+    if (!nameResult.isValid || sanitizedName === undefined) {
       throw new Error(`Invalid memory name: ${nameResult.errors?.join(', ')}`);
     }
 
@@ -2084,18 +2148,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
     let sanitizedDescription = '';
     if (metadataSource.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadataSource.description, {
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
-      if (!descResult.isValid) {
+      const sanitizedDescriptionValue = descResult.sanitizedValue;
+      if (!descResult.isValid || sanitizedDescriptionValue === undefined) {
         throw new Error(`Invalid memory description: ${descResult.errors?.join(', ')}`);
       }
-      sanitizedDescription = descResult.sanitizedValue!;
+      sanitizedDescription = sanitizedDescriptionValue;
     }
 
     const metadata: MemoryMetadata = {
-      name: nameResult.sanitizedValue!,
+      name: sanitizedName,
       description: sanitizedDescription,
       version: metadataSource.version || '1.0.0',
       author: metadataSource.author,
@@ -2120,7 +2185,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Memory type classification
       memoryType: metadataSource.memoryType,
       // Issue #524 — Gatekeeper policy (all element types)
-      gatekeeper: sanitizeGatekeeperPolicy(metadataSource.gatekeeper, nameResult.sanitizedValue || 'unknown', 'memory', metadataSource as Record<string, unknown>),
+      gatekeeper: sanitizeGatekeeperPolicy(metadataSource.gatekeeper, sanitizedName, 'memory', metadataSource as Record<string, unknown>),
     };
 
     // Enhanced trigger validation and logging
@@ -2148,9 +2213,26 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private parseRetentionDays(retention: string | number): number {
     if (typeof retention === 'number') return retention;
     if (retention === 'permanent' || retention === 'perpetual') return 999999;
-    const regex = /(\d+)\s*days?/i;
-    const match = regex.exec(retention);
-    return match ? Number.parseInt(match[1]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
+    const normalized = retention.toLowerCase();
+    let cursor = 0;
+    while (cursor < normalized.length) {
+      if (normalized[cursor] < '0' || normalized[cursor] > '9') {
+        cursor++;
+        continue;
+      }
+      const digitStart = cursor;
+      while (cursor < normalized.length && normalized[cursor] >= '0' && normalized[cursor] <= '9') {
+        cursor++;
+      }
+      let suffixStart = cursor;
+      while (suffixStart < normalized.length && normalized[suffixStart].trim().length === 0) {
+        suffixStart++;
+      }
+      if (normalized.startsWith('day', suffixStart)) {
+        return Number.parseInt(normalized.slice(digitStart, cursor));
+      }
+    }
+    return MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
   }
 
   /**

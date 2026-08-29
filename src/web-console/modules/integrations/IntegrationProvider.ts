@@ -1,5 +1,6 @@
 import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
 import type { UserIntegrationProvider, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import type { IntegrationStaticApiKeyDescriptor } from '../../stores/IIntegrationDescriptorStore.js';
 import type { GitHubIntegrationStatusDto, IntegrationStatusDto } from './IntegrationDtos.js';
 import type {
   GitHubIntegrationContentsPermission,
@@ -80,8 +81,18 @@ export interface IntegrationProviderStatusProjection {
 
 export interface IIntegrationProvider {
   readonly descriptor: IntegrationProviderCatalogDescriptor;
+  /** Persisted descriptor that owns credentials created by this provider. */
+  readonly integrationDescriptorId?: string | null;
+  /** Routing-sensitive digest of the persisted descriptor. */
+  readonly integrationDescriptorFingerprint?: string | null;
   readonly authorizationConfigured: boolean;
   readonly credentialStrategy: IntegrationCredentialStrategy;
+  /**
+   * Injection shape for static_api_key providers, so the connect surface
+   * knows whether to capture a single api_key or a Basic username/password
+   * pair. Absent for OAuth/coded providers.
+   */
+  readonly staticApiKeyInjection?: IntegrationStaticApiKeyDescriptor['injection'];
   createAuthorizationUrl(request: IntegrationAuthorizationRequest): string;
   exchangeAuthorizationCode(request: IntegrationTokenExchangeRequest): Promise<IntegrationTokenExchangeResult>;
   refreshCredentials?(request: IntegrationTokenRefreshRequest): Promise<IntegrationTokenRefreshResult>;
@@ -95,7 +106,7 @@ export function createGitHubIntegrationProvider(
 ): IIntegrationProvider {
   return {
     descriptor: {
-      id: 'github',
+      id: 'github' as UserIntegrationProvider,
       displayName: 'GitHub',
       category: 'Source control',
     },
@@ -146,7 +157,7 @@ export function createUnavailableGitHubIntegrationProvider(
 ): IIntegrationProvider {
   return {
     descriptor: {
-      id: 'github',
+      id: 'github' as UserIntegrationProvider,
       displayName: 'GitHub',
       category: 'Source control',
     },

@@ -21,14 +21,14 @@ import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHan
 function makeMemory(name: string) {
   return {
     metadata: { name },
-    addEntry: jest.fn(async () => ({
+    addEntry: jest.fn(() => Promise.resolve({
       id: 'entry-1',
       timestamp: new Date('2026-01-01T00:00:00.000Z'),
       trustLevel: 'untrusted',
     })),
     removeEntry: jest.fn(() => true),
     getEntries: jest.fn(() => new Map()),
-    clearAll: jest.fn(async () => undefined),
+    clearAll: jest.fn(() => Promise.resolve()),
   };
 }
 
@@ -46,10 +46,10 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
   beforeEach(() => {
     memory = makeMemory('doomed-memory');
     manager = {
-      find: jest.fn(async () => memory),
-      save: jest.fn(async () => undefined),
-      assertPersistable: jest.fn(async () => undefined),
-      isMemoryDeletedAt: jest.fn(async () => false),
+      find: jest.fn(() => Promise.resolve(memory)),
+      save: jest.fn(() => Promise.resolve()),
+      assertPersistable: jest.fn(() => Promise.resolve()),
+      isMemoryDeletedAt: jest.fn(() => Promise.resolve(false)),
       getMemoryProbeToken: jest.fn(() => '/portfolio/users/a/memories/doomed-memory.yaml'),
     };
     handler = new MemorySaveHandler(
@@ -120,6 +120,25 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     handler.cleanupSession('session-a');
     // cleanupSession fires asynchronously; give the microtask queue a turn.
     await new Promise(resolve => setTimeout(resolve, 10));
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('retains a failed cleanup retry for the shutdown flush', async () => {
+    await seedFailedSave();
+    manager.save.mockClear();
+    manager.save.mockRejectedValueOnce(new Error('cleanup retry still unavailable'));
+
+    handler.cleanupSession('session-a');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(manager.save).toHaveBeenCalledTimes(1);
+
+    manager.save.mockClear();
+    await handler.flushPendingSaves();
+    expect(manager.save).toHaveBeenCalledTimes(1);
+    expect(manager.save).toHaveBeenCalledWith(memory);
+
+    manager.save.mockClear();
+    await handler.flushPendingSaves();
     expect(manager.save).not.toHaveBeenCalled();
   });
 });

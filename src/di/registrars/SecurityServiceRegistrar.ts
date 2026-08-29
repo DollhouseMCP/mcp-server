@@ -43,7 +43,8 @@ import type { DatabaseConfirmationStore } from '../../state/DatabaseConfirmation
 import type { DatabaseChallengeStore } from '../../state/DatabaseChallengeStore.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import { VerificationNotifier } from '../../services/VerificationNotifier.js';
-import { PortfolioManager, ElementType } from '../../portfolio/PortfolioManager.js';
+import { ElementType } from '../../portfolio/PortfolioManager.js';
+import type { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import type { MetadataService } from '../../services/MetadataService.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 import path from 'node:path';
@@ -54,10 +55,12 @@ import type { PathService } from '../../paths/PathService.js';
 
 export class SecurityServiceRegistrar {
   public register(container: DiContainerFacade): void {
+    container.register('ContextTracker', () => new ContextTracker());
+
     // SecurityMonitor: DI-managed instance wired into the static facade.
     // Eagerly resolved to replace the fallback before handlers start logging.
     container.register('SecurityMonitor', () => {
-      const instance = new SecurityMonitor();
+      const instance = new SecurityMonitor(() => container.resolve<ContextTracker>('ContextTracker'));
       SecurityMonitor.setInstance(instance);
       return instance;
     });
@@ -75,8 +78,6 @@ export class SecurityServiceRegistrar {
       const session = container.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       return new SessionActivationRegistry(session.sessionId);
     });
-
-    container.register('ContextTracker', () => new ContextTracker());
 
     container.register('PatternEncryptor', () => new PatternEncryptor());
     container.register('PatternDecryptor', () => new PatternDecryptor(

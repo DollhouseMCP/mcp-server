@@ -6,7 +6,12 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { tmpdir } from 'node:os';
 import path from 'path';
+
+const TEST_SECURITY_DIR = path.join(tmpdir(), 'test-security');
+const TEST_AGENT_NAME = 'test-agent';
+const TEST_VERIFICATION_CODE = 'verify-123';
 
 // Create mock function for SecurityMonitor
 const mockLogSecurityEvent = jest.fn();
@@ -27,7 +32,7 @@ jest.unstable_mockModule('../../../src/security/securityMonitor.js', () => ({
   },
 }));
 
-const mockMkdir = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+const mockMkdir = jest.fn<() => Promise<void>>().mockResolvedValue();
 jest.unstable_mockModule('fs/promises', () => ({
   default: { mkdir: mockMkdir },
   mkdir: mockMkdir,
@@ -39,28 +44,36 @@ const { DangerZoneEnforcer } = await import('../../../src/security/DangerZoneEnf
 /**
  * Create a mock FileOperationsService with controlled read/write behavior
  */
-function createMockFileOps(options?: {
+interface MockFileOpsOptions {
   readFileResult?: string;
   readFileError?: Error;
   writeFileError?: Error;
-}) {
+}
+
+function createMockReadFile(options?: MockFileOpsOptions) {
+  if (options?.readFileError) {
+    return jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError);
+  }
+  if (options?.readFileResult === undefined) {
+    return jest.fn<() => Promise<string>>().mockRejectedValue(
+      Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    );
+  }
+  return jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
+}
+
+function createMockFileOps(options?: MockFileOpsOptions) {
   return {
-    readFile: options?.readFileError
-      ? jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError)
-      : options?.readFileResult !== undefined
-        ? jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult)
-        : jest.fn<() => Promise<string>>().mockRejectedValue(
-            Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-          ),
+    readFile: createMockReadFile(options),
     writeFile: options?.writeFileError
       ? jest.fn<() => Promise<void>>().mockRejectedValue(options.writeFileError)
-      : jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      : jest.fn<() => Promise<void>>().mockResolvedValue(),
     // Minimal stubs for remaining FileOperationsService interface
     readElementFile: jest.fn<() => Promise<string>>().mockResolvedValue(''),
-    deleteFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    deleteFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
     fileExists: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
     listFiles: jest.fn<() => Promise<string[]>>().mockResolvedValue([]),
-    ensureDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    ensureDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
   } as any;
 }
 
@@ -71,39 +84,46 @@ describe('DangerZoneEnforcer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFileOps = createMockFileOps();
-    enforcer = new DangerZoneEnforcer(mockFileOps, '/tmp/test-security');
+    enforcer = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
     enforcer.setAdminToken(null); // Disable admin token for most tests
   });
 
   describe('block()', () => {
     it('should block an agent', () => {
       enforcer.block(
-        'test-agent',
+        TEST_AGENT_NAME,
         'Danger zone pattern matched',
-        ['rm -rf', 'drop database']
+        ['beetlejuice_beetlejuice_beetlejuice']
       );
 
-      const result = enforcer.check('test-agent');
+      const result = enforcer.check(TEST_AGENT_NAME);
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Danger zone pattern matched');
+      expect(result.eventId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(new Date(result.blockedAt ?? '').toISOString()).toBe(result.blockedAt);
     });
 
     it('should include verification ID if provided', () => {
       enforcer.block(
-        'test-agent',
+        TEST_AGENT_NAME,
         'Danger zone',
         ['pattern'],
-        'verify-123'
+        TEST_VERIFICATION_CODE
       );
 
-      const result = enforcer.check('test-agent');
+      const result = enforcer.check(TEST_AGENT_NAME);
       expect(result.blocked).toBe(true);
-      expect(result.verificationId).toBe('verify-123');
-      expect(result.resolution).toContain('verify-123');
+      expect(result.verificationId).toBe(TEST_VERIFICATION_CODE);
+      expect(result.resolution).toContain(TEST_VERIFICATION_CODE);
     });
 
     it('should log enriched security event on block', () => {
-      enforcer.block('my-agent', 'test reason', ['rm -rf', 'drop db'], 'v-1');
+      enforcer.block(
+        'my-agent',
+        'test reason',
+        ['beetlejuice_beetlejuice_beetlejuice'],
+        'v-1',
+      );
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -114,7 +134,7 @@ describe('DangerZoneEnforcer', () => {
           additionalData: expect.objectContaining({
             agentName: 'my-agent',
             reason: 'test reason',
-            triggeredPatterns: ['rm -rf', 'drop db'],
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
             verificationId: 'v-1',
             totalActiveBlocks: 1,
           }),
@@ -123,13 +143,13 @@ describe('DangerZoneEnforcer', () => {
     });
 
     it('should persist to disk after blocking', async () => {
-      enforcer.block('test-agent', 'Reason', ['pattern']);
+      enforcer.block(TEST_AGENT_NAME, 'Reason', ['pattern']);
 
       // Wait for fire-and-forget persist
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(mockFileOps.writeFile).toHaveBeenCalledWith(
-        path.join('/tmp/test-security', 'blocked-agents.json'),
+        path.join(TEST_SECURITY_DIR, 'blocked-agents.json'),
         expect.stringContaining('"test-agent"')
       );
     });
@@ -137,12 +157,12 @@ describe('DangerZoneEnforcer', () => {
 
   describe('unblock()', () => {
     it('should unblock an agent', () => {
-      enforcer.block('test-agent', 'Blocked', []);
+      enforcer.block(TEST_AGENT_NAME, 'Blocked', []);
 
-      const unblocked = enforcer.unblock('test-agent');
+      const unblocked = enforcer.unblock(TEST_AGENT_NAME);
       expect(unblocked).toBe(true);
 
-      const result = enforcer.check('test-agent');
+      const result = enforcer.check(TEST_AGENT_NAME);
       expect(result.blocked).toBe(false);
     });
 
@@ -152,31 +172,31 @@ describe('DangerZoneEnforcer', () => {
     });
 
     it('should require matching verification ID', () => {
-      enforcer.block('test-agent', 'Blocked', [], 'verify-123');
+      enforcer.block(TEST_AGENT_NAME, 'Blocked', [], TEST_VERIFICATION_CODE);
 
       // Wrong verification ID
-      const wrongUnblock = enforcer.unblock('test-agent', 'wrong-id');
+      const wrongUnblock = enforcer.unblock(TEST_AGENT_NAME, 'wrong-id');
       expect(wrongUnblock).toBe(false);
 
       // Still blocked
-      expect(enforcer.check('test-agent').blocked).toBe(true);
+      expect(enforcer.check(TEST_AGENT_NAME).blocked).toBe(true);
 
       // Correct verification ID
-      const correctUnblock = enforcer.unblock('test-agent', 'verify-123');
+      const correctUnblock = enforcer.unblock(TEST_AGENT_NAME, TEST_VERIFICATION_CODE);
       expect(correctUnblock).toBe(true);
-      expect(enforcer.check('test-agent').blocked).toBe(false);
+      expect(enforcer.check(TEST_AGENT_NAME).blocked).toBe(false);
     });
 
     it('should log enriched unblock event with duration', () => {
-      enforcer.block('test-agent', 'Blocked', []);
-      enforcer.unblock('test-agent');
+      enforcer.block(TEST_AGENT_NAME, 'Blocked', []);
+      enforcer.unblock(TEST_AGENT_NAME);
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           source: 'DangerZoneEnforcer.unblock',
           details: expect.stringContaining("Agent 'test-agent' unblocked after verification"),
           additionalData: expect.objectContaining({
-            agentName: 'test-agent',
+            agentName: TEST_AGENT_NAME,
             blockDurationMs: expect.any(Number),
           }),
         })
@@ -184,11 +204,11 @@ describe('DangerZoneEnforcer', () => {
     });
 
     it('should persist to disk after unblocking', async () => {
-      enforcer.block('test-agent', 'Reason', []);
+      enforcer.block(TEST_AGENT_NAME, 'Reason', []);
       await new Promise(resolve => setTimeout(resolve, 50));
       mockFileOps.writeFile.mockClear();
 
-      enforcer.unblock('test-agent');
+      enforcer.unblock(TEST_AGENT_NAME);
       await new Promise(resolve => setTimeout(resolve, 50));
 
       expect(mockFileOps.writeFile).toHaveBeenCalled();
@@ -367,7 +387,7 @@ describe('DangerZoneEnforcer', () => {
       enforcer.block('  test-agent  ', 'Reason', []);
 
       // Should find it with trimmed name
-      const result = enforcer.check('test-agent');
+      const result = enforcer.check(TEST_AGENT_NAME);
       expect(result.blocked).toBe(true);
 
       // Should also find it with whitespace (will be trimmed)
@@ -436,28 +456,56 @@ describe('DangerZoneEnforcer', () => {
         blocks: {
           'agent-x': {
             reason: 'Previous session block',
-            triggeredPatterns: ['rm -rf'],
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
             blockedAt: '2026-01-01T00:00:00.000Z',
             verificationId: 'v-abc',
+            goalId: 'goal-abc',
           },
         },
       });
 
       const fileOps = createMockFileOps({ readFileResult: persistedData });
-      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
       await instance.initialize();
 
       const result = instance.check('agent-x');
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Previous session block');
       expect(result.verificationId).toBe('v-abc');
+      expect(result.eventId).toBe('v-abc');
+      expect(result.goalId).toBe('goal-abc');
+      expect(result.blockedAt).toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('should preserve a block with a safe timestamp when persisted blockedAt is invalid', async () => {
+      const persistedData = JSON.stringify({
+        version: 1,
+        blocks: {
+          'agent-invalid-time': {
+            reason: 'Previous session block',
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
+            blockedAt: 'not-a-timestamp',
+            verificationId: 'v-invalid-time',
+          },
+        },
+      });
+
+      const fileOps = createMockFileOps({ readFileResult: persistedData });
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
+      await instance.initialize();
+
+      expect(instance.check('agent-invalid-time')).toEqual(expect.objectContaining({
+        blocked: true,
+        blockedAt: '1970-01-01T00:00:00.000Z',
+        verificationId: 'v-invalid-time',
+      }));
     });
 
     it('should start with empty blocks when file is missing', async () => {
       const fileOps = createMockFileOps({
         readFileError: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
       });
-      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
       await instance.initialize();
 
       expect(instance.hasBlockedAgents()).toBe(false);
@@ -465,7 +513,7 @@ describe('DangerZoneEnforcer', () => {
 
     it('should start with empty blocks on corrupt JSON', async () => {
       const fileOps = createMockFileOps({ readFileResult: 'NOT VALID JSON{{{' });
-      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
       await instance.initialize();
 
       expect(instance.hasBlockedAgents()).toBe(false);
@@ -483,7 +531,7 @@ describe('DangerZoneEnforcer', () => {
       const fileOps = createMockFileOps({
         readFileError: new Error('Permission denied'),
       });
-      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
       await instance.initialize();
 
       // Should not throw, should start with empty blocks
@@ -497,12 +545,19 @@ describe('DangerZoneEnforcer', () => {
       let writtenContent = '';
       const writeFileOps = createMockFileOps();
       writeFileOps.writeFile = jest.fn<(path: string, content: string) => Promise<void>>()
-        .mockImplementation(async (_path: string, content: string) => {
+        .mockImplementation((_path: string, content: string) => {
           writtenContent = content;
+          return Promise.resolve();
         });
 
-      const instance1 = new DangerZoneEnforcer(writeFileOps, '/tmp/test-security');
-      instance1.block('agent-survive', 'Persist test', ['pattern-a'], 'verify-survive');
+      const instance1 = new DangerZoneEnforcer(writeFileOps, TEST_SECURITY_DIR);
+      instance1.block(
+        'agent-survive',
+        'Persist test',
+        ['pattern-a'],
+        'verify-survive',
+        { goalId: 'goal-survive' },
+      );
 
       // Wait for fire-and-forget persist
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -511,13 +566,16 @@ describe('DangerZoneEnforcer', () => {
 
       // Create new instance that reads what was written
       const readFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const instance2 = new DangerZoneEnforcer(readFileOps, '/tmp/test-security');
+      const instance2 = new DangerZoneEnforcer(readFileOps, TEST_SECURITY_DIR);
       await instance2.initialize();
 
       const result = instance2.check('agent-survive');
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Persist test');
       expect(result.verificationId).toBe('verify-survive');
+      expect(result.eventId).toBeDefined();
+      expect(result.goalId).toBe('goal-survive');
+      expect(result.blockedAt).toBeDefined();
     });
   });
 
@@ -526,7 +584,7 @@ describe('DangerZoneEnforcer', () => {
       const fileOps = createMockFileOps({
         writeFileError: new Error('Disk full'),
       });
-      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
 
       // Block should work even though disk write will fail
       instance.block('agent-disk-fail', 'Disk failure test', ['pattern']);
@@ -543,10 +601,10 @@ describe('DangerZoneEnforcer', () => {
 
   describe('verification ID mismatch security event', () => {
     it('should log VERIFICATION_FAILED / HIGH on verification ID mismatch', () => {
-      enforcer.block('test-agent', 'Blocked', ['pattern'], 'correct-id');
+      enforcer.block(TEST_AGENT_NAME, 'Blocked', ['pattern'], 'correct-id');
       mockLogSecurityEvent.mockClear();
 
-      enforcer.unblock('test-agent', 'wrong-id');
+      enforcer.unblock(TEST_AGENT_NAME, 'wrong-id');
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -555,7 +613,7 @@ describe('DangerZoneEnforcer', () => {
           source: 'DangerZoneEnforcer.unblock',
           details: expect.stringContaining('verification ID mismatch'),
           additionalData: expect.objectContaining({
-            agentName: 'test-agent',
+            agentName: TEST_AGENT_NAME,
             expectedVerificationId: 'correct-id',
             providedVerificationId: 'wrong-id',
             reason: 'verification_id_mismatch',
@@ -578,7 +636,7 @@ describe('DangerZoneEnforcer', () => {
       const fileOps = createMockFileOps({
         writeFileError: new Error('Disk full'),
       });
-      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      const instance = new DangerZoneEnforcer(fileOps, TEST_SECURITY_DIR);
       instance.setAdminToken(null);
 
       instance.block('agent-disk', 'Reason', ['pattern']);
@@ -626,13 +684,13 @@ describe('DangerZoneEnforcer', () => {
       enforcer.block(
         'audit-agent',
         'Danger zone pattern matched',
-        ['rm -rf'],
+        ['beetlejuice_beetlejuice_beetlejuice'],
         'v-audit',
         {
           stepNumber: 3,
           currentStepDescription: 'Execute shell command',
           currentStepOutcome: 'success',
-          nextActionHint: 'rm -rf /tmp/data',
+          nextActionHint: 'beetlejuice_beetlejuice_beetlejuice',
           riskScore: 92,
           goalDescription: 'Clean up temporary files',
           goalId: 'goal-abc-123',
@@ -648,13 +706,13 @@ describe('DangerZoneEnforcer', () => {
           additionalData: expect.objectContaining({
             agentName: 'audit-agent',
             reason: 'Danger zone pattern matched',
-            triggeredPatterns: ['rm -rf'],
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
             verificationId: 'v-audit',
             totalActiveBlocks: 1,
             stepNumber: 3,
             currentStepDescription: 'Execute shell command',
             currentStepOutcome: 'success',
-            nextActionHint: 'rm -rf /tmp/data',
+            nextActionHint: 'beetlejuice_beetlejuice_beetlejuice',
             riskScore: 92,
             goalDescription: 'Clean up temporary files',
             goalId: 'goal-abc-123',
@@ -673,7 +731,10 @@ describe('DangerZoneEnforcer', () => {
         (c: any[]) => c[0]?.source === 'DangerZoneEnforcer.block'
       );
       expect(call).toBeDefined();
-      const additionalData = call![0].additionalData;
+      if (!call) {
+        throw new Error('Expected the compatibility audit event');
+      }
+      const additionalData = call[0].additionalData;
 
       // Existing fields present
       expect(additionalData.agentName).toBe('compat-agent');
@@ -708,7 +769,10 @@ describe('DangerZoneEnforcer', () => {
         (c: any[]) => c[0]?.source === 'DangerZoneEnforcer.block'
       );
       expect(call).toBeDefined();
-      const additionalData = call![0].additionalData;
+      if (!call) {
+        throw new Error('Expected the partial-context audit event');
+      }
+      const additionalData = call[0].additionalData;
 
       expect(additionalData.stepNumber).toBe(1);
       expect(additionalData.riskScore).toBe(88);
@@ -720,8 +784,8 @@ describe('DangerZoneEnforcer', () => {
 
   describe('test isolation', () => {
     it('should have independent state per instance', () => {
-      const enforcer1 = new DangerZoneEnforcer(mockFileOps, '/tmp/test-security');
-      const enforcer2 = new DangerZoneEnforcer(mockFileOps, '/tmp/test-security');
+      const enforcer1 = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
+      const enforcer2 = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
 
       enforcer1.block('agent-1', 'Reason', []);
 

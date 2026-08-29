@@ -21,6 +21,7 @@ import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { IRuntimeSessionControlStore } from '../services/runtime/IRuntimeSessionControlStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
+import type { ConsoleCollectionFetchRateLimiter } from '../services/rate-limit/ConsoleCollectionFetchRateLimiter.js';
 import type { ConsoleHttpMethod, ConsoleRouteDefinition , ConsoleRequest } from './ConsolePlatformTypes.js';
 import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
@@ -44,6 +45,7 @@ export interface SecuredConsoleRouterOptions {
   readonly runtimeStore: IRuntimeSessionControlStore;
   readonly authPolicyStore?: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter?: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly collectionFetchRateLimiter?: ConsoleCollectionFetchRateLimiter | null;
   readonly idleTimeoutMs: number;
   readonly now?: () => Date;
   readonly reportInternalError?: (error: unknown, correlationId: string) => void;

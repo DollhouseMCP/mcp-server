@@ -333,7 +333,7 @@ describe('ToolRegistry', () => {
   });
 
   it('registerIntegrationTools should wire request and operation discovery tools', () => {
-    registry.registerIntegrationTools({} as any, null, {
+    registry.registerIntegrationTools({} as any, {
       listOperations: jest.fn(),
       describeOperation: jest.fn(),
     } as any);

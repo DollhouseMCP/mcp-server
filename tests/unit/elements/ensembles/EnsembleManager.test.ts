@@ -16,7 +16,7 @@ jest.mock('../../../../src/utils/logger.js');
 import { EnsembleManager } from '../../../../src/elements/ensembles/EnsembleManager.js';
 import { resolveElementTypes } from '../../../../src/utils/elementTypeResolver.js';
 import { Ensemble } from '../../../../src/elements/ensembles/Ensemble.js';
-import { EnsembleMetadata } from '../../../../src/elements/ensembles/types.js';
+import type { EnsembleMetadata } from '../../../../src/elements/ensembles/types.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
@@ -29,6 +29,16 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 import { logger } from '../../../../src/utils/logger.js';
+
+const LEGACY_SKILL_NAME = 'legacy-skill';
+
+function atomicReadFileMock(manager: FileLockManager): jest.MockedFunction<FileLockManager['atomicReadFile']> {
+  return manager.atomicReadFile as jest.MockedFunction<FileLockManager['atomicReadFile']>;
+}
+
+function atomicWriteFileMock(manager: FileLockManager): jest.MockedFunction<FileLockManager['atomicWriteFile']> {
+  return manager.atomicWriteFile as jest.MockedFunction<FileLockManager['atomicWriteFile']>;
+}
 
 describe('EnsembleManager', () => {
   let ensembleManager: EnsembleManager;
@@ -76,7 +86,7 @@ describe('EnsembleManager', () => {
     jest.clearAllMocks();
 
     // Set default mock implementations
-    fileLockManager.atomicWriteFile = jest.fn(() => Promise.resolve(undefined)) as any;
+    fileLockManager.atomicWriteFile = jest.fn(() => Promise.resolve()) as any;
     fileLockManager.atomicReadFile = jest.fn(() => Promise.resolve('')) as any;
     fileLockManager.withLock = jest.fn((resource: string, operation: () => Promise<any>) => operation()) as any;
     (SecurityMonitor as any).logSecurityEvent = jest.fn();
@@ -113,11 +123,11 @@ describe('EnsembleManager', () => {
       expect(ensemble).toBeInstanceOf(Ensemble);
       expect(ensemble.metadata.name).toBe('Test Ensemble');
       expect(ensemble.metadata.activationStrategy).toBe('sequential');
-      expect(ensemble.metadata.elements.length).toBe(1);
+      expect(ensemble.metadata.elements).toHaveLength(1);
 
       // CRITICAL: Verify file was saved to disk
       expect(fileLockManager.atomicWriteFile).toHaveBeenCalled();
-      const writeCall = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls[0];
+      const writeCall = atomicWriteFileMock(fileLockManager).mock.calls[0];
       const [actualPath, content] = writeCall as [string, string];
 
       // Verify the filename
@@ -146,7 +156,7 @@ describe('EnsembleManager', () => {
         description: 'Testing legacy field migration',
         elements: [
           {
-            name: 'legacy-skill',  // Legacy field
+            name: LEGACY_SKILL_NAME,  // Legacy field
             type: 'skill',         // Legacy field
             role: 'primary',
             priority: 80,
@@ -158,9 +168,9 @@ describe('EnsembleManager', () => {
       const ensemble = await ensembleManager.create(metadata);
 
       expect(ensemble).toBeInstanceOf(Ensemble);
-      expect(ensemble.metadata.elements.length).toBe(1);
+      expect(ensemble.metadata.elements).toHaveLength(1);
       // Verify migration happened - element should have element_name/element_type
-      expect(ensemble.metadata.elements[0].element_name).toBe('legacy-skill');
+      expect(ensemble.metadata.elements[0].element_name).toBe(LEGACY_SKILL_NAME);
       expect(ensemble.metadata.elements[0].element_type).toBe('skill');
     });
 
@@ -170,7 +180,7 @@ describe('EnsembleManager', () => {
         name: 'Legacy Parse Ensemble',
         elements: [
           {
-            name: 'legacy-skill',
+            name: LEGACY_SKILL_NAME,
             type: 'skill',
             role: 'primary',
             priority: 80,
@@ -201,7 +211,7 @@ describe('EnsembleManager', () => {
         description: 'Testing bounded legacy warnings',
         elements: [
           {
-            name: 'legacy-skill',
+            name: LEGACY_SKILL_NAME,
             type: 'skill',
             role: 'primary',
             priority: 80,
@@ -223,7 +233,7 @@ describe('EnsembleManager', () => {
         name: 'Legacy Resettable Warning Ensemble',
         elements: [
           {
-            name: 'legacy-skill',
+            name: LEGACY_SKILL_NAME,
             type: 'skill',
             role: 'primary',
             priority: 80,
@@ -264,6 +274,7 @@ describe('EnsembleManager', () => {
       const yamlContent = `---
 name: Imported Ensemble
 description: Imported from YAML
+instructions: Coordinate the imported elements.
 activationStrategy: all
 conflictResolution: priority
 elements:
@@ -287,8 +298,15 @@ This is ensemble documentation.
 
       expect(ensemble.metadata.name).toBe('Imported Ensemble');
       expect(ensemble.metadata.activationStrategy).toBe('all');
-      expect(ensemble.metadata.elements.length).toBe(2);
+      expect(ensemble.metadata.elements).toHaveLength(2);
       expect(ensemble.metadata.elements[0].element_name).toBe('element1');
+      expect(ensemble.instructions).toBe('Coordinate the imported elements.');
+      expect(ensemble.metadata.instructions).toBeUndefined();
+      expect(ensemble.content).toContain('This is ensemble documentation.');
+
+      const exported = await ensembleManager.exportElement(ensemble, 'yaml');
+      expect(exported).toContain('instructions: Coordinate the imported elements.');
+      expect(exported).toContain('This is ensemble documentation.');
     });
 
     it('should import ensemble from JSON', async () => {
@@ -367,14 +385,14 @@ This is ensemble documentation.
       const fullPath = path.join(portfolioPath, 'ensembles', filePath);
 
       // Mock successful save
-      (fileLockManager.atomicWriteFile as jest.Mock).mockResolvedValueOnce(undefined);
+      atomicWriteFileMock(fileLockManager).mockImplementationOnce(() => Promise.resolve());
 
       await ensembleManager.save(ensemble, filePath);
 
-      const calls = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls;
+      const calls = atomicWriteFileMock(fileLockManager).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
 
-      const [actualPath, content, options] = calls[calls.length - 1] as [string, string, { encoding: string }];
+      const [actualPath, content, options] = calls.at(-1) as [string, string, { encoding: string }];
 
       // Normalize paths for cross-platform comparison (handles /var → /private/var on macOS)
       // Since the file hasn't been written yet (mocked), normalize parent directories
@@ -417,13 +435,13 @@ Test instructions.
       await fs.writeFile(fullPath, fileContent, 'utf-8');
 
       // Mock file read
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValueOnce(fileContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValueOnce(fileContent);
 
       const ensemble = await ensembleManager.load(filePath);
 
       expect(ensemble.metadata.name).toBe('Load Test');
       expect(ensemble.metadata.activationStrategy).toBe('priority');
-      expect(ensemble.metadata.elements.length).toBe(1);
+      expect(ensemble.metadata.elements).toHaveLength(1);
       expect(ensemble.metadata.elements[0].element_name).toBe('loaded-element');
     });
 
@@ -448,9 +466,8 @@ elements:
       const fullPath = path.join(portfolioPath, 'ensembles', filePath);
       await fs.writeFile(fullPath, fileContent, 'utf-8');
       mockPortfolioManager.listElements.mockResolvedValue([filePath]);
-      (fileLockManager.atomicReadFile as jest.Mock).mockImplementation(async (targetPath: string) =>
-        fs.readFile(targetPath, 'utf-8')
-      );
+      atomicReadFileMock(fileLockManager).mockImplementation((targetPath: string) =>
+        fs.readFile(targetPath, 'utf-8'));
 
       await ensembleManager.load(filePath);
       await ensembleManager.load(filePath);
@@ -479,9 +496,8 @@ elements:
       const fullPath = path.join(portfolioPath, 'ensembles', filePath);
       await fs.writeFile(fullPath, fileContent, 'utf-8');
       mockPortfolioManager.listElements.mockResolvedValue([filePath]);
-      (fileLockManager.atomicReadFile as jest.Mock).mockImplementation(async (targetPath: string) =>
-        fs.readFile(targetPath, 'utf-8')
-      );
+      atomicReadFileMock(fileLockManager).mockImplementation((targetPath: string) =>
+        fs.readFile(targetPath, 'utf-8'));
 
       const result = await ensembleManager.repairLegacyElementFields();
 
@@ -497,9 +513,9 @@ elements:
         ]
       });
 
-      const writes = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls;
+      const writes = atomicWriteFileMock(fileLockManager).mock.calls;
       expect(writes.length).toBeGreaterThan(0);
-      const [, content] = writes[writes.length - 1] as [string, string];
+      const [, content] = writes.at(-1) as [string, string];
       const contentLines = content.split('\n').map((line) => line.trim());
       expect(content).toContain('element_name: repair-skill');
       expect(content).toContain('element_type: skill');
@@ -625,7 +641,7 @@ elements:
       const yamlContent = `---
 name: Too Many Elements
 elements:
-${tooManyElements.map(e => `  - name: ${e.element_name}
+${tooManyElements.map(e => `  - name: ${e.name}
     type: ${e.element_type}
     role: ${e.role}
     priority: ${e.priority}
@@ -715,7 +731,7 @@ elements:
     it('should resolve element_type when found in exactly one manager', async () => {
       const mockManagers = {
         skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue({ metadata: { name: 'found-skill' } }) },
-        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue(undefined) },
+        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
       };
 
       const elements = [
@@ -747,8 +763,8 @@ elements:
 
     it('should report elements not found in any manager', async () => {
       const mockManagers = {
-        skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue(undefined) },
-        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue(undefined) },
+        skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
+        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
       };
 
       const elements = [
@@ -762,7 +778,7 @@ elements:
 
     it('should resolve persona via findPersona method', async () => {
       const mockManagers = {
-        skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue(undefined) },
+        skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
         personaManager: { findPersona: jest.fn<(name: string) => any>().mockReturnValue({ metadata: { name: 'my-persona' } }) },
       };
 
@@ -777,10 +793,11 @@ elements:
 
     it('should handle mixed elements: some with type, some needing resolution', async () => {
       const mockManagers = {
-        skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue(undefined) },
-        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockImplementation(async (name: string) => {
-          return name === 'found-template' ? { metadata: { name: 'found-template' } } : undefined;
-        }) },
+        skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
+        templateManager: {
+          findByName: jest.fn<(name: string) => Promise<any>>().mockImplementation((name: string) =>
+            Promise.resolve(name === 'found-template' ? { metadata: { name: 'found-template' } } : undefined)),
+        },
       };
 
       const elements = [
@@ -816,7 +833,7 @@ elements:
     it('should validate resolved types against canonical element type map', async () => {
       const mockManagers = {
         skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue({ metadata: { name: 'valid-skill' } }) },
-        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockResolvedValue(undefined) },
+        templateManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
       };
 
       const elements = [
@@ -887,7 +904,7 @@ elements: []
       // Use mockImplementation to return based on filename for deterministic ordering
       // BaseElementManager.list() uses Promise.all() which executes in parallel,
       // so mockResolvedValueOnce may return in unpredictable order
-      (fileLockManager.atomicReadFile as jest.Mock).mockImplementation((filePath: string) => {
+      atomicReadFileMock(fileLockManager).mockImplementation((filePath: string) => {
         if (filePath.includes('ensemble1')) return Promise.resolve(fileContent1);
         if (filePath.includes('ensemble2')) return Promise.resolve(fileContent2);
         return Promise.reject(new Error('Unknown file'));
@@ -895,7 +912,7 @@ elements: []
 
       const ensembles = await ensembleManager.list();
 
-      expect(ensembles.length).toBe(2);
+      expect(ensembles).toHaveLength(2);
       expect(ensembles[0].metadata.name).toBe('Ensemble 1');
       expect(ensembles[1].metadata.name).toBe('Ensemble 2');
     });
@@ -985,25 +1002,25 @@ elements:
       // Write initial file and warm the cache
       await fs.writeFile(filePath, originalContent, 'utf-8');
       mockPortfolioManager.listElements.mockResolvedValue([fileName]);
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(originalContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(originalContent);
 
       // list() triggers a scan that stores the mtime and populates the LRU cache
       const initial = await ensembleManager.list();
-      expect(initial[0].metadata.elements.length).toBe(2);
+      expect(initial[0].metadata.elements).toHaveLength(2);
 
       // Simulate external edit: overwrite file on disk (changing mtime) and update mock
       await fs.writeFile(filePath, updatedContent, 'utf-8');
       // Advance mtime explicitly to guarantee the scan sees a change
       const futureTime = new Date(Date.now() + 5000);
       await fs.utimes(filePath, futureTime, futureTime);
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(updatedContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(updatedContent);
 
       // activateEnsemble must call scanAndEvict() so the LRU entry is flushed
       const result = await ensembleManager.activateEnsemble('DQM Stack');
 
       expect(result.success).toBe(true);
       // Without the fix, this returns 2 (stale cache). With the fix, it returns 3.
-      expect(result.ensemble?.metadata.elements.length).toBe(3);
+      expect(result.ensemble?.metadata.elements).toHaveLength(3);
     });
 
     it('should not return stale data on repeated activate-deactivate-activate cycle', async () => {
@@ -1016,12 +1033,12 @@ elements:
 
       await fs.writeFile(filePath, v1, 'utf-8');
       mockPortfolioManager.listElements.mockResolvedValue([fileName]);
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(v1);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(v1);
       await ensembleManager.list();
 
       // First activation: should get v1 (1 element)
       const r1 = await ensembleManager.activateEnsemble('Cycle Ensemble');
-      expect(r1.ensemble?.metadata.elements.length).toBe(1);
+      expect(r1.ensemble?.metadata.elements).toHaveLength(1);
 
       await ensembleManager.deactivateEnsemble('Cycle Ensemble');
 
@@ -1029,11 +1046,11 @@ elements:
       await fs.writeFile(filePath, v2, 'utf-8');
       const futureTime = new Date(Date.now() + 5000);
       await fs.utimes(filePath, futureTime, futureTime);
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(v2);
+      atomicReadFileMock(fileLockManager).mockResolvedValue(v2);
 
       // Second activation: must NOT serve stale 1-element cache
       const r2 = await ensembleManager.activateEnsemble('Cycle Ensemble');
-      expect(r2.ensemble?.metadata.elements.length).toBe(2);
+      expect(r2.ensemble?.metadata.elements).toHaveLength(2);
     });
   });
 
@@ -1050,13 +1067,15 @@ elements:
       expect(ensemble.metadata.name).toBe('Body Test');
 
       // Verify the written content includes a markdown body
-      const writeCall = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls[
-        (fileLockManager.atomicWriteFile as jest.Mock).mock.calls.length - 1
-      ];
+      const writeCall = atomicWriteFileMock(fileLockManager).mock.calls.at(
+        -1
+      );
       const [, content] = writeCall as [string, string];
 
       // File should have content after the closing ---
-      expect(content).toMatch(/---\s*\n[\s\S]+\n---\s*\n[\s\S]+/);
+      const closingDelimiter = content.indexOf('\n---\n');
+      expect(closingDelimiter).toBeGreaterThan(0);
+      expect(content.slice(closingDelimiter + 5).trim()).not.toBe('');
       expect(content).toContain('Body Test');
     });
 
@@ -1083,7 +1102,7 @@ elements:
 `;
       const ensemblesDir = path.join(portfolioPath, 'ensembles');
       await fs.writeFile(path.join(ensemblesDir, 'legacy-ensemble.md'), fileContent, 'utf-8');
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValueOnce(fileContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValueOnce(fileContent);
 
       // Should load without throwing
       const loaded = await ensembleManager.load('legacy-ensemble.md');
@@ -1112,7 +1131,7 @@ elements:
 `;
       const ensemblesDir = path.join(portfolioPath, 'ensembles');
       await fs.writeFile(path.join(ensemblesDir, 'emdash-ensemble.md'), fileContent, 'utf-8');
-      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValueOnce(fileContent);
+      atomicReadFileMock(fileLockManager).mockResolvedValueOnce(fileContent);
 
       const loaded = await ensembleManager.load('emdash-ensemble.md');
       expect(loaded.metadata.description).toContain('—');

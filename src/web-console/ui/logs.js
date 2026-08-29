@@ -19,6 +19,7 @@
  */
 
 import { get } from './api.js';
+import { escapeHtml } from './ui-utils.js';
 
 const BUFFER_SIZE = 10000;
 const ROW_HEIGHT = 22;
@@ -64,9 +65,6 @@ let viewport, scrollSpacer, jumpBtn, statusDot, statusText, entryCountEl;
 let sessionSelect, categorySelect, levelSelect, sourceInput, searchInput, pauseBtn, clearBtn;
 let detailModal, copySelectedBtn, selectCountEl;
 const rowPool = [];
-
-// Filters whose change requires a server re-query (vs. instant buffer re-filter).
-const SERVER_SIDE_FILTERS = new Set(['level', 'correlationId', 'sessionId']);
 
 // ── Entry point ────────────────────────────────────────────────────────────
 export async function init(panelEl, ctx = {}) {
@@ -381,7 +379,7 @@ async function reload() {
   updateSelectionUI();
   // The endpoint returns newest-first; the buffer is oldest→newest (newest at
   // the bottom, like the legacy stream).
-  const entries = (res.body.entries || []).slice().reverse();
+  const entries = (res.body.items || []).slice().reverse();
   for (const entry of entries) buffer.push(entry);
   newestTs = entries.length ? entries[entries.length - 1].ts : newestTs;
   noteSessions(entries);
@@ -438,7 +436,7 @@ async function poll() {
     }
     if (lastPollFailed) setStatus(paused ? 'paused' : 'live');
     lastPollFailed = false;
-    applyFreshEntries((res.body.entries || []).slice().reverse()); // oldest→newest
+    applyFreshEntries((res.body.items || []).slice().reverse()); // oldest→newest
   } catch {
     markPollFailed();
   } finally {
@@ -769,9 +767,4 @@ function copyToClipboard(text) {
     document.execCommand('copy'); // NOSONAR — intentional fallback for browsers without navigator.clipboard support
     ta.remove();
   });
-}
-
-function escapeHtml(s) {
-  if (!s) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

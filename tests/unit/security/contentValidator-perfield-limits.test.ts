@@ -1,10 +1,12 @@
 /**
  * Regression: ContentValidator.validateMetadata must apply per-field
  * length limits. Identity fields (name, category, author, version,
- * tags) keep the strict 1KB cap; long-form fields (instructions,
- * content, description) get a higher limit so non-trivial collection
- * personas actually install. Description uses the YAML/frontmatter
- * limit because it carries substantive LLM-authored text.
+ * tags) keep the strict 1KB cap; the long-form content fields
+ * (instructions, content) get a much higher limit so non-trivial
+ * collection personas actually install. The element `description` has
+ * its own dedicated cap (MAX_DESCRIPTION_LENGTH) — a short summary
+ * field; substantive long-form text belongs in instructions/content or
+ * nested documentation fields, not the top-level description.
  *
  * Caught during Phase 4.5 PoC verification on 2026-05-12 — installing
  * `dollhouse-expert` from the public collection failed because the
@@ -17,6 +19,8 @@ import { describe, it, expect } from '@jest/globals';
 import { ContentValidator } from '../../../src/security/contentValidator.js';
 import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
+const EXCEEDS_MAXIMUM_LENGTH = 'exceeds maximum length';
+
 describe('ContentValidator.validateMetadata per-field length limits', () => {
   describe('identity-shaped fields (1KB cap)', () => {
     it.each(['name', 'category', 'author', 'version'])(
@@ -26,7 +30,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
         const result = ContentValidator.validateMetadata(metadata);
         expect(result.isValid).toBe(false);
         expect(result.detectedPatterns?.[0]).toContain(fieldName);
-        expect(result.detectedPatterns?.[0]).toContain('exceeds maximum length');
+        expect(result.detectedPatterns?.[0]).toContain(EXCEEDS_MAXIMUM_LENGTH);
       },
     );
 
@@ -39,7 +43,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
         // we don't assert on the validity bit here because the
         // validateAndSanitize call may flag pure 'a' runs as suspicious
         // patterns. The point is: not the length-cap failure mode.
-        expect(result.detectedPatterns?.find(p => p.startsWith(`${fieldName}:`) && p.includes('exceeds maximum length'))).toBeUndefined();
+        expect(result.detectedPatterns?.find(p => p.startsWith(`${fieldName}:`) && p.includes(EXCEEDS_MAXIMUM_LENGTH))).toBeUndefined();
       },
     );
   });
@@ -55,7 +59,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       // because pure 'a' runs may still trip pattern detection — that's
       // a separate concern from the length policy this test pins.
       expect(
-        result.detectedPatterns?.find(p => p.startsWith('instructions:') && p.includes('exceeds maximum length')),
+        result.detectedPatterns?.find(p => p.startsWith('instructions:') && p.includes(EXCEEDS_MAXIMUM_LENGTH)),
       ).toBeUndefined();
     });
 
@@ -66,7 +70,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       };
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
-      const lenError = result.detectedPatterns?.find(p => p.includes('instructions:') && p.includes('exceeds maximum length'));
+      const lenError = result.detectedPatterns?.find(p => p.includes('instructions:') && p.includes(EXCEEDS_MAXIMUM_LENGTH));
       expect(lenError).toBeDefined();
       expect(lenError).toContain(String(SECURITY_LIMITS.MAX_CONTENT_LENGTH));
     });
@@ -78,33 +82,33 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       };
       const result = ContentValidator.validateMetadata(metadata);
       expect(
-        result.detectedPatterns?.find(p => p.startsWith('content:') && p.includes('exceeds maximum length')),
+        result.detectedPatterns?.find(p => p.startsWith('content:') && p.includes(EXCEEDS_MAXIMUM_LENGTH)),
       ).toBeUndefined();
     });
 
-    it('accepts description well over the short metadata limit', () => {
+    it('accepts description at MAX_DESCRIPTION_LENGTH', () => {
       const metadata = {
         name: 'realistic-persona',
-        // 5KB of description text — far over the 1KB metadata cap but
-        // well under MAX_YAML_LENGTH. LLM-authored descriptions need this.
-        description: 'a'.repeat(5_000),
+        // Description has its own dedicated cap (MAX_DESCRIPTION_LENGTH);
+        // a description right at the cap must not trip the length check.
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH),
       };
       const result = ContentValidator.validateMetadata(metadata);
       expect(
-        result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes('exceeds maximum length')),
+        result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes(EXCEEDS_MAXIMUM_LENGTH)),
       ).toBeUndefined();
     });
 
-    it('rejects description only when over MAX_YAML_LENGTH', () => {
+    it('rejects description over MAX_DESCRIPTION_LENGTH', () => {
       const metadata = {
         name: 'huge-description-persona',
-        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 10),
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 10),
       };
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
-      const lenError = result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes('exceeds maximum length'));
+      const lenError = result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes(EXCEEDS_MAXIMUM_LENGTH));
       expect(lenError).toBeDefined();
-      expect(lenError).toContain(String(SECURITY_LIMITS.MAX_YAML_LENGTH));
+      expect(lenError).toContain(String(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH));
     });
   });
 
@@ -131,7 +135,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       const result = ContentValidator.validateMetadata(metadata);
       // No length-cap rejection on any field
       expect(
-        result.detectedPatterns?.find(p => p.includes('exceeds maximum length')),
+        result.detectedPatterns?.find(p => p.includes(EXCEEDS_MAXIMUM_LENGTH)),
       ).toBeUndefined();
     });
   });

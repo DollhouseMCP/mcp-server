@@ -267,7 +267,7 @@ describe('IntegrationOperationCatalog', () => {
     const stored = await specStore.findByDescriptorId(DESCRIPTOR_ID);
     const paths = stored?.spec.paths as Record<string, Record<string, { operationId: string }>>;
     const pathItem = paths['/gmail/v1/users/me/profile'];
-    expect(Object.keys(pathItem).sort()).toEqual(['get', 'post']);
+    expect(Object.keys(pathItem).sort((left, right) => left.localeCompare(right))).toEqual(['get', 'post']);
     expect(pathItem.get.operationId).toBe('duplicate');
     expect(pathItem.post.operationId).toBe('duplicate_2');
   });
@@ -355,6 +355,31 @@ describe('IntegrationOperationCatalog', () => {
     });
   });
 
+  it.each([
+    ['protocol-relative', '//evil.example.com/messages'],
+    ['backslash-bearing', String.raw`/gmail\v1/messages`],
+  ])('rejects %s OpenAPI operation paths during ingestion', async (_label, unsafePath) => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    await expect(runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        ...openApiSpec(),
+        paths: {
+          [unsafePath]: {
+            get: { operationId: 'unsafe', responses: { 200: { description: 'ok' } } },
+          },
+        },
+      },
+    }))).rejects.toMatchObject({
+      code: 'invalid_openapi_spec',
+      message: expect.stringContaining('absolute paths'),
+    });
+  });
+
   it('does not expose operations for a revoked connected integration', async () => {
     const revoked = {
       ...integration([GMAIL_READONLY]),
@@ -373,6 +398,52 @@ describe('IntegrationOperationCatalog', () => {
       });
     await expect(runAsUser(contextTracker, () => catalog.listPromotedOperations()))
       .resolves.toEqual([]);
+  });
+
+  it('accepts an equivalent canonical spelling of an allowlisted OpenAPI server host', async () => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({
+        ownership: 'byo',
+        ownerUserId: USER_ID,
+        apiHosts: ['gmail.googleapis.com'],
+      }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    const result = await runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        ...openApiSpec(),
+        servers: [{ url: 'https://GMAIL.GOOGLEAPIS.COM./' }],
+      },
+    }));
+
+    expect(result.operationCount).toBeGreaterThan(0);
+  });
+
+  it('rejects specs nested past the external-ref scan depth instead of skipping the check', async () => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    // An external $ref buried under 45 allOf wrappers sits past the scanner's
+    // depth limit of 40; the spec must be rejected outright, not silently pass.
+    let nested: Record<string, unknown> = { $ref: 'https://evil.example.com/schema.json#/External' };
+    for (let wrap = 0; wrap < 45; wrap += 1) {
+      nested = { allOf: [nested] };
+    }
+
+    await expect(runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        ...openApiSpec(),
+        components: { schemas: { Deep: nested } },
+      },
+    }))).rejects.toMatchObject({
+      code: 'invalid_openapi_spec',
+      message: expect.stringContaining('nesting depth'),
+    });
   });
 
   it('regenerates skill helpers while preserving user edits as a new revision', async () => {
@@ -560,6 +631,7 @@ function descriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): Integ
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'v1',
     operationPromotion: {},
     createdAt: new Date(TIMESTAMP),
@@ -573,6 +645,7 @@ function integration(scopes: readonly string[]): UserIntegrationRecord {
     id: INTEGRATION_ID,
     userId: USER_ID,
     provider: 'gmail',
+    integrationDescriptorId: DESCRIPTOR_ID,
     externalAccountLabel: 'alice@example.com',
     externalInstallationId: null,
     authorizedPermissions: { scopes },

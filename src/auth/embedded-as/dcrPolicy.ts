@@ -8,7 +8,8 @@
  * Anchored to issue #2220.
  */
 
-import { isIP } from 'node:net';
+import { isLoopbackIpAddress, isPublicIpAddress, parseIpAddress } from '../../security/ipAddressClassifier.js';
+import { containsUnsafeDisplayUnicode } from '../../security/validators/displayText.js';
 
 const MAX_REDIRECT_URIS = 10;
 const MAX_URI_LENGTH = 2048;
@@ -289,6 +290,9 @@ function validateStringMetadata(metadata: Record<string, unknown>, errors: strin
     if (containsControlCharacter(value)) {
       errors.push(`${key} must not contain control characters`);
     }
+    if (key === 'client_name' && containsUnsafeDisplayUnicode(value)) {
+      errors.push('client_name must not contain directional or zero-width characters');
+    }
   }
 }
 
@@ -369,95 +373,15 @@ function normalizeUrlHostname(hostname: string): string {
 }
 
 function isLoopbackHost(host: string): boolean {
-  if (host === 'localhost') return true;
-  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
-  const mappedIpv4 = parseIpv4MappedIpv6(host);
-  if (mappedIpv4) return mappedIpv4[0] === 127;
-  if (isIP(host) === 4) {
-    const octets = parseIpv4(host);
-    return octets ? octets[0] === 127 : false;
-  }
-  return false;
+  return host === 'localhost' || isLoopbackIpAddress(host);
 }
 
+/**
+ * True when the host is an IP literal that is not publicly routable, judged
+ * from canonical byte form so no textual variant (hex-mapped, long-form
+ * mapped, v4-compatible, NAT64, 6to4) slips through. Non-IP hostnames are
+ * not literals and return false.
+ */
 function isPrivateIpLiteral(host: string): boolean {
-  const mappedIpv4 = parseIpv4MappedIpv6(host);
-  if (mappedIpv4) return isPrivateIpv4Octets(mappedIpv4);
-  const version = isIP(host);
-  if (version === 4) {
-    const octets = parseIpv4(host);
-    if (!octets) return false;
-    return isPrivateIpv4Octets(octets);
-  }
-  if (version === 6) {
-    return host === '::'
-      || host === '::1'
-      || isIpv6UniqueLocal(host)
-      || isIpv6LinkLocal(host);
-  }
-  return false;
-}
-
-function isIpv6UniqueLocal(host: string): boolean {
-  const firstHextet = parseFirstIpv6Hextet(host);
-  return firstHextet !== null && firstHextet >= 0xfc00 && firstHextet <= 0xfdff;
-}
-
-function isIpv6LinkLocal(host: string): boolean {
-  const firstHextet = parseFirstIpv6Hextet(host);
-  return firstHextet !== null && firstHextet >= 0xfe80 && firstHextet <= 0xfebf;
-}
-
-function parseFirstIpv6Hextet(host: string): number | null {
-  const [first] = host.split(':', 1);
-  if (!first || !/^[0-9a-f]{1,4}$/i.test(first)) return null;
-  return Number.parseInt(first, 16);
-}
-
-function isPrivateIpv4Octets(octets: [number, number, number, number]): boolean {
-  const [a, b] = octets;
-  return a === 0
-    || a === 10
-    || a === 127
-    || (a === 100 && b >= 64 && b <= 127)
-    || (a === 169 && b === 254)
-    || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168);
-}
-
-function parseIpv4MappedIpv6(host: string): [number, number, number, number] | null {
-  const mappedPrefix = '::ffff:';
-  if (!host.startsWith(mappedPrefix)) return null;
-
-  const embedded = host.slice(mappedPrefix.length);
-  const dotted = parseIpv4(embedded);
-  if (dotted) return dotted;
-
-  const groups = embedded.split(':');
-  if (groups.length !== 2) return null;
-
-  const high = parseIpv4MappedHexGroup(groups[0]);
-  const low = parseIpv4MappedHexGroup(groups[1]);
-  if (high === null || low === null) return null;
-
-  return [
-    high >>> 8,
-    high & 0xff,
-    low >>> 8,
-    low & 0xff,
-  ];
-}
-
-function parseIpv4MappedHexGroup(group: string): number | null {
-  if (!/^[0-9a-f]{1,4}$/i.test(group)) return null;
-  const value = Number.parseInt(group, 16);
-  return Number.isInteger(value) && value >= 0 && value <= 0xffff ? value : null;
-}
-
-function parseIpv4(host: string): [number, number, number, number] | null {
-  const parts = host.split('.');
-  if (parts.length !== 4) return null;
-  const octets = parts.map(Number);
-  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return null;
-  return octets as [number, number, number, number];
+  return parseIpAddress(host) !== null && !isPublicIpAddress(host);
 }

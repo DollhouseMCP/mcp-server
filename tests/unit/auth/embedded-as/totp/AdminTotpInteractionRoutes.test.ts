@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { Secret, TOTP } from 'otpauth';
@@ -13,6 +13,10 @@ import { InMemoryRateLimitStore } from '../../../../../src/auth/embedded-as/stor
 import { AeadSecretEncryptionService } from '../../../../../src/web-console/security/SecretEncryption.js';
 import { InMemoryConsoleIdentityResolver } from '../../../../../src/web-console/identity/InMemoryConsoleIdentityResolver.js';
 import { InMemoryConsoleFactorStore } from '../../../../../src/web-console/stores/InMemoryConsoleFactorStore.js';
+
+const ENROLL_ROUTE_WITH_LABEL = '/auth/totp/enroll?label=Admin%20Console';
+const ENROLL_CONFIRM_ROUTE = '/auth/totp/enroll/confirm';
+const DISABLE_CONFIRM_ROUTE = '/auth/totp/disable/confirm';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -67,17 +71,27 @@ function buildFixture(options: { disabled?: boolean; unauthenticated?: boolean; 
 }
 
 describe('AdminTotpInteractionRoutes', () => {
+  it('normalizes the human-visible enrollment label without changing opaque TOTP values', async () => {
+    const { app, service } = buildFixture();
+    const beginEnrollment = jest.spyOn(service, 'beginEnrollment');
+
+    const response = await request(app).get('/auth/totp/enroll?label=Admin%E2%80%8B%20Console');
+
+    expect(response.status).toBe(200);
+    expect(beginEnrollment).toHaveBeenCalledWith(USER_ID, 'Admin Console');
+  });
+
   it('enrollment confirm creates an active factor and one-time backup codes', async () => {
     const { app, service, factors } = buildFixture();
 
-    const enroll = await request(app).get('/auth/totp/enroll?label=Admin%20Console');
+    const enroll = await request(app).get(ENROLL_ROUTE_WITH_LABEL);
     expect(enroll.status).toBe(200);
     const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
     const csrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
     const secret = match(enroll.text, /<code>([A-Z2-7]+)<\/code>/);
 
     const confirmed = await request(app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, csrf_token: csrf, code: totpCodeAt(secret) });
 
@@ -91,12 +105,12 @@ describe('AdminTotpInteractionRoutes', () => {
 
   it('disable confirm requires a valid proof before disabling the factor', async () => {
     const { app, factors } = buildFixture();
-    const enroll = await request(app).get('/auth/totp/enroll?label=Admin%20Console');
+    const enroll = await request(app).get(ENROLL_ROUTE_WITH_LABEL);
     const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
     const enrollCsrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
     const secret = match(enroll.text, /<code>([A-Z2-7]+)<\/code>/);
     await request(app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, csrf_token: enrollCsrf, code: totpCodeAt(secret) });
 
@@ -104,7 +118,7 @@ describe('AdminTotpInteractionRoutes', () => {
     const disableId = match(disable.text, /name="disable_id" value="([^"]+)"/);
     const disableCsrf = match(disable.text, /name="csrf_token" value="([^"]+)"/);
     const failed = await request(app)
-      .post('/auth/totp/disable/confirm')
+      .post(DISABLE_CONFIRM_ROUTE)
       .type('form')
       .send({ disable_id: disableId, csrf_token: disableCsrf, code: '000000' });
 
@@ -113,7 +127,7 @@ describe('AdminTotpInteractionRoutes', () => {
 
     const nextCsrf = match(failed.text, /name="csrf_token" value="([^"]+)"/);
     const disabled = await request(app)
-      .post('/auth/totp/disable/confirm')
+      .post(DISABLE_CONFIRM_ROUTE)
       .type('form')
       .send({ disable_id: disableId, csrf_token: nextCsrf, code: totpCodeAt(secret) });
 
@@ -123,20 +137,20 @@ describe('AdminTotpInteractionRoutes', () => {
 
   it('rejects missing and cross-user route CSRF tokens', async () => {
     const fixture = buildFixture();
-    const enroll = await request(fixture.app).get('/auth/totp/enroll?label=Admin%20Console');
+    const enroll = await request(fixture.app).get(ENROLL_ROUTE_WITH_LABEL);
     const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
     const csrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
     const secret = match(enroll.text, /<code>([A-Z2-7]+)<\/code>/);
 
     const missing = await request(fixture.app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, code: totpCodeAt(secret) });
     expect(missing.status).toBe(403);
 
     fixture.setSessionSub(OTHER_AUTH_SUB);
     const crossUser = await request(fixture.app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, csrf_token: csrf, code: totpCodeAt(secret) });
     expect(crossUser.status).toBe(403);
@@ -154,20 +168,20 @@ describe('AdminTotpInteractionRoutes', () => {
     await expect(request(app).get('/auth/totp/enroll?label=%3Cscript%3E'))
       .resolves.toMatchObject({ status: 400, body: { error: 'invalid_label' } });
 
-    const enroll = await request(app).get('/auth/totp/enroll?label=Admin%20Console');
+    const enroll = await request(app).get(ENROLL_ROUTE_WITH_LABEL);
     const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
     const csrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
     const secret = match(enroll.text, /<code>([A-Z2-7]+)<\/code>/);
     const first = await request(app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, csrf_token: csrf, code: totpCodeAt(secret) });
     expect(first.status).toBe(200);
 
-    await expect(request(app).get('/auth/totp/enroll?label=Admin%20Console'))
+    await expect(request(app).get(ENROLL_ROUTE_WITH_LABEL))
       .resolves.toMatchObject({ status: 409, body: { error: 'already_enrolled' } });
     const replay = await request(app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, csrf_token: csrf, code: totpCodeAt(secret) });
     expect(replay.status).toBe(403);
@@ -175,17 +189,17 @@ describe('AdminTotpInteractionRoutes', () => {
 
   it('rate-limits enrollment and disable proof failures', async () => {
     const enrollFixture = buildFixture({ rateLimitStore: new InMemoryRateLimitStore() });
-    const enroll = await request(enrollFixture.app).get('/auth/totp/enroll?label=Admin%20Console');
+    const enroll = await request(enrollFixture.app).get(ENROLL_ROUTE_WITH_LABEL);
     const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
     const csrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await request(enrollFixture.app)
-        .post('/auth/totp/enroll/confirm')
+        .post(ENROLL_CONFIRM_ROUTE)
         .type('form')
         .send({ pending_id: pendingId, csrf_token: csrf, code: '000000' });
     }
     await expect(request(enrollFixture.app)
-      .post('/auth/totp/enroll/confirm')
+      .post(ENROLL_CONFIRM_ROUTE)
       .type('form')
       .send({ pending_id: pendingId, csrf_token: csrf, code: '000000' }))
       .resolves.toMatchObject({ status: 429 });
@@ -197,13 +211,13 @@ describe('AdminTotpInteractionRoutes', () => {
     let disableCsrf = match(disable.text, /name="csrf_token" value="([^"]+)"/);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const failed = await request(disableFixture.app)
-        .post('/auth/totp/disable/confirm')
+        .post(DISABLE_CONFIRM_ROUTE)
         .type('form')
         .send({ disable_id: disableId, csrf_token: disableCsrf, code: '000000' });
       disableCsrf = /name="csrf_token" value="([^"]+)"/.exec(failed.text)?.[1] ?? disableCsrf;
     }
     await expect(request(disableFixture.app)
-      .post('/auth/totp/disable/confirm')
+      .post(DISABLE_CONFIRM_ROUTE)
       .type('form')
       .send({ disable_id: disableId, csrf_token: disableCsrf, code: totpCodeAt(enrolled.secret) }))
       .resolves.toMatchObject({ status: 429 });
@@ -217,7 +231,7 @@ describe('AdminTotpInteractionRoutes', () => {
     const disableCsrf = match(disable.text, /name="csrf_token" value="([^"]+)"/);
 
     const disabled = await request(app)
-      .post('/auth/totp/disable/confirm')
+      .post(DISABLE_CONFIRM_ROUTE)
       .type('form')
       .send({ disable_id: disableId, csrf_token: disableCsrf, code: enrolled.backupCodes[0] });
 
@@ -229,12 +243,12 @@ describe('AdminTotpInteractionRoutes', () => {
 });
 
 async function enrollFactor(app: express.Express): Promise<{ secret: string; backupCodes: string[] }> {
-  const enroll = await request(app).get('/auth/totp/enroll?label=Admin%20Console');
+  const enroll = await request(app).get(ENROLL_ROUTE_WITH_LABEL);
   const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
   const csrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
   const secret = match(enroll.text, /<code>([A-Z2-7]+)<\/code>/);
   const confirmed = await request(app)
-    .post('/auth/totp/enroll/confirm')
+    .post(ENROLL_CONFIRM_ROUTE)
     .type('form')
     .send({ pending_id: pendingId, csrf_token: csrf, code: totpCodeAt(secret) });
   const backupCodes = [...confirmed.text.matchAll(/<code>([0-9A-Z]+)<\/code>/g)].map((m) => m[1]);

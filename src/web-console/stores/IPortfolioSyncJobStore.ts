@@ -8,7 +8,7 @@ import {
 export type PortfolioSyncProvider = 'github';
 export type PortfolioSyncJobDirection = 'pull' | 'push' | 'bidirectional';
 export type PortfolioSyncJobConflictPolicy = 'fail' | 'prefer_local' | 'prefer_remote';
-export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
 export interface PortfolioSyncJobRecord {
   readonly id: string;
@@ -134,8 +134,7 @@ function isPortfolioSyncJobStatus(value: string): value is PortfolioSyncJobStatu
   return value === 'queued' ||
     value === 'running' ||
     value === 'succeeded' ||
-    value === 'failed' ||
-    value === 'cancelled';
+    value === 'failed';
 }
 
 function validateLeaseShape(record: PortfolioSyncJobRecord): void {
@@ -148,7 +147,7 @@ function validateLeaseShape(record: PortfolioSyncJobRecord): void {
 }
 
 function validateTerminalShape(record: PortfolioSyncJobRecord): void {
-  if (['succeeded', 'failed', 'cancelled'].includes(record.status) && !record.completedAt) {
+  if (['succeeded', 'failed'].includes(record.status) && !record.completedAt) {
     throw new ConsoleStoreValidationError('terminal sync job requires completedAt');
   }
   if (record.status === 'failed' && !record.operationalErrorCode) {

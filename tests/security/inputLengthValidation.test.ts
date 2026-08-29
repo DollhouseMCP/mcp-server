@@ -6,7 +6,7 @@ import { describe, test, expect } from '@jest/globals';
 import { 
   validateInputLengths, 
   validateContentSize,
-  ContentValidationOptions 
+  type ContentValidationOptions,
 } from '../../src/security/InputValidator.js';
 import { ContentValidator } from '../../src/security/contentValidator.js';
 import { SecureYamlParser } from '../../src/security/secureYamlParser.js';
@@ -91,7 +91,7 @@ describe('Input Length Validation', () => {
       // stable prefix instead of pinning the exact string.
       expect(result.detectedPatterns).toEqual(
         expect.arrayContaining([
-          expect.stringContaining('customField: Field exceeds maximum length of 1024 characters'),
+          expect.stringContaining(`customField: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH} characters`),
         ]),
       );
     });
@@ -118,7 +118,7 @@ describe('Input Length Validation', () => {
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns).toEqual(
         expect.arrayContaining([
-          expect.stringContaining(`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`),
+          expect.stringContaining(`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`),
         ]),
       );
     });

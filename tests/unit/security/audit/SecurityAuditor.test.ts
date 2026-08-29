@@ -4,13 +4,37 @@
 
 import { describe, expect, beforeEach, afterEach, jest, test } from '@jest/globals';
 import { SecurityAuditor } from '../../../../src/security/audit/SecurityAuditor.js';
+import { CodeScanner } from '../../../../src/security/audit/scanners/CodeScanner.js';
+import { SecurityRules } from '../../../../src/security/audit/rules/SecurityRules.js';
+import { suppressions as sourceSuppressions } from '../../../../src/security/audit/config/suppressions.js';
 import type { SecurityAuditConfig } from '../../../../src/security/audit/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { Stats } from 'fs';
+import type { Stats } from 'fs';
 import { VULNERABLE_PATTERNS } from '../../../fixtures/testCredentials.js';
+
+const RATE_LIMIT_RULE_ID = 'DMCP-SEC-003';
+const RATE_LIMITING_MESSAGE_FRAGMENT = 'rate limiting';
+const UNICODE_RULE_ID = 'DMCP-SEC-004';
+
+function canonicalSuppressionPattern(value: string): string {
+  return value
+    .replaceAll('\\', '/')
+    .replaceAll(/\/+/g, '/')
+    .replace(/^(?:\*\*\/)+/, '');
+}
+
+function isFirstPartySourceGlob(value: string): boolean {
+  const canonical = canonicalSuppressionPattern(value);
+  return canonical.startsWith('src/') && canonical.slice('src/'.length).includes('*');
+}
+
+function isBlanketVendorSuppression(value: string): boolean {
+  const canonical = canonicalSuppressionPattern(value);
+  return canonical.startsWith('src/web-console/ui/vendor/') && canonical.includes('*');
+}
 
 /**
  * Create a mock FileOperationsService for testing
@@ -19,12 +43,12 @@ function createMockFileOperationsService(): jest.Mocked<IFileOperationsService> 
   return {
     readFile: jest.fn().mockResolvedValue(''),
     readElementFile: jest.fn().mockResolvedValue(''),
-    writeFile: jest.fn().mockResolvedValue(undefined),
-    deleteFile: jest.fn().mockResolvedValue(undefined),
-    createDirectory: jest.fn().mockResolvedValue(undefined),
+    writeFile: jest.fn().mockResolvedValue(),
+    deleteFile: jest.fn().mockResolvedValue(),
+    createDirectory: jest.fn().mockResolvedValue(),
     listDirectory: jest.fn().mockResolvedValue([]),
     listDirectoryWithTypes: jest.fn().mockResolvedValue([]),
-    renameFile: jest.fn().mockResolvedValue(undefined),
+    renameFile: jest.fn().mockResolvedValue(),
     exists: jest.fn().mockResolvedValue(false),
     stat: jest.fn().mockResolvedValue({} as Stats),
     resolvePath: jest.fn().mockImplementation((relativePath: string, baseDirectory: string) =>
@@ -32,9 +56,9 @@ function createMockFileOperationsService(): jest.Mocked<IFileOperationsService> 
     ),
     validatePath: jest.fn().mockReturnValue(true),
     createFileExclusive: jest.fn().mockResolvedValue(true),
-    copyFile: jest.fn().mockResolvedValue(undefined),
-    chmod: jest.fn().mockResolvedValue(undefined),
-    appendFile: jest.fn().mockResolvedValue(undefined)
+    copyFile: jest.fn().mockResolvedValue(),
+    chmod: jest.fn().mockResolvedValue(),
+    appendFile: jest.fn().mockResolvedValue()
   };
 }
 
@@ -94,6 +118,56 @@ describe('SecurityAuditor', () => {
       expect(defaultConfig.enabled).toBe(true);
       expect(defaultConfig.scanners.code.enabled).toBe(true);
       expect(defaultConfig.scanners.dependencies.enabled).toBe(true);
+    });
+
+    test('default scan excludes only the recorded vendored bundles, not first-party console code', async () => {
+      const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
+      expect(defaultConfig.scanners.code.exclude.filter(pattern =>
+        pattern.startsWith('src/web-console/ui/vendor/'))).toEqual([
+        'src/web-console/ui/vendor/purify.min.js',
+        'src/web-console/ui/vendor/marked.min.js',
+        'src/web-console/ui/vendor/js-yaml.min.js',
+      ]);
+      expect(sourceSuppressions.filter(suppression =>
+        suppression.rule === '*' &&
+        typeof suppression.file === 'string' &&
+        isBlanketVendorSuppression(suppression.file))).toEqual([]);
+
+      expect(isBlanketVendorSuppression('**/src/web-console/ui/vendor/**/*')).toBe(true);
+
+      const vendorDir = path.join(tempDir, 'src', 'web-console', 'ui', 'vendor');
+      const uiDir = path.dirname(vendorDir);
+      await fs.mkdir(vendorDir, { recursive: true });
+      const credentialPattern = 'const api_key = "not-a-real-but-secret-shaped-value";';
+      await fs.writeFile(path.join(vendorDir, 'purify.min.js'), credentialPattern);
+      await fs.writeFile(path.join(uiDir, 'app.js'), credentialPattern);
+
+      const scanner = new CodeScanner(defaultConfig.scanners.code);
+      const findings = await scanner.scan({ projectRoot: tempDir });
+
+      const normalizedFindingPaths = findings.map(finding => finding.file?.replaceAll('\\', '/'));
+      expect(normalizedFindingPaths.some(file => file?.endsWith('/ui/app.js'))).toBe(true);
+      expect(normalizedFindingPaths.some(file => file?.endsWith('/vendor/purify.min.js'))).toBe(false);
+    });
+
+    test('custom audit policy does not suppress first-party source directories', async () => {
+      const configPath = path.join(
+        process.cwd(),
+        'src',
+        'security',
+        'audit',
+        'config',
+        'security-suppressions.json',
+      );
+      const parsed: unknown = JSON.parse(await fs.readFile(configPath, 'utf8'));
+      const entries = (parsed as { suppressions: Array<{ file?: string }> }).suppressions;
+      const productionDirectoryGlobs = entries.filter(
+        ({ file }) => typeof file === 'string' && isFirstPartySourceGlob(file),
+      );
+
+      expect(productionDirectoryGlobs).toEqual([]);
+      expect(isFirstPartySourceGlob(String.raw`src\web-console\**\*.ts`)).toBe(true);
+      expect(isFirstPartySourceGlob('**/**/src/web-console/**/*.ts')).toBe(true);
     });
 
     test('should run audit on empty directory', async () => {
@@ -193,6 +267,60 @@ describe('SecurityAuditor', () => {
         f.ruleId === 'OWASP-A03-003' && f.severity === 'high'
       )).toBe(true);
     });
+
+    test.each([
+      ['template interpolation', 'db.query(`SELECT * FROM users WHERE id = ${userId}`);'],
+      ['string concatenation', "db.execute('DELETE FROM users WHERE id = ' + userId);"],
+    ])('should detect SQL injection through %s inside a database call', (_caseName, code) => {
+      const sqlInjectionRule = new SecurityRules()
+        .getOWASPRules()
+        .find(rule => rule.id === 'OWASP-A03-001');
+
+      expect(sqlInjectionRule?.pattern?.test(code)).toBe(true);
+    });
+
+    test.each([
+      ['placeholder parameters', "db.query('SELECT * FROM users WHERE id = $1', [userId]);"],
+      ['tagged-template parameters', "tx.execute(sql`SELECT * FROM users WHERE id = ${userId}`);"],
+    ])('should allow a database query using %s', (_caseName, code) => {
+      const sqlInjectionRule = new SecurityRules()
+        .getOWASPRules()
+        .find(rule => rule.id === 'OWASP-A03-001');
+
+      expect(sqlInjectionRule?.pattern?.test(code)).toBe(false);
+    });
+
+    test.each([
+      ['template assignment', 'target.innerHTML = `${userInput}`;'],
+      ['React property', 'return <section dangerouslySetInnerHTML={{ __html: userInput }} />;'],
+    ])('should detect direct HTML injection through %s', (_caseName, code) => {
+      const directHtmlRule = new SecurityRules()
+        .getOWASPRules()
+        .find(rule => rule.id === 'OWASP-A03-004');
+
+      expect(directHtmlRule?.pattern?.test(code)).toBe(true);
+    });
+
+    test('should allow HTML interpolation through the escaping boundary', () => {
+      const directHtmlRule = new SecurityRules()
+        .getOWASPRules()
+        .find(rule => rule.id === 'OWASP-A03-004');
+
+      expect(directHtmlRule?.pattern?.test('target.innerHTML = `${escapeHtml(userInput)}`;')).toBe(false);
+    });
+
+    test('should distinguish validated and unvalidated persona loading on the same line', () => {
+      const unsafePersonaRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === 'DMCP-SEC-001');
+
+      expect(unsafePersonaRule?.pattern?.test('loadPersona(persona);')).toBe(true);
+
+      const validatedPersonaRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === 'DMCP-SEC-001');
+      expect(validatedPersonaRule?.pattern?.test('loadPersona(persona); validate(persona);')).toBe(false);
+    });
   });
 
   describe('DollhouseMCP Specific Rules', () => {
@@ -230,7 +358,247 @@ describe('SecurityAuditor', () => {
       const result = await detectAuditor.audit(tempDir);
 
       expect(result.findings.some(f =>
-        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test('should not combine unrelated name and handle data into an MCP tool finding', async () => {
+      const code = `
+        const file = { name: 'memory.yaml', handle: directoryEntry, path: 'memories/memory.yaml' };
+        const first = { name: 'display-only' };
+        const second = { handle: async () => true };
+        const third = { name: 'conditional-data', handle: enabled ? directoryEntry : undefined };
+        export function collect() { return [file, first, second]; }
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'file-handles.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f => f.ruleId === RATE_LIMIT_RULE_ID)).toBe(false);
+    });
+
+    test('should detect a delegated callable MCP tool handler', async () => {
+      const code = `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'delegated-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test('should detect an imported delegated MCP tool handler', async () => {
+      const code = `
+        import { execute } from './handler.js';
+        export const myTool = { name: 'dangerous_tool', handle: execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'imported-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test('should detect a namespace-imported delegated MCP tool handler', async () => {
+      const code = `
+        import * as handlers from './handlers.js';
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'namespace-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test('should detect a locally delegated object-member MCP tool handler', async () => {
+      const code = `
+        const handlers = { execute: async (request) => processRequest(request) };
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'object-member-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test.each([
+      ['local class instance', `
+        class ToolHandlers { execute(request) { return processRequest(request); } }
+        const handlers = new ToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['imported class instance', `
+        import { ToolHandlers } from './handlers.js';
+        const handlers = new ToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['late-bound class instance', `
+        class ToolHandlers { execute(request) { return processRequest(request); } }
+        let handlers;
+        handlers = new ToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['aliased class instance', `
+        class ToolHandlers { execute(request) { return processRequest(request); } }
+        const instance = new ToolHandlers();
+        const handlers = instance;
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['static class method', `
+        class ToolHandlers { static execute(request) { return processRequest(request); } }
+        export const myTool = { name: 'dangerous_tool', handle: ToolHandlers.execute };
+      `],
+      ['factory-created handler object', `
+        const handlers = createToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['this method', `
+        class ToolOwner {
+          execute(request) { return processRequest(request); }
+          tool = { name: 'dangerous_tool', handle: this.execute };
+        }
+      `],
+      ['nested this method', `
+        class ToolOwner {
+          handlers = { execute: (request) => processRequest(request) };
+          tool = { name: 'dangerous_tool', handle: this.handlers.execute };
+        }
+      `],
+      ['bracketed this method', `
+        class ToolOwner {
+          execute(request) { return processRequest(request); }
+          tool = { name: 'dangerous_tool', handle: this['execute'] };
+        }
+      `],
+      ['super method', `
+        class BaseOwner { execute(request) { return processRequest(request); } }
+        class ToolOwner extends BaseOwner {
+          tool = { name: 'dangerous_tool', handle: super.execute };
+        }
+      `],
+    ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
+      await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test.each([
+      ['factory call', `
+        function createHandler() { return async (request) => processRequest(request); }
+        export const myTool = { name: 'dangerous_tool', handle: createHandler() };
+      `],
+      ['conditional callable', `
+        const primary = async (request) => processRequest(request);
+        const fallback = async (request) => fallbackRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: enabled ? primary : fallback };
+      `],
+      ['conditionally enabled callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: enabled ? execute : undefined };
+      `],
+      ['logical-and callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: enabled && execute };
+      `],
+      ['logical-or callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: configured || execute };
+      `],
+      ['nullish callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: configured ?? execute };
+      `],
+      ['local bracket member', `
+        const handlers = { execute: async (request) => processRequest(request) };
+        export const myTool = { name: 'dangerous_tool', handle: handlers['execute'] };
+      `],
+      ['namespace bracket member', `
+        import * as handlers from './handlers.js';
+        export const myTool = { name: 'dangerous_tool', handle: handlers['execute'] };
+      `],
+    ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
+      await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test('should detect callable aliases and alias chains', async () => {
+      const code = `
+        const execute = async (request) => processRequest(request);
+        const firstAlias = execute;
+        const secondAlias = firstAlias;
+        export const myTool = { name: 'dangerous_tool', handle: secondAlias };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'aliased-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test('should detect shorthand callable object members', async () => {
+      const code = `
+        const execute = async (request) => processRequest(request);
+        const handlers = { execute };
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'shorthand-member-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
+      )).toBe(true);
+    });
+
+    test.each([
+      ['late identifier assignment', `
+        let execute;
+        execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: execute };
+      `],
+      ['late alias assignment', `
+        const execute = async (request) => processRequest(request);
+        let alias;
+        alias = execute;
+        export const myTool = { name: 'dangerous_tool', handle: alias };
+      `],
+      ['late object-member assignment', `
+        const handlers = {};
+        handlers.execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['late bracket-member assignment', `
+        const handlers = {};
+        handlers['execute'] = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: handlers['execute'] };
+      `],
+    ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
+      await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === RATE_LIMIT_RULE_ID && f.message.includes(RATE_LIMITING_MESSAGE_FRAGMENT)
       )).toBe(true);
     });
 
@@ -251,8 +619,66 @@ describe('SecurityAuditor', () => {
       const result = await detectAuditor.audit(tempDir);
 
       expect(result.findings.some(f =>
-        f.ruleId === 'DMCP-SEC-004' && f.message.includes('Unicode')
+        f.ruleId === UNICODE_RULE_ID && f.message.includes('Unicode')
       )).toBe(true);
+    });
+
+    test('should not treat generic content-shaped models as HTTP user-input boundaries', async () => {
+      const code = `
+        export interface RecordShape { content: string; params: string[] }
+        export function serialize(record: RecordShape) { return record.content; }
+      `;
+      await fs.writeFile(path.join(tempDir, 'content-model.ts'), code);
+
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f => f.ruleId === UNICODE_RULE_ID)).toBe(false);
+    });
+
+    test.each([
+      ['dot access', 'const value = req.body;'],
+      ['optional dot access', 'const value = request?.query;'],
+      ['bracket access', "const value = req['params'];"],
+      ['optional bracket access', 'const value = request?.["body"];'],
+      ['destructuring', 'const { body } = req;'],
+      ['aliased destructuring', 'const { query: rawQuery, params } = request;'],
+      ['nested destructuring', 'const { body: { content } } = req;'],
+      ['nested destructuring after another property', 'const { app: { name }, query: { search } } = request;'],
+      ['quoted property destructuring', 'const { "body": rawBody } = req;'],
+      ['computed property destructuring', "const { ['params']: rawParams } = request;"],
+      ['commented destructuring', 'const { /* request payload */ body } = req;'],
+      ['destructuring after braces in comments', 'const { app /* } */, query } = request;'],
+      ['destructuring assignment', 'let body; ({ body } = req);'],
+      ['nested destructuring assignment', '({ query: { search } } = request);'],
+      ['real destructuring after malformed commented example', '// example: const {\nconst { params } = req;'],
+      ['template expression access', 'const value = `${req.body}`;'],
+      ['typed destructuring', 'const { body }: { body: string; query: string } = req;'],
+    ])('should detect missing Unicode validation for %s', (_name, code) => {
+      const unicodeRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === UNICODE_RULE_ID);
+
+      expect(unicodeRule?.check?.(code).some(finding => finding.ruleId === UNICODE_RULE_ID)).toBe(true);
+    });
+
+    test.each([
+      ['response destructuring', 'const { body } = response;'],
+      ['similarly named object', 'const value = databaseRequest.query;'],
+      ['generic body model', 'const value = record.body;'],
+      ['unrelated property aliased to params', 'const { app: params } = req;'],
+      ['nested unrelated property named body', 'const { app: { body } } = request;'],
+      ['commented direct access', '// const value = req.body;'],
+      ['quoted direct access', 'const example = "request.query";'],
+      ['commented destructuring assignment', '// ({ body } = req);'],
+      ['quoted destructuring assignment', 'const example = "({ params } = request)";'],
+      ['regular expression literal', 'const matcher = /req.body/;'],
+      ['quoted token in regex before real code', 'const matcher = /"request.query/; const value = record.body;'],
+    ])('should not treat %s as an HTTP user-input boundary', (_name, code) => {
+      const unicodeRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === UNICODE_RULE_ID);
+
+      expect(unicodeRule?.check?.(code)).toEqual([]);
     });
 
     test('should detect security calls in template literals with expressions', async () => {
@@ -323,17 +749,22 @@ describe('SecurityAuditor', () => {
       expect(result.findings.some(f => f.ruleId === 'OWASP-A01-001')).toBe(false);
     });
 
-    test('should suppress findings with config glob patterns against absolute scanner paths', async () => {
+    test('should suppress configured glob patterns against absolute scanner paths', async () => {
+      const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
       const configWithSuppression: SecurityAuditConfig = {
-        ...await SecurityAuditor.getDefaultConfig(mockFileOperations),
+        ...defaultConfig,
+        scanners: {
+          ...defaultConfig.scanners,
+          dependencies: { ...defaultConfig.scanners.dependencies, enabled: false },
+          configuration: { ...defaultConfig.scanners.configuration, enabled: false },
+        },
+        reporting: { ...defaultConfig.reporting, formats: [], failOnSeverity: 'critical' },
         suppressions: [{
-          rule: 'DMCP-SEC-004',
+          rule: UNICODE_RULE_ID,
           file: '**/src/feature/suppressed.ts',
-          reason: 'Test glob suppression for scanner absolute paths'
-        }]
+          reason: 'Test glob suppression for an absolute scanner path',
+        }],
       };
-
-      const auditorWithSuppression = new SecurityAuditor(configWithSuppression, mockFileOperations);
       const sourceDir = path.join(tempDir, 'src', 'feature');
       await fs.mkdir(sourceDir, { recursive: true });
       await fs.writeFile(
@@ -341,9 +772,9 @@ describe('SecurityAuditor', () => {
         'export function handler(req: { body: string }) { return req.body; }',
       );
 
-      const result = await auditorWithSuppression.audit(tempDir);
+      const result = await new SecurityAuditor(configWithSuppression, mockFileOperations).audit(tempDir);
 
-      expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-004')).toBe(false);
+      expect(result.findings.some(f => f.ruleId === UNICODE_RULE_ID)).toBe(false);
     });
   });
 
@@ -476,7 +907,10 @@ describe('SecurityAuditor', () => {
       expect(mockFileOperations.exists).toHaveBeenCalled();
       expect(mockFileOperations.readFile).toHaveBeenCalled();
       expect(config.suppressions).toBeDefined();
-      expect(config.suppressions!.some(s => s.rule === 'TEST-001')).toBe(true);
+      if (!config.suppressions) {
+        throw new Error('Expected configured security-audit suppressions');
+      }
+      expect(config.suppressions.some(s => s.rule === 'TEST-001')).toBe(true);
     });
 
     test('should handle missing suppressions file gracefully', async () => {

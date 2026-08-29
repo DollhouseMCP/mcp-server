@@ -13,6 +13,7 @@ import {
   cloneAllowlistEntry,
   normalizeAllowlistDisplayValue,
   normalizeAllowlistValue,
+  storedConsoleAllowlistValueMatches,
   validateAllowlistAddInput,
   validateAllowlistRemoveInput,
   validateAllowlistUpdateInput,
@@ -45,13 +46,35 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
     for (const entry of this.entries.values()) {
       if (entry.revokedAt) continue;
       if (entry.kind === 'email' && values.email &&
-        entry.normalizedValue === normalizeAllowlistValue('email', values.email)) return true;
+        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.email)) return true;
       if (entry.kind === 'github_username' && values.githubUsername &&
-        entry.normalizedValue === normalizeAllowlistValue('github_username', values.githubUsername)) return true;
+        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubUsername)) return true;
       if (entry.kind === 'github_id' && values.githubId &&
-        entry.normalizedValue === normalizeAllowlistValue('github_id', values.githubId)) return true;
+        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubId)) return true;
     }
     return false;
+  }
+
+  async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    await Promise.resolve();
+    let newestActiveAt = Number.NEGATIVE_INFINITY;
+    let newestRevokedAt = Number.NEGATIVE_INFINITY;
+    for (const entry of this.entries.values()) {
+      const matches = (entry.kind === 'email' && values.email &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.email))
+        || (entry.kind === 'github_username' && values.githubUsername &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubUsername))
+        || (entry.kind === 'github_id' && values.githubId &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubId));
+      if (!matches) continue;
+      if (entry.revokedAt) {
+        newestRevokedAt = Math.max(newestRevokedAt, entry.revokedAt.getTime());
+      } else {
+        newestActiveAt = Math.max(newestActiveAt, entry.createdAt.getTime());
+      }
+    }
+    return newestRevokedAt !== Number.NEGATIVE_INFINITY
+      && newestRevokedAt >= newestActiveAt;
   }
 
   async findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null> {
@@ -65,7 +88,8 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
     validateAllowlistAddInput(input);
     const normalizedValue = normalizeAllowlistValue(input.kind, input.value);
     if ([...this.entries.values()].some(entry =>
-      !entry.revokedAt && entry.kind === input.kind && entry.normalizedValue === normalizedValue)) {
+      !entry.revokedAt && entry.kind === input.kind &&
+      storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, input.value))) {
       throw new ConsoleStoreConflictError('active allowlist entry already exists');
     }
     const entry: ConsoleAccountAllowlistEntry = {

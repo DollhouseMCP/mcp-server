@@ -29,6 +29,7 @@ export { authAllowlist } from './authAllowlist.js';
 export type { AuthAllowlistKind, AuthAllowlistEntry } from './authAllowlist.js';
 export {
   userAdminRoles,
+  accountAllowlistAuthorityOrderSequence,
   accountAllowlistEntries,
   consoleSessions,
   consoleAuthPolicy,

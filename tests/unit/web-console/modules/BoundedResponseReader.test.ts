@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   readBoundedResponseText,
@@ -7,9 +7,16 @@ import {
 
 describe('readBoundedResponseText', () => {
   it('rejects an oversized declared or streamed response', async () => {
-    await expect(readBoundedResponseText(new Response('oversized', {
+    const declaredOversized = new Response('oversized', {
       headers: { 'content-length': '9' },
-    }), 8)).rejects.toBeInstanceOf(ResponseBodyTooLargeError);
+    });
+    const body = declaredOversized.body;
+    if (!body) throw new Error('test response body missing');
+    const cancel = jest.spyOn(body, 'cancel');
+
+    await expect(readBoundedResponseText(declaredOversized, 8))
+      .rejects.toBeInstanceOf(ResponseBodyTooLargeError);
+    expect(cancel).toHaveBeenCalledTimes(1);
 
     await expect(readBoundedResponseText(new Response('oversized', {
       headers: { 'content-length': 'invalid' },

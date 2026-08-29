@@ -11,10 +11,12 @@ const LOOPBACK = '127.0.0.1';
 describe('createPinnedOutboundFactory', () => {
   let server: Server;
   let port: number;
+  const seenHosts: string[] = [];
   const seenPaths: string[] = [];
 
   beforeAll(async () => {
     server = createServer((req, res) => {
+      seenHosts.push(req.headers.host ?? '');
       seenPaths.push(req.url ?? '');
       if (req.url === '/redirect') {
         res.statusCode = 302;
@@ -32,7 +34,7 @@ describe('createPinnedOutboundFactory', () => {
     await new Promise<void>(resolve => server.close(() => resolve()));
   });
 
-  it('connects through the vetted address even when the URL hostname cannot resolve', async () => {
+  it('connects through the vetted address without resolving the URL hostname', async () => {
     const outbound = createPinnedOutboundFactory()({
       hostname: PINNED_HOSTNAME,
       address: LOOPBACK,
@@ -40,20 +42,39 @@ describe('createPinnedOutboundFactory', () => {
     });
     try {
       const response = await outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/probe`);
+      expect(response.status).toBe(200);
       expect(await response.text()).toBe('ok');
     } finally {
       await outbound.close();
     }
   });
 
-  it('rejects redirects by default without visiting the redirect target', async () => {
+  it('presents the vetted hostname to the server rather than the pinned address', async () => {
     const outbound = createPinnedOutboundFactory()({
       hostname: PINNED_HOSTNAME,
       address: LOOPBACK,
       family: 4,
     });
     try {
-      await expect(outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/redirect`)).rejects.toThrow();
+      const response = await outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/host-check`);
+      await response.arrayBuffer();
+      expect(seenHosts.at(-1)).toBe(`${PINNED_HOSTNAME}:${port}`);
+    } finally {
+      await outbound.close();
+    }
+  });
+
+  it('rejects redirects without visiting the redirect target', async () => {
+    const outbound = createPinnedOutboundFactory()({
+      hostname: PINNED_HOSTNAME,
+      address: LOOPBACK,
+      family: 4,
+    });
+    try {
+      await expect(
+        outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/redirect`, { redirect: 'follow' }),
+      ).rejects.toThrow();
+      expect(seenPaths).toContain('/redirect');
       expect(seenPaths).not.toContain('/redirect-target');
     } finally {
       await outbound.close();
@@ -97,5 +118,17 @@ describe('createPinnedOutboundFactory', () => {
     } finally {
       await outbound.close();
     }
+  });
+
+  it('close releases the socket pool and rejects further requests', async () => {
+    const outbound = createPinnedOutboundFactory()({
+      hostname: PINNED_HOSTNAME,
+      address: LOOPBACK,
+      family: 4,
+    });
+    const response = await outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/before-close`);
+    await response.arrayBuffer();
+    await outbound.close();
+    await expect(outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/after-close`)).rejects.toThrow();
   });
 });

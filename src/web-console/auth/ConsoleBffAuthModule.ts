@@ -12,6 +12,7 @@ import {
 } from '../middleware/ConsoleCookies.js';
 import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../security/SecretEncryption.js';
+import type { IConsoleAccountAdminStore } from '../stores/IConsoleAccountAdminStore.js';
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { ILoginTransactionStore } from '../stores/ILoginTransactionStore.js';
 import type {
@@ -44,6 +45,8 @@ export interface ConsoleBffAuthModuleOptions {
   readonly loginTransactions: ILoginTransactionStore;
   readonly sessionStore: IConsoleSessionStore;
   readonly identityResolver: IConsoleIdentityResolver;
+  /** Profile-field source for /auth/me — the same store /me/profile reads. */
+  readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService;
   readonly publicBaseUrl: string;
@@ -449,11 +452,18 @@ class ConsoleBffAuthService {
     // failure (disabled/removed principal) falls back to none.
     const principal = await this.options.identityResolver.resolveEnabledPrincipal(authentication.authSub);
     const availableAdminCapabilities = principal ? capabilitiesForRoles(principal.roles ?? []) : [];
+    // Profile fields for the SPA header, from the same store /me/profile
+    // serves. Null-safe: a session can briefly outlive a deleted principal,
+    // and /auth/me must keep answering (the SPA uses it to decide sign-out).
+    const profile = await this.options.accountAdminStore.findPrincipal(authentication.userId);
     return {
       status: 200,
       body: {
         user_id: authentication.userId,
         auth_sub: authentication.authSub,
+        display_name: profile?.displayName ?? null,
+        email: profile?.email ?? null,
+        auth_methods: profile ? [...profile.authMethods] : [],
         granted_capabilities: authentication.grantedCapabilities,
         available_admin_capabilities: availableAdminCapabilities,
         elevation: authentication.elevation
@@ -528,6 +538,9 @@ function invalidCapability(): ConsoleHandlerResult {
   return {
     status: 400,
     body: {
+      type: 'about:blank',
+      title: 'Invalid request',
+      status: 400,
       code: 'invalid_capability',
       detail: 'Step-up requires a valid administrative console capability.',
     },

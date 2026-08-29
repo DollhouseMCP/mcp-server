@@ -5,11 +5,11 @@
  * Uses the PersonaManager's unique API and PersonaIndicatorService for formatting.
  */
 
-import { PersonaManager } from '../../persona/PersonaManager.js';
-import { PersonaIndicatorService } from '../../services/PersonaIndicatorService.js';
+import type { PersonaManager } from '../../persona/PersonaManager.js';
+import type { PersonaIndicatorService } from '../../services/PersonaIndicatorService.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { BaseActivationStrategy } from './BaseActivationStrategy.js';
-import { ElementActivationStrategy, MCPResponse } from './ElementActivationStrategy.js';
+import type { ElementActivationStrategy, MCPResponse } from './ElementActivationStrategy.js';
 
 export class PersonaActivationStrategy extends BaseActivationStrategy implements ElementActivationStrategy {
   constructor(
@@ -43,8 +43,10 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     }
 
     const persona = result.persona;
-    const instructions = persona.instructions?.trim() || persona.content?.trim() || 'No instructions provided.';
-    const referenceContent = persona.instructions?.trim() ? persona.content?.trim() : '';
+    const trimmedInstructions = persona.instructions.trim();
+    const trimmedContent = persona.content.trim();
+    const instructions = trimmedInstructions || trimmedContent || 'No instructions provided.';
+    const referenceContent = trimmedInstructions ? trimmedContent : '';
 
     let text = `${this.getPersonaIndicator()}Persona Activated: **${persona.metadata.name}**\n\n${persona.metadata.description}\n\n**Instructions:**\n${instructions}`;
     if (referenceContent) {
@@ -82,7 +84,8 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
    * @throws {Error} When name parameter is missing
    * @see Issue #275 - Handlers return success=true for missing elements
    */
-  async deactivate(name: string): Promise<MCPResponse> {
+  deactivate(name: string): Promise<MCPResponse> {
+    try {
     // Issue #275: Require name parameter for consistent error handling
     if (!name || name === '') {
       throw new Error('Name parameter is required for deactivate operation');
@@ -99,15 +102,15 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     const indicator = this.getPersonaIndicator();
 
     if (!result.success) {
-      return {
+      return Promise.resolve({
         content: [{
           type: "text",
           text: `${indicator}❌ ${result.message}`
         }]
-      };
+      });
     }
 
-    return {
+    return Promise.resolve({
       content: [{
         type: "text",
         text: `${indicator}✅ ${result.message}`
@@ -116,24 +119,28 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
         name: persona.metadata.name,
         filename: persona.filename,
       },
-    };
+    });
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   /**
    * Get all active personas
    * Issue #281: Updated to show all active personas (supports multiple)
    */
-  async getActiveElements(): Promise<MCPResponse> {
+  getActiveElements(): Promise<MCPResponse> {
+    try {
     const activePersonas = this.personaManager.getActivePersonas();
     const indicator = this.getPersonaIndicator();
 
     if (activePersonas.length === 0) {
-      return {
+      return Promise.resolve({
         content: [{
           type: "text",
           text: `${indicator}No personas are currently active.`
         }]
-      };
+      });
     }
 
     const personaList = activePersonas.map(p =>
@@ -147,25 +154,24 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     let text = `${header}\n\n${personaList}`;
 
     // Issue #642: Restriction summary for active personas with externalRestrictions
-    const restrictedPersonas = activePersonas.filter(
-      p => (p.metadata as unknown as Record<string, unknown>)?.gatekeeper &&
-        ((p.metadata as unknown as Record<string, unknown>).gatekeeper as Record<string, unknown>)?.externalRestrictions
-    );
-    if (restrictedPersonas.length > 0) {
-      const summary = restrictedPersonas.map(p => {
-        const gk = (p.metadata as unknown as Record<string, unknown>).gatekeeper as Record<string, unknown>;
-        const r = gk.externalRestrictions as Record<string, unknown>;
-        return `  **${p.metadata.name}**: ${r.description}`;
-      }).join('\n');
+    const restrictionSummaries = activePersonas.flatMap(p => {
+      const restrictions = p.metadata.gatekeeper?.externalRestrictions;
+      return restrictions ? [`  **${p.metadata.name}**: ${restrictions.description}`] : [];
+    });
+    if (restrictionSummaries.length > 0) {
+      const summary = restrictionSummaries.join('\n');
       text += `\n\n**Loaded CLI Restrictions:**\n${summary}\n> Use \`get_effective_cli_policies\` for full details.`;
     }
 
-    return {
+    return Promise.resolve({
       content: [{
         type: "text",
         text
       }]
-    };
+    });
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   /**
@@ -176,7 +182,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
    * @see Issue #275 - Handlers return success=true for missing elements
    */
   async getElementDetails(name: string): Promise<MCPResponse> {
-    const persona = this.personaManager.findPersona(name);
+    const persona = await this.personaManager.findPersonaAsync(name);
     const indicator = this.getPersonaIndicator();
 
     if (!persona) {
@@ -184,7 +190,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     }
 
     const triggers = persona.metadata.triggers?.join(', ') || 'None';
-    const content = persona.content?.trim() || 'No instructions provided.';
+    const content = persona.content.trim() || 'No instructions provided.';
 
     return {
       content: [{

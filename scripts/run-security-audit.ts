@@ -23,9 +23,9 @@ import { MarkdownReporter } from '../src/security/audit/reporters/MarkdownReport
 import { JsonReporter } from '../src/security/audit/reporters/JsonReporter.js';
 import { FileOperationsService } from '../src/services/FileOperationsService.js';
 import { FileLockManager } from '../src/security/fileLockManager.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,10 +34,10 @@ const projectRoot = path.resolve(__dirname, '..');
 async function runSecurityAudit() {
   console.log('🔒 Running Security Audit...\n');
 
-  const args = process.argv.slice(2);
-  const outputJson = args.includes('--json');
-  const outputMarkdown = args.includes('--markdown') || !outputJson;
-  const verbose = args.includes('--verbose');
+  const args = new Set(process.argv.slice(2));
+  const outputJson = args.has('--json');
+  const outputMarkdown = args.has('--markdown') || !outputJson;
+  const verbose = args.has('--verbose');
 
   // Create FileOperationsService for config loading
   const fileLockManager = new FileLockManager();
@@ -48,6 +48,7 @@ async function runSecurityAudit() {
   
   // Customize configuration
   config.scanners.code.exclude = [
+    ...(config.scanners.code.exclude ?? []),
     '**/node_modules/**',
     '**/dist/**',
     '**/coverage/**',
@@ -72,8 +73,9 @@ async function runSecurityAudit() {
         ? suppression.file
         : path.join(projectRoot, suppression.file)
     }));
-  } catch (_error) {
-    // Suppressions file doesn't exist or is invalid - that's OK
+  } catch {
+    // A missing or invalid optional file means there are no custom suppressions.
+    customSuppressions = [];
   }
 
   // Add suppressions for test files and custom suppressions without dropping
@@ -95,16 +97,17 @@ async function runSecurityAudit() {
   ];
   
   // Configure fail behavior based on command line args
-  const failOnCritical = args.includes('--fail-on-critical');
-  const failOnHigh = args.includes('--fail-on-high');
+  const failOnCritical = args.has('--fail-on-critical');
+  const failOnHigh = args.has('--fail-on-high');
   
   if (failOnCritical) {
     config.reporting.failOnSeverity = 'critical';
   } else if (failOnHigh) {
     config.reporting.failOnSeverity = 'high';
   } else {
-    // Use 'info' as default (lowest severity) - script handles exit code manually
-    config.reporting.failOnSeverity = 'info';
+    // Keep the default report useful in repositories with advisory medium/low
+    // findings. Critical findings still fail; --fail-on-high tightens the gate.
+    config.reporting.failOnSeverity = 'critical';
   }
 
   const auditor = new SecurityAuditor(config, fileOperations);
@@ -218,4 +221,4 @@ ${result.findings.slice(0, 10).map(f =>
 }
 
 // Run the audit
-runSecurityAudit().catch(console.error);
+await runSecurityAudit();

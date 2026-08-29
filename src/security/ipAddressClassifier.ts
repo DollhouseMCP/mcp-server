@@ -3,6 +3,11 @@
  *
  * Text is parsed into fixed-width bytes before classification so IPv6 forms
  * that embed IPv4 addresses cannot disguise a non-public destination.
+ * Unparseable input always classifies as non-public (fail closed).
+ *
+ * Transition-address policy is deliberately narrow: IPv4-mapped IPv6 and the
+ * well-known NAT64 /96 are classified by their embedded IPv4. IPv4-compatible
+ * IPv6, local-use NAT64, and 6to4 are rejected as whole classes.
  */
 const IPV6_BYTE_LENGTH = 16;
 const IPV6_GROUP_COUNT = 8;
@@ -65,6 +70,7 @@ export interface CanonicalIpAddress {
   readonly bytes: Uint8Array;
 }
 
+/** Parse a plain IPv4 dotted-quad or IPv6 string into canonical byte form. */
 export function parseIpAddress(address: string): CanonicalIpAddress | null {
   const ipv4 = parseIpv4(address);
   if (ipv4 !== null) return { family: 4, bytes: ipv4 };
@@ -73,6 +79,7 @@ export function parseIpAddress(address: string): CanonicalIpAddress | null {
   return null;
 }
 
+/** Classify an IP literal as globally reachable under the outbound policy. */
 export function isPublicIpAddress(address: string): boolean {
   const canonical = parseIpAddress(address);
   if (canonical === null) return false;
@@ -81,6 +88,11 @@ export function isPublicIpAddress(address: string): boolean {
     : isPublicIpv6Bytes(canonical.bytes);
 }
 
+/**
+ * Identify direct loopback forms used by local redirect policy. NAT64 and 6to4
+ * embeddings are not the local host, even though the outbound policy rejects
+ * those transition forms separately.
+ */
 export function isLoopbackIpAddress(address: string): boolean {
   const canonical = parseIpAddress(address);
   if (canonical === null) return false;
@@ -129,6 +141,7 @@ function parseIpv6(address: string): Uint8Array | null {
   return bytes;
 }
 
+/** Replace a trailing embedded dotted-quad with its two equivalent hextets. */
 function rewriteEmbeddedIpv4Tail(address: string): string | null {
   if (!address.includes('.')) return address;
   const lastColon = address.lastIndexOf(':');
@@ -161,7 +174,7 @@ function isPublicIpv4Bytes(bytes: Uint8Array): boolean {
 }
 
 function isPublicIpv6Bytes(bytes: Uint8Array): boolean {
-  const embedded = extractPubliclyRoutableEmbeddedIpv4(bytes);
+  const embedded = extractClassifiableEmbeddedIpv4(bytes);
   if (embedded !== null) return isPublicIpv4Bytes(embedded);
   if (!matchesPrefix(bytes, IPV6_GLOBAL_UNICAST)) return false;
   if (matchesPrefix(bytes, IPV6_IANA_PROTOCOL_ASSIGNMENTS)) {
@@ -172,7 +185,7 @@ function isPublicIpv6Bytes(bytes: Uint8Array): boolean {
   return true;
 }
 
-function extractPubliclyRoutableEmbeddedIpv4(bytes: Uint8Array): Uint8Array | null {
+function extractClassifiableEmbeddedIpv4(bytes: Uint8Array): Uint8Array | null {
   if (matchesPrefix(bytes, IPV4_MAPPED_PREFIX) || matchesPrefix(bytes, WELL_KNOWN_NAT64_PREFIX)) {
     return bytes.slice(12);
   }

@@ -25,7 +25,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import * as yaml from 'js-yaml';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { logger } from '../../utils/logger.js';
 import type { IOperatorConfigStore, OperatorConfig } from '../operatorConfig/IOperatorConfigStore.js';
 import type { IUserConfigStore, UserConfig } from '../userConfig/IUserConfigStore.js';
@@ -33,6 +33,7 @@ import type { ISigningKeyStore } from '../signingKeys/ISigningKeyStore.js';
 
 const MARKER_FILENAME = '.migrated-to-db';
 const MARKER_VERSION = 1;
+const MAX_LEGACY_CONFIG_YAML_SIZE = 64 * 1024;
 
 export interface MigrationOptions {
   operatorStore: IOperatorConfigStore;
@@ -243,11 +244,15 @@ function hasLegacyState(plan: MigrationPlan): boolean {
 
 async function loadLegacyConfig(configYamlPath: string): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(configYamlPath, 'utf-8');
-  const parsed = yaml.load(raw, { schema: yaml.FAILSAFE_SCHEMA });
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`Legacy config at ${configYamlPath} is not a valid YAML object`);
+  const parsed = SecureYamlParser.parseRawYaml(raw, {
+    maxSize: MAX_LEGACY_CONFIG_YAML_SIZE,
+    schema: 'failsafe',
+    contentPolicy: 'structure-only',
+  });
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new TypeError(`Legacy config at ${configYamlPath} is not a valid YAML object`);
   }
-  return parsed as Record<string, unknown>;
+  return parsed;
 }
 
 async function migrateConfigYaml(options: MigrationOptions, planned: PlannedMigration): Promise<void> {

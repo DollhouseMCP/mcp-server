@@ -33,6 +33,7 @@
  */
 
 import yaml from 'js-yaml';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import {
   getOperationSchema,
@@ -60,6 +61,11 @@ import { ElementType } from '../../portfolio/types.js';
  */
 const SAFE_PATH_PATTERN = /^[a-zA-Z_$][a-zA-Z0-9_$.]*$/;
 const FORBIDDEN_PATHS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function getLegacyInputElementType(input?: OperationInput): ElementType | undefined {
+  const legacyInput = input as unknown as { elementType?: ElementType } | undefined;
+  return legacyInput?.elementType;
+}
 
 /**
  * Resolve a value from a dot-notation path on an object.
@@ -158,7 +164,7 @@ function resolveParamValue(
  * snakeToCamel('already_camel') => 'alreadyCamel'
  */
 function snakeToCamel(str: string): string {
-  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+  return str.replaceAll(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
 /**
@@ -237,31 +243,32 @@ function validateRequiredParams(
   const context = { input, params };
 
   for (const [key, def] of Object.entries(schema)) {
-    if (def.required) {
-      const value = resolveParamValue(key, def, context);
-      if (value === undefined) {
-        // Build detailed error message for debugging
-        const sourcesChecked = def.sources
-          ? `Sources checked (in order): [${def.sources.join(' → ')}] → params.${key}`
-          : `Source: params.${key}`;
-
-        const providedParams = Object.keys(params).length > 0
-          ? `Provided params: {${Object.keys(params).join(', ')}}`
-          : 'No params provided';
-
-        // Issue #290: Check both snake_case and camelCase for element_type
-        const elementTypeValue = input?.element_type || input?.elementType;
-        const hasElementType = elementTypeValue
-          ? `input.element_type: '${elementTypeValue}'`
-          : 'input.element_type: undefined';
-
-        throw new Error(
-          `Missing required parameter '${key}' for operation '${operation}'. ` +
-          `${sourcesChecked}. ${providedParams}. ${hasElementType}`
-        );
-      }
+    if (!def.required || resolveParamValue(key, def, context) !== undefined) {
+      continue;
     }
+    throw new Error(buildMissingParamMessage(key, def, operation, params, input));
   }
+}
+
+function buildMissingParamMessage(
+  key: string,
+  definition: ParamDef,
+  operation: string,
+  params: Record<string, unknown>,
+  input?: OperationInput
+): string {
+  const sourcesChecked = definition.sources
+    ? `Sources checked (in order): [${definition.sources.join(' → ')}] → params.${key}`
+    : `Source: params.${key}`;
+  const providedParams = Object.keys(params).length > 0
+    ? `Provided params: {${Object.keys(params).join(', ')}}`
+    : 'No params provided';
+  const elementTypeValue = input?.element_type || getLegacyInputElementType(input);
+  const hasElementType = elementTypeValue
+    ? `input.element_type: '${elementTypeValue}'`
+    : 'input.element_type: undefined';
+  return `Missing required parameter '${key}' for operation '${operation}'. ` +
+    `${sourcesChecked}. ${providedParams}. ${hasElementType}`;
 }
 
 // ============================================================================
@@ -275,6 +282,11 @@ function getActualType(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   return typeof value;
+}
+
+function isStringOrStringArray(value: unknown): value is string | string[] {
+  return typeof value === 'string'
+    || (Array.isArray(value) && value.every(item => typeof item === 'string'));
 }
 
 /**
@@ -301,64 +313,73 @@ function validateParamType(
 
   switch (def.type) {
     case 'string':
-      if (typeof value !== 'string') {
-        throw new Error(
-          `Parameter '${key}' for operation '${operation}' must be a string, got ${actualType}`
-        );
-      }
+      assertParamType(typeof value === 'string', key, operation, 'a string', actualType);
       break;
 
     case 'number':
-      if (typeof value !== 'number' || Number.isNaN(value)) {
-        throw new Error(
-          `Parameter '${key}' for operation '${operation}' must be a number, got ${actualType}`
-        );
-      }
+      assertParamType(typeof value === 'number' && !Number.isNaN(value), key, operation, 'a number', actualType);
       break;
 
     case 'boolean':
-      if (typeof value !== 'boolean') {
-        throw new Error(
-          `Parameter '${key}' for operation '${operation}' must be a boolean, got ${actualType}`
-        );
-      }
+      assertParamType(typeof value === 'boolean', key, operation, 'a boolean', actualType);
       break;
 
     case 'object':
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        throw new Error(
-          `Parameter '${key}' for operation '${operation}' must be an object, got ${actualType}`
-        );
-      }
+      assertParamType(
+        typeof value === 'object' && value !== null && !Array.isArray(value),
+        key,
+        operation,
+        'an object',
+        actualType
+      );
       break;
 
     case 'array':
-      if (!Array.isArray(value)) {
-        throw new Error(
-          `Parameter '${key}' for operation '${operation}' must be an array, got ${actualType}`
-        );
-      }
+      assertParamType(Array.isArray(value), key, operation, 'an array', actualType);
       break;
 
     case 'string[]':
-      if (!Array.isArray(value)) {
-        throw new Error(
-          `Parameter '${key}' for operation '${operation}' must be a string array, got ${actualType}`
-        );
-      }
-      // Validate array elements are strings
-      for (let i = 0; i < value.length; i++) {
-        if (typeof value[i] !== 'string') {
-          throw new Error(
-            `Parameter '${key}[${i}]' for operation '${operation}' must be a string, got ${getActualType(value[i])}`
-          );
-        }
-      }
+      validateStringArrayParam(value, key, operation, actualType);
+      break;
+
+    case 'string | string[]':
+      assertParamType(isStringOrStringArray(value), key, operation, 'a string or string array', actualType);
       break;
 
     case 'unknown':
       // Allow any type - no validation needed
       break;
+  }
+}
+
+function assertParamType(
+  condition: boolean,
+  key: string,
+  operation: string,
+  expected: string,
+  actualType: string
+): void {
+  if (!condition) {
+    throw new Error(
+      `Parameter '${key}' for operation '${operation}' must be ${expected}, got ${actualType}`
+    );
+  }
+}
+
+function validateStringArrayParam(
+  value: unknown,
+  key: string,
+  operation: string,
+  actualType: string
+): void {
+  assertParamType(Array.isArray(value), key, operation, 'a string array', actualType);
+  const values = value as unknown[];
+  for (let index = 0; index < values.length; index++) {
+    if (typeof values[index] !== 'string') {
+      throw new TypeError(
+        `Parameter '${key}[${index}]' for operation '${operation}' must be a string, got ${getActualType(values[index])}`
+      );
+    }
   }
 }
 
@@ -513,6 +534,144 @@ function filterDispatchOnlyParams(
   return filtered;
 }
 
+function buildNamedWithTypeArgs(
+  params: Record<string, unknown>,
+  mappedParams: Record<string, unknown>,
+  input?: OperationInput
+): unknown[] {
+  const result = { ...mappedParams };
+  const inputElementType = input?.element_type || getLegacyInputElementType(input);
+  if (!result.elementType && inputElementType) {
+    result.elementType = inputElementType;
+  }
+  if (!result.type && result.elementType) {
+    result.type = result.elementType;
+  }
+  if (!result.name && result.elementName) {
+    result.name = result.elementName;
+  }
+
+  const resolvedType = result.elementType || result.type || inputElementType;
+  mergeEnsembleParams(result, params, resolvedType);
+  mergeCommonMetadataParams(result, params);
+  mergeTemplateParams(result, params, resolvedType);
+  mergeAgentParams(result, params, resolvedType);
+  mergeGatekeeperParam(result, params);
+  return [filterDispatchOnlyParams(result)];
+}
+
+function mergeEnsembleParams(
+  result: Record<string, unknown>,
+  params: Record<string, unknown>,
+  resolvedType: unknown
+): void {
+  if (resolvedType !== ElementType.ENSEMBLE && resolvedType !== 'ensemble') {
+    return;
+  }
+  const currentMetadata = result.metadata as Record<string, unknown> | undefined;
+  if (params.elements && !currentMetadata?.elements) {
+    result.metadata = { ...currentMetadata, elements: params.elements };
+  }
+}
+
+function mergeCommonMetadataParams(
+  result: Record<string, unknown>,
+  params: Record<string, unknown>
+): void {
+  const currentMetadata = result.metadata as Record<string, unknown> | undefined;
+  let updatedMetadata = currentMetadata;
+  if (params.tags !== undefined && Array.isArray(params.tags) && updatedMetadata?.tags === undefined) {
+    updatedMetadata = { ...updatedMetadata, tags: params.tags };
+  }
+  if (params.triggers !== undefined && Array.isArray(params.triggers) && updatedMetadata?.triggers === undefined) {
+    updatedMetadata = { ...updatedMetadata, triggers: params.triggers };
+  }
+  if (updatedMetadata !== currentMetadata) {
+    result.metadata = updatedMetadata;
+  }
+}
+
+function mergeTemplateParams(
+  result: Record<string, unknown>,
+  params: Record<string, unknown>,
+  resolvedType: unknown
+): void {
+  const isTemplate = resolvedType === ElementType.TEMPLATE || resolvedType === 'template';
+  if (!isTemplate || !Array.isArray(params.variables)) {
+    return;
+  }
+  const currentMetadata = result.metadata as Record<string, unknown> | undefined;
+  if (currentMetadata?.variables === undefined) {
+    result.metadata = { ...currentMetadata, variables: params.variables };
+  }
+}
+
+function mergeAgentParams(
+  result: Record<string, unknown>,
+  params: Record<string, unknown>,
+  resolvedType: unknown
+): void {
+  const isAgent = resolvedType === ElementType.AGENT || resolvedType === 'agent';
+  if (!isAgent) {
+    return;
+  }
+  const currentMetadata = result.metadata as Record<string, unknown> | undefined;
+  let updatedMetadata = currentMetadata;
+  if (params.goal !== undefined && updatedMetadata?.goal === undefined) {
+    updatedMetadata = { ...updatedMetadata, goal: params.goal };
+  }
+  if (params.activates !== undefined && updatedMetadata?.activates === undefined) {
+    updatedMetadata = { ...updatedMetadata, activates: params.activates };
+  }
+  if (params.tools !== undefined && updatedMetadata?.tools === undefined) {
+    updatedMetadata = { ...updatedMetadata, tools: params.tools };
+  }
+  const systemPromptValue = params.systemPrompt ?? params.system_prompt;
+  if (systemPromptValue !== undefined && updatedMetadata?.systemPrompt === undefined) {
+    updatedMetadata = { ...updatedMetadata, systemPrompt: systemPromptValue };
+  }
+  if (params.autonomy !== undefined && updatedMetadata?.autonomy === undefined) {
+    updatedMetadata = { ...updatedMetadata, autonomy: params.autonomy };
+  }
+  if (params.resilience !== undefined && updatedMetadata?.resilience === undefined) {
+    updatedMetadata = { ...updatedMetadata, resilience: params.resilience };
+  }
+  if (updatedMetadata !== currentMetadata) {
+    result.metadata = updatedMetadata;
+  }
+}
+
+function mergeGatekeeperParam(
+  result: Record<string, unknown>,
+  params: Record<string, unknown>
+): void {
+  if (!params.gatekeeper || typeof params.gatekeeper !== 'object') {
+    return;
+  }
+  const currentMetadata = result.metadata as Record<string, unknown> | undefined;
+  if (currentMetadata?.gatekeeper) {
+    return;
+  }
+  const resultName = typeof result.name === 'string' ? result.name : 'unknown';
+  console.debug(`[SchemaDispatcher] Merging top-level gatekeeper into metadata for element '${resultName}'`);
+  result.metadata = { ...currentMetadata, gatekeeper: params.gatekeeper };
+}
+
+function buildSingleArgs(schema: OperationDef, mappedParams: Record<string, unknown>): unknown[] {
+  if (!schema.params || Object.keys(schema.params).length === 0) {
+    return [];
+  }
+  const args: unknown[] = [];
+  for (const key of Object.keys(schema.params)) {
+    if (DISPATCH_ONLY_PARAMS.has(key)) {
+      continue;
+    }
+    const targetKey = schema.params[key].mapTo ?? key;
+    args.push(mappedParams[targetKey]);
+  }
+  return args;
+}
+
 /**
  * Build arguments for handler method based on argBuilder type
  *
@@ -545,109 +704,7 @@ function buildArgs(
     }
 
     case 'namedWithType': {
-      // Like 'named' but ensures 'elementType' and 'elementName' are available
-      // This handles the ElementCRUD pattern where type comes from input.element_type OR params.element_type
-      // Issue #290: element_name maps to elementName, element_type maps to elementType
-      const result = { ...mappedParams };
-
-      // If 'elementType' wasn't in mappedParams but is available from input.element_type (or legacy elementType), add it
-      // Issue #290: Prefer snake_case element_type, fallback to camelCase elementType for backward compat
-      if (!result.elementType && (input?.element_type || input?.elementType)) {
-        result.elementType = input.element_type || input.elementType;
-      }
-      // Set 'type' from 'elementType' for handlers that expect it
-      if (!result.type && result.elementType) {
-        result.type = result.elementType;
-      }
-      // Set 'name' from 'elementName' for handlers that expect it (Issue #290)
-      if (!result.name && result.elementName) {
-        result.name = result.elementName;
-      }
-
-      // Issue #278: For ensembles, merge top-level elements into metadata
-      // LLMs often pass elements at params level, not inside metadata
-      // Issue #290: Prefer snake_case element_type, fallback to camelCase elementType
-      const resolvedType = result.elementType || result.type || input?.element_type || input?.elementType;
-      // Check for ensemble type (handles both plural constant and singular form)
-      const isEnsemble = resolvedType === ElementType.ENSEMBLE || resolvedType === 'ensemble';
-      if (isEnsemble) {
-        const elements = params.elements;
-        const currentMetadata = result.metadata as Record<string, unknown> | undefined;
-        if (elements && (!currentMetadata || !currentMetadata.elements)) {
-          result.metadata = { ...currentMetadata, elements };
-        }
-      }
-
-      // Issue #722: Common fields (tags, triggers) — LLMs pass at params level for any element type.
-      {
-        let currentMeta = result.metadata as Record<string, unknown> | undefined;
-        let updatedMeta = currentMeta;
-
-        if (params.tags !== undefined && Array.isArray(params.tags) && (!updatedMeta || updatedMeta.tags === undefined)) {
-          updatedMeta = { ...updatedMeta, tags: params.tags };
-        }
-        if (params.triggers !== undefined && Array.isArray(params.triggers) && (!updatedMeta || updatedMeta.triggers === undefined)) {
-          updatedMeta = { ...updatedMeta, triggers: params.triggers };
-        }
-
-        if (updatedMeta !== currentMeta) {
-          result.metadata = updatedMeta;
-        }
-      }
-
-      const isTemplate = resolvedType === ElementType.TEMPLATE || resolvedType === 'template';
-      if (isTemplate && Array.isArray(params.variables)) {
-        const currentMetadata = result.metadata as Record<string, unknown> | undefined;
-        if (currentMetadata?.variables === undefined) {
-          result.metadata = { ...currentMetadata, variables: params.variables };
-        }
-      }
-
-      // Agent V2 fields: goal, activates, tools, systemPrompt, autonomy, resilience
-      const isAgent = resolvedType === ElementType.AGENT || resolvedType === 'agent';
-      if (isAgent) {
-        const currentMetadata = result.metadata as Record<string, unknown> | undefined;
-        let updatedMetadata = currentMetadata;
-
-        if (params.goal !== undefined && (!updatedMetadata || updatedMetadata.goal === undefined)) {
-          updatedMetadata = { ...updatedMetadata, goal: params.goal };
-        }
-        if (params.activates !== undefined && (!updatedMetadata || updatedMetadata.activates === undefined)) {
-          updatedMetadata = { ...updatedMetadata, activates: params.activates };
-        }
-        if (params.tools !== undefined && (!updatedMetadata || updatedMetadata.tools === undefined)) {
-          updatedMetadata = { ...updatedMetadata, tools: params.tools };
-        }
-        // Issue #725: Accept both systemPrompt and system_prompt (LLMs commonly use snake_case)
-        const systemPromptValue = params.systemPrompt ?? params.system_prompt;
-        if (systemPromptValue !== undefined && (!updatedMetadata || updatedMetadata.systemPrompt === undefined)) {
-          updatedMetadata = { ...updatedMetadata, systemPrompt: systemPromptValue };
-        }
-        if (params.autonomy !== undefined && (!updatedMetadata || updatedMetadata.autonomy === undefined)) {
-          updatedMetadata = { ...updatedMetadata, autonomy: params.autonomy };
-        }
-        // Issue #722: resilience was missing from the agent V2 merge
-        if (params.resilience !== undefined && (!updatedMetadata || updatedMetadata.resilience === undefined)) {
-          updatedMetadata = { ...updatedMetadata, resilience: params.resilience };
-        }
-
-        if (updatedMetadata !== currentMetadata) {
-          result.metadata = updatedMetadata;
-        }
-      }
-
-      // Issue #666: LLMs often pass gatekeeper at top-level params, not inside metadata.
-      // Merge it into metadata for all element types.
-      if (params.gatekeeper && typeof params.gatekeeper === 'object') {
-        const currentMeta = result.metadata as Record<string, unknown> | undefined;
-        if (!currentMeta || !currentMeta.gatekeeper) {
-          console.debug(`[SchemaDispatcher] Merging top-level gatekeeper into metadata for element '${result.name ?? 'unknown'}'`);
-          result.metadata = { ...currentMeta, gatekeeper: params.gatekeeper };
-        }
-      }
-
-      // Filter out dispatch-only params before returning
-      return [filterDispatchOnlyParams(result)];
+      return buildNamedWithTypeArgs(params, mappedParams, input);
     }
 
     case 'typeWithParams': {
@@ -655,30 +712,13 @@ function buildArgs(
       // Used for operations like list_elements that need (type, paginationParams)
       // Issue #290: element_type maps to elementType, with backward compat for type
       // Prefer snake_case element_type, fallback to camelCase elementType
-      const resolvedType = mappedParams.elementType ?? mappedParams.type ?? input?.element_type ?? input?.elementType;
+      const resolvedType = mappedParams.elementType ?? mappedParams.type ?? input?.element_type ?? getLegacyInputElementType(input);
       return [resolvedType, filterDispatchOnlyParams(params)];
     }
 
     case 'single':
     default: {
-      // Extract params in schema order, using resolved values
-      if (!schema.params || Object.keys(schema.params).length === 0) {
-        return [];
-      }
-
-      // For simple handlers, pass resolved params in schema order
-      // Skip dispatch-only params (like 'fields') that are handled by SchemaDispatcher
-      const args: unknown[] = [];
-      for (const key of Object.keys(schema.params)) {
-        // Skip dispatch-level params that shouldn't be passed to handlers
-        if (DISPATCH_ONLY_PARAMS.has(key)) {
-          continue;
-        }
-        // Use mapped value if available (handles source resolution)
-        const targetKey = schema.params[key].mapTo ?? key;
-        args.push(mappedParams[targetKey]);
-      }
-      return args;
+      return buildSingleArgs(schema, mappedParams);
     }
   }
 }
@@ -690,20 +730,28 @@ function buildArgs(
 /**
  * Handle introspection operation (uses IntrospectionResolver directly)
  */
-async function handleIntrospection(
+function handleIntrospection(
   params: Record<string, unknown>
 ): Promise<unknown> {
-  return IntrospectionResolver.resolve(params);
+  try {
+    return Promise.resolve(IntrospectionResolver.resolve(params));
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 /**
  * Handle get_capabilities operation (uses IntrospectionResolver directly)
  * @see Issue #1760 - get_capabilities operation
  */
-async function handleCapabilities(
+function handleCapabilities(
   params: Record<string, unknown>
 ): Promise<unknown> {
-  return IntrospectionResolver.getCapabilities(params);
+  try {
+    return Promise.resolve(IntrospectionResolver.getCapabilities(params));
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 /**
@@ -748,8 +796,10 @@ function handleCacheBudgetReport(
     '',
   ];
   if (report.caches.length > 0) {
-    lines.push('| Cache | Entries | Memory (MB) | Hit Rate | Last Activity |');
-    lines.push('|-------|---------|-------------|----------|---------------|');
+    lines.push(
+      '| Cache | Entries | Memory (MB) | Hit Rate | Last Activity |',
+      '|-------|---------|-------------|----------|---------------|',
+    );
     for (const c of report.caches) {
       const activity = c.lastActivityMs > 0
         ? `${((Date.now() - c.lastActivityMs) / 1000).toFixed(0)}s ago`
@@ -789,21 +839,15 @@ async function handleExportElement(
   registry: HandlerRegistry
 ): Promise<ExportPackage> {
   const handler = registry.elementCRUD;
-  if (!handler) {
-    throw new Error('ElementCRUD operations not available: handler not configured');
-  }
 
   // Get the exportable data from the element
   // Issue #290: Use mapped names (elementName, elementType) from schema mapTo
   const name = mappedParams.elementName as string;
   const type = mappedParams.elementType as string;
-  const format = (mappedParams.format as 'json' | 'yaml') || 'json';
+  const format = mappedParams.format as 'json' | 'yaml';
 
   // Use the element query service to get element details
   const elementDetails = await handler.getElementDetails(name, type);
-  if (!elementDetails) {
-    throw new Error(`Element not found: ${type}/${name}`);
-  }
 
   // Build export package (matches MCPAQLHandler.handleExportElement format)
   const exportPackage: ExportPackage = {
@@ -829,6 +873,84 @@ async function handleExportElement(
   return exportPackage;
 }
 
+interface ImportElementDetails {
+  elementType: string;
+  elementName: string;
+  elementData: Record<string, unknown>;
+}
+
+function parseImportPackage(data: unknown): Record<string, unknown> {
+  if (typeof data === 'string') {
+    try {
+      return JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      throw new Error('Invalid export package: not valid JSON');
+    }
+  }
+  if (typeof data === 'object' && data !== null) {
+    return data as Record<string, unknown>;
+  }
+  throw new Error('Invalid export package: data must be a string or object');
+}
+
+function parseNestedImportData(nestedData: unknown, format: string | undefined): Record<string, unknown> {
+  if (typeof nestedData === 'object') {
+    return nestedData as Record<string, unknown>;
+  }
+  if (typeof nestedData !== 'string') {
+    throw new TypeError('Invalid export package: data field must be string or object');
+  }
+  try {
+    return format === 'yaml'
+      ? SecureYamlParser.parseRawYaml(nestedData, {
+        maxSize: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+        schema: 'json',
+        contentPolicy: 'structure-only',
+      })
+      : JSON.parse(nestedData) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Invalid export package: data field is not valid ${format || 'JSON'}`);
+  }
+}
+
+function resolveImportElementDetails(exportPackage: Record<string, unknown>): ImportElementDetails {
+  if (exportPackage.elementType && exportPackage.data) {
+    return {
+      elementType: exportPackage.elementType as string,
+      elementName: exportPackage.elementName as string,
+      elementData: parseNestedImportData(exportPackage.data, exportPackage.format as string | undefined),
+    };
+  }
+  if (exportPackage.element) {
+    const element = exportPackage.element as Record<string, unknown>;
+    return {
+      elementType: element.type as string,
+      elementName: element.name as string,
+      elementData: element,
+    };
+  }
+  throw new Error('Invalid export package: missing element data');
+}
+
+async function assertImportTargetAvailable(
+  handler: HandlerRegistry['elementCRUD'],
+  elementName: string,
+  elementType: string,
+  overwrite: boolean | undefined
+): Promise<void> {
+  if (overwrite) {
+    return;
+  }
+  try {
+    await handler.getElementDetails(elementName, elementType);
+    throw new Error(`Element '${elementName}' already exists. Use overwrite: true to replace.`);
+  } catch (lookupError) {
+    if (!(lookupError instanceof Error) || !lookupError.message.includes('not found')) {
+      throw lookupError;
+    }
+  }
+}
+
 /**
  * Handle element import operation.
  * Parses export package and delegates to ElementCRUD.
@@ -842,82 +964,11 @@ async function handleImportElement(
   registry: HandlerRegistry
 ): Promise<unknown> {
   const handler = registry.elementCRUD;
-  if (!handler) {
-    throw new Error('ElementCRUD operations not available: handler not configured');
-  }
 
-  const data = mappedParams.data;
   const overwrite = mappedParams.overwrite as boolean | undefined;
-
-  // Parse the export package (accept string or already-parsed object)
-  let exportPackage: Record<string, unknown>;
-  if (typeof data === 'string') {
-    try {
-      exportPackage = JSON.parse(data);
-    } catch {
-      throw new Error('Invalid export package: not valid JSON');
-    }
-  } else if (typeof data === 'object' && data !== null) {
-    exportPackage = data as Record<string, unknown>;
-  } else {
-    throw new Error('Invalid export package: data must be a string or object');
-  }
-
-  // Determine element details based on package format
-  let elementType: string;
-  let elementName: string;
-  let elementData: Record<string, unknown>;
-
-  if (exportPackage.elementType && exportPackage.data) {
-    // MCPAQLHandler format: { exportVersion, elementType, elementName, format, data }
-    elementType = exportPackage.elementType as string;
-    elementName = exportPackage.elementName as string;
-    const format = exportPackage.format as string | undefined;
-
-    // Parse the nested data field based on format
-    const nestedData = exportPackage.data;
-    if (typeof nestedData === 'string') {
-      try {
-        if (format === 'yaml') {
-          // Use SecureYamlParser.parseRawYaml for safe YAML parsing (CORE_SCHEMA, size limits)
-          elementData = SecureYamlParser.parseRawYaml(nestedData);
-        } else {
-          elementData = JSON.parse(nestedData);
-        }
-      } catch {
-        throw new Error(`Invalid export package: data field is not valid ${format || 'JSON'}`);
-      }
-    } else if (typeof nestedData === 'object' && nestedData !== null) {
-      elementData = nestedData as Record<string, unknown>;
-    } else {
-      throw new Error('Invalid export package: data field must be string or object');
-    }
-  } else if (exportPackage.element) {
-    // Legacy format: { version, element: { type, name, ... } }
-    const element = exportPackage.element as Record<string, unknown>;
-    elementType = element.type as string;
-    elementName = element.name as string;
-    elementData = element;
-  } else {
-    throw new Error('Invalid export package: missing element data');
-  }
-
-  // Check if element already exists when overwrite is false
-  if (!overwrite) {
-    try {
-      const existing = await handler.getElementDetails(elementName, elementType);
-      if (existing) {
-        throw new Error(
-          `Element '${elementName}' already exists. Use overwrite: true to replace.`
-        );
-      }
-    } catch (e) {
-      // Element doesn't exist, which is what we want
-      if (!(e instanceof Error) || !e.message.includes('not found')) {
-        throw e;
-      }
-    }
-  }
+  const exportPackage = parseImportPackage(mappedParams.data);
+  const { elementType, elementName, elementData } = resolveImportElementDetails(exportPackage);
+  await assertImportTargetAvailable(handler, elementName, elementType, overwrite);
 
   // Create the element
   return handler.createElement({
@@ -928,6 +979,36 @@ async function handleImportElement(
     instructions: elementData.instructions as string | undefined,
     metadata: elementData.metadata as Record<string, unknown> | undefined,
   });
+}
+
+function applyOperationNormalizer(
+  params: Record<string, unknown>,
+  schema: OperationDef,
+  operation: string,
+  input?: OperationInput
+): Record<string, unknown> {
+  if (!schema.normalizer) {
+    return params;
+  }
+  const normalizer = NormalizerRegistry.get(schema.normalizer);
+  if (!normalizer) {
+    throw new Error(
+      `Normalizer '${schema.normalizer}' not found for operation '${operation}'. ` +
+      `Registered normalizers: [${NormalizerRegistry.list().join(', ') || 'none'}]`
+    );
+  }
+  const normalizerContext: NormalizerContext = {
+    operation,
+    endpoint: schema.endpoint,
+    handler: schema.handler,
+    method: schema.method,
+    elementType: getLegacyInputElementType(input),
+  };
+  const result = normalizer.normalize(params, normalizerContext);
+  if (!result.success) {
+    throw new Error(result.error);
+  }
+  return result.params;
 }
 
 // ============================================================================
@@ -971,35 +1052,8 @@ export class SchemaDispatcher {
       throw new Error(`No schema definition found for operation '${operation}'`);
     }
 
-    // Apply normalizer if schema specifies one (Issue #243)
-    // Normalizers transform raw input params before validation and dispatch
-    if (schema.normalizer) {
-      const normalizer = NormalizerRegistry.get(schema.normalizer);
-      if (!normalizer) {
-        throw new Error(
-          `Normalizer '${schema.normalizer}' not found for operation '${operation}'. ` +
-          `Registered normalizers: [${NormalizerRegistry.list().join(', ') || 'none'}]`
-        );
-      }
-
-      // Build normalizer context for debugging and future extensibility
-      const normalizerContext: NormalizerContext = {
-        operation,
-        endpoint: schema.endpoint,
-        handler: schema.handler,
-        method: schema.method,
-        elementType: input?.elementType,
-      };
-
-      // Normalize params - this may transform, validate, or enrich parameters
-      const result = normalizer.normalize(params, normalizerContext);
-      if (!result.success) {
-        throw new Error(result.error);
-      }
-
-      // Use normalized params for the rest of dispatch
-      params = result.params as Record<string, unknown>;
-    }
+    // Apply normalizer if schema specifies one (Issue #243).
+    params = applyOperationNormalizer(params, schema, operation, input);
 
     // Determine if we need full input context for source resolution
     const needsInput = schema.needsFullInput && input;
@@ -1024,16 +1078,18 @@ export class SchemaDispatcher {
     // Map params according to schema (with input context and param style)
     // For operations with normalizers, the normalized params ARE the mapped params
     // (the normalizer already transforms input to handler-ready format)
-    const mappedParams = schema.normalizer
-      ? params  // Normalizer already produced the correct output format
-      : schema.params
-        ? mapParams(params, schema.params, needsInput ? input : undefined, schema.paramStyle)
-        : {};
+    const inputContext = needsInput ? input : undefined;
+    let mappedParams: Record<string, unknown> = {};
+    if (schema.normalizer) {
+      mappedParams = params;
+    } else if (schema.params) {
+      mappedParams = mapParams(params, schema.params, inputContext, schema.paramStyle);
+    }
 
     // Validate params: required params first, then type validation (Issue #255)
     // Skip validation for normalized operations (normalizer handles validation)
     if (schema.params && !schema.normalizer) {
-      validateRequiredParams(params, schema.params, operation, needsInput ? input : undefined);
+      validateRequiredParams(params, schema.params, operation, inputContext);
       validateParamTypes(params, schema.params, operation);
     }
 

@@ -424,6 +424,18 @@ p, li { max-width: 69ch; }
   border-color: color-mix(in srgb, #fcd34d 35%, transparent);
 }
 
+/* COLLECTION badge — shown on catalog (not-yet-installed) elements */
+.source-badge-collection {
+  background: color-mix(in srgb, var(--signal) 20%, var(--paper-strong));
+  color: color-mix(in srgb, var(--signal) 88%, var(--ink-800));
+  border-color: color-mix(in srgb, var(--signal) 45%, transparent);
+}
+[data-theme="dark"] .source-badge-collection {
+  background: color-mix(in srgb, var(--signal) 16%, var(--paper-strong));
+  color: color-mix(in srgb, var(--signal) 92%, white);
+  border-color: color-mix(in srgb, var(--signal) 38%, transparent);
+}
+
 /* Portfolio button in browse controls */
 .portfolio-btn {
   appearance: none;
@@ -911,6 +923,34 @@ p, li { max-width: 69ch; }
   border-color: color-mix(in srgb, var(--signal) 30%, var(--line));
 }
 .card-download-btn:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+/* Install action — always visible on collection cards (installing is the
+   primary collection interaction, unlike the list-only download). */
+.card-install-wrap { flex-shrink: 0; }
+.card-install-btn {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--signal) 40%, var(--line));
+  border-radius: 0.28rem;
+  background: color-mix(in srgb, var(--signal-2) 18%, var(--paper-strong));
+  color: color-mix(in srgb, var(--signal) 92%, var(--ink-800));
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.24rem 0.62rem;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+.card-install-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--signal-2) 32%, var(--paper-strong));
+  border-color: color-mix(in srgb, var(--signal) 60%, var(--line));
+}
+.card-install-btn:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.card-install-btn:disabled {
+  cursor: default;
+  color: var(--ink-500);
+  background: color-mix(in srgb, var(--surface-1) 40%, var(--paper-strong));
+  border-color: color-mix(in srgb, var(--line) 80%, transparent);
+}
 
 /* List view — inline expand */
 .card-inline-detail {
@@ -1884,7 +1924,7 @@ fieldset.topic-filters {
   font-size: 0.8rem;
   line-height: 1.55;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   background: color-mix(in srgb, var(--ink-900) 6%, var(--paper));
   border-radius: var(--radius-sm);
   padding: 0.55rem 0.75rem;

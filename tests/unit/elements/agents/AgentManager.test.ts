@@ -3,8 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import * as path from 'path';
-import * as os from 'os';
+import { randomUUID } from 'node:crypto';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 // Mock the security modules before importing anything that uses them
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -13,14 +14,14 @@ jest.mock('../../../../src/utils/logger.js');
 jest.mock('../../../../src/services/FileOperationsService.js');
 
 // Import after mocking
-import { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
 import { Agent } from '../../../../src/elements/agents/Agent.js';
+import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { DollhouseContainer } from '../../../../src/di/Container.js';
-import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
-import { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
+import type { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
+import type { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import { createTestMetadataService, TestableAgentManager } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
@@ -38,7 +39,26 @@ import {
 import { EVICT_TERMINAL_GOAL } from '../../../../src/elements/agents/constants.js';
 import { SessionActivationRegistry } from '../../../../src/state/SessionActivationState.js';
 
+const RECOVERY_AGENT_NAME = 'recovery-agent';
+const OPERATOR_ABORT_SUMMARY = 'Operator abort';
+const ORIGINAL_EXECUTION_DESCRIPTION = 'Original execution';
+
 const metadataService: MetadataService = createTestMetadataService();
+const TEST_AGENT_NAME = 'test-agent';
+const STATE_FILE_SUFFIX = '.state.yaml';
+
+function asAsyncRead(
+  implementation: (filePath: string) => string
+): FileOperationsService['readFile'] {
+  return (filePath) => Promise.resolve().then(() => implementation(filePath));
+}
+
+function requireLoadedAgent(agent: Agent | null): Agent {
+  if (!agent) {
+    throw new Error('Expected agent to load');
+  }
+  return agent;
+}
 
 interface AgentManagerExecutionInternals {
   executeAgentWithinStateOperation(
@@ -75,7 +95,7 @@ describe('AgentManager', () => {
 
     // Create temporary test directory
 
-    testDir = path.join(os.tmpdir(), 'agent-test-' + Math.random().toString(36).substring(7));
+    testDir = path.join(os.tmpdir(), `agent-test-${randomUUID()}`);
     portfolioPath = testDir;
     
     mockPortfolioManager = {
@@ -88,21 +108,21 @@ describe('AgentManager', () => {
     container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
     container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
     
-    const mockFileOperations: any = {
-      createDirectory: jest.fn().mockResolvedValue(undefined),
-      exists: jest.fn().mockResolvedValue(false),
-      readFile: jest.fn().mockResolvedValue(''),
-      writeFile: jest.fn().mockResolvedValue(undefined),
-      deleteFile: jest.fn().mockResolvedValue(undefined),
-      listDirectory: jest.fn().mockResolvedValue([]),
-      resolvePath: jest.fn((p: string) => path.resolve(portfolioPath, p)),
-      validatePath: jest.fn().mockReturnValue(true),
-      createFileExclusive: jest.fn().mockResolvedValue(true)
+      const mockFileOperations: any = {
+        createDirectory: jest.fn<FileOperationsService['createDirectory']>().mockResolvedValue(),
+        exists: jest.fn<FileOperationsService['exists']>().mockResolvedValue(false),
+        readFile: jest.fn<FileOperationsService['readFile']>().mockResolvedValue(''),
+        writeFile: jest.fn<FileOperationsService['writeFile']>().mockResolvedValue(),
+        deleteFile: jest.fn<FileOperationsService['deleteFile']>().mockResolvedValue(),
+        listDirectory: jest.fn<FileOperationsService['listDirectory']>().mockResolvedValue([]),
+        resolvePath: jest.fn<FileOperationsService['resolvePath']>((p: string) => path.resolve(portfolioPath, p)),
+        validatePath: jest.fn<FileOperationsService['validatePath']>().mockReturnValue(true),
+        createFileExclusive: jest.fn<FileOperationsService['createFileExclusive']>().mockResolvedValue(true)
     };
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile via mockResolvedValue still flow through.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
-    container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
+    container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations);
 
     // Register DI services
     container.register('SerializationService', () => new SerializationService());
@@ -126,7 +146,7 @@ describe('AgentManager', () => {
     storageLayerFactory: createTestStorageFactory(),
     }));
 
-    agentManager = container.resolve<AgentManager>('AgentManager');
+    agentManager = container.resolve<TestableAgentManager>('AgentManager');
     _fileLockManager = container.resolve<FileLockManager>('FileLockManager');
     fileOperationsService = container.resolve<FileOperationsService>('FileOperationsService') as jest.Mocked<FileOperationsService>;
 
@@ -139,8 +159,33 @@ describe('AgentManager', () => {
   });
 
   describe('Initialization', () => {
-    it('should create agents directory structure', async () => {
+    it('should create agents directory structure', () => {
       expect(fileOperationsService.createDirectory).toHaveBeenCalledTimes(2); // agents dir + state dir
+    });
+
+    it('uses separate cache namespaces for DB-backed transport sessions', () => {
+      let currentSession: SessionContext = {
+        userId: 'shared-user',
+        sessionId: 'session-a',
+        tenantId: null,
+        transport: 'http',
+        createdAt: Date.now(),
+      };
+      const internals = agentManager as unknown as {
+        contextTracker?: { getSessionContext: () => SessionContext | undefined };
+        storageLayer: { writeContent?: () => Promise<string> };
+        getCacheNamespace: () => string;
+      };
+      internals.contextTracker = { getSessionContext: () => currentSession };
+      internals.storageLayer.writeContent = () => Promise.resolve('unused-test-id');
+
+      const sessionANamespace = internals.getCacheNamespace();
+      currentSession = { ...currentSession, sessionId: 'session-b' };
+      const sessionBNamespace = internals.getCacheNamespace();
+
+      expect(sessionANamespace).toBe('shared-user:agent-session:session-a');
+      expect(sessionBNamespace).toBe('shared-user:agent-session:session-b');
+      expect(sessionANamespace).not.toBe(sessionBNamespace);
     });
   });
 
@@ -148,7 +193,7 @@ describe('AgentManager', () => {
     it('resolves only active names without listing the full catalog', async () => {
       const activeAgent = { metadata: { name: 'active-agent' } } as Agent;
       (agentManager as any).getActivationSet().add('active-agent');
-      const refresh = jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      const refresh = jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
       const findByName = jest.spyOn(agentManager, 'findByName').mockResolvedValue(activeAgent);
       const list = jest.spyOn(agentManager, 'list');
 
@@ -165,7 +210,7 @@ describe('AgentManager', () => {
       Object.defineProperty(agent, 'filePath', { value: 'stable-agent.md', configurable: true });
       jest.spyOn(agentManager, 'findByName').mockResolvedValue(agent);
       const findByStorageIdentity = jest.spyOn(agentManager, 'findByStorageIdentity').mockResolvedValue(agent);
-      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
 
       const activated = await agentManager.activateAgent('Original Name');
       agent.metadata.name = 'Renamed Agent';
@@ -182,10 +227,12 @@ describe('AgentManager', () => {
       const second = new Agent({ name: 'Shared Name' }, metadataService);
       Object.defineProperty(first, 'filePath', { value: 'first.md', configurable: true });
       Object.defineProperty(second, 'filePath', { value: 'second.md', configurable: true });
-      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
-      jest.spyOn(agentManager, 'findByStorageIdentity').mockImplementation(async (identity) =>
-        identity === 'first.md' ? first : identity === 'second.md' ? second : undefined
-      );
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
+      jest.spyOn(agentManager, 'findByStorageIdentity').mockImplementation((identity) => {
+        if (identity === 'first.md') return Promise.resolve(first);
+        if (identity === 'second.md') return Promise.resolve(second);
+        return Promise.resolve<Agent | undefined>();
+      });
 
       await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'first.md' }, 'Shared Name');
       await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'second.md' }, 'Shared Name');
@@ -198,10 +245,12 @@ describe('AgentManager', () => {
       const second = new Agent({ name: 'Other Agent' }, metadataService);
       Object.defineProperty(first, 'filePath', { value: 'first.md', configurable: true });
       Object.defineProperty(second, 'filePath', { value: 'second.md', configurable: true });
-      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
-      jest.spyOn(agentManager, 'findByStorageIdentity').mockImplementation(async (identity) =>
-        identity === 'first.md' ? first : identity === 'second.md' ? second : undefined
-      );
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
+      jest.spyOn(agentManager, 'findByStorageIdentity').mockImplementation((identity) => {
+        if (identity === 'first.md') return Promise.resolve(first);
+        if (identity === 'second.md') return Promise.resolve(second);
+        return Promise.resolve<Agent | undefined>();
+      });
 
       await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'first.md' });
       await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'second.md' });
@@ -222,7 +271,7 @@ describe('AgentManager', () => {
       Object.defineProperty(agent, 'filePath', { value: 'session-agent.md', configurable: true });
       jest.spyOn(agentManager, 'findByName').mockResolvedValue(agent);
       jest.spyOn(agentManager, 'findByStorageIdentity').mockResolvedValue(agent);
-      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
 
       await agentManager.activateAgent('Session Agent');
       expect(registry.getOrCreate('session-a').agents).toEqual(new Set(['session-agent.md']));
@@ -235,7 +284,7 @@ describe('AgentManager', () => {
 
   describe('Recovery state synchronization', () => {
     it('allows normal completion to shrink legacy oversized state', async () => {
-      const agent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const agent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const target = agent.addGoal({ description: 'Stuck execution' });
       target.status = 'in_progress';
       agent.markStatePersisted();
@@ -244,7 +293,7 @@ describe('AgentManager', () => {
       jest.spyOn((agentManager as any).stateStore, 'save').mockResolvedValueOnce(2);
 
       const result = await agentManager.completeAgentGoal({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: target.id,
         outcome: 'success',
         summary: 'Completed normally',
@@ -256,7 +305,7 @@ describe('AgentManager', () => {
     });
 
     it('restores normal completion state when oversized cleanup cannot be saved', async () => {
-      const agent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const agent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const target = agent.addGoal({ description: 'Stuck execution' });
       target.status = 'in_progress';
       agent.markStatePersisted();
@@ -268,7 +317,7 @@ describe('AgentManager', () => {
         .mockRejectedValueOnce(new Error('version conflict'));
 
       await expect(agentManager.completeAgentGoal({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: target.id,
         outcome: 'failure',
         summary: 'Failed cleanup',
@@ -279,7 +328,7 @@ describe('AgentManager', () => {
     });
 
     it('archives only the terminal goal when oversized recovery must shrink', async () => {
-      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const recoveryAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const target = recoveryAgent.addGoal({ description: 'Stuck execution' });
       target.status = 'in_progress';
       const survivor = recoveryAgent.addGoal({ description: 'Other execution' });
@@ -292,10 +341,10 @@ describe('AgentManager', () => {
         .mockResolvedValueOnce(2);
 
       const result = await agentManager.completeAgentGoalForRecovery({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: target.id,
         outcome: 'failure',
-        summary: 'Operator abort',
+        summary: OPERATOR_ABORT_SUMMARY,
       });
 
       expect(save).toHaveBeenCalledTimes(2);
@@ -312,7 +361,7 @@ describe('AgentManager', () => {
     });
 
     it('continues compacting safe terminal history until recovery fits', async () => {
-      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const recoveryAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const oldTerminal = recoveryAgent.addGoal({ description: 'Old completed history' });
       oldTerminal.status = 'completed';
       const target = recoveryAgent.addGoal({ description: 'Stuck execution' });
@@ -328,10 +377,10 @@ describe('AgentManager', () => {
         .mockResolvedValueOnce(2);
 
       await expect(agentManager.completeAgentGoalForRecovery({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: target.id,
         outcome: 'failure',
-        summary: 'Operator abort',
+        summary: OPERATOR_ABORT_SUMMARY,
       })).resolves.toEqual(expect.objectContaining({ success: true }));
 
       expect(save).toHaveBeenCalledTimes(3);
@@ -346,7 +395,7 @@ describe('AgentManager', () => {
     });
 
     it('retains a referenced failure tombstone during oversized recovery', async () => {
-      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const recoveryAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const target = recoveryAgent.addGoal({ description: 'Detailed stuck execution' });
       target.status = 'in_progress';
       const dependent = recoveryAgent.addGoal({
@@ -361,10 +410,10 @@ describe('AgentManager', () => {
         .mockResolvedValueOnce(2);
 
       const result = await agentManager.completeAgentGoalForRecovery({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: target.id,
         outcome: 'failure',
-        summary: 'Operator abort',
+        summary: OPERATOR_ABORT_SUMMARY,
       });
 
       expect(result.goal).toEqual(expect.objectContaining({
@@ -382,7 +431,7 @@ describe('AgentManager', () => {
     });
 
     it('continues the requested in-progress goal instead of another session goal', async () => {
-      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
       const otherGoal = agent.addGoal({ description: 'Other session execution' });
       otherGoal.status = 'in_progress';
       const ownedGoal = agent.addGoal({ description: 'Calling session execution' });
@@ -399,7 +448,7 @@ describe('AgentManager', () => {
         getExecutionInternals(agentManager),
         'executeAgentWithinStateOperation',
       ).mockResolvedValue({
-        agentName: 'test-agent',
+        agentName: TEST_AGENT_NAME,
         goal: 'Continued execution',
         goalId: 'goal-continuation',
         activeElements: {},
@@ -409,7 +458,7 @@ describe('AgentManager', () => {
       });
 
       await expect(agentManager.continueAgentExecution({
-        agentName: 'test-agent',
+        agentName: TEST_AGENT_NAME,
         goalId: ownedGoal.id,
       })).resolves.toEqual(expect.objectContaining({
         previousState: expect.objectContaining({
@@ -420,14 +469,14 @@ describe('AgentManager', () => {
       }));
 
       expect(executeSpy).toHaveBeenCalledWith(
-        'test-agent',
+        TEST_AGENT_NAME,
         {},
         { operationName: 'continue_execution', resumedGoalId: ownedGoal.id },
       );
     });
 
     it('rejects a requested goal that is not in progress', async () => {
-      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
       const activeGoal = agent.addGoal({ description: 'Another active execution' });
       activeGoal.status = 'in_progress';
       jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
@@ -437,7 +486,7 @@ describe('AgentManager', () => {
       );
 
       await expect(agentManager.continueAgentExecution({
-        agentName: 'test-agent',
+        agentName: TEST_AGENT_NAME,
         goalId: 'goal-not-owned',
       })).rejects.toThrow("Goal 'goal-not-owned' is not an in-progress goal");
 
@@ -445,7 +494,7 @@ describe('AgentManager', () => {
     });
 
     it('rejects a second completion of an explicitly identified finalized goal', async () => {
-      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
       const completedGoal = agent.addGoal({ description: 'Already completed execution' });
       completedGoal.status = 'in_progress';
       agent.completeGoal(completedGoal.id, 'success');
@@ -453,7 +502,7 @@ describe('AgentManager', () => {
       jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
 
       await expect(agentManager.completeAgentGoal({
-        agentName: 'test-agent',
+        agentName: TEST_AGENT_NAME,
         goalId: completedGoal.id,
         outcome: 'failure',
         summary: 'Attempted duplicate completion',
@@ -476,7 +525,7 @@ describe('AgentManager', () => {
         getSessionContext: () => currentSession,
       };
 
-      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
       const sourceGoal = agent.addGoal({ description: 'Paused execution' });
       sourceGoal.status = 'in_progress';
       agent.recordDecision({
@@ -501,7 +550,7 @@ describe('AgentManager', () => {
           markContinuationStarted?.();
           await continuationRelease;
           return {
-            agentName: 'test-agent',
+            agentName: TEST_AGENT_NAME,
             goal: 'Continued execution',
             goalId: 'goal-continuation',
             activeElements: {},
@@ -512,14 +561,14 @@ describe('AgentManager', () => {
         });
 
       const continuation = agentManager.continueAgentExecution({
-        agentName: 'test-agent',
+        agentName: TEST_AGENT_NAME,
         goalId: sourceGoal.id,
       });
       await continuationStarted;
 
       currentSession = { ...currentSession, sessionId: 'session-b' };
       const completion = agentManager.completeAgentGoal({
-        agentName: 'test-agent',
+        agentName: TEST_AGENT_NAME,
         goalId: sourceGoal.id,
         outcome: 'success',
         summary: 'Completed from another session',
@@ -536,16 +585,16 @@ describe('AgentManager', () => {
     });
 
     it('serializes execute_agent behind an in-flight orphan reclaim', async () => {
-      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+      fileOperationsService.readFile.mockImplementation((filePath: string) => {
         if (filePath.includes('.state.yaml')) {
-          throw Object.assign(new Error('missing state'), { code: 'ENOENT' });
+          return Promise.reject(Object.assign(new Error('missing state'), { code: 'ENOENT' }));
         }
-        return `---
+        return Promise.resolve(`---
 name: test-agent
 ---
-Content`;
+Content`);
       });
-      const agent = await agentManager.read('test-agent');
+      const agent = await agentManager.read(TEST_AGENT_NAME);
       expect(agent).not.toBeNull();
 
       let markReclaimStarted: (() => void) | undefined;
@@ -561,9 +610,9 @@ Content`;
       const loadExecutable = jest.spyOn(agentManager as any, 'loadExecutableAgent')
         .mockRejectedValue(new Error('execution reached serialized boundary'));
 
-      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: 'test-agent' });
+      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: TEST_AGENT_NAME });
       await reclaimStarted;
-      const execute = agentManager.executeAgent('test-agent', {});
+      const execute = agentManager.executeAgent(TEST_AGENT_NAME, {});
       await Promise.resolve();
       expect(loadExecutable).not.toHaveBeenCalled();
 
@@ -574,16 +623,16 @@ Content`;
     });
 
     it('does not hydrate reclaimed state over an execution started during the read', async () => {
-      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+      fileOperationsService.readFile.mockImplementation((filePath: string) => {
         if (filePath.includes('.state.yaml')) {
-          throw Object.assign(new Error('missing state'), { code: 'ENOENT' });
+          return Promise.reject(Object.assign(new Error('missing state'), { code: 'ENOENT' }));
         }
-        return `---
+        return Promise.resolve(`---
 name: test-agent
 ---
-Content`;
+Content`);
       });
-      const agent = await agentManager.read('test-agent');
+      const agent = await agentManager.read(TEST_AGENT_NAME);
       expect(agent).not.toBeNull();
 
       let markReadStarted: (() => void) | undefined;
@@ -597,9 +646,9 @@ Content`;
           resolveState = resolve;
         }));
 
-      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: 'test-agent' });
+      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: TEST_AGENT_NAME });
       await readStarted;
-      (agentManager as any).beginExecutionAttempt('test-agent');
+      (agentManager as any).beginExecutionAttempt(TEST_AGENT_NAME);
       resolveState?.({
         goals: [{
           id: 'goal-orphan',
@@ -617,15 +666,15 @@ Content`;
         sessionCount: 1,
         stateVersion: 1,
       });
-      (agentManager as any).endExecutionAttempt('test-agent');
+      (agentManager as any).endExecutionAttempt(TEST_AGENT_NAME);
 
       await expect(reclaim).resolves.toBeNull();
       expect(agent?.getState().goals).toEqual([]);
     });
 
     it('preserves a concurrently-created goal while applying a recovery completion', () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
 
@@ -659,8 +708,8 @@ Content`;
     });
 
     it('removes an archived recovery goal while preserving concurrent state', () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
 
@@ -686,7 +735,7 @@ Content`;
     });
 
     it('removes every recovery eviction from pending live state', async () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const oldTerminal = sourceAgent.addGoal({ description: 'Old completed history' });
       sourceAgent.recordDecision({
         goalId: oldTerminal.id,
@@ -696,7 +745,7 @@ Content`;
       });
       sourceAgent.completeGoal(oldTerminal.id, 'success');
       const originalGoal = sourceAgent.addGoal({
-        description: 'Original execution',
+        description: ORIGINAL_EXECUTION_DESCRIPTION,
         dependencies: [oldTerminal.id],
       });
       originalGoal.status = 'in_progress';
@@ -715,10 +764,10 @@ Content`;
         .mockResolvedValueOnce(2);
 
       await expect(agentManager.completeAgentGoalForRecovery({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: originalGoal.id,
         outcome: 'failure',
-        summary: 'Operator abort',
+        summary: OPERATOR_ABORT_SUMMARY,
       })).resolves.toEqual(expect.objectContaining({ success: true }));
 
       const synchronizedState = sourceAgent.getState();
@@ -731,10 +780,10 @@ Content`;
     });
 
     it('retains tombstones for evicted prerequisites of pending live work', async () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const oldTerminal = sourceAgent.addGoal({ description: 'Old failed prerequisite' });
       sourceAgent.completeGoal(oldTerminal.id, 'failure');
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
 
@@ -753,10 +802,10 @@ Content`;
         .mockResolvedValueOnce(2);
 
       await expect(agentManager.completeAgentGoalForRecovery({
-        agentName: 'recovery-agent',
+        agentName: RECOVERY_AGENT_NAME,
         goalId: originalGoal.id,
         outcome: 'failure',
-        summary: 'Operator abort',
+        summary: OPERATOR_ABORT_SUMMARY,
       })).resolves.toEqual(expect.objectContaining({ success: true }));
 
       expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
@@ -775,8 +824,8 @@ Content`;
     });
 
     it('synchronizes a referenced recovery tombstone into the live source state', () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       const dependent = sourceAgent.addGoal({
         description: 'Dependent execution',
@@ -807,8 +856,8 @@ Content`;
     });
 
     it('marks a recovery-only synchronization as fully persisted', () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
 
@@ -825,8 +874,8 @@ Content`;
     });
 
     it('keeps the durable recovery committed when live synchronization fails', () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
       const sourceSnapshot = sourceAgent.serializeToJSON();
@@ -856,8 +905,8 @@ Content`;
     });
 
     it('does not deserialize an oversized live snapshot during failed synchronization', () => {
-      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const sourceAgent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
 
@@ -888,7 +937,7 @@ Content`;
   describe('Create', () => {
     it('should create a new agent', async () => {
       const result = await agentManager.create(
-        'test-agent',
+        TEST_AGENT_NAME,
         'A test agent',
         'Agent instructions here',
         {
@@ -898,7 +947,7 @@ Content`;
       );
 
       expect(result.success).toBe(true);
-      expect(result.message).toContain('test-agent');
+      expect(result.message).toContain(TEST_AGENT_NAME);
       expect(result.element).toBeInstanceOf(Agent);
       expect(fileOperationsService.createFileExclusive).toHaveBeenCalledWith(
         expect.stringContaining('test-agent.md'),
@@ -1045,7 +1094,7 @@ Content`;
   });
 
   describe('Read', () => {
-    beforeEach(async () => {
+    beforeEach(() => {
       fileOperationsService.readFile.mockResolvedValue(`---
 name: test-agent
 type: agent
@@ -1062,10 +1111,10 @@ Agent instructions here`);
     });
 
     it('should read an existing agent', async () => {
-      const agent = await agentManager.read('test-agent');
+      const agent = await agentManager.read(TEST_AGENT_NAME);
 
       expect(agent).not.toBeNull();
-      expect(agent?.metadata.name).toBe('test-agent');
+      expect(agent?.metadata.name).toBe(TEST_AGENT_NAME);
       expect(agent?.extensions?.decisionFramework).toBe('rule_based');
     });
 
@@ -1085,8 +1134,8 @@ Agent instructions here`);
 
     it('should load agent state if available', async () => {
       // Mock both agent file and state file
-      fileOperationsService.readFile.mockImplementation(async (path: string) => {
-          if (path.includes('.state.yaml')) {
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((path: string) => {
+          if (path.includes(STATE_FILE_SUFFIX)) {
             // Return state file content in YAML frontmatter format
             return `---
 goals:
@@ -1107,9 +1156,9 @@ type: agent
 ---
 Content`;
           }
-        });
+        }));
 
-      const agent = await agentManager.read('test-agent');
+      const agent = await agentManager.read(TEST_AGENT_NAME);
       const state = agent?.getState();
 
       // Note: sessionCount is stored as string in YAML and parsed back as number
@@ -1126,7 +1175,7 @@ description: Old description
 ---
 Content`);
 
-      const success = await agentManager.update('test-agent', {
+      const success = await agentManager.update(TEST_AGENT_NAME, {
         description: 'New description',
         specializations: ['updated', 'skills']
       });
@@ -1151,7 +1200,7 @@ Content`);
 
     it('should save agent state if dirty', async () => {
       // Create a mock agent with dirty state
-      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
       agent.addGoal({ description: 'New goal' }); // This makes state dirty
 
       // Mock the read to return our agent
@@ -1163,7 +1212,7 @@ Content`);
       // Mock the manager's read method to return our agent
       jest.spyOn(agentManager, 'read').mockImplementation(() => Promise.resolve(agent));
 
-      await agentManager.update('test-agent', {});
+      await agentManager.update(TEST_AGENT_NAME, {});
 
       // Should have written both the agent file and state file
       expect(fileOperationsService.writeFile).toHaveBeenCalledTimes(2);
@@ -1171,7 +1220,7 @@ Content`);
 
     it('should not call saveAgentState when state is not dirty (Issue #123)', async () => {
       // Create a fresh agent WITHOUT making any state changes
-      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
       // Note: NOT calling addGoal, recordDecision, or any state-modifying method
       // so needsStatePersistence() should return false
 
@@ -1184,7 +1233,7 @@ Content`);
       // Mock the manager's read method to return our fresh (clean) agent
       jest.spyOn(agentManager, 'read').mockImplementation(() => Promise.resolve(agent));
 
-      await agentManager.update('test-agent', { description: 'Updated description' });
+      await agentManager.update(TEST_AGENT_NAME, { description: 'Updated description' });
 
       // Should have written ONLY the agent file, NOT the state file
       // because needsStatePersistence() returns false for clean state
@@ -1199,7 +1248,7 @@ Content`);
     it('should delete agent and state files', async () => {
       fileOperationsService.exists.mockResolvedValue(true);
 
-      await agentManager.delete('test-agent');
+      await agentManager.delete(TEST_AGENT_NAME);
 
       expect(fileOperationsService.deleteFile).toHaveBeenCalledTimes(2); // Main file + state file
       expect(fileOperationsService.deleteFile).toHaveBeenCalledWith(
@@ -1209,7 +1258,7 @@ Content`);
       );
       expect(fileOperationsService.deleteFile).toHaveBeenCalledWith(
         expect.stringContaining('test-agent.state.yaml'),
-        'agents',
+        ElementType.AGENT,
         expect.objectContaining({ source: 'AgentManager.delete (state file)' })
       );
     });
@@ -1217,7 +1266,7 @@ Content`);
     it('should log security event on deletion', async () => {
       fileOperationsService.exists.mockResolvedValue(true);
 
-      await agentManager.delete('test-agent');
+      await agentManager.delete(TEST_AGENT_NAME);
 
       // Security logging is now handled by FileOperationsService, but BaseElementManager might still log high-level events?
       // Actually, BaseElementManager.delete calls super.delete which calls fileOperations.deleteFile.
@@ -1246,7 +1295,7 @@ Content`);
       // Configure the mock to return agent files
       mockPortfolioManager.listElements.mockResolvedValue(['agent1.md', 'agent2.md']);
 
-      fileOperationsService.readFile.mockImplementation(async (path: any) => {
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((path: any) => {
         if (path.includes('agent1')) {
           return `---
 name: agent1
@@ -1258,7 +1307,7 @@ name: agent2
 ---
 Content`;
         }
-      });
+      }));
 
       const agents = await agentManager.list();
 
@@ -1296,7 +1345,7 @@ Content`;
       expect(agentManager.validatePath('../traversal')).toBe(false);
       expect(agentManager.validatePath('~/home')).toBe(false);
       expect(agentManager.validatePath('/absolute/path')).toBe(false);
-      expect(agentManager.validatePath('C:\\windows')).toBe(false);
+      expect(agentManager.validatePath(String.raw`C:\windows`)).toBe(false);
     });
   });
 
@@ -1345,6 +1394,8 @@ This is the agent content.`;
 
       expect(agent.metadata.name).toBe('markdown-agent');
       expect(agent.extensions?.decisionFramework).toBe('programmatic');
+      expect(agent.instructions).toContain('This is the agent content.');
+      await expect(agentManager.exportElement(agent, 'markdown')).resolves.toContain('This is the agent content.');
     });
 
     it('should export agent to JSON', async () => {
@@ -1399,7 +1450,7 @@ This is the agent content.`;
         sessionCount: 1
       };
 
-      await agentManager.exposedSaveAgentState('test-agent', state as any);
+      await agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any);
 
       // Check that the path contains the expected components (cross-platform)
       const firstCallArgs = (fileOperationsService.writeFile as jest.Mock).mock.calls[0];
@@ -1418,15 +1469,15 @@ This is the agent content.`;
         sessionCount: 1
       };
 
-      await expect(agentManager.exposedSaveAgentState('test-agent', hugeState as any))
+      await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, hugeState as any))
         .rejects.toThrow('exceeds allowed size');
     });
 
     it('should cache loaded state', async () => {
       let callCount = 0;
-      fileOperationsService.readFile.mockImplementation(async (path: string) => {
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((path: string) => {
           callCount++;
-          if (path.includes('.state.yaml')) {
+          if (path.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -1440,17 +1491,17 @@ name: test-agent
 ---
 Content`;
           }
-        });
+        }));
 
       // First read: element is not cached, so both the agent file and its
       // .state.yaml sidecar are read from disk (callCount = 2).
-      await agentManager.read('test-agent');
+      await agentManager.read(TEST_AGENT_NAME);
       expect(callCount).toBe(2);
 
       // Second read: the element cache (populated by BaseElementManager.load())
       // serves the agent, and its already-hydrated state is returned as-is —
       // neither file is re-read. This is the desired steady-state behavior.
-      await agentManager.read('test-agent');
+      await agentManager.read(TEST_AGENT_NAME);
       expect(callCount).toBe(2);
 
       // Force an element-cache miss by clearing the base-class LRU. The state
@@ -1458,7 +1509,7 @@ Content`;
       // so the next read should re-fetch the agent file but reuse the cached
       // AgentState, confirming the two layers are separate.
       agentManager.clearCache();
-      await agentManager.read('test-agent');
+      await agentManager.read(TEST_AGENT_NAME);
       expect(callCount).toBe(3); // +1 agent file read; state came from stateCache
     });
 
@@ -1475,7 +1526,7 @@ Content`;
         stateVersion: 1
       };
 
-      await agentManager.exposedSaveAgentState('test-agent', state as any);
+      await agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any);
 
       // Verify that withLock was called with the correct resource identifier
       expect(withLockSpy).toHaveBeenCalledWith(
@@ -1529,8 +1580,8 @@ Content`;
 
       // Execute concurrent saves
       await Promise.all([
-        agentManager.exposedSaveAgentState('test-agent', state1 as any).then(() => executionOrder.push(1)),
-        agentManager.exposedSaveAgentState('test-agent', state2 as any).then(() => executionOrder.push(2))
+        agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state1 as any).then(() => executionOrder.push(1)),
+        agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state2 as any).then(() => executionOrder.push(2))
       ]);
 
       // Both should complete successfully (serialized by lock)
@@ -1579,8 +1630,8 @@ Content`);
     describe('Corruption Recovery', () => {
       it('should handle malformed YAML state file gracefully', async () => {
         // Mock agent file to exist
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             // Return malformed YAML (unclosed brace, invalid syntax)
             return `---
 goals: [
@@ -1592,11 +1643,11 @@ decisions: []
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Should not throw - graceful degradation returns null for corrupt state
         // Agent should still load, just without persisted state
-        const agent = await agentManager.read('test-agent');
+        const agent = await agentManager.read(TEST_AGENT_NAME);
 
         // Agent loads but state is default (no goals from corrupt file)
         expect(agent).not.toBeNull();
@@ -1604,8 +1655,8 @@ Content`;
       });
 
       it('should handle truncated state file', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             // Truncated YAML - incomplete content
             return `---
 goals:
@@ -1617,16 +1668,16 @@ goals:
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Should handle gracefully
-        const agent = await agentManager.read('test-agent');
+        const agent = await agentManager.read(TEST_AGENT_NAME);
         expect(agent).not.toBeNull();
       });
 
       it('should handle state file with invalid stateVersion type', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -1640,9 +1691,9 @@ stateVersion: "not-a-number"
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
-        const agent = await agentManager.read('test-agent');
+        const agent = await agentManager.read(TEST_AGENT_NAME);
         expect(agent).not.toBeNull();
 
         // stateVersion should be coerced or defaulted, not NaN
@@ -1655,8 +1706,8 @@ Content`;
        * normalizeLoadedState() defaults missing goals/decisions to empty arrays.
        */
       it('should default missing goals/decisions arrays in state file', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             // Missing goals, decisions, context - only has sessionCount and lastActive
             return `---
 lastActive: 2025-01-01T00:00:00Z
@@ -1668,9 +1719,9 @@ stateVersion: 1
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
-        const agent = await agentManager.read('test-agent');
+        const agent = await agentManager.read(TEST_AGENT_NAME);
         expect(agent).not.toBeNull();
 
         // CORRECT BEHAVIOR: Missing fields should be defaulted to empty arrays
@@ -1683,8 +1734,8 @@ Content`;
       });
 
       it('should handle state file with invalid date format', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -1698,10 +1749,10 @@ stateVersion: 1
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Should handle gracefully
-        const agent = await agentManager.read('test-agent');
+        const agent = await agentManager.read(TEST_AGENT_NAME);
         expect(agent).not.toBeNull();
       });
     });
@@ -1724,7 +1775,7 @@ Content`;
         };
 
         // Should succeed without throwing
-        await expect(agentManager.exposedSaveAgentState('test-agent', state as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any))
           .resolves.not.toThrow();
       });
 
@@ -1742,7 +1793,7 @@ Content`;
           stateVersion: 1
         };
 
-        await expect(agentManager.exposedSaveAgentState('test-agent', state as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any))
           .rejects.toThrow('normal persistence limit');
       });
 
@@ -1772,14 +1823,14 @@ Content`;
         };
 
         // Should succeed - 50 small goals is under size limit
-        await expect(agentManager.exposedSaveAgentState('test-agent', state as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any))
           .resolves.not.toThrow();
       });
     });
 
     describe('State Version Rollback on Failed Save', () => {
       it('should not increment stateVersion when write fails', async () => {
-        const agent = new Agent({ name: 'test-agent' }, metadataService);
+        const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
         const initialVersion = agent.getState().stateVersion;
 
         // Add a goal - with Option C fix, version does NOT increment during operation
@@ -1792,7 +1843,7 @@ Content`;
         fileOperationsService.writeFile.mockRejectedValueOnce(new Error('Disk full'));
 
         // Attempt save - should fail
-        await expect(agentManager.exposedSaveAgentState('test-agent', agent.getState() as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, agent.getState() as any))
           .rejects.toThrow('Disk full');
 
         // FIX (Issue #123): Version should NOT have incremented because save failed
@@ -1809,7 +1860,7 @@ Content`;
        * This test verifies the Option C pattern is working correctly.
        */
       it('stateVersion should only increment on successful save', async () => {
-        const agent = new Agent({ name: 'test-agent' }, metadataService);
+        const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
         const initialVersion = agent.getState().stateVersion;
         expect(initialVersion).toBe(1);
 
@@ -1822,24 +1873,24 @@ Content`;
         expect(agent.getState().stateVersion).toBe(1); // Will fail with current bug
 
         // Mock successful save
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
           }
           return `---\nname: test-agent\n---\nContent`;
-        });
+        }));
 
         // Save should increment version
-        await agentManager.exposedSaveAgentState('test-agent', agent.getState() as any);
+        await agentManager.exposedSaveAgentState(TEST_AGENT_NAME, agent.getState() as any);
 
         // After successful save, version should be 2
         // Note: The agent object won't automatically update - this tests the pattern
       });
 
       it('should not increment stateVersion when size validation fails', async () => {
-        const agent = new Agent({ name: 'test-agent' }, metadataService);
+        const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
         const initialVersion = agent.getState().stateVersion;
 
         // Add goal - with Option C fix, version does NOT change during operation
@@ -1855,7 +1906,7 @@ Content`;
         };
 
         // Attempt save - should fail due to size
-        await expect(agentManager.exposedSaveAgentState('test-agent', oversizedState as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, oversizedState as any))
           .rejects.toThrow('exceeds allowed size');
 
         // FIX (Issue #123): Version should NOT have changed because save failed
@@ -1864,8 +1915,8 @@ Content`;
 
       it('should not persist stateVersion increment when version conflict occurs', async () => {
         // Setup: Load an agent with version 1
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -1879,7 +1930,7 @@ stateVersion: 5
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Create a state with lower version (simulating stale state)
         const staleState = {
@@ -1892,7 +1943,7 @@ Content`;
         };
 
         // Attempt to save stale state - should fail with version conflict
-        await expect(agentManager.exposedSaveAgentState('test-agent', staleState as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, staleState as any))
           .rejects.toThrow('State version conflict');
 
         // Verify no write occurred
@@ -1902,8 +1953,8 @@ Content`;
 
     describe('Issue #697: V2 Field Normalization on Load', () => {
       it('should normalize goals (plural) to goal on load', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -1919,20 +1970,20 @@ goals:
       required: true
 ---
 Agent with plural goals field`;
-        });
+        }));
 
         const agent = await agentManager.read('plural-goal-agent');
         expect(agent).not.toBeNull();
         // goal should be set from goals
-        expect((agent!.metadata as any).goal).toBeDefined();
-        expect((agent!.metadata as any).goal.template).toBe('Do {{task}}');
+        expect((requireLoadedAgent(agent).metadata as any).goal).toBeDefined();
+        expect((requireLoadedAgent(agent).metadata as any).goal.template).toBe('Do {{task}}');
         // goals (plural) should be removed
-        expect((agent!.metadata as any).goals).toBeUndefined();
+        expect((requireLoadedAgent(agent).metadata as any).goals).toBeUndefined();
       });
 
       it('should not clobber existing goal when goals (plural) also present', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -1946,19 +1997,19 @@ goals:
   template: "Legacy {{task}}"
 ---
 Agent with both goal and goals`;
-        });
+        }));
 
         const agent = await agentManager.read('both-goal-agent');
         expect(agent).not.toBeNull();
         // Original goal should be preserved
-        expect((agent!.metadata as any).goal.template).toBe('Primary {{task}}');
+        expect((requireLoadedAgent(agent).metadata as any).goal.template).toBe('Primary {{task}}');
         // goals should be cleaned up
-        expect((agent!.metadata as any).goals).toBeUndefined();
+        expect((requireLoadedAgent(agent).metadata as any).goals).toBeUndefined();
       });
 
       it('should normalize maxSteps to maxAutonomousSteps inside autonomy', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -1971,18 +2022,18 @@ autonomy:
   riskTolerance: moderate
 ---
 Agent with maxSteps shorthand`;
-        });
+        }));
 
         const agent = await agentManager.read('maxsteps-agent');
         expect(agent).not.toBeNull();
-        const autonomy = (agent!.metadata as any).autonomy;
+        const autonomy = (requireLoadedAgent(agent).metadata as any).autonomy;
         expect(autonomy.maxAutonomousSteps).toBe(5);
         expect(autonomy.maxSteps).toBeUndefined();
       });
 
       it('should promote root-level riskTolerance into autonomy block', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -1993,18 +2044,18 @@ type: agent
 riskTolerance: conservative
 ---
 Agent with root-level riskTolerance`;
-        });
+        }));
 
         const agent = await agentManager.read('root-risk-agent');
         expect(agent).not.toBeNull();
-        const autonomy = (agent!.metadata as any).autonomy;
+        const autonomy = (requireLoadedAgent(agent).metadata as any).autonomy;
         expect(autonomy).toBeDefined();
         expect(autonomy.riskTolerance).toBe('conservative');
       });
 
       it('should promote root-level maxAutonomousSteps into autonomy block', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -2015,19 +2066,19 @@ type: agent
 maxAutonomousSteps: 10
 ---
 Agent with root-level maxAutonomousSteps`;
-        });
+        }));
 
         const agent = await agentManager.read('root-steps-agent');
         expect(agent).not.toBeNull();
-        const autonomy = (agent!.metadata as any).autonomy;
+        const autonomy = (requireLoadedAgent(agent).metadata as any).autonomy;
         expect(autonomy).toBeDefined();
         expect(autonomy.maxAutonomousSteps).toBe(10);
-        expect((agent!.metadata as any).maxAutonomousSteps).toBeUndefined();
+        expect((requireLoadedAgent(agent).metadata as any).maxAutonomousSteps).toBeUndefined();
       });
 
       it('should not clobber existing autonomy.riskTolerance with root-level value', async () => {
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -2041,11 +2092,11 @@ autonomy:
   maxAutonomousSteps: 3
 ---
 Agent with both root and nested riskTolerance`;
-        });
+        }));
 
         const agent = await agentManager.read('noclobber-agent');
         expect(agent).not.toBeNull();
-        const autonomy = (agent!.metadata as any).autonomy;
+        const autonomy = (requireLoadedAgent(agent).metadata as any).autonomy;
         // Nested value should win
         expect(autonomy.riskTolerance).toBe('conservative');
         expect(autonomy.maxAutonomousSteps).toBe(3);
@@ -2055,8 +2106,8 @@ Agent with both root and nested riskTolerance`;
     describe('Version Conflict Detection', () => {
       it('should detect version conflict when disk version is higher', async () => {
         // Mock disk state with version 10
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -2070,7 +2121,7 @@ stateVersion: 10
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Try to save with version 5 (stale)
         const staleState = {
@@ -2082,14 +2133,14 @@ Content`;
           stateVersion: 5
         };
 
-        await expect(agentManager.exposedSaveAgentState('test-agent', staleState as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, staleState as any))
           .rejects.toThrow(/State version conflict.*current version is 10.*attempted to save version 5/);
       });
 
       it('should allow save when disk version matches attempted version', async () => {
         // Mock disk state with version 5
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -2103,7 +2154,7 @@ stateVersion: 5
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Save with version 5 (matches disk) - should increment to 6
         // Note: Current implementation allows equal versions (not just greater)
@@ -2117,14 +2168,14 @@ Content`;
         };
 
         // Should succeed - versions match
-        await expect(agentManager.exposedSaveAgentState('test-agent', matchingState as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, matchingState as any))
           .resolves.not.toThrow();
       });
 
       it('should allow save when disk version is lower (normal progression)', async () => {
         // Mock disk state with version 3
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
 goals: []
 decisions: []
@@ -2138,7 +2189,7 @@ stateVersion: 3
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         // Save with version 5 (higher than disk 3) - normal case
         const newerState = {
@@ -2151,14 +2202,14 @@ Content`;
         };
 
         // Should succeed
-        await expect(agentManager.exposedSaveAgentState('test-agent', newerState as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, newerState as any))
           .resolves.not.toThrow();
       });
 
       it('should handle first save when no state file exists', async () => {
         // Mock: no state file exists (ENOENT)
-        fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-          if (filePath.includes('.state.yaml')) {
+        fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+          if (filePath.includes(STATE_FILE_SUFFIX)) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
             error.code = 'ENOENT';
             throw error;
@@ -2167,7 +2218,7 @@ Content`;
 name: test-agent
 ---
 Content`;
-        });
+        }));
 
         const newState = {
           goals: [{ id: 'goal_1', description: 'First goal', status: 'pending' }],
@@ -2179,7 +2230,7 @@ Content`;
         };
 
         // Should succeed - no existing state to conflict with
-        await expect(agentManager.exposedSaveAgentState('test-agent', newState as any))
+        await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, newState as any))
           .resolves.not.toThrow();
       });
     });

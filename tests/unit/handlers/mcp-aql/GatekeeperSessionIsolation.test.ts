@@ -10,6 +10,10 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
+const LLM_REQUEST_ID = 'llm-request';
+const TEST_SESSION_ID = 'test-session';
+const TEST_CHALLENGE_ID = 'challenge-123';
+
 jest.unstable_mockModule('../../../../src/utils/logger.js', () => ({
   logger: {
     debug: jest.fn(),
@@ -51,19 +55,21 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
       const sessionB = { userId: 'user-b', sessionId: 'session-b', tenantId: null, transport: 'http' as const, createdAt: Date.now() };
 
       // Session A confirms create_element
-      const ctxA = tracker.createSessionContext('llm-request', sessionA);
-      await tracker.runAsync(ctxA, async () => {
+      const ctxA = tracker.createSessionContext(LLM_REQUEST_ID, sessionA);
+      await tracker.runAsync(ctxA, () => {
         gatekeeper.recordConfirmation('create_element', 'CONFIRM_SESSION' as any);
+        return Promise.resolve();
       });
 
       // Session B enforces create_element — should NOT find Session A's confirmation
-      const ctxB = tracker.createSessionContext('llm-request', sessionB);
+      const ctxB = tracker.createSessionContext(LLM_REQUEST_ID, sessionB);
       let decisionB: any;
-      await tracker.runAsync(ctxB, async () => {
+      await tracker.runAsync(ctxB, () => {
         decisionB = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
         });
+        return Promise.resolve();
       });
 
       // Session B should see confirmationPending, not allowed via session_confirmation
@@ -74,18 +80,20 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
       const sessionA = { userId: 'user-a', sessionId: 'session-a', tenantId: null, transport: 'http' as const, createdAt: Date.now() };
 
       // Session A confirms create_element
-      const ctxA = tracker.createSessionContext('llm-request', sessionA);
-      await tracker.runAsync(ctxA, async () => {
+      const ctxA = tracker.createSessionContext(LLM_REQUEST_ID, sessionA);
+      await tracker.runAsync(ctxA, () => {
         gatekeeper.recordConfirmation('create_element', 'CONFIRM_SESSION' as any);
+        return Promise.resolve();
       });
 
       // Session A enforces — should find its own confirmation
       let decisionA: any;
-      await tracker.runAsync(ctxA, async () => {
+      await tracker.runAsync(ctxA, () => {
         decisionA = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
         });
+        return Promise.resolve();
       });
 
       expect(decisionA.allowed).toBe(true);
@@ -97,27 +105,31 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
       const sessionB = { userId: 'user-b', sessionId: 'session-b', tenantId: null, transport: 'http' as const, createdAt: Date.now() };
 
       // Both sessions confirm
-      const ctxA = tracker.createSessionContext('llm-request', sessionA);
-      const ctxB = tracker.createSessionContext('llm-request', sessionB);
-      await tracker.runAsync(ctxA, async () => {
+      const ctxA = tracker.createSessionContext(LLM_REQUEST_ID, sessionA);
+      const ctxB = tracker.createSessionContext(LLM_REQUEST_ID, sessionB);
+      await tracker.runAsync(ctxA, () => {
         gatekeeper.recordConfirmation('delete_element', 'CONFIRM_SESSION' as any);
+        return Promise.resolve();
       });
-      await tracker.runAsync(ctxB, async () => {
+      await tracker.runAsync(ctxB, () => {
         gatekeeper.recordConfirmation('delete_element', 'CONFIRM_SESSION' as any);
+        return Promise.resolve();
       });
 
       // Session A revokes all
-      await tracker.runAsync(ctxA, async () => {
+      await tracker.runAsync(ctxA, () => {
         gatekeeper.revokeAllConfirmations();
+        return Promise.resolve();
       });
 
       // Session B's confirmation should still be there
       let decisionB: any;
-      await tracker.runAsync(ctxB, async () => {
+      await tracker.runAsync(ctxB, () => {
         decisionB = gatekeeper.enforce({
           operation: 'delete_element',
           endpoint: 'DELETE',
         });
+        return Promise.resolve();
       });
       expect(decisionB.allowed).toBe(true);
       expect(decisionB.policySource).toBe('session_confirmation');
@@ -129,9 +141,10 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
       const sessionB = { userId: 'user-b', sessionId: 'session-b', tenantId: null, transport: 'http' as const, createdAt: Date.now() };
 
       // Session B confirms
-      const ctxB = tracker.createSessionContext('llm-request', sessionB);
-      await tracker.runAsync(ctxB, async () => {
+      const ctxB = tracker.createSessionContext(LLM_REQUEST_ID, sessionB);
+      await tracker.runAsync(ctxB, () => {
         gatekeeper.recordConfirmation('create_element', 'CONFIRM_SESSION' as any);
+        return Promise.resolve();
       });
 
       // Dispose Session A
@@ -139,11 +152,12 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
 
       // Session B's confirmation should survive
       let decisionB: any;
-      await tracker.runAsync(ctxB, async () => {
+      await tracker.runAsync(ctxB, () => {
         decisionB = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
         });
+        return Promise.resolve();
       });
       expect(decisionB.allowed).toBe(true);
       expect(decisionB.policySource).toBe('session_confirmation');
@@ -154,8 +168,8 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
 describe('GatekeeperSession.initialize() restore', () => {
   it('restores confirmations from IConfirmationStore', async () => {
     const mockStore = {
-      initialize: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      persist: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      initialize: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      persist: jest.fn<() => Promise<void>>().mockResolvedValue(),
       getAllConfirmations: jest.fn().mockReturnValue([
         { operation: 'create_element', confirmedAt: new Date().toISOString(), permissionLevel: 'CONFIRM_SESSION', useCount: 1 },
         { operation: 'delete_element', confirmedAt: new Date().toISOString(), permissionLevel: 'CONFIRM_SESSION', useCount: 0, elementType: 'skill' },
@@ -178,10 +192,10 @@ describe('GatekeeperSession.initialize() restore', () => {
       saveCliSessionApproval: jest.fn(),
       getCliSessionApproval: jest.fn(),
       savePermissionPromptActive: jest.fn(),
-      getSessionId: jest.fn().mockReturnValue('test-session'),
+      getSessionId: jest.fn().mockReturnValue(TEST_SESSION_ID),
     } as any;
 
-    const session = new GatekeeperSession(undefined, 100, undefined, mockStore, 'test-session');
+    const session = new GatekeeperSession(undefined, 100, undefined, mockStore, TEST_SESSION_ID);
     await session.initialize();
 
     // Verify confirmations restored
@@ -204,8 +218,8 @@ describe('GatekeeperSession.initialize() restore', () => {
 
   it('starts fresh when store has no data', async () => {
     const mockStore = {
-      initialize: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      persist: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      initialize: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      persist: jest.fn<() => Promise<void>>().mockResolvedValue(),
       getAllConfirmations: jest.fn().mockReturnValue([]),
       getAllCliApprovals: jest.fn().mockReturnValue([]),
       getAllCliSessionApprovals: jest.fn().mockReturnValue([]),
@@ -220,10 +234,10 @@ describe('GatekeeperSession.initialize() restore', () => {
       saveCliSessionApproval: jest.fn(),
       getCliSessionApproval: jest.fn(),
       savePermissionPromptActive: jest.fn(),
-      getSessionId: jest.fn().mockReturnValue('test-session'),
+      getSessionId: jest.fn().mockReturnValue(TEST_SESSION_ID),
     } as any;
 
-    const session = new GatekeeperSession(undefined, 100, undefined, mockStore, 'test-session');
+    const session = new GatekeeperSession(undefined, 100, undefined, mockStore, TEST_SESSION_ID);
     await session.initialize();
 
     expect(session.getActiveConfirmations()).toEqual([]);
@@ -233,7 +247,7 @@ describe('GatekeeperSession.initialize() restore', () => {
   it('handles store initialization failure gracefully', async () => {
     const mockStore = {
       initialize: jest.fn<() => Promise<void>>().mockRejectedValue(new Error('disk error')),
-      persist: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      persist: jest.fn<() => Promise<void>>().mockResolvedValue(),
       getAllConfirmations: jest.fn().mockReturnValue([]),
       getAllCliApprovals: jest.fn().mockReturnValue([]),
       getAllCliSessionApprovals: jest.fn().mockReturnValue([]),
@@ -248,10 +262,10 @@ describe('GatekeeperSession.initialize() restore', () => {
       saveCliSessionApproval: jest.fn(),
       getCliSessionApproval: jest.fn(),
       savePermissionPromptActive: jest.fn(),
-      getSessionId: jest.fn().mockReturnValue('test-session'),
+      getSessionId: jest.fn().mockReturnValue(TEST_SESSION_ID),
     } as any;
 
-    const session = new GatekeeperSession(undefined, 100, undefined, mockStore, 'test-session');
+    const session = new GatekeeperSession(undefined, 100, undefined, mockStore, TEST_SESSION_ID);
     // Should not throw
     await session.initialize();
     expect(session.getActiveConfirmations()).toEqual([]);
@@ -264,8 +278,8 @@ describe('DangerZoneEnforcer session guard', () => {
 
   beforeEach(async () => {
     jest.unstable_mockModule('fs/promises', () => ({
-      default: { mkdir: jest.fn().mockResolvedValue(undefined) },
-      mkdir: jest.fn().mockResolvedValue(undefined),
+      default: { mkdir: jest.fn().mockResolvedValue() },
+      mkdir: jest.fn().mockResolvedValue(),
     }));
 
     const mod = await import('../../../../src/security/DangerZoneEnforcer.js');
@@ -275,16 +289,16 @@ describe('DangerZoneEnforcer session guard', () => {
   it('rejects cross-session unblock', () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
     // Block from Session A
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
     // Try to unblock from Session B — should be rejected
-    const result = enforcer.unblock('agent-1', 'challenge-123', 'session-b');
+    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-b');
     expect(result).toBe(false);
 
     // Verify still blocked
@@ -296,14 +310,14 @@ describe('DangerZoneEnforcer session guard', () => {
   it('allows unblock from same session', () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
-    const result = enforcer.unblock('agent-1', 'challenge-123', 'session-a');
+    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-a');
     expect(result).toBe(true);
 
     const check = enforcer.check('agent-1');
@@ -313,42 +327,42 @@ describe('DangerZoneEnforcer session guard', () => {
   it('allows unblock when block has no sessionId (backward compat)', () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
     // Block without sessionId (old format)
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID);
 
     // Any session can unblock
-    const result = enforcer.unblock('agent-1', 'challenge-123', 'session-b');
+    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-b');
     expect(result).toBe(true);
   });
 
   it('rejects unblock when block has sessionId but caller has none', () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
     // Caller with no sessionId — should be rejected because block has one
-    const result = enforcer.unblock('agent-1', 'challenge-123', undefined);
+    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID);
     expect(result).toBe(false);
   });
 
   it('check() returns sessionId in BlockCheckResult', () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
     const check = enforcer.check('agent-1');
     expect(check.sessionId).toBe('session-a');

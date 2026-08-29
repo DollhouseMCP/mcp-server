@@ -12,7 +12,7 @@ const SELF_CAPABILITY = 'console:self';
 const SELF_STREAM_PATH = '/api/v1/me/example/stream';
 const EMPTY_SSE_EVENTS: AsyncIterable<never> = {
   [Symbol.asyncIterator]: () => ({
-    next: () => Promise.resolve({ done: true, value: undefined as never }),
+    next: () => Promise.resolve({ done: true, value: undefined }),
   }),
 };
 
@@ -200,20 +200,22 @@ describe('ConsoleModuleRegistry', () => {
 
   it.each([
     ['an unsupported API version', selfModule({
-      apiVersion: 'v2' as never,
+      apiVersion: 'v2' as unknown as ConsoleModuleDescriptor['apiVersion'],
     }), /unsupported API version/],
     ['an invalid module identifier', selfModule({
       id: 'Invalid module id',
     }), /invalid identifier/],
     ['an unknown capability', selfModule({
-      capabilities: ['console:made-up' as never],
-      routes: [selfRoute({ requiredCapability: 'console:made-up' as never })],
+      capabilities: ['console:made-up' as unknown as ConsoleModuleDescriptor['capabilities'][number]],
+      routes: [selfRoute({
+        requiredCapability: 'console:made-up' as unknown as ConsoleRouteDefinition['requiredCapability'],
+      })],
     }), /unknown capability/],
     ['an undeclared route capability', selfModule({
       capabilities: [],
     }), /uses undeclared capability/],
     ['an invalid HTTP method', selfModule({
-      routes: [selfRoute({ method: 'OPTIONS' as never })],
+      routes: [selfRoute({ method: 'OPTIONS' as unknown as ConsoleRouteDefinition['method'] })],
     }), /invalid method/],
     ['a path outside the API namespace', selfModule({
       routes: [selfRoute({ path: '/api/v2/me/example' })],
@@ -223,7 +225,7 @@ describe('ConsoleModuleRegistry', () => {
     }), /missing a valid privacy class/],
     ['a missing elevation policy', adminModule({ elevation: undefined }), /missing a valid elevation policy/],
     ['an invalid ownership policy', selfModule({
-      routes: [selfRoute({ ownership: 'other_user' as never })],
+      routes: [selfRoute({ ownership: 'other_user' as unknown as ConsoleRouteDefinition['ownership'] })],
     }), /invalid ownership policy/],
     ['an admin route without audit', adminModule({ auditOperation: undefined }), /missing a declared audit operation/],
     ['an admin route without privacy projection', adminModule({ privacyProjector: undefined }), /missing a privacy projector/],
@@ -233,13 +235,13 @@ describe('ConsoleModuleRegistry', () => {
       routes: [selfRoute({ method: 'POST', idempotency: undefined })],
     }), /missing an idempotency decision/],
     ['an invalid idempotency decision', selfModule({
-      routes: [selfRoute({ idempotency: 'sometimes' as never })],
+      routes: [selfRoute({ idempotency: 'sometimes' as unknown as ConsoleRouteDefinition['idempotency'] })],
     }), /invalid idempotency decision/],
     ['an invalid rate-limit policy', selfModule({
-      routes: [selfRoute({ rateLimit: 'sometimes' as never })],
+      routes: [selfRoute({ rateLimit: 'sometimes' as unknown as ConsoleRouteDefinition['rateLimit'] })],
     }), /invalid rate-limit policy/],
     ['an invalid response kind', selfModule({
-      routes: [selfRoute({ responseKind: 'xml' as never })],
+      routes: [selfRoute({ responseKind: 'xml' as unknown as ConsoleRouteDefinition['responseKind'] })],
     }), /invalid response kind/],
     ['an SSE route without stream policy', selfModule({
       routes: [selfRoute({ path: SELF_STREAM_PATH, responseKind: 'sse' })],
@@ -282,7 +284,7 @@ describe('ConsoleModuleRegistry', () => {
         path: SELF_STREAM_PATH,
         responseKind: 'sse',
         streamPolicy: {
-          lastEventId: 'raw' as never,
+          lastEventId: 'raw' as unknown as NonNullable<ConsoleRouteDefinition['streamPolicy']>['lastEventId'],
           heartbeatMs: 15_000,
           revalidateMs: 15_000,
           maxLifetimeMs: 15 * 60_000,
@@ -412,6 +414,30 @@ describe('ConsoleModuleRegistry', () => {
       events: [{ type: PROFILE_UPDATED_EVENT, schemaId: 'profile.v1' }],
       schemas: [{ id: 'profile.v1' }],
     }))).toThrow(/duplicates schema/);
+  });
+
+  it('accepts a public_catalog route under /api/v1/collection', () => {
+    const registry = new ConsoleModuleRegistry();
+    expect(() => registry.register(selfModule({
+      id: 'collection',
+      routes: [selfRoute({ path: '/api/v1/collection/elements', privacyClass: 'public_catalog' })],
+    }))).not.toThrow();
+  });
+
+  it('rejects a personal route that claims the public_catalog privacy class', () => {
+    const registry = new ConsoleModuleRegistry();
+    // Laundering per-user data through the non-personal catalog class must fail.
+    expect(() => registry.register(selfModule({
+      routes: [selfRoute({ path: '/api/v1/me/example', privacyClass: 'public_catalog' })],
+    }))).toThrow(/public_catalog/);
+  });
+
+  it('rejects a /api/v1/collection route that claims a personal privacy class', () => {
+    const registry = new ConsoleModuleRegistry();
+    expect(() => registry.register(selfModule({
+      id: 'collection',
+      routes: [selfRoute({ path: '/api/v1/collection/elements', privacyClass: 'self_private' })],
+    }))).toThrow(/public_catalog/);
   });
 
   it('rejects event and schema identifier collisions across modules', () => {

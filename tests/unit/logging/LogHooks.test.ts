@@ -47,6 +47,8 @@ import type { UnifiedLogEntry } from '../../../src/logging/types.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { LRUCache } from '../../../src/cache/LRUCache.js';
 
+const TEST_TIMESTAMP = '2026-02-10T12:00:00.000Z';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -150,7 +152,7 @@ describe('LogHooks', () => {
 
       wireLogHooks(mockLogManager, container);
 
-      const testDate = new Date('2026-02-10T12:00:00.000Z');
+      const testDate = new Date(TEST_TIMESTAMP);
       mockListener({
         timestamp: testDate,
         level: 'warn',
@@ -160,7 +162,7 @@ describe('LogHooks', () => {
 
       expect(mockLogManager.logCalls).toHaveLength(1);
       expect(mockLogManager.logCalls[0]).toMatchObject({
-        timestamp: '2026-02-10T12:00:00.000Z',
+        timestamp: TEST_TIMESTAMP,
         category: 'application',
         level: 'warn',
         source: 'MCPLogger',
@@ -227,6 +229,15 @@ describe('LogHooks', () => {
       expect(() => wireLogHooks(mockLogManager, container)).not.toThrow();
     });
 
+    it('should replay security events emitted before log hooks are wired', () => {
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener');
+
+      wireLogHooks(mockLogManager, makeMockContainer({}));
+
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), { replayExisting: true });
+      spy.mockRestore();
+    });
+
     // Severity mapping logic is tested directly in the implementation
     // Full integration tests for Security Monitor are in tests/integration/
   });
@@ -249,7 +260,7 @@ describe('LogHooks', () => {
       wireLogHooks(mockLogManager, container);
 
       mockListener({
-        timestamp: '2026-02-10T12:00:00.000Z',
+        timestamp: TEST_TIMESTAMP,
         attackType: 'SQL_INJECTION',
         pattern: 'UNION SELECT',
         severity: 'HIGH',
@@ -280,7 +291,7 @@ describe('LogHooks', () => {
       wireLogHooks(mockLogManager, container);
 
       mockListener({
-        timestamp: '2026-02-10T12:00:00.000Z',
+        timestamp: TEST_TIMESTAMP,
         attackType: 'XSS',
         pattern: '<script>',
         severity: 'MEDIUM',
@@ -621,13 +632,13 @@ describe('LogHooks', () => {
 
       // Simulate a SecurityMonitor event
       capturedCallback({
-        timestamp: '2026-02-10T12:00:00.000Z',
+        timestamp: TEST_TIMESTAMP,
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'HIGH',
         source: 'PersonaManager.activatePersona',
         details: 'Suspicious path detected',
         additionalData: { path: '/etc/passwd' },
-      });
+      }, { replayed: false });
 
       expect(mockLogManager.logCalls).toHaveLength(1);
       const loggedEntry = mockLogManager.logCalls[0];
@@ -652,12 +663,12 @@ describe('LogHooks', () => {
       wireLogHooks(mockLogManager, container);
 
       capturedCallback({
-        timestamp: '2026-02-10T12:00:00.000Z',
+        timestamp: TEST_TIMESTAMP,
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',
         source: 'SecureYamlParser',
         details: 'Malicious YAML detected',
-      });
+      }, { replayed: false });
 
       expect(mockLogManager.logCalls).toHaveLength(1);
       const loggedEntry = mockLogManager.logCalls[0];
@@ -667,6 +678,107 @@ describe('LogHooks', () => {
         sourceComponent: 'SecureYamlParser',
       });
 
+      spy.mockRestore();
+    });
+
+    it('does not attach the current bootstrap context to replayed security events', () => {
+      let capturedCallback: any;
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        capturedCallback = fn;
+        return jest.fn() as any;
+      });
+      const contextTracker = {
+        getCorrelationId: jest.fn(() => 'BOOTSTRAP-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'bootstrap-user',
+          sessionId: 'bootstrap-session',
+        })),
+      };
+
+      wireLogHooks(mockLogManager, makeMockContainer({ ContextTracker: contextTracker }));
+      capturedCallback({
+        timestamp: TEST_TIMESTAMP,
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: 'Integration descriptor seed denied_reserved for provider github',
+      }, { replayed: true });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      expect(mockLogManager.logCalls[0]).not.toHaveProperty('correlationId');
+      expect(mockLogManager.logCalls[0]).not.toHaveProperty('userId');
+      expect(mockLogManager.logCalls[0]).not.toHaveProperty('sessionId');
+      expect(contextTracker.getCorrelationId).not.toHaveBeenCalled();
+      expect(contextTracker.getSessionContext).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('preserves emission-time request attribution on replayed security events', () => {
+      let capturedCallback: any;
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        capturedCallback = fn;
+        return jest.fn() as any;
+      });
+      const registrationContext = {
+        getCorrelationId: jest.fn(() => 'BOOTSTRAP-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'bootstrap-user',
+          sessionId: 'bootstrap-session',
+        })),
+      };
+
+      wireLogHooks(mockLogManager, makeMockContainer({ ContextTracker: registrationContext }));
+      capturedCallback({
+        timestamp: TEST_TIMESTAMP,
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'IntegrationRequestGateway',
+        details: 'Integration request completed before hook setup',
+        correlationId: 'REQUEST-CORRELATION',
+        userId: 'request-user',
+        sessionId: 'request-session',
+      }, { replayed: true });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      expect(mockLogManager.logCalls[0]).toMatchObject({
+        correlationId: 'REQUEST-CORRELATION',
+        userId: 'request-user',
+        sessionId: 'request-session',
+      });
+      expect(registrationContext.getCorrelationId).not.toHaveBeenCalled();
+      expect(registrationContext.getSessionContext).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('attaches the active request context to live security events', () => {
+      let capturedCallback: any;
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        capturedCallback = fn;
+        return jest.fn() as any;
+      });
+      const contextTracker = {
+        getCorrelationId: jest.fn(() => 'REQUEST-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'request-user',
+          sessionId: 'request-session',
+        })),
+      };
+
+      wireLogHooks(mockLogManager, makeMockContainer({ ContextTracker: contextTracker }));
+      capturedCallback({
+        timestamp: TEST_TIMESTAMP,
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'IntegrationRequestGateway',
+        details: 'Integration request allowed',
+      }, { replayed: false });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      expect(mockLogManager.logCalls[0]).toMatchObject({
+        correlationId: 'REQUEST-CORRELATION',
+        userId: 'request-user',
+        sessionId: 'request-session',
+      });
       spy.mockRestore();
     });
   });
@@ -683,7 +795,6 @@ describe('LogHooks', () => {
           if (event === 'state-change') {
             mockHandler.mockImplementation(handler);
           }
-          return undefined;
         }),
         removeListener: jest.fn(),
       };
@@ -717,7 +828,6 @@ describe('LogHooks', () => {
           if (event === 'state-change') {
             mockHandler.mockImplementation(handler);
           }
-          return undefined;
         }),
         removeListener: jest.fn(),
       };
@@ -778,7 +888,6 @@ describe('LogHooks', () => {
       const notifier = {
         on: jest.fn((event, handler) => {
           capturedHandler = handler;
-          return undefined;
         }),
         removeListener: jest.fn(),
       };
@@ -894,7 +1003,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => 'REQ-12345'),
-        getSessionContext: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => {}),
       };
       const container = makeMockContainer({
         MCPLogger: mcpLogger,
@@ -922,8 +1031,8 @@ describe('LogHooks', () => {
         }),
       };
       const mockContextTracker = {
-        getCorrelationId: jest.fn(() => undefined),
-        getSessionContext: jest.fn(() => undefined),
+        getCorrelationId: jest.fn(() => {}),
+        getSessionContext: jest.fn(() => {}),
       };
       const container = makeMockContainer({
         MCPLogger: mcpLogger,
@@ -977,7 +1086,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => 'REQ-LEVEL-ID'),
-        getSessionContext: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => {}),
       };
       const container = makeMockContainer({
         ElementEventDispatcher: dispatcher,
@@ -1013,8 +1122,8 @@ describe('LogHooks', () => {
         }),
       };
       const mockContextTracker = {
-        getCorrelationId: jest.fn(() => undefined),
-        getSessionContext: jest.fn(() => undefined),
+        getCorrelationId: jest.fn(() => {}),
+        getSessionContext: jest.fn(() => {}),
       };
       const container = makeMockContainer({
         ElementEventDispatcher: dispatcher,
@@ -1048,8 +1157,8 @@ describe('LogHooks', () => {
         }),
       };
       const mockContextTracker = {
-        getCorrelationId: jest.fn(() => undefined),
-        getSessionContext: jest.fn(() => undefined),
+        getCorrelationId: jest.fn(() => {}),
+        getSessionContext: jest.fn(() => {}),
       };
       const container = makeMockContainer({
         ElementEventDispatcher: dispatcher,
@@ -1080,7 +1189,7 @@ describe('LogHooks', () => {
 
   describe('getTriggerMetricsLogListener with contextTracker', () => {
     it('should include correlationId when contextTracker is provided', () => {
-      const mockContextTracker = { getCorrelationId: jest.fn(() => 'TRIGGER-REQ-1'), getSessionContext: jest.fn(() => undefined) };
+      const mockContextTracker = { getCorrelationId: jest.fn(() => 'TRIGGER-REQ-1'), getSessionContext: jest.fn(() => {}) };
       const listener = getTriggerMetricsLogListener(mockLogManager, mockContextTracker);
 
       listener('info', 'Trigger fired', { triggerId: 'T-1' });
@@ -1104,7 +1213,7 @@ describe('LogHooks', () => {
 
   describe('getSecurityAuditorLogListener with contextTracker', () => {
     it('should include correlationId when contextTracker is provided', () => {
-      const mockContextTracker = { getCorrelationId: jest.fn(() => 'AUDIT-REQ-1'), getSessionContext: jest.fn(() => undefined) };
+      const mockContextTracker = { getCorrelationId: jest.fn(() => 'AUDIT-REQ-1'), getSessionContext: jest.fn(() => {}) };
       const listener = getSecurityAuditorLogListener(mockLogManager, mockContextTracker);
 
       listener('warn', 'Violation', { rule: 'TEST' });
@@ -1241,8 +1350,8 @@ describe('LogHooks', () => {
         }),
       };
       const mockContextTracker = {
-        getCorrelationId: jest.fn(() => undefined),
-        getSessionContext: jest.fn(() => undefined),
+        getCorrelationId: jest.fn(() => {}),
+        getSessionContext: jest.fn(() => {}),
       };
       const container = makeMockContainer({
         MCPLogger: mcpLogger,

@@ -18,6 +18,7 @@ import {
   uniqueIndex,
   primaryKey,
   check,
+  pgSequence,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -32,6 +33,10 @@ export type ConsoleAdminRole =
   | 'operator'
   | 'auditor'
   | 'security_admin';
+
+export const accountAllowlistAuthorityOrderSequence = pgSequence(
+  'account_allowlist_authority_order_seq',
+);
 
 export const userAdminRoles = pgTable('user_admin_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -68,6 +73,9 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  authorityOrder: bigint('authority_order', { mode: 'number' })
+    .notNull()
+    .default(sql`nextval('account_allowlist_authority_order_seq')`),
 }, (table) => [
   check('account_allowlist_entries_kind_check', sql`${table.kind} IN ('email', 'github_username', 'github_id')`),
   check('account_allowlist_entries_shape_check', sql`
@@ -84,6 +92,7 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   uniqueIndex('idx_account_allowlist_entries_active_unique')
     .on(table.kind, table.normalizedValue)
     .where(sql`${table.revokedAt} IS NULL`),
+  uniqueIndex('idx_account_allowlist_entries_authority_order').on(table.authorityOrder),
   index('idx_account_allowlist_entries_created').on(table.createdAt),
 ]);
 
@@ -133,15 +142,25 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
   consoleSessionIdHash: bytea('console_session_id_hash'),
   requestedCapability: text('requested_capability'),
+  integrationDescriptorId: uuid('integration_descriptor_id')
+    .references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
+  integrationDescriptorFingerprint: text('integration_descriptor_fingerprint'),
   returnTo: text('return_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
 }, (table) => [
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
+  index('idx_console_login_transactions_descriptor').on(table.integrationDescriptorId),
+  check('console_login_transactions_descriptor_fingerprint_check', sql`
+    (${table.integrationDescriptorId} IS NULL AND ${table.integrationDescriptorFingerprint} IS NULL)
+    OR (${table.integrationDescriptorId} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} ~ '^[a-f0-9]{64}$')
+  `),
 ]);
 
-export type UserIntegrationProvider = string & { readonly __integrationProviderBrand?: never };
+export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
@@ -156,6 +175,8 @@ export const userIntegrations = pgTable('user_integrations', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   provider: text('provider').$type<UserIntegrationProvider>().notNull(),
+  integrationDescriptorId: uuid('integration_descriptor_id')
+    .references(() => integrationProviderDescriptors.id, { onDelete: 'set null' }),
   externalAccountLabel: text('external_account_label'),
   externalInstallationId: text('external_installation_id'),
   authorizedPermissions: jsonb('authorized_permissions').notNull().default({
@@ -240,11 +261,17 @@ export const userIntegrations = pgTable('user_integrations', {
         ))
       OR (${table.status} <> 'error' AND ${table.errorReason} IS NULL)
     )
+    AND (
+      ${table.provider} = 'github'
+      OR ${table.integrationDescriptorId} IS NOT NULL
+      OR ${table.revokedAt} IS NOT NULL
+    )
   `),
   uniqueIndex('idx_user_integrations_active_provider_unique')
     .on(table.userId, table.provider)
     .where(sql`${table.revokedAt} IS NULL`),
   index('idx_user_integrations_user').on(table.userId, table.revokedAt),
+  index('idx_user_integrations_descriptor').on(table.integrationDescriptorId),
 ]);
 
 export const integrationProviderDescriptors = pgTable('integration_provider_descriptors', {
@@ -259,6 +286,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
   oauth: jsonb('oauth').$type<Record<string, unknown> | null>(),
   staticApiKey: jsonb('static_api_key').$type<Record<string, unknown> | null>(),
   clientSecretCiphertext: bytea('client_secret_ciphertext'),
+  clientSecretRevision: uuid('client_secret_revision'),
   credentialKeyVersion: text('credential_key_version'),
   operationPromotion: jsonb('operation_promotion').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
@@ -280,6 +308,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
       btrim(${table.credentialKeyVersion}) <> ''
       AND char_length(${table.credentialKeyVersion}) <= 128
     ))
+    AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.clientSecretRevision} IS NULL)
     AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.credentialKeyVersion} IS NULL)
     AND (
       (${table.ownership} = 'curated' AND ${table.ownerUserId} IS NULL)
@@ -337,7 +366,7 @@ export const integrationOpenApiSpecs = pgTable('integration_openapi_specs', {
 
 export type PortfolioSyncDirection = 'pull' | 'push' | 'bidirectional';
 export type PortfolioSyncConflictPolicy = 'fail' | 'prefer_local' | 'prefer_remote';
-export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -357,7 +386,7 @@ export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
 }, (table) => [
   check('portfolio_sync_jobs_direction_check', sql`${table.direction} IN ('pull', 'push', 'bidirectional')`),
   check('portfolio_sync_jobs_conflict_policy_check', sql`${table.conflictPolicy} IN ('fail', 'prefer_local', 'prefer_remote')`),
-  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
+  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed')`),
   check('portfolio_sync_jobs_shape_check', sql`
     ${table.claimVersion} >= 0
     AND ${table.attemptCount} >= 0
@@ -383,8 +412,8 @@ export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
         AND ${table.leaseUntil} IS NULL)
     )
     AND (
-      (${table.status} IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NOT NULL)
-      OR (${table.status} NOT IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NULL)
+      (${table.status} IN ('succeeded', 'failed') AND ${table.completedAt} IS NOT NULL)
+      OR (${table.status} NOT IN ('succeeded', 'failed') AND ${table.completedAt} IS NULL)
     )
     AND (
       (${table.status} = 'failed' AND ${table.operationalErrorCode} IS NOT NULL)
@@ -550,6 +579,10 @@ export const runtimeSessionPresence = pgTable('runtime_session_presence', {
   index('idx_runtime_session_presence_user').on(table.userId, table.status, table.leaseUntil),
   index('idx_runtime_session_presence_replica').on(table.replicaId, table.leaseUntil),
   index('idx_runtime_session_presence_correlation').on(table.accountCorrelationId),
+  // Keyset pagination for the cross-user operational sessions list (Family B): matches
+  // `WHERE status=? ORDER BY last_active_at DESC, session_id DESC` + `(last_active_at, session_id) < cursor`.
+  index('idx_runtime_session_presence_active_ordering')
+    .on(table.status, table.lastActiveAt.desc(), table.sessionId.desc()),
 ]);
 
 export type SessionActivationElementType =

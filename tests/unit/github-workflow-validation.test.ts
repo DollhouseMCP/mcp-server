@@ -13,6 +13,8 @@ import * as yaml from 'js-yaml';
 
 interface WorkflowStep {
   name?: string;
+  id?: string;
+  if?: string;
   run?: string;
   shell?: string;
   uses?: string;
@@ -24,6 +26,11 @@ interface WorkflowJob {
   name?: string;
   'runs-on': string | string[];
   steps: WorkflowStep[];
+  strategy?: {
+    matrix?: {
+      os?: string | string[];
+    };
+  };
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
 }
@@ -92,18 +99,120 @@ describe('GitHub Workflow Validation', () => {
           });
         });
 
-        it('should have proper permissions set', () => {
-          // Check if workflow has permissions defined (for security)
-          if (workflow.jobs) {
-            Object.entries(workflow.jobs).forEach(([jobName, job]) => {
-              // This is more of a warning than a hard requirement
-              if (!job.permissions && !workflow.permissions) {
-                console.warn(`Job ${jobName} in ${file} has no explicit permissions`);
-              }
-            });
-          }
+        it('should avoid write-all permissions and report missing explicit permissions', () => {
+          const parsedJobs = (workflow as Partial<Workflow>).jobs;
+          expect(parsedJobs).toBeDefined();
+
+          Object.entries(parsedJobs ?? {}).forEach(([jobName, job]) => {
+            const effectivePermissions = job.permissions ?? workflow.permissions;
+            expect(effectivePermissions).not.toBe('write-all');
+            if (!effectivePermissions) {
+              console.warn(`Job ${jobName} in ${file} has no explicit permissions`);
+            }
+          });
         });
       });
+    });
+  });
+
+  describe('Hosted HTTP integration branch gate', () => {
+    const hostedBranch = 'codex/hosted-http-integration';
+    const requiredPushWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+    ];
+    const requiredPullRequestWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+    ];
+    it.each(requiredPushWorkflows)(
+      'should run %s for pushes to the hosted branch',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.push?.branches).toContain(hostedBranch);
+      }
+    );
+
+    it.each(requiredPullRequestWorkflows)(
+      'should run %s for pull requests targeting the hosted branch',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.pull_request?.branches).toContain(hostedBranch);
+      }
+    );
+
+    it('should enforce unit tests on every core platform and defer performance at the hosted stage', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'core-build-test.yml'),
+        'utf8'
+      );
+      const workflow = yaml.load(content) as Workflow;
+      const steps = workflow.jobs['hosted-test'].steps;
+      const operatingSystems = workflow.jobs['hosted-test'].strategy?.matrix?.os;
+      const unitTestGate = steps.find(
+        (step) => step.name === 'Enforce unit test result'
+      );
+      const performanceTests = steps.find(
+        (step) => step.id === 'performance_tests'
+      );
+
+      expect(unitTestGate?.if).toBe('always()');
+      expect(unitTestGate?.env?.TEST_OUTCOME).toBe(
+        '${{ steps.original_tests.outcome }}'
+      );
+      expect(unitTestGate?.run).toContain('exit 1');
+      expect(performanceTests?.if).toContain(hostedBranch);
+      expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
+      expect(operatingSystems).toEqual(expect.stringContaining('windows-latest'));
+      expect(operatingSystems).toEqual(expect.stringContaining('macos-latest'));
+      expect(steps).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ if: false })])
+      );
+    });
+
+    it('should give core and extended compatibility checks distinct names', () => {
+      const core = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const extended = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'extended-node-compatibility.yml'), 'utf8')
+      ) as Workflow;
+
+      expect(core.jobs['hosted-test'].name).toContain('Test (');
+      expect(extended.jobs['extended-compatibility'].name).toContain('Extended (');
+      expect(core.jobs['hosted-test'].name).not.toBe(
+        extended.jobs['extended-compatibility'].name
+      );
+    });
+
+    it('should require successful MCP payloads from every Docker gate', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'docker-testing.yml'),
+        'utf8'
+      );
+      const failureMessages = [
+        'MCP initialize response is missing expected serverInfo',
+        'tools/list response does not contain a non-empty result.tools array',
+        'Docker Compose initialize response is missing expected serverInfo',
+      ];
+
+      for (const message of failureMessages) {
+        const marker = content.indexOf(message);
+
+        expect(marker).toBeGreaterThanOrEqual(0);
+        expect(content.slice(marker, marker + 200)).toContain('exit 1');
+      }
+
+      expect(content).toContain('notifications/initialized');
+      expect(content).toContain(".result.tools | type == \"array\" and length > 0");
     });
   });
 
@@ -124,7 +233,7 @@ describe('GitHub Workflow Validation', () => {
           job.steps.forEach((step, _index) => {
             if (step.run && !step.shell) {
               problematicPatterns.forEach(({ pattern, description: _description }) => {
-                if (pattern.test(step.run!)) {
+                if (pattern.test(step.run)) {
                   // This should fail - we need shell: bash for these patterns
                   expect(step.shell).toBe('bash');
                 }
@@ -224,8 +333,50 @@ describe('GitHub Workflow Validation', () => {
       const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
       const betaDeployWorkflow = fs.readFileSync(path.join(workflowDir, 'deploy-beta-alpha-vps.yml'), 'utf8');
 
-      expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
-      expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+      expect(betaPublishWorkflow).toContain(String.raw`-beta(\.[0-9A-Za-z.-]+)?$`);
+      expect(betaDeployWorkflow).toContain(String.raw`-beta(\.[0-9A-Za-z.-]+)?$`);
+    });
+
+    it('should dispatch and await every beta artifact publisher at the release tag', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('actions: write');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-npm.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-github-packages.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-mcpb.yml');
+      expect(betaPublishWorkflow).toContain('gh workflow run "${workflow}" --ref "${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('--field tag_name="${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('gh run list');
+      expect(betaPublishWorkflow).toContain('gh run watch "${run_id}" --exit-status');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids=()');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${npm_run_id}")');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
+    });
+
+    it('should reuse only a matching published prerelease and safely retry publishers', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('refs/tags/${tag_name}^{}');
+      expect(betaPublishWorkflow).toContain('[[ "${remote_tag_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('echo "tag_exists=${tag_exists}"');
+      expect(betaPublishWorkflow).toContain('--json tagName,isPrerelease,isDraft,targetCommitish');
+      expect(betaPublishWorkflow).toContain('[[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]');
+      expect(betaPublishWorkflow).toContain('[[ "${release_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('::warning::Release ${tag_name} records a different targetCommitish');
+      expect(betaPublishWorkflow).not.toContain('::error::Release ${tag_name} targets');
+      expect(betaPublishWorkflow).toContain('echo "release_exists=${release_exists}"');
+      expect(betaPublishWorkflow).toContain('echo "npm_publish_complete=${npm_publish_complete}"');
+      expect(betaPublishWorkflow).toContain('beta_is_newer()');
+      expect(betaPublishWorkflow).not.toContain('import semver from');
+      expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
+      expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
+      expect(betaPublishWorkflow).toContain('RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${TAG_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('if [[ "${RELEASE_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('gh release create "${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('NPM_PUBLISH_COMPLETE: ${{ steps.release.outputs.npm_publish_complete }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
     });
   });
 
@@ -299,7 +450,7 @@ function checkForTestPersonasDir(job: WorkflowJob): boolean {
     }
     
     // Check if it's set in a run command
-    if (step.run && step.run.includes('TEST_PERSONAS_DIR')) {
+    if (step.run?.includes('TEST_PERSONAS_DIR')) {
       return true;
     }
     

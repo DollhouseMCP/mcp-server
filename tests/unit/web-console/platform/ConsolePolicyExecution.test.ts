@@ -6,6 +6,8 @@ import {
   InMemoryAdminAuditWriter,
   sendConsoleHandlerResult,
   type ConsoleAdminAuditEvent,
+  type ConsoleHandlerResult,
+  type ConsoleRequest,
   type ConsoleRouteDefinition,
   type ConsoleSseEvent,
 } from '../../../../src/web-console/index.js';
@@ -15,7 +17,11 @@ import {
   CONSOLE_LOGIN_STATE_COOKIE,
   CONSOLE_SESSION_COOKIE,
   serializeConsoleCookie,
+  type ConsoleCookieDirective,
 } from '../../../../src/web-console/middleware/ConsoleCookies.js';
+
+const ABOUT_BLANK = 'about:blank';
+const TEST_ACTOR_USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 
 function route(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
   return {
@@ -35,7 +41,7 @@ function route(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDef
 function auditEvent(): ConsoleAdminAuditEvent {
   return {
     occurredAt: new Date('2026-05-26T12:00:00.000Z'),
-    actorUserId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+    actorUserId: TEST_ACTOR_USER_ID,
     actorSub: 'github_user-7',
     actorRole: null,
     actorCapabilityRole: 'auditor',
@@ -70,7 +76,7 @@ describe('console route policy execution', () => {
       auditOperation: 'admin.audit.read',
       privacyProjector: value => ({ visible: (value as { visible: boolean }).visible }),
       handler: () => ({ status: 200, body: { visible: true, rawPrivate: 'hidden' } }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     expect(result).toEqual({ status: 200, body: { visible: true } });
   });
@@ -78,7 +84,7 @@ describe('console route policy execution', () => {
   it('leaves administrative problem bodies unprojected', async () => {
     const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
     const problem = {
-      type: 'about:blank',
+      type: ABOUT_BLANK,
       title: 'Not found',
       status: 404,
       code: 'not_found',
@@ -94,7 +100,7 @@ describe('console route policy execution', () => {
       auditOperation: 'admin.audit.read',
       privacyProjector: projector,
       handler: () => ({ status: 404, body: problem }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     expect(result).toEqual({ status: 404, body: problem });
     expect(projector).not.toHaveBeenCalled();
@@ -106,7 +112,7 @@ describe('console route policy execution', () => {
     const result = await executeConsoleRoute(route({
       privacyProjector: projector,
       handler: () => ({ status: 200, body: { visible: true, rawPrivate: 'hidden' } }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     expect(result.body).toEqual({ visible: true });
     expect(projector).toHaveBeenCalledTimes(1);
@@ -115,7 +121,7 @@ describe('console route policy execution', () => {
   it('leaves self-service problem bodies unprojected', async () => {
     const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
     const problem = {
-      type: 'about:blank',
+      type: ABOUT_BLANK,
       title: 'Validation failed',
       status: 422,
       code: 'validation_failed',
@@ -125,7 +131,7 @@ describe('console route policy execution', () => {
     const result = await executeConsoleRoute(route({
       privacyProjector: projector,
       handler: () => ({ status: 422, body: problem }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     expect(result).toEqual({ status: 422, body: problem });
     expect(projector).not.toHaveBeenCalled();
@@ -140,7 +146,7 @@ describe('console route policy execution', () => {
       ownership: 'none',
       privacyProjector: projector,
       handler: () => ({ status: 200, body: { visible: true, publicValue: 'kept' } }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     expect(result.body).toEqual({ visible: true, publicValue: 'kept' });
     expect(projector).not.toHaveBeenCalled();
@@ -170,7 +176,7 @@ describe('console route policy execution', () => {
           events: emptySseEvents(),
         },
       }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     expect(result.stream?.projectEvent?.({
       event: 'update',
@@ -191,7 +197,7 @@ describe('console route policy execution', () => {
   it.each([Number.NaN, -1, 600])('rejects invalid route status %s', async status => {
     await expect(executeConsoleRoute(route({
       handler: () => ({ status }),
-    }), {} as never)).rejects.toThrow('invalid HTTP status');
+    }), {} as unknown as ConsoleRequest)).rejects.toThrow('invalid HTTP status');
   });
 
   it('propagates failures from an administrative privacy projector', async () => {
@@ -204,7 +210,7 @@ describe('console route policy execution', () => {
       privacyProjector: () => {
         throw new Error('projection rejected input');
       },
-    }), {} as never)).rejects.toThrow('projection rejected input');
+    }), {} as unknown as ConsoleRequest)).rejects.toThrow('projection rejected input');
   });
 
   it('projects administrative streams by SSE event name before serialization', async () => {
@@ -238,7 +244,7 @@ describe('console route policy execution', () => {
           events: emptySseEvents(),
         },
       }),
-    }), {} as never);
+    }), {} as unknown as ConsoleRequest);
 
     const projector = result.stream?.projectEvent;
     expect(projector?.({
@@ -290,6 +296,116 @@ describe('console route policy execution', () => {
     expect(json).toHaveBeenCalledWith({ ok: true });
   });
 
+  it('lifts handler problem bodies into RFC 9457 problem documents', () => {
+    const json = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      json,
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      headers: {},
+      consoleContext: { correlationId: TEST_ACTOR_USER_ID, receivedAt: new Date() },
+    } as unknown as Parameters<typeof sendConsoleHandlerResult>[2];
+
+    sendConsoleHandlerResult(response, {
+      status: 422,
+      body: {
+        type: ABOUT_BLANK,
+        title: 'Validation failed',
+        status: 422,
+        code: 'validation_failed',
+        detail: 'content is required.',
+        issues: [{ path: 'content', code: 'required', message: 'content is required.' }],
+      },
+    }, request);
+
+    expect(response.status).toHaveBeenCalledWith(422);
+    expect(type).toHaveBeenCalledWith('application/problem+json');
+    expect(json).toHaveBeenCalledWith({
+      type: 'https://dollhousemcp.com/errors/validation_failed',
+      title: 'Validation failed',
+      status: 422,
+      detail: 'content is required.',
+      instance: TEST_ACTOR_USER_ID,
+      code: 'validation_failed',
+      issues: [{ path: 'content', code: 'required', message: 'content is required.' }],
+    });
+  });
+
+  it('sends non-problem error bodies and status-mismatched bodies unchanged', () => {
+    const json = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      json,
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      headers: {},
+      consoleContext: { correlationId: TEST_ACTOR_USER_ID, receivedAt: new Date() },
+    } as unknown as Parameters<typeof sendConsoleHandlerResult>[2];
+
+    // Not a problem document at all.
+    sendConsoleHandlerResult(response, { status: 400, body: { message: 'nope' } }, request);
+    expect(json).toHaveBeenLastCalledWith({ message: 'nope' });
+
+    // Problem-shaped but self-identifying as a different status: not lifted.
+    sendConsoleHandlerResult(response, {
+      status: 400,
+      body: { type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' },
+    }, request);
+    expect(json).toHaveBeenLastCalledWith({ type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' });
+    expect(type).not.toHaveBeenCalledWith('application/problem+json');
+  });
+
+  it('ships the plain body when no request context is available', () => {
+    const json = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      json,
+      end: jest.fn(),
+    } as unknown as Response;
+
+    sendConsoleHandlerResult(response, {
+      status: 404,
+      body: { type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' },
+    });
+
+    expect(json).toHaveBeenCalledWith({ type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' });
+    expect(type).not.toHaveBeenCalledWith('application/problem+json');
+  });
+
+  it('prefers the browser HTML error page over problem+json for document navigations', () => {
+    const send = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      send,
+      json: jest.fn(),
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      headers: { accept: 'text/html' },
+      consoleContext: { correlationId: TEST_ACTOR_USER_ID, receivedAt: new Date() },
+    } as unknown as Parameters<typeof sendConsoleHandlerResult>[2];
+
+    sendConsoleHandlerResult(response, {
+      status: 401,
+      body: { type: ABOUT_BLANK, title: 'Step-up required', status: 401, code: 'step_up_required', detail: 'x' },
+    }, request);
+
+    expect(type).toHaveBeenCalledWith('text/html');
+    expect(type).not.toHaveBeenCalledWith('application/problem+json');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('emits platform-controlled cookie directives before completing a response', () => {
     const response = {
       append: jest.fn(),
@@ -325,7 +441,7 @@ describe('console route policy execution', () => {
 
     expect(() => sendConsoleHandlerResult(response, {
       status: 204,
-      cookies: { operation: 'clear', name: CONSOLE_SESSION_COOKIE } as never,
+      cookies: { operation: 'clear', name: CONSOLE_SESSION_COOKIE } as unknown as ConsoleHandlerResult['cookies'],
     })).toThrow('invalid cookie directives');
     expect(() => sendConsoleHandlerResult(response, {
       status: 204,
@@ -378,7 +494,7 @@ describe('console route policy execution', () => {
 
 const EMPTY_SSE_EVENTS: AsyncIterable<ConsoleSseEvent> = {
   [Symbol.asyncIterator]: () => ({
-    next: () => Promise.resolve({ done: true, value: undefined as never }),
+    next: () => Promise.resolve({ done: true, value: undefined }),
   }),
 };
 
@@ -430,13 +546,13 @@ describe('console cookie directives', () => {
     expect(() => serializeConsoleCookie({
       operation: 'set',
       name: CONSOLE_SESSION_COOKIE,
-      value: Buffer.from('opaque') as never,
-    })).toThrow('must be a string');
+      value: Buffer.from('opaque'),
+    } as unknown as ConsoleCookieDirective)).toThrow('must be a string');
     expect(() => serializeConsoleCookie({
       operation: 'set',
-      name: 'dh_unknown' as never,
+      name: 'dh_unknown',
       value: 'opaque',
-    })).toThrow('Unknown console cookie name');
+    } as unknown as ConsoleCookieDirective)).toThrow('Unknown console cookie name');
   });
 });
 

@@ -1,9 +1,16 @@
 import type { ConsoleModuleDescriptor, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
+import type { IIntegrationDescriptorStore } from '../../stores/IIntegrationDescriptorStore.js';
+import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
-import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
+import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import type { IGitHubIntegrationProvider } from './GitHubIntegrationProvider.js';
+import {
+  createStoreIntegrationProviderResolver,
+  type CuratedProviderOutboundOptions,
+  type IntegrationProviderResolver,
+} from './CuratedIntegrationProviders.js';
 import {
   createGitHubIntegrationProvider,
   createUnavailableGitHubIntegrationProvider,
@@ -11,24 +18,34 @@ import {
 } from './IntegrationProvider.js';
 import { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 import type { IIntegrationSecurityEventSink } from './IntegrationSecurityEvents.js';
+import { IntegrationDescriptorAuthoringService } from './IntegrationDescriptorAuthoringService.js';
 import { IntegrationService } from './IntegrationService.js';
 import { serializeGitHubIntegrationStatus } from './IntegrationDtos.js';
 import {
   projectGitHubIntegrationStatus,
   projectConfiguredIntegrationStatus,
   projectIntegrationConnect,
+  projectIntegrationConnectOrStatus,
+  projectIntegrationDescriptor,
+  projectIntegrationDescriptorList,
   projectIntegrationList,
+  projectIntegrationOpenApiSpecMetadata,
+  projectIntegrationSpecOperations,
 } from './IntegrationPrivacyProjectors.js';
 
 const SELF_CAPABILITY = 'console:self';
 
 export interface IntegrationModuleOptions {
   readonly integrationStore: IUserIntegrationStore;
+  readonly descriptorStore?: IIntegrationDescriptorStore | null;
+  readonly openApiSpecStore?: IIntegrationOpenApiSpecStore | null;
   readonly loginTransactions?: ILoginTransactionStore | null;
   readonly opaqueValues?: IConsoleOpaqueValueService | null;
   readonly secretEncryption?: ISecretEncryptionService | null;
   readonly githubProvider?: IGitHubIntegrationProvider | null;
   readonly configuredProviders?: readonly IIntegrationProvider[];
+  /** Outbound-transport seams threaded into per-request-built providers. */
+  readonly providerOutbound?: CuratedProviderOutboundOptions;
   readonly publicBaseUrl?: string | null;
   readonly securityEventSink?: IIntegrationSecurityEventSink | null;
   readonly now?: () => Date;
@@ -41,9 +58,18 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
       : createUnavailableGitHubIntegrationProvider(serializeGitHubIntegrationStatus),
     ...(options.configuredProviders ?? []),
   ]);
+  const resolveProvider: IntegrationProviderResolver | null =
+    options.descriptorStore && options.secretEncryption
+      ? createStoreIntegrationProviderResolver({
+        descriptorStore: options.descriptorStore,
+        secretEncryption: options.secretEncryption,
+        outbound: options.providerOutbound,
+      })
+      : null;
   const service = new IntegrationService({
     store: options.integrationStore,
     providers,
+    resolveProvider,
     loginTransactions: options.loginTransactions,
     opaqueValues: options.opaqueValues,
     secretEncryption: options.secretEncryption,
@@ -131,9 +157,229 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         privacyProjector: projectGitHubIntegrationStatus,
         handler: req => service.disconnectGitHub(req),
       },
+      ...byoDescriptorRoutes(options, new Set(providers.listDescriptors().map(entry => entry.id))),
       ...configuredProviderRoutes(options.configuredProviders ?? [], service),
+      // Parameterized routes MUST register last: every literal route above
+      // (github, descriptors, boot-time curated providers) wins the match
+      // first, so these only serve providers resolved per-request.
+      ...perRequestProviderRoutes(options, service, resolveProvider !== null),
     ],
   };
+}
+
+/**
+ * Segments under /api/v1/me/integrations/ that are fixed routes, never
+ * provider ids. The descriptor store also reserves `descriptors`; this guard
+ * is belt-and-braces for the parameterized fallback routes.
+ */
+const RESERVED_PROVIDER_SEGMENTS = new Set(['github', 'descriptors']);
+const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/;
+
+/**
+ * Always-on parameterized connect/status/callback/disconnect routes serving
+ * providers the boot-time registry does not know — above all BYO descriptors
+ * authored at runtime, resolved from the store per-request (issue #2321).
+ */
+function perRequestProviderRoutes(
+  options: IntegrationModuleOptions,
+  service: IntegrationService,
+  enabled: boolean,
+): ConsoleModuleDescriptor['routes'] {
+  if (!enabled) return [];
+  const basePath = '/api/v1/me/integrations/:provider';
+  const withProvider = (
+    handle: (
+      req: Parameters<ConsoleRouteDefinition['handler']>[0],
+      providerId: UserIntegrationProvider,
+    ) => ReturnType<ConsoleRouteDefinition['handler']>,
+  ): ConsoleRouteDefinition['handler'] => req => {
+    const raw = req.params.provider;
+    const providerId = (typeof raw === 'string' ? raw : '') as UserIntegrationProvider;
+    if (!PROVIDER_ID_PATTERN.test(providerId) || RESERVED_PROVIDER_SEGMENTS.has(providerId)) {
+      return {
+        status: 404,
+        body: {
+          type: 'about:blank',
+          title: 'Not found',
+          status: 404,
+          code: 'integration_provider_not_found',
+          detail: `Integration provider '${providerId}' is not registered.`,
+        },
+      };
+    }
+    return handle(req, providerId);
+  };
+  return [
+    {
+      method: 'GET',
+      path: basePath,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectConfiguredIntegrationStatus,
+      handler: withProvider((req, providerId) => service.getProvider(req, providerId)),
+    },
+    {
+      method: 'POST',
+      path: `${basePath}/connect`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      // The strategy is unknown until the descriptor resolves, so the
+      // projector accepts both connect shapes (OAuth authorize_url vs
+      // static-key status).
+      privacyProjector: projectIntegrationConnectOrStatus,
+      handler: withProvider((req, providerId) => service.connectProvider(req, providerId)),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/callback`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'flow_transaction',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      handler: withProvider((req, providerId) => service.completeProviderCallback(req, providerId)),
+    },
+    {
+      method: 'DELETE',
+      path: basePath,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectConfiguredIntegrationStatus,
+      handler: withProvider((req, providerId) => service.disconnectProvider(req, providerId)),
+    },
+  ];
+}
+
+/**
+ * Self-service BYO descriptor authoring (issue #2321). The literal
+ * `descriptors` segment cannot collide with a provider route: the store
+ * reserves that provider id, and configured-provider routes are generated
+ * from validated descriptors only.
+ */
+function byoDescriptorRoutes(
+  options: IntegrationModuleOptions,
+  reservedProviderIds: ReadonlySet<string>,
+): ConsoleModuleDescriptor['routes'] {
+  if (!options.descriptorStore || !options.openApiSpecStore) return [];
+  const authoring = new IntegrationDescriptorAuthoringService({
+    descriptorStore: options.descriptorStore,
+    specStore: options.openApiSpecStore,
+    integrationStore: options.integrationStore,
+    secretEncryption: options.secretEncryption,
+    reservedProviderIds,
+    now: options.now,
+  });
+  const basePath = '/api/v1/me/integrations/descriptors';
+  return [
+    {
+      method: 'GET',
+      path: basePath,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationDescriptorList,
+      handler: req => authoring.list(req),
+    },
+    {
+      method: 'POST',
+      path: basePath,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectIntegrationDescriptor,
+      handler: req => authoring.create(req),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/:id`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationDescriptor,
+      handler: req => authoring.get(req),
+    },
+    {
+      method: 'PATCH',
+      path: `${basePath}/:id`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectIntegrationDescriptor,
+      handler: req => authoring.update(req),
+    },
+    {
+      method: 'DELETE',
+      path: `${basePath}/:id`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      handler: req => authoring.remove(req),
+    },
+    {
+      method: 'PUT',
+      path: `${basePath}/:id/spec`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectIntegrationOpenApiSpecMetadata,
+      handler: req => authoring.putSpec(req),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/:id/spec`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationOpenApiSpecMetadata,
+      handler: req => authoring.getSpec(req),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/:id/spec/operations`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationSpecOperations,
+      handler: req => authoring.listSpecOperations(req),
+    },
+  ];
 }
 
 function configuredProviderRoutes(

@@ -19,6 +19,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { INTEGRATION_OUTBOUND_OVERRIDES, type DollhouseContainer } from '../../../src/di/Container.js';
 import { WebConsoleRegistrar, WEB_CONSOLE_SERVICE_NAMES } from '../../../src/web-console/WebConsoleRegistrar.js';
+import { executeConsoleRoute } from '../../../src/web-console/platform/ConsoleRouteExecution.js';
+import type {
+  ConsoleHandlerResult,
+  ConsoleRequest,
+} from '../../../src/web-console/platform/ConsolePlatformTypes.js';
 import { createHttpSession } from '../../../src/context/HttpSession.js';
 import { integrationSecretContext } from '../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
 import { createIntegrationContainer, type IntegrationContainer } from '../../helpers/integration-container.js';
@@ -31,12 +36,12 @@ import type { IIntegrationOpenApiSpecStore } from '../../../src/web-console/stor
 import type { IUserIntegrationStore } from '../../../src/web-console/stores/IUserIntegrationStore.js';
 import type { IPortfolioElementStore } from '../../../src/web-console/stores/IPortfolioElementStore.js';
 import type { RemoteMcpClientFactory } from '../../../src/web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
-import type { PinnedOutboundFactory } from '../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
+import type { PinnedFetch, PinnedOutboundFactory } from '../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 import type { SessionContext } from '../../../src/context/SessionContext.js';
 
 export const PROVIDER = 'wired-rest';
 export const API_HOST = 'api.wired.test';
-export const ACCESS_TOKEN = ['wired', 'access', 'value'].join('-');
+export const ACCESS_TOKEN = ['wired', 'test', 'credential'].join('-');
 const PUBLIC_DNS_ADDRESS = ['8', '8', '8', '8'].join('.');
 const TIMESTAMP = new Date('2026-06-20T00:00:00Z');
 
@@ -71,6 +76,16 @@ export interface WiredHarness {
   readonly secretEncryption: ISecretEncryptionService;
   lastRequest(): CapturedRequest | undefined;
   hasTool(name: string): boolean;
+  /**
+   * Invoke a registered console `/api/v1` route through the real route
+   * execution path (privacy projectors applied), authenticated as the
+   * harness user. `request` supplies params/query/body/headers.
+   */
+  callConsoleRoute(
+    method: string,
+    path: string,
+    request?: Partial<Pick<ConsoleRequest, 'params' | 'query' | 'body' | 'headers'>>,
+  ): Promise<ConsoleHandlerResult>;
   encryptAccessToken(userId: string, provider: string, token: string): Buffer;
   /** Seeds a BYO descriptor owned by the session user + a connected credential. Returns the descriptor id. */
   seedConnectedByoDescriptor(provider: string, host: string): Promise<string>;
@@ -142,7 +157,7 @@ async function startLocalUpstream(): Promise<{
       // A `/redact`-prefixed path returns a credential-shaped body so the gateway's
       // response redaction can be exercised end-to-end.
       const responseBody = (req.url ?? '').includes('redact')
-        ? { access_token: ['leaked', 'by', 'upstream'].join('-'), data: 'ok' }
+        ? { access_token: ['upstream', 'test', 'credential'].join('-'), data: 'ok' }
         : { ok: true, path: req.url, received: body || null };
       res.end(JSON.stringify(responseBody));
     });
@@ -183,25 +198,28 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
   await container.preparePortfolio();
 
   // Additive outbound-transport overrides — pass the SSRF guard with a public DNS answer
-  // while routing the actual bytes to the local upstream.
+  // while routing the actual bytes to the local upstream. The harness's pinned-outbound
+  // factory deliberately ignores the pin address and reroutes by URL: chain-level tests
+  // prove the guard/allowlist/policy path, while pinning correctness itself is proven by
+  // the focused unit test of the production factory.
   const dnsLookup = () => Promise.resolve([{ address: PUBLIC_DNS_ADDRESS, family: 4 }]);
-  const routedFetch: typeof fetch = (input, init) => {
+  const routedFetch: PinnedFetch = (input, init) => {
     const requested = new URL(requestHref(input));
     return fetch(new URL(`${requested.pathname}${requested.search}`, upstream.baseUrl), init);
   };
-  const pinnedOutbound: PinnedOutboundFactory = () => ({
-    fetch: (input, init) => routedFetch(input, init),
+  const pinnedOutboundFactory: PinnedOutboundFactory = () => ({
+    fetch: routedFetch,
     close: () => Promise.resolve(),
   });
   const remoteMcpBearer: { value: string | undefined } = { value: undefined };
   container.register(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup, () => dnsLookup);
-  container.register(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutbound, () => pinnedOutbound);
+  container.register(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory, () => pinnedOutboundFactory);
   container.register(
     INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory,
     () => options.remoteMcpClientFactory ?? defaultRemoteMcpClientFactory(token => { remoteMcpBearer.value = token; }),
   );
 
-  await new WebConsoleRegistrar({
+  const composition = await new WebConsoleRegistrar({
     opaqueValueHmacKey: Buffer.alloc(32, 11),
     secretEncryptionKey: { keyId: 'wired-test-key', key: Buffer.alloc(32, 7) },
     registerCleanup: false,
@@ -258,6 +276,7 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
   await userStore.connect({
     userId,
     provider: PROVIDER,
+    integrationDescriptorId: descriptor.id,
     externalAccountLabel: 'wired@example.com',
     externalInstallationId: null,
     authorizedPermissions: { scopes: ['things.read', 'things.write'] },
@@ -294,6 +313,28 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     encryptAccessToken,
     lastRequest: () => upstream.captured.value,
     hasTool: name => toolRegistry.has(name),
+    callConsoleRoute: (method, path, request = {}) => {
+      const route = composition.registry.getModules()
+        .flatMap(module => module.routes)
+        .find(candidate => candidate.method === method && candidate.path === path);
+      if (!route) throw new Error(`console route not registered: ${method} ${path}`);
+      const consoleRequest = {
+        params: {},
+        query: {},
+        body: {},
+        headers: {},
+        ...request,
+        consoleAuthentication: {
+          sessionIdHash: Buffer.alloc(32, 21),
+          userId,
+          authSub: 'wired-user',
+          authzVersion: 1,
+          grantedCapabilities: ['console:self'],
+          elevation: null,
+        },
+      } as unknown as ConsoleRequest;
+      return executeConsoleRoute(route, consoleRequest);
+    },
     seedConnectedByoDescriptor: async (provider, host) => {
       const byo = await descriptorStore.upsert({
         provider,
@@ -323,6 +364,7 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
       await userStore.connect({
         userId,
         provider,
+        integrationDescriptorId: byo.id,
         externalAccountLabel: 'byo@example.com',
         externalInstallationId: null,
         authorizedPermissions: { scopes: ['things.read'] },

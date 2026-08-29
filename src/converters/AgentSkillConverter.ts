@@ -23,6 +23,20 @@ import { ContentValidator } from '../security/contentValidator.js';
 import { logger } from '../utils/logger.js';
 
 export const AGENT_SKILL_MAPPING_VERSION = 'agent-skill-v1';
+const REFERENCES_DIRECTORY = 'references/';
+const AGENT_FRONTMATTER_FIELDS = ['version', 'author', 'license', 'created', 'modified'] as const;
+const AGENT_NESTED_METADATA_FIELDS = [
+  'category',
+  'tags',
+  'complexity',
+  'domains',
+  'dependencies',
+  'prerequisites',
+  'parameters',
+  'examples',
+  'languages',
+  'proficiency_level',
+] as const;
 
 export type ConversionDirection = 'agent_to_dollhouse' | 'dollhouse_to_agent';
 export type SkillPathMode = 'safe' | 'lossless';
@@ -103,6 +117,14 @@ interface ParsedMarkdownWithFrontmatter {
   body: string;
 }
 
+interface ParsedDollhouseContentBlock {
+  fileReference: string;
+  normalizedFileContent: string;
+  span: { start: number; end: number };
+}
+
+type ResourceDirectories = Partial<Record<string, Record<string, string>>>;
+
 export class AgentSkillConverter {
   convert(options: SkillConversionOptions): SkillConversionResult {
     const startedAt = performance.now();
@@ -113,18 +135,19 @@ export class AgentSkillConverter {
 
     let result: SkillConversionResult;
 
-    if (options.direction === 'agent_to_dollhouse') {
+    const direction: unknown = options.direction;
+    if (direction === 'agent_to_dollhouse') {
       if (!options.agent_skill) {
         throw new Error(
-          `Missing required parameter 'agent_skill' for direction '${options.direction}'`
+          `Missing required parameter 'agent_skill' for direction '${direction}'`
         );
       }
       result = this.convertAgentToDollhouse(options.agent_skill, pathMode, securityMode);
-    } else if (options.direction === 'dollhouse_to_agent') {
+    } else if (direction === 'dollhouse_to_agent') {
       result = this.convertDollhouseToAgent(options, pathMode);
     } else {
       throw new Error(
-        `Unsupported conversion direction '${String(options.direction)}'. Expected 'agent_to_dollhouse' or 'dollhouse_to_agent'.`
+        `Unsupported conversion direction '${String(direction)}'. Expected 'agent_to_dollhouse' or 'dollhouse_to_agent'.`
       );
     }
 
@@ -156,30 +179,17 @@ export class AgentSkillConverter {
     }
 
     if (options.dollhouse) {
-      addTextBudget(JSON.stringify(options.dollhouse.metadata ?? {}), 'dollhouse.metadata');
-      addTextBudget(options.dollhouse.instructions ?? '', 'dollhouse.instructions');
-      addTextBudget(options.dollhouse.content ?? '', 'dollhouse.content');
+      const metadata = isRecord(options.dollhouse.metadata) ? options.dollhouse.metadata : {};
+      const instructions = typeof options.dollhouse.instructions === 'string' ? options.dollhouse.instructions : '';
+      const content = typeof options.dollhouse.content === 'string' ? options.dollhouse.content : '';
+      addTextBudget(JSON.stringify(metadata), 'dollhouse.metadata');
+      addTextBudget(instructions, 'dollhouse.instructions');
+      addTextBudget(content, 'dollhouse.content');
       fileCount += 3;
     }
 
     if (options.agent_skill) {
-      for (const [pathKey, pathValue] of Object.entries(options.agent_skill)) {
-        if (typeof pathValue === 'string') {
-          addTextBudget(pathValue, `agent_skill.${pathKey}`);
-          fileCount += 1;
-          continue;
-        }
-
-        if (pathValue && typeof pathValue === 'object') {
-          for (const [fileName, fileContent] of Object.entries(pathValue)) {
-            if (typeof fileContent !== 'string') {
-              continue;
-            }
-            addTextBudget(fileContent, `agent_skill.${pathKey}${fileName}`);
-            fileCount += 1;
-          }
-        }
-      }
+      fileCount += this.visitAgentSkillText(options.agent_skill, addTextBudget);
     }
 
     if (fileCount > CONVERSION_MAX_FILES) {
@@ -234,25 +244,13 @@ export class AgentSkillConverter {
     }
 
     if (options.dollhouse) {
-      totalBytes += Buffer.byteLength(JSON.stringify(options.dollhouse.metadata ?? {}), 'utf8');
-      totalBytes += Buffer.byteLength(options.dollhouse.instructions ?? '', 'utf8');
-      totalBytes += Buffer.byteLength(options.dollhouse.content ?? '', 'utf8');
+      totalBytes += this.measureDollhouseArtifactBytes(options.dollhouse);
     }
 
     if (options.agent_skill) {
-      for (const pathValue of Object.values(options.agent_skill)) {
-        if (typeof pathValue === 'string') {
-          totalBytes += Buffer.byteLength(pathValue, 'utf8');
-          continue;
-        }
-        if (pathValue && typeof pathValue === 'object') {
-          for (const fileContent of Object.values(pathValue)) {
-            if (typeof fileContent === 'string') {
-              totalBytes += Buffer.byteLength(fileContent, 'utf8');
-            }
-          }
-        }
-      }
+      this.visitAgentSkillText(options.agent_skill, value => {
+        totalBytes += Buffer.byteLength(value, 'utf8');
+      });
     }
 
     return totalBytes;
@@ -266,28 +264,51 @@ export class AgentSkillConverter {
     }
 
     if (result.dollhouse) {
-      totalBytes += Buffer.byteLength(JSON.stringify(result.dollhouse.metadata ?? {}), 'utf8');
-      totalBytes += Buffer.byteLength(result.dollhouse.instructions ?? '', 'utf8');
-      totalBytes += Buffer.byteLength(result.dollhouse.content ?? '', 'utf8');
+      totalBytes += this.measureDollhouseArtifactBytes(result.dollhouse);
     }
 
     if (result.agent_skill) {
-      for (const pathValue of Object.values(result.agent_skill)) {
-        if (typeof pathValue === 'string') {
-          totalBytes += Buffer.byteLength(pathValue, 'utf8');
-          continue;
-        }
-        if (pathValue && typeof pathValue === 'object') {
-          for (const fileContent of Object.values(pathValue)) {
-            if (typeof fileContent === 'string') {
-              totalBytes += Buffer.byteLength(fileContent, 'utf8');
-            }
-          }
-        }
-      }
+      this.visitAgentSkillText(result.agent_skill, value => {
+        totalBytes += Buffer.byteLength(value, 'utf8');
+      });
     }
 
     return totalBytes;
+  }
+
+  private visitAgentSkillText(
+    agentSkill: AgentSkillStructure,
+    visit: (value: string, pathLabel: string) => void
+  ): number {
+    let fileCount = 0;
+    for (const [pathKey, pathValue] of Object.entries(agentSkill)) {
+      if (typeof pathValue === 'string') {
+        visit(pathValue, `agent_skill.${pathKey}`);
+        fileCount += 1;
+        continue;
+      }
+
+      if (!pathValue || typeof pathValue !== 'object') {
+        continue;
+      }
+      for (const [fileName, fileContent] of Object.entries(pathValue)) {
+        if (typeof fileContent !== 'string') {
+          continue;
+        }
+        visit(fileContent, `agent_skill.${pathKey}${fileName}`);
+        fileCount += 1;
+      }
+    }
+    return fileCount;
+  }
+
+  private measureDollhouseArtifactBytes(dollhouse: DollhouseSkillArtifact): number {
+    const metadata = isRecord(dollhouse.metadata) ? dollhouse.metadata : {};
+    const instructions = typeof dollhouse.instructions === 'string' ? dollhouse.instructions : '';
+    const content = typeof dollhouse.content === 'string' ? dollhouse.content : '';
+    return Buffer.byteLength(JSON.stringify(metadata), 'utf8')
+      + Buffer.byteLength(instructions, 'utf8')
+      + Buffer.byteLength(content, 'utf8');
   }
 
   private applyDollhouseSecurityPolicy(
@@ -379,18 +400,7 @@ export class AgentSkillConverter {
         );
       }
 
-      if (securityResult.detectedPatterns && securityResult.detectedPatterns.length > 0) {
-        const displayedPatterns = securityResult.detectedPatterns.slice(0, 5);
-        const suffix = securityResult.detectedPatterns.length > 5 ? ` (+${securityResult.detectedPatterns.length - 5} more)` : '';
-        warnings.push({
-          code: 'invalid_input',
-          path,
-          message: pathMode === 'safe'
-            ? `Security patterns detected (${displayedPatterns.join(', ')}${suffix}). Content was sanitized in safe mode.`
-            : `Security patterns detected (${displayedPatterns.join(', ')}${suffix}). Content preserved because path_mode='lossless'.`,
-          preserved: pathMode === 'lossless',
-        });
-      }
+      this.recordDetectedSecurityPatterns(securityResult.detectedPatterns, path, warnings, pathMode);
 
       if (pathMode === 'safe') {
         return securityResult.sanitizedContent ?? value;
@@ -410,62 +420,115 @@ export class AgentSkillConverter {
     }
   }
 
-  convertAgentToDollhouse(
-    agentSkill: AgentSkillStructure,
-    pathMode: SkillPathMode = 'safe',
-    securityMode: SkillSecurityMode = 'strict'
-  ): SkillConversionResult {
-    const warnings: ConversionWarning[] = [];
-    const unsupportedFields = new Set<string>();
+  private recordDetectedSecurityPatterns(
+    detectedPatterns: string[] | undefined,
+    path: string,
+    warnings: ConversionWarning[],
+    pathMode: SkillPathMode
+  ): void {
+    if (!detectedPatterns || detectedPatterns.length === 0) {
+      return;
+    }
+    const displayedPatterns = detectedPatterns.slice(0, 5);
+    const suffix = detectedPatterns.length > 5 ? ` (+${detectedPatterns.length - 5} more)` : '';
+    warnings.push({
+      code: 'invalid_input',
+      path,
+      message: pathMode === 'safe'
+        ? `Security patterns detected (${displayedPatterns.join(', ')}${suffix}). Content was sanitized in safe mode.`
+        : `Security patterns detected (${displayedPatterns.join(', ')}${suffix}). Content preserved because path_mode='lossless'.`,
+      preserved: pathMode === 'lossless',
+    });
+  }
 
-    // Normalize all text inputs to NFC to prevent Unicode homograph attacks
+  private normalizeAgentSkill(agentSkill: AgentSkillStructure): AgentSkillStructure {
     const normalizedSkill = {} as AgentSkillStructure;
     for (const [key, value] of Object.entries(agentSkill)) {
-      const nKey = String(key).normalize('NFC');
-      if (typeof value === 'string') {
-        normalizedSkill[nKey] = value.normalize('NFC');
-      } else if (typeof value === 'object' && value !== null) {
-        const normalizedDir: Record<string, string> = {};
-        for (const [fKey, fVal] of Object.entries(value)) {
-          normalizedDir[String(fKey).normalize('NFC')] = typeof fVal === 'string' ? fVal.normalize('NFC') : String(fVal);
-        }
-        normalizedSkill[nKey] = normalizedDir;
-      } else {
-        normalizedSkill[nKey] = value;
+      const normalizedKey = key.normalize('NFC');
+      const untrustedValue: unknown = value;
+      if (typeof untrustedValue === 'string') {
+        normalizedSkill[normalizedKey] = untrustedValue.normalize('NFC');
+        continue;
       }
+      if (typeof untrustedValue === 'object' && untrustedValue !== null) {
+        const normalizedDirectory: Record<string, string> = {};
+        for (const [fileName, fileContent] of Object.entries(untrustedValue)) {
+          normalizedDirectory[fileName.normalize('NFC')] = typeof fileContent === 'string'
+            ? fileContent.normalize('NFC')
+            : String(fileContent);
+        }
+        normalizedSkill[normalizedKey] = normalizedDirectory;
+        continue;
+      }
+      normalizedSkill[normalizedKey] = value;
     }
+    return normalizedSkill;
+  }
 
-    const parsed = this.parseSkillMarkdown(normalizedSkill['SKILL.md'], 'agent_skill.SKILL.md');
-    const name = this.readRequiredString(parsed.frontmatter, 'name', warnings, unsupportedFields, 'agent_skill.SKILL.md.frontmatter.name');
-    const description = this.readRequiredString(parsed.frontmatter, 'description', warnings, unsupportedFields, 'agent_skill.SKILL.md.frontmatter.description');
-
+  private buildDollhouseMetadata(
+    frontmatter: Record<string, unknown>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): Record<string, unknown> {
+    const name = this.readRequiredString(
+      frontmatter,
+      'name',
+      warnings,
+      unsupportedFields,
+      'agent_skill.SKILL.md.frontmatter.name'
+    );
+    const description = this.readRequiredString(
+      frontmatter,
+      'description',
+      warnings,
+      unsupportedFields,
+      'agent_skill.SKILL.md.frontmatter.description'
+    );
     const metadata: Record<string, unknown> = {
       name: name ?? 'Unnamed Agent Skill',
       description: description ?? 'No description provided',
       type: 'skill',
-      version: this.readString(parsed.frontmatter, 'version') ?? '1.0.0',
+      version: this.readString(frontmatter, 'version') ?? '1.0.0',
     };
 
-    if (this.readString(parsed.frontmatter, 'type') && this.readString(parsed.frontmatter, 'type') !== 'skill') {
-      warnings.push({
-        code: 'ambiguous_mapping',
-        path: 'agent_skill.SKILL.md.frontmatter.type',
-        message: `Agent skill type '${String(parsed.frontmatter.type)}' is normalized to Dollhouse type 'skill'.`,
-        preserved: false,
-      });
-    }
-
+    this.recordAgentTypeNormalization(frontmatter, warnings);
     for (const field of COPY_THROUGH_FIELDS) {
-      if (Object.hasOwn(parsed.frontmatter, field)) {
-        metadata[field] = parsed.frontmatter[field];
+      if (Object.hasOwn(frontmatter, field)) {
+        metadata[field] = frontmatter[field];
       }
     }
+    this.copyAgentArrayMetadata(frontmatter, metadata, warnings, unsupportedFields);
+    metadata.custom = this.buildAgentCustomMetadata(frontmatter, warnings, unsupportedFields);
+    return metadata;
+  }
 
+  private recordAgentTypeNormalization(
+    frontmatter: Record<string, unknown>,
+    warnings: ConversionWarning[]
+  ): void {
+    const agentType = this.readString(frontmatter, 'type');
+    if (!agentType || agentType === 'skill') {
+      return;
+    }
+    warnings.push({
+      code: 'ambiguous_mapping',
+      path: 'agent_skill.SKILL.md.frontmatter.type',
+      message: `Agent skill type '${agentType}' is normalized to Dollhouse type 'skill'.`,
+      preserved: false,
+    });
+  }
+
+  private copyAgentArrayMetadata(
+    frontmatter: Record<string, unknown>,
+    metadata: Record<string, unknown>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): void {
     for (const field of ARRAY_METADATA_FIELDS) {
-      if (!Object.hasOwn(parsed.frontmatter, field)) {
+      if (!Object.hasOwn(frontmatter, field)) {
         continue;
       }
-      const value = parsed.frontmatter[field];
+      const value = frontmatter[field];
       if (Array.isArray(value) && value.every(item => typeof item === 'string')) {
         metadata[field] = value;
         continue;
@@ -488,15 +551,20 @@ export class AgentSkillConverter {
       });
       unsupportedFields.add(`agent_skill.SKILL.md.frontmatter.${field}`);
     }
+  }
 
+  private buildAgentCustomMetadata(
+    frontmatter: Record<string, unknown>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): Record<string, unknown> {
     const customMetadata: Record<string, unknown> = {
       source_format: 'agent_skill_current',
       mapping_version: AGENT_SKILL_MAPPING_VERSION,
     };
-
-    if (isRecord(parsed.frontmatter.metadata)) {
-      customMetadata.agent_metadata = clone(parsed.frontmatter.metadata);
-    } else if (Object.hasOwn(parsed.frontmatter, 'metadata')) {
+    if (isRecord(frontmatter.metadata)) {
+      customMetadata.agent_metadata = clone(frontmatter.metadata);
+    } else if (Object.hasOwn(frontmatter, 'metadata')) {
       warnings.push({
         code: 'unsupported_field',
         path: 'agent_skill.SKILL.md.frontmatter.metadata',
@@ -504,11 +572,11 @@ export class AgentSkillConverter {
         preserved: true,
       });
       unsupportedFields.add('agent_skill.SKILL.md.frontmatter.metadata');
-      customMetadata.agent_metadata = parsed.frontmatter.metadata;
+      customMetadata.agent_metadata = frontmatter.metadata;
     }
 
     const unknownFrontmatter: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(parsed.frontmatter)) {
+    for (const [key, value] of Object.entries(frontmatter)) {
       if (!DIRECT_METADATA_FIELDS.has(key)) {
         unknownFrontmatter[key] = value;
       }
@@ -516,82 +584,142 @@ export class AgentSkillConverter {
     if (Object.keys(unknownFrontmatter).length > 0) {
       customMetadata.agent_frontmatter_unknown = unknownFrontmatter;
     }
+    return customMetadata;
+  }
 
-    metadata.custom = customMetadata;
-
-    const resourceDirectories: Record<string, Record<string, string>> = {};
+  private collectAgentResources(
+    agentSkill: AgentSkillStructure,
+    pathMode: SkillPathMode,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): { resourceDirectories: ResourceDirectories; topLevelFiles: Record<string, string> } {
+    const resourceDirectories: ResourceDirectories = {};
     const topLevelFiles: Record<string, string> = {};
     for (const [pathKey, pathValue] of Object.entries(agentSkill)) {
       if (pathKey === 'SKILL.md') {
         continue;
       }
       if (pathKey.endsWith('/')) {
-        if (!isStringRecord(pathValue)) {
-          warnings.push({
-            code: 'invalid_input',
-            path: `agent_skill.${pathKey}`,
-            message: `Directory '${pathKey}' must be a map of filename -> string content.`,
-            preserved: false,
-          });
-          unsupportedFields.add(`agent_skill.${pathKey}`);
-          continue;
-        }
-
-        if (pathMode === 'lossless') {
-          resourceDirectories[pathKey] = clone(pathValue);
-          continue;
-        }
-
-        if (isAllowedAgentDirectory(pathKey) && isSafeDirectoryName(pathKey)) {
-          resourceDirectories[pathKey] = clone(pathValue);
-          continue;
-        }
-
-        warnings.push({
-          code: 'ambiguous_mapping',
-          path: `agent_skill.${pathKey}`,
-          message: `Directory '${pathKey}' is outside allowed directories and was remapped under references/${REMAPPED_DIRECTORY_PREFIX}/.`,
-          preserved: true,
-        });
-
-        const remapRoot = `${REMAPPED_DIRECTORY_PREFIX}/${sanitizePathToken(pathKey.replace(/\/+$/u, ''))}`;
-        if (!resourceDirectories['references/']) {
-          resourceDirectories['references/'] = {};
-        }
-        for (const [fileName, fileContent] of Object.entries(pathValue)) {
-          const safeFilePath = sanitizeRelativePathForReference(fileName);
-          resourceDirectories['references/'][`${remapRoot}/${safeFilePath}`] = fileContent;
-        }
+        this.mapAgentDirectory(pathKey, pathValue, pathMode, resourceDirectories, warnings, unsupportedFields);
         continue;
       }
-
-      if (typeof pathValue !== 'string') {
-        warnings.push({
-          code: 'invalid_input',
-          path: `agent_skill.${pathKey}`,
-          message: `Top-level file '${pathKey}' must contain string content.`,
-          preserved: false,
-        });
-        unsupportedFields.add(`agent_skill.${pathKey}`);
-        continue;
-      }
-      if (pathMode === 'lossless' || isSafeTopLevelFileName(pathKey)) {
-        topLevelFiles[pathKey] = pathValue;
-        continue;
-      }
-
-      warnings.push({
-        code: 'ambiguous_mapping',
-        path: `agent_skill.${pathKey}`,
-        message: `Top-level path '${pathKey}' is unsafe and was remapped under references/${REMAPPED_TOP_LEVEL_PREFIX}/.`,
-        preserved: true,
-      });
-      if (!resourceDirectories['references/']) {
-        resourceDirectories['references/'] = {};
-      }
-      const safeFilePath = sanitizeRelativePathForReference(pathKey);
-      resourceDirectories['references/'][`${REMAPPED_TOP_LEVEL_PREFIX}/${safeFilePath}`] = pathValue;
+      this.mapAgentTopLevelFile(
+        pathKey,
+        pathValue,
+        pathMode,
+        resourceDirectories,
+        topLevelFiles,
+        warnings,
+        unsupportedFields
+      );
     }
+    return { resourceDirectories, topLevelFiles };
+  }
+
+  private mapAgentDirectory(
+    pathKey: string,
+    pathValue: unknown,
+    pathMode: SkillPathMode,
+    resourceDirectories: ResourceDirectories,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): void {
+    if (!isStringRecord(pathValue)) {
+      warnings.push({
+        code: 'invalid_input',
+        path: `agent_skill.${pathKey}`,
+        message: `Directory '${pathKey}' must be a map of filename -> string content.`,
+        preserved: false,
+      });
+      unsupportedFields.add(`agent_skill.${pathKey}`);
+      return;
+    }
+    if (pathMode === 'lossless' || (isAllowedAgentDirectory(pathKey) && isSafeDirectoryName(pathKey))) {
+      resourceDirectories[pathKey] = clone(pathValue);
+      return;
+    }
+
+    warnings.push({
+      code: 'ambiguous_mapping',
+      path: `agent_skill.${pathKey}`,
+      message: `Directory '${pathKey}' is outside allowed directories and was remapped under references/${REMAPPED_DIRECTORY_PREFIX}/.`,
+      preserved: true,
+    });
+    const remapRoot = `${REMAPPED_DIRECTORY_PREFIX}/${sanitizePathToken(removeTrailingSlashes(pathKey))}`;
+    const references = this.ensureResourceDirectory(resourceDirectories, REFERENCES_DIRECTORY);
+    for (const [fileName, fileContent] of Object.entries(pathValue)) {
+      const safeFilePath = sanitizeRelativePathForReference(fileName);
+      references[`${remapRoot}/${safeFilePath}`] = fileContent;
+    }
+  }
+
+  private mapAgentTopLevelFile(
+    pathKey: string,
+    pathValue: unknown,
+    pathMode: SkillPathMode,
+    resourceDirectories: ResourceDirectories,
+    topLevelFiles: Record<string, string>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): void {
+    if (typeof pathValue !== 'string') {
+      warnings.push({
+        code: 'invalid_input',
+        path: `agent_skill.${pathKey}`,
+        message: `Top-level file '${pathKey}' must contain string content.`,
+        preserved: false,
+      });
+      unsupportedFields.add(`agent_skill.${pathKey}`);
+      return;
+    }
+    if (pathMode === 'lossless' || isSafeTopLevelFileName(pathKey)) {
+      topLevelFiles[pathKey] = pathValue;
+      return;
+    }
+
+    warnings.push({
+      code: 'ambiguous_mapping',
+      path: `agent_skill.${pathKey}`,
+      message: `Top-level path '${pathKey}' is unsafe and was remapped under references/${REMAPPED_TOP_LEVEL_PREFIX}/.`,
+      preserved: true,
+    });
+    const references = this.ensureResourceDirectory(resourceDirectories, REFERENCES_DIRECTORY);
+    const safeFilePath = sanitizeRelativePathForReference(pathKey);
+    references[`${REMAPPED_TOP_LEVEL_PREFIX}/${safeFilePath}`] = pathValue;
+  }
+
+  private ensureResourceDirectory(
+    resourceDirectories: ResourceDirectories,
+    directory: string
+  ): Record<string, string> {
+    const existing = resourceDirectories[directory];
+    if (existing) {
+      return existing;
+    }
+    const created: Record<string, string> = {};
+    resourceDirectories[directory] = created;
+    return created;
+  }
+
+  convertAgentToDollhouse(
+    agentSkill: AgentSkillStructure,
+    pathMode: SkillPathMode = 'safe',
+    securityMode: SkillSecurityMode = 'strict'
+  ): SkillConversionResult {
+    const warnings: ConversionWarning[] = [];
+    const unsupportedFields = new Set<string>();
+
+    // Normalize all text inputs to NFC to prevent Unicode homograph attacks
+    const normalizedSkill = this.normalizeAgentSkill(agentSkill);
+
+    const parsed = this.parseSkillMarkdown(normalizedSkill['SKILL.md'], 'agent_skill.SKILL.md');
+    const metadata = this.buildDollhouseMetadata(parsed.frontmatter, warnings, unsupportedFields);
+    const { resourceDirectories, topLevelFiles } = this.collectAgentResources(
+      agentSkill,
+      pathMode,
+      warnings,
+      unsupportedFields
+    );
 
     const content = this.buildDollhouseContent(resourceDirectories, topLevelFiles);
     const dollhouse: DollhouseSkillArtifact = {
@@ -622,104 +750,194 @@ export class AgentSkillConverter {
     };
   }
 
+  private resolveRoundTripConversion(
+    options: SkillConversionOptions,
+    warnings: ConversionWarning[]
+  ): SkillConversionResult | undefined {
+    const preferRoundTripState = options.prefer_roundtrip_state ?? true;
+    const roundTripState = options.roundtrip_state;
+    if (!preferRoundTripState || !roundTripState) {
+      return undefined;
+    }
+    if (roundTripState.mappingVersion !== AGENT_SKILL_MAPPING_VERSION) {
+      warnings.push({
+        code: 'ambiguous_mapping',
+        path: 'roundtrip_state.mappingVersion',
+        message: `roundtrip_state mapping version '${roundTripState.mappingVersion}' does not match '${AGENT_SKILL_MAPPING_VERSION}'. Falling back to best-effort mapping.`,
+        preserved: false,
+      });
+      return undefined;
+    }
+    return {
+      direction: 'dollhouse_to_agent',
+      mappingVersion: AGENT_SKILL_MAPPING_VERSION,
+      agent_skill: clone(roundTripState.agentSkill),
+      report: {
+        mappingVersion: AGENT_SKILL_MAPPING_VERSION,
+        deterministic: true,
+        roundTripAvailable: true,
+        warnings,
+        unsupportedFields: [],
+      },
+    };
+  }
+
+  private buildAgentFrontmatter(
+    metadata: Record<string, unknown>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): Record<string, unknown> {
+    const name = this.readRequiredString(
+      metadata,
+      'name',
+      warnings,
+      unsupportedFields,
+      'dollhouse.metadata.name'
+    );
+    const description = this.readRequiredString(
+      metadata,
+      'description',
+      warnings,
+      unsupportedFields,
+      'dollhouse.metadata.description'
+    );
+    const frontmatter: Record<string, unknown> = {
+      name: name ?? 'Converted Dollhouse Skill',
+      description: description ?? 'No description provided',
+    };
+    this.copyPresentMetadataFields(metadata, frontmatter, AGENT_FRONTMATTER_FIELDS);
+
+    const mappedMetadata: Record<string, unknown> = {};
+    this.copyPresentMetadataFields(metadata, mappedMetadata, AGENT_NESTED_METADATA_FIELDS);
+    this.restoreAgentCustomMetadata(metadata.custom, frontmatter, mappedMetadata, warnings);
+    if (Object.keys(mappedMetadata).length > 0) {
+      frontmatter.metadata = mappedMetadata;
+    }
+    this.recordUnsupportedDollhouseMetadata(metadata, warnings, unsupportedFields);
+    return frontmatter;
+  }
+
+  private copyPresentMetadataFields(
+    source: Record<string, unknown>,
+    target: Record<string, unknown>,
+    fields: readonly string[]
+  ): void {
+    for (const field of fields) {
+      if (Object.hasOwn(source, field)) {
+        target[field] = source[field];
+      }
+    }
+  }
+
+  private restoreAgentCustomMetadata(
+    customValue: unknown,
+    frontmatter: Record<string, unknown>,
+    mappedMetadata: Record<string, unknown>,
+    warnings: ConversionWarning[]
+  ): void {
+    if (!isRecord(customValue)) {
+      return;
+    }
+    const agentMetadata = customValue.agent_metadata;
+    if (isRecord(agentMetadata)) {
+      Object.assign(mappedMetadata, clone(agentMetadata));
+    } else if (agentMetadata !== undefined) {
+      mappedMetadata.dollhouse_custom_agent_metadata = clone(agentMetadata);
+    }
+
+    const unknownFrontmatter = customValue.agent_frontmatter_unknown;
+    if (!isRecord(unknownFrontmatter)) {
+      return;
+    }
+    for (const [key, value] of Object.entries(unknownFrontmatter)) {
+      if (Object.hasOwn(frontmatter, key)) {
+        warnings.push({
+          code: 'ambiguous_mapping',
+          path: `dollhouse.metadata.custom.agent_frontmatter_unknown.${key}`,
+          message: `Unknown frontmatter key '${key}' conflicts with mapped frontmatter and was not applied.`,
+          preserved: false,
+        });
+        continue;
+      }
+      frontmatter[key] = clone(value);
+    }
+  }
+
+  private recordUnsupportedDollhouseMetadata(
+    metadata: Record<string, unknown>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>
+  ): void {
+    for (const key of Object.keys(metadata)) {
+      if (DIRECT_METADATA_FIELDS.has(key) || key === 'custom') {
+        continue;
+      }
+      warnings.push({
+        code: 'unsupported_field',
+        path: `dollhouse.metadata.${key}`,
+        message: `Dollhouse metadata field '${key}' is not mapped to Agent Skill frontmatter.`,
+        preserved: false,
+      });
+      unsupportedFields.add(`dollhouse.metadata.${key}`);
+    }
+  }
+
+  private appendResidualContent(
+    instructions: string,
+    residualContent: string,
+    warnings: ConversionWarning[]
+  ): string {
+    if (residualContent.length === 0) {
+      return instructions;
+    }
+    warnings.push({
+      code: 'ambiguous_mapping',
+      path: 'dollhouse.content',
+      message: 'Some Dollhouse content could not be mapped to Agent Skill subdirectories. Unmapped content was appended to SKILL.md body.',
+      preserved: true,
+    });
+    return instructions.length > 0
+      ? `${instructions}\n\n## Additional Dollhouse Content\n\n${residualContent}`
+      : residualContent;
+  }
+
+  private buildAgentSkillStructure(
+    frontmatter: Record<string, unknown>,
+    body: string,
+    resourceDirectories: ResourceDirectories,
+    topLevelFiles: Record<string, string>
+  ): AgentSkillStructure {
+    const agentSkill: AgentSkillStructure = {
+      'SKILL.md': this.serializeSkillMarkdown(frontmatter, body),
+    };
+    for (const [directory, files] of Object.entries(resourceDirectories)) {
+      if (files && Object.keys(files).length > 0) {
+        agentSkill[directory] = files;
+      }
+    }
+    for (const [fileName, fileContent] of Object.entries(topLevelFiles)) {
+      agentSkill[fileName] = fileContent;
+    }
+    return agentSkill;
+  }
+
   convertDollhouseToAgent(options: SkillConversionOptions, pathMode: SkillPathMode = 'safe'): SkillConversionResult {
     const warnings: ConversionWarning[] = [];
     const unsupportedFields = new Set<string>();
-    const preferRoundTripState = options.prefer_roundtrip_state ?? true;
 
     // Normalize dollhouse markdown input to NFC
     if (options.dollhouse_markdown && typeof options.dollhouse_markdown === 'string') {
       options.dollhouse_markdown = options.dollhouse_markdown.normalize('NFC');
     }
 
-    if (preferRoundTripState && options.roundtrip_state) {
-      if (options.roundtrip_state.mappingVersion !== AGENT_SKILL_MAPPING_VERSION) {
-        warnings.push({
-          code: 'ambiguous_mapping',
-          path: 'roundtrip_state.mappingVersion',
-          message: `roundtrip_state mapping version '${options.roundtrip_state.mappingVersion}' does not match '${AGENT_SKILL_MAPPING_VERSION}'. Falling back to best-effort mapping.`,
-          preserved: false,
-        });
-      } else {
-        return {
-          direction: 'dollhouse_to_agent',
-          mappingVersion: AGENT_SKILL_MAPPING_VERSION,
-          agent_skill: clone(options.roundtrip_state.agentSkill),
-          report: {
-            mappingVersion: AGENT_SKILL_MAPPING_VERSION,
-            deterministic: true,
-            roundTripAvailable: true,
-            warnings,
-            unsupportedFields: [...unsupportedFields].sort((a, b) => a.localeCompare(b)),
-          },
-        };
-      }
+    const roundTripConversion = this.resolveRoundTripConversion(options, warnings);
+    if (roundTripConversion) {
+      return roundTripConversion;
     }
 
     const dollhouse = this.resolveDollhouseInput(options, warnings, unsupportedFields);
-
     const metadata = isRecord(dollhouse.metadata) ? dollhouse.metadata : {};
-    const name = this.readRequiredString(metadata, 'name', warnings, unsupportedFields, 'dollhouse.metadata.name');
-    const description = this.readRequiredString(metadata, 'description', warnings, unsupportedFields, 'dollhouse.metadata.description');
-
-    const frontmatter: Record<string, unknown> = {
-      name: name ?? 'Converted Dollhouse Skill',
-      description: description ?? 'No description provided',
-    };
-
-    for (const field of ['version', 'author', 'license', 'created', 'modified'] as const) {
-      if (Object.hasOwn(metadata, field)) {
-        frontmatter[field] = metadata[field];
-      }
-    }
-
-    const mappedMetadata: Record<string, unknown> = {};
-    for (const field of ['category', 'tags', 'complexity', 'domains', 'dependencies', 'prerequisites', 'parameters', 'examples', 'languages', 'proficiency_level'] as const) {
-      if (Object.hasOwn(metadata, field)) {
-        mappedMetadata[field] = metadata[field];
-      }
-    }
-
-    if (isRecord(metadata.custom)) {
-      const agentMetadata = metadata.custom.agent_metadata;
-      if (isRecord(agentMetadata)) {
-        Object.assign(mappedMetadata, clone(agentMetadata));
-      } else if (agentMetadata !== undefined) {
-        mappedMetadata.dollhouse_custom_agent_metadata = clone(agentMetadata);
-      }
-
-      const unknownFrontmatter = metadata.custom.agent_frontmatter_unknown;
-      if (isRecord(unknownFrontmatter)) {
-        for (const [key, value] of Object.entries(unknownFrontmatter)) {
-          if (Object.hasOwn(frontmatter, key)) {
-            warnings.push({
-              code: 'ambiguous_mapping',
-              path: `dollhouse.metadata.custom.agent_frontmatter_unknown.${key}`,
-              message: `Unknown frontmatter key '${key}' conflicts with mapped frontmatter and was not applied.`,
-              preserved: false,
-            });
-            continue;
-          }
-          frontmatter[key] = clone(value);
-        }
-      }
-    }
-
-    if (Object.keys(mappedMetadata).length > 0) {
-      frontmatter.metadata = mappedMetadata;
-    }
-
-    for (const key of Object.keys(metadata)) {
-      if (!DIRECT_METADATA_FIELDS.has(key) && key !== 'custom') {
-        warnings.push({
-          code: 'unsupported_field',
-          path: `dollhouse.metadata.${key}`,
-          message: `Dollhouse metadata field '${key}' is not mapped to Agent Skill frontmatter.`,
-          preserved: false,
-        });
-        unsupportedFields.add(`dollhouse.metadata.${key}`);
-      }
-    }
+    const frontmatter = this.buildAgentFrontmatter(metadata, warnings, unsupportedFields);
 
     const instructions = (typeof dollhouse.instructions === 'string' ? dollhouse.instructions : '').trim();
     const content = (typeof dollhouse.content === 'string' ? dollhouse.content : '').trim();
@@ -729,32 +947,13 @@ export class AgentSkillConverter {
       unsupportedFields,
       pathMode
     );
-
-    let body = instructions;
-    if (contentParseResult.residualContent.length > 0) {
-      warnings.push({
-        code: 'ambiguous_mapping',
-        path: 'dollhouse.content',
-        message: 'Some Dollhouse content could not be mapped to Agent Skill subdirectories. Unmapped content was appended to SKILL.md body.',
-        preserved: true,
-      });
-      body = body.length > 0
-        ? `${body}\n\n## Additional Dollhouse Content\n\n${contentParseResult.residualContent}`
-        : contentParseResult.residualContent;
-    }
-
-    const agentSkill: AgentSkillStructure = {
-      'SKILL.md': this.serializeSkillMarkdown(frontmatter, body),
-    };
-    for (const [directory, files] of Object.entries(contentParseResult.resourceDirectories)) {
-      if (Object.keys(files).length === 0) {
-        continue;
-      }
-      agentSkill[directory] = files;
-    }
-    for (const [fileName, fileContent] of Object.entries(contentParseResult.topLevelFiles)) {
-      agentSkill[fileName] = fileContent;
-    }
+    const body = this.appendResidualContent(instructions, contentParseResult.residualContent, warnings);
+    const agentSkill = this.buildAgentSkillStructure(
+      frontmatter,
+      body,
+      contentParseResult.resourceDirectories,
+      contentParseResult.topLevelFiles
+    );
 
     return {
       direction: 'dollhouse_to_agent',
@@ -832,6 +1031,9 @@ export class AgentSkillConverter {
     try {
       parsedFrontmatter = SecureYamlParser.parseRawYaml(match[1]);
     } catch (error) {
+      if (error instanceof Error && error.message === 'YAML content must parse to an object') {
+        throw new Error(`Frontmatter in ${pathLabel} must be a YAML object`);
+      }
       throw new Error(
         `Invalid YAML frontmatter in ${pathLabel}: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -842,7 +1044,7 @@ export class AgentSkillConverter {
 
     return {
       frontmatter: parsedFrontmatter,
-      body: match[2] ?? '',
+      body: match[2],
     };
   }
 
@@ -884,12 +1086,12 @@ export class AgentSkillConverter {
   }
 
   private buildDollhouseContent(
-    resourceDirectories: Record<string, Record<string, string>>,
+    resourceDirectories: ResourceDirectories,
     topLevelFiles: Record<string, string>
   ): string {
     const sections: string[] = [];
 
-    const knownOrder = ['references/', 'scripts/', 'agents/', 'assets/'];
+    const knownOrder = [REFERENCES_DIRECTORY, 'scripts/', 'agents/', 'assets/'];
     const discoveredDirectories = Object.keys(resourceDirectories);
     const orderedDirectories = [
       ...knownOrder.filter(path => Object.hasOwn(resourceDirectories, path)),
@@ -945,17 +1147,153 @@ export class AgentSkillConverter {
     return `### ${pathReference}\n\`\`\`${language}\n${normalizedContent}\`\`\``;
   }
 
+  private parseDollhouseContentBlock(match: RegExpExecArray): ParsedDollhouseContentBlock {
+    const leadingOffset = match[0].startsWith('\n') ? 1 : 0;
+    const start = match.index + leadingOffset;
+    const end = start + match[0].length - leadingOffset;
+    const fileReference = match[1].trim();
+    const fenceLanguage = match[2].trim().toLowerCase();
+    let fileContent = match[3];
+
+    // Backward compatibility: earlier formatter inserted an extra blank line
+    // after the opening fence and before the closing fence.
+    if (match[0].includes('```\n\n') && fileContent.startsWith('\n')) {
+      fileContent = fileContent.slice(1);
+    }
+    if (match[0].includes('\n\n```') && fileContent.endsWith('\n')) {
+      fileContent = fileContent.slice(0, -1);
+    }
+
+    const normalizedFileContent = fenceLanguage === BINARY_LINK_FENCE
+      ? `${BINARY_LINK_PREFIX}${fileContent.trim()}`
+      : fileContent;
+    return { fileReference, normalizedFileContent, span: { start, end } };
+  }
+
+  private mapDollhouseContentBlock(
+    block: ParsedDollhouseContentBlock,
+    resourceDirectories: ResourceDirectories,
+    topLevelFiles: Record<string, string>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>,
+    pathMode: SkillPathMode
+  ): boolean {
+    if (block.fileReference.startsWith(TOP_LEVEL_CONTENT_PREFIX)) {
+      return this.mapDollhouseTopLevelBlock(block, topLevelFiles, warnings, unsupportedFields, pathMode);
+    }
+    return this.mapDollhouseResourceBlock(
+      block,
+      resourceDirectories,
+      warnings,
+      unsupportedFields,
+      pathMode
+    );
+  }
+
+  private mapDollhouseTopLevelBlock(
+    block: ParsedDollhouseContentBlock,
+    topLevelFiles: Record<string, string>,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>,
+    pathMode: SkillPathMode
+  ): boolean {
+    const topLevelName = block.fileReference.slice(TOP_LEVEL_CONTENT_PREFIX.length).trim();
+    const isInvalid = topLevelName.length === 0
+      || (pathMode === 'safe' && !isSafeTopLevelFileName(topLevelName));
+    if (isInvalid) {
+      warnings.push({
+        code: 'invalid_input',
+        path: `dollhouse.content.${block.fileReference}`,
+        message: `Top-level content block '${block.fileReference}' is not a valid${pathMode === 'safe' ? ' safe' : ''} top-level filename.`,
+        preserved: false,
+      });
+      unsupportedFields.add(`dollhouse.content.${block.fileReference}`);
+      return false;
+    }
+    topLevelFiles[topLevelName] = block.normalizedFileContent;
+    return true;
+  }
+
+  private mapDollhouseResourceBlock(
+    block: ParsedDollhouseContentBlock,
+    resourceDirectories: ResourceDirectories,
+    warnings: ConversionWarning[],
+    unsupportedFields: Set<string>,
+    pathMode: SkillPathMode
+  ): boolean {
+    const slashIndex = block.fileReference.indexOf('/');
+    if (slashIndex <= 0 || slashIndex >= block.fileReference.length - 1) {
+      warnings.push({
+        code: 'unsupported_field',
+        path: `dollhouse.content.${block.fileReference}`,
+        message: `Content block '${block.fileReference}' is not in a recognized '<directory>/<file>' format.`,
+        preserved: true,
+      });
+      unsupportedFields.add(`dollhouse.content.${block.fileReference}`);
+      return false;
+    }
+
+    const directory = `${block.fileReference.slice(0, slashIndex + 1)}`;
+    const fileName = block.fileReference.slice(slashIndex + 1);
+    if (pathMode === 'safe' && (!isAllowedAgentDirectory(directory) || !isSafeDirectoryName(directory))) {
+      warnings.push({
+        code: 'unsupported_field',
+        path: `dollhouse.content.${block.fileReference}`,
+        message: `Directory '${directory}' is not in the allowed converter directory set.`,
+        preserved: true,
+      });
+      unsupportedFields.add(`dollhouse.content.${block.fileReference}`);
+      return false;
+    }
+    if (pathMode === 'safe' && !isSafeRelativePath(fileName)) {
+      warnings.push({
+        code: 'invalid_input',
+        path: `dollhouse.content.${block.fileReference}`,
+        message: `File path '${fileName}' is not a safe relative path.`,
+        preserved: false,
+      });
+      unsupportedFields.add(`dollhouse.content.${block.fileReference}`);
+      return false;
+    }
+    const directoryFiles = this.ensureResourceDirectory(resourceDirectories, directory);
+    directoryFiles[fileName] = block.normalizedFileContent;
+    return true;
+  }
+
+  private removeMappedContentSpans(content: string, mappedSpans: Array<{ start: number; end: number }>): string {
+    if (mappedSpans.length === 0) {
+      return content;
+    }
+    const sortedSpans = [...mappedSpans];
+    sortedSpans.sort((a, b) => a.start - b.start);
+    const pieces: string[] = [];
+    let cursor = 0;
+    for (const span of sortedSpans) {
+      pieces.push(content.slice(cursor, span.start));
+      cursor = span.end;
+    }
+    pieces.push(content.slice(cursor));
+    return pieces.join('');
+  }
+
+  private cleanResidualDollhouseContent(content: string): string {
+    const withoutMappedSectionHeadings = content
+      .replaceAll(/^## (References|Scripts|Assets|Agent Metadata|Top-level Files|Directory: .+)\n?/gm, '')
+      .replaceAll(/\n{3,}/g, '\n\n');
+    return pruneOrphanSectionHeadings(withoutMappedSectionHeadings).trim();
+  }
+
   private extractResourcesFromDollhouseContent(
     content: string,
     warnings: ConversionWarning[],
     unsupportedFields: Set<string>,
     pathMode: SkillPathMode
   ): {
-    resourceDirectories: Record<string, Record<string, string>>;
+    resourceDirectories: ResourceDirectories;
     topLevelFiles: Record<string, string>;
     residualContent: string;
   } {
-    const resourceDirectories: Record<string, Record<string, string>> = {};
+    const resourceDirectories: ResourceDirectories = {};
     const topLevelFiles: Record<string, string> = {};
     if (content.trim().length === 0) {
       return {
@@ -969,100 +1307,23 @@ export class AgentSkillConverter {
     const blockRegex = /(?:^|\n)### ([^\n]+)\n(?:\n)?```([^\n]*)\n([\s\S]*?)\n```(?=\n|$)/g;
     let match: RegExpExecArray | null = null;
     while ((match = blockRegex.exec(content)) !== null) {
-      const leadingOffset = match[0].startsWith('\n') ? 1 : 0;
-      const start = match.index + leadingOffset;
-      const end = start + match[0].length - leadingOffset;
-      const fileReference = match[1].trim();
-      const fenceLanguage = match[2].trim().toLowerCase();
-      let fileContent = match[3];
-      // Backward compatibility: earlier formatter inserted an extra blank line
-      // after the opening fence and before the closing fence.
-      if (match[0].includes('```\n\n') && fileContent.startsWith('\n')) {
-        fileContent = fileContent.slice(1);
+      const block = this.parseDollhouseContentBlock(match);
+      const mapped = this.mapDollhouseContentBlock(
+        block,
+        resourceDirectories,
+        topLevelFiles,
+        warnings,
+        unsupportedFields,
+        pathMode
+      );
+      if (mapped) {
+        mappedSpans.push(block.span);
       }
-      if (match[0].includes('\n\n```') && fileContent.endsWith('\n')) {
-        fileContent = fileContent.slice(0, -1);
-      }
-
-      const normalizedFileContent = fenceLanguage === BINARY_LINK_FENCE
-        ? `${BINARY_LINK_PREFIX}${fileContent.trim()}`
-        : fileContent;
-
-      if (fileReference.startsWith(TOP_LEVEL_CONTENT_PREFIX)) {
-        const topLevelName = fileReference.slice(TOP_LEVEL_CONTENT_PREFIX.length).trim();
-        if (topLevelName.length === 0 || (pathMode === 'safe' && !isSafeTopLevelFileName(topLevelName))) {
-          warnings.push({
-            code: 'invalid_input',
-            path: `dollhouse.content.${fileReference}`,
-            message: `Top-level content block '${fileReference}' is not a valid${pathMode === 'safe' ? ' safe' : ''} top-level filename.`,
-            preserved: false,
-          });
-          unsupportedFields.add(`dollhouse.content.${fileReference}`);
-          continue;
-        }
-        topLevelFiles[topLevelName] = normalizedFileContent;
-        mappedSpans.push({ start, end });
-        continue;
-      }
-
-      const slashIndex = fileReference.indexOf('/');
-      if (slashIndex <= 0 || slashIndex >= fileReference.length - 1) {
-        warnings.push({
-          code: 'unsupported_field',
-          path: `dollhouse.content.${fileReference}`,
-          message: `Content block '${fileReference}' is not in a recognized '<directory>/<file>' format.`,
-          preserved: true,
-        });
-        unsupportedFields.add(`dollhouse.content.${fileReference}`);
-        continue;
-      }
-
-      const directory = `${fileReference.slice(0, slashIndex + 1)}`;
-      const fileName = fileReference.slice(slashIndex + 1);
-      if (pathMode === 'safe' && (!isAllowedAgentDirectory(directory) || !isSafeDirectoryName(directory))) {
-        warnings.push({
-          code: 'unsupported_field',
-          path: `dollhouse.content.${fileReference}`,
-          message: `Directory '${directory}' is not in the allowed converter directory set.`,
-          preserved: true,
-        });
-        unsupportedFields.add(`dollhouse.content.${fileReference}`);
-        continue;
-      }
-      if (pathMode === 'safe' && !isSafeRelativePath(fileName)) {
-        warnings.push({
-          code: 'invalid_input',
-          path: `dollhouse.content.${fileReference}`,
-          message: `File path '${fileName}' is not a safe relative path.`,
-          preserved: false,
-        });
-        unsupportedFields.add(`dollhouse.content.${fileReference}`);
-        continue;
-      }
-      if (!resourceDirectories[directory]) {
-        resourceDirectories[directory] = {};
-      }
-      resourceDirectories[directory][fileName] = normalizedFileContent;
-      mappedSpans.push({ start, end });
     }
 
-    let residualContent = content;
-    if (mappedSpans.length > 0) {
-      const sortedSpans = mappedSpans.sort((a, b) => a.start - b.start);
-      const pieces: string[] = [];
-      let cursor = 0;
-      for (const span of sortedSpans) {
-        pieces.push(residualContent.slice(cursor, span.start));
-        cursor = span.end;
-      }
-      pieces.push(residualContent.slice(cursor));
-      residualContent = pieces.join('');
-    }
-
-    residualContent = residualContent
-      .replace(/^## (References|Scripts|Assets|Agent Metadata|Top-level Files|Directory: .+)\n?/gm, '')
-      .replace(/\n{3,}/g, '\n\n');
-    residualContent = pruneOrphanSectionHeadings(residualContent).trim();
+    const residualContent = this.cleanResidualDollhouseContent(
+      this.removeMappedContentSpans(content, mappedSpans)
+    );
 
     return {
       resourceDirectories,
@@ -1085,7 +1346,7 @@ function getSectionTitle(directory: string): string {
 }
 
 function getDefaultLanguageForDirectory(directory: string): string {
-  if (directory === 'references/') {
+  if (directory === REFERENCES_DIRECTORY) {
     return 'markdown';
   }
   if (directory === 'agents/') {
@@ -1095,7 +1356,7 @@ function getDefaultLanguageForDirectory(directory: string): string {
 }
 
 function shouldInferLanguageForDirectory(directory: string): boolean {
-  return directory !== 'references/';
+  return directory !== REFERENCES_DIRECTORY;
 }
 
 function isBinaryFile(pathReference: string, content: string): boolean {
@@ -1201,7 +1462,7 @@ function isSafeRelativePath(pathValue: string): boolean {
 }
 
 function sanitizeRelativePathForReference(pathValue: string): string {
-  const normalized = pathValue.replace(/\\/g, '/').replace(/^\/+/u, '');
+  const normalized = pathValue.replaceAll('\\', '/').replace(/^\/+/u, '');
   const pieces = normalized
     .split('/')
     .filter(segment => segment.length > 0 && segment !== '.' && segment !== '..')
@@ -1212,19 +1473,39 @@ function sanitizeRelativePathForReference(pathValue: string): string {
   return pieces.join('/');
 }
 
+function removeTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') {
+    end--;
+  }
+  return value.slice(0, end);
+}
+
+function trimHyphens(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === '-') {
+    start++;
+  }
+  while (end > start && value[end - 1] === '-') {
+    end--;
+  }
+  return value.slice(start, end);
+}
+
 function sanitizePathToken(token: string): string {
   const cleaned = token
     .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return cleaned.length > 0 ? cleaned : 'unknown';
+    .replaceAll(/[^a-z0-9._-]+/g, '-')
+    .replaceAll(/-+/g, '-');
+  const trimmed = trimHyphens(cleaned);
+  return trimmed.length > 0 ? trimmed : 'unknown';
 }
 
 function extractFileName(pathReference: string): string {
-  const normalized = pathReference.replace(/\\/g, '/');
+  const normalized = pathReference.replaceAll('\\', '/');
   const segments = normalized.split('/').filter(segment => segment.length > 0);
-  const candidate = segments.length > 0 ? segments[segments.length - 1] : 'binary.dat';
+  const candidate = segments.at(-1) ?? 'binary.dat';
   return sanitizePathToken(candidate) || 'binary.dat';
 }
 
@@ -1237,8 +1518,5 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 }
 
 function clone<T>(value: T): T {
-  if (typeof globalThis.structuredClone === 'function') {
-    return globalThis.structuredClone(value);
-  }
-  return JSON.parse(JSON.stringify(value)) as T;
+  return structuredClone(value);
 }

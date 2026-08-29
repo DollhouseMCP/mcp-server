@@ -1,3 +1,4 @@
+export * from './PortfolioActivityEvents.js';
 export * from './PortfolioDtos.js';
 export * from './PortfolioModule.js';
 export * from './PortfolioPrivacyProjectors.js';

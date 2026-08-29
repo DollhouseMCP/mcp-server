@@ -21,9 +21,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { BuildInfoService } from '../../../src/services/BuildInfoService.js';
+import type { BuildInfoService } from '../../../src/services/BuildInfoService.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
-import { assertTiming, createTimingThreshold } from '../../helpers/timing-thresholds.js';
+import { assertTiming } from '../../helpers/timing-thresholds.js';
+
+const DOCKER_DAEMON_ERROR_MESSAGE = 'Docker daemon not running';
 
 describe('BuildInfoService - Parallel Error Scenarios', () => {
   let service: BuildInfoService;
@@ -66,12 +68,12 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
       const originalGetGitInfo = (service as any).getGitInfo.bind(service);
       const originalGetDockerInfo = (service as any).getDockerInfo.bind(service);
 
-      jest.spyOn(service as any, 'getGitInfo').mockImplementation(async () => {
+      jest.spyOn(service as any, 'getGitInfo').mockImplementation(() => {
         callTimes.push({ method: 'git', time: Date.now() });
         return originalGetGitInfo();
       });
 
-      jest.spyOn(service as any, 'getDockerInfo').mockImplementation(async () => {
+      jest.spyOn(service as any, 'getDockerInfo').mockImplementation(() => {
         callTimes.push({ method: 'docker', time: Date.now() });
         return originalGetDockerInfo();
       });
@@ -134,10 +136,10 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
     }, 5000);
 
     it('IMPROVED BEHAVIOR: should return partial results when git stderr output occurs', async () => {
-      jest.spyOn(service as any, 'getGitInfo').mockImplementation(async () => {
+      jest.spyOn(service as any, 'getGitInfo').mockImplementation(() => {
         const error: any = new Error('Command failed');
         error.stderr = 'fatal: not a git repository';
-        throw error;
+        return Promise.reject(error);
       });
 
       // IMPROVED: Returns partial results instead of failing
@@ -260,7 +262,7 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
     it('IMPROVED BEHAVIOR: now captures all error information', async () => {
       const errors = [
         new Error('Git unavailable'),
-        new Error('Docker daemon not running')
+        new Error(DOCKER_DAEMON_ERROR_MESSAGE)
       ];
 
       jest.spyOn(service as any, 'getGitInfo').mockRejectedValue(errors[0]);
@@ -281,7 +283,7 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
     it('FUTURE: Promise.allSettled would capture all errors', async () => {
       const promises = [
         Promise.reject(new Error('Git unavailable')),
-        Promise.reject(new Error('Docker daemon not running'))
+        Promise.reject(new Error(DOCKER_DAEMON_ERROR_MESSAGE))
       ];
 
       const results = await Promise.allSettled(promises);
@@ -293,7 +295,7 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
       // Both errors captured
       expect(errors).toEqual([
         'Git unavailable',
-        'Docker daemon not running'
+        DOCKER_DAEMON_ERROR_MESSAGE
       ]);
 
       // FUTURE: Could build partial BuildInfo with available data
@@ -361,30 +363,30 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
 
   describe('Performance and Concurrency', () => {
     it('should benefit from parallel execution', async () => {
-      const delay = 100; // ms per operation
+      let started = 0;
+      let releaseOperations!: () => void;
+      const release = new Promise<void>(resolve => {
+        releaseOperations = resolve;
+      });
 
       jest.spyOn(service as any, 'getGitInfo').mockImplementation(async () => {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        started += 1;
+        await release;
         return { commit: 'abc', branch: 'main' };
       });
 
       jest.spyOn(service as any, 'getDockerInfo').mockImplementation(async () => {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        started += 1;
+        await release;
         return { isDocker: true, info: 'container-123' };
       });
 
-      const startTime = Date.now();
-      await service.getBuildInfo();
-      const elapsed = Date.now() - startTime;
-
-      // Parallel should be ~100ms, not 200ms (sequential)
-      // Use CI-aware thresholds: local=250ms (2.5x delay), CI=600ms (6x delay)
-      // CI threshold accounts for Windows scheduling delays, system load, and timer resolution
-      const { threshold } = createTimingThreshold(delay * 2.5, 2.4); // 250ms local, 600ms CI
-      expect(elapsed).toBeLessThan(threshold);
-      // Lower bound ensures operations actually ran (fast systems may skip mocks)
-      const lowerBound = delay - 60;
-      expect(elapsed).toBeGreaterThanOrEqual(lowerBound);
+      const buildInfo = service.getBuildInfo();
+      expect(started).toBe(2);
+      releaseOperations();
+      await expect(buildInfo).resolves.toEqual(expect.objectContaining({
+        build: expect.objectContaining({ gitCommit: 'abc', gitBranch: 'main' }),
+      }));
     });
 
     it('should handle concurrent getBuildInfo calls', async () => {
@@ -433,7 +435,7 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
     it('demonstrates comprehensive error reporting with Promise.allSettled', async () => {
       const results = await Promise.allSettled([
         Promise.reject(new Error('Git command timeout')),
-        Promise.reject(new Error('Docker daemon not running'))
+        Promise.reject(new Error(DOCKER_DAEMON_ERROR_MESSAGE))
       ]);
 
       const allErrors = results
@@ -443,10 +445,11 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
       // All errors captured
       expect(allErrors).toHaveLength(2);
       expect(allErrors).toContain('Git command timeout');
-      expect(allErrors).toContain('Docker daemon not running');
+      expect(allErrors).toContain(DOCKER_DAEMON_ERROR_MESSAGE);
 
       // FUTURE: Could present comprehensive error report:
-      const errorReport = `Build info collection failed:\n${allErrors.map(e => `  - ${e}`).join('\n')}`;
+      const formattedErrors = allErrors.map(error => `  - ${error}`).join('\n');
+      const errorReport = `Build info collection failed:\n${formattedErrors}`;
       expect(errorReport).toContain('Build info collection failed:');
       expect(errorReport).toContain('timeout');
       expect(errorReport).toContain('Docker');

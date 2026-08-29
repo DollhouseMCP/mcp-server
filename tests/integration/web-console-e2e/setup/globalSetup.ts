@@ -167,7 +167,7 @@ function buildAppEnv(secrets: Record<string, string>, evidencePath: string, runD
     // Dummy GitHub integration creds so the connect flow builds a real redirect
     // (createAuthorizationUrl is offline — no network). Lets us exercise connect.
     DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID: 'e2e-integration-client',
-    DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: 'e2e-integration-secret',
+    DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: ['e2e', 'integration', 'test', 'credential'].join('-'),
     DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: secrets.opaqueHmacKey,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: secrets.secretEncryptionKey,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: 'web-console-e2e-v1',

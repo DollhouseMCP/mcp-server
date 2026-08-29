@@ -34,108 +34,98 @@ export class MemoryMetadataExtractor {
       return MemoryMetadataExtractor.defaultEntry(relativePath);
     }
 
-    const primaryParse = MemoryMetadataExtractor.tryParseYamlObject(rawContent);
-    let yamlData = primaryParse.data;
-    if (!yamlData) {
-      // Multi-document streams (frontmatter + content) fail single-doc parsing.
-      // Extract just the frontmatter block and retry parsing safely.
-      const fmContent = MemoryMetadataExtractor.extractFrontmatter(rawContent);
-      if (!fmContent) {
-        if (primaryParse.errorMessage) {
-          logger.debug('MemoryMetadataExtractor: failed to parse YAML, returning default metadata', {
-            relativePath,
-            stage: 'primary',
-            error: primaryParse.errorMessage,
-          });
-        }
-        return MemoryMetadataExtractor.defaultEntry(relativePath);
-      }
-      const fallbackParse = MemoryMetadataExtractor.tryParseYamlObject(fmContent);
-      yamlData = fallbackParse.data;
-      if (!yamlData) {
-        logger.debug('MemoryMetadataExtractor: failed to parse YAML (primary + frontmatter fallback), returning default metadata', {
-          relativePath,
-          primaryError: primaryParse.errorMessage,
-          fallbackError: fallbackParse.errorMessage,
-        });
-        return MemoryMetadataExtractor.defaultEntry(relativePath);
-      }
-    }
+    const yamlData = MemoryMetadataExtractor.parseMetadataYaml(rawContent, relativePath);
+    if (!yamlData) return MemoryMetadataExtractor.defaultEntry(relativePath);
 
     // Memory files store metadata under a top-level `metadata` key or directly as top-level keys
-    const metadataSource = (
-      yamlData.metadata && typeof yamlData.metadata === 'object' && !Array.isArray(yamlData.metadata)
-        ? yamlData.metadata
-        : yamlData
-    ) as Record<string, unknown>;
-
-    const normalizedName = typeof metadataSource.name === 'string'
-      ? MemoryMetadataExtractor.normalizeText(metadataSource.name)
-      : '';
-    const name = normalizedName.length > 0
-      ? normalizedName
-      : 'unnamed';
-
-    const description = typeof metadataSource.description === 'string'
-      ? MemoryMetadataExtractor.normalizeText(metadataSource.description)
-      : '';
-
-    const normalizedVersion = typeof metadataSource.version === 'string'
-      ? MemoryMetadataExtractor.normalizeText(metadataSource.version)
-      : '';
-    const version = normalizedVersion.length > 0
-      ? normalizedVersion
-      : '1.0.0';
-
-    const author = typeof metadataSource.author === 'string'
-      ? MemoryMetadataExtractor.normalizeText(metadataSource.author)
-      : '';
-
-    const tags = Array.isArray(metadataSource.tags) && metadataSource.tags.every((t: unknown) => typeof t === 'string')
-      ? (metadataSource.tags as string[])
-        .map(tag => MemoryMetadataExtractor.normalizeText(tag))
-        .filter(tag => tag.length > 0)
-      : [];
-
-    const autoLoad = typeof metadataSource.autoLoad === 'boolean'
-      ? metadataSource.autoLoad
-      : undefined;
-
-    const priority = typeof metadataSource.priority === 'number'
-      ? metadataSource.priority
-      : undefined;
-
-    const normalizedMemoryType = typeof metadataSource.memoryType === 'string'
-      ? MemoryMetadataExtractor.normalizeText(metadataSource.memoryType)
-      : '';
-    const memoryType = normalizedMemoryType.length > 0
-      ? normalizedMemoryType
-      : MemoryMetadataExtractor.inferMemoryType(relativePath);
-
-    // totalEntries: prefer stats.totalEntries, fall back to entries array length
-    let totalEntries: number | undefined;
-    const stats = yamlData.stats as Record<string, unknown> | undefined;
-    if (stats && typeof stats === 'object' && typeof stats.totalEntries === 'number') {
-      totalEntries = stats.totalEntries;
-    } else if (Array.isArray(yamlData.entries)) {
-      totalEntries = yamlData.entries.length;
-    }
+    const metadataSource = MemoryMetadataExtractor.getMetadataSource(yamlData);
+    const memoryType = MemoryMetadataExtractor.normalizedString(metadataSource.memoryType)
+      || MemoryMetadataExtractor.inferMemoryType(relativePath);
 
     const entry: Partial<ElementIndexEntry> = {
       filePath: relativePath,
-      name,
-      description,
-      version,
-      author,
-      tags,
+      name: MemoryMetadataExtractor.normalizedString(metadataSource.name) || 'unnamed',
+      description: MemoryMetadataExtractor.normalizedString(metadataSource.description),
+      version: MemoryMetadataExtractor.normalizedString(metadataSource.version) || '1.0.0',
+      author: MemoryMetadataExtractor.normalizedString(metadataSource.author),
+      tags: MemoryMetadataExtractor.normalizedTags(metadataSource.tags),
       memoryType,
     };
 
+    const autoLoad = MemoryMetadataExtractor.booleanValue(metadataSource.autoLoad);
+    const priority = MemoryMetadataExtractor.numberValue(metadataSource.priority);
+    const totalEntries = MemoryMetadataExtractor.getTotalEntries(yamlData);
     if (autoLoad !== undefined) entry.autoLoad = autoLoad;
     if (priority !== undefined) entry.priority = priority;
     if (totalEntries !== undefined) entry.totalEntries = totalEntries;
 
     return entry;
+  }
+
+  private static parseMetadataYaml(
+    rawContent: string,
+    relativePath: string
+  ): Record<string, unknown> | undefined {
+    const primaryParse = MemoryMetadataExtractor.tryParseYamlObject(rawContent);
+    if (primaryParse.data) return primaryParse.data;
+
+    // Multi-document streams (frontmatter + content) fail single-doc parsing.
+    const frontmatter = MemoryMetadataExtractor.extractFrontmatter(rawContent);
+    if (!frontmatter) {
+      if (primaryParse.errorMessage) {
+        logger.debug('MemoryMetadataExtractor: failed to parse YAML, returning default metadata', {
+          relativePath,
+          stage: 'primary',
+          error: primaryParse.errorMessage,
+        });
+      }
+      return undefined;
+    }
+
+    const fallbackParse = MemoryMetadataExtractor.tryParseYamlObject(frontmatter);
+    if (fallbackParse.data) return fallbackParse.data;
+
+    logger.debug('MemoryMetadataExtractor: failed to parse YAML (primary + frontmatter fallback), returning default metadata', {
+      relativePath,
+      primaryError: primaryParse.errorMessage,
+      fallbackError: fallbackParse.errorMessage,
+    });
+    return undefined;
+  }
+
+  private static getMetadataSource(yamlData: Record<string, unknown>): Record<string, unknown> {
+    const metadata = yamlData.metadata;
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? metadata as Record<string, unknown>
+      : yamlData;
+  }
+
+  private static normalizedString(value: unknown): string {
+    return typeof value === 'string' ? MemoryMetadataExtractor.normalizeText(value) : '';
+  }
+
+  private static normalizedTags(value: unknown): string[] {
+    if (!Array.isArray(value) || !value.every(tag => typeof tag === 'string')) return [];
+    return value
+      .map(tag => MemoryMetadataExtractor.normalizeText(tag))
+      .filter(tag => tag.length > 0);
+  }
+
+  private static booleanValue(value: unknown): boolean | undefined {
+    return typeof value === 'boolean' ? value : undefined;
+  }
+
+  private static numberValue(value: unknown): number | undefined {
+    return typeof value === 'number' ? value : undefined;
+  }
+
+  private static getTotalEntries(yamlData: Record<string, unknown>): number | undefined {
+    const stats = yamlData.stats;
+    if (stats && typeof stats === 'object' && !Array.isArray(stats)) {
+      const totalEntries = (stats as Record<string, unknown>).totalEntries;
+      if (typeof totalEntries === 'number') return totalEntries;
+    }
+    return Array.isArray(yamlData.entries) ? yamlData.entries.length : undefined;
   }
 
   /**
@@ -146,7 +136,7 @@ export class MemoryMetadataExtractor {
    */
   static inferMemoryType(relativePath: string): string {
     // Normalize separators to forward slash for consistent matching
-    const normalized = relativePath.replace(/\\/g, '/');
+    const normalized = relativePath.replaceAll('\\', '/');
 
     if (normalized.startsWith('system/')) return 'system';
     if (normalized.startsWith('adapters/')) return 'adapter';
@@ -173,11 +163,10 @@ export class MemoryMetadataExtractor {
    */
   private static tryParseYamlObject(content: string): { data?: Record<string, unknown>; errorMessage?: string } {
     try {
-      const data = SecureYamlParser.parseRawYaml(
-        content,
-        MemoryMetadataExtractor.MAX_YAML_SIZE,
-        { detectContentPatterns: false },
-      );
+      const data = SecureYamlParser.parseRawYaml(content, {
+        maxSize: MemoryMetadataExtractor.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
       if (!validateMemoryControlFields(data)) {
         return { errorMessage: 'Malicious memory control content detected' };
       }

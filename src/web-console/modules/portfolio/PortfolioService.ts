@@ -3,6 +3,8 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import { requireConsoleRequestContext } from '../../platform/ConsoleRequestContext.js';
+import type { IPortfolioActivityEventSink } from './PortfolioActivityEvents.js';
 import {
   canonicalizePortfolioElementName,
   isConsolePortfolioElementType,
@@ -15,7 +17,8 @@ import {
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { isValidDisplayString } from '../../stores/ConsoleStoreValidation.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import {
   isPortfolioSyncJobConflictPolicy,
   isPortfolioSyncJobDirection,
@@ -52,6 +55,7 @@ export class PortfolioService {
     private readonly integrationStore: IUserIntegrationStore,
     private readonly syncJobStore: IPortfolioSyncJobStore,
     private readonly now: () => Date = () => new Date(),
+    private readonly activityEventSink: IPortfolioActivityEventSink | null = null,
   ) {}
 
   async getSummary(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
@@ -122,9 +126,9 @@ export class PortfolioService {
     if (!isConsolePortfolioElementType(type)) {
       return invalidRequest('type path parameter must be a supported portfolio element type.');
     }
-    const parsed = parseElementBody(req.body, { requireName: true, requireContent: true });
+    const parsed = parseElementBody(req.body, { requireName: true, requireContent: false });
     if (parsed.kind === 'problem') return parsed.result;
-    const issues = validateElementPayload(parsed.value);
+    const issues = validateElementPayload(type, parsed.value);
     if (issues.length > 0) return validationFailed(issues);
     try {
       const record = await this.store.create({
@@ -176,7 +180,7 @@ export class PortfolioService {
       content: parsed.value.content ?? existing.content,
       tags: parsed.value.tags ?? existing.tags,
     };
-    const issues = validateElementPayload(candidate);
+    const issues = validateElementPayload(path.type, candidate);
     if (issues.length > 0) return validationFailed(issues);
     try {
       const updated = await this.store.update({
@@ -205,6 +209,10 @@ export class PortfolioService {
     }
   }
 
+  // Console deletion is an intentional HARD delete, mirroring the canonical `delete_element`
+  // semantics the manager-backed store delegates to — there is deliberately no recycle bin.
+  // The metadata-only activity event below is the forensic trail of what was removed
+  // (it records the contentHash, never the content).
   async deleteElement(
     req: ConsoleRequest,
     type: string,
@@ -227,6 +235,16 @@ export class PortfolioService {
         now: this.now(),
       });
       if (!deleted) return notFound();
+      await this.activityEventSink?.recordElementDeleted({
+        type: 'console.portfolio.element.deleted.v1',
+        userId: auth.userId,
+        consoleSessionId: auth.sessionIdHash.toString('hex'),
+        elementType: deleted.type,
+        canonicalName: deleted.canonicalName,
+        contentHash: deleted.contentHash ?? null,
+        correlationId: requireConsoleRequestContext(req).correlationId,
+        occurredAt: this.now(),
+      });
       return {
         status: 200,
         body: {
@@ -265,7 +283,7 @@ export class PortfolioService {
       content: parsed.value.content ?? existing?.content ?? '',
       tags: parsed.value.tags ?? existing?.tags ?? [],
     };
-    const issues = validateElementPayload(candidate);
+    const issues = validateElementPayload(path.type, candidate);
     return {
       status: 200,
       body: {
@@ -290,7 +308,7 @@ export class PortfolioService {
     const content = parsed.value.content ?? existing.content;
     let displayName = existing.displayName;
     if (parsed.value.displayName !== undefined) displayName = parsed.value.displayName;
-    const issues = validateElementPayload({
+    const issues = validateElementPayload(existing.type, {
       name: existing.name,
       displayName,
       metadata: parsed.value.metadata ?? existing.metadata,
@@ -312,8 +330,8 @@ export class PortfolioService {
     const auth = requireConsoleAuthentication(req);
     const parsed = parseSyncBody(req.body);
     if (parsed.kind === 'problem') return parsed.result;
-    const integration = await this.integrationStore.findByProvider(auth.userId, parsed.value.provider);
-    if (integration?.status !== 'connected') {
+    const integration = await this.integrationStore.findByProvider(auth.userId, parsed.value.provider as UserIntegrationProvider);
+    if (!isIntegrationConnected(integration)) {
       return problem(409, 'integration_required', 'Conflict', 'A connected GitHub integration is required for portfolio sync.');
     }
     if (!syncDirectionAllowed(integration, parsed.value.direction)) {
@@ -479,7 +497,13 @@ function parseSyncBody(body: unknown):
   };
 }
 
-function validateElementPayload(input: {
+/**
+ * Pre-write payload validation mirroring the store record contract
+ * (validatePortfolioElementSummaryRecord), so contract violations 422 BEFORE
+ * anything persists. Exported so the collection install path applies the same
+ * caps as the direct create/update routes.
+ */
+export function validateElementPayload(type: ConsolePortfolioElementType, input: {
   readonly name?: string;
   readonly displayName?: string | null;
   readonly metadata?: Readonly<Record<string, unknown>>;
@@ -489,16 +513,52 @@ function validateElementPayload(input: {
   const issues: PortfolioElementValidationIssueDto[] = [];
   if (!input.name || input.name.trim() === '') issues.push(issue('name', 'required', 'name is required.'));
   if (input.name && canonicalizePortfolioElementName(input.name) === '') issues.push(issue('name', 'invalid', 'name must have a canonical form.'));
+  if (input.name && input.name.trim() !== '' && !isValidDisplayString(input.name, 200)) {
+    issues.push(issue('name', 'invalid', 'name must be a printable string of at most 200 characters.'));
+  }
   if (input.displayName?.trim() === '') {
     issues.push(issue('display_name', 'invalid', 'display_name must be non-empty when provided.'));
+  } else if (input.displayName != null && !isValidDisplayString(input.displayName, 200)) {
+    issues.push(issue('display_name', 'invalid', 'display_name must be a printable string of at most 200 characters.'));
   }
-  issues.push(...validateMetadataPayload(input.metadata));
-  if (input.content === undefined || input.content.trim() === '') issues.push(issue('content', 'required', 'content is required.'));
+  issues.push(
+    ...validateMetadataPayload(input.metadata),
+    ...validateContentPayload(type, input.content, input.metadata),
+  );
   if (input.content !== undefined && Buffer.byteLength(input.content, 'utf8') > PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES) {
     issues.push(issue('content', 'too_large', 'content must be at most 1 MiB.'));
   }
   issues.push(...validateTagsPayload(input.tags ?? []));
   return issues;
+}
+
+function validateContentPayload(
+  type: ConsolePortfolioElementType,
+  content: string | undefined,
+  metadata: Readonly<Record<string, unknown>> | undefined,
+): readonly PortfolioElementValidationIssueDto[] {
+  const hasContent = typeof content === 'string' && content.trim() !== '';
+  if ((type === 'templates' || type === 'memories') && !hasContent) {
+    return [issue('content', 'required', 'content is required.')];
+  }
+  if ((type === 'personas' || type === 'skills') && !hasContent && !hasInstructions(metadata)) {
+    return [issue('content', 'required', 'content or metadata.instructions is required.')];
+  }
+  if (type === 'agents' && !hasContent && !hasInstructions(metadata) && metadata?.goal === undefined) {
+    return [issue('content', 'required', 'content, metadata.instructions, or metadata.goal is required.')];
+  }
+  if (type === 'ensembles' && !hasContent && !hasInstructions(metadata) && !hasEnsembleElements(metadata)) {
+    return [issue('content', 'required', 'content, metadata.instructions, or metadata.elements is required.')];
+  }
+  return [];
+}
+
+function hasInstructions(metadata: Readonly<Record<string, unknown>> | undefined): boolean {
+  return typeof metadata?.instructions === 'string' && metadata.instructions.trim() !== '';
+}
+
+function hasEnsembleElements(metadata: Readonly<Record<string, unknown>> | undefined): boolean {
+  return Array.isArray(metadata?.elements) && metadata.elements.length > 0;
 }
 
 function validateMetadataPayload(metadata: Readonly<Record<string, unknown>> | undefined): readonly PortfolioElementValidationIssueDto[] {
@@ -517,7 +577,11 @@ function validateTagsPayload(tags: readonly string[]): readonly PortfolioElement
     issues.push(issue('tags', 'too_many', `tags must contain at most ${PORTFOLIO_ELEMENT_TAGS_MAX} entries.`));
   }
   for (const [index, tag] of tags.entries()) {
-    if (tag.trim() === '') issues.push(issue(`tags.${index}`, 'invalid', 'tags must be non-empty strings.'));
+    if (tag.trim() === '') {
+      issues.push(issue(`tags.${index}`, 'invalid', 'tags must be non-empty strings.'));
+    } else if (!isValidDisplayString(tag, 80)) {
+      issues.push(issue(`tags.${index}`, 'invalid', 'tags must be printable strings of at most 80 characters.'));
+    }
   }
   return issues;
 }
@@ -553,6 +617,7 @@ function validationFailed(issues: readonly PortfolioElementValidationIssueDto[])
       title: 'Validation failed',
       status: 422,
       code: 'validation_failed',
+      detail: 'The request failed validation; see issues.',
       issues,
     },
   };

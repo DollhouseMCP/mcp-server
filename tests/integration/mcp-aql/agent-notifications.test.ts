@@ -9,13 +9,21 @@
  * @since v2.1.0 - Agent Notification System
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
-import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
-import { AgentManager } from '../../../src/elements/agents/AgentManager.js';
-import { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
+import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { AgentManager } from '../../../src/elements/agents/AgentManager.js';
+import type { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+
+const PAUSE_AGENT_NAME = 'pause-agent';
+const IDEMPOTENT_AGENT_NAME = 'idempotent-agent';
+const MULTI_AGENT_NAME = 'multi-agent';
+const DZ_BLOCKED_AGENT_NAME = 'dz-blocked-agent';
+const DZ_CURRENT_AGENT_NAME = 'dz-current-agent';
+const DZ_GOAL_SCOPE_AGENT_NAME = 'dz-goal-scope-agent';
+const DZ_SESSION_SCOPE_AGENT_NAME = 'dz-session-scope-agent';
 
 describe('Agent Notification System', () => {
   let env: PortfolioTestEnvironment;
@@ -88,7 +96,12 @@ describe('Agent Notification System', () => {
     });
   }
 
-  async function recordStep(name: string, step: string, outcome: 'success' | 'failure' | 'partial' = 'success') {
+  async function recordStep(
+    name: string,
+    step: string,
+    outcome: 'success' | 'failure' | 'partial' = 'success',
+    overrides: Record<string, unknown> = {},
+  ) {
     return mcpAqlHandler.handleCreate({
       operation: 'record_execution_step',
       params: {
@@ -97,7 +110,28 @@ describe('Agent Notification System', () => {
         outcome,
         findings: `Results for: ${step}`,
         confidence: 0.85,
+        ...overrides,
       },
+    });
+  }
+
+  function injectBeetlejuiceBlockOnNextStep(options: {
+    readonly goalId?: string;
+    readonly sessionId?: string;
+  } = {}) {
+    const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const recordAgentStep = agentManager.recordAgentStep.bind(agentManager);
+    return jest.spyOn(agentManager, 'recordAgentStep').mockImplementationOnce(async params => {
+      const result = await recordAgentStep(params);
+      dangerZone.block(
+        params.agentName,
+        'Beetlejuice test trigger',
+        ['beetlejuice_beetlejuice_beetlejuice'],
+        'beetlejuice-verification-id',
+        { goalId: options.goalId ?? params.goalId },
+        options.sessionId,
+      );
+      return result;
     });
   }
 
@@ -139,16 +173,22 @@ describe('Agent Notification System', () => {
 
       const notifications = getNotifications(stepResult);
       expect(notifications).toBeDefined();
-      expect(notifications!.length).toBeGreaterThanOrEqual(1);
+      if (!notifications) {
+        throw new Error('Expected permission notifications');
+      }
+      expect(notifications.length).toBeGreaterThanOrEqual(1);
 
-      const permissionNotification = notifications!.find(
+      const permissionNotification = notifications.find(
         (n: Record<string, unknown>) => n.type === 'permission_pending'
       );
       expect(permissionNotification).toBeDefined();
-      expect(permissionNotification!.message).toContain('delete_element');
-      expect(permissionNotification!.timestamp).toBeDefined();
+      if (!permissionNotification) {
+        throw new Error('Expected a permission-pending notification');
+      }
+      expect(permissionNotification.message).toContain('delete_element');
+      expect(permissionNotification.timestamp).toBeDefined();
 
-      const metadata = permissionNotification!.metadata as Record<string, unknown>;
+      const metadata = permissionNotification.metadata as Record<string, unknown>;
       expect(metadata.operation).toBe('delete_element');
     });
   });
@@ -186,17 +226,17 @@ describe('Agent Notification System', () => {
   describe('Autonomy pause notification', () => {
     it('should include autonomy_pause notification when step limit is reached', async () => {
       // Create agent with low step limit
-      await createAgent('pause-agent', {
+      await createAgent(PAUSE_AGENT_NAME, {
         gatekeeper: { allow: ['*'] },
         autonomy: { maxAutonomousSteps: 2 },
       });
 
       // Execute agent
-      const execResult = await executeAgent('pause-agent');
+      const execResult = await executeAgent(PAUSE_AGENT_NAME);
       expect(execResult.success).toBe(true);
 
       // Record steps up to and past the limit
-      const step1 = await recordStep('pause-agent', 'Step 1');
+      const step1 = await recordStep(PAUSE_AGENT_NAME, 'Step 1');
       expect(step1.success).toBe(true);
       const step1Notifications = getNotifications(step1);
       // Step 1 should not have autonomy_pause
@@ -205,30 +245,36 @@ describe('Agent Notification System', () => {
       );
       expect(step1Pause).toBeUndefined();
 
-      const step2 = await recordStep('pause-agent', 'Step 2');
+      const step2 = await recordStep(PAUSE_AGENT_NAME, 'Step 2');
       expect(step2.success).toBe(true);
 
       // Step 2 might or might not pause depending on implementation (limit=2 means 2 steps allowed)
       // Step 3 should definitely cause a pause
-      const step3 = await recordStep('pause-agent', 'Step 3');
+      const step3 = await recordStep(PAUSE_AGENT_NAME, 'Step 3');
       expect(step3.success).toBe(true);
 
       const step3Data = step3.data as Record<string, unknown>;
-      const step3Autonomy = step3Data?.autonomy as Record<string, unknown>;
+      const step3Autonomy = step3Data.autonomy as Record<string, unknown>;
 
       // By step 3, the agent should be paused (continue=false)
-      expect(step3Autonomy?.continue).toBe(false);
+      expect(step3Autonomy.continue).toBe(false);
 
       const step3Notifications = getNotifications(step3);
       expect(step3Notifications).toBeDefined();
+      if (!step3Notifications) {
+        throw new Error('Expected autonomy-pause notifications');
+      }
 
-      const pauseNotification = step3Notifications!.find(
+      const pauseNotification = step3Notifications.find(
         (n: Record<string, unknown>) => n.type === 'autonomy_pause'
       );
       expect(pauseNotification).toBeDefined();
-      expect(pauseNotification!.message).toContain('paused');
+      if (!pauseNotification) {
+        throw new Error('Expected an autonomy-pause notification');
+      }
+      expect(pauseNotification.message).toContain('paused');
 
-      const metadata = pauseNotification!.metadata as Record<string, unknown>;
+      const metadata = pauseNotification.metadata as Record<string, unknown>;
       expect(metadata.reason).toBeDefined();
     });
   });
@@ -236,23 +282,23 @@ describe('Agent Notification System', () => {
   describe('Idempotent reporting', () => {
     it('should only report gatekeeper blocks once (first record_execution_step call)', async () => {
       // Create agent with deny policy
-      await createAgent('idempotent-agent', {
+      await createAgent(IDEMPOTENT_AGENT_NAME, {
         gatekeeper: { deny: ['delete_element'] },
       });
 
       // Execute agent
-      const execResult = await executeAgent('idempotent-agent');
+      const execResult = await executeAgent(IDEMPOTENT_AGENT_NAME);
       expect(execResult.success).toBe(true);
 
       // Trigger gatekeeper block
       await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
         element_type: 'agent',
-        params: { element_name: 'idempotent-agent' },
+        params: { element_name: IDEMPOTENT_AGENT_NAME },
       });
 
       // First record_execution_step — should include the notification
-      const step1 = await recordStep('idempotent-agent', 'First step after block');
+      const step1 = await recordStep(IDEMPOTENT_AGENT_NAME, 'First step after block');
       expect(step1.success).toBe(true);
       const step1Notifications = getNotifications(step1);
       const step1Permission = step1Notifications?.find(
@@ -261,7 +307,7 @@ describe('Agent Notification System', () => {
       expect(step1Permission).toBeDefined();
 
       // Second record_execution_step — same block should NOT appear again
-      const step2 = await recordStep('idempotent-agent', 'Second step after block');
+      const step2 = await recordStep(IDEMPOTENT_AGENT_NAME, 'Second step after block');
       expect(step2.success).toBe(true);
       const step2Notifications = getNotifications(step2);
       const step2Permission = step2Notifications?.find(
@@ -274,55 +320,58 @@ describe('Agent Notification System', () => {
   describe('Multiple notifications', () => {
     it('should report multiple gatekeeper blocks in a single response', async () => {
       // Create agent with deny on multiple operations
-      await createAgent('multi-agent', {
+      await createAgent(MULTI_AGENT_NAME, {
         gatekeeper: { deny: ['delete_element', 'edit_element'] },
       });
 
       // Execute agent
-      const execResult = await executeAgent('multi-agent');
+      const execResult = await executeAgent(MULTI_AGENT_NAME);
       expect(execResult.success).toBe(true);
 
       // Trigger two different gatekeeper blocks
       await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
         element_type: 'agent',
-        params: { element_name: 'multi-agent' },
+        params: { element_name: MULTI_AGENT_NAME },
       });
       await mcpAqlHandler.handleUpdate({
         operation: 'edit_element',
         element_type: 'agent',
-        params: { element_name: 'multi-agent', input: { description: 'modified' } },
+        params: { element_name: MULTI_AGENT_NAME, input: { description: 'modified' } },
       });
 
       // Record step — should include both blocks as notifications
-      const stepResult = await recordStep('multi-agent', 'Step after blocks');
+      const stepResult = await recordStep(MULTI_AGENT_NAME, 'Step after blocks');
       expect(stepResult.success).toBe(true);
 
       const notifications = getNotifications(stepResult);
       expect(notifications).toBeDefined();
+      if (!notifications) {
+        throw new Error('Expected multiple permission notifications');
+      }
 
-      const permissionNotifications = notifications!.filter(
+      const permissionNotifications = notifications.filter(
         (n: Record<string, unknown>) => n.type === 'permission_pending'
       );
       expect(permissionNotifications.length).toBeGreaterThanOrEqual(2);
 
       const operations = permissionNotifications.map(
-        (n: Record<string, unknown>) => (n.metadata as Record<string, unknown>)?.operation
+        (n: Record<string, unknown>) => (n.metadata as Record<string, unknown>).operation
       );
       expect(operations).toContain('delete_element');
       expect(operations).toContain('edit_element');
     });
   });
 
-  describe('DangerZone broadcast', () => {
-    it('should broadcast danger_zone notification to other executing agents', async () => {
+  describe('DangerZone notification isolation', () => {
+    it('should not leak a danger_zone notification to another agent', async () => {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
 
       // Ensure no stale blocks from prior runs
       dangerZone.clearAll();
 
       // Create two agents
-      await createAgent('dz-blocked-agent', {
+      await createAgent(DZ_BLOCKED_AGENT_NAME, {
         gatekeeper: { allow: ['*'] },
       });
       await createAgent('dz-observer-agent', {
@@ -331,7 +380,7 @@ describe('Agent Notification System', () => {
       });
 
       // Execute both agents
-      const exec1 = await executeAgent('dz-blocked-agent');
+      const exec1 = await executeAgent(DZ_BLOCKED_AGENT_NAME);
       expect(exec1.success).toBe(true);
       const exec2 = await executeAgent('dz-observer-agent');
       expect(exec2.success).toBe(true);
@@ -339,33 +388,120 @@ describe('Agent Notification System', () => {
       try {
         // Block the first agent via DangerZoneEnforcer directly
         dangerZone.block(
-          'dz-blocked-agent',
-          'Dangerous pattern detected in agent actions',
-          ['rm -rf /'],
+          DZ_BLOCKED_AGENT_NAME,
+          'Beetlejuice test trigger',
+          ['beetlejuice_beetlejuice_beetlejuice'],
           'verify-test-123'
         );
 
-        // Record step on the OBSERVER agent — should receive danger_zone notification
+        // Record a clean step on the observer. The other agent's block remains
+        // enforced, but it is not part of this execution response.
         const stepResult = await recordStep('dz-observer-agent', 'Checking for alerts');
         expect(stepResult.success).toBe(true);
 
         const notifications = getNotifications(stepResult);
-        expect(notifications).toBeDefined();
-
-        const dangerNotification = notifications!.find(
+        const dangerNotification = notifications?.find(
           (n: Record<string, unknown>) => n.type === 'danger_zone'
         );
-        expect(dangerNotification).toBeDefined();
-        expect(dangerNotification!.message).toContain('dz-blocked-agent');
-        expect(dangerNotification!.message).toContain('danger zone');
-
-        const metadata = dangerNotification!.metadata as Record<string, unknown>;
-        expect(metadata.agentName).toBe('dz-blocked-agent');
-        expect(metadata.reason).toContain('Dangerous pattern');
-        expect(metadata.verificationId).toBe('verify-test-123');
+        expect(dangerNotification).toBeUndefined();
+        expect(dangerZone.check(DZ_BLOCKED_AGENT_NAME).blocked).toBe(true);
       } finally {
         // Always clean up the block regardless of test outcome
-        dangerZone.unblock('dz-blocked-agent');
+        dangerZone.unblock(DZ_BLOCKED_AGENT_NAME, 'verify-test-123');
+      }
+    });
+
+    it('should report a current-agent danger_zone event with its source timestamp', async () => {
+      const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      await createAgent(DZ_CURRENT_AGENT_NAME, {
+        gatekeeper: { allow: ['*'] },
+        autonomy: { maxAutonomousSteps: 0 },
+      });
+      const execResult = await executeAgent(DZ_CURRENT_AGENT_NAME);
+      expect(execResult.success).toBe(true);
+
+      const recordSpy = injectBeetlejuiceBlockOnNextStep();
+
+      try {
+        const stepResult = await recordStep(
+          DZ_CURRENT_AGENT_NAME,
+          'Recorded a safe test step',
+          'success',
+        );
+        expect(stepResult.success).toBe(true);
+
+        const notifications = getNotifications(stepResult);
+        const dangerNotification = notifications?.find(
+          (notification: Record<string, unknown>) => notification.type === 'danger_zone',
+        );
+        expect(dangerNotification).toBeDefined();
+        if (!dangerNotification) {
+          throw new Error('Expected a danger-zone notification');
+        }
+
+        const blockCheck = dangerZone.check(DZ_CURRENT_AGENT_NAME);
+        const metadata = dangerNotification.metadata as Record<string, unknown>;
+        const resultData = stepResult.data as Record<string, unknown>;
+        const decision = resultData.decision as Record<string, unknown>;
+        expect(blockCheck.blocked).toBe(true);
+        expect(dangerNotification.timestamp).toBe(blockCheck.blockedAt);
+        expect(metadata.agentName).toBe(DZ_CURRENT_AGENT_NAME);
+        expect(metadata.eventId).toBe(blockCheck.eventId);
+        expect(metadata.goalId).toBe(decision.goalId);
+        expect(metadata.verificationId).toBe(blockCheck.verificationId);
+      } finally {
+        recordSpy.mockRestore();
+        dangerZone.unblock(DZ_CURRENT_AGENT_NAME, 'beetlejuice-verification-id');
+      }
+    });
+
+    it('should not report a block owned by another goal', async () => {
+      const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      await createAgent(DZ_GOAL_SCOPE_AGENT_NAME, {
+        gatekeeper: { allow: ['*'] },
+        autonomy: { maxAutonomousSteps: 0 },
+      });
+      expect((await executeAgent(DZ_GOAL_SCOPE_AGENT_NAME)).success).toBe(true);
+      const recordSpy = injectBeetlejuiceBlockOnNextStep({ goalId: 'another-goal' });
+
+      try {
+        const stepResult = await recordStep(DZ_GOAL_SCOPE_AGENT_NAME, 'Recorded a safe test step');
+        const dangerNotification = getNotifications(stepResult)?.find(
+          notification => notification.type === 'danger_zone',
+        );
+        expect(stepResult.success).toBe(true);
+        expect(dangerNotification).toBeUndefined();
+        expect(dangerZone.check(DZ_GOAL_SCOPE_AGENT_NAME).blocked).toBe(true);
+      } finally {
+        recordSpy.mockRestore();
+        dangerZone.unblock(DZ_GOAL_SCOPE_AGENT_NAME, 'beetlejuice-verification-id');
+      }
+    });
+
+    it('should not report a block owned by another session', async () => {
+      const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      await createAgent(DZ_SESSION_SCOPE_AGENT_NAME, {
+        gatekeeper: { allow: ['*'] },
+        autonomy: { maxAutonomousSteps: 0 },
+      });
+      expect((await executeAgent(DZ_SESSION_SCOPE_AGENT_NAME)).success).toBe(true);
+      const recordSpy = injectBeetlejuiceBlockOnNextStep({ sessionId: 'another-session' });
+
+      try {
+        const stepResult = await recordStep(DZ_SESSION_SCOPE_AGENT_NAME, 'Recorded a safe test step');
+        const dangerNotification = getNotifications(stepResult)?.find(
+          notification => notification.type === 'danger_zone',
+        );
+        expect(stepResult.success).toBe(true);
+        expect(dangerNotification).toBeUndefined();
+        expect(dangerZone.check(DZ_SESSION_SCOPE_AGENT_NAME).blocked).toBe(true);
+      } finally {
+        recordSpy.mockRestore();
+        dangerZone.unblock(
+          DZ_SESSION_SCOPE_AGENT_NAME,
+          'beetlejuice-verification-id',
+          'another-session',
+        );
       }
     });
   });

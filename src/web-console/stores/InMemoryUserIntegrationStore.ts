@@ -56,6 +56,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         id: randomUUID(),
         userId: input.userId,
         provider: input.provider,
+        integrationDescriptorId: input.integrationDescriptorId ?? null,
         externalAccountLabel: input.externalAccountLabel,
         externalInstallationId: input.externalInstallationId,
         authorizedPermissions: input.authorizedPermissions,
@@ -99,6 +100,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         id: randomUUID(),
         userId: input.userId,
         provider: input.provider,
+        integrationDescriptorId: input.integrationDescriptorId ?? null,
         externalAccountLabel: null,
         externalInstallationId: null,
         authorizedPermissions: defaultAuthorizedPermissions(input.provider),
@@ -142,6 +144,42 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     });
   }
 
+  async revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number> {
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    const targets = new Map<string, { readonly userId: string; readonly provider: UserIntegrationProvider }>();
+    for (const record of this.records.values()) {
+      if (record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
+      targets.set(activeProviderKey(record.userId, record.provider), {
+        userId: record.userId,
+        provider: record.provider,
+      });
+    }
+    let revoked = 0;
+    for (const { userId, provider } of targets.values()) {
+      revoked += await this.withProviderMutationLock(userId, provider, () => {
+        let providerRevoked = 0;
+        for (const record of this.records.values()) {
+          if (record.userId !== userId || record.provider !== provider
+              || record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
+          const revokedRecord: UserIntegrationRecord = {
+            ...record,
+            accessTokenCiphertext: null,
+            refreshTokenCiphertext: null,
+            status: 'revoked',
+            errorReason: null,
+            revokedAt,
+          };
+          validateUserIntegrationRecord(revokedRecord);
+          this.records.set(record.id, cloneUserIntegrationRecord(revokedRecord));
+          providerRevoked += 1;
+        }
+        this.activeProviderIndex.delete(activeProviderKey(userId, provider));
+        return providerRevoked;
+      });
+    }
+    return revoked;
+  }
+
   private set(record: UserIntegrationRecord): void {
     validateUserIntegrationRecord(record);
     const cloned = cloneUserIntegrationRecord(record);
@@ -172,7 +210,8 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   private async refreshLocked(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
     const activeId = this.activeProviderIndex.get(activeProviderKey(input.userId, input.provider));
     const active = activeId ? this.records.get(activeId) : null;
-    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext) {
+    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext
+        || (active.integrationDescriptorId ?? null) !== input.integrationDescriptorId) {
       return { kind: 'missing', record: null };
     }
     if (!active.accessTokenCiphertext.equals(input.staleAccessTokenCiphertext)) {

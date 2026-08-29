@@ -20,7 +20,7 @@ import {
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
-import { ElementCrudContext } from './types.js';
+import type { ElementCrudContext } from './types.js';
 import { logger } from '../../utils/logger.js';
 // FIX: Issue #281 - SecurityMonitor import removed, persona logging now in PersonaManager.create()
 import {
@@ -30,6 +30,14 @@ import {
 } from './responseFormatter.js';
 import type { McpToolResponse } from './responseFormatter.js';
 import type { EnsembleElement } from '../../elements/ensembles/types.js';
+
+const DUPLICATE_ELEMENT_ERROR_FRAGMENT = 'already exists';
+const CATEGORY_TYPES = new Set([
+  ElementType.PERSONA,
+  ElementType.SKILL,
+  ElementType.TEMPLATE,
+  ElementType.MEMORY,
+]);
 
 /**
  * Arguments for creating a new element.
@@ -150,6 +158,311 @@ function addPersonaIndicator(response: McpToolResponse, indicator: string) {
   };
 }
 
+interface ValidatedCreateInput {
+  validatedName: string;
+  validatedDescription: string;
+  content?: string;
+  instructions?: string;
+  sanitized: Record<string, any>;
+  warningText: string;
+}
+
+function formatCreatedResponse(
+  context: ElementCrudContext,
+  warningText: string,
+  successMessage: string
+): McpToolResponse {
+  return {
+    content: [{
+      type: 'text',
+      text: `${context.getPersonaIndicator()}${warningText}✅ ${successMessage}`,
+    }],
+  };
+}
+
+function formatCreateError(
+  context: ElementCrudContext,
+  error: unknown,
+  elementType: ElementType,
+  name: string
+): McpToolResponse {
+  const message = error instanceof Error ? error.message : String(error);
+  const errorResponse = message.includes(DUPLICATE_ELEMENT_ERROR_FRAGMENT)
+    ? formatDuplicateError(elementType, name)
+    : formatExceptionError(error, 'create', elementType, name);
+  return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
+}
+
+function validateCreateTextSize(
+  value: string | undefined,
+  label: 'Content' | 'Instructions'
+): McpToolResponse | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    validateContentSize(value, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const maximum = label === 'Content'
+      ? `${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${Math.floor(SECURITY_LIMITS.MAX_CONTENT_LENGTH / 1024)}KB)`
+      : `${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters`;
+    return {
+      content: [{
+        type: 'text',
+        text: `❌ ${label} too large: ${message}. Maximum allowed size is ${maximum}.`,
+      }],
+    };
+  }
+}
+
+function validateCreateTextFields(
+  content: string | undefined,
+  instructions: string | undefined
+): McpToolResponse | undefined {
+  return validateCreateTextSize(content, 'Content')
+    ?? validateCreateTextSize(instructions, 'Instructions');
+}
+
+function validateCreateCategory(
+  category: unknown,
+  normalizedType: ElementType
+): McpToolResponse | undefined {
+  if (!category || !CATEGORY_TYPES.has(normalizedType)) {
+    return undefined;
+  }
+  try {
+    validateCategory(category as string);
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return formatSimpleErrorResponse(`Invalid category '${formatCategoryValue(category)}': ${message}`);
+  }
+}
+
+function formatCategoryValue(category: unknown): string {
+  if (typeof category === 'string') {
+    return category;
+  }
+  if (category === null) {
+    return 'null';
+  }
+  if (typeof category === 'number' || typeof category === 'boolean' || typeof category === 'bigint') {
+    return category.toString();
+  }
+  if (category === undefined || typeof category === 'function') {
+    return typeof category;
+  }
+  if (typeof category === 'symbol') {
+    return category.description ? `Symbol(${category.description})` : 'Symbol';
+  }
+  try {
+    return JSON.stringify(category) || 'object';
+  } catch {
+    return 'object';
+  }
+}
+
+function logUnknownCreateMetadata(
+  normalizedType: ElementType,
+  name: string,
+  unknownPropertyWarnings: ReturnType<typeof detectUnknownMetadataProperties>
+): void {
+  if (unknownPropertyWarnings.length === 0) {
+    return;
+  }
+  logger.warn('[createElement] Unknown metadata properties detected', {
+    elementType: normalizedType,
+    elementName: name,
+    warningCount: unknownPropertyWarnings.length,
+    unknownProperties: unknownPropertyWarnings.map(warning => ({
+      property: warning.property,
+      suggestion: warning.suggestion,
+    })),
+  });
+}
+
+async function createPersona(
+  context: ElementCrudContext,
+  input: ValidatedCreateInput
+): Promise<McpToolResponse> {
+  try {
+    const persona = await context.personaManager.create({
+      ...input.sanitized,
+      name: input.validatedName,
+      description: input.validatedDescription,
+      instructions: input.instructions,
+      content: input.content,
+    });
+    return formatCreatedResponse(
+      context,
+      input.warningText,
+      `Created persona '${persona.metadata.name}' successfully`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('instructions are required')) {
+      return formatSimpleErrorResponse(message);
+    }
+    return formatCreateError(context, error, ElementType.PERSONA, input.validatedName);
+  }
+}
+
+async function createSkill(
+  context: ElementCrudContext,
+  input: ValidatedCreateInput
+): Promise<McpToolResponse> {
+  try {
+    const skill = await context.skillManager.create({
+      name: input.validatedName,
+      description: input.validatedDescription,
+      ...input.sanitized,
+      instructions: input.instructions,
+      content: input.content || '',
+    });
+    return formatCreatedResponse(
+      context,
+      input.warningText,
+      `Created skill '${skill.metadata.name}' successfully`
+    );
+  } catch (error) {
+    return formatCreateError(context, error, ElementType.SKILL, input.validatedName);
+  }
+}
+
+async function createTemplate(
+  context: ElementCrudContext,
+  input: ValidatedCreateInput
+): Promise<McpToolResponse> {
+  try {
+    const template = await context.templateManager.create({
+      name: input.validatedName,
+      description: input.validatedDescription,
+      instructions: input.instructions,
+      content: input.content || '',
+      metadata: input.sanitized,
+    });
+    return formatCreatedResponse(
+      context,
+      input.warningText,
+      `Created template '${template.metadata.name}' successfully`
+    );
+  } catch (error) {
+    return formatCreateError(context, error, ElementType.TEMPLATE, input.validatedName);
+  }
+}
+
+async function createAgent(
+  context: ElementCrudContext,
+  input: ValidatedCreateInput
+): Promise<McpToolResponse> {
+  try {
+    const agent = await context.agentManager.create(
+      input.validatedName,
+      input.validatedDescription,
+      input.instructions || '',
+      { ...input.sanitized, content: input.content || '' }
+    );
+    if (!agent.success) {
+      const failureReason = agent.message || 'Unknown error';
+      return formatSimpleErrorResponse(`Failed to create agent: ${failureReason}`);
+    }
+    const baseMessage = agent.message.toLowerCase().includes('created agent')
+      ? agent.message
+      : `Created agent '${input.validatedName}' successfully`;
+    return formatCreatedResponse(context, input.warningText, baseMessage);
+  } catch (error) {
+    return formatCreateError(context, error, ElementType.AGENT, input.validatedName);
+  }
+}
+
+async function createMemory(
+  context: ElementCrudContext,
+  input: ValidatedCreateInput
+): Promise<McpToolResponse> {
+  try {
+    const memory = await context.memoryManager.create({
+      ...input.sanitized,
+      name: input.validatedName,
+      description: input.validatedDescription,
+      content: input.content,
+      instructions: input.instructions,
+    });
+    return formatCreatedResponse(
+      context,
+      input.warningText,
+      `Created memory '${memory.metadata.name}' successfully`
+    );
+  } catch (error) {
+    return formatCreateError(context, error, ElementType.MEMORY, input.validatedName);
+  }
+}
+
+async function createEnsemble(
+  context: ElementCrudContext,
+  input: ValidatedCreateInput
+): Promise<McpToolResponse> {
+  try {
+    const resolutionResult = await resolveElementTypes(
+      input.sanitized.elements || [],
+      {
+        skillManager: context.skillManager,
+        templateManager: context.templateManager,
+        agentManager: context.agentManager,
+        memoryManager: context.memoryManager,
+        personaManager: context.personaManager,
+        ensembleManager: context.ensembleManager,
+      }
+    );
+    const resolutionWarningText = formatElementResolutionWarnings(resolutionResult);
+    const ensemble = await context.ensembleManager.create({
+      ...input.sanitized,
+      name: input.validatedName,
+      description: input.validatedDescription,
+      elements: resolutionResult.resolved,
+      instructions: input.instructions,
+      content: input.content,
+    });
+    return formatCreatedResponse(
+      context,
+      `${input.warningText}${resolutionWarningText}`,
+      `Created ensemble '${ensemble.metadata.name}' successfully`
+    );
+  } catch (error) {
+    return formatCreateError(context, error, ElementType.ENSEMBLE, input.validatedName);
+  }
+}
+
+function createNormalizedElement(
+  context: ElementCrudContext,
+  normalizedType: ElementType,
+  input: ValidatedCreateInput,
+  originalType: string
+): Promise<McpToolResponse> | McpToolResponse {
+  switch (normalizedType) {
+    case ElementType.PERSONA:
+      return createPersona(context, input);
+    case ElementType.SKILL:
+      return createSkill(context, input);
+    case ElementType.TEMPLATE:
+      return createTemplate(context, input);
+    case ElementType.AGENT:
+      return createAgent(context, input);
+    case ElementType.MEMORY:
+      return createMemory(context, input);
+    case ElementType.ENSEMBLE:
+      return createEnsemble(context, input);
+    default:
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Element type '${originalType}' is not yet supported for creation`,
+        }],
+      };
+  }
+}
+
 export async function createElement(context: ElementCrudContext, args: CreateElementArgs) {
   await context.ensureInitialized();
 
@@ -179,35 +492,11 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     }
 
     const validatedName = sanitizeInput(name, SECURITY_LIMITS.MAX_FILENAME_LENGTH);
-    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_YAML_LENGTH);
+    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
 
-    if (content) {
-      try {
-        validateContentSize(content, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-      } catch (error: any) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Content too large: ${error.message}. Maximum allowed size is ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters (${Math.floor(SECURITY_LIMITS.MAX_CONTENT_LENGTH / 1024)}KB).`
-          }]
-        };
-      }
-    }
-
-    // Issue #602 resolved: Both 'instructions' and 'content' are first-class fields.
-    // instructions = behavioral directives (command voice, "You ARE...", "ALWAYS...")
-    // content = reference material (informational, domain knowledge, examples)
-    if (instructions) {
-      try {
-        validateContentSize(instructions, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-      } catch (error: any) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Instructions too large: ${error.message}. Maximum allowed size is ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters.`
-          }]
-        };
-      }
+    const textSizeError = validateCreateTextFields(content, instructions);
+    if (textSizeError) {
+      return textSizeError;
     }
 
     // Element-specific fields (ensemble elements, agent V2 fields) are merged into
@@ -219,17 +508,9 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
       return formatSimpleErrorResponse(formatGatekeeperValidationMessage(gatekeeperErrors));
     }
 
-    // Issue #621: Validate category format for element types that support it
-    // Persona also supports categories (validated internally by PersonaManager) — include here for consistent early error reporting
-    const CATEGORY_TYPES = new Set([ElementType.PERSONA, ElementType.SKILL, ElementType.TEMPLATE, ElementType.MEMORY]);
-    if (sanitized.category && CATEGORY_TYPES.has(normalizedType)) {
-      try {
-        validateCategory(sanitized.category as string);
-      } catch (categoryError: any) {
-        return formatSimpleErrorResponse(
-          `Invalid category '${sanitized.category}': ${categoryError.message}`
-        );
-      }
+    const categoryError = validateCreateCategory(sanitized.category, normalizedType);
+    if (categoryError) {
+      return categoryError;
     }
 
     // Detect unknown metadata properties and generate warnings for LLM feedback
@@ -239,186 +520,15 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     );
     const warningText = formatUnknownPropertyWarnings(unknownPropertyWarnings);
 
-    // Log warnings for debugging with structured data for better observability
-    if (unknownPropertyWarnings.length > 0) {
-      logger.warn(`[createElement] Unknown metadata properties detected`, {
-        elementType: normalizedType,
-        elementName: name,
-        warningCount: unknownPropertyWarnings.length,
-        unknownProperties: unknownPropertyWarnings.map(w => ({
-          property: w.property,
-          suggestion: w.suggestion
-        }))
-      });
-    }
-
-    switch (normalizedType) {
-      case ElementType.PERSONA: {
-        try {
-          // Issue #602: Both 'instructions' and 'content' are first-class fields.
-          const persona = await context.personaManager.create({
-            ...sanitized,
-            name: validatedName,
-            description: validatedDescription,
-            instructions: instructions,
-            content: content,
-          });
-
-          const successMsg = `${warningText}✅ Created persona '${persona.metadata.name}' successfully`;
-          return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };
-        } catch (personaError) {
-          const message = personaError instanceof Error ? personaError.message : String(personaError);
-          if (message.includes('instructions are required')) {
-            return formatSimpleErrorResponse(message);
-          }
-          const errorResponse = message.includes('already exists')
-            ? formatDuplicateError(ElementType.PERSONA, validatedName)
-            : formatExceptionError(personaError, 'create', ElementType.PERSONA, validatedName);
-          return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
-        }
-      }
-
-      case ElementType.SKILL: {
-        // FIX: Issue #20 - Catch duplicate errors from SkillManager
-        try {
-          const skill = await context.skillManager.create({
-            name: validatedName,
-            description: validatedDescription,
-            ...sanitized,
-            instructions: instructions,
-            content: content || ''
-          });
-          const successMsg = `${warningText}✅ Created skill '${skill.metadata.name}' successfully`;
-          return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };
-        } catch (skillError) {
-          // Check if it's a duplicate error
-          const message = skillError instanceof Error ? skillError.message : String(skillError);
-          const errorResponse = message.includes('already exists')
-            ? formatDuplicateError(ElementType.SKILL, validatedName)
-            : formatExceptionError(skillError, 'create', ElementType.SKILL, validatedName);
-          return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
-        }
-      }
-
-      case ElementType.TEMPLATE: {
-        // FIX: Issue #20 - Catch duplicate errors from TemplateManager
-        try {
-          const template = await context.templateManager.create({
-            name: validatedName,
-            description: validatedDescription,
-            instructions: instructions,
-            content: content || '',
-            metadata: sanitized,
-          });
-          const successMsg = `${warningText}✅ Created template '${template.metadata.name}' successfully`;
-          return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };
-        } catch (templateError) {
-          // Check if it's a duplicate error
-          const message = templateError instanceof Error ? templateError.message : String(templateError);
-          const errorResponse = message.includes('already exists')
-            ? formatDuplicateError(ElementType.TEMPLATE, validatedName)
-            : formatExceptionError(templateError, 'create', ElementType.TEMPLATE, validatedName);
-          return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
-        }
-      }
-
-      case ElementType.AGENT: {
-        // V2 fields are merged into metadata by the dispatcher (MCPAQLHandler).
-        // Goal normalization (string→object) is handled by AgentManager.create().
-        try {
-          // Issue #722: v2 dual-field architecture — each field goes where it belongs.
-          // AgentManager.create() 3rd param = behavioral directives (agent.instructions).
-          // metadata.content = reference material (markdown body after frontmatter).
-          const agentInstructions = instructions || '';
-          const agentContent = content || '';
-          const agent = await context.agentManager.create(
-            validatedName,
-            validatedDescription,
-            agentInstructions,
-            { ...sanitized, content: agentContent }
-          );
-          if (agent.success) {
-            const baseMessage = agent.message && agent.message.toLowerCase().includes('created agent')
-              ? agent.message
-              : `Created agent '${validatedName}' successfully`;
-            const successMsg = `${warningText}✅ ${baseMessage}`;
-            return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };
-          }
-          // FIX: Issue #20 - Include "failed to create" in error message for test compatibility
-          const failureReason = agent.message || 'Unknown error';
-          return formatSimpleErrorResponse(`Failed to create agent: ${failureReason}`);
-        } catch (agentError) {
-          const message = agentError instanceof Error ? agentError.message : String(agentError);
-          const errorResponse = message.includes('already exists')
-            ? formatDuplicateError(ElementType.AGENT, validatedName)
-            : formatExceptionError(agentError, 'create', ElementType.AGENT, validatedName);
-          return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
-        }
-      }
-
-      case ElementType.MEMORY: {
-        try {
-          const memory = await context.memoryManager.create({
-            ...sanitized,
-            name: validatedName,
-            description: validatedDescription,
-            content: content,
-            instructions: instructions,
-          });
-          const successMsg = `${warningText}✅ Created memory '${memory.metadata.name}' successfully`;
-          return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };
-        } catch (memoryError) {
-          const message = memoryError instanceof Error ? memoryError.message : String(memoryError);
-          const errorResponse = message.includes('already exists')
-            ? formatDuplicateError(ElementType.MEMORY, validatedName)
-            : formatExceptionError(memoryError, 'create', ElementType.MEMORY, validatedName);
-          return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
-        }
-      }
-
-      case ElementType.ENSEMBLE: {
-        try {
-          // Issue #466: Resolve missing element_type via portfolio lookup before create
-          const resolutionResult = await resolveElementTypes(
-            sanitized.elements || [],
-            {
-              skillManager: context.skillManager,
-              templateManager: context.templateManager,
-              agentManager: context.agentManager,
-              memoryManager: context.memoryManager,
-              personaManager: context.personaManager,
-              ensembleManager: context.ensembleManager,
-            }
-          );
-          const resolutionWarningText = formatElementResolutionWarnings(resolutionResult);
-
-          const ensemble = await context.ensembleManager.create({
-            ...sanitized,
-            name: validatedName,
-            description: validatedDescription,
-            elements: resolutionResult.resolved,
-            instructions: instructions,
-            content: content,
-          });
-          const successMsg = `${warningText}${resolutionWarningText}✅ Created ensemble '${ensemble.metadata.name}' successfully`;
-          return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };
-        } catch (ensembleError) {
-          const message = ensembleError instanceof Error ? ensembleError.message : String(ensembleError);
-          const errorResponse = message.includes('already exists')
-            ? formatDuplicateError(ElementType.ENSEMBLE, validatedName)
-            : formatExceptionError(ensembleError, 'create', ElementType.ENSEMBLE, validatedName);
-          return addPersonaIndicator(errorResponse, context.getPersonaIndicator());
-        }
-      }
-
-      default:
-        return {
-          content: [{
-            type: "text",
-            text: `❌ Element type '${type}' is not yet supported for creation`
-          }]
-        };
-    }
+    logUnknownCreateMetadata(normalizedType, name, unknownPropertyWarnings);
+    return await createNormalizedElement(context, normalizedType, {
+      validatedName,
+      validatedDescription,
+      content,
+      instructions,
+      sanitized,
+      warningText,
+    }, type);
   } catch (error) {
     logger.error('ElementCRUDHandler.createElement', error);
     const message = error instanceof Error ? error.message : 'Unknown error';

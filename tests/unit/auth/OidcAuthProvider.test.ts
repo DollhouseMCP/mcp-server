@@ -26,6 +26,7 @@ import {
 } from 'jose';
 import { OidcAuthProvider } from '../../../src/auth/OidcAuthProvider.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { logger } from '../../../src/utils/logger.js';
 
 const ISSUER = 'https://tenant.example.com/';
 const AUDIENCE = 'mcp-resource';
@@ -160,9 +161,9 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     const r2 = await provider.validate(wrongAudToken);
     const r3 = await provider.validate(wrongIssToken);
 
-    expect(r1.ok && 'token expired').toBe(false); // ok=false
-    expect(r2.ok && 'invalid audience').toBe(false);
-    expect(r3.ok && 'invalid issuer').toBe(false);
+    expect(r1.ok).toBe(false);
+    expect(r2.ok).toBe(false);
+    expect(r3.ok).toBe(false);
     if (!r1.ok) expect(r1.reason).toBe('token expired');
     if (!r2.ok) expect(r2.reason).toBe('invalid audience');
     if (!r3.ok) expect(r3.reason).toBe('invalid issuer');
@@ -255,11 +256,40 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
   });
 
   describe('cycle 19 / security-#6: opt-in RFC 9068 typ enforcement', () => {
+    it('warns when typ enforcement is disabled for a non-local issuer', () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Access-token typ enforcement is disabled'),
+        { issuer: ISSUER }
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn for a loopback issuer', () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      new OidcAuthProvider({
+        issuer: 'http://127.0.0.1:8080/',
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
     it('default (option off): accepts a token with no typ header (compat with most IdPs)', async () => {
       // The cycle 19 fix is opt-in. Default behavior must preserve
       // compat with Auth0/Okta/Keycloak/Cognito, which typically don't
       // stamp typ on access tokens.
-      const token = await mintTokenWithTyp(signKey, undefined);
+      const token = await mintTokenWithTyp(signKey);
       const result = await provider.validate(token);
       expect(result.ok).toBe(true);
     });
@@ -293,7 +323,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         jwksGetter: verifyJwks,
         requireAccessTokenTyp: true,
       });
-      const token = await mintTokenWithTyp(signKey, undefined);
+      const token = await mintTokenWithTyp(signKey);
       const result = await strict.validate(token);
       expect(result.ok).toBe(false);
     });

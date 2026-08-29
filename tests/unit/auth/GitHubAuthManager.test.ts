@@ -21,6 +21,7 @@ jest.mock('../../../src/security/securityMonitor.js', () => ({
 // Create a mock TokenManager instance with all required methods
 const mockTokenManagerInstance = {
   getGitHubTokenAsync: jest.fn(),
+  retrieveGitHubToken: jest.fn(),
   storeGitHubToken: jest.fn(),
   removeStoredToken: jest.fn(),
   validateToken: jest.fn(),
@@ -66,6 +67,8 @@ import { GitHubAuthManager } from '../../../src/auth/GitHubAuthManager.js';
 import { APICache } from '../../../src/cache/APICache.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
+const TEST_DEVICE_CODE = 'test-device-code';
+
 // OAuth error codes per RFC 6749/8628
 const GITHUB_OAUTH_ERRORS = {
   // Terminal errors - must propagate immediately
@@ -82,7 +85,7 @@ const GITHUB_OAUTH_ERRORS = {
 function mockOAuthResponse(mockFetch: jest.MockedFunction<typeof fetch>, error?: string, data?: any) {
   return mockFetch.mockResolvedValueOnce({
     ok: true,
-    json: async () => error ? { error } : data
+      json: () => error ? { error } : data
   } as Response);
 }
 
@@ -93,7 +96,7 @@ function mockNetworkError(mockFetch: jest.MockedFunction<typeof fetch>, message:
 function mockSuccessfulToken(mockFetch: jest.MockedFunction<typeof fetch>, token: string) {
   return mockFetch.mockResolvedValueOnce({
     ok: true,
-    json: async () => ({
+      json: () => ({
       access_token: token,
       token_type: 'bearer',
       scope: 'public_repo read:user'
@@ -111,9 +114,9 @@ async function expectSuccessfulAuth(promise: Promise<any>, expectedToken: string
 }
 
 function mockOAuthResponseIndefinitely(mockFetch: jest.MockedFunction<typeof fetch>, error: string) {
-  return mockFetch.mockImplementation(async () => ({
+    return mockFetch.mockImplementation(() => ({
     ok: true,
-    json: async () => ({ error })
+      json: () => ({ error })
   } as Response));
 }
 
@@ -131,6 +134,7 @@ describe('GitHubAuthManager', () => {
 
     // Reset all mocked TokenManager methods
     mockTokenManagerInstance.getGitHubTokenAsync.mockReset();
+    mockTokenManagerInstance.retrieveGitHubToken.mockReset();
     mockTokenManagerInstance.storeGitHubToken.mockReset();
     mockTokenManagerInstance.removeStoredToken.mockReset();
     mockTokenManagerInstance.validateToken.mockReset();
@@ -139,14 +143,14 @@ describe('GitHubAuthManager', () => {
 
     // Mock global fetch
     mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
-    global.fetch = mockFetch;
+    globalThis.fetch = mockFetch;
 
     // Create API cache
     apiCache = new APICache();
 
     // Mock ConfigManager with all required methods
     mockConfigManager = {
-      initialize: jest.fn().mockResolvedValue(undefined),
+      initialize: jest.fn().mockResolvedValue(),
       getGitHubClientId: jest.fn().mockReturnValue('test-client-id'),
     };
 
@@ -178,7 +182,7 @@ describe('GitHubAuthManager', () => {
         headers: {
           get: (name: string) => name === 'x-oauth-scopes' ? 'public_repo, read:user' : null
         } as any,
-        json: async () => mockUserInfo,
+          json: () => mockUserInfo,
       } as Response);
 
       const status = await authManager.getAuthStatus();
@@ -201,7 +205,7 @@ describe('GitHubAuthManager', () => {
   describe('initiateDeviceFlow', () => {
     it('should successfully initiate device flow', async () => {
       const mockResponse = {
-        device_code: 'test-device-code',
+        device_code: TEST_DEVICE_CODE,
         user_code: 'TEST-CODE',
         verification_uri: 'https://github.com/login/device',
         expires_in: 900,
@@ -214,7 +218,7 @@ describe('GitHubAuthManager', () => {
         headers: {
           get: () => null
         } as any,
-        json: async () => mockResponse
+        json: () => mockResponse
       } as Response);
 
       const result = await authManager.initiateDeviceFlow();
@@ -239,14 +243,14 @@ describe('GitHubAuthManager', () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ error: 'authorization_pending' })
+          json: () => ({ error: 'authorization_pending' })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockTokenResponse
+        json: () => mockTokenResponse
         } as Response);
 
-      const pollPromise = authManager.pollForToken('test-device-code', 100);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 100);
 
       // Advance timers to trigger the first poll
       await jest.advanceTimersByTimeAsync(100);
@@ -262,18 +266,18 @@ describe('GitHubAuthManager', () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ error: 'slow_down' })
+          json: () => ({ error: 'slow_down' })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ error: 'authorization_pending' })
+          json: () => ({ error: 'authorization_pending' })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ access_token: 'ghp_token' })
+        json: () => ({ access_token: 'ghp_token' })
         } as Response);
 
-      const pollPromise = authManager.pollForToken('test-device-code', 100);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 100);
 
       // Advance through multiple polling intervals
       await jest.advanceTimersByTimeAsync(100); // First poll (slow_down)
@@ -288,11 +292,11 @@ describe('GitHubAuthManager', () => {
     it('should throw on expired token', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ error: 'expired_token' })
+        json: () => ({ error: 'expired_token' })
       } as Response);
 
       // Don't use fake timers for this test - we want immediate execution
-      await expect(authManager.pollForToken('test-device-code', 100))
+      await expect(authManager.pollForToken(TEST_DEVICE_CODE, 100))
         .rejects
         .toThrow('The authorization code has expired');
     });
@@ -300,23 +304,23 @@ describe('GitHubAuthManager', () => {
     it('should throw on access denied', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ error: 'access_denied' })
+        json: () => ({ error: 'access_denied' })
       } as Response);
 
       // Don't use fake timers for this test - we want immediate execution
-      await expect(authManager.pollForToken('test-device-code', 100))
+      await expect(authManager.pollForToken(TEST_DEVICE_CODE, 100))
         .rejects
         .toThrow('Authorization was denied');
     });
 
     it('should be cancellable via cleanup', async () => {
       // Use real timers with short interval
-      mockFetch.mockImplementation(async () => ({
+      mockFetch.mockImplementation(() => ({
         ok: true,
-        json: async () => ({ error: 'authorization_pending' })
+        json: () => ({ error: 'authorization_pending' })
       } as Response));
 
-      const pollPromise = authManager.pollForToken('test-device-code', 50);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 50);
 
       // Give it time to start
       await new Promise(resolve => setTimeout(resolve, 75));
@@ -338,7 +342,7 @@ describe('GitHubAuthManager', () => {
       };
       const mockUserInfo = { login: 'newuser', email: 'user@example.com' };
 
-      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue(undefined);
+      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue();
       mockTokenManagerInstance.getTokenType.mockReturnValue('Personal');
 
       mockFetch.mockResolvedValueOnce({
@@ -346,7 +350,7 @@ describe('GitHubAuthManager', () => {
         headers: {
           get: (name: string) => name === 'x-oauth-scopes' ? 'public_repo, read:user' : null
         } as any,
-        json: async () => mockUserInfo
+          json: () => mockUserInfo
       } as Response);
 
       const result = await authManager.completeAuthentication(mockToken);
@@ -364,7 +368,7 @@ describe('GitHubAuthManager', () => {
   describe('clearAuthentication', () => {
     it('should remove stored token and clear cache', async () => {
       mockTokenManagerInstance.getGitHubTokenAsync.mockResolvedValue('ghp_token');
-      mockTokenManagerInstance.removeStoredToken.mockResolvedValue(undefined);
+      mockTokenManagerInstance.removeStoredToken.mockResolvedValue();
       mockTokenManagerInstance.getTokenPrefix.mockReturnValue('ghp');
 
       await authManager.clearAuthentication();
@@ -388,12 +392,12 @@ describe('GitHubAuthManager', () => {
   describe('cleanup', () => {
     it('should abort active polling and clear cache', async () => {
       // Use real timers with short interval
-      mockFetch.mockImplementation(async () => ({
+      mockFetch.mockImplementation(() => ({
         ok: true,
-        json: async () => ({ error: 'authorization_pending' })
+        json: () => ({ error: 'authorization_pending' })
       } as Response));
 
-      const pollPromise = authManager.pollForToken('test-device-code', 50);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 50);
 
       // Give it time to start
       await new Promise(resolve => setTimeout(resolve, 75));
@@ -426,7 +430,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.EXPIRED_TOKEN);
 
       await expectTerminalError(
-        authManager.pollForToken('test-device-code', 100),
+        authManager.pollForToken(TEST_DEVICE_CODE, 100),
         /authorization code has expired/i
       );
 
@@ -438,7 +442,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.ACCESS_DENIED);
 
       await expectTerminalError(
-        authManager.pollForToken('test-device-code', 100),
+        authManager.pollForToken(TEST_DEVICE_CODE, 100),
         /authorization was denied/i
       );
 
@@ -449,7 +453,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.UNSUPPORTED_GRANT_TYPE);
 
       await expectTerminalError(
-        authManager.pollForToken('test-device-code', 100),
+        authManager.pollForToken(TEST_DEVICE_CODE, 100),
         /authentication failed.*please try starting/i
       );
     });
@@ -458,7 +462,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.INVALID_GRANT);
 
       await expectTerminalError(
-        authManager.pollForToken('test-device-code', 100),
+        authManager.pollForToken(TEST_DEVICE_CODE, 100),
         /authentication failed.*please try starting/i
       );
     });
@@ -471,7 +475,7 @@ describe('GitHubAuthManager', () => {
       // Second call: success
       mockSuccessfulToken(mockFetch, 'ghp_success_token');
 
-      const pollPromise = authManager.pollForToken('test-device-code', 100);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 100);
 
       await jest.advanceTimersByTimeAsync(100);
 
@@ -486,7 +490,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
       mockSuccessfulToken(mockFetch, 'ghp_final_token');
 
-      const pollPromise = authManager.pollForToken('test-device-code', 100);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 100);
 
       await jest.advanceTimersByTimeAsync(100); // First poll
       await jest.advanceTimersByTimeAsync(100); // Second poll
@@ -503,7 +507,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
       mockSuccessfulToken(mockFetch, 'ghp_slowed_token');
 
-      const pollPromise = authManager.pollForToken('test-device-code', 100);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 100);
 
       await jest.advanceTimersByTimeAsync(100); // First poll (slow_down)
       await jest.advanceTimersByTimeAsync(150); // Increased interval
@@ -522,7 +526,7 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponseIndefinitely(mockFetch, GITHUB_OAUTH_ERRORS.AUTHORIZATION_PENDING);
 
       // Start polling with short interval
-      const pollPromise = authManager.pollForToken('test-device-code', 10);
+      const pollPromise = authManager.pollForToken(TEST_DEVICE_CODE, 10);
 
       // Advance time beyond max attempts (180 * 10ms = 1800ms)
       await jest.advanceTimersByTimeAsync(2000);
@@ -560,11 +564,40 @@ describe('GitHubAuthManager', () => {
       mockOAuthResponse(mockFetch, 'unknown_error_code');
 
       await expectTerminalError(
-        authManager.pollForToken('test-device-code', 100),
+        authManager.pollForToken(TEST_DEVICE_CODE, 100),
         /authentication failed/i
       );
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('importOAuthHelperToken (#2334 server-side handoff import)', () => {
+    it('stores the token and confirms it through the session store', async () => {
+      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue();
+      mockTokenManagerInstance.retrieveGitHubToken.mockResolvedValue('ghp_imported_token');
+
+      await expect(authManager.importOAuthHelperToken('ghp_imported_token')).resolves.toBeUndefined();
+      expect(mockTokenManagerInstance.storeGitHubToken).toHaveBeenCalledWith('ghp_imported_token');
+      expect(mockTokenManagerInstance.retrieveGitHubToken).toHaveBeenCalled();
+    });
+
+    it('throws when the store cannot retrieve the token even if GITHUB_TOKEN is set in env (#5)', async () => {
+      // Store write "resolves" but the session store has nothing (e.g. a silently
+      // failed database write). An env var must NOT be allowed to mask this.
+      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue();
+      mockTokenManagerInstance.retrieveGitHubToken.mockResolvedValue(null);
+      const originalEnv = process.env.GITHUB_TOKEN;
+      process.env.GITHUB_TOKEN = 'ghp_env_would_have_masked_this';
+      try {
+        await expect(authManager.importOAuthHelperToken('ghp_imported_token'))
+          .rejects.toThrow(/token store|retrievable/i);
+        // Must verify via the store-only path, never the env-first getGitHubTokenAsync.
+        expect(mockTokenManagerInstance.getGitHubTokenAsync).not.toHaveBeenCalled();
+      } finally {
+        if (originalEnv === undefined) delete process.env.GITHUB_TOKEN;
+        else process.env.GITHUB_TOKEN = originalEnv;
+      }
     });
   });
 });

@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, lt, notExists, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, notExists, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
@@ -11,6 +11,8 @@ import {
 } from '../../../database/schema/index.js';
 import type {
   IRuntimeSessionControlStore,
+  RuntimeOperationalListQuery,
+  RuntimeOperationalPresencePage,
   RuntimeSessionHeartbeatInput,
   RuntimeSessionHeartbeatResult,
   RuntimeSessionListQuery,
@@ -26,6 +28,7 @@ import {
   cloneRuntimeTerminationAck,
   cloneRuntimeTerminationCommand,
   validateRuntimeListQuery,
+  validateRuntimeOperationalListQuery,
   validateRuntimeSessionHeartbeatInput,
   validateRuntimeSessionPresenceInput,
   validateRuntimeTerminationAckInput,
@@ -126,18 +129,33 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
     return rows.map(row => fromPresenceRow(row));
   }
 
-  async listOperationalPresence(query: RuntimeSessionListQuery = {}): Promise<RuntimeSessionPresence[]> {
-    const parsed = validateRuntimeListQuery(query);
+  // Known limitation: the keyset sorts/cursors on last_active_at, which a heartbeat
+  // mutates. A session that heartbeats above the page cursor between page requests can
+  // be skipped from a full paged sweep — acceptable for a live operational snapshot
+  // (it re-appears near the top on the next sweep), but callers doing an exhaustive
+  // cross-page audit should be aware it is best-effort, not a consistent point-in-time cut.
+  async listOperationalPresence(query: RuntimeOperationalListQuery = {}): Promise<RuntimeOperationalPresencePage> {
+    const parsed = validateRuntimeOperationalListQuery(query);
+    const conditions: SQL[] = [
+      eq(runtimeSessionPresence.status, parsed.status ?? 'active'),
+      gt(runtimeSessionPresence.leaseUntil, parsed.now),
+    ];
+    if (parsed.userId) conditions.push(eq(runtimeSessionPresence.userId, parsed.userId));
+    if (parsed.after) {
+      conditions.push(sql`(${runtimeSessionPresence.lastActiveAt}, ${runtimeSessionPresence.sessionId}) < (${parsed.after.lastActiveAt}::timestamptz, ${parsed.after.sessionId})`);
+    }
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(runtimeSessionPresence)
-        .where(and(
-          eq(runtimeSessionPresence.status, 'active'),
-          gt(runtimeSessionPresence.leaseUntil, parsed.now),
-        ))
-        .orderBy(desc(runtimeSessionPresence.lastActiveAt), runtimeSessionPresence.sessionId)
-        .limit(parsed.limit),
+        .where(and(...conditions))
+        .orderBy(desc(runtimeSessionPresence.lastActiveAt), desc(runtimeSessionPresence.sessionId))
+        .limit(parsed.limit + 1),
     );
-    return rows.map(row => fromPresenceRow(row));
+    const items = rows.slice(0, parsed.limit).map(row => fromPresenceRow(row));
+    const last = items.at(-1);
+    const nextCursor = rows.length > parsed.limit && last
+      ? { lastActiveAt: last.lastActiveAt, sessionId: last.sessionId }
+      : null;
+    return { items, nextCursor };
   }
 
   async createTerminationCommand(input: RuntimeTerminationCommandInput): Promise<RuntimeTerminationCommand> {
@@ -176,6 +194,16 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
         .limit(1),
     );
     return rows[0] ? fromAckRow(rows[0]) : null;
+  }
+
+  async getCommand(commandId: string): Promise<RuntimeTerminationCommand | null> {
+    assertUuid(commandId, 'commandId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(runtimeControlCommands)
+        .where(eq(runtimeControlCommands.commandId, commandId))
+        .limit(1),
+    );
+    return rows[0] ? fromCommandRow(rows[0]) : null;
   }
 }
 

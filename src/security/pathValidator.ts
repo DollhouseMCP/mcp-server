@@ -19,6 +19,8 @@ import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 
+const PATH_ACCESS_DENIED_MESSAGE = 'Path access denied';
+
 /**
  * Per-user allowlist for session-scoped PathValidator instances.
  * Specifies which directories the session's user can write to and
@@ -90,13 +92,7 @@ export class PathValidator {
         : this.allowedDirectories;
 
       const resolved = await Promise.all(
-        allowedDirs.map(async (dir) => {
-          try {
-            return await fs.realpath(dir);
-          } catch {
-            return dir;
-          }
-        })
+        allowedDirs.map(dir => PathValidator.resolveSymlinks(path.resolve(dir), dir))
       );
 
       return resolved;
@@ -113,8 +109,8 @@ export class PathValidator {
     );
 
     if (!isAllowed) {
-      logger.error('Path access denied', { path: userPath, realPath, allowedDirs });
-      throw new Error('Path access denied');
+      logger.error(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, realPath, allowedDirs });
+      throw new Error(PATH_ACCESS_DENIED_MESSAGE);
     }
   }
 
@@ -140,8 +136,8 @@ export class PathValidator {
       throw new Error('Path must be a non-empty string');
     }
 
-    // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
-    const cleanPath = userPath.replaceAll(/\u0000/g, ''); // NOSONAR
+    // Intentionally remove all null bytes before path normalization.
+    const cleanPath = userPath.replaceAll('\0', ''); // NOSONAR
     const normalizedPath = path.normalize(cleanPath);
     const resolvedPath = path.resolve(normalizedPath);
 
@@ -203,14 +199,9 @@ export class PathValidator {
   }
 
   private async validatePathIsWritable(realPath: string): Promise<void> {
-    this.resolvedWritableDirs ??= (async () => {
-      return Promise.all(
-        this.writableDirectories.map(async (dir) => {
-          try { return await fs.realpath(dir); }
-          catch { return dir; }
-        })
-      );
-    })();
+    this.resolvedWritableDirs ??= Promise.all(
+      this.writableDirectories.map(dir => PathValidator.resolveSymlinks(path.resolve(dir), dir))
+    );
     const writableDirs = await this.resolvedWritableDirs;
     const isWritable = writableDirs.some(dir =>
       realPath.startsWith(dir + path.sep) || realPath === dir
@@ -227,10 +218,12 @@ export class PathValidator {
 
   /** Set the root instance (called by DI container). Warns on re-set (prevents silent replacement). */
   static setRootInstance(instance: PathValidator): void {
-    if (PathValidator._rootInstance && PathValidator._rootInstance !== instance) {
-      if (process.env.NODE_ENV !== 'test') {
-        throw new Error('PathValidator root instance already set — cannot replace at runtime');
-      }
+    if (
+      PathValidator._rootInstance &&
+      PathValidator._rootInstance !== instance &&
+      process.env.NODE_ENV !== 'test'
+    ) {
+      throw new Error('PathValidator root instance already set — cannot replace at runtime');
     }
     PathValidator._rootInstance = instance;
   }
@@ -288,21 +281,36 @@ export class PathValidator {
   }
 
   private static async resolveParentSymlink(resolvedPath: string, userPath: string): Promise<string> {
-    const parentDir = path.dirname(resolvedPath);
-    try {
-      const realParent = await fs.realpath(parentDir);
+    let existingAncestor = resolvedPath;
+    const missingSegments: string[] = [];
 
-      if (realParent !== parentDir) {
-        logger.warn('Parent directory symlink detected and resolved', {
-          requestedPath: userPath,
-          parentDir,
-          realParent
-        });
+    for (;;) {
+      try {
+        const realAncestor = await fs.realpath(existingAncestor);
+        const realPath = path.join(realAncestor, ...missingSegments);
+
+        if (realPath !== resolvedPath) {
+          logger.warn('Path ancestor symlink detected and resolved', {
+            requestedPath: userPath,
+            resolvedPath,
+            realPath,
+          });
+        }
+
+        return realPath;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+          throw error;
+        }
+
+        const parent = path.dirname(existingAncestor);
+        if (parent === existingAncestor) {
+          return resolvedPath;
+        }
+        missingSegments.unshift(path.basename(existingAncestor));
+        existingAncestor = parent;
       }
-
-      return path.join(realParent, path.basename(resolvedPath));
-    } catch {
-      return resolvedPath;
     }
   }
 
@@ -318,8 +326,8 @@ export class PathValidator {
       throw new Error('allowedDir must be a non-empty string');
     }
 
-    // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
-    const cleanPath = absolutePath.replaceAll(/\u0000/g, ''); // NOSONAR
+    // Intentionally remove all null bytes before path normalization.
+    const cleanPath = absolutePath.replaceAll('\0', ''); // NOSONAR
     const normalizedPath = path.normalize(cleanPath);
     PathValidator.assertNoTraversal(normalizedPath, cleanPath, absolutePath);
 
@@ -340,8 +348,8 @@ export class PathValidator {
     const pathWithSep = normalizedPath + path.sep;
     const allowedDirWithSep = normalizedAllowedDir + path.sep;
     if (!pathWithSep.startsWith(allowedDirWithSep) && normalizedPath !== normalizedAllowedDir) {
-      logger.error('Path access denied', { path: userPath, allowedDir: normalizedAllowedDir });
-      throw new Error('Path access denied');
+      logger.error(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, allowedDir: normalizedAllowedDir });
+      throw new Error(PATH_ACCESS_DENIED_MESSAGE);
     }
   }
 
@@ -356,7 +364,7 @@ export class PathValidator {
 
       if (!realPathWithSep.startsWith(allowedDirWithSep) && realPath !== normalizedAllowedDir) {
         logger.error('Symlink target outside allowed directory', { path: userPath, realPath, allowedDir: normalizedAllowedDir });
-        throw new Error('Path access denied');
+        throw new Error(PATH_ACCESS_DENIED_MESSAGE);
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
@@ -388,8 +396,8 @@ export class PathValidator {
       throw new Error('allowedDir must be a non-empty string');
     }
 
-    // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
-    const cleanPath = userPath.replaceAll(/\u0000/g, ''); // NOSONAR
+    // Intentionally remove all null bytes before path normalization.
+    const cleanPath = userPath.replaceAll('\0', ''); // NOSONAR
     const normalizedPath = path.normalize(cleanPath);
     const resolvedPath = path.resolve(normalizedPath);
 
@@ -402,8 +410,8 @@ export class PathValidator {
 
     const resolvedAllowedDir = await fs.realpath(allowedDir).catch(() => allowedDir);
     if (!realPath.startsWith(resolvedAllowedDir + path.sep) && realPath !== resolvedAllowedDir) {
-      logger.error('Path access denied', { path: userPath, realPath, allowedDir: resolvedAllowedDir });
-      throw new Error('Path access denied');
+      logger.error(PATH_ACCESS_DENIED_MESSAGE, { path: userPath, realPath, allowedDir: resolvedAllowedDir });
+      throw new Error(PATH_ACCESS_DENIED_MESSAGE);
     }
 
     const instance = PathValidator._rootInstance;

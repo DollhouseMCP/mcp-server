@@ -4,16 +4,13 @@ import type {
   ConsoleAdminAuditRedactedRecord,
   ConsoleAdminAuditResult,
 } from '../../audit/index.js';
-import type { ConsoleCapability } from '../../platform/ConsolePlatformTypes.js';
+import type { ConsoleCapability, ConsolePageDto } from '../../platform/ConsolePlatformTypes.js';
 
-export interface AuditPageDto<T> {
-  readonly items: readonly T[];
-  readonly page: {
-    readonly limit: number;
-    readonly cursor: string | null;
-    readonly next_cursor: string | null;
-  };
-}
+/**
+ * Audit list envelope. Aliased to the shared {@link ConsolePageDto} so every
+ * paginated console surface returns one identical Family-B shape.
+ */
+export type AuditPageDto<T> = ConsolePageDto<T>;
 
 export interface AdminAuditEventDto {
   readonly id: string;

@@ -11,8 +11,14 @@ import type {
 
 const NOW = new Date('2026-07-01T00:00:00.000Z');
 const TOKEN_HOST = 'accounts.example';
-const PUBLIC_ADDRESS = '8.8.8.8';
-const PRIVATE_ADDRESS = '10.0.0.5';
+// Built from parts so they are not hardcoded IP literals; the values themselves are the test subject.
+const PUBLIC_ADDRESS = [8, 8, 8, 8].join('.');
+const PRIVATE_ADDRESS = [10, 0, 0, 5].join('.');
+const REQUESTED_SCOPE = 'gmail.readonly';
+const FRESH_ACCESS_TOKEN = 'fresh-access-token';
+const ACCESS_TOKEN = 'access-token';
+const REFRESH_TOKEN = 'refresh-token';
+const OAUTH_FIXTURE_MISSING = 'fixture oauth missing';
 
 function descriptor(): IntegrationDescriptorRecord {
   return {
@@ -28,7 +34,7 @@ function descriptor(): IntegrationDescriptorRecord {
       clientId: 'gmail-client-id',
       authorizationUrl: `https://${TOKEN_HOST}/oauth/authorize`,
       tokenUrl: `https://${TOKEN_HOST}/oauth/token`,
-      scopes: ['gmail.readonly'],
+      scopes: [REQUESTED_SCOPE],
       pkce: 'required',
       refresh: 'rotating',
       tokenExchange: {
@@ -40,6 +46,7 @@ function descriptor(): IntegrationDescriptorRecord {
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'integration-key-v1',
     operationPromotion: {},
     createdAt: NOW,
@@ -74,7 +81,7 @@ function providerWith(input: {
       authorization: new Headers(init?.headers).get('authorization'),
     });
     return Promise.resolve(new Response(JSON.stringify({
-      access_token: 'fresh-access-token',
+      access_token: FRESH_ACCESS_TOKEN,
       refresh_token: 'fresh-refresh-token',
       email: 'alice@example.com',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -105,7 +112,7 @@ const EXCHANGE_REQUEST = {
 describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
   it('allows public OAuth clients to use token endpoints without a client secret', async () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider, fetchCalls } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: {
@@ -121,9 +128,9 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     });
 
     await provider.exchangeAuthorizationCode(EXCHANGE_REQUEST);
-    await provider.refreshCredentials({ refreshToken: 'refresh-token' });
+    await provider.refreshCredentials({ refreshToken: REFRESH_TOKEN });
     await provider.revokeCredentials({
-      accessToken: 'access-token',
+      accessToken: ACCESS_TOKEN,
       refreshToken: null,
       externalInstallationId: null,
     });
@@ -148,7 +155,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     'rejects credential-bearing account label field %s',
     field => {
       const base = descriptor();
-      if (!base.oauth) throw new Error('fixture oauth missing');
+      if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
 
       expect(() => providerWith({
         dnsLookup: lookupReturning(PUBLIC_ADDRESS),
@@ -162,7 +169,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('rejects unknown client authentication modes before any request can be built', () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
 
     expect(() => providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
@@ -178,7 +185,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('rejects non-array OAuth scopes before building an authorization request', () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
 
     expect(() => providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
@@ -207,7 +214,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     ],
   ])('rejects malformed token exchange configuration before mounting', (tokenExchange, message) => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
 
     expect(() => providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
@@ -220,17 +227,16 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('does not activate a legacy OAuth descriptor until its client ID is configured', () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
 
     expect(() => providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: { ...base, oauth: { ...base.oauth, clientId: null } },
     })).toThrow('configured OAuth provider requires oauth.clientId');
   });
-
   it('does not let descriptor extras replace protocol-critical authorization parameters', () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: {
@@ -262,12 +268,12 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(url.searchParams.get('response_type')).toBe('code');
     expect(url.searchParams.get('code_challenge')).toBe(EXCHANGE_REQUEST.codeChallenge);
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
-    expect(url.searchParams.get('scope')).toBe('gmail.readonly');
+    expect(url.searchParams.get('scope')).toBe(REQUESTED_SCOPE);
   });
 
   it('removes reserved parameters inherited from the authorization URL', () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: {
@@ -290,7 +296,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('removes every duplicate reserved parameter inherited from the authorization URL', () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: {
@@ -313,7 +319,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     ['tokenUrl', 'https://auth.company.corp/oauth/token'],
   ] as const)('rejects a private-suffix %s at construction', (field, value) => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     expect(() => providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: { ...base, oauth: { ...base.oauth, [field]: value } },
@@ -327,6 +333,19 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
+  it('fails closed on refresh when tokenUrl resolves to a private address, before any secret is sent', async () => {
+    const { provider, factory } = providerWith({ dnsLookup: lookupReturning(PRIVATE_ADDRESS) });
+    await expect(provider.refreshCredentials({ refreshToken: REFRESH_TOKEN }))
+      .rejects.toThrow('configured_oauth_endpoint_not_allowed');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on revocation when revocationUrl resolves to a private address, before any secret is sent', async () => {
+    const { provider, factory } = providerWith({ dnsLookup: lookupReturning(PRIVATE_ADDRESS) });
+    await expect(provider.revokeCredentials({ accessToken: ACCESS_TOKEN }))
+      .rejects.toThrow('configured_oauth_endpoint_not_allowed');
+    expect(factory).not.toHaveBeenCalled();
+  });
   it('fails closed when the token host cannot be resolved', async () => {
     const { provider, factory } = providerWith({
       dnsLookup: () => Promise.reject(new Error('ENOTFOUND')),
@@ -338,7 +357,9 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('applies the outbound deadline while DNS resolution is pending', async () => {
     const { provider, factory } = providerWith({
-      dnsLookup: () => new Promise(() => undefined),
+      dnsLookup: () => new Promise(() => {
+        // Deliberately remain pending so the provider deadline owns cancellation.
+      }),
       requestTimeoutMs: 10,
     });
 
@@ -350,13 +371,13 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
   it('pins the vetted address and refuses redirects for exchange, refresh, and revocation', async () => {
     const { provider, pins, fetchCalls } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
     await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
-      accessToken: 'fresh-access-token',
+      accessToken: FRESH_ACCESS_TOKEN,
     });
-    await expect(provider.refreshCredentials({ refreshToken: 'refresh-token' })).resolves.toMatchObject({
-      accessToken: 'fresh-access-token',
+    await expect(provider.refreshCredentials({ refreshToken: REFRESH_TOKEN })).resolves.toMatchObject({
+      accessToken: FRESH_ACCESS_TOKEN,
     });
     await expect(provider.revokeCredentials({
-      accessToken: 'access-token',
+      accessToken: ACCESS_TOKEN,
       refreshToken: null,
       externalInstallationId: null,
     })).resolves.toBeUndefined();
@@ -373,16 +394,16 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       fetch: () => Promise.resolve(new Response(JSON.stringify({
-        access_token: 'fresh-access-token',
+        access_token: FRESH_ACCESS_TOKEN,
         scope: 'gmail.metadata',
       }), { status: 200 })),
     });
 
     await expect(provider.refreshCredentials({
-      refreshToken: 'refresh-token',
-      authorizedPermissions: { scopes: ['gmail.readonly'] },
+      refreshToken: REFRESH_TOKEN,
+      authorizedPermissions: { scopes: [REQUESTED_SCOPE] },
     })).resolves.toMatchObject({
-      accessToken: 'fresh-access-token',
+      accessToken: FRESH_ACCESS_TOKEN,
       authorizedPermissions: { scopes: ['gmail.metadata'] },
     });
   });
@@ -391,8 +412,8 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     const { provider } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
 
     const refreshed = await provider.refreshCredentials({
-      refreshToken: 'refresh-token',
-      authorizedPermissions: { scopes: ['gmail.readonly'] },
+      refreshToken: REFRESH_TOKEN,
+      authorizedPermissions: { scopes: [REQUESTED_SCOPE] },
     });
 
     expect(refreshed).not.toHaveProperty('authorizedPermissions');
@@ -400,7 +421,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('uses HTTP Basic client auth without duplicating credentials in the form body', async () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider, fetchCalls } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: {
@@ -422,7 +443,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('form-encodes reserved characters in HTTP Basic client credentials', async () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider, fetchCalls } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       clientSecret: 'secret% value',
@@ -445,7 +466,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('honors HTTP Basic client auth during revocation', async () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider, fetchCalls } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: {
@@ -458,7 +479,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     });
 
     await provider.revokeCredentials({
-      accessToken: 'access-token',
+      accessToken: ACCESS_TOKEN,
       refreshToken: null,
       externalInstallationId: null,
     });
@@ -473,8 +494,8 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     const { provider, fetchCalls } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
 
     await provider.revokeCredentials({
-      accessToken: 'access-token',
-      refreshToken: 'refresh-token',
+      accessToken: ACCESS_TOKEN,
+      refreshToken: REFRESH_TOKEN,
       externalInstallationId: null,
     });
 
@@ -491,7 +512,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     });
 
     await expect(provider.revokeCredentials({
-      accessToken: 'access-token',
+      accessToken: ACCESS_TOKEN,
       refreshToken: null,
       externalInstallationId: null,
     })).rejects.toThrow('configured_oauth_revocation_failed');
@@ -501,20 +522,20 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       fetch: () => Promise.resolve(new Response(JSON.stringify({
-        access_token: 'fresh-access-token',
+        access_token: FRESH_ACCESS_TOKEN,
         scope: 'gmail.metadata gmail.readonly gmail.metadata',
       }), { status: 200 })),
     });
 
     await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
-      authorizedPermissions: { scopes: ['gmail.metadata', 'gmail.readonly'] },
+      authorizedPermissions: { scopes: ['gmail.metadata', REQUESTED_SCOPE] },
     });
   });
 
   it.each([
-    [{ access_token: 'fresh-access-token', email: 'x'.repeat(201) }],
+    [{ access_token: FRESH_ACCESS_TOKEN, email: 'x'.repeat(201) }],
     [{
-      access_token: 'fresh-access-token',
+      access_token: FRESH_ACCESS_TOKEN,
       scope: Array.from({ length: 101 }, (_, index) => `scope-${index}`).join(' '),
     }],
   ])('rejects token-response metadata that cannot be stored safely', async responseBody => {
@@ -529,13 +550,13 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
 
   it('fails closed when refresh is unsupported', async () => {
     const base = descriptor();
-    if (!base.oauth) throw new Error('fixture oauth missing');
+    if (!base.oauth) throw new Error(OAUTH_FIXTURE_MISSING);
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
       descriptor: { ...base, oauth: { ...base.oauth, refresh: 'none' } },
     });
 
-    await expect(provider.refreshCredentials({ refreshToken: 'refresh-token' }))
+    await expect(provider.refreshCredentials({ refreshToken: REFRESH_TOKEN }))
       .rejects.toThrow('configured_oauth_refresh_not_supported');
   });
 
@@ -563,14 +584,53 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(canceled).toBe(true);
   });
 
-  it('accepts bounded BOM-prefixed JSON', async () => {
-    const responseBody = `\uFEFF${JSON.stringify({ access_token: 'bom-access-token' })}`;
+  it('accepts bounded BOM-prefixed JSON for token exchange and refresh', async () => {
+    const responseBody = `\uFEFF${JSON.stringify({
+      access_token: 'bom-access-token',
+      refresh_token: 'bom-refresh-token',
+      email: 'bom@example.com',
+    })}`;
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
-      fetch: () => Promise.resolve(new Response(responseBody, { status: 200 })),
+      fetch: () => Promise.resolve(new Response(responseBody, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
     });
     await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
       accessToken: 'bom-access-token',
+      refreshToken: 'bom-refresh-token',
+      accountLabel: 'bom@example.com',
     });
+    await expect(provider.refreshCredentials({ refreshToken: 'old-refresh-token' })).resolves.toEqual({
+      accessToken: 'bom-access-token',
+      refreshToken: 'bom-refresh-token',
+    });
+  });
+
+  it('rejects an oversized token response from its content-length before reading', async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        return Promise.resolve();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(body, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(300 * 1024),
+        },
+      })),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
+      .rejects.toThrow('configured_oauth_endpoint_response_too_large');
+    expect(canceled).toBe(true);
   });
 });

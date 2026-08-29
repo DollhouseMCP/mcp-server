@@ -15,14 +15,15 @@ class FakeClient implements DcrClientInstance {
   static readonly clients = new Map<string, Record<string, unknown>>();
 
   static readonly adapter = {
-    async upsert(id: string, payload: Record<string, unknown>): Promise<void> {
+    upsert(id: string, payload: Record<string, unknown>): Promise<void> {
       FakeClient.clients.set(id, payload);
+      return Promise.resolve();
     },
   };
 
-  static async find(id: string): Promise<DcrClientInstance | undefined> {
+  static find(id: string): Promise<DcrClientInstance | undefined> {
     const found = FakeClient.clients.get(id);
-    return found ? new FakeClient(found) : undefined;
+    return Promise.resolve(found ? new FakeClient(found) : undefined);
   }
 
   readonly clientId: string;
@@ -47,7 +48,7 @@ function makeApp(opts: {
   if (opts.trustProxy) app.set('trust proxy', true);
   const provider: DcrProvider = { Client: FakeClient };
   app.post('/reg', ...createOpenDcrRegistrationHandlers({
-    ensureProvider: async () => provider,
+    ensureProvider: () => Promise.resolve(provider),
     rateLimitStore: opts.rateLimitStore,
     storage: opts.storage,
   }));
@@ -117,6 +118,21 @@ describe('dcrPolicyMiddleware — issue #2220 open DCR hardening', () => {
         'token_endpoint_auth_method contains unsupported value "client_secret_post"',
       ]),
     });
+  });
+
+  it('NFC-normalizes the accepted human-visible client name before persistence', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const app = makeApp({ storage, rateLimitStore: new InMemoryRateLimitStore() });
+
+    const res = await request(app)
+      .post('/reg')
+      .send({
+        client_name: 'Cafe\u0301 MCP',
+        redirect_uris: ['https://client.example.com/oauth/callback'],
+      })
+      .expect(201);
+
+    expect(res.body.client_name).toBe('Café MCP');
   });
 
   it('runs the shared-store limiter before JSON parsing', async () => {

@@ -12,7 +12,7 @@
  * See: InstallMemoryBug.md for details
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../src/services/FileOperationsService.js';
@@ -26,6 +26,15 @@ import { dirname } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const SEED_MEMORY_NAME = 'dollhousemcp-baseline-knowledge';
+const SEED_MEMORY_FILE = `${SEED_MEMORY_NAME}.yaml`;
+const SEED_BACKUP_PREFIX = `${SEED_MEMORY_NAME}.backup-`;
+
+function requireDefined<T>(value: T | undefined, label: string = 'baseline memory'): T {
+  expect(value).toBeDefined();
+  if (value === undefined) throw new Error(`Expected ${label} to be defined`);
+  return value;
+}
 
 describe('MemoryManager - Seed Installation', () => {
   let memoryManager: MemoryManager;
@@ -94,6 +103,10 @@ describe('MemoryManager - Seed Installation', () => {
     });
   });
 
+  afterEach(() => {
+    memoryManager.dispose();
+  });
+
   describe('installSeedMemories', () => {
     it('should install seed memory successfully', async () => {
       // Install seed memories
@@ -104,7 +117,7 @@ describe('MemoryManager - Seed Installation', () => {
       expect(memories.length).toBeGreaterThan(0);
 
       const baselineMemory = memories.find(m =>
-        m.metadata.name === 'dollhousemcp-baseline-knowledge'
+        m.metadata.name === SEED_MEMORY_NAME
       );
       expect(baselineMemory).toBeDefined();
     });
@@ -113,29 +126,26 @@ describe('MemoryManager - Seed Installation', () => {
       await memoryManager.installSeedMemories();
 
       const memories = await memoryManager.list();
-      const baselineMemory = memories.find(m =>
-        m.metadata.name === 'dollhousemcp-baseline-knowledge'
+      const baselineMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
       );
 
-      expect(baselineMemory).toBeDefined();
-      expect(baselineMemory!.metadata.name).toBe('dollhousemcp-baseline-knowledge');
-      expect(baselineMemory!.metadata.description).toContain('Baseline knowledge');
-      expect(baselineMemory!.metadata.version).toBe('1.0.0');
-      expect(baselineMemory!.metadata.author).toBe('DollhouseMCP');
+      expect(baselineMemory.metadata.name).toBe(SEED_MEMORY_NAME);
+      expect(baselineMemory.metadata.description).toContain('Baseline knowledge');
+      expect(baselineMemory.metadata.version).toBe('1.0.0');
+      expect(baselineMemory.metadata.author).toBe('DollhouseMCP');
     });
 
     it('should preserve memory content (NOT empty entries)', async () => {
       await memoryManager.installSeedMemories();
 
       const memories = await memoryManager.list();
-      const baselineMemory = memories.find(m =>
-        m.metadata.name === 'dollhousemcp-baseline-knowledge'
+      const baselineMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
       );
 
-      expect(baselineMemory).toBeDefined();
-
       // CRITICAL TEST: Verify entries exist and contain content
-      const entries = baselineMemory!.getAllEntries();
+      const entries = baselineMemory.getAllEntries();
       expect(entries.length).toBeGreaterThan(0);
 
       // Verify the content is not empty
@@ -152,10 +162,10 @@ describe('MemoryManager - Seed Installation', () => {
       await memoryManager.installSeedMemories();
 
       // Load the memory by name
-      const loadedMemory = await memoryManager.load('dollhousemcp-baseline-knowledge.yaml');
+      const loadedMemory = await memoryManager.load(SEED_MEMORY_FILE);
 
       expect(loadedMemory).toBeDefined();
-      expect(loadedMemory.metadata.name).toBe('dollhousemcp-baseline-knowledge');
+      expect(loadedMemory.metadata.name).toBe(SEED_MEMORY_NAME);
 
       // Verify it has content
       const entries = loadedMemory.getAllEntries();
@@ -166,13 +176,12 @@ describe('MemoryManager - Seed Installation', () => {
       await memoryManager.installSeedMemories();
 
       const memories = await memoryManager.list();
-      const baselineMemory = memories.find(m =>
-        m.metadata.name === 'dollhousemcp-baseline-knowledge'
+      const baselineMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
       );
 
-      expect(baselineMemory).toBeDefined();
-      expect((baselineMemory!.metadata as any).autoLoad).toBe(true);
-      expect((baselineMemory!.metadata as any).priority).toBe(1);
+      expect((baselineMemory.metadata as any).autoLoad).toBe(true);
+      expect((baselineMemory.metadata as any).priority).toBe(1);
     });
 
     it('should skip reinstallation if memory already exists (idempotency - Issue #1430)', async () => {
@@ -180,35 +189,35 @@ describe('MemoryManager - Seed Installation', () => {
       await memoryManager.installSeedMemories();
 
       const firstInstallMemories = await memoryManager.list();
-      const seeds1 = firstInstallMemories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      const backups1 = firstInstallMemories.filter(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
+      const seeds1 = firstInstallMemories.filter(m => m.metadata.name === SEED_MEMORY_NAME);
+      const backups1 = firstInstallMemories.filter(m => m.metadata.name.startsWith(SEED_BACKUP_PREFIX));
 
       // First install should NOT create a backup (nothing to backup)
-      expect(seeds1.length).toBe(1);
-      expect(backups1.length).toBe(0);
+      expect(seeds1).toHaveLength(1);
+      expect(backups1).toHaveLength(0);
 
       // Install again (ISSUE #1430: Skip reinstallation to preserve cache)
       await memoryManager.installSeedMemories();
 
       const secondInstallMemories = await memoryManager.list();
-      const seeds2 = secondInstallMemories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      const backups2 = secondInstallMemories.filter(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
+      const seeds2 = secondInstallMemories.filter(m => m.metadata.name === SEED_MEMORY_NAME);
+      const backups2 = secondInstallMemories.filter(m => m.metadata.name.startsWith(SEED_BACKUP_PREFIX));
 
       // Should still have only 1 seed (no duplication), NO backups (reinstallation skipped)
-      expect(seeds2.length).toBe(1);
-      expect(seeds1.length).toBe(seeds2.length); // Seed count stays the same
-      expect(backups2.length).toBe(0); // No backups when reinstallation is skipped
+      expect(seeds2).toHaveLength(1);
+      expect(seeds1).toHaveLength(seeds2.length); // Seed count stays the same
+      expect(backups2).toHaveLength(0); // No backups when reinstallation is skipped
     });
 
     it('should handle content with markdown formatting', async () => {
       await memoryManager.installSeedMemories();
 
       const memories = await memoryManager.list();
-      const baselineMemory = memories.find(m =>
-        m.metadata.name === 'dollhousemcp-baseline-knowledge'
+      const baselineMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
       );
 
-      const entries = baselineMemory!.getAllEntries();
+      const entries = baselineMemory.getAllEntries();
       const content = entries[0].content;
 
       // Verify markdown elements are preserved
@@ -225,10 +234,12 @@ describe('MemoryManager - Seed Installation', () => {
       const entries = await fs.readdir(systemDir);
 
       // Verify the seed memory file exists in the system folder
-      const seedFile = entries.find(f => f.includes('dollhousemcp-baseline-knowledge'));
-      expect(seedFile).toBeDefined();
+      const seedFile = requireDefined(
+        entries.find(file => file.includes(SEED_MEMORY_NAME)),
+        'seed memory file'
+      );
 
-      const memoryPath = path.join(systemDir, seedFile!);
+      const memoryPath = path.join(systemDir, seedFile);
       await expect(fs.access(memoryPath)).resolves.not.toThrow();
     });
 
@@ -236,11 +247,11 @@ describe('MemoryManager - Seed Installation', () => {
       await memoryManager.installSeedMemories();
 
       const memories = await memoryManager.list();
-      const baselineMemory = memories.find(m =>
-        m.metadata.name === 'dollhousemcp-baseline-knowledge'
+      const baselineMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
       );
 
-      const metadata = baselineMemory!.metadata as any;
+      const metadata = baselineMemory.metadata as any;
 
       // Verify triggers
       expect(metadata.triggers).toBeDefined();
@@ -300,7 +311,7 @@ version: 1.0.0
 
       // Should have zero entries when there's no content
       const entries = importedMemory.getAllEntries();
-      expect(entries.length).toBe(0);
+      expect(entries).toHaveLength(0);
     });
 
     it('should trim whitespace from content', async () => {

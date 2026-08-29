@@ -180,6 +180,22 @@ describe('ManagerBackedPortfolioElementStore', () => {
     ]));
   });
 
+  it('preserves structured memory entries containing code-like text', async () => {
+    const store = createRealStore(cleanupDirs);
+    const codeLikeContent = "Explain require('./module'), eval(example), and file:// references.";
+    const structuredMemory = `metadata:\n  description: Code reference memory\nentries:\n  - id: mem_code_reference\n    content: ${JSON.stringify(codeLikeContent)}\n    timestamp: ${NOW.toISOString()}\n`;
+
+    const created = await store.create(elementInput(
+      'memories',
+      'Code Reference Memory',
+      structuredMemory,
+      { description: 'Code reference memory' },
+    ));
+
+    expect(created.content).toContain('mem_code_reference');
+    expect(created.content).toContain(codeLikeContent);
+  });
+
   it('updates and deletes real manager-backed elements for all console portfolio types', async () => {
     const store = createRealStore(cleanupDirs);
     const inputs = [

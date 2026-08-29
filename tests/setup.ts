@@ -5,8 +5,11 @@
  * a dedicated test database so integration tests never touch live data.
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 // Test directories
 export const TEST_BASE_DIR = path.join(process.cwd(), '.test-tmp');
@@ -15,8 +18,14 @@ export const TEST_CACHE_DIR = path.join(TEST_BASE_DIR, 'cache');
 
 // Test database — separate from the live dollhousemcp database
 const TEST_DB_NAME = 'dollhousemcp_test';
-const ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/postgres';
-const TEST_DB_ADMIN_URL = `postgres://dollhouse:dollhouse@localhost:5432/${TEST_DB_NAME}`;
+const LOCAL_TEST_ADMIN_ROLE = 'dollhouse';
+
+function localTestAdminUrl(databaseName: string): string {
+  return `postgres://${LOCAL_TEST_ADMIN_ROLE}:${LOCAL_TEST_ADMIN_ROLE}@localhost:5432/${databaseName}`;
+}
+
+const ADMIN_URL = localTestAdminUrl('postgres');
+const TEST_DB_ADMIN_URL = localTestAdminUrl(TEST_DB_NAME);
 
 export default async function globalSetup() {
   console.log('\n🔧 Setting up integration test environment...\n');
@@ -86,11 +95,14 @@ export default async function globalSetup() {
     await testSql.end();
 
     // Run Drizzle migrations on the test database
-    const { execSync } = await import('node:child_process');
-    execSync(
-      `DOLLHOUSE_DATABASE_ADMIN_URL="${TEST_DB_ADMIN_URL}" npx drizzle-kit migrate`,
-      { stdio: 'pipe', cwd: process.cwd(), timeout: 30000 },
-    );
+    const { execFileSync } = await import('node:child_process');
+    const drizzleKitEntry = path.join(path.dirname(require.resolve('drizzle-kit')), 'bin.cjs');
+    execFileSync(process.execPath, [drizzleKitEntry, 'migrate'], {
+      stdio: 'pipe',
+      cwd: process.cwd(),
+      timeout: 30000,
+      env: { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: TEST_DB_ADMIN_URL },
+    });
 
     // Re-run grants after migrations (tables now exist)
     const postMigSql = pg.default(TEST_DB_ADMIN_URL, { max: 1 });

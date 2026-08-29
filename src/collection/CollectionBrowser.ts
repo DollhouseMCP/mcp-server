@@ -2,26 +2,30 @@
  * Browse collection content from GitHub
  */
 
-import { GitHubClient } from './GitHubClient.js';
-import { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
+import type { GitHubClient } from './GitHubClient.js';
+import type { CollectionCache, CollectionItem } from '../cache/CollectionCache.js';
 import { CollectionSeeder } from './CollectionSeeder.js';
-import { CollectionIndexManager } from './CollectionIndexManager.js';
-import { CollectionIndex, IndexEntry } from '../types/collection.js';
+import type { CollectionIndexManager } from './CollectionIndexManager.js';
+import type { CollectionIndex, IndexEntry } from '../types/collection.js';
 import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
+
+// Top-level collection sections. Used as an allowlist so untrusted `section`
+// input can never be interpolated into a GitHub API URL (SSRF guard).
+const COLLECTION_SECTIONS: ReadonlySet<string> = new Set(['library', 'showcase', 'catalog']);
 
 // Content types supported by MCP server
 // Now includes memories (IP concerns resolved)
 // ⚠️ CRITICAL: When adding new element types, you MUST update this array!
 // Also update validTypes array in src/index.ts
 // See docs/developer-guide/ADDING_NEW_ELEMENT_TYPES_CHECKLIST.md for complete guide
-const MCP_SUPPORTED_TYPES = [
+const MCP_SUPPORTED_TYPES = new Set([
   ElementType.PERSONA,    // personas - supported by PersonaTools and ElementTools
   ElementType.SKILL,      // skills - supported by ElementTools
   ElementType.AGENT,      // agents - supported by ElementTools
   ElementType.TEMPLATE,   // templates - supported by ElementTools
   ElementType.MEMORY      // memories - supported by ElementTools (restored)
-];
+]);
 
 /**
  * Type guard to safely check if a string is a valid ElementType
@@ -34,14 +38,14 @@ function isElementType(value: string): value is ElementType {
  * Type guard to safely check if an ElementType is supported by MCP
  */
 function isMCPSupportedType(elementType: ElementType): boolean {
-  return MCP_SUPPORTED_TYPES.includes(elementType);
+  return MCP_SUPPORTED_TYPES.has(elementType);
 }
 
 export class CollectionBrowser {
-  private githubClient: GitHubClient;
-  private collectionCache: CollectionCache;
-  private indexManager: CollectionIndexManager;
-  private baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
+  private readonly githubClient: GitHubClient;
+  private readonly collectionCache: CollectionCache;
+  private readonly indexManager: CollectionIndexManager;
+  private readonly baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
   
   constructor(githubClient: GitHubClient, collectionCache: CollectionCache, indexManager: CollectionIndexManager) {
     this.githubClient = githubClient;
@@ -57,6 +61,21 @@ export class CollectionBrowser {
    * @param type - Optional content type within the library section (personas, skills, etc.)
    */
   async browseCollection(section?: string, type?: string): Promise<{ items: any[], categories: any[], sections?: any[] }> {
+    // SECURITY (SSRF guard): validate section/type against fixed allowlists
+    // BEFORE they can reach any URL interpolation. Untrusted values (e.g. from
+    // the web console) that fail validation are treated as "no such listing"
+    // rather than being interpolated into a GitHub API path. The GitHub-API
+    // fallback below builds `${baseUrl}/${section}/${type}` directly, so this
+    // is the primary defense; GitHubClient's path-traversal check is secondary.
+    if (section !== undefined && !COLLECTION_SECTIONS.has(section)) {
+      logger.debug('Rejecting browse request for unknown collection section', { section });
+      return { items: [], categories: [] };
+    }
+    if (type !== undefined && !isElementType(type)) {
+      logger.debug('Rejecting browse request for unknown element type', { type });
+      return { items: [], categories: [] };
+    }
+
     try {
       // Try using collection index first for faster browsing
       const indexResult = await this.browseFromIndex(section, type);
@@ -72,7 +91,7 @@ export class CollectionBrowser {
       if (!section) {
         const data = await this.githubClient.fetchFromGitHub(url, false);
         if (!Array.isArray(data)) {
-          throw new Error('Invalid collection response. Expected directory listing.');
+          throw new TypeError('Invalid collection response. Expected directory listing.');
         }
         
         // Filter to only show content directories
@@ -91,7 +110,7 @@ export class CollectionBrowser {
       const data = await this.githubClient.fetchFromGitHub(url, false);
       
       if (!Array.isArray(data)) {
-        throw new Error('Invalid collection response. Expected directory listing.');
+        throw new TypeError('Invalid collection response. Expected directory listing.');
       }
       
       // In the library section, we have content type directories
@@ -164,7 +183,7 @@ export class CollectionBrowser {
     
     // Extract types from index keys and filter for MCP-supported types
     Object.keys(index.index).forEach(typeName => {
-      const elementType = isElementType(typeName) ? typeName as ElementType : null;
+      const elementType = isElementType(typeName) ? typeName : null;
       if (elementType && isMCPSupportedType(elementType)) {
         types.add(typeName);
       }
@@ -182,7 +201,7 @@ export class CollectionBrowser {
   private getItemsFromIndex(index: CollectionIndex, section: string, type?: string): IndexEntry[] {
     // For library section with type, get items from that type
     if (section === 'library' && type) {
-      return index.index[type] || [];
+      return Object.hasOwn(index.index, type) ? index.index[type] : [];
     }
     
     // For library section without type, return empty (should show categories)
@@ -286,7 +305,7 @@ export class CollectionBrowser {
       if (pathParts.length >= 2 && pathParts[0] === 'library') {
         // Only include MCP-supported types in cache browsing
         const typeName = pathParts[1];
-        const elementType = isElementType(typeName) ? typeName as ElementType : null;
+        const elementType = isElementType(typeName) ? typeName : null;
         if (elementType && isMCPSupportedType(elementType)) {
           types.add(typeName);
         }
@@ -337,6 +356,7 @@ export class CollectionBrowser {
    */
   formatBrowseResults(items: any[], categories: any[], section?: string, type?: string, personaIndicator: string = ''): string {
     const textParts = [`${personaIndicator}🏪 **DollhouseMCP Collection**\n\n`];
+    const typeSuffix = type ? `/${type}` : '';
     
     // Show top-level sections if no section specified
     if (!section && categories.length > 0) {
@@ -379,7 +399,7 @@ export class CollectionBrowser {
       textParts.push('\n');
     } else if (categories.length > 0) {
       // Only show category navigation for non-library sections (showcase, catalog)
-      textParts.push(`**📁 Subdirectories in ${section}${type ? `/${type}` : ''} (${categories.length}):**\n`);
+      textParts.push(`**📁 Subdirectories in ${section}${typeSuffix} (${categories.length}):**\n`);
       categories.forEach((cat: any) => {
         const browsePath = type ? `"${section}" "${type}/${cat.name}"` : `"${section}" "${cat.name}"`;
         textParts.push(`   📂 **${cat.name}** - Browse: \`browse_collection ${browsePath}\`\n`);
@@ -399,7 +419,7 @@ export class CollectionBrowser {
       };
       const icon = contentIcons[contentType] || '📄';
       
-      textParts.push(`**${icon} ${contentType.charAt(0).toUpperCase() + contentType.slice(1)} in ${section}${type ? `/${type}` : ''} (${items.length}):**\n`);
+      textParts.push(`**${icon} ${contentType.charAt(0).toUpperCase() + contentType.slice(1)} in ${section}${typeSuffix} (${items.length}):**\n`);
       items.forEach((item: any) => {
         // Use item.path for correct GitHub file path, item.name for display
         // This fixes the mismatch where browse returned "Code Review.md" but file is "code-review.md"

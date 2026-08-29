@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { MCPAQLHandler, HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { MCPAQLHandler } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import { PermissionLevel } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import type { OperationInput, ResponseMeta } from '../../../../src/handlers/mcp-aql/types.js';
@@ -93,9 +94,9 @@ describe('MCPAQLHandler', () => {
           getEntries: jest.fn().mockReturnValue(new Map()),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
         }),
-        save: jest.fn().mockResolvedValue(undefined),
+        save: jest.fn().mockResolvedValue(),
         // Issue #2329: addEntry pre-flights persistence before reporting success
-        assertPersistable: jest.fn().mockResolvedValue(undefined),
+        assertPersistable: jest.fn().mockResolvedValue(),
       },
       agentManager: {
         canonicalizeExecutionName: jest.fn((name: string) => name),
@@ -1272,6 +1273,27 @@ describe('MCPAQLHandler', () => {
           })
         );
       });
+
+      it.each(['memory', 'memories'])(
+        'should clear save bookkeeping after deleting a %s element',
+        async elementType => {
+          const memorySaveHandler = (handler as unknown as {
+            memorySaveHandler: { cleanupDeletedMemory(memoryName: string): void };
+          }).memorySaveHandler;
+          const cleanupDeletedMemory = jest.spyOn(memorySaveHandler, 'cleanupDeletedMemory');
+
+          const result = await handler.handleDelete({
+            operation: 'delete_element',
+            params: {
+              element_name: TEST_MEMORY_NAME,
+              element_type: elementType,
+            },
+          });
+
+          expect(result.success).toBe(true);
+          expect(cleanupDeletedMemory).toHaveBeenCalledWith(TEST_MEMORY_NAME);
+        },
+      );
     });
 
     // execute_agent moved to EXECUTE endpoint in Issue #244
@@ -1673,9 +1695,9 @@ describe('MCPAQLHandler', () => {
             getEntries: jest.fn().mockReturnValue(new Map()),
             clearAll: jest.fn().mockResolvedValue({ cleared: true }),
           }),
-          save: jest.fn().mockResolvedValue(undefined),
+          save: jest.fn().mockResolvedValue(),
           // Issue #2329: addEntry pre-flights persistence before reporting success
-          assertPersistable: jest.fn().mockResolvedValue(undefined),
+          assertPersistable: jest.fn().mockResolvedValue(),
         },
         agentManager: {
           canonicalizeExecutionName: jest.fn((name: string) => name),
@@ -2030,7 +2052,7 @@ describe('MCPAQLHandler', () => {
 
     it('should fail with expired challenge (not found in store)', async () => {
       // get() returns undefined for expired/missing challenges
-      mockVerificationStore.get.mockReturnValue(undefined);
+      mockVerificationStore.get.mockReturnValue();
 
       const result = await verifyHandler.handleCreate({
         operation: 'verify_challenge',
@@ -2234,7 +2256,7 @@ describe('MCPAQLHandler', () => {
       expect(afterFailure.totalFailures).toBe(1);
 
       // Expired challenge
-      mockVerificationStore.get.mockReturnValue(undefined);
+      mockVerificationStore.get.mockReturnValue();
       await verifyHandler.handleCreate({
         operation: 'verify_challenge',
         params: { challenge_id: VALID_CHALLENGE_ID_2, code: 'ABC123' },
@@ -2319,7 +2341,7 @@ describe('MCPAQLHandler', () => {
 
     it('should log VERIFICATION_EXPIRED when challenge is not found', async () => {
       const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
-      mockVerificationStore.get.mockReturnValue(undefined);
+      mockVerificationStore.get.mockReturnValue();
 
       await verifyHandler.handleCreate({
         operation: 'verify_challenge',
@@ -2357,7 +2379,7 @@ describe('MCPAQLHandler', () => {
 
     it('should use GatekeeperErrorCode-aligned error messages', async () => {
       // Expired challenge should reference VERIFICATION_TIMEOUT semantics
-      mockVerificationStore.get.mockReturnValue(undefined);
+      mockVerificationStore.get.mockReturnValue();
 
       const result = await verifyHandler.handleCreate({
         operation: 'verify_challenge',
@@ -2538,7 +2560,7 @@ describe('MCPAQLHandler', () => {
       const verificationStore = {
         set: jest.fn(),
         get: jest.fn()
-          .mockReturnValueOnce(undefined)
+          .mockReturnValueOnce()
           .mockReturnValueOnce({
             code: 'RELIEF1',
             expiresAt: Date.now() + 300000,
@@ -2719,7 +2741,7 @@ describe('MCPAQLHandler', () => {
       tracker.trackSaveFrequency(TEST_MEMORY_NAME);
 
       expect(tracker.saveFrequencyCounters.has('default:test-memory')).toBe(true);
-      expect(tracker.saveFrequencyCounters.get('default:test-memory').timestamps.length).toBe(1);
+      expect(tracker.saveFrequencyCounters.get('default:test-memory').timestamps).toHaveLength(1);
       // Should not warn for a single call
       expect(loggerWarnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining('Save frequency warn threshold'),
@@ -2739,7 +2761,7 @@ describe('MCPAQLHandler', () => {
       // All three should have been tracked under the same key
       expect(tracker.saveFrequencyCounters.size).toBe(1);
       expect(tracker.saveFrequencyCounters.has('default:mymemory')).toBe(true);
-      expect(tracker.saveFrequencyCounters.get('default:mymemory').timestamps.length).toBe(3);
+      expect(tracker.saveFrequencyCounters.get('default:mymemory').timestamps).toHaveLength(3);
     });
 
     it('should set warned flag when warn threshold is reached', () => {
@@ -2815,7 +2837,7 @@ describe('MCPAQLHandler', () => {
       tracker.trackSaveFrequency('recovery-memory');
 
       const counter = tracker.saveFrequencyCounters.get('default:recovery-memory');
-      expect(counter.timestamps.length).toBe(1);
+      expect(counter.timestamps).toHaveLength(1);
       expect(counter.warned).toBe(false);
       expect(counter.critical).toBe(false);
     });

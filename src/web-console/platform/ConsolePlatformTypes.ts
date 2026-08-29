@@ -19,6 +19,10 @@ export const CONSOLE_PRIVACY_CLASSES = [
   'approval_metadata',
   'admin_audit',
   'security_metadata',
+  // Global public-catalog data (the collection browse surface). Routes remain
+  // session-gated because serving them spends server-funded upstream budget,
+  // but the payload carries no per-user data.
+  'public_catalog',
 ] as const;
 
 export const CONSOLE_ELEVATION_POLICIES = [
@@ -39,6 +43,10 @@ export const CONSOLE_HTTP_METHODS = [
 export const CONSOLE_RATE_LIMIT_POLICIES = [
   'none',
   'protected_correlation_resolution',
+  // Per-session + per-deployment budget on collection catalog routes: they can
+  // drive server-funded outbound GitHub fetches, so one session must not be
+  // able to exhaust the shared upstream budget.
+  'collection_fetch',
 ] as const;
 
 export type ConsoleCapability = typeof CONSOLE_CAPABILITIES[number];
@@ -289,4 +297,20 @@ export interface ConsoleRouteManifestEntry {
 export interface ConsoleRouteManifest {
   readonly apiVersion: 'v1';
   readonly routes: readonly ConsoleRouteManifestEntry[];
+}
+
+/**
+ * Family-B (cursor list) page envelope shared by every paginated console list
+ * surface. `next_cursor: null` is the sole exhaustion signal — there is no
+ * `has_more` and no `total` (API contract §5.3).
+ */
+export interface ConsolePageInfo {
+  readonly limit: number;
+  readonly cursor: string | null;
+  readonly next_cursor: string | null;
+}
+
+export interface ConsolePageDto<T> {
+  readonly items: readonly T[];
+  readonly page: ConsolePageInfo;
 }

@@ -28,6 +28,7 @@
 
 import { and, eq, gte, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DatabaseInstance } from '../../../database/connection.js';
+import type { DrizzleTx } from '../../../database/db-utils.js';
 import { withSystemContext } from '../../../database/admin.js';
 import {
   authAccounts,
@@ -35,6 +36,7 @@ import {
   authKv,
 } from '../../../database/schema/auth.js';
 import { authAllowlist } from '../../../database/schema/authAllowlist.js';
+import { normalizeAuthAllowlistValue } from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -55,6 +57,12 @@ import { InProcessKeyedLock } from './InProcessKeyedLock.js';
 // owner may consume that connection budget when the supported pool size is 2.
 const POSTGRES_GENERIC_LOCKS = new InProcessKeyedLock();
 const POSTGRES_GENERIC_POOL_GATE = 'auth-storage-advisory-lock-pool-gate';
+
+function stringifyJsonValue(value: unknown): string | undefined {
+  // Runtime JSON.stringify returns undefined for values such as symbols and functions even though
+  // the active TypeScript library declaration models this call as always returning a string.
+  return JSON.stringify(value);
+}
 
 export interface PostgresAuthStorageLayerOptions {
   /** Drizzle DB instance. Pass the same instance the rest of the app uses. */
@@ -106,22 +114,8 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async upsertAccount(account: StoredAccount): Promise<void> {
-    const row = storedAccountToRow(account);
     await withSystemContext(this.db, async (tx) => {
-      await tx.insert(authAccounts).values(row).onConflictDoUpdate({
-        target: [authAccounts.provider, authAccounts.externalSub],
-        set: {
-          sub: row.sub,
-          userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
-          email: row.email,
-          emailVerified: row.emailVerified,
-          displayName: row.displayName,
-          rawProfile: row.rawProfile,
-          passwordHash: row.passwordHash,
-          lastAuthAt: row.lastAuthAt,
-          updatedAt: row.updatedAt,
-        },
-      });
+      await upsertAuthAccountWithTx(tx, account);
     });
   }
 
@@ -349,7 +343,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     payload: unknown,
     expiresInSec?: number,
   ): Promise<boolean> {
-    const expectedJson = JSON.stringify(expectedPayload);
+    const expectedJson = stringifyJsonValue(expectedPayload);
     if (expectedJson === undefined) {
       throw new Error('genericCompareAndSet expectedPayload must be JSON-compatible');
     }
@@ -480,7 +474,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
-    const value = input.value.toLowerCase();
+    const value = normalizeAuthAllowlistValue(input.kind, input.value);
     try {
       const rows = await withSystemContext(this.db, (tx) =>
         tx.insert(authAllowlist).values({
@@ -534,15 +528,24 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     // No values supplied → trivially false (no possible match).
     const predicates: SQL[] = [];
     if (values.email) {
-      const pred = and(eq(authAllowlist.kind, 'email'), eq(authAllowlist.value, values.email.toLowerCase()));
+      const pred = and(
+        eq(authAllowlist.kind, 'email'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('email', values.email))
+      );
       if (pred) predicates.push(pred);
     }
     if (values.githubUsername) {
-      const pred = and(eq(authAllowlist.kind, 'github_username'), eq(authAllowlist.value, values.githubUsername.toLowerCase()));
+      const pred = and(
+        eq(authAllowlist.kind, 'github_username'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('github_username', values.githubUsername))
+      );
       if (pred) predicates.push(pred);
     }
     if (values.githubId) {
-      const pred = and(eq(authAllowlist.kind, 'github_id'), eq(authAllowlist.value, values.githubId));
+      const pred = and(
+        eq(authAllowlist.kind, 'github_id'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('github_id', values.githubId))
+      );
       if (pred) predicates.push(pred);
     }
     if (predicates.length === 0) return false;
@@ -552,6 +555,25 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     );
     return rows.length > 0;
   }
+}
+
+/** Transaction-aware account upsert shared with the authoritative sign-in gate. */
+export async function upsertAuthAccountWithTx(tx: DrizzleTx, account: StoredAccount): Promise<void> {
+  const row = storedAccountToRow(account);
+  await tx.insert(authAccounts).values(row).onConflictDoUpdate({
+    target: [authAccounts.provider, authAccounts.externalSub],
+    set: {
+      sub: row.sub,
+      userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
+      email: row.email,
+      emailVerified: row.emailVerified,
+      displayName: row.displayName,
+      rawProfile: row.rawProfile,
+      passwordHash: row.passwordHash,
+      lastAuthAt: row.lastAuthAt,
+      updatedAt: row.updatedAt,
+    },
+  });
 }
 
 function notExpired(): SQL {

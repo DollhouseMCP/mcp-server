@@ -33,7 +33,7 @@ import { ElementCRUDDispatcher } from './ElementCRUDDispatcher.js';
 import { ConfigDispatcher } from './ConfigDispatcher.js';
 import { AgentExecutionHandler } from './AgentExecutionHandler.js';
 import { GatekeeperHandler } from './GatekeeperHandler.js';
-import { MemorySaveHandler } from './MemorySaveHandler.js';
+import { MemorySaveHandler, type SaveContextScope } from './MemorySaveHandler.js';
 import { buildOperationSummary } from './OperationSummary.js';
 import { applyFieldSelection } from './FieldSelection.js';
 import { initializeNormalizers } from './normalizers/index.js';
@@ -49,6 +49,8 @@ import {
   type BatchResult,
   type BatchOperationResult,
   isBatchRequest,
+  ElementType as AqlElementType,
+  normalizeMCPAQLElementType,
 } from './types.js';
 import {
   type ExecutingAgentEntry,
@@ -88,8 +90,7 @@ import type { MetricQueryOptions, MetricType } from '../../metrics/types.js';
 import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
 import type { OperationMetricsTracker } from '../../metrics/OperationMetricsTracker.js';
 import type { GatekeeperMetricsTracker } from '../../metrics/GatekeeperMetricsTracker.js';
-import { ElementType, type PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { normalizeElementType } from '../../utils/elementTypeNormalization.js';
+import type { ElementType, PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
 import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js';
 import type { SessionActivationRegistry } from '../../state/SessionActivationState.js';
@@ -437,7 +438,7 @@ export interface HandlerRegistry {
  * Keeps coupling loose — only requires what MCPAQLHandler actually needs.
  * Issue #301: Request correlation support.
  */
-export interface CorrelationIdProvider {
+export interface CorrelationIdProvider extends SaveContextScope {
   getCorrelationId(): string | undefined;
   getSessionContext?(): { sessionId: string } | undefined;
 }
@@ -532,7 +533,9 @@ export class MCPAQLHandler {
     this.searchHandler = new SearchHandler(handlers);
     this.elementCRUDDispatcher = new ElementCRUDDispatcher(handlers);
     this.configDispatcher = new ConfigDispatcher(handlers);
-    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name));
+    // Pass the context tracker so pending memory saves can re-establish their
+    // per-user context during a shutdown flush (#2329 multi-user correctness).
+    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name), contextTracker);
     this.agentExecutionHandler = new AgentExecutionHandler(
       handlers,
       this.executingAgents,
@@ -628,6 +631,11 @@ export class MCPAQLHandler {
    * disconnect, causing a slow memory leak in long-running HTTP servers.
    *
    * Called by DollhouseContainer.createServerForHttpSession()'s dispose callback.
+   *
+   * Issue #2329: the memory handler's session cleanup is deliberately
+   * non-writing — it leaves each pending save's debounce timer to fire in its
+   * propagated per-user context (a write from this context-less disposal path
+   * would land in the flat shared dir). So this stays synchronous bookkeeping.
    */
   cleanupSession(sessionId: string): void {
     const prefix = `${sessionId}:`;
@@ -643,6 +651,30 @@ export class MCPAQLHandler {
     this.deadlockReliefIssuanceLimiters.delete(sessionId);
     this.permissionPromptLimiters.delete(sessionId);
     this.cliApprovalLimiters.delete(sessionId);
+  }
+
+  /**
+   * Issue #2329: after a successful delete_element of a memory, delegate to the
+   * memory handler to drop its save bookkeeping. Kept thin here — all durability
+   * state lives in MemorySaveHandler; this only recognizes the delete and the
+   * element type. elementType is already the resolved MCP-AQL enum from
+   * executeOperation (the same type resolveInputElementType returns).
+   */
+  private cleanupDeletedMemoryBookkeeping(
+    operation: string,
+    elementType: AqlElementType | undefined,
+    params: Record<string, unknown>,
+  ): void {
+    if (operation !== 'delete_element') return;
+    // The type may arrive as the resolved top-level elementType OR inside params
+    // (element_type/type), and as a plural alias ('memories'); resolve from all
+    // three and normalize so both singular and plural forms clean up the ledger.
+    const rawType = (elementType ?? params.element_type ?? params.type) as string | undefined;
+    if (!rawType || normalizeMCPAQLElementType(rawType) !== AqlElementType.Memory) return;
+    const name = (params.element_name ?? params.name) as string | undefined;
+    if (name) {
+      this.memorySaveHandler.cleanupDeletedMemory(name);
+    }
   }
 
   /**
@@ -1318,27 +1350,6 @@ export class MCPAQLHandler {
 
   async flushPendingSaves(): Promise<void> {
     await this.memorySaveHandler.flushPendingSaves();
-  }
-
-  /**
-   * Issue #2329 (Codex review): a successfully deleted memory must drop its
-   * save bookkeeping — a retained failure-ledger instance or pending debounce
-   * timer would otherwise re-save the in-RAM state and resurrect the deleted
-   * file. Called after dispatch in executeOperation so the schema-dispatch,
-   * legacy, and batch paths are all covered.
-   */
-  private cleanupDeletedMemoryBookkeeping(
-    operation: string,
-    elementType: string | undefined,
-    params: Record<string, unknown> | undefined,
-  ): void {
-    if (operation !== 'delete_element') return;
-    const p = params ?? {};
-    const type = (elementType ?? p.element_type ?? p.type) as string | undefined;
-    const name = (p.element_name ?? p.name) as string | undefined;
-    if (name && normalizeElementType(type) === ElementType.MEMORY) {
-      this.memorySaveHandler.clearMemorySaveBookkeeping(name);
-    }
   }
 
   private get saveFrequencyCounters(): Map<string, unknown> {

@@ -34,6 +34,7 @@ import {
 } from '../../security/IntegrationApiHosts.js';
 import { assertDisplayString } from '../../stores/ConsoleStoreValidation.js';
 import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
+import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 const MAX_TOKEN_ENDPOINT_RESPONSE_BYTES = 256 * 1024;
@@ -56,6 +57,7 @@ export interface ConfiguredOAuthIntegrationProviderConfig {
   readonly requestTimeoutMs?: number;
 }
 
+/** A token-endpoint response with its body already consumed, so the pinned socket pool can close. */
 interface TokenEndpointResponse {
   readonly ok: boolean;
   readonly status: number;
@@ -64,6 +66,8 @@ interface TokenEndpointResponse {
 
 export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
+  readonly integrationDescriptorId;
+  readonly integrationDescriptorFingerprint;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'oauth2_authorization_code';
 
@@ -92,6 +96,8 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       displayName: normalizeUnicodeDisplayText(config.descriptor.displayName),
       category: normalizeUnicodeDisplayText(config.descriptor.category),
     };
+    this.integrationDescriptorId = config.descriptor.id;
+    this.integrationDescriptorFingerprint = integrationDescriptorRoutingFingerprint(config.descriptor);
     this.pinnedOutboundFactory = config.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = config.dnsLookup ?? dnsLookup;
     this.timeoutMs = config.requestTimeoutMs ?? DEFAULT_OUTBOUND_TIMEOUT_MS;
@@ -136,7 +142,13 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       }),
       redirect: 'error',
     });
-    if (!response.ok) throw new Error('configured_oauth_token_exchange_failed');
+    if (!response.ok) {
+      logger.warn('Configured OAuth token exchange failed', {
+        provider: this.descriptor.id,
+        status: response.status,
+      });
+      throw new Error('configured_oauth_token_exchange_failed');
+    }
     const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_exchange_failed');
@@ -162,7 +174,13 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       }),
       redirect: 'error',
     });
-    if (!response.ok) throw new Error('configured_oauth_token_refresh_failed');
+    if (!response.ok) {
+      logger.warn('Configured OAuth token refresh failed', {
+        provider: this.descriptor.id,
+        status: response.status,
+      });
+      throw new Error('configured_oauth_token_refresh_failed');
+    }
     const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_refresh_failed');
@@ -216,6 +234,13 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     return { ...oauth, clientId };
   }
 
+  /**
+   * POST to a descriptor-controlled token endpoint through the same
+   * resolve-once-and-pin guard as the data path. The host must resolve to
+   * public addresses BEFORE any secret leaves the process, and the connection
+   * is pinned to the vetted address so a connect-time re-resolution cannot
+   * retarget it. Fails closed on resolution failure or a non-public address.
+   */
   private async guardedTokenEndpointFetch(
     endpoint: 'token' | 'revocation',
     urlValue: string,
@@ -254,7 +279,6 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       }
       throw error;
     }
-
     const outbound = this.pinnedOutboundFactory({
       hostname: canonicalHostname,
       address: vetted.address,

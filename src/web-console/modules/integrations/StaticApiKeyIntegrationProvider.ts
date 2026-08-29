@@ -10,11 +10,15 @@ import type {
 } from './IntegrationProvider.js';
 import { normalizeUnicodeDisplayText } from './IntegrationProvider.js';
 import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
+import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
 
 export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
+  readonly integrationDescriptorId;
+  readonly integrationDescriptorFingerprint;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'static_api_key';
+  readonly staticApiKeyInjection;
 
   constructor(private readonly record: IntegrationDescriptorRecord) {
     if (record.authStrategy !== 'static_api_key' || !record.staticApiKey) {
@@ -25,6 +29,9 @@ export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
       displayName: normalizeUnicodeDisplayText(record.displayName),
       category: normalizeUnicodeDisplayText(record.category),
     };
+    this.integrationDescriptorId = record.id;
+    this.integrationDescriptorFingerprint = integrationDescriptorRoutingFingerprint(record);
+    this.staticApiKeyInjection = record.staticApiKey.injection;
   }
 
   createAuthorizationUrl(_request: IntegrationAuthorizationRequest): string {

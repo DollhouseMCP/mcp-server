@@ -5,6 +5,9 @@ const { ElementType } = await import('../../../../src/portfolio/PortfolioManager
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
+const TEST_SKILL_NAME = 'test-skill';
+const TEST_ENSEMBLE_NAME = 'test-ensemble';
+
 describe('createElement helper', () => {
   let mockContext: ElementCrudContext;
 
@@ -12,7 +15,7 @@ describe('createElement helper', () => {
     mockContext = {
       skillManager: {
         create: jest.fn().mockResolvedValue({
-          metadata: { name: 'test-skill' },
+          metadata: { name: TEST_SKILL_NAME },
         }),
       },
       templateManager: {
@@ -27,13 +30,13 @@ describe('createElement helper', () => {
         }),
       },
       memoryManager: {
-        create: jest.fn().mockImplementation(async (metadata) => {
+        create: jest.fn().mockImplementation((metadata) => {
           // Return a mock Memory object with the expected interface
-          return {
+          return Promise.resolve({
             metadata: { name: metadata.name, description: metadata.description, ...metadata },
             retentionDays: metadata.retentionDays,
-            addEntry: jest.fn().mockResolvedValue(undefined),
-          };
+            addEntry: jest.fn().mockResolvedValue(),
+          });
         }),
       },
       personaManager: {
@@ -44,10 +47,10 @@ describe('createElement helper', () => {
       },
       ensembleManager: {
         create: jest.fn().mockResolvedValue({
-          metadata: { name: 'test-ensemble' },
+          metadata: { name: TEST_ENSEMBLE_NAME },
         }),
       },
-      ensureInitialized: jest.fn().mockResolvedValue(undefined),
+      ensureInitialized: jest.fn().mockResolvedValue(),
       getPersonaIndicator: jest.fn().mockReturnValue(''),
     } as any;
   });
@@ -66,14 +69,14 @@ describe('createElement helper', () => {
 
     it('should accept valid element type: skills', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-skill',
+        name: TEST_SKILL_NAME,
         type: ElementType.SKILL,
         description: 'Test skill',
       });
 
       expect(mockContext.skillManager.create).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅');
-      expect(result.content[0].text).toContain('test-skill');
+      expect(result.content[0].text).toContain(TEST_SKILL_NAME);
     });
 
     it('should accept valid element type: templates', async () => {
@@ -111,21 +114,21 @@ describe('createElement helper', () => {
 
     it('should accept valid element type: ensembles', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test ensemble',
       });
 
       expect(mockContext.ensembleManager.create).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅');
-      expect(result.content[0].text).toContain('test-ensemble');
+      expect(result.content[0].text).toContain(TEST_ENSEMBLE_NAME);
     });
   });
 
   describe('input validation and sanitization', () => {
     it('should sanitize name input', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-skill',
+        name: TEST_SKILL_NAME,
         type: ElementType.SKILL,
         description: 'Description',
       });
@@ -164,8 +167,22 @@ describe('createElement helper', () => {
       );
     });
 
-    it('should reject persona descriptions above the YAML frontmatter limit', async () => {
-      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
+    it('should accept persona descriptions at the frontmatter-aware description limit', async () => {
+      const maximumDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+
+      await createElement(mockContext, {
+        name: 'test-persona',
+        type: ElementType.PERSONA,
+        description: maximumDescription,
+      });
+
+      expect(mockContext.personaManager.create).toHaveBeenCalledWith(
+        expect.objectContaining({ description: maximumDescription })
+      );
+    });
+
+    it('should reject persona descriptions that consume reserved frontmatter overhead', async () => {
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
 
       const result = await createElement(mockContext, {
         name: 'test-persona',
@@ -175,7 +192,25 @@ describe('createElement helper', () => {
 
       expect(result.content[0].text).toContain('❌ Description too large');
       expect(result.content[0].text).toContain('input.description');
+      expect(result.content[0].text).toContain('frontmatter overhead reserved');
       expect(mockContext.personaManager.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+
+      const result = await createElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        description: descriptionPart,
+        metadata: {
+          variables: [{ name: 'topic', description: descriptionPart }],
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌ Description too large');
+      expect(result.content[0].text).toContain('aggregate frontmatter description budget');
+      expect(mockContext.templateManager.create).not.toHaveBeenCalled();
     });
 
     it('should sanitize metadata to remove dangerous properties', async () => {
@@ -203,7 +238,7 @@ describe('createElement helper', () => {
 
     it('should reject top-level externalRestrictions during create', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-skill',
+        name: TEST_SKILL_NAME,
         type: ElementType.SKILL,
         description: 'Test skill',
         metadata: { description: 'safe metadata' },
@@ -221,7 +256,7 @@ describe('createElement helper', () => {
 
     it('should reject gatekeeper.externalRestrictions without description during create', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-skill',
+        name: TEST_SKILL_NAME,
         type: ElementType.SKILL,
         description: 'Test skill',
         metadata: {
@@ -285,7 +320,7 @@ describe('createElement helper', () => {
         })
       );
       expect(result.content[0].text).toContain('✅');
-      expect(result.content[0].text).toContain('test-skill');
+      expect(result.content[0].text).toContain(TEST_SKILL_NAME);
     });
 
     it('should create skill without content', async () => {
@@ -541,9 +576,7 @@ describe('createElement helper', () => {
 
   describe('error handling', () => {
     it('should handle skill manager creation errors', async () => {
-      mockContext.skillManager.create = jest.fn().mockImplementation(async () => {
-        throw new Error('Creation failed');
-      });
+      mockContext.skillManager.create = jest.fn().mockRejectedValue(new Error('Creation failed'));
 
       const result = await createElement(mockContext, {
         name: 'test',
@@ -556,9 +589,7 @@ describe('createElement helper', () => {
     });
 
     it('should handle template manager creation errors', async () => {
-      mockContext.templateManager.create = jest.fn().mockImplementation(async () => {
-        throw new Error('Template error');
-      });
+      mockContext.templateManager.create = jest.fn().mockRejectedValue(new Error('Template error'));
 
       const result = await createElement(mockContext, {
         name: 'test',
@@ -571,9 +602,7 @@ describe('createElement helper', () => {
     });
 
     it('should handle memory creation errors', async () => {
-      mockContext.memoryManager.create = jest.fn().mockImplementation(async () => {
-        throw new Error('Save failed');
-      });
+      mockContext.memoryManager.create = jest.fn().mockRejectedValue(new Error('Save failed'));
 
       const result = await createElement(mockContext, {
         name: 'test',
@@ -617,9 +646,9 @@ describe('createElement helper', () => {
     });
 
     it('should require persona content (behavioral instructions)', async () => {
-      mockContext.personaManager.create = jest.fn().mockImplementation(async () => {
-        throw new Error("Persona instructions are required to create 'persona-name'.");
-      });
+      mockContext.personaManager.create = jest.fn().mockRejectedValue(
+        new Error("Persona instructions are required to create 'persona-name'."),
+      );
 
       const result = await createElement(mockContext, {
         name: 'persona-name',
@@ -647,7 +676,7 @@ describe('createElement helper', () => {
         })
       );
       expect(result.content[0].text).toContain('✅');
-      expect(result.content[0].text).toContain('test-ensemble');
+      expect(result.content[0].text).toContain(TEST_ENSEMBLE_NAME);
     });
 
     it('should create ensemble with elements array', async () => {
@@ -682,7 +711,7 @@ describe('createElement helper', () => {
 
     it('should delegate conflictResolution defaults to manager', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
       });
@@ -694,7 +723,7 @@ describe('createElement helper', () => {
 
     it('should respect custom conflictResolution strategy', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
         metadata: {
@@ -709,7 +738,7 @@ describe('createElement helper', () => {
 
     it('should pass snake_case conflictResolution parameter to manager', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
         metadata: {
@@ -725,7 +754,7 @@ describe('createElement helper', () => {
 
     it('should delegate activationStrategy defaults to manager', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
       });
@@ -737,7 +766,7 @@ describe('createElement helper', () => {
 
     it('should respect custom activationStrategy', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
         metadata: {
@@ -752,7 +781,7 @@ describe('createElement helper', () => {
 
     it('should pass snake_case activationStrategy parameter to manager', async () => {
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
         metadata: {
@@ -767,12 +796,12 @@ describe('createElement helper', () => {
     });
 
     it('should handle ensemble creation errors', async () => {
-      mockContext.ensembleManager.create = jest.fn().mockImplementation(async () => {
-        throw new Error('Invalid conflict resolution strategy');
-      });
+      mockContext.ensembleManager.create = jest.fn().mockRejectedValue(
+        new Error('Invalid conflict resolution strategy'),
+      );
 
       const result = await createElement(mockContext, {
-        name: 'test-ensemble',
+        name: TEST_ENSEMBLE_NAME,
         type: ElementType.ENSEMBLE,
         description: 'Test',
       });
