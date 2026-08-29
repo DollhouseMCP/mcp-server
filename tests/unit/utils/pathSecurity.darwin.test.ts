@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -36,7 +37,7 @@ describePosixFilesystem('pathSecurity under macOS-shaped filesystem semantics', 
   let linkedRoot: string;
 
   beforeAll(() => {
-    root = mkdtempSync(path.join(tmpdir(), 'dh-darwin-'));
+    root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'dh-darwin-')));
     realRoot = path.join(root, 'private', 'workspace');
     mkdirSync(realRoot, { recursive: true });
     linkedRoot = path.join(root, 'workspace');

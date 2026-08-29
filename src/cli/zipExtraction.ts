@@ -160,15 +160,50 @@ function extractArchive(
         const state: ZipValidationState = { entryCount: 0, expandedBytes: 0 };
         const extracted = { bytes: 0 };
 
-        const fail = (reason: unknown): void => {
+        const closeAndSettle = (failure?: Error): void => {
             if (settled) return;
             settled = true;
-            if (zipFile?.isOpen) zipFile.close();
-            reject(toError(reason));
+
+            const openedZip = zipFile;
+            if (!openedZip?.isOpen) {
+                if (failure) reject(failure);
+                else resolve();
+                return;
+            }
+
+            let closeHandled = false;
+            const finish = (closeFailure?: unknown): void => {
+                if (closeHandled) return;
+                closeHandled = true;
+                openedZip.removeListener('close', onClose);
+                openedZip.removeListener('error', onCloseError);
+
+                const finalFailure = failure ?? (
+                    closeFailure === undefined ? undefined : toError(closeFailure)
+                );
+                if (finalFailure) reject(finalFailure);
+                else resolve();
+            };
+            const onClose = (): void => finish();
+            const onCloseError = (closeError: unknown): void => finish(closeError);
+
+            // On Windows, the archive remains locked until yauzl's asynchronous fd close
+            // completes. Settle only after that event so callers can immediately clean up.
+            openedZip.once('close', onClose);
+            openedZip.once('error', onCloseError);
+            try {
+                openedZip.close();
+            } catch (closeError) {
+                finish(closeError);
+            }
+        };
+
+        const fail = (reason: unknown): void => {
+            closeAndSettle(toError(reason));
         };
 
         yauzl.open(zipPath, {
-            autoClose: true,
+            autoClose: false,
             lazyEntries: true,
             decodeStrings: true,
             validateEntrySizes: true,
@@ -186,9 +221,7 @@ function extractArchive(
 
             openedZip.on('error', fail);
             openedZip.on('end', () => {
-                if (settled) return;
-                settled = true;
-                resolve();
+                closeAndSettle();
             });
             openedZip.on('entry', (entry: Entry) => {
                 try {
