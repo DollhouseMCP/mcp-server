@@ -532,7 +532,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(await store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).toBeNull();
   });
 
-  it('removes a previously persisted curated OAuth descriptor when credentials are withdrawn', async () => {
+  it('retains a curated descriptor and its revocable credentials when deployment credentials are withdrawn', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const integrationStore = new InMemoryUserIntegrationStore();
@@ -569,9 +569,15 @@ describe('IntegrationDescriptorSeedLoader', () => {
       credentials({}),
       loaderOptions(integrationStore),
     );
-    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
-    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
-    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 0, failed: 1 });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      id: curated.id,
+      ownership: 'curated',
+    });
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-access'),
+    });
   });
 
   it('does not revoke a same-provider BYO integration when no curated descriptor exists', async () => {
@@ -648,7 +654,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     });
   });
 
-  it('revokes credentials before a same-provider BYO route is revealed', async () => {
+  it('does not reveal a same-provider BYO route by discarding curated credentials', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const integrationStore = new InMemoryUserIntegrationStore();
@@ -682,13 +688,17 @@ describe('IntegrationDescriptorSeedLoader', () => {
       loaderOptions(integrationStore),
     );
 
-    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
-    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 0, failed: 1 });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toMatchObject({ id: curated.id });
     await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
-      ownership: 'byo',
-      apiHosts: ['byo.examplecorp.test'],
+      ownership: 'curated',
+      id: curated.id,
     });
-    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-curated-access'),
+      refreshTokenCiphertext: Buffer.from('encrypted-curated-refresh'),
+    });
   });
 
   it('reports a failure when the curated descriptor disappears during withdrawal', async () => {
@@ -705,18 +715,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       loaderOptions(integrationStore),
     );
     const configuredResult = await configured.loadSeeds();
-    const curated = requireRuntimeValue(
-      configuredResult.descriptors[0],
-      'expected configured curated descriptor',
-    );
-    await connectExampleCorp(integrationStore, {
-      descriptorId: curated.id,
-      accountLabel: 'curated-route-user',
-      scopes: ['read'],
-      accessToken: 'encrypted-curated-access',
-      refreshToken: 'encrypted-curated-refresh',
-    });
-
+    expect(configuredResult.descriptors[0]).toBeDefined();
     const deleteCurated = store.deleteCurated.bind(store);
     jest.spyOn(store, 'deleteCurated').mockImplementation(async provider => {
       await deleteCurated(provider);

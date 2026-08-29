@@ -9,6 +9,7 @@ import {
   InMemoryConsoleAccountAdminStore,
   InMemoryConsoleSessionStore,
   InMemoryConsoleSecurityInvalidationStore,
+  InMemoryUserIntegrationStore,
   InMemoryRuntimeSessionControlStore,
   createAccountAdminModule,
   type ConsoleRouteDefinition,
@@ -16,6 +17,7 @@ import {
   type ConsoleSessionRecord,
   type IConsoleAccountInviteIssuer,
   type IOAuthGrantRevocationService,
+  type IUserIntegrationStore,
 } from '../../../../src/web-console/index.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -86,6 +88,7 @@ async function principalFixture(
 
 function mutationFixture(
   principals = store(),
+  integrationStore?: IUserIntegrationStore,
 ): {
   readonly accountAdminStore: InMemoryConsoleAccountAdminStore;
   readonly sessionStore: InMemoryConsoleSessionStore;
@@ -104,6 +107,7 @@ function mutationFixture(
     authStorage: authStorageFixture({ adminSub: PRIMARY_SUB }),
     accountInviteIssuer: accountInviteIssuer(),
     oauthGrantRevocationService: oauthGrantRevocationService(),
+    integrationStore,
     enableAccountAllowlistRoutes: true,
     accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
       accountAdminStore: principals,
@@ -617,6 +621,49 @@ describe('AccountAdminModule', () => {
     await expect(getUser.handler(consoleRequest({
       params: { user_id: UNKNOWN_USER_ID },
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+  });
+
+  it('refuses account deletion while revocable integration credentials remain', async () => {
+    const principals = new InMemoryConsoleAccountAdminStore([
+      await principalFixture(),
+      await principalFixture({
+        userId: SECOND_USER_ID,
+        primarySub: 'github_user-8',
+        username: 'bob',
+        displayName: 'Bob Example',
+        email: 'bob@example.test',
+        roles: [],
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      }),
+    ]);
+    const integrationStore = new InMemoryUserIntegrationStore();
+    await integrationStore.connect({
+      userId: SECOND_USER_ID,
+      provider: 'github',
+      integrationDescriptorId: null,
+      externalAccountLabel: 'bob',
+      externalInstallationId: 'installation-789',
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+      },
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+      connectedAt: NOW,
+    });
+    const { module } = mutationFixture(principals, integrationStore);
+    const remove = findRoute(module.routes, '/api/v1/admin/accounts/users/:user_id', 'DELETE');
+
+    await expect(remove.handler(consoleRequest({ params: { user_id: SECOND_USER_ID } })))
+      .resolves.toMatchObject({
+        status: 409,
+        body: { code: 'integration_credential_cleanup_pending' },
+      });
+    await expect(principals.findPrincipal(SECOND_USER_ID)).resolves.not.toBeNull();
+    await expect(integrationStore.findByProvider(SECOND_USER_ID, 'github')).resolves.toMatchObject({
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    });
   });
 
   it('issues account invites after bootstrap with transaction audit and privacy projection', async () => {

@@ -556,6 +556,7 @@ export class WebConsoleRegistrar {
       accountInviteIssuer,
       oauthGrantRevocationService,
       runtimeSessionControlStore: stores.runtimeSessionControlStore,
+      integrationStore: stores.integrationStore,
       runtimeTerminationAcknowledgementTimeoutMs: this.options.runtimeTerminationAcknowledgementTimeoutMs,
       accountAdminMutationTransactionRunner,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,

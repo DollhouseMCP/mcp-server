@@ -178,6 +178,10 @@ function userIntegrationRow(overrides: Partial<UserIntegrationRecord> = {}) {
     credentialKeyVersion: 'integration-key-v1',
     status: 'connected',
     errorReason: null,
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: null,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,
@@ -1135,19 +1139,64 @@ describe('PostgresUserIntegrationStore', () => {
     expect(transaction.update).not.toHaveBeenCalled();
   });
 
-  it('clears all credential material when revoking a withdrawn descriptor', async () => {
-    const chain = returningChain([{ id: INTEGRATION_ID }, { id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4' }]);
-    transaction.update = jest.fn(() => chain);
-    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
-
-    await expect(store.revokeAllByDescriptor(DESCRIPTOR_ID, FIVE_MINUTES)).resolves.toBe(2);
-    expect(chain.set).toHaveBeenCalledWith({
-      accessTokenCiphertext: null,
-      refreshTokenCiphertext: null,
-      status: 'revoked',
-      errorReason: null,
+  it('retains ciphertext while moving and claiming durable cleanup work', async () => {
+    const leaseId = '00000000-0000-4000-8000-000000000301';
+    const leaseExpiresAt = new Date(FIVE_MINUTES.getTime() + 60_000);
+    const pendingRow = userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupAttemptCount: 0,
+      cleanupNextAttemptAt: FIVE_MINUTES,
       revokedAt: FIVE_MINUTES,
     });
+    const pending = returningChain([pendingRow]);
+    const claimed = returningChain([{
+      ...pendingRow,
+      cleanupAttemptCount: 1,
+      cleanupLeaseId: leaseId,
+      cleanupLeaseExpiresAt: leaseExpiresAt,
+    }]);
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(pending)
+      .mockReturnValueOnce(claimed);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.beginCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: INTEGRATION_ID,
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      accessTokenCiphertext: Buffer.from(ENCRYPTED_ACCESS_TOKEN),
+    });
+    expect(pending.set).toHaveBeenCalledWith({
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupAttemptCount: 0,
+      cleanupNextAttemptAt: FIVE_MINUTES,
+      cleanupLeaseId: null,
+      cleanupLeaseExpiresAt: null,
+      revokedAt: FIVE_MINUTES,
+    });
+    await expect(store.claimCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      cleanupRecordId: INTEGRATION_ID,
+      leaseId,
+      attemptedAt: FIVE_MINUTES,
+      leaseExpiresAt,
+    })).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      cleanupAttemptCount: 1,
+      cleanupLeaseId: leaseId,
+    });
+    expect(claimed.set).toHaveBeenCalledWith(expect.objectContaining({
+      cleanupLeaseId: leaseId,
+      cleanupLeaseExpiresAt: leaseExpiresAt,
+    }));
   });
 
   it('locks an active integration before updating refreshed credentials', async () => {

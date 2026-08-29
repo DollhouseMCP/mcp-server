@@ -11,6 +11,7 @@ import type { ConsoleAdminRole, IConsoleAccountAdminStore } from '../../stores/I
 import { CONSOLE_ADMIN_ROLES } from '../../stores/IConsoleAccountAdminStore.js';
 import { tupleIncludes } from '../../stores/ConsoleStoreValidation.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
+import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { AccountAdminAllowlistService } from './AccountAdminAllowlistService.js';
 import { AccountAdminBootstrapService } from './AccountAdminBootstrapService.js';
@@ -82,6 +83,7 @@ export interface AccountAdminModuleOptions {
   readonly runtimeSessionControlStore?: IRuntimeSessionControlStore | null;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly integrationStore?: IUserIntegrationStore | null;
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly now?: () => Date;
 }
@@ -122,6 +124,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner,
     runtimeTerminationService,
+    integrationStore: options.integrationStore,
     now: options.now,
   });
   const identityService = new AccountAdminIdentityService({

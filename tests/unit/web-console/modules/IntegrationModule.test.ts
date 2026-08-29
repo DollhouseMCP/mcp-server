@@ -127,6 +127,10 @@ function integrationFixture(overrides: Partial<UserIntegrationRecord> = {}): Use
     credentialKeyVersion: 'integration-key-v1',
     status: 'connected',
     errorReason: null,
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: null,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
     connectedAt: NOW,
     lastSyncAt: LAST_SYNC,
     revokedAt: null,
@@ -833,16 +837,54 @@ describe('IntegrationModule', () => {
       status: 200,
       body: {
         provider: 'github',
-        status: 'error',
+        status: 'cleanup_pending',
         error_reason: 'revocation_failed',
       },
     });
-    expect(await store.findByProvider(USER_ID, 'github')).toMatchObject({
-      status: 'error',
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toBeNull();
+    expect(await store.findCredentialCleanupPending(USER_ID, 'github')).toMatchObject({
+      status: 'cleanup_pending',
       errorReason: 'revocation_failed',
-      accessTokenCiphertext: null,
-      refreshTokenCiphertext: null,
+      accessTokenCiphertext: expect.any(Buffer),
+      refreshTokenCiphertext: expect.any(Buffer),
+      cleanupAttemptCount: 1,
     });
+  });
+
+  it('backs off repeated cleanup failures and completes a later retry', async () => {
+    let clock = NOW;
+    const provider = new FixtureGitHubIntegrationProvider();
+    const { module, store } = writeModuleFixture({ provider, now: () => clock });
+    const connect = findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST');
+    const callback = findRoute(module.routes, GITHUB_CALLBACK_PATH);
+    const disconnect = findRoute(module.routes, GITHUB_PATH, 'DELETE');
+    const started = await connect.handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const state = provider.authorizations[0]?.state;
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+    await callback.handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+    provider.revokeFails = true;
+
+    await expect(disconnect.handler(consoleRequest())).resolves.toMatchObject({
+      body: { status: 'cleanup_pending', error_reason: 'revocation_failed' },
+    });
+    expect(provider.revocations).toHaveLength(1);
+    await expect(disconnect.handler(consoleRequest())).resolves.toMatchObject({
+      body: { status: 'cleanup_pending', error_reason: 'revocation_failed' },
+    });
+    expect(provider.revocations).toHaveLength(1);
+
+    clock = new Date(NOW.getTime() + 1_000);
+    provider.revokeFails = false;
+    await expect(disconnect.handler(consoleRequest())).resolves.toMatchObject({
+      body: { status: 'disconnected', error_reason: null },
+    });
+    expect(provider.revocations).toHaveLength(2);
+    await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toBeNull();
+    await expect(store.hasAnyCredentialMaterial(USER_ID)).resolves.toBe(false);
   });
 
   it.each([
@@ -872,9 +914,9 @@ describe('IntegrationModule', () => {
     const disconnecting = disconnect.handler(consoleRequest());
     await revocationStarted;
 
-    const replacement = await store.connect({
+    const replacementInput = {
       userId: USER_ID,
-      provider: 'github',
+      provider: 'github' as const,
       externalAccountLabel: 'replacement-account',
       externalInstallationId: 'replacement-installation',
       authorizedPermissions: {
@@ -885,18 +927,27 @@ describe('IntegrationModule', () => {
       refreshTokenCiphertext: Buffer.from('replacement-refresh-ciphertext'),
       credentialKeyVersion: 'integration-key-v2',
       connectedAt: LAST_SYNC,
-    });
+    };
+    await expect(store.connect(replacementInput)).rejects.toThrow(
+      'integration credential cleanup must finish before reconnecting',
+    );
     releaseRevocation();
 
     await expect(disconnecting).resolves.toMatchObject({
       status: 200,
       body: {
         provider: 'github',
-        status: 'connected',
-        account_label: 'replacement-account',
+        status: revokeFails ? 'cleanup_pending' : 'disconnected',
       },
     });
-    await expect(store.findByProvider(USER_ID, 'github')).resolves.toEqual(replacement);
+    if (revokeFails) {
+      await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toMatchObject({
+        status: 'cleanup_pending',
+      });
+    } else {
+      const replacement = await store.connect(replacementInput);
+      await expect(store.findByProvider(USER_ID, 'github')).resolves.toEqual(replacement);
+    }
   });
 
   it.each([
@@ -929,16 +980,17 @@ describe('IntegrationModule', () => {
         status: 200,
         body: {
           provider: 'github',
-          status: 'error',
+          status: 'cleanup_pending',
           error_reason: 'revocation_failed',
         },
       });
       expect(provider.revocations).toHaveLength(0);
-      await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({
-        status: 'error',
+      await expect(store.findByProvider(USER_ID, 'github')).resolves.toBeNull();
+      await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toMatchObject({
+        status: 'cleanup_pending',
         errorReason: 'revocation_failed',
-        accessTokenCiphertext: null,
-        refreshTokenCiphertext: null,
+        accessTokenCiphertext: record.accessTokenCiphertext,
+        refreshTokenCiphertext: record.refreshTokenCiphertext,
       });
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
         type: 'OPERATION_FAILED',
@@ -1377,9 +1429,13 @@ describe('IntegrationModule', () => {
     await expect(findRoute(module.routes, GMAIL_PATH).handler(consoleRequest()))
       .resolves.toMatchObject({ body: { status: 'disconnected' } });
     await expect(findRoute(module.routes, GMAIL_PATH, 'DELETE').handler(consoleRequest()))
-      .resolves.toMatchObject({ status: 200, body: { status: 'disconnected' } });
+      .resolves.toMatchObject({ status: 200, body: { status: 'cleanup_pending' } });
     expect(revoke).not.toHaveBeenCalled();
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toMatchObject({
+      integrationDescriptorId: oauthDescriptorFixture().id,
+      status: 'cleanup_pending',
+    });
   });
 
   it('keeps the descriptor binding when configured-provider revocation fails', async () => {
@@ -1418,11 +1474,12 @@ describe('IntegrationModule', () => {
     await expect(findRoute(module.routes, GMAIL_PATH, 'DELETE').handler(consoleRequest()))
       .resolves.toMatchObject({
         status: 200,
-        body: { status: 'error', error_reason: 'revocation_failed' },
+        body: { status: 'cleanup_pending', error_reason: 'revocation_failed' },
       });
-    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toMatchObject({
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toMatchObject({
       integrationDescriptorId: oauthDescriptorFixture().id,
-      status: 'error',
+      status: 'cleanup_pending',
       errorReason: 'revocation_failed',
     });
   });

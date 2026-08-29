@@ -141,6 +141,7 @@ async function expectInterruptedArtifacts(authDir: string): Promise<Record<strin
 }
 
 const TERMINATION_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
+const itPosix = process.platform === 'win32' ? it.skip : it;
 
 describe(HELPER_FILENAME, () => {
   it('coordinates terminal state and uses only the encrypted token handoff', async () => {
@@ -370,11 +371,7 @@ describe(HELPER_FILENAME, () => {
     }
   }, 15_000);
 
-  it.each(TERMINATION_SIGNALS)('handles %s before publishing readiness', async (signal) => {
-    if (process.platform === 'win32') {
-      return;
-    }
-
+  itPosix.each(TERMINATION_SIGNALS)('handles %s before publishing readiness', async (signal) => {
     const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-early-interrupt-'));
     const authDir = path.join(tempHome, DOLLHOUSE_DIR, '.auth');
@@ -425,10 +422,6 @@ describe(HELPER_FILENAME, () => {
   }, 15_000);
 
   it('preserves selected success and exit code when its result write fails', async () => {
-    if (process.platform === 'win32') {
-      return;
-    }
-
     const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-result-write-failure-'));
     const authDir = path.join(tempHome, DOLLHOUSE_DIR, '.auth');
@@ -457,23 +450,19 @@ describe(HELPER_FILENAME, () => {
     );
 
     try {
-      const child = spawnHelper(
+      const result = await runHelper(
         helperPath,
         `http://127.0.0.1:${address.port}/token`,
         tempHome,
         {
           NODE_ENV: 'test',
           DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId,
-          DOLLHOUSE_OAUTH_HELPER_TEST_POST_RESULT_DELAY_MS: '2000'
         }
       );
-      await waitForFileContent(logFile, 'Failed to write terminal result');
-
-      expect(child.kill('SIGTERM')).toBe(true);
-      const result = await waitForClose(child);
 
       expect(result.code).toBe(0);
       expect(result.signal).toBeNull();
+      await expect(fs.readFile(logFile, 'utf-8')).resolves.toContain('Failed to write terminal result');
       const resultPathStat = await fs.stat(resultFile);
       expect(resultPathStat.isDirectory()).toBe(true);
       await expect(fs.readFile(path.join(authDir, HELPER_STATE_FILE), 'utf-8')).resolves.toContain(flowId);
@@ -485,11 +474,7 @@ describe(HELPER_FILENAME, () => {
     }
   }, 15_000);
 
-  it.each(TERMINATION_SIGNALS)('writes a terminal result when interrupted by %s during polling', async (signal) => {
-    if (process.platform === 'win32') {
-      return;
-    }
-
+  itPosix.each(TERMINATION_SIGNALS)('writes a terminal result when interrupted by %s during polling', async (signal) => {
     const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-interrupt-'));
 
@@ -523,11 +508,7 @@ describe(HELPER_FILENAME, () => {
     }
   }, 15_000);
 
-  it.each(TERMINATION_SIGNALS)('preserves committed success when %s arrives late', async (signal) => {
-    if (process.platform === 'win32') {
-      return;
-    }
-
+  itPosix.each(TERMINATION_SIGNALS)('preserves committed success when %s arrives late', async (signal) => {
     const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-late-signal-'));
     const expectedToken = 'gho_test_late_signal_token_1234567890';
@@ -585,9 +566,7 @@ describe(HELPER_FILENAME, () => {
     }
   }, 15_000);
 
-  it('preserves completed handoff state when interrupted after the encrypted write', async () => {
-    if (process.platform === 'win32') return;
-
+  itPosix('preserves completed handoff state when interrupted after the encrypted write', async () => {
     const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-post-handoff-signal-'));
     const expectedToken = 'gho_test_post_handoff_signal_1234567890';

@@ -3,9 +3,9 @@ name: Build Artifacts
 
 on:
   push:
-    branches: [main, develop, beta, codex/hosted-http-integration]
+    branches: [main, develop, beta]
   pull_request:
-    branches: [main, develop, beta, codex/hosted-http-integration]
+    branches: [main, develop, beta]
   workflow_dispatch:
 
 permissions:

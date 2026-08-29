@@ -881,7 +881,8 @@ describe('IAuthStorageLayer contract: FilesystemAuthStorageLayer', () => {
 
 // ── Postgres fixture (gated on local Docker DB + CI env) ──────────────
 //
-// CI sets `DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1` so the absence of Postgres
+// The PostgreSQL integration CI job sets `DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1`
+// so the absence of Postgres
 // is a hard failure (catches a deployment that THINKS it's testing
 // Postgres parity but isn't). Local dev without Docker: the suite is
 // `describe.skip`-ed entirely so the run is green and the dev sees a
@@ -907,7 +908,8 @@ afterAll(async () => {
   if (pgAvailable) await closeTestDb();
 });
 
-// CI sets DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1 → describe runs and fails if
+// The PostgreSQL integration CI job sets DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1
+// → describe runs and fails if
 // Postgres isn't reachable. Local dev without it → describe.skip so the
 // skip is visible in the jest output instead of silently substituting
 // InMemoryAuthStorageLayer (which is what the previous shape did, hiding

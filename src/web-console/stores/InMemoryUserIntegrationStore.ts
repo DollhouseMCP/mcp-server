@@ -3,7 +3,11 @@ import { randomUUID } from 'node:crypto';
 import {
   cloneUserIntegrationRecord,
   GITHUB_USER_INTEGRATION_PROVIDER,
+  IntegrationCredentialCleanupPendingError,
   type IUserIntegrationStore,
+  type UserIntegrationCleanupClaimInput,
+  type UserIntegrationCleanupCompleteInput,
+  type UserIntegrationCleanupReleaseInput,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
   type UserIntegrationErrorInput,
@@ -36,7 +40,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return [...this.records.values()]
       .filter(record =>
         record.userId === userId &&
-        record.revokedAt === null &&
+        (record.revokedAt === null || record.status === 'cleanup_pending') &&
         visibleProviders.has(record.provider))
       .map(cloneUserIntegrationRecord);
   }
@@ -49,9 +53,25 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return record ? cloneUserIntegrationRecord(record) : null;
   }
 
+  async findCredentialCleanupPending(
+    userId: string,
+    provider: UserIntegrationProvider,
+  ): Promise<UserIntegrationRecord | null> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    const record = [...this.records.values()].find(candidate =>
+      candidate.userId === userId
+      && candidate.provider === provider
+      && candidate.status === 'cleanup_pending');
+    return record ? cloneUserIntegrationRecord(record) : null;
+  }
+
   async connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord> {
     assertUuid(input.userId, 'userId');
     return this.withProviderMutationLock(input.userId, input.provider, () => {
+      if (this.findCleanupRecord(input.userId, input.provider)) {
+        throw new IntegrationCredentialCleanupPendingError();
+      }
       const record: UserIntegrationRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -65,6 +85,10 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         credentialKeyVersion: input.credentialKeyVersion ?? null,
         status: 'connected',
         errorReason: null,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
         connectedAt: input.connectedAt,
         lastSyncAt: null,
         revokedAt: null,
@@ -96,6 +120,14 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         const active = activeId ? this.records.get(activeId) : null;
         return active ? cloneUserIntegrationRecord(active) : null;
       }
+      if (input.errorReason === 'revocation_failed' && activeId) {
+        const active = this.records.get(activeId);
+        if (!active) return null;
+        const pending = this.toCleanupPending(active, input.occurredAt);
+        this.records.set(pending.id, cloneUserIntegrationRecord(pending));
+        this.activeProviderIndex.delete(activeProviderKey(input.userId, input.provider));
+        return cloneUserIntegrationRecord(pending);
+      }
       const record: UserIntegrationRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -109,6 +141,10 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         credentialKeyVersion: null,
         status: 'error',
         errorReason: input.errorReason,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
         connectedAt: null,
         lastSyncAt: null,
         revokedAt: null,
@@ -118,6 +154,116 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       this.set(record);
       return cloneUserIntegrationRecord(record);
     });
+  }
+
+  async beginCredentialCleanup(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.userId, 'userId');
+    assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const key = activeProviderKey(input.userId, input.provider);
+      const activeId = this.activeProviderIndex.get(key);
+      if (activeId !== input.expectedActiveRecordId) {
+        const pending = this.findCleanupRecord(input.userId, input.provider);
+        return pending ? cloneUserIntegrationRecord(pending) : null;
+      }
+      const active = this.records.get(activeId);
+      if (!active) return null;
+      const pending = this.toCleanupPending(active, input.revokedAt);
+      this.records.set(pending.id, cloneUserIntegrationRecord(pending));
+      this.activeProviderIndex.delete(key);
+      return cloneUserIntegrationRecord(pending);
+    });
+  }
+
+  async claimCredentialCleanup(input: UserIntegrationCleanupClaimInput): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.userId, 'userId');
+    assertUuid(input.cleanupRecordId, 'cleanupRecordId');
+    assertUuid(input.leaseId, 'leaseId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const pending = this.records.get(input.cleanupRecordId);
+      if (pending?.userId !== input.userId || pending.provider !== input.provider
+          || pending.status !== 'cleanup_pending'
+          || (pending.cleanupNextAttemptAt?.getTime() ?? Number.POSITIVE_INFINITY) > input.attemptedAt.getTime()
+          || (pending.cleanupLeaseExpiresAt !== null
+            && pending.cleanupLeaseExpiresAt.getTime() > input.attemptedAt.getTime())) {
+        return null;
+      }
+      const claimed: UserIntegrationRecord = {
+        ...pending,
+        cleanupAttemptCount: Math.min(pending.cleanupAttemptCount + 1, 2_147_483_647),
+        cleanupLeaseId: input.leaseId,
+        cleanupLeaseExpiresAt: input.leaseExpiresAt,
+      };
+      validateUserIntegrationRecord(claimed);
+      this.records.set(claimed.id, cloneUserIntegrationRecord(claimed));
+      return cloneUserIntegrationRecord(claimed);
+    });
+  }
+
+  async releaseCredentialCleanup(input: UserIntegrationCleanupReleaseInput): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.userId, 'userId');
+    assertUuid(input.cleanupRecordId, 'cleanupRecordId');
+    assertUuid(input.leaseId, 'leaseId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const pending = this.records.get(input.cleanupRecordId);
+      if (pending?.userId !== input.userId || pending.provider !== input.provider
+          || pending.status !== 'cleanup_pending' || pending.cleanupLeaseId !== input.leaseId) {
+        return null;
+      }
+      const released: UserIntegrationRecord = {
+        ...pending,
+        cleanupNextAttemptAt: input.retryAt,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+      };
+      validateUserIntegrationRecord(released);
+      this.records.set(released.id, cloneUserIntegrationRecord(released));
+      return cloneUserIntegrationRecord(released);
+    });
+  }
+
+  async completeCredentialCleanup(input: UserIntegrationCleanupCompleteInput): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.userId, 'userId');
+    assertUuid(input.cleanupRecordId, 'cleanupRecordId');
+    assertUuid(input.leaseId, 'leaseId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const pending = this.records.get(input.cleanupRecordId);
+      if (pending?.userId !== input.userId || pending.provider !== input.provider
+          || pending.status !== 'cleanup_pending' || pending.cleanupLeaseId !== input.leaseId) {
+        return null;
+      }
+      const completed: UserIntegrationRecord = {
+        ...pending,
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+        revokedAt: input.completedAt,
+      };
+      validateUserIntegrationRecord(completed);
+      this.records.set(completed.id, cloneUserIntegrationRecord(completed));
+      return cloneUserIntegrationRecord(completed);
+    });
+  }
+
+  async hasAnyCredentialMaterial(userId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    return [...this.records.values()].some(record =>
+      record.userId === userId
+      && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null));
+  }
+
+  async hasCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    return [...this.records.values()].some(record =>
+      record.integrationDescriptorId === integrationDescriptorId
+      && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null));
   }
 
   async disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
@@ -135,6 +281,10 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         refreshTokenCiphertext: null,
         status: 'revoked',
         errorReason: null,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
         revokedAt: input.revokedAt,
       };
       validateUserIntegrationRecord(disconnected);
@@ -142,42 +292,6 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       this.activeProviderIndex.delete(key);
       return cloneUserIntegrationRecord(disconnected);
     });
-  }
-
-  async revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number> {
-    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
-    const targets = new Map<string, { readonly userId: string; readonly provider: UserIntegrationProvider }>();
-    for (const record of this.records.values()) {
-      if (record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
-      targets.set(activeProviderKey(record.userId, record.provider), {
-        userId: record.userId,
-        provider: record.provider,
-      });
-    }
-    let revoked = 0;
-    for (const { userId, provider } of targets.values()) {
-      revoked += await this.withProviderMutationLock(userId, provider, () => {
-        let providerRevoked = 0;
-        for (const record of this.records.values()) {
-          if (record.userId !== userId || record.provider !== provider
-              || record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
-          const revokedRecord: UserIntegrationRecord = {
-            ...record,
-            accessTokenCiphertext: null,
-            refreshTokenCiphertext: null,
-            status: 'revoked',
-            errorReason: null,
-            revokedAt,
-          };
-          validateUserIntegrationRecord(revokedRecord);
-          this.records.set(record.id, cloneUserIntegrationRecord(revokedRecord));
-          providerRevoked += 1;
-        }
-        this.activeProviderIndex.delete(activeProviderKey(userId, provider));
-        return providerRevoked;
-      });
-    }
-    return revoked;
   }
 
   private set(record: UserIntegrationRecord): void {
@@ -201,10 +315,39 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         refreshTokenCiphertext: null,
         status: 'revoked',
         errorReason: null,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
         revokedAt,
       }));
     }
     this.activeProviderIndex.delete(key);
+  }
+
+  private findCleanupRecord(
+    userId: string,
+    provider: UserIntegrationProvider,
+  ): UserIntegrationRecord | null {
+    return [...this.records.values()].find(record =>
+      record.userId === userId
+      && record.provider === provider
+      && record.status === 'cleanup_pending') ?? null;
+  }
+
+  private toCleanupPending(record: UserIntegrationRecord, requestedAt: Date): UserIntegrationRecord {
+    const pending: UserIntegrationRecord = {
+      ...record,
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupAttemptCount: 0,
+      cleanupNextAttemptAt: requestedAt,
+      cleanupLeaseId: null,
+      cleanupLeaseExpiresAt: null,
+      revokedAt: requestedAt,
+    };
+    validateUserIntegrationRecord(pending);
+    return pending;
   }
 
   private async refreshLocked(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {

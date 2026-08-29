@@ -22,6 +22,13 @@ interface WorkflowStep {
   env?: Record<string, any>;
 }
 
+interface WorkflowService {
+  image: string;
+  env?: Record<string, any>;
+  ports?: Array<string | number>;
+  options?: string;
+}
+
 interface WorkflowJob {
   name?: string;
   'runs-on': string | string[];
@@ -33,6 +40,8 @@ interface WorkflowJob {
   };
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
+  services?: Record<string, WorkflowService>;
+  'timeout-minutes'?: number;
 }
 
 interface Workflow {
@@ -115,7 +124,7 @@ describe('GitHub Workflow Validation', () => {
     });
   });
 
-  describe('Hosted HTTP integration branch gate', () => {
+  describe('Beta CI policy', () => {
     const hostedBranch = 'codex/hosted-http-integration';
     const requiredPushWorkflows = [
       'build-artifacts.yml',
@@ -130,26 +139,26 @@ describe('GitHub Workflow Validation', () => {
       'docker-testing.yml',
     ];
     it.each(requiredPushWorkflows)(
-      'should run %s for pushes to the hosted branch',
+      'should not retain the retired hosted branch push trigger in %s',
       (file) => {
         const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
         const workflow = yaml.load(content) as Workflow;
 
-        expect(workflow.on?.push?.branches).toContain(hostedBranch);
+        expect(workflow.on?.push?.branches).not.toContain(hostedBranch);
       }
     );
 
     it.each(requiredPullRequestWorkflows)(
-      'should run %s for pull requests targeting the hosted branch',
+      'should not retain the retired hosted branch pull-request trigger in %s',
       (file) => {
         const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
         const workflow = yaml.load(content) as Workflow;
 
-        expect(workflow.on?.pull_request?.branches).toContain(hostedBranch);
+        expect(workflow.on?.pull_request?.branches).not.toContain(hostedBranch);
       }
     );
 
-    it('should enforce unit tests on every core platform and defer performance at the hosted stage', () => {
+    it('should enforce unit and performance tests on every core platform', () => {
       const content = fs.readFileSync(
         path.join(workflowDir, 'core-build-test.yml'),
         'utf8'
@@ -169,13 +178,65 @@ describe('GitHub Workflow Validation', () => {
         '${{ steps.original_tests.outcome }}'
       );
       expect(unitTestGate?.run).toContain('exit 1');
-      expect(performanceTests?.if).toContain(hostedBranch);
-      expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
-      expect(operatingSystems).toEqual(expect.stringContaining('windows-latest'));
-      expect(operatingSystems).toEqual(expect.stringContaining('macos-latest'));
+      expect(performanceTests?.if).toBeUndefined();
+      expect(operatingSystems).toEqual([
+        'ubuntu-latest',
+        'windows-latest',
+        'macos-latest',
+      ]);
       expect(steps).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ if: false })])
       );
+    });
+
+    it('should enforce the full PostgreSQL integration suite against a pinned service', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const job = workflow.jobs['postgres-integration'];
+      const postgres = job?.services?.postgres;
+      const integrationStep = job?.steps.find(
+        (step) => step.name === 'Run required PostgreSQL integration suite'
+      );
+
+      expect(job?.name).toBe('PostgreSQL Integration');
+      expect(job?.['runs-on']).toBe('ubuntu-latest');
+      expect(job?.['timeout-minutes']).toBe(20);
+      expect(job?.permissions).toEqual({ contents: 'read' });
+      expect(job?.env?.DOLLHOUSE_REQUIRE_TEST_DATABASE).toBe('1');
+      expect(job?.env?.DOLLHOUSE_REQUIRE_PG_AUTH_TESTS).toBe('1');
+      expect(job?.env?.DOLLHOUSE_TEST_DATABASE_URL).toBe(
+        'postgres://dollhouse_app@localhost:5432/dollhousemcp_test'
+      );
+      expect(job?.env?.DOLLHOUSE_TEST_DATABASE_ADMIN_URL).toBe(
+        'postgres://dollhouse@localhost:5432/dollhousemcp_test'
+      );
+      expect(job?.env?.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
+      expect(postgres?.image).toBe(
+        'postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73'
+      );
+      expect(postgres?.env).toEqual({
+        POSTGRES_USER: 'dollhouse',
+        POSTGRES_HOST_AUTH_METHOD: 'trust',
+        POSTGRES_DB: 'postgres',
+      });
+      expect(postgres?.ports).toEqual(['5432:5432']);
+      expect(integrationStep?.run).toBe('npm run test:integration -- --runInBand');
+
+      const externalActions = job?.steps
+        .map((step) => step.uses)
+        .filter((uses): uses is string => Boolean(uses));
+      expect(externalActions).toEqual([
+        'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683',
+        'actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af',
+      ]);
+    });
+
+    it('should hard-fail integration setup when PostgreSQL is required', () => {
+      const setup = fs.readFileSync(path.join(process.cwd(), 'tests', 'setup.ts'), 'utf8');
+
+      expect(setup).toContain("process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1'");
+      expect(setup).toContain('throw new Error(`Required PostgreSQL integration setup failed: ${msg}`');
     });
 
     it('should give core and extended compatibility checks distinct names', () => {

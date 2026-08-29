@@ -5,6 +5,7 @@ import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } fro
 import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
 import type { IConsoleAccountAdminStore, PrincipalDeletionOutcome } from '../../stores/IConsoleAccountAdminStore.js';
+import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountDeletion, type AccountDeletionDto } from './AccountAdminDtos.js';
 import {
@@ -19,6 +20,7 @@ export interface AccountAdminDeletionServiceOptions {
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
   readonly runtimeTerminationService?: AccountAdminRuntimeTerminationService | null;
+  readonly integrationStore?: IUserIntegrationStore | null;
   readonly now?: () => Date;
 }
 
@@ -62,6 +64,16 @@ export class AccountAdminDeletionService {
         'would_orphan_accounts_admin',
         'Validation failed',
         'Deleting this principal would leave zero enabled account administrators.',
+      );
+    }
+    if (this.options.integrationStore
+        && await this.options.integrationStore.hasAnyCredentialMaterial(userId)) {
+      await this.writeAttemptAudit(req, route, 'rejected', 'integration_credential_cleanup_pending', userId, {});
+      return problem(
+        409,
+        'integration_credential_cleanup_pending',
+        'Conflict',
+        'Provider credentials must be disconnected and remotely revoked before deleting this account.',
       );
     }
 

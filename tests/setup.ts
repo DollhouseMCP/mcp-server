@@ -19,6 +19,7 @@ export const TEST_CACHE_DIR = path.join(TEST_BASE_DIR, 'cache');
 // Test database — separate from the live dollhousemcp database
 const TEST_DB_NAME = 'dollhousemcp_test';
 const LOCAL_TEST_ADMIN_ROLE = 'dollhouse';
+const DATABASE_REQUIRED = process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1';
 
 function localTestAdminUrl(databaseName: string): string {
   return `postgres://${LOCAL_TEST_ADMIN_ROLE}:${LOCAL_TEST_ADMIN_ROLE}@localhost:5432/${databaseName}`;
@@ -121,6 +122,9 @@ export default async function globalSetup() {
     console.log(`✅ Test database '${TEST_DB_NAME}' created and migrated`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (DATABASE_REQUIRED) {
+      throw new Error(`Required PostgreSQL integration setup failed: ${msg}`, { cause: err });
+    }
     console.warn(`⚠️  Test database setup skipped (Postgres not available: ${msg})`);
     console.warn('   DB integration tests will skip gracefully.\n');
   }

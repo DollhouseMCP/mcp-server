@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -12,7 +12,11 @@ import {
   type DescriptorCallbackConnectInput,
   type DescriptorCredentialConnectInput,
   GITHUB_USER_INTEGRATION_PROVIDER,
+  IntegrationCredentialCleanupPendingError,
   type IUserIntegrationStore,
+  type UserIntegrationCleanupClaimInput,
+  type UserIntegrationCleanupCompleteInput,
+  type UserIntegrationCleanupReleaseInput,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
   type UserIntegrationErrorInput,
@@ -48,7 +52,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       tx.select().from(userIntegrations).where(and(
         eq(userIntegrations.userId, userId),
         inArray(userIntegrations.provider, [...providers]),
-        isNull(userIntegrations.revokedAt),
+        sql`(${userIntegrations.revokedAt} IS NULL OR ${userIntegrations.status} = 'cleanup_pending')`,
       )).orderBy(asc(userIntegrations.provider)),
     );
     return rows.map(fromRow);
@@ -61,6 +65,21 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         eq(userIntegrations.userId, userId),
         eq(userIntegrations.provider, provider),
         isNull(userIntegrations.revokedAt),
+      )).limit(1),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async findCredentialCleanupPending(
+    userId: string,
+    provider: UserIntegrationProvider,
+  ): Promise<UserIntegrationRecord | null> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(userIntegrations).where(and(
+        eq(userIntegrations.userId, userId),
+        eq(userIntegrations.provider, provider),
+        eq(userIntegrations.status, 'cleanup_pending'),
       )).limit(1),
     );
     return rows[0] ? fromRow(rows[0]) : null;
@@ -157,6 +176,10 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
           credential_key_version AS "credentialKeyVersion",
           status,
           error_reason AS "errorReason",
+          cleanup_attempt_count AS "cleanupAttemptCount",
+          cleanup_next_attempt_at AS "cleanupNextAttemptAt",
+          cleanup_lease_id AS "cleanupLeaseId",
+          cleanup_lease_expires_at AS "cleanupLeaseExpiresAt",
           connected_at AS "connectedAt",
           last_sync_at AS "lastSyncAt",
           revoked_at AS "revokedAt"
@@ -220,6 +243,15 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
     }
     const row = await withSystemContext(this.db, async tx => {
+      await lockProviderMutation(tx, input.userId, input.provider);
+      if (input.errorReason === 'revocation_failed' && input.expectedActiveRecordId !== null) {
+        return beginCredentialCleanupWithTx(tx, {
+          userId: input.userId,
+          provider: input.provider,
+          expectedActiveRecordId: input.expectedActiveRecordId,
+          revokedAt: input.occurredAt,
+        });
+      }
       if (input.expectedActiveRecordId !== null) {
         const replaced = await tx.update(userIntegrations).set({
           accessTokenCiphertext: null,
@@ -247,6 +279,10 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         credentialKeyVersion: null,
         status: 'error',
         errorReason: input.errorReason,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
         connectedAt: null,
         lastSyncAt: null,
         revokedAt: null,
@@ -254,6 +290,102 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       return inserted[0] ?? findActiveRow(tx, input.userId, input.provider);
     });
     return row ? fromRow(row) : null;
+  }
+
+  async beginCredentialCleanup(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.userId, 'userId');
+    assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
+    const row = await withSystemContext(this.db, async tx => {
+      await lockProviderMutation(tx, input.userId, input.provider);
+      return beginCredentialCleanupWithTx(tx, input);
+    });
+    return row ? fromRow(row) : null;
+  }
+
+  async claimCredentialCleanup(input: UserIntegrationCleanupClaimInput): Promise<UserIntegrationRecord | null> {
+    validateCleanupClaimInput(input);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(userIntegrations).set({
+        cleanupAttemptCount: sql`LEAST(${userIntegrations.cleanupAttemptCount} + 1, 2147483647)`,
+        cleanupLeaseId: input.leaseId,
+        cleanupLeaseExpiresAt: input.leaseExpiresAt,
+      }).where(and(
+        eq(userIntegrations.id, input.cleanupRecordId),
+        eq(userIntegrations.userId, input.userId),
+        eq(userIntegrations.provider, input.provider),
+        eq(userIntegrations.status, 'cleanup_pending'),
+        lte(userIntegrations.cleanupNextAttemptAt, input.attemptedAt),
+        or(
+          isNull(userIntegrations.cleanupLeaseId),
+          lte(userIntegrations.cleanupLeaseExpiresAt, input.attemptedAt),
+        ),
+      )).returning(),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async releaseCredentialCleanup(input: UserIntegrationCleanupReleaseInput): Promise<UserIntegrationRecord | null> {
+    validateCleanupMutationInput(input);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(userIntegrations).set({
+        cleanupNextAttemptAt: input.retryAt,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+      }).where(and(
+        eq(userIntegrations.id, input.cleanupRecordId),
+        eq(userIntegrations.userId, input.userId),
+        eq(userIntegrations.provider, input.provider),
+        eq(userIntegrations.status, 'cleanup_pending'),
+        eq(userIntegrations.cleanupLeaseId, input.leaseId),
+      )).returning(),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async completeCredentialCleanup(input: UserIntegrationCleanupCompleteInput): Promise<UserIntegrationRecord | null> {
+    validateCleanupMutationInput(input);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(userIntegrations).set({
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+        revokedAt: input.completedAt,
+      }).where(and(
+        eq(userIntegrations.id, input.cleanupRecordId),
+        eq(userIntegrations.userId, input.userId),
+        eq(userIntegrations.provider, input.provider),
+        eq(userIntegrations.status, 'cleanup_pending'),
+        eq(userIntegrations.cleanupLeaseId, input.leaseId),
+      )).returning(),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async hasAnyCredentialMaterial(userId: string): Promise<boolean> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx => tx.select({ id: userIntegrations.id })
+      .from(userIntegrations)
+      .where(and(
+        eq(userIntegrations.userId, userId),
+        sql`(${userIntegrations.accessTokenCiphertext} IS NOT NULL OR ${userIntegrations.refreshTokenCiphertext} IS NOT NULL)`,
+      )).limit(1));
+    return rows.length > 0;
+  }
+
+  async hasCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean> {
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    const rows = await withSystemContext(this.db, tx => tx.select({ id: userIntegrations.id })
+      .from(userIntegrations)
+      .where(and(
+        eq(userIntegrations.integrationDescriptorId, integrationDescriptorId),
+        sql`(${userIntegrations.accessTokenCiphertext} IS NOT NULL OR ${userIntegrations.refreshTokenCiphertext} IS NOT NULL)`,
+      )).limit(1));
+    return rows.length > 0;
   }
 
   async disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
@@ -265,6 +397,10 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         refreshTokenCiphertext: null,
         status: 'revoked',
         errorReason: null,
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
         revokedAt: input.revokedAt,
       }).where(and(
         eq(userIntegrations.id, input.expectedActiveRecordId),
@@ -276,33 +412,32 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     return rows[0] ? fromRow(rows[0]) : null;
   }
 
-  async revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number> {
-    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
-    const rows = await withSystemContext(this.db, tx =>
-      tx.update(userIntegrations).set({
-        accessTokenCiphertext: null,
-        refreshTokenCiphertext: null,
-        status: 'revoked',
-        errorReason: null,
-        revokedAt,
-      }).where(and(
-        eq(userIntegrations.integrationDescriptorId, integrationDescriptorId),
-        isNull(userIntegrations.revokedAt),
-      )).returning({ id: userIntegrations.id }),
-    );
-    return rows.length;
-  }
 }
 
 async function connectWithTx(
   tx: SystemTransaction,
   input: UserIntegrationConnectInput,
 ): Promise<(typeof userIntegrations.$inferSelect)[]> {
+  await lockProviderMutation(tx, input.userId, input.provider);
+  const pending: { id: string }[] = await tx.execute(sql`
+    SELECT id
+    FROM user_integrations
+    WHERE user_id = ${input.userId}
+      AND provider = ${input.provider}
+      AND status = 'cleanup_pending'
+    LIMIT 1
+    FOR UPDATE
+  `);
+  if (pending.length > 0) throw new IntegrationCredentialCleanupPendingError();
   await tx.update(userIntegrations).set({
     accessTokenCiphertext: null,
     refreshTokenCiphertext: null,
     status: 'revoked',
     errorReason: null,
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: null,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
     revokedAt: input.connectedAt,
   }).where(and(
     eq(userIntegrations.userId, input.userId),
@@ -321,6 +456,10 @@ async function connectWithTx(
     credentialKeyVersion: input.credentialKeyVersion ?? null,
     status: 'connected',
     errorReason: null,
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: null,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
     connectedAt: input.connectedAt,
     lastSyncAt: null,
     revokedAt: null,
@@ -366,6 +505,57 @@ async function findActiveRow(
   return rows[0] ?? null;
 }
 
+async function lockProviderMutation(
+  tx: SystemTransaction,
+  userId: string,
+  provider: UserIntegrationProvider,
+): Promise<void> {
+  const providerLockKey = `${userId}:${provider}`;
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${providerLockKey}, 0))`);
+}
+
+async function beginCredentialCleanupWithTx(
+  tx: SystemTransaction,
+  input: UserIntegrationDisconnectInput,
+): Promise<typeof userIntegrations.$inferSelect | null> {
+  const rows = await tx.update(userIntegrations).set({
+    status: 'cleanup_pending',
+    errorReason: 'revocation_failed',
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: input.revokedAt,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
+    revokedAt: input.revokedAt,
+  }).where(and(
+    eq(userIntegrations.id, input.expectedActiveRecordId),
+    eq(userIntegrations.userId, input.userId),
+    eq(userIntegrations.provider, input.provider),
+    isNull(userIntegrations.revokedAt),
+  )).returning();
+  if (rows[0]) return rows[0];
+  const pending = await tx.select().from(userIntegrations).where(and(
+    eq(userIntegrations.userId, input.userId),
+    eq(userIntegrations.provider, input.provider),
+    eq(userIntegrations.status, 'cleanup_pending'),
+  )).limit(1);
+  return pending[0] ?? null;
+}
+
+function validateCleanupClaimInput(input: UserIntegrationCleanupClaimInput): void {
+  validateCleanupMutationInput(input);
+  if (input.leaseExpiresAt.getTime() <= input.attemptedAt.getTime()) {
+    throw new ConsoleStoreValidationError('cleanup lease must expire after the attempt starts');
+  }
+}
+
+function validateCleanupMutationInput(
+  input: UserIntegrationCleanupClaimInput | UserIntegrationCleanupReleaseInput | UserIntegrationCleanupCompleteInput,
+): void {
+  assertUuid(input.userId, 'userId');
+  assertUuid(input.cleanupRecordId, 'cleanupRecordId');
+  assertUuid(input.leaseId, 'leaseId');
+}
+
 function validateConnectInput(input: UserIntegrationConnectInput): void {
   validateUserIntegrationRecord({
     id: '00000000-0000-4000-8000-000000000000',
@@ -380,6 +570,10 @@ function validateConnectInput(input: UserIntegrationConnectInput): void {
     credentialKeyVersion: input.credentialKeyVersion ?? null,
     status: 'connected',
     errorReason: null,
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: null,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
     connectedAt: input.connectedAt,
     lastSyncAt: null,
     revokedAt: null,
@@ -410,6 +604,10 @@ function fromRow(row: typeof userIntegrations.$inferSelect): UserIntegrationReco
     credentialKeyVersion: row.credentialKeyVersion,
     status: row.status,
     errorReason: row.errorReason,
+    cleanupAttemptCount: row.cleanupAttemptCount,
+    cleanupNextAttemptAt: row.cleanupNextAttemptAt,
+    cleanupLeaseId: row.cleanupLeaseId,
+    cleanupLeaseExpiresAt: row.cleanupLeaseExpiresAt,
     connectedAt: row.connectedAt,
     lastSyncAt: row.lastSyncAt,
     revokedAt: row.revokedAt,

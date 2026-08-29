@@ -106,6 +106,10 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
     credentialKeyVersion: 'integration-key-v1',
     status: 'connected',
     errorReason: null,
+    cleanupAttemptCount: 0,
+    cleanupNextAttemptAt: null,
+    cleanupLeaseId: null,
+    cleanupLeaseExpiresAt: null,
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,
@@ -720,7 +724,7 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
-  it('revokes and clears only active credentials bound to a withdrawn descriptor', async () => {
+  it('retains descriptor-bound ciphertext behind a fenced cleanup lease until completion', async () => {
     const store = new InMemoryUserIntegrationStore([
       userIntegration({
         provider: 'linear',
@@ -740,10 +744,55 @@ describe('InMemoryUserIntegrationStore', () => {
       }),
     ]);
 
-    await expect(store.revokeAllByDescriptor(DESCRIPTOR_ID, FIVE_MINUTES)).resolves.toBe(2);
+    const pending = await store.beginCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+      revokedAt: FIVE_MINUTES,
+    });
+    expect(pending).toMatchObject({
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+      cleanupAttemptCount: 0,
+    });
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
-    await expect(store.findByProvider(SECOND_USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(SECOND_USER_ID, 'linear')).resolves.toMatchObject({ status: 'connected' });
     await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({ status: 'connected' });
+    await expect(store.hasCredentialMaterialByDescriptor(DESCRIPTOR_ID)).resolves.toBe(true);
+
+    const firstLease = '00000000-0000-4000-8000-000000000301';
+    const secondLease = '00000000-0000-4000-8000-000000000302';
+    await expect(store.claimCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      cleanupRecordId: pending?.id ?? '',
+      leaseId: firstLease,
+      attemptedAt: FIVE_MINUTES,
+      leaseExpiresAt: new Date(FIVE_MINUTES.getTime() + 60_000),
+    })).resolves.toMatchObject({ cleanupLeaseId: firstLease, cleanupAttemptCount: 1 });
+    await expect(store.claimCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      cleanupRecordId: pending?.id ?? '',
+      leaseId: secondLease,
+      attemptedAt: FIVE_MINUTES,
+      leaseExpiresAt: new Date(FIVE_MINUTES.getTime() + 60_000),
+    })).resolves.toBeNull();
+    await expect(store.completeCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      cleanupRecordId: pending?.id ?? '',
+      leaseId: firstLease,
+      completedAt: new Date(FIVE_MINUTES.getTime() + 1_000),
+    })).resolves.toMatchObject({
+      status: 'revoked',
+      accessTokenCiphertext: null,
+      refreshTokenCiphertext: null,
+      cleanupLeaseId: null,
+    });
+    await expect(store.findCredentialCleanupPending(USER_ID, 'linear')).resolves.toBeNull();
   });
 
   it('validates integration records before storing them', () => {

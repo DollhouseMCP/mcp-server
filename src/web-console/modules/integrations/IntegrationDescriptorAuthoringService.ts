@@ -30,7 +30,6 @@ import type {
   IUserIntegrationStore,
   UserIntegrationProvider,
 } from '../../stores/IUserIntegrationStore.js';
-import { hasIntegrationCredentials } from '../../stores/IUserIntegrationStore.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import {
   serializeIntegrationDescriptor,
@@ -203,8 +202,7 @@ export class IntegrationDescriptorAuthoringService {
     try {
       const merged = mergeDescriptor(existing, parsed);
       if (hasCredentialRoutingChanges(parsed)) {
-        const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-        if (hasIntegrationCredentials(active)) {
+        if (await this.options.integrationStore.hasCredentialMaterialByDescriptor(existing.id)) {
           auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
           return connectedDescriptorConflict('updated');
         }
@@ -253,8 +251,7 @@ export class IntegrationDescriptorAuthoringService {
       return notFound();
     }
     try {
-      const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-      if (hasIntegrationCredentials(active)) {
+      if (await this.options.integrationStore.hasCredentialMaterialByDescriptor(existing.id)) {
         auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
         return connectedDescriptorConflict('deleted');
       }

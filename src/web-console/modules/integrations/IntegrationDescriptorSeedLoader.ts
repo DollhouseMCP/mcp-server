@@ -190,10 +190,9 @@ export class IntegrationDescriptorSeedLoader {
       // however, the credentials belong to the BYO route and stay untouched.
       if (!curated) return null;
 
-      const revoked = await this.integrationStore.revokeAllByDescriptor(
-        curated.id,
-        this.now(),
-      );
+      if (await this.integrationStore.hasCredentialMaterialByDescriptor(curated.id)) {
+        throw new Error('curated integration descriptor still owns revocable credentials');
+      }
       const removed = await this.descriptorStore.deleteCurated(curated.provider);
       if (!removed) {
         throw new Error('curated integration descriptor disappeared during credential withdrawal');
@@ -205,7 +204,7 @@ export class IntegrationDescriptorSeedLoader {
         details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(curated.provider)}`,
       });
       logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${safeIntegrationAuditProvider(curated.provider)}' because deployment credentials are unavailable`, {
-        revokedIntegrations: revoked,
+        revokedIntegrations: 0,
       });
       return null;
     }

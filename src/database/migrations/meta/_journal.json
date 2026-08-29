@@ -365,6 +365,13 @@
       "when": 1787580700000,
       "tag": "0051_integration_descriptor_secret_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1787580800000,
+      "tag": "0052_integration_credential_cleanup_pending",
+      "breakpoints": true
     }
   ]
 }
