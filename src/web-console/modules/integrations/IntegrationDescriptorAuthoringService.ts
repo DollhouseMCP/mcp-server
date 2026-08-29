@@ -202,7 +202,7 @@ export class IntegrationDescriptorAuthoringService {
     try {
       const merged = mergeDescriptor(existing, parsed);
       if (hasCredentialRoutingChanges(parsed)) {
-        if (await this.options.integrationStore.hasCredentialMaterialByDescriptor(existing.id)) {
+        if (await this.options.integrationStore.hasBlockingCredentialMaterialByDescriptor(existing.id)) {
           auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
           return connectedDescriptorConflict('updated');
         }
@@ -251,7 +251,7 @@ export class IntegrationDescriptorAuthoringService {
       return notFound();
     }
     try {
-      if (await this.options.integrationStore.hasCredentialMaterialByDescriptor(existing.id)) {
+      if (await this.options.integrationStore.hasBlockingCredentialMaterialByDescriptor(existing.id)) {
         auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
         return connectedDescriptorConflict('deleted');
       }

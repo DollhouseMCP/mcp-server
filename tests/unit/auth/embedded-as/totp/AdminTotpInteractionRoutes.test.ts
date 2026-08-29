@@ -135,6 +135,31 @@ describe('AdminTotpInteractionRoutes', () => {
     await expect(factors.getTotpStatus(USER_ID)).resolves.toMatchObject({ enrolled: false });
   });
 
+  it('HTML-escapes an opaque disable identifier before reflecting it into the retry form', async () => {
+    const { app, storage } = buildFixture();
+    await enrollFactor(app);
+    const disableId = '"><script data-value=\'&\'>alert(1)</script>';
+    const csrf = 'hostile-disable-id-csrf';
+    await storage.genericSet(
+      'AdminTotpRouteCsrf',
+      disableId,
+      { token: csrf, userId: USER_ID },
+      10 * 60,
+    );
+
+    const failed = await request(app)
+      .post(DISABLE_CONFIRM_ROUTE)
+      .type('form')
+      .send({ disable_id: disableId, csrf_token: csrf, code: '000000' });
+
+    expect(failed.status).toBe(400);
+    expect(failed.text).not.toContain(disableId);
+    expect(failed.text).not.toContain('<script');
+    expect(failed.text).toContain(
+      'value="&quot;&gt;&lt;script data-value=&#39;&amp;&#39;&gt;alert(1)&lt;/script&gt;"',
+    );
+  });
+
   it('rejects missing and cross-user route CSRF tokens', async () => {
     const fixture = buildFixture();
     const enroll = await request(fixture.app).get(ENROLL_ROUTE_WITH_LABEL);

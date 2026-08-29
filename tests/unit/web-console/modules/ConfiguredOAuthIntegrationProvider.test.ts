@@ -346,6 +346,27 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
       .rejects.toThrow('configured_oauth_endpoint_not_allowed');
     expect(factory).not.toHaveBeenCalled();
   });
+
+  it.each([404, 410])(
+    'treats a %i revocation retry as success after the provider already removed the credential',
+    async missingStatus => {
+      const responses = [204, missingStatus];
+      const { provider } = providerWith({
+        dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+        fetch: () => Promise.resolve(new Response(null, { status: responses.shift() ?? 500 })),
+      });
+      const request = {
+        accessToken: ACCESS_TOKEN,
+        refreshToken: null,
+        externalInstallationId: null,
+      };
+
+      await expect(provider.revokeCredentials(request)).resolves.toBeUndefined();
+      await expect(provider.revokeCredentials(request)).resolves.toBeUndefined();
+      expect(responses).toEqual([]);
+    },
+  );
+
   it('fails closed when the token host cannot be resolved', async () => {
     const { provider, factory } = providerWith({
       dnsLookup: () => Promise.reject(new Error('ENOTFOUND')),
@@ -505,10 +526,10 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     ]);
   });
 
-  it('treats a missing revocation endpoint response as failure', async () => {
+  it('treats a provider revocation server error as failure', async () => {
     const { provider } = providerWith({
       dnsLookup: lookupReturning(PUBLIC_ADDRESS),
-      fetch: () => Promise.resolve(new Response('{}', { status: 404 })),
+      fetch: () => Promise.resolve(new Response('{}', { status: 500 })),
     });
 
     await expect(provider.revokeCredentials({

@@ -132,6 +132,28 @@ describe('GitHubAppIntegrationProvider', () => {
     );
   });
 
+  it.each([404, 410])('treats a %i revocation response as already revoked', async status => {
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status }));
+    const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
+
+    await expect(provider.revokeCredentials({
+      accessToken: 'github-access-token',
+      refreshToken: null,
+      installationId: null,
+    })).resolves.toBeUndefined();
+  });
+
+  it('fails closed on a GitHub revocation server error', async () => {
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status: 500 }));
+    const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
+
+    await expect(provider.revokeCredentials({
+      accessToken: 'github-access-token',
+      refreshToken: null,
+      installationId: null,
+    })).rejects.toThrow('github_integration_revocation_failed');
+  });
+
   it('skips remote revocation when no decrypted access token is available', async () => {
     const fetchMock = jest.fn<typeof fetch>();
     const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });

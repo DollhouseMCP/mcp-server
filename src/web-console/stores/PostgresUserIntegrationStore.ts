@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -14,8 +14,10 @@ import {
   GITHUB_USER_INTEGRATION_PROVIDER,
   IntegrationCredentialCleanupPendingError,
   type IUserIntegrationStore,
+  type UserIntegrationCleanupAbandonInput,
   type UserIntegrationCleanupClaimInput,
   type UserIntegrationCleanupCompleteInput,
+  type UserIntegrationCleanupFailInput,
   type UserIntegrationCleanupReleaseInput,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
@@ -52,7 +54,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       tx.select().from(userIntegrations).where(and(
         eq(userIntegrations.userId, userId),
         inArray(userIntegrations.provider, [...providers]),
-        sql`(${userIntegrations.revokedAt} IS NULL OR ${userIntegrations.status} = 'cleanup_pending')`,
+        sql`(${userIntegrations.revokedAt} IS NULL OR ${userIntegrations.status} IN ('cleanup_pending', 'cleanup_failed'))`,
       )).orderBy(asc(userIntegrations.provider)),
     );
     return rows.map(fromRow);
@@ -81,6 +83,21 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         eq(userIntegrations.provider, provider),
         eq(userIntegrations.status, 'cleanup_pending'),
       )).limit(1),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async findCredentialCleanupFailed(
+    userId: string,
+    provider: UserIntegrationProvider,
+  ): Promise<UserIntegrationRecord | null> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(userIntegrations).where(and(
+        eq(userIntegrations.userId, userId),
+        eq(userIntegrations.provider, provider),
+        eq(userIntegrations.status, 'cleanup_failed'),
+      )).orderBy(desc(userIntegrations.revokedAt)).limit(1),
     );
     return rows[0] ? fromRow(rows[0]) : null;
   }
@@ -342,6 +359,43 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     return rows[0] ? fromRow(rows[0]) : null;
   }
 
+  async failCredentialCleanup(input: UserIntegrationCleanupFailInput): Promise<UserIntegrationRecord | null> {
+    validateCleanupMutationInput(input);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(userIntegrations).set({
+        status: 'cleanup_failed',
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+      }).where(and(
+        eq(userIntegrations.id, input.cleanupRecordId),
+        eq(userIntegrations.userId, input.userId),
+        eq(userIntegrations.provider, input.provider),
+        eq(userIntegrations.status, 'cleanup_pending'),
+        eq(userIntegrations.cleanupLeaseId, input.leaseId),
+      )).returning(),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async abandonCredentialCleanupForUser(
+    input: UserIntegrationCleanupAbandonInput,
+  ): Promise<readonly UserIntegrationRecord[]> {
+    assertUuid(input.userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(userIntegrations).set({
+        status: 'cleanup_failed',
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+      }).where(and(
+        eq(userIntegrations.userId, input.userId),
+        eq(userIntegrations.status, 'cleanup_pending'),
+      )).returning(),
+    );
+    return rows.map(fromRow);
+  }
+
   async completeCredentialCleanup(input: UserIntegrationCleanupCompleteInput): Promise<UserIntegrationRecord | null> {
     validateCleanupMutationInput(input);
     const rows = await withSystemContext(this.db, tx =>
@@ -383,6 +437,30 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       .from(userIntegrations)
       .where(and(
         eq(userIntegrations.integrationDescriptorId, integrationDescriptorId),
+        sql`(${userIntegrations.accessTokenCiphertext} IS NOT NULL OR ${userIntegrations.refreshTokenCiphertext} IS NOT NULL)`,
+      )).limit(1));
+    return rows.length > 0;
+  }
+
+  async hasBlockingCredentialMaterial(userId: string): Promise<boolean> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx => tx.select({ id: userIntegrations.id })
+      .from(userIntegrations)
+      .where(and(
+        eq(userIntegrations.userId, userId),
+        sql`${userIntegrations.status} <> 'cleanup_failed'`,
+        sql`(${userIntegrations.accessTokenCiphertext} IS NOT NULL OR ${userIntegrations.refreshTokenCiphertext} IS NOT NULL)`,
+      )).limit(1));
+    return rows.length > 0;
+  }
+
+  async hasBlockingCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean> {
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    const rows = await withSystemContext(this.db, tx => tx.select({ id: userIntegrations.id })
+      .from(userIntegrations)
+      .where(and(
+        eq(userIntegrations.integrationDescriptorId, integrationDescriptorId),
+        sql`${userIntegrations.status} <> 'cleanup_failed'`,
         sql`(${userIntegrations.accessTokenCiphertext} IS NOT NULL OR ${userIntegrations.refreshTokenCiphertext} IS NOT NULL)`,
       )).limit(1));
     return rows.length > 0;
@@ -549,7 +627,8 @@ function validateCleanupClaimInput(input: UserIntegrationCleanupClaimInput): voi
 }
 
 function validateCleanupMutationInput(
-  input: UserIntegrationCleanupClaimInput | UserIntegrationCleanupReleaseInput | UserIntegrationCleanupCompleteInput,
+  input: UserIntegrationCleanupClaimInput | UserIntegrationCleanupReleaseInput
+    | UserIntegrationCleanupFailInput | UserIntegrationCleanupCompleteInput,
 ): void {
   assertUuid(input.userId, 'userId');
   assertUuid(input.cleanupRecordId, 'cleanupRecordId');

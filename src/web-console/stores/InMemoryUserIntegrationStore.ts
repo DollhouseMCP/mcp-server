@@ -5,8 +5,10 @@ import {
   GITHUB_USER_INTEGRATION_PROVIDER,
   IntegrationCredentialCleanupPendingError,
   type IUserIntegrationStore,
+  type UserIntegrationCleanupAbandonInput,
   type UserIntegrationCleanupClaimInput,
   type UserIntegrationCleanupCompleteInput,
+  type UserIntegrationCleanupFailInput,
   type UserIntegrationCleanupReleaseInput,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
@@ -40,7 +42,8 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return [...this.records.values()]
       .filter(record =>
         record.userId === userId &&
-        (record.revokedAt === null || record.status === 'cleanup_pending') &&
+        (record.revokedAt === null || record.status === 'cleanup_pending'
+          || record.status === 'cleanup_failed') &&
         visibleProviders.has(record.provider))
       .map(cloneUserIntegrationRecord);
   }
@@ -63,6 +66,20 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       candidate.userId === userId
       && candidate.provider === provider
       && candidate.status === 'cleanup_pending');
+    return record ? cloneUserIntegrationRecord(record) : null;
+  }
+
+  async findCredentialCleanupFailed(
+    userId: string,
+    provider: UserIntegrationProvider,
+  ): Promise<UserIntegrationRecord | null> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    const record = [...this.records.values()]
+      .filter(candidate => candidate.userId === userId
+        && candidate.provider === provider
+        && candidate.status === 'cleanup_failed')
+      .sort((left, right) => (right.revokedAt?.getTime() ?? 0) - (left.revokedAt?.getTime() ?? 0))[0];
     return record ? cloneUserIntegrationRecord(record) : null;
   }
 
@@ -222,6 +239,51 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     });
   }
 
+  async failCredentialCleanup(input: UserIntegrationCleanupFailInput): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.userId, 'userId');
+    assertUuid(input.cleanupRecordId, 'cleanupRecordId');
+    assertUuid(input.leaseId, 'leaseId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const pending = this.records.get(input.cleanupRecordId);
+      if (pending?.userId !== input.userId || pending.provider !== input.provider
+          || pending.status !== 'cleanup_pending' || pending.cleanupLeaseId !== input.leaseId) {
+        return null;
+      }
+      const failed: UserIntegrationRecord = {
+        ...pending,
+        status: 'cleanup_failed',
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+      };
+      validateUserIntegrationRecord(failed);
+      this.records.set(failed.id, cloneUserIntegrationRecord(failed));
+      return cloneUserIntegrationRecord(failed);
+    });
+  }
+
+  async abandonCredentialCleanupForUser(
+    input: UserIntegrationCleanupAbandonInput,
+  ): Promise<readonly UserIntegrationRecord[]> {
+    await Promise.resolve();
+    assertUuid(input.userId, 'userId');
+    const abandoned: UserIntegrationRecord[] = [];
+    for (const [recordId, record] of this.records) {
+      if (record.userId !== input.userId || record.status !== 'cleanup_pending') continue;
+      const failed: UserIntegrationRecord = {
+        ...record,
+        status: 'cleanup_failed',
+        cleanupNextAttemptAt: null,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+      };
+      validateUserIntegrationRecord(failed);
+      this.records.set(recordId, cloneUserIntegrationRecord(failed));
+      abandoned.push(cloneUserIntegrationRecord(failed));
+    }
+    return abandoned;
+  }
+
   async completeCredentialCleanup(input: UserIntegrationCleanupCompleteInput): Promise<UserIntegrationRecord | null> {
     assertUuid(input.userId, 'userId');
     assertUuid(input.cleanupRecordId, 'cleanupRecordId');
@@ -258,11 +320,29 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null));
   }
 
+  async hasBlockingCredentialMaterial(userId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    return [...this.records.values()].some(record =>
+      record.userId === userId
+      && record.status !== 'cleanup_failed'
+      && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null));
+  }
+
   async hasCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean> {
     await Promise.resolve();
     assertUuid(integrationDescriptorId, 'integrationDescriptorId');
     return [...this.records.values()].some(record =>
       record.integrationDescriptorId === integrationDescriptorId
+      && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null));
+  }
+
+  async hasBlockingCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    return [...this.records.values()].some(record =>
+      record.integrationDescriptorId === integrationDescriptorId
+      && record.status !== 'cleanup_failed'
       && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null));
   }
 

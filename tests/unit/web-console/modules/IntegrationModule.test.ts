@@ -980,18 +980,21 @@ describe('IntegrationModule', () => {
         status: 200,
         body: {
           provider: 'github',
-          status: 'cleanup_pending',
+          status: 'cleanup_failed',
           error_reason: 'revocation_failed',
         },
       });
       expect(provider.revocations).toHaveLength(0);
       await expect(store.findByProvider(USER_ID, 'github')).resolves.toBeNull();
-      await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toMatchObject({
-        status: 'cleanup_pending',
-        errorReason: 'revocation_failed',
-        accessTokenCiphertext: record.accessTokenCiphertext,
-        refreshTokenCiphertext: record.refreshTokenCiphertext,
-      });
+      await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toBeNull();
+      await expect(store.listByUser(USER_ID, ['github'])).resolves.toEqual([
+        expect.objectContaining({
+          status: 'cleanup_failed',
+          errorReason: 'revocation_failed',
+          accessTokenCiphertext: record.accessTokenCiphertext,
+          refreshTokenCiphertext: record.refreshTokenCiphertext,
+        }),
+      ]);
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
         type: 'OPERATION_FAILED',
         severity: 'MEDIUM',
@@ -1429,13 +1432,18 @@ describe('IntegrationModule', () => {
     await expect(findRoute(module.routes, GMAIL_PATH).handler(consoleRequest()))
       .resolves.toMatchObject({ body: { status: 'disconnected' } });
     await expect(findRoute(module.routes, GMAIL_PATH, 'DELETE').handler(consoleRequest()))
-      .resolves.toMatchObject({ status: 200, body: { status: 'cleanup_pending' } });
+      .resolves.toMatchObject({ status: 200, body: { status: 'cleanup_failed' } });
     expect(revoke).not.toHaveBeenCalled();
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
-    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toMatchObject({
-      integrationDescriptorId: oauthDescriptorFixture().id,
-      status: 'cleanup_pending',
-    });
+    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.listByUser(USER_ID, ['gmail'])).resolves.toEqual([
+      expect.objectContaining({
+        integrationDescriptorId: oauthDescriptorFixture().id,
+        status: 'cleanup_failed',
+        errorReason: 'revocation_failed',
+        accessTokenCiphertext: expect.any(Buffer),
+      }),
+    ]);
   });
 
   it('keeps the descriptor binding when configured-provider revocation fails', async () => {

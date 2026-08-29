@@ -81,7 +81,7 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
       // sent here, so a 3xx must never replay them to a redirect target.
       redirect: 'error',
     });
-    if (!response.ok && response.status !== 404) {
+    if (!response.ok && response.status !== 404 && response.status !== 410) {
       throw new Error('github_integration_revocation_failed');
     }
   }

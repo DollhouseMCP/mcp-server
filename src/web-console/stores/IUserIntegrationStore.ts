@@ -90,6 +90,10 @@ export interface IUserIntegrationStore {
     userId: string,
     provider: UserIntegrationProvider,
   ): Promise<UserIntegrationRecord | null>;
+  findCredentialCleanupFailed(
+    userId: string,
+    provider: UserIntegrationProvider,
+  ): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
   /** Atomically persist a credential only while its descriptor revision is current. */
   connectDescriptorCredential?(input: DescriptorCredentialConnectInput): Promise<UserIntegrationRecord | null>;
@@ -104,9 +108,15 @@ export interface IUserIntegrationStore {
   beginCredentialCleanup(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
   claimCredentialCleanup(input: UserIntegrationCleanupClaimInput): Promise<UserIntegrationRecord | null>;
   releaseCredentialCleanup(input: UserIntegrationCleanupReleaseInput): Promise<UserIntegrationRecord | null>;
+  failCredentialCleanup(input: UserIntegrationCleanupFailInput): Promise<UserIntegrationRecord | null>;
+  abandonCredentialCleanupForUser(
+    input: UserIntegrationCleanupAbandonInput,
+  ): Promise<readonly UserIntegrationRecord[]>;
   completeCredentialCleanup(input: UserIntegrationCleanupCompleteInput): Promise<UserIntegrationRecord | null>;
   hasAnyCredentialMaterial(userId: string): Promise<boolean>;
   hasCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean>;
+  hasBlockingCredentialMaterial(userId: string): Promise<boolean>;
+  hasBlockingCredentialMaterialByDescriptor(integrationDescriptorId: string): Promise<boolean>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
 }
 
@@ -188,6 +198,17 @@ export interface UserIntegrationCleanupReleaseInput {
   readonly retryAt: Date;
 }
 
+export interface UserIntegrationCleanupFailInput {
+  readonly userId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly cleanupRecordId: string;
+  readonly leaseId: string;
+}
+
+export interface UserIntegrationCleanupAbandonInput {
+  readonly userId: string;
+}
+
 export interface UserIntegrationCleanupCompleteInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
@@ -212,7 +233,7 @@ export function validateUserIntegrationRecord(record: UserIntegrationRecord): vo
   if (record.integrationDescriptorId) {
     assertUuid(record.integrationDescriptorId, 'integrationDescriptorId');
   }
-  if (!['connected', 'cleanup_pending', 'revoked', 'error'].includes(record.status)) {
+  if (!['connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error'].includes(record.status)) {
     throw new ConsoleStoreValidationError(`unsupported integration status '${record.status}'`);
   }
   if (record.errorReason !== null && !isIntegrationErrorReason(record.errorReason)) {
@@ -236,16 +257,34 @@ function assertIntegrationCleanupMetadata(record: UserIntegrationRecord): void {
     throw new ConsoleStoreValidationError('cleanup lease id and expiry must be present together');
   }
   if (record.cleanupLeaseId !== null) assertUuid(record.cleanupLeaseId, 'cleanupLeaseId');
-  if ((record.status === 'revoked' || record.status === 'cleanup_pending') && !record.revokedAt) {
+  if ((record.status === 'revoked' || record.status === 'cleanup_pending'
+      || record.status === 'cleanup_failed') && !record.revokedAt) {
     throw new ConsoleStoreValidationError(`${record.status} integration requires revokedAt`);
   }
   if (record.status === 'cleanup_pending') {
     assertCleanupPendingRecord(record);
     return;
   }
+  if (record.status === 'cleanup_failed') {
+    assertCleanupFailedRecord(record);
+    return;
+  }
   if (record.cleanupAttemptCount !== 0 || record.cleanupNextAttemptAt !== null
       || record.cleanupLeaseId !== null || record.cleanupLeaseExpiresAt !== null) {
     throw new ConsoleStoreValidationError('cleanup metadata requires cleanup_pending status');
+  }
+}
+
+function assertCleanupFailedRecord(record: UserIntegrationRecord): void {
+  if (record.errorReason !== 'revocation_failed') {
+    throw new ConsoleStoreValidationError('cleanup_failed integration requires revocation_failed');
+  }
+  if (!record.accessTokenCiphertext && !record.refreshTokenCiphertext) {
+    throw new ConsoleStoreValidationError('cleanup_failed integration requires credential material');
+  }
+  if (record.cleanupNextAttemptAt !== null || record.cleanupLeaseId !== null
+      || record.cleanupLeaseExpiresAt !== null) {
+    throw new ConsoleStoreValidationError('cleanup_failed integration cannot retain retry or lease metadata');
   }
 }
 
@@ -265,8 +304,11 @@ function assertIntegrationErrorState(record: UserIntegrationRecord): void {
   if (record.status === 'error' && record.errorReason === null) {
     throw new ConsoleStoreValidationError('error integration requires errorReason');
   }
-  if (record.status !== 'error' && record.status !== 'cleanup_pending' && record.errorReason !== null) {
-    throw new ConsoleStoreValidationError('integration error reason requires error or cleanup_pending status');
+  if (record.status !== 'error' && record.status !== 'cleanup_pending'
+      && record.status !== 'cleanup_failed' && record.errorReason !== null) {
+    throw new ConsoleStoreValidationError(
+      'integration error reason requires error, cleanup_pending, or cleanup_failed status',
+    );
   }
 }
 

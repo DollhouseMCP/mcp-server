@@ -190,7 +190,7 @@ export class IntegrationDescriptorSeedLoader {
       // however, the credentials belong to the BYO route and stay untouched.
       if (!curated) return null;
 
-      if (await this.integrationStore.hasCredentialMaterialByDescriptor(curated.id)) {
+      if (await this.integrationStore.hasBlockingCredentialMaterialByDescriptor(curated.id)) {
         throw new Error('curated integration descriptor still owns revocable credentials');
       }
       const removed = await this.descriptorStore.deleteCurated(curated.provider);

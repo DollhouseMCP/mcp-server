@@ -795,6 +795,52 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.findCredentialCleanupPending(USER_ID, 'linear')).resolves.toBeNull();
   });
 
+  it('terminalizes non-retryable cleanup without erasing ciphertext and releases deletion guards', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+    })]);
+    const pending = await store.beginCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+      revokedAt: FIVE_MINUTES,
+    });
+    const leaseId = '00000000-0000-4000-8000-000000000303';
+    await store.claimCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      cleanupRecordId: pending?.id ?? '',
+      leaseId,
+      attemptedAt: FIVE_MINUTES,
+      leaseExpiresAt: new Date(FIVE_MINUTES.getTime() + 60_000),
+    });
+
+    await expect(store.failCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      cleanupRecordId: pending?.id ?? '',
+      leaseId,
+    })).resolves.toMatchObject({
+      status: 'cleanup_failed',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+      cleanupAttemptCount: 1,
+      cleanupNextAttemptAt: null,
+      cleanupLeaseId: null,
+      cleanupLeaseExpiresAt: null,
+    });
+    await expect(store.findCredentialCleanupPending(USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findCredentialCleanupFailed(USER_ID, 'linear'))
+      .resolves.toMatchObject({ status: 'cleanup_failed' });
+    await expect(store.hasAnyCredentialMaterial(USER_ID)).resolves.toBe(true);
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(false);
+    await expect(store.hasCredentialMaterialByDescriptor(DESCRIPTOR_ID)).resolves.toBe(true);
+    await expect(store.hasBlockingCredentialMaterialByDescriptor(DESCRIPTOR_ID)).resolves.toBe(false);
+  });
+
   it('validates integration records before storing them', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       authorizedPermissions: {

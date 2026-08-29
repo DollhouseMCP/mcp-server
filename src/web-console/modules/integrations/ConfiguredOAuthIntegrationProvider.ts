@@ -219,7 +219,9 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         ),
         redirect: 'error',
       });
-      if (!response.ok) throw new Error('configured_oauth_revocation_failed');
+      if (!response.ok && response.status !== 404 && response.status !== 410) {
+        throw new Error('configured_oauth_revocation_failed');
+      }
     }
   }
 

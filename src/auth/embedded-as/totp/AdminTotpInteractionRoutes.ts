@@ -19,6 +19,13 @@ const ROUTE_CSRF_MODEL = 'AdminTotpRouteCsrf';
 const ROUTE_CSRF_TTL_SECONDS = 10 * 60;
 const ENROLL_CONFIRM_RATE_SCOPE = 'admin_totp_enroll';
 const DISABLE_CONFIRM_RATE_SCOPE = 'admin_totp_disable';
+const HTML_ESCAPE_REPLACEMENTS: Readonly<Record<string, string>> = Object.freeze({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+});
 
 export interface AdminTotpInteractionRouteDeps {
   storage: IAuthStorageLayer;
@@ -240,12 +247,7 @@ function page(title: string, body: string): string {
 }
 
 function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\'', '&#39;');
+  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPE_REPLACEMENTS[character] ?? character);
 }
 
 function escapeHtmlAttr(value: string): string {

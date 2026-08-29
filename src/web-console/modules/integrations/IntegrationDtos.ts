@@ -58,9 +58,20 @@ export function serializeIntegrationList(
   return {
     integrations: providers.map(provider => serializeProviderStatus(
       provider,
-      records.find(record => record.provider === provider.id) ?? null,
+      selectProviderRecord(records, provider.id),
     )),
   };
+}
+
+function selectProviderRecord(
+  records: readonly UserIntegrationRecord[],
+  provider: UserIntegrationProvider,
+): UserIntegrationRecord | null {
+  const matching = records.filter(record => record.provider === provider);
+  return matching.find(record => record.revokedAt === null)
+    ?? matching.find(record => record.status === 'cleanup_pending')
+    ?? matching.find(record => record.status === 'cleanup_failed')
+    ?? null;
 }
 
 function serializeProviderStatus(

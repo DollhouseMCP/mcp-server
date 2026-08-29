@@ -49,6 +49,7 @@ const IDEMPOTENCY_NOT_APPLICABLE = 'not_applicable';
 const AUDIT_USERS_DISABLE = 'accounts.users.disable';
 const AUDIT_USERS_ENABLE = 'accounts.users.enable';
 const AUDIT_USERS_INVITE = 'accounts.users.invite';
+const AUDIT_USERS_DELETE = 'accounts.users.delete';
 const AUDIT_USERS_CREDENTIALS_REVOKE_ALL = 'accounts.users.credentials.revoke_all';
 const AUDIT_ALLOWLIST_ADD = 'accounts.allowlist.add';
 const AUDIT_ROLES_GRANT = 'accounts.roles.grant';
@@ -664,6 +665,62 @@ describe('AccountAdminModule', () => {
       status: 'connected',
       accessTokenCiphertext: Buffer.from('encrypted-access-token'),
     });
+  });
+
+  it('allows an elevated operator to acknowledge terminal cleanup risk before account deletion', async () => {
+    const principals = new InMemoryConsoleAccountAdminStore([
+      await principalFixture(),
+      await principalFixture({
+        userId: SECOND_USER_ID,
+        primarySub: 'github_user-8',
+        username: 'bob',
+        displayName: 'Bob Example',
+        email: 'bob@example.test',
+        roles: [],
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      }),
+    ]);
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const connected = await integrationStore.connect({
+      userId: SECOND_USER_ID,
+      provider: 'github',
+      integrationDescriptorId: null,
+      externalAccountLabel: 'bob',
+      externalInstallationId: 'installation-789',
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+      },
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+      connectedAt: NOW,
+    });
+    await integrationStore.beginCredentialCleanup({
+      userId: SECOND_USER_ID,
+      provider: 'github',
+      expectedActiveRecordId: connected.id,
+      revokedAt: NOW,
+    });
+    const { module, adminAuditWriter } = mutationFixture(principals, integrationStore);
+    const remove = findRoute(module.routes, '/api/v1/admin/accounts/users/:user_id', 'DELETE');
+
+    await expect(remove.handler(consoleRequest({
+      params: { user_id: SECOND_USER_ID },
+      body: {
+        integration_credential_cleanup_override: 'abandon_unrevoked_provider_credentials',
+      },
+    }))).resolves.toMatchObject({ status: 200, body: { user_id: SECOND_USER_ID } });
+    await expect(principals.findPrincipal(SECOND_USER_ID)).resolves.toBeNull();
+    await expect(integrationStore.findCredentialCleanupPending(SECOND_USER_ID, 'github'))
+      .resolves.toBeNull();
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_DELETE,
+        argsRedacted: expect.objectContaining({
+          integrationCredentialCleanupOverride: true,
+        }),
+      }),
+    ]);
   });
 
   it('issues account invites after bootstrap with transaction audit and privacy projection', async () => {

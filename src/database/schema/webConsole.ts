@@ -161,7 +161,7 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
 ]);
 
 export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };
-export type UserIntegrationStatus = 'connected' | 'cleanup_pending' | 'revoked' | 'error';
+export type UserIntegrationStatus = 'connected' | 'cleanup_pending' | 'cleanup_failed' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
   | 'token_refresh_failed'
@@ -197,7 +197,7 @@ export const userIntegrations = pgTable('user_integrations', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 }, (table) => [
   check('user_integrations_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
-  check('user_integrations_status_check', sql`${table.status} IN ('connected', 'cleanup_pending', 'revoked', 'error')`),
+  check('user_integrations_status_check', sql`${table.status} IN ('connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error')`),
   check('user_integrations_shape_check', sql`
     (${table.externalAccountLabel} IS NULL OR (
       btrim(${table.externalAccountLabel}) <> ''
@@ -251,8 +251,8 @@ export const userIntegrations = pgTable('user_integrations', {
       )
     )
     AND (
-      (${table.status} IN ('cleanup_pending', 'revoked') AND ${table.revokedAt} IS NOT NULL)
-      OR (${table.status} NOT IN ('cleanup_pending', 'revoked'))
+      (${table.status} IN ('cleanup_pending', 'cleanup_failed', 'revoked') AND ${table.revokedAt} IS NOT NULL)
+      OR (${table.status} NOT IN ('cleanup_pending', 'cleanup_failed', 'revoked'))
     )
     AND (
       (${table.status} = 'error'
@@ -264,10 +264,11 @@ export const userIntegrations = pgTable('user_integrations', {
           'provider_unavailable'
         ))
       OR (${table.status} = 'cleanup_pending' AND ${table.errorReason} = 'revocation_failed')
-      OR (${table.status} NOT IN ('error', 'cleanup_pending') AND ${table.errorReason} IS NULL)
+      OR (${table.status} = 'cleanup_failed' AND ${table.errorReason} = 'revocation_failed')
+      OR (${table.status} NOT IN ('error', 'cleanup_pending', 'cleanup_failed') AND ${table.errorReason} IS NULL)
     )
     AND (
-      ${table.status} <> 'cleanup_pending'
+      ${table.status} NOT IN ('cleanup_pending', 'cleanup_failed')
       OR ${table.accessTokenCiphertext} IS NOT NULL
       OR ${table.refreshTokenCiphertext} IS NOT NULL
     )
@@ -278,7 +279,11 @@ export const userIntegrations = pgTable('user_integrations', {
     )
     AND (
       (${table.status} = 'cleanup_pending' AND ${table.cleanupNextAttemptAt} IS NOT NULL)
-      OR (${table.status} <> 'cleanup_pending'
+      OR (${table.status} = 'cleanup_failed'
+        AND ${table.cleanupNextAttemptAt} IS NULL
+        AND ${table.cleanupLeaseId} IS NULL
+        AND ${table.cleanupLeaseExpiresAt} IS NULL)
+      OR (${table.status} NOT IN ('cleanup_pending', 'cleanup_failed')
         AND ${table.cleanupAttemptCount} = 0
         AND ${table.cleanupNextAttemptAt} IS NULL
         AND ${table.cleanupLeaseId} IS NULL

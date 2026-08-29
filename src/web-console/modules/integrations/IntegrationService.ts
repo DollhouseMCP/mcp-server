@@ -51,6 +51,8 @@ const CREDENTIAL_CLEANUP_LEASE_MS = 5 * 60 * 1000;
 const CREDENTIAL_CLEANUP_INITIAL_RETRY_MS = 1_000;
 const CREDENTIAL_CLEANUP_MAX_RETRY_MS = 60_000;
 
+type CredentialRevocationOutcome = 'revoked' | 'retry' | 'terminal';
+
 interface ConsumedProviderCallbackContext {
   readonly req: ConsoleRequest;
   readonly auth: ConsoleAuthenticatedContext;
@@ -117,7 +119,8 @@ export class IntegrationService {
     const provider = await this.resolveProviderFor(auth.userId, providerId);
     if (!provider) return providerNotFound(providerId);
     const record = await this.options.store.findByProvider(auth.userId, providerId)
-      ?? await this.options.store.findCredentialCleanupPending(auth.userId, providerId);
+      ?? await this.options.store.findCredentialCleanupPending(auth.userId, providerId)
+      ?? await this.options.store.findCredentialCleanupFailed(auth.userId, providerId);
     return {
       status: 200,
       body: provider.projectStatus(this.recordOwnedByProvider(provider, record) ? record : null).body,
@@ -385,7 +388,8 @@ export class IntegrationService {
       await this.attemptCredentialCleanup(deps, auth, pending);
     }
     const current = await this.options.store.findByProvider(auth.userId, providerId)
-      ?? await this.options.store.findCredentialCleanupPending(auth.userId, providerId);
+      ?? await this.options.store.findCredentialCleanupPending(auth.userId, providerId)
+      ?? await this.options.store.findCredentialCleanupFailed(auth.userId, providerId);
     return {
       status: 200,
       body: deps.provider.projectStatus(current).body,
@@ -434,9 +438,28 @@ export class IntegrationService {
       leaseExpiresAt: new Date(attemptedAt.getTime() + CREDENTIAL_CLEANUP_LEASE_MS),
     });
     if (!claimed) return;
-    const revoked = this.recordOwnedByProvider(deps.provider, claimed)
-      && await this.revokeRemoteCredentials(deps, auth, claimed);
-    if (!revoked) {
+    let outcome: CredentialRevocationOutcome;
+    if (!this.recordOwnedByProvider(deps.provider, claimed)) {
+      logIntegrationSecurityEvent(
+        'OPERATION_FAILED',
+        'MEDIUM',
+        'Integration credential cleanup descriptor ownership mismatch',
+        { userId: auth.userId, provider: pending.provider },
+      );
+      outcome = 'terminal';
+    } else {
+      outcome = await this.revokeRemoteCredentials(deps, auth, claimed);
+    }
+    if (outcome === 'terminal') {
+      await this.options.store.failCredentialCleanup({
+        userId: auth.userId,
+        provider: pending.provider,
+        cleanupRecordId: claimed.id,
+        leaseId,
+      });
+      return;
+    }
+    if (outcome === 'retry') {
       await this.options.store.releaseCredentialCleanup({
         userId: auth.userId,
         provider: pending.provider,
@@ -465,7 +488,7 @@ export class IntegrationService {
     deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
     auth: ConsoleAuthenticatedContext,
     active: NonNullable<Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>>,
-  ): Promise<boolean> {
+  ): Promise<CredentialRevocationOutcome> {
     const accessToken = active.accessTokenCiphertext
       ? decryptNullable(
         deps.secretEncryption,
@@ -486,7 +509,7 @@ export class IntegrationService {
       : null;
     if ((active.accessTokenCiphertext && accessToken === null) ||
         (active.refreshTokenCiphertext && refreshToken === null)) {
-      return false;
+      return 'terminal';
     }
     try {
       await deps.provider.revokeCredentials({
@@ -494,12 +517,12 @@ export class IntegrationService {
         refreshToken,
         externalInstallationId: active.externalInstallationId,
       });
-      return true;
+      return 'revoked';
     } catch {
       // Local credential invalidation still proceeds so no future console path
       // can use the stored credentials. Structured event persistence lands with
       // the self-security/user-event sink.
-      return false;
+      return 'retry';
     }
   }
 

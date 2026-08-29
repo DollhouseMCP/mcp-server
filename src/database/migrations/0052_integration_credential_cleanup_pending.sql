@@ -18,7 +18,7 @@ ALTER TABLE "user_integrations"
 
 ALTER TABLE "user_integrations"
   ADD CONSTRAINT "user_integrations_status_check"
-  CHECK ("status" IN ('connected', 'cleanup_pending', 'revoked', 'error')),
+  CHECK ("status" IN ('connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error')),
   ADD CONSTRAINT "user_integrations_shape_check"
   CHECK (
     ("external_account_label" IS NULL OR (
@@ -62,8 +62,8 @@ ALTER TABLE "user_integrations"
       )
     )
     AND (
-      ("status" IN ('cleanup_pending', 'revoked') AND "revoked_at" IS NOT NULL)
-      OR "status" NOT IN ('cleanup_pending', 'revoked')
+      ("status" IN ('cleanup_pending', 'cleanup_failed', 'revoked') AND "revoked_at" IS NOT NULL)
+      OR "status" NOT IN ('cleanup_pending', 'cleanup_failed', 'revoked')
     )
     AND (
       ("status" = 'error' AND "error_reason" IN (
@@ -71,10 +71,11 @@ ALTER TABLE "user_integrations"
         'scope_denied', 'provider_unavailable'
       ))
       OR ("status" = 'cleanup_pending' AND "error_reason" = 'revocation_failed')
-      OR ("status" NOT IN ('error', 'cleanup_pending') AND "error_reason" IS NULL)
+      OR ("status" = 'cleanup_failed' AND "error_reason" = 'revocation_failed')
+      OR ("status" NOT IN ('error', 'cleanup_pending', 'cleanup_failed') AND "error_reason" IS NULL)
     )
     AND (
-      "status" <> 'cleanup_pending'
+      "status" NOT IN ('cleanup_pending', 'cleanup_failed')
       OR "access_token_ciphertext" IS NOT NULL
       OR "refresh_token_ciphertext" IS NOT NULL
     )
@@ -85,7 +86,11 @@ ALTER TABLE "user_integrations"
     )
     AND (
       ("status" = 'cleanup_pending' AND "cleanup_next_attempt_at" IS NOT NULL)
-      OR ("status" <> 'cleanup_pending'
+      OR ("status" = 'cleanup_failed'
+        AND "cleanup_next_attempt_at" IS NULL
+        AND "cleanup_lease_id" IS NULL
+        AND "cleanup_lease_expires_at" IS NULL)
+      OR ("status" NOT IN ('cleanup_pending', 'cleanup_failed')
         AND "cleanup_attempt_count" = 0
         AND "cleanup_next_attempt_at" IS NULL
         AND "cleanup_lease_id" IS NULL
@@ -113,6 +118,7 @@ BEGIN
     SELECT 1
     FROM "user_integrations"
     WHERE "integration_descriptor_id" = OLD."id"
+      AND "status" <> 'cleanup_failed'
       AND (
         "access_token_ciphertext" IS NOT NULL
         OR "refresh_token_ciphertext" IS NOT NULL
@@ -143,8 +149,9 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF OLD."access_token_ciphertext" IS NOT NULL
-     OR OLD."refresh_token_ciphertext" IS NOT NULL THEN
+  IF OLD."status" <> 'cleanup_failed'
+     AND (OLD."access_token_ciphertext" IS NOT NULL
+       OR OLD."refresh_token_ciphertext" IS NOT NULL) THEN
     RAISE EXCEPTION 'user integration still owns revocable credentials'
       USING ERRCODE = '55006';
   END IF;

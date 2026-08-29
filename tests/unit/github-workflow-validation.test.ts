@@ -198,6 +198,12 @@ describe('GitHub Workflow Validation', () => {
       const integrationStep = job?.steps.find(
         (step) => step.name === 'Run required PostgreSQL integration suite'
       );
+      const buildStepIndex = job?.steps.findIndex(
+        (step) => step.name === 'Build project'
+      ) ?? -1;
+      const integrationStepIndex = job?.steps.findIndex(
+        (step) => step.name === 'Run required PostgreSQL integration suite'
+      ) ?? -1;
 
       expect(job?.name).toBe('PostgreSQL Integration');
       expect(job?.['runs-on']).toBe('ubuntu-latest');
@@ -212,6 +218,9 @@ describe('GitHub Workflow Validation', () => {
         'postgres://dollhouse@localhost:5432/dollhousemcp_test'
       );
       expect(job?.env?.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
+      expect(buildStepIndex).toBeGreaterThan(-1);
+      expect(job?.steps[buildStepIndex]?.run).toBe('npm run build');
+      expect(buildStepIndex).toBeLessThan(integrationStepIndex);
       expect(postgres?.image).toBe(
         'postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73'
       );
