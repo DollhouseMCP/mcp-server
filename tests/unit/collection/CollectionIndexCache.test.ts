@@ -62,15 +62,16 @@ describe('CollectionIndexCache', () => {
 
   describe('cache path resolution', () => {
     it('uses an exact canonical cache directory without nesting it again', () => {
+      const canonicalCacheDir = path.resolve('canonical', 'cache');
       const canonicalCache = new CollectionIndexCache({
         githubClient: mockGithubClient,
-        cacheDir: '/canonical/cache',
+        cacheDir: canonicalCacheDir,
         performanceMonitor: container.resolve('PerformanceMonitor'),
         fileOperations: container.resolve('FileOperationsService'),
       });
 
       const cacheFile = (canonicalCache as unknown as { cacheFile: string }).cacheFile;
-      expect(cacheFile).toBe(path.join('/canonical/cache', 'collection-index-cache.json'));
+      expect(cacheFile).toBe(path.join(canonicalCacheDir, 'collection-index-cache.json'));
     });
   });
 

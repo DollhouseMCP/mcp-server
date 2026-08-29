@@ -1,4 +1,5 @@
 import { describe, it, expect, jest } from '@jest/globals';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
 import { FileTokenStore } from '../../../src/security/tokenStores/FileTokenStore.js';
@@ -39,8 +40,9 @@ describe('FileTokenStore', () => {
 
   it('resolves the user auth directory per call for two users', async () => {
     const fileOps = createMockFileOperationsService();
+    const authRoot = path.join(tmpdir(), 'dollhouse-test');
     const store = new FileTokenStore(fileOps as any, {
-      getUserAuthDir: (userId?: string) => `/tmp/dollhouse-test/${userId}/auth`,
+      getUserAuthDir: (userId?: string) => path.join(authRoot, userId ?? '', 'auth'),
     });
 
     await store.storeToken('alice', 'ghp_ALICETOKEN000000000000000000000000000001');
@@ -48,13 +50,13 @@ describe('FileTokenStore', () => {
 
     expect(fileOps.writeFile).toHaveBeenNthCalledWith(
       1,
-      path.join('/tmp/dollhouse-test/alice/auth', 'github_token.enc'), // NOSONAR — assertion arg against mocked writeFile; never touches disk
+      path.join(authRoot, 'alice', 'auth', 'github_token.enc'), // NOSONAR — assertion arg against mocked writeFile; never touches disk
       expect.any(String),
       expect.any(Object),
     );
     expect(fileOps.writeFile).toHaveBeenNthCalledWith(
       2,
-      path.join('/tmp/dollhouse-test/bob/auth', 'github_token.enc'), // NOSONAR — assertion arg against mocked writeFile; never touches disk
+      path.join(authRoot, 'bob', 'auth', 'github_token.enc'), // NOSONAR — assertion arg against mocked writeFile; never touches disk
       expect.any(String),
       expect.any(Object),
     );

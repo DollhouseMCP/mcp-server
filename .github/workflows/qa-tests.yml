@@ -12,15 +12,12 @@ permissions:
 env:
   NODE_OPTIONS: '--max-old-space-size=4096 --experimental-vm-modules'
   CI: true
-  PORTFOLIO_REPOSITORY_NAME: dollhouse-portfolio
-  TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
-  TEST_GITHUB_TOKEN: ${{ secrets.TEST_GITHUB_TOKEN }}
 
 jobs:
   qa-tests:
     name: QA Automated Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     continue-on-error: true
 
     steps:
@@ -36,29 +33,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
-      - name: Validate QA environment
-        shell: bash
-        run: |
-          echo "🔍 Validating QA test environment..."
-          echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
-          echo "NODE_OPTIONS: $NODE_OPTIONS"
-          echo "CI: $CI"
-
-          # Verify TEST_PERSONAS_DIR is set
-          if [ -z "$TEST_PERSONAS_DIR" ]; then
-            echo "❌ TEST_PERSONAS_DIR is not set!"
-            exit 1
-          fi
-
-          # Create test personas directory if it doesn't exist
-          mkdir -p "$TEST_PERSONAS_DIR"
-          echo "✅ Test personas directory ready: $TEST_PERSONAS_DIR"
-
-          # Display workspace info for debugging
-          echo "GitHub workspace: ${{ github.workspace }}"
-          echo "Current directory: $(pwd)"
-          echo "✅ QA environment validation passed"
-
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
@@ -68,93 +42,95 @@ jobs:
       - name: Verify QA scripts exist
         shell: bash
         run: |
-          echo "🔍 Verifying QA test scripts..."
-          if [ -f "scripts/qa-test-runner.js" ]; then
-            echo "✅ QA test runner found"
-          else
-            echo "❌ QA test runner not found!"
-            exit 1
-          fi
+          for script in \
+            scripts/qa-mcp-mode-contract.js \
+            scripts/qa-server-bootstrap.js \
+            scripts/qa-direct-test.js \
+            scripts/qa-inspector-cli-test.js
+          do
+            if [ ! -f "$script" ]; then
+              echo "Missing required QA script: $script"
+              exit 1
+            fi
+          done
 
-          if [ -f "scripts/qa-utils.js" ]; then
-            echo "✅ QA utils found"
-          else
-            echo "❌ QA utils not found!"
-            exit 1
-          fi
-
-          # Ensure docs/QA directory exists for results
           mkdir -p docs/QA
-          echo "✅ QA results directory ready"
+          echo "QA mode-matrix scripts and results directory are ready"
 
-      - name: Run QA Test Suite
+      - name: Run QA mode matrix
         id: qa_tests
+        continue-on-error: true
         shell: bash
         run: |
-          echo "🚀 Starting QA test suite..."
+          set +e
+          timeout --kill-after=10s 300s npm run qa:direct
+          direct_code=$?
 
-          # Run BOTH test approaches for comprehensive validation:
+          timeout --kill-after=10s 300s npm run qa:inspector
+          inspector_code=$?
+          set -e
 
-          # 1. Direct SDK tests (internal validation - fast and reliable)
-          echo "📌 Running Direct SDK Tests (internal validation)..."
-          timeout 270 node scripts/qa-direct-test.js || {
-            exit_code=$?
-            if [ $exit_code -eq 124 ]; then
-              echo "⏰ Direct SDK tests timed out after 4.5 minutes"
-              echo "direct_status=timeout" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Direct SDK tests failed with exit code: $exit_code"
-              echo "direct_status=failed" >> $GITHUB_OUTPUT
-            fi
-            # Don't exit yet - run Inspector tests too
-          }
+          if [ "$direct_code" -eq 0 ]; then
+            direct_status=success
+          elif [ "$direct_code" -eq 124 ]; then
+            direct_status=timeout
+          else
+            direct_status=failed
+          fi
 
-          # 2. Inspector CLI tests (CRITICAL: external client validation for protocol compliance)
-          echo ""
-          echo "📌 Running Inspector CLI Tests (EXTERNAL validation - protocol compliance)..."
-          timeout 270 ./node_modules/.bin/mcp-inspector --version && \
-          node scripts/qa-inspector-cli-test.js || {
-            exit_code=$?
-            if [ $exit_code -eq 124 ]; then
-              echo "⏰ Inspector CLI tests timed out after 4.5 minutes"
-              echo "inspector_status=timeout" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Inspector CLI tests failed with exit code: $exit_code"
-              echo "inspector_status=failed" >> $GITHUB_OUTPUT
-            fi
-            # Don't fail the job yet - we want to see both results
-          }
+          if [ "$inspector_code" -eq 0 ]; then
+            inspector_status=success
+          elif [ "$inspector_code" -eq 124 ]; then
+            inspector_status=timeout
+          else
+            inspector_status=failed
+          fi
 
-          echo "✅ QA test suite completed"
-          echo "qa_status=success" >> $GITHUB_OUTPUT
+          if [ "$direct_code" -eq 0 ] && [ "$inspector_code" -eq 0 ]; then
+            qa_status=success
+          else
+            qa_status=failed
+          fi
+
+          echo "direct_status=$direct_status" >> "$GITHUB_OUTPUT"
+          echo "inspector_status=$inspector_status" >> "$GITHUB_OUTPUT"
+          echo "qa_status=$qa_status" >> "$GITHUB_OUTPUT"
+
+          echo "Direct SDK status: $direct_status"
+          echo "Inspector CLI status: $inspector_status"
+
+          if [ "$qa_status" != success ]; then
+            exit 1
+          fi
 
       - name: Verify test results
+        id: qa_results
+        if: always()
+        continue-on-error: true
         shell: bash
         run: |
-          echo "📊 Checking QA test results..."
+          status=0
+          for runner in direct inspector
+          do
+            latest_result=$(find docs/QA -maxdepth 1 -type f \
+              -name "qa-${runner}-test-results-*.json" -printf '%T@ %p\n' \
+              | sort -nr | head -1 | cut -d' ' -f2-)
 
-          # Check if any result files were created (qa-direct-test creates different filename pattern)
-          if ls docs/QA/qa-*-test-results-*.json 1> /dev/null 2>&1; then
-            echo "✅ QA test results found:"
-            ls -la docs/QA/qa-*-test-results-*.json
-
-            # Show summary of latest results
-            latest_result=$(ls -t docs/QA/qa-*-test-results-*.json | head -1)
-            echo "📋 Latest result summary from: $latest_result"
-
-            # Extract key metrics using jq if available, otherwise use grep
-            if command -v jq >/dev/null 2>&1; then
-              echo "Total Tests: $(jq -r '.summary.total_tests' "$latest_result")"
-              echo "Success Rate: $(jq -r '.summary.success_rate' "$latest_result")"
-              echo "Duration: $(jq -r '.duration' "$latest_result")"
-            else
-              echo "Result file created (jq not available for detailed parsing)"
-              grep -E '"total_tests"|"success_rate"|"duration"' "$latest_result" || true
+            if [ -z "$latest_result" ]; then
+              echo "No $runner QA result was produced"
+              status=1
+              continue
             fi
-          else
-            echo "⚠️ No QA test result files found"
-            echo "This may indicate the tests didn't complete or encountered early failure"
-          fi
+
+            echo "$runner report: $latest_result"
+            jq '.summary' "$latest_result"
+            if ! jq -e '.summary.failed_tests == 0' "$latest_result" > /dev/null; then
+              echo "$runner report contains failed checks"
+              status=1
+            fi
+          done
+
+          exit "$status"
 
       - name: Upload QA test results
         uses: actions/upload-artifact@v4
@@ -176,54 +152,33 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: Comment QA results summary
-        if: always() && github.event_name == 'pull_request'
+      - name: Write QA results summary
+        if: always()
         shell: bash
         run: |
-          echo "📝 Preparing QA results summary for PR comment..."
+          {
+            echo "## MCP QA mode matrix"
+            echo
+            echo "- Overall runner status: ${{ steps.qa_tests.outputs.qa_status || 'unknown' }}"
+            echo "- Direct SDK: ${{ steps.qa_tests.outputs.direct_status || 'unknown' }}"
+            echo "- Inspector CLI: ${{ steps.qa_tests.outputs.inspector_status || 'unknown' }}"
+            echo "- Report validation: ${{ steps.qa_results.outcome }}"
+            echo
+            echo "This non-blocking job validates discrete, MCP-AQL CRUDE, and MCP-AQL single modes."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          # Create a summary comment for the PR
-          if ls docs/QA/qa-test-results-*.json 1> /dev/null 2>&1; then
-            latest_result=$(ls -t docs/QA/qa-test-results-*.json | head -1)
-
-            echo "## 🧪 QA Test Results" > qa_summary.md
-            echo "" >> qa_summary.md
-            echo "**Status:** ${{ steps.qa_tests.outputs.qa_status || 'unknown' }}" >> qa_summary.md
-            echo "" >> qa_summary.md
-
-            if command -v jq >/dev/null 2>&1; then
-              echo "**📊 Test Metrics:**" >> qa_summary.md
-              echo "- Total Tests: $(jq -r '.summary.total_tests' "$latest_result")" >> qa_summary.md
-              echo "- Executed Tests: $(jq -r '.summary.executed_tests' "$latest_result")" >> qa_summary.md
-              echo "- Skipped Tests: $(jq -r '.summary.skipped_tests' "$latest_result")" >> qa_summary.md
-              echo "- Success Rate: $(jq -r '.summary.success_rate' "$latest_result")" >> qa_summary.md
-              echo "- Duration: $(jq -r '.duration' "$latest_result")" >> qa_summary.md
-              echo "- Available Tools: $(jq -r '.tool_discovery.available_tools_count' "$latest_result")" >> qa_summary.md
-            else
-              echo "- Result file created: ✅" >> qa_summary.md
-              echo "- Detailed metrics available in artifacts" >> qa_summary.md
-            fi
-
-            echo "" >> qa_summary.md
-            echo "*📎 Detailed results available in workflow artifacts*" >> qa_summary.md
-            echo "" >> qa_summary.md
-            echo "*🔧 This is a non-blocking test suite in development phase*" >> qa_summary.md
-
-            cat qa_summary.md
-          else
-            echo "⚠️ No QA results to summarize"
+      - name: Enforce QA result within the non-blocking job
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.qa_tests.outputs.qa_status }}" != success ]; then
+            echo "One or more QA runners failed or timed out"
+            exit 1
           fi
 
-      - name: QA Tests Complete
-        shell: bash
-        run: |
-          echo "🎉 QA Tests workflow completed!"
-          echo "Status: ${{ steps.qa_tests.outputs.qa_status || 'unknown' }}"
-          echo ""
-          echo "ℹ️  This workflow is currently non-blocking (continue-on-error: true)"
-          echo "   Future releases may make these tests blocking for merge"
-          echo ""
-          echo "📋 Next steps:"
-          echo "   - Review QA test results in artifacts"
-          echo "   - Address any failures found"
-          echo "   - Monitor for consistency across PRs"
+          if [ "${{ steps.qa_results.outcome }}" != success ]; then
+            echo "QA report validation failed"
+            exit 1
+          fi
+
+          echo "All three interface modes passed through both QA clients"

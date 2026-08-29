@@ -324,9 +324,23 @@ function parseHookStdout(result: HookResult, hookScript: string): unknown {
 }
 
 function resolveDockerBinary(): string {
-  return execFileSync(
-    '/usr/bin/env',
-    ['-i', `PATH=${SAFE_HOST_PATH}`, 'sh', '-lc', 'command -v docker'],
-    { encoding: 'utf-8' },
-  ).trim();
+  if (process.platform === 'win32') {
+    // GitHub's native Windows runners do not provide Linux containers. Return
+    // the normal executable name and let DOCKER_AVAILABLE skip cleanly when it
+    // is absent instead of crashing this module on /usr/bin/env.
+    return 'docker.exe';
+  }
+
+  const envBinary = '/usr/bin/env';
+  try {
+    return execFileSync(
+      envBinary,
+      ['-i', `PATH=${SAFE_HOST_PATH}`, 'sh', '-lc', 'command -v docker'],
+      { encoding: 'utf-8' },
+    ).trim();
+  } catch {
+    // Preserve the trusted-PATH lookup policy: never fall back to the caller's
+    // PATH merely to make an unavailable-Docker test appear runnable.
+    return '/__dollhouse_missing_docker__';
+  }
 }

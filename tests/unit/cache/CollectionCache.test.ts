@@ -58,21 +58,23 @@ describe('CollectionCache', () => {
     });
 
     it('should initialize with custom base directory', () => {
-      const customCache = new CollectionCache(fileOperations, '/custom/path');
+      const customBaseDir = path.resolve('custom', 'path');
+      const customCache = new CollectionCache(fileOperations, customBaseDir);
       expect(customCache).toBeInstanceOf(CollectionCache);
       expect(customCache.getCacheFilePath()).toBe(
-        path.join('/custom/path', '.dollhousemcp', 'cache', 'collection-cache.json')
+        path.resolve(customBaseDir, '.dollhousemcp', 'cache', 'collection-cache.json')
       );
     });
 
     it('should use an exact canonical cache directory without nesting it again', () => {
+      const canonicalCacheDir = path.resolve('canonical', 'cache');
       const canonicalCache = new CollectionCache({
         fileOperations,
-        cacheDir: '/canonical/cache',
+        cacheDir: canonicalCacheDir,
       });
 
       expect(canonicalCache.getCacheFilePath()).toBe(
-        path.join('/canonical/cache', 'collection-cache.json')
+        path.resolve(canonicalCacheDir, 'collection-cache.json')
       );
     });
   });
