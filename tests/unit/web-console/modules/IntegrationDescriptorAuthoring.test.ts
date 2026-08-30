@@ -8,11 +8,13 @@ import {
   createIntegrationModule,
   HmacConsoleOpaqueValueService,
   InMemoryIntegrationDescriptorStore,
+  InMemoryIntegrationMutationCoordinator,
   InMemoryIntegrationOpenApiSpecStore,
   InMemoryLoginTransactionStore,
   InMemoryUserIntegrationStore,
   IntegrationProviderRegistry,
   IntegrationTokenRefreshService,
+  IntegrationDescriptorCredentialConflictError,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type IntegrationDescriptorRecord,
@@ -102,9 +104,19 @@ function fixture(options: {
   readonly reservedProviderIds?: ReadonlySet<string>;
   readonly secretEncryption?: ISecretEncryptionService;
 } = {}) {
-  const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? []);
+  const mutationCoordinator = new InMemoryIntegrationMutationCoordinator();
+  let integrationStore!: InMemoryUserIntegrationStore;
+  const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? [], {
+    mutationCoordinator,
+    hasBlockingCredentialMaterialByDescriptor: descriptorId =>
+      integrationStore.hasBlockingCredentialMaterialByDescriptor(descriptorId),
+  });
   const specStore = new InMemoryIntegrationOpenApiSpecStore();
-  const integrationStore = new InMemoryUserIntegrationStore();
+  integrationStore = new InMemoryUserIntegrationStore(
+    [],
+    descriptorId => descriptorStore.routingFingerprint(descriptorId),
+    { mutationCoordinator },
+  );
   const secretEncryption = options.withEncryption === false
     ? null
     : options.secretEncryption ?? encryption();
@@ -466,10 +478,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
     await expect(service.update(consoleRequest({
       params: { id: descriptorId },
       body: { operation_promotion: { operations: ['records.list'] } },
-    }))).resolves.toMatchObject({
-      status: 409,
-      body: { code: 'integration_descriptor_conflict' },
-    });
+    }))).resolves.toMatchObject({ status: 200 });
     await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
       .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
 
@@ -487,6 +496,22 @@ describe('IntegrationDescriptorAuthoringService', () => {
     }))).resolves.toMatchObject({ status: 200 });
     await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
       .resolves.toMatchObject({ status: 204 });
+  });
+
+  it('maps a store-level credential mutation race to the public 409 conflict', async () => {
+    const { service, descriptorStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    jest.spyOn(descriptorStore, 'upsert').mockRejectedValueOnce(
+      new IntegrationDescriptorCredentialConflictError(),
+    );
+
+    await expect(service.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { api_hosts: ['api2.mycrm.example'] },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
   });
 
   it('allows descriptor maintenance when the provider has no usable credential', async () => {
@@ -1022,14 +1047,25 @@ describe('IntegrationModule per-request provider routes', () => {
   }
 
   function moduleFixture(fetchImpl?: (input: string | URL, init?: RequestInit) => Promise<Response>) {
-    const integrationStore = new InMemoryUserIntegrationStore();
-    const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    const mutationCoordinator = new InMemoryIntegrationMutationCoordinator();
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    let integrationStore!: InMemoryUserIntegrationStore;
+    const descriptorStore = new InMemoryIntegrationDescriptorStore([], {
+      mutationCoordinator,
+      hasBlockingCredentialMaterialByDescriptor: descriptorId =>
+        integrationStore.hasBlockingCredentialMaterialByDescriptor(descriptorId),
+    });
+    integrationStore = new InMemoryUserIntegrationStore(
+      [],
+      descriptorId => descriptorStore.routingFingerprint(descriptorId),
+      { mutationCoordinator, loginTransactionStore: loginTransactions, now: () => NOW },
+    );
     const secretEncryption = encryption();
     const module = createIntegrationModule({
       integrationStore,
       descriptorStore,
       openApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
-      loginTransactions: new InMemoryLoginTransactionStore(),
+      loginTransactions,
       opaqueValues: new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8)),
       secretEncryption,
       publicBaseUrl: PUBLIC_BASE_URL,
@@ -1148,10 +1184,18 @@ describe('IntegrationModule per-request provider routes', () => {
       params: { provider: TWILIO_LIKE },
       body: { username: 'account:sid', password: 'secret' },
     }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_basic_credential' } });
+    await expect(connect.handler(consoleRequest({
+      params: { provider: TWILIO_LIKE },
+      body: { username: '   ', password: 'secret' },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_basic_credential' } });
+    await expect(connect.handler(consoleRequest({
+      params: { provider: TWILIO_LIKE },
+      body: { username: 'account\u0000sid', password: 'secret' },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_basic_credential' } });
 
     const connected = await connect.handler(consoleRequest({
       params: { provider: TWILIO_LIKE },
-      body: { username: 'account-sid', password: 'auth-token-secret' },
+      body: { username: '  account-sid  ', password: 'auth-token-secret' },
     }));
     expect(connected).toMatchObject({
       status: 200,
@@ -1163,7 +1207,7 @@ describe('IntegrationModule per-request provider routes', () => {
     expect(secretEncryption.decrypt(
       stored?.accessTokenCiphertext ?? Buffer.alloc(0),
       integrationSecretContext('access_token', USER_ID, TWILIO_LIKE),
-    ).toString('utf8')).toBe('account-sid:auth-token-secret');
+    ).toString('utf8')).toBe('  account-sid  :auth-token-secret');
   });
 
   it('fails closed for BYO OAuth descriptors without a stored client secret', async () => {

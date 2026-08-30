@@ -105,13 +105,16 @@ export async function getPromotedIntegrationTools(
   gateway: AuthorizedIntegrationGateway,
   operationCatalog: AuthorizedIntegrationOperationCatalog,
   reservedToolNames: ReadonlySet<string> = new Set(),
+  invalidateTool: (toolName: string) => void = () => {},
 ): Promise<Array<{ tool: ToolDefinition; handler: ToolHandler }>> {
   const operations = await operationCatalog.listPromotedOperations();
   const usedNames = new Set<string>(reservedToolNames);
   return operations.map(operation => promotedToolRegistration(
     operation,
     gateway,
+    operationCatalog,
     usedNames,
+    invalidateTool,
   ));
 }
 
@@ -323,7 +326,9 @@ function readArgs(args: unknown) {
 function promotedToolRegistration(
   operation: IntegrationOperationDetails,
   gateway: AuthorizedIntegrationGateway,
+  operationCatalog: AuthorizedIntegrationOperationCatalog,
   usedNames: Set<string>,
+  invalidateTool: (toolName: string) => void,
 ): { tool: ToolDefinition; handler: ToolHandler } {
   const toolName = uniquePromotedToolName(operation, usedNames);
   return {
@@ -338,6 +343,26 @@ function promotedToolRegistration(
     },
     handler: async (args: unknown) => {
       try {
+        const current = (await operationCatalog.listPromotedOperations({
+          provider: operation.gatewayRequest.provider,
+        })).find(candidate => candidate.operationId === operation.operationId);
+        if (current?.specContract.descriptorId !== operation.specContract.descriptorId
+            || current.specContract.specHash !== operation.specContract.specHash
+            || current.gatewayRequest.method !== operation.gatewayRequest.method
+            || current.gatewayRequest.pathTemplate !== operation.gatewayRequest.pathTemplate) {
+          // Remove the stale per-session registration and emit ToolRegistry's
+          // normal list-changed notification. The attempted call fails closed;
+          // it never rebinds an old tool name to a mutated descriptor/spec.
+          invalidateTool(toolName);
+          return textResponse({
+            ok: false,
+            error: {
+              code: 'integration_promoted_tool_stale',
+              message: 'This promoted integration tool changed; refresh the tool list before retrying.',
+              status: 409,
+            },
+          });
+        }
         const input = readObject(args);
         const request = {
           provider: operation.gatewayRequest.provider,

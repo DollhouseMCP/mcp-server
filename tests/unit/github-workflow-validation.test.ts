@@ -207,7 +207,7 @@ describe('GitHub Workflow Validation', () => {
 
       expect(job?.name).toBe('PostgreSQL Integration');
       expect(job?.['runs-on']).toBe('ubuntu-latest');
-      expect(job?.['timeout-minutes']).toBe(20);
+      expect(job?.['timeout-minutes']).toBe(30);
       expect(job?.permissions).toEqual({ contents: 'read' });
       expect(job?.env?.DOLLHOUSE_REQUIRE_TEST_DATABASE).toBe('1');
       expect(job?.env?.DOLLHOUSE_REQUIRE_PG_AUTH_TESTS).toBe('1');

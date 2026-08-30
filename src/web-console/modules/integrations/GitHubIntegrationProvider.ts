@@ -39,6 +39,7 @@ export interface GitHubIntegrationRevocationRequest {
    */
   readonly refreshToken: string | null;
   readonly installationId: string | null;
+  readonly isRetry?: boolean;
 }
 
 export interface IGitHubIntegrationProvider {

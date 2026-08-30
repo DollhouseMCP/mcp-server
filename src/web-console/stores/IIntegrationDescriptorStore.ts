@@ -24,6 +24,15 @@ export type IntegrationPkceMode = 'required' | 'supported' | 'unsupported';
 export type IntegrationRefreshMode = 'none' | 'static' | 'rotating';
 export type IntegrationOAuthClientAuth = 'body' | 'basic' | 'none';
 
+export class IntegrationDescriptorCredentialConflictError extends Error {
+  readonly code = 'integration_descriptor_credential_conflict';
+
+  constructor() {
+    super('integration descriptor still owns revocable credentials');
+    this.name = 'IntegrationDescriptorCredentialConflictError';
+  }
+}
+
 const SENSITIVE_OAUTH_RESPONSE_FIELDS = new Set([
   'access_token',
   'api_key',

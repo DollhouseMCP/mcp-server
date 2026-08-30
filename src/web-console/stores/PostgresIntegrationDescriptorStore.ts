@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, ne, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -11,6 +11,7 @@ import {
   cloneIntegrationDescriptorRecord,
   decodeDescriptorPageCursor,
   encodeDescriptorPageCursor,
+  IntegrationDescriptorCredentialConflictError,
   resolveDescriptorPageLimit,
   type IIntegrationDescriptorStore,
   type IntegrationDescriptorCreateInput,
@@ -25,7 +26,10 @@ import {
 } from './IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from './IUserIntegrationStore.js';
 import { assertUuid } from './ConsoleStoreValidation.js';
-import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
+import {
+  integrationDescriptorCredentialBindingFingerprint,
+  integrationDescriptorRoutingFingerprint,
+} from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
 
 export class PostgresIntegrationDescriptorStore implements IIntegrationDescriptorStore {
   constructor(private readonly db: DatabaseInstance) {}
@@ -219,7 +223,18 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
           clientSecretRevision: null,
         });
       if (currentFingerprint !== proposedFingerprint && !initializesOnlyRevision) {
-        await invalidateDescriptorBindingsWithTx(tx, existing.id, input.updatedAt);
+        const credentialBindingChanged =
+          integrationDescriptorCredentialBindingFingerprint(current) !==
+          integrationDescriptorCredentialBindingFingerprint(proposed);
+        if (credentialBindingChanged) {
+          await invalidateDescriptorBindingsWithTx(tx, existing.id, input.updatedAt);
+        } else {
+          // Safe rotations still invalidate callbacks captured against the old
+          // full routing fingerprint, while existing issued grants remain bound.
+          await tx.delete(consoleLoginTransactions).where(
+            eq(consoleLoginTransactions.integrationDescriptorId, existing.id),
+          );
+        }
       }
       return tx.update(integrationProviderDescriptors)
         .set(toDescriptorValues(input, existing.createdAt))
@@ -237,16 +252,32 @@ async function invalidateDescriptorBindingsWithTx(
   descriptorId: string,
   revokedAt: Date,
 ): Promise<void> {
-  // The descriptor row is already locked FOR UPDATE by every caller. Remove
-  // callbacks first, then clear credentials, so callback persistence can use
-  // the same descriptor -> transaction -> credential lock order without a
-  // deadlock or a stale credential write after rotation.
+  // The descriptor row is already locked FOR UPDATE by every caller. Refuse
+  // the mutation while any non-terminal credential can still be revoked. The
+  // existing disconnect/cleanup state machine owns remote revocation; this
+  // store must never erase its retry handle or claim revocation happened.
+  const blockingCredentials = await tx.select({ id: userIntegrations.id })
+    .from(userIntegrations)
+    .where(and(
+      eq(userIntegrations.integrationDescriptorId, descriptorId),
+      ne(userIntegrations.status, 'cleanup_failed'),
+      or(
+        isNotNull(userIntegrations.accessTokenCiphertext),
+        isNotNull(userIntegrations.refreshTokenCiphertext),
+      ),
+    ))
+    .limit(1);
+  if (blockingCredentials.length > 0) {
+    throw new IntegrationDescriptorCredentialConflictError();
+  }
+
+  // Once no revocable material remains, invalidate callbacks and retire any
+  // credential-free active rows. cleanup_failed rows already carry revokedAt
+  // and intentionally retain ciphertext for audited operator handling.
   await tx.delete(consoleLoginTransactions).where(
     eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
   );
   await tx.update(userIntegrations).set({
-    accessTokenCiphertext: null,
-    refreshTokenCiphertext: null,
     status: 'revoked',
     errorReason: null,
     revokedAt,

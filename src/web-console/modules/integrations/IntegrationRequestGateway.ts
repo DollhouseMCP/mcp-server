@@ -205,6 +205,12 @@ export class IntegrationRequestGateway {
       await this.auditCredentialError(provider, session.userId, session.sessionId, method, url, 'refresh_failed');
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
     }
+    // Refresh is safe and updates only local credential state. Replaying the
+    // upstream operation is a separate decision: only GET is idempotent under
+    // this gateway contract, so writes return their original 401 after refresh.
+    if (!canAutomaticallyRetryAfterUnauthorized(method)) {
+      return this.finish(provider, session.userId, session.sessionId, method, url, first, true);
+    }
     const retryCredential = await this.decryptAuditedAccessToken(refresh.record, session.userId, session.sessionId, method, url, true);
     const retry = await this.auditedSend(
       requestContext,
@@ -641,6 +647,10 @@ function normalizeMethod(method: string): string {
     throw new IntegrationRequestError('integration_method_not_allowed', 'Integration request method is not allowed.', 400);
   }
   return normalized;
+}
+
+function canAutomaticallyRetryAfterUnauthorized(method: string): boolean {
+  return method === 'GET';
 }
 
 function buildAllowedUrl(

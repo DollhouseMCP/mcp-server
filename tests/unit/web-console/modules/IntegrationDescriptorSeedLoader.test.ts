@@ -12,6 +12,7 @@ import { integrationDescriptorClientSecretContext } from '../../../../src/web-co
 import { HmacConsoleOpaqueValueService } from '../../../../src/web-console/security/ConsoleOpaqueValues.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
+import { IntegrationDescriptorCredentialConflictError } from '../../../../src/web-console/stores/IIntegrationDescriptorStore.js';
 import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
 
 const DEPLOYMENT_CLIENT_ID = 'deployment-client-id';
@@ -128,6 +129,29 @@ function connectExampleCorp(
 }
 
 describe('IntegrationDescriptorSeedLoader', () => {
+  it('surfaces a live-credential routing conflict instead of reporting startup success', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore([], {
+      hasBlockingCredentialMaterialByDescriptor: () => Promise.resolve(true),
+    });
+    const loader = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      newEncryption(),
+      credentials({ examplecorp: { clientId: DEPLOYMENT_CLIENT_ID, clientSecret: DEPLOYMENT_SECRET } }),
+      loaderOptions(),
+    );
+    await expect(loader.loadSeeds()).resolves.toMatchObject({ loaded: 1, failed: 0 });
+    await fs.writeFile(path.join(dir, 'examplecorp.json'), JSON.stringify({
+      ...OAUTH_SEED,
+      apiHosts: ['rotated.examplecorp.test'],
+    }), 'utf8');
+
+    await expect(loader.loadSeeds()).rejects.toBeInstanceOf(
+      IntegrationDescriptorCredentialConflictError,
+    );
+  });
+
   it('loads a curated OAuth descriptor, injecting clientId and encrypting the client secret', async () => {
     SecurityMonitor.clearAllEventsForTesting();
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });

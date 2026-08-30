@@ -38,9 +38,9 @@ describe('Collection Submission Integration via MCP', () => {
     }, {} as Record<string, string>);
 
     // Start MCP server directly via stdio
-    // IMPORTANT: We explicitly clear GITHUB_TOKEN and GITHUB_TEST_TOKEN to ensure
+    // IMPORTANT: Clear the canonical token and both legacy test-token aliases so
     // this test never makes real GitHub API calls. The server loads .env.local,
-    // so we must override those values here to prevent accidental submissions.
+    // and CI still exports TEST_GITHUB_TOKEN, so every alias must be overridden.
     transport = new StdioClientTransport({
       command: 'node',
       args: ['dist/index.js'],
@@ -54,6 +54,7 @@ describe('Collection Submission Integration via MCP', () => {
         // Explicitly clear GitHub tokens to prevent real API calls
         GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
+        TEST_GITHUB_TOKEN: '',
       }
     });
 
@@ -73,9 +74,12 @@ describe('Collection Submission Integration via MCP', () => {
     });
     
     // Start transport and connect client
+    // client.connect() starts the transport before awaiting the MCP handshake.
+    // Mark it owned before awaiting so a failed/timed-out handshake is still
+    // closed by afterAll instead of leaking the child process.
+    transportInitialized = true;
     await client.connect(transport);
     clientInitialized = true;
-    transportInitialized = true;
     
     // Create element directories
     await fs.mkdir(path.join(testDir, 'personas'), { recursive: true });

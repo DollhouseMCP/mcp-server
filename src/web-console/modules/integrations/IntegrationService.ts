@@ -22,7 +22,9 @@ import type {
 import {
   hasIntegrationCredentials,
   IntegrationCredentialCleanupPendingError,
+  IntegrationCredentialReplacementRequiresCleanupError,
   type IUserIntegrationStore,
+  type UserIntegrationConnectInput,
   type UserIntegrationProvider,
   type UserIntegrationRecord,
 } from '../../stores/IUserIntegrationStore.js';
@@ -39,7 +41,10 @@ import type {
   IntegrationCallbackRejectedReason,
 } from './IntegrationSecurityEvents.js';
 import { integrationSecretContext, type IntegrationSecretContext } from './IntegrationSecretContext.js';
-import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
+import {
+  IntegrationProviderTemporarilyUnavailableError,
+  type IntegrationProviderResolver,
+} from './CuratedIntegrationProviders.js';
 import type { IIntegrationProvider } from './IntegrationProvider.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
@@ -50,8 +55,14 @@ const INTEGRATION_PATH = '/api/v1/me/integrations';
 const CREDENTIAL_CLEANUP_LEASE_MS = 5 * 60 * 1000;
 const CREDENTIAL_CLEANUP_INITIAL_RETRY_MS = 1_000;
 const CREDENTIAL_CLEANUP_MAX_RETRY_MS = 60_000;
+const CREDENTIAL_CLEANUP_MAX_STEPS_PER_REQUEST = 2;
 
 type CredentialRevocationOutcome = 'revoked' | 'retry' | 'terminal';
+type CredentialCleanupAttemptResult = 'completed' | 'pending' | 'stopped';
+type CredentialCleanupDependencies =
+  | { readonly kind: 'ready'; readonly secretEncryption: ISecretEncryptionService; readonly provider: IIntegrationProvider }
+  | { readonly kind: 'retry' }
+  | { readonly kind: 'terminal' };
 
 interface ConsumedProviderCallbackContext {
   readonly req: ConsoleRequest;
@@ -343,7 +354,6 @@ export class IntegrationService {
     try {
       const connected = transaction.integrationDescriptorId
           && transaction.integrationDescriptorFingerprint
-          && this.options.store.connectDescriptorCallback
         ? await this.options.store.connectDescriptorCallback({
             transactionIdHash: idHash,
             descriptorId: transaction.integrationDescriptorId,
@@ -352,12 +362,12 @@ export class IntegrationService {
           })
         : await this.options.store.connect(connection);
       if (!connected) {
-        await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
+        await this.revokeExchangedCredentials(currentDeps.provider, exchanged, connection);
         await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
         return failedIntegrationCallback(transaction.returnTo ?? undefined);
       }
     } catch {
-      await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
+      await this.revokeExchangedCredentials(currentDeps.provider, exchanged, connection);
       await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
@@ -380,15 +390,20 @@ export class IntegrationService {
 
   async disconnectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const provider = await this.resolveProviderFor(auth.userId, providerId);
+    // Enter cleanup before consulting live provider configuration. A retired
+    // or temporarily unavailable provider must not strand a connected row in
+    // a state that blocks both disconnect and account deletion forever.
+    let pending = await this.ensureCredentialCleanupPending(auth.userId, providerId);
+    const { provider, cleanupDeps } = await this.resolveProviderForCleanup(auth.userId, providerId);
+    for (let step = 0; pending && step < CREDENTIAL_CLEANUP_MAX_STEPS_PER_REQUEST; step += 1) {
+      const result = await this.attemptCredentialCleanup(cleanupDeps, auth, pending);
+      if (result !== 'completed') break;
+      pending = await this.ensureCredentialCleanupPending(auth.userId, providerId);
+    }
     const deps = this.credentialDependencies(provider);
     if (!deps) return serviceUnavailable(`${providerId} integration disconnect is not configured.`);
-    const pending = await this.ensureCredentialCleanupPending(auth.userId, providerId);
-    if (pending) {
-      await this.attemptCredentialCleanup(deps, auth, pending);
-    }
-    const current = await this.options.store.findByProvider(auth.userId, providerId)
-      ?? await this.options.store.findCredentialCleanupPending(auth.userId, providerId)
+    const current = await this.options.store.findCredentialCleanupPending(auth.userId, providerId)
+      ?? await this.options.store.findByProvider(auth.userId, providerId)
       ?? await this.options.store.findCredentialCleanupFailed(auth.userId, providerId);
     return {
       status: 200,
@@ -400,33 +415,32 @@ export class IntegrationService {
     userId: string,
     provider: UserIntegrationProvider,
   ): Promise<UserIntegrationRecord | null> {
-    const existing = await this.options.store.findCredentialCleanupPending(userId, provider);
-    if (existing) return existing;
     const active = await this.options.store.findByProvider(userId, provider);
-    if (!active) return null;
-    const revokedAt = this.now();
-    if (hasIntegrationCredentials(active)) {
-      return this.options.store.beginCredentialCleanup({
+    if (active) {
+      const revokedAt = this.now();
+      if (hasIntegrationCredentials(active)) {
+        return this.options.store.beginCredentialCleanup({
+          userId,
+          provider,
+          expectedActiveRecordId: active.id,
+          revokedAt,
+        });
+      }
+      await this.options.store.disconnect({
         userId,
         provider,
         expectedActiveRecordId: active.id,
         revokedAt,
       });
     }
-    await this.options.store.disconnect({
-      userId,
-      provider,
-      expectedActiveRecordId: active.id,
-      revokedAt,
-    });
-    return null;
+    return this.options.store.findCredentialCleanupPending(userId, provider);
   }
 
   private async attemptCredentialCleanup(
-    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    deps: CredentialCleanupDependencies,
     auth: ConsoleAuthenticatedContext,
     pending: UserIntegrationRecord,
-  ): Promise<void> {
+  ): Promise<CredentialCleanupAttemptResult> {
     const attemptedAt = this.now();
     const leaseId = randomUUID();
     const claimed = await this.options.store.claimCredentialCleanup({
@@ -437,29 +451,50 @@ export class IntegrationService {
       attemptedAt,
       leaseExpiresAt: new Date(attemptedAt.getTime() + CREDENTIAL_CLEANUP_LEASE_MS),
     });
-    if (!claimed) return;
+    if (!claimed) return 'pending';
     let outcome: CredentialRevocationOutcome;
-    if (!this.recordOwnedByProvider(deps.provider, claimed)) {
+    if (deps.kind === 'retry') {
+      logIntegrationSecurityEvent(
+        'OPERATION_FAILED',
+        'MEDIUM',
+        'Integration credential cleanup dependencies temporarily unavailable',
+        { userId: auth.userId, provider: pending.provider },
+      );
+      outcome = 'retry';
+    } else if (deps.kind === 'terminal') {
+      logIntegrationSecurityEvent(
+        'OPERATION_FAILED',
+        'MEDIUM',
+        'Integration credential cleanup provider permanently unavailable',
+        { userId: auth.userId, provider: pending.provider },
+      );
+      outcome = 'terminal';
+    } else if (!this.recordOwnedByProvider(deps.provider, claimed)) {
       logIntegrationSecurityEvent(
         'OPERATION_FAILED',
         'MEDIUM',
         'Integration credential cleanup descriptor ownership mismatch',
         { userId: auth.userId, provider: pending.provider },
       );
-      outcome = 'terminal';
+      // A parked credential may have been issued immediately before its
+      // descriptor changed. Retain it for an exact routing revision to return
+      // or for the explicit audited operator-abandon path; never revoke it
+      // through the new descriptor and never auto-terminalize the handle.
+      outcome = 'retry';
     } else {
       outcome = await this.revokeRemoteCredentials(deps, auth, claimed);
     }
-    if (outcome === 'terminal') {
+    const mayStopBlocking = this.mayCredentialCleanupStopBlocking(claimed, outcome);
+    if (outcome === 'terminal' && mayStopBlocking) {
       await this.options.store.failCredentialCleanup({
         userId: auth.userId,
         provider: pending.provider,
         cleanupRecordId: claimed.id,
         leaseId,
       });
-      return;
+      return 'stopped';
     }
-    if (outcome === 'retry') {
+    if (!mayStopBlocking) {
       await this.options.store.releaseCredentialCleanup({
         userId: auth.userId,
         provider: pending.provider,
@@ -467,7 +502,7 @@ export class IntegrationService {
         leaseId,
         retryAt: new Date(attemptedAt.getTime() + cleanupRetryDelayMs(claimed.cleanupAttemptCount)),
       });
-      return;
+      return 'pending';
     }
     const completed = await this.options.store.completeCredentialCleanup({
       userId: auth.userId,
@@ -481,7 +516,26 @@ export class IntegrationService {
         userId: auth.userId,
         provider: pending.provider,
       });
+      return 'completed';
     }
+    return 'pending';
+  }
+
+  /**
+   * The only automatic exits from blocking cleanup are confirmed remote
+   * revocation and legacy terminal cleanup without a pinned issuance route.
+   * A parked credential with a routing fingerprint represents a known remote
+   * revocation debt; descriptor loss, decrypt failure, or routing mismatch
+   * must retain it until revocation succeeds or an operator explicitly uses
+   * the audited abandon path.
+   */
+  private mayCredentialCleanupStopBlocking(
+    record: UserIntegrationRecord,
+    outcome: CredentialRevocationOutcome,
+  ): boolean {
+    if (outcome === 'revoked') return true;
+    if (outcome === 'retry') return false;
+    return (record.cleanupDescriptorFingerprint ?? null) === null;
   }
 
   private async revokeRemoteCredentials(
@@ -516,6 +570,7 @@ export class IntegrationService {
         accessToken,
         refreshToken,
         externalInstallationId: active.externalInstallationId,
+        isRetry: active.cleanupAttemptCount > 1,
       });
       return 'revoked';
     } catch {
@@ -530,8 +585,12 @@ export class IntegrationService {
     provider: IIntegrationProvider,
     record: Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>,
   ): boolean {
-    return (record?.integrationDescriptorId ?? null) ===
-      (provider.integrationDescriptorId ?? null);
+    if ((record?.integrationDescriptorId ?? null) !== (provider.integrationDescriptorId ?? null)) {
+      return false;
+    }
+    const cleanupFingerprint = record?.cleanupDescriptorFingerprint ?? null;
+    return cleanupFingerprint === null ||
+      cleanupFingerprint === (provider.integrationDescriptorFingerprint ?? null);
   }
 
   /** Boot-time registry first, then the per-request store-backed fallback. */
@@ -542,7 +601,37 @@ export class IntegrationService {
     const registered = this.options.providers.get(providerId);
     if (registered) return registered;
     if (!this.options.resolveProvider) return null;
-    return this.options.resolveProvider(userId, providerId);
+    try {
+      return await this.options.resolveProvider(userId, providerId);
+    } catch (error) {
+      if (error instanceof IntegrationProviderTemporarilyUnavailableError) return null;
+      throw error;
+    }
+  }
+
+  private async resolveProviderForCleanup(
+    userId: string,
+    providerId: UserIntegrationProvider,
+  ): Promise<{
+    readonly provider: IIntegrationProvider | null;
+    readonly cleanupDeps: CredentialCleanupDependencies;
+  }> {
+    const registered = this.options.providers.get(providerId);
+    if (registered) {
+      return { provider: registered, cleanupDeps: this.cleanupDependencies(registered) };
+    }
+    if (!this.options.resolveProvider) {
+      return { provider: null, cleanupDeps: { kind: 'terminal' } };
+    }
+    try {
+      const provider = await this.options.resolveProvider(userId, providerId);
+      return { provider, cleanupDeps: this.cleanupDependencies(provider) };
+    } catch (error) {
+      if (error instanceof IntegrationProviderTemporarilyUnavailableError) {
+        return { provider: null, cleanupDeps: { kind: 'retry' } };
+      }
+      throw error;
+    }
   }
 
   private writeDependencies(provider: IIntegrationProvider | null): {
@@ -600,7 +689,6 @@ export class IntegrationService {
     try {
       record = provider.integrationDescriptorId
           && provider.integrationDescriptorFingerprint
-          && this.options.store.connectDescriptorCredential
         ? await this.options.store.connectDescriptorCredential({
             descriptorId: provider.integrationDescriptorId,
             descriptorFingerprint: provider.integrationDescriptorFingerprint,
@@ -608,7 +696,8 @@ export class IntegrationService {
           })
         : await this.options.store.connect(connection);
     } catch (error) {
-      if (error instanceof IntegrationCredentialCleanupPendingError) {
+      if (error instanceof IntegrationCredentialCleanupPendingError
+          || error instanceof IntegrationCredentialReplacementRequiresCleanupError) {
         return credentialCleanupPendingConflict();
       }
       throw error;
@@ -633,19 +722,57 @@ export class IntegrationService {
     };
   }
 
+  private cleanupDependencies(provider: IIntegrationProvider | null): CredentialCleanupDependencies {
+    if (!provider) return { kind: 'terminal' };
+    if (!this.options.secretEncryption || !provider.authorizationConfigured) {
+      return { kind: 'retry' };
+    }
+    return {
+      kind: 'ready',
+      secretEncryption: this.options.secretEncryption,
+      provider,
+    };
+  }
+
   private async revokeExchangedCredentials(
     provider: IIntegrationProvider,
     exchanged: Awaited<ReturnType<IIntegrationProvider['exchangeAuthorizationCode']>>,
+    connection: UserIntegrationConnectInput,
   ): Promise<void> {
     try {
       await provider.revokeCredentials({
         accessToken: exchanged.accessToken,
         refreshToken: exchanged.refreshToken ?? null,
         externalInstallationId: exchanged.externalInstallationId,
+        isRetry: false,
       });
-    } catch {
-      // The local credential write failed closed. Remote revocation is best-effort
-      // and must not revive or expose the rejected callback.
+    } catch (error) {
+      let parked = false;
+      try {
+        await this.options.store.parkCredentialCleanup({
+          ...connection,
+          descriptorFingerprint: provider.integrationDescriptorFingerprint ?? null,
+          requestedAt: this.now(),
+        });
+        parked = true;
+      } catch (parkError) {
+        logger.error('Failed to retain rejected integration credential for cleanup', {
+          userId: connection.userId,
+          provider: provider.descriptor.id,
+          error: parkError instanceof Error ? parkError.message : 'unknown persistence error',
+        });
+      }
+      logger.error('Compensating integration credential revocation failed', {
+        userId: connection.userId,
+        provider: provider.descriptor.id,
+        error: error instanceof Error ? error.message : 'unknown revocation error',
+        cleanupCredentialParked: parked,
+      });
+      await this.recordCallbackRejected(
+        provider.descriptor.id,
+        connection.userId,
+        'compensating_revocation_failed',
+      );
     }
   }
 
@@ -811,10 +938,11 @@ function readApiKeyCredential(body: unknown): CapturedStaticCredential {
  */
 function readBasicCredential(body: unknown): CapturedStaticCredential {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
-  const username = typeof record.username === 'string' ? record.username.trim() : '';
+  const username = typeof record.username === 'string' ? record.username : '';
   const password = typeof record.password === 'string' ? record.password : '';
-  if (username.length === 0 || password.length === 0 ||
-      !isWellFormedUnicode(username) || !isWellFormedUnicode(password)) {
+  if (username.trim().length === 0 || password.length === 0 ||
+      !isWellFormedUnicode(username) || !isWellFormedUnicode(password) ||
+      hasBasicCredentialControlCharacter(username) || hasBasicCredentialControlCharacter(password)) {
     return { error: badRequest('invalid_basic_credential', 'Valid, non-empty username and password are required.') };
   }
   if (username.includes(':')) {
@@ -824,7 +952,17 @@ function readBasicCredential(body: unknown): CapturedStaticCredential {
   if (Buffer.byteLength(credential, 'utf8') > 8192) {
     return { error: badRequest('invalid_basic_credential', 'Credential is too large.') };
   }
-  return { credential, defaultAccountLabel: username.slice(0, 200) };
+  return { credential, defaultAccountLabel: username.trim().slice(0, 200) };
+}
+
+function hasBasicCredentialControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function singleQueryValue(value: unknown): string | null {

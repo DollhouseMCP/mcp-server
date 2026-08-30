@@ -29,6 +29,7 @@ import { canonicalizeIntegrationApiHosts } from '../../security/IntegrationApiHo
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import {
+  IntegrationDescriptorCredentialConflictError,
   type IIntegrationDescriptorStore,
   type IntegrationDescriptorCreateInput,
   type IntegrationDescriptorRecord,
@@ -121,6 +122,10 @@ export class IntegrationDescriptorSeedLoader {
         if (record) descriptors.push(record);
         else skipped++;
       } catch (err) {
+        // A curated routing change blocked by live credentials is a deployment
+        // readiness failure, not a malformed optional seed. Never continue on
+        // the previous routing/client configuration while reporting boot green.
+        if (err instanceof IntegrationDescriptorCredentialConflictError) throw err;
         failed++;
         SecurityMonitor.logSecurityEvent({
           type: 'INTEGRATION_SECURITY_DECISION',

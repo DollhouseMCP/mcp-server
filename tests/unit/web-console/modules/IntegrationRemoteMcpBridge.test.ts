@@ -419,6 +419,75 @@ describe('IntegrationRemoteMcpBridge', () => {
     expect(bearerTokens).toEqual([REMOTE_ACCESS_TOKEN, 'remote-refreshed-access-token']);
   });
 
+  it('refreshes but does not replay a remote MCP tool call after an upstream 401', async () => {
+    const secretEncryption = encryption();
+    const staleIntegration = {
+      ...integration(secretEncryption),
+      refreshTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from('remote-refresh-token', 'utf8'),
+        integrationSecretContext('refresh_token', USER_ID, REMOTE_DOCS),
+      ),
+    };
+    const refreshProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: descriptor(),
+      clientSecret: 'remote-client-secret',
+      dnsLookup: publicDnsLookup,
+      pinnedOutbound: () => ({
+        fetch: () => Promise.resolve(new Response(JSON.stringify({
+          access_token: 'remote-refreshed-access-token',
+          refresh_token: 'remote-rotated-refresh-token',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })),
+        close: () => Promise.resolve(),
+      }),
+    });
+    const bearerTokens: string[] = [];
+    const toolCalls: string[] = [];
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockImplementation(({ bearerToken, pinnedFetch }) => {
+      bearerTokens.push(bearerToken);
+      return Promise.resolve({
+        listTools: jest.fn().mockResolvedValue({ tools: [] }),
+        callTool: async () => {
+          toolCalls.push(bearerToken);
+          if (bearerToken === REMOTE_ACCESS_TOKEN) {
+            await pinnedFetch(REMOTE_MCP_URL, { method: 'POST' });
+            throw new Error('Remote MCP request failed with HTTP 401');
+          }
+          return { content: [{ type: 'text', text: 'duplicate effect' }] };
+        },
+        close: jest.fn(() => Promise.resolve()),
+      });
+    });
+    const { bridge, contextTracker, integrationStore } = fixture({
+      integration: staleIntegration,
+      providers: new IntegrationProviderRegistry([refreshProvider]),
+      clientFactory,
+      pinnedOutbound: () => ({
+        fetch: () => Promise.resolve(new Response(null, { status: 401 })),
+        close: () => Promise.resolve(),
+      }),
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: { query: 'once only' },
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_call_failed',
+      message: 'Remote MCP tool call failed.',
+    });
+
+    expect(bearerTokens).toEqual([REMOTE_ACCESS_TOKEN]);
+    expect(toolCalls).toEqual([REMOTE_ACCESS_TOKEN]);
+    const refreshed = await integrationStore.findByProvider(USER_ID, REMOTE_DOCS);
+    expect(secretEncryption.decrypt(
+      refreshed?.accessTokenCiphertext ?? Buffer.alloc(0),
+      integrationSecretContext('access_token', USER_ID, REMOTE_DOCS),
+    ).toString('utf8')).toBe('remote-refreshed-access-token');
+  });
+
   it('rejects remote MCP server URLs outside descriptor apiHosts', async () => {
     const { bridge, contextTracker } = fixture({
       descriptor: descriptor({
@@ -687,6 +756,7 @@ function fixture(options: {
   });
   return {
     contextTracker,
+    integrationStore,
     pins,
     closePinned,
     bridge: new IntegrationRemoteMcpBridge({

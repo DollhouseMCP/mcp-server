@@ -111,6 +111,16 @@ export type IntegrationProviderResolver = (
   providerId: UserIntegrationProvider,
 ) => Promise<IIntegrationProvider | null>;
 
+/** The descriptor exists, but its provider could not be built right now. */
+export class IntegrationProviderTemporarilyUnavailableError extends Error {
+  readonly code = 'integration_provider_temporarily_unavailable';
+
+  constructor(providerId: UserIntegrationProvider) {
+    super(`integration provider '${providerId}' is temporarily unavailable`);
+    this.name = 'IntegrationProviderTemporarilyUnavailableError';
+  }
+}
+
 export function createStoreIntegrationProviderResolver(params: {
   readonly descriptorStore: IIntegrationDescriptorStore;
   readonly secretEncryption: ISecretEncryptionService;
@@ -129,7 +139,7 @@ export function createStoreIntegrationProviderResolver(params: {
         `[CuratedIntegrationProviders] Per-request provider build failed for '${descriptor.provider}'`,
         { error: err instanceof Error ? err.message : String(err) },
       );
-      return null;
+      throw new IntegrationProviderTemporarilyUnavailableError(descriptor.provider);
     }
   };
 }

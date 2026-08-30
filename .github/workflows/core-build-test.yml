@@ -181,7 +181,11 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The first complete 126-suite serial runs consumed 1,048-1,080 seconds
+    # (87-90% of the former 20-minute cap). Keep capacity headroom as the
+    # required integration tree grows; per-test startup timeouts are repaired
+    # independently and are not masked by this job-level budget.
+    timeout-minutes: 30
     env:
       DOLLHOUSE_REQUIRE_TEST_DATABASE: '1'
       DOLLHOUSE_REQUIRE_PG_AUTH_TESTS: '1'

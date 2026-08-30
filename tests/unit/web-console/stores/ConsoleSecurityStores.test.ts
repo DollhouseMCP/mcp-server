@@ -9,8 +9,10 @@ import {
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
   InMemoryIntegrationDescriptorStore,
+  InMemoryIntegrationMutationCoordinator,
   InMemoryIntegrationOpenApiSpecStore,
   InMemoryUserIntegrationStore,
+  IntegrationCredentialCleanupPendingError,
   isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
 import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/index.js';
@@ -503,6 +505,186 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
+  it('persists descriptor-bound credentials only for the current in-memory descriptor revision', async () => {
+    const store = new InMemoryUserIntegrationStore(
+      [],
+      descriptorId => descriptorId === DESCRIPTOR_ID ? DESCRIPTOR_FINGERPRINT : null,
+    );
+    const connection = {
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      externalAccountLabel: 'alice@example.test',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: null,
+      connectedAt: NOW,
+    };
+
+    await expect(store.connectDescriptorCredential({
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      connection,
+    })).resolves.toMatchObject({
+      status: 'connected',
+      integrationDescriptorId: DESCRIPTOR_ID,
+    });
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      integrationDescriptorId: DESCRIPTOR_ID,
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    });
+  });
+
+  it('fails a real descriptor-bound callback closed when the in-memory revision changed', async () => {
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    await loginTransactions.create(loginTransaction({
+      idHash: hash(9),
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      requestedCapability: null,
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    }));
+    await loginTransactions.consume(hash(9), hash(4), FOUR_MINUTES);
+    const store = new InMemoryUserIntegrationStore(
+      [],
+      () => '0'.repeat(64),
+      { loginTransactionStore: loginTransactions, now: () => FIVE_MINUTES },
+    );
+
+    await expect(store.connectDescriptorCallback({
+      transactionIdHash: hash(9),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      connection: {
+        userId: USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'alice@example.test',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+        connectedAt: NOW,
+      },
+    })).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
+  it('persists an in-memory descriptor callback only while its consumed lease remains live', async () => {
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    await loginTransactions.create(loginTransaction({
+      idHash: hash(9),
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      requestedCapability: null,
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    }));
+    await loginTransactions.consume(hash(9), hash(4), FOUR_MINUTES);
+    const connection = {
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      externalAccountLabel: 'alice@example.test',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+      connectedAt: NOW,
+    };
+    const liveStore = new InMemoryUserIntegrationStore(
+      [],
+      () => DESCRIPTOR_FINGERPRINT,
+      { loginTransactionStore: loginTransactions, now: () => FIVE_MINUTES },
+    );
+
+    await expect(liveStore.connectDescriptorCallback({
+      transactionIdHash: hash(9),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      connection,
+    })).resolves.toMatchObject({ status: 'connected' });
+
+    await loginTransactions.completeConsumed(hash(9));
+    const completedStore = new InMemoryUserIntegrationStore(
+      [],
+      () => DESCRIPTOR_FINGERPRINT,
+      { loginTransactionStore: loginTransactions, now: () => FIVE_MINUTES },
+    );
+    await expect(completedStore.connectDescriptorCallback({
+      transactionIdHash: hash(9),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      connection,
+    })).resolves.toBeNull();
+    await expect(completedStore.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
+  it('rechecks the consumed callback lease after waiting for descriptor mutation', async () => {
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    await loginTransactions.create(loginTransaction({
+      idHash: hash(9),
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      requestedCapability: null,
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    }));
+    await loginTransactions.consume(hash(9), hash(4), FOUR_MINUTES);
+    const mutationCoordinator = new InMemoryIntegrationMutationCoordinator();
+    let releaseMutation!: () => void;
+    let signalMutationStarted!: () => void;
+    const mutationStarted = new Promise<void>(resolve => {
+      signalMutationStarted = resolve;
+    });
+    const mutationGate = new Promise<void>(resolve => {
+      releaseMutation = resolve;
+    });
+    const blockingMutation = mutationCoordinator.runExclusive(async () => {
+      signalMutationStarted();
+      await mutationGate;
+    });
+    await mutationStarted;
+    let currentTime = FIVE_MINUTES;
+    const store = new InMemoryUserIntegrationStore(
+      [],
+      () => DESCRIPTOR_FINGERPRINT,
+      {
+        loginTransactionStore: loginTransactions,
+        mutationCoordinator,
+        now: () => currentTime,
+      },
+    );
+    const callback = store.connectDescriptorCallback({
+      transactionIdHash: hash(9),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      connection: {
+        userId: USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'alice@example.test',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+        connectedAt: NOW,
+      },
+    });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    currentTime = new Date('2026-05-26T12:10:00.000Z');
+    releaseMutation();
+    await blockingMutation;
+
+    await expect(callback).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
   it('serializes concurrent refresh and lets the losing caller reuse the fresh token', async () => {
     const store = new InMemoryUserIntegrationStore([userIntegration({
       provider: 'linear',
@@ -667,7 +849,7 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
   });
 
-  it('does not let an in-flight refresh replace a newer connection', async () => {
+  it('requires explicit cleanup before reconnect can replace an active credential', async () => {
     const store = new InMemoryUserIntegrationStore([userIntegration({
       provider: 'linear',
       authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
@@ -711,16 +893,14 @@ describe('InMemoryUserIntegrationStore', () => {
 
     releaseRefresh();
     await expect(refreshing).resolves.toMatchObject({ kind: 'refreshed' });
-    await expect(reconnecting).resolves.toMatchObject({
-      externalAccountLabel: 'replacement',
-      accessTokenCiphertext: Buffer.from('replacement-access'),
-    });
+    await expect(reconnecting).rejects.toThrow(
+      'existing integration credential must be cleaned up before reconnecting',
+    );
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
-      externalAccountLabel: 'replacement',
-      credentialKeyVersion: 'integration-key-v3',
-      accessTokenCiphertext: Buffer.from('replacement-access'),
-      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
-      authorizedPermissions: { scopes: ['write:issues'] },
+      externalAccountLabel: 'alice',
+      accessTokenCiphertext: Buffer.from('fresh-old-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-old-refresh'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
     });
   });
 
@@ -793,6 +973,51 @@ describe('InMemoryUserIntegrationStore', () => {
       cleanupLeaseId: null,
     });
     await expect(store.findCredentialCleanupPending(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
+  it('enforces one pending cleanup row before moving an active credential', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+    })]);
+    const parked = await store.parkCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      externalAccountLabel: 'failed relink',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from('parked-access-token'),
+      refreshTokenCiphertext: null,
+      credentialKeyVersion: 'integration-key-v1',
+      connectedAt: NOW,
+      requestedAt: FIVE_MINUTES,
+    });
+
+    await expect(store.beginCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({ id: parked.id, status: 'cleanup_pending' });
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({ status: 'connected' });
+
+    await expect(store.parkCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      externalAccountLabel: 'second failed relink',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from('second-parked-access-token'),
+      refreshTokenCiphertext: null,
+      credentialKeyVersion: 'integration-key-v1',
+      connectedAt: NOW,
+      requestedAt: FIVE_MINUTES,
+    })).rejects.toBeInstanceOf(IntegrationCredentialCleanupPendingError);
   });
 
   it('terminalizes non-retryable cleanup without erasing ciphertext and releases deletion guards', async () => {
@@ -899,6 +1124,87 @@ describe('InMemoryUserIntegrationStore', () => {
 });
 
 describe('InMemoryIntegrationDescriptorStore', () => {
+  it('serializes routing mutation with descriptor-bound credential persistence', async () => {
+    const mutationCoordinator = new InMemoryIntegrationMutationCoordinator();
+    let releaseCredentialCheck!: () => void;
+    const credentialCheckStarted = new Promise<void>(resolve => {
+      releaseCredentialCheck = resolve;
+    });
+    let integrationStore!: InMemoryUserIntegrationStore;
+    const descriptorStore = new InMemoryIntegrationDescriptorStore([], {
+      mutationCoordinator,
+      hasBlockingCredentialMaterialByDescriptor: async descriptorId => {
+        await credentialCheckStarted;
+        return integrationStore.hasBlockingCredentialMaterialByDescriptor(descriptorId);
+      },
+    });
+    const initial = await descriptorStore.upsert(oauthDescriptorInput());
+    integrationStore = new InMemoryUserIntegrationStore(
+      [],
+      descriptorId => descriptorStore.routingFingerprint(descriptorId),
+      { mutationCoordinator },
+    );
+    const originalFingerprint = descriptorStore.routingFingerprint(initial.id);
+    if (!originalFingerprint) throw new Error('fixture descriptor fingerprint missing');
+
+    const mutation = descriptorStore.upsert(oauthDescriptorInput({
+      apiHosts: ['mail.example.com'],
+      updatedAt: FIVE_MINUTES,
+    }));
+    const connection = integrationStore.connectDescriptorCredential({
+      descriptorId: initial.id,
+      descriptorFingerprint: originalFingerprint,
+      connection: {
+        userId: USER_ID,
+        provider: 'gmail',
+        integrationDescriptorId: initial.id,
+        externalAccountLabel: ALICE_EMAIL,
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+        connectedAt: NOW,
+      },
+    });
+    releaseCredentialCheck();
+
+    await expect(mutation).resolves.toMatchObject({ apiHosts: ['mail.example.com'] });
+    await expect(connection).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+  });
+
+  it('allows promotion and client-secret rotation while credentials remain bound', async () => {
+    const store = new InMemoryIntegrationDescriptorStore([], {
+      hasBlockingCredentialMaterialByDescriptor: () => Promise.resolve(true),
+    });
+    const initial = await store.upsert(oauthDescriptorInput());
+
+    await expect(store.upsert(oauthDescriptorInput({
+      clientSecretCiphertext: Buffer.from('rotated-client-secret'),
+      clientSecretRevision: '00000000-0000-4000-8000-000000000202',
+      operationPromotion: { operations: ['gmail.users.messages.send'] },
+      updatedAt: FIVE_MINUTES,
+    }))).resolves.toMatchObject({
+      id: initial.id,
+      clientSecretRevision: '00000000-0000-4000-8000-000000000202',
+      operationPromotion: { operations: ['gmail.users.messages.send'] },
+    });
+  });
+
+  it('rejects credential-binding mutation while revocable credentials remain', async () => {
+    const store = new InMemoryIntegrationDescriptorStore([], {
+      hasBlockingCredentialMaterialByDescriptor: () => Promise.resolve(true),
+    });
+    await store.upsert(oauthDescriptorInput());
+
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['mail.example.com'],
+      updatedAt: FIVE_MINUTES,
+    }))).rejects.toMatchObject({
+      code: 'integration_descriptor_credential_conflict',
+    });
+  });
+
   it('stores visible curated and BYO descriptors and clones encrypted client secrets', async () => {
     const store = new InMemoryIntegrationDescriptorStore();
     const created = await store.upsert(oauthDescriptorInput());

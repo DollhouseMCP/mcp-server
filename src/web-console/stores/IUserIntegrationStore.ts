@@ -30,11 +30,20 @@ export class IntegrationCredentialCleanupPendingError extends Error {
   }
 }
 
+export class IntegrationCredentialReplacementRequiresCleanupError extends Error {
+  constructor() {
+    super('existing integration credential must be cleaned up before reconnecting');
+    this.name = 'IntegrationCredentialReplacementRequiresCleanupError';
+  }
+}
+
 export interface UserIntegrationRecord {
   readonly id: string;
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
   readonly integrationDescriptorId?: string | null;
+  /** Routing revision pinned only for cleanup work created after failed compensation. */
+  readonly cleanupDescriptorFingerprint?: string | null;
   readonly externalAccountLabel: string | null;
   readonly externalInstallationId: string | null;
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
@@ -96,13 +105,15 @@ export interface IUserIntegrationStore {
   ): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
   /** Atomically persist a credential only while its descriptor revision is current. */
-  connectDescriptorCredential?(input: DescriptorCredentialConnectInput): Promise<UserIntegrationRecord | null>;
+  connectDescriptorCredential(input: DescriptorCredentialConnectInput): Promise<UserIntegrationRecord | null>;
   /**
    * Atomically verify a descriptor-bound callback and persist its credentials.
-   * PostgreSQL implements this to serialize callback completion with descriptor
-   * rotation; stores without shared descriptor state may omit it.
+   * Every backend must implement this fail-closed contract; descriptor-bound
+   * credentials must never silently fall back to an unbound write.
    */
-  connectDescriptorCallback?(input: DescriptorCallbackConnectInput): Promise<UserIntegrationRecord | null>;
+  connectDescriptorCallback(input: DescriptorCallbackConnectInput): Promise<UserIntegrationRecord | null>;
+  /** Persist an unusable newly-issued grant when compensating revocation fails. */
+  parkCredentialCleanup(input: UserIntegrationCleanupParkInput): Promise<UserIntegrationRecord>;
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord | null>;
   beginCredentialCleanup(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
@@ -190,6 +201,11 @@ export interface UserIntegrationCleanupClaimInput {
   readonly leaseExpiresAt: Date;
 }
 
+export interface UserIntegrationCleanupParkInput extends UserIntegrationConnectInput {
+  readonly descriptorFingerprint: string | null;
+  readonly requestedAt: Date;
+}
+
 export interface UserIntegrationCleanupReleaseInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
@@ -232,6 +248,11 @@ export function validateUserIntegrationRecord(record: UserIntegrationRecord): vo
   assertUserIntegrationProvider(record.provider);
   if (record.integrationDescriptorId) {
     assertUuid(record.integrationDescriptorId, 'integrationDescriptorId');
+  }
+  if (record.cleanupDescriptorFingerprint !== undefined
+      && record.cleanupDescriptorFingerprint !== null
+      && !/^[a-f0-9]{64}$/.test(record.cleanupDescriptorFingerprint)) {
+    throw new ConsoleStoreValidationError('cleanupDescriptorFingerprint must be a lowercase SHA-256 digest');
   }
   if (!['connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error'].includes(record.status)) {
     throw new ConsoleStoreValidationError(`unsupported integration status '${record.status}'`);

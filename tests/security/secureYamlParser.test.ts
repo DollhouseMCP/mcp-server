@@ -1,6 +1,7 @@
 import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import type { SecureParseOptions } from '../../src/security/secureYamlParser.js';
 import { SecureYamlParser } from '../../src/security/secureYamlParser.js';
+import { ContentValidator } from '../../src/security/contentValidator.js';
 import { SecurityMonitor } from '../../src/security/securityMonitor.js';
 import { SECURITY_LIMITS } from '../../src/security/constants.js';
 
@@ -60,6 +61,25 @@ Content`;
       expect(() => {
         SecureYamlParser.parse(largeYaml);
       }).toThrow('YAML frontmatter exceeds maximum allowed size');
+    });
+
+    it('passes the merged default YAML bound to structure validation', () => {
+      const validateStructure = jest.spyOn(ContentValidator, 'validateYamlStructure');
+
+      SecureYamlParser.parse('---\nname: Test\n---', { contentContext: 'skill' });
+
+      expect(validateStructure).toHaveBeenCalledWith('name: Test', 64 * 1024);
+    });
+
+    it('passes a caller YAML bound to structure validation', () => {
+      const validateStructure = jest.spyOn(ContentValidator, 'validateYamlStructure');
+
+      SecureYamlParser.parse('---\nname: Test\n---', {
+        contentContext: 'skill',
+        maxYamlSize: 1024,
+      });
+
+      expect(validateStructure).toHaveBeenCalledWith('name: Test', 1024);
     });
 
     describe('malicious YAML detection', () => {

@@ -348,7 +348,7 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
   });
 
   it.each([404, 410])(
-    'treats a %i revocation retry as success after the provider already removed the credential',
+    'treats a %i as already revoked only after another token revocation succeeded in the same call',
     async missingStatus => {
       const responses = [204, missingStatus];
       const { provider } = providerWith({
@@ -357,11 +357,10 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
       });
       const request = {
         accessToken: ACCESS_TOKEN,
-        refreshToken: null,
+        refreshToken: REFRESH_TOKEN,
         externalInstallationId: null,
       };
 
-      await expect(provider.revokeCredentials(request)).resolves.toBeUndefined();
       await expect(provider.revokeCredentials(request)).resolves.toBeUndefined();
       expect(responses).toEqual([]);
     },
@@ -523,6 +522,51 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(fetchCalls.map(call => call.body)).toEqual([
       'token=refresh-token&token_type_hint=refresh_token&client_id=gmail-client-id&client_secret=gmail-client-secret',
       'token=access-token&token_type_hint=access_token&client_id=gmail-client-id&client_secret=gmail-client-secret',
+    ]);
+  });
+
+  it.each([404, 410])('treats a bare %i revocation response as failure', async status => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response('{}', { status })),
+    });
+
+    await expect(provider.revokeCredentials({
+      accessToken: ACCESS_TOKEN,
+      refreshToken: null,
+      externalInstallationId: null,
+    })).rejects.toThrow('configured_oauth_revocation_failed');
+  });
+
+  it('continues a partially successful multi-token revocation on a durable retry', async () => {
+    const responses = [204, 502, 404, 204];
+    const revocationBodies: string[] = [];
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: (_url, init) => {
+        const body = init?.body;
+        revocationBodies.push(
+          typeof body === 'string' || body instanceof URLSearchParams ? body.toString() : '',
+        );
+        return Promise.resolve(new Response(null, { status: responses.shift() ?? 500 }));
+      },
+    });
+    const request = {
+      accessToken: ACCESS_TOKEN,
+      refreshToken: REFRESH_TOKEN,
+      externalInstallationId: null,
+    };
+
+    await expect(provider.revokeCredentials(request))
+      .rejects.toThrow('configured_oauth_revocation_failed');
+    await expect(provider.revokeCredentials({ ...request, isRetry: true }))
+      .resolves.toBeUndefined();
+
+    expect(revocationBodies).toEqual([
+      expect.stringContaining('token=refresh-token'),
+      expect.stringContaining('token=access-token'),
+      expect.stringContaining('token=refresh-token'),
+      expect.stringContaining('token=access-token'),
     ]);
   });
 

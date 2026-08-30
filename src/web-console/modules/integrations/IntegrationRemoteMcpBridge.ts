@@ -192,6 +192,7 @@ export class IntegrationRemoteMcpBridge {
       userId,
       config.serverUrl,
       vetted,
+      true,
       async (client, bearerToken) => {
       const listed = await this.awaitRemoteOperation(
         client.listTools(),
@@ -251,6 +252,7 @@ export class IntegrationRemoteMcpBridge {
         session.userId,
         config.serverUrl,
         vetted,
+        false,
         async (client, bearerToken) => {
         const remoteResult = await this.awaitRemoteOperation(
           client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
@@ -361,6 +363,7 @@ export class IntegrationRemoteMcpBridge {
     userId: string,
     serverUrl: URL,
     vetted: DnsLookupAddress,
+    replayAfterRefresh: boolean,
     work: (client: RemoteMcpClient, credential: string) => Promise<T>,
   ): Promise<T> {
     const staleAccessTokenCiphertext = integration.accessTokenCiphertext;
@@ -369,7 +372,8 @@ export class IntegrationRemoteMcpBridge {
       return await this.withPinnedClient(serverUrl, firstCredential, vetted, client => work(client, firstCredential));
     } catch (error) {
       const tokenRefresh = this.options.tokenRefresh;
-      if (!(error instanceof RemoteMcpUnauthorizedResponseError) || !tokenRefresh || !staleAccessTokenCiphertext ||
+      if (!(error instanceof RemoteMcpUnauthorizedResponseError) ||
+          !tokenRefresh || !staleAccessTokenCiphertext ||
           !(await tokenRefresh.canRefresh(userId, descriptor, integration))) {
         throw unwrapRemoteMcpUnauthorizedError(error);
       }
@@ -387,6 +391,10 @@ export class IntegrationRemoteMcpBridge {
           502,
         );
       }
+      // Persisting a refreshed credential is safe even when replaying the
+      // remote tool call is not. Mutating calls surface the original 401 and
+      // use the refreshed credential only on the caller's next explicit call.
+      if (!replayAfterRefresh) throw unwrapRemoteMcpUnauthorizedError(error);
       const refreshedCredential = this.decryptAccessToken(refreshed.record, userId);
       try {
         return await this.withPinnedClient(serverUrl, refreshedCredential, vetted, client => work(client, refreshedCredential));

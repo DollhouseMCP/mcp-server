@@ -5,6 +5,7 @@ import {
   ConfiguredOAuthIntegrationProvider,
   createIntegrationModule,
   HmacConsoleOpaqueValueService,
+  InMemoryIntegrationDescriptorStore,
   InMemoryUserIntegrationStore,
   InMemoryLoginTransactionStore,
   IntegrationDescriptorChangedError,
@@ -13,10 +14,12 @@ import {
   IntegrationProviderRegistry,
   IntegrationService,
   IntegrationTokenRefreshService,
+  executeConsoleRoute,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type IGitHubIntegrationProvider,
   type IIntegrationSecurityEventSink,
+  type ILoginTransactionStore,
   type IntegrationCallbackRejectedEvent,
   StaticApiKeyIntegrationProvider,
   type IntegrationDescriptorRecord,
@@ -27,6 +30,7 @@ import type {
   PinnedFetch,
   PinnedOutboundFactory,
 } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
+import { createStoreIntegrationProviderResolver } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
 
 function formBodyString(body: RequestInit['body']): string | null {
   if (typeof body === 'string') return body;
@@ -86,6 +90,39 @@ function successfulConfiguredOAuthFetch(): Promise<Response> {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   }));
+}
+
+function descriptorBoundStoreFor(
+  provider: {
+    readonly integrationDescriptorId?: string | null;
+    readonly integrationDescriptorFingerprint?: string | null;
+  },
+  records: readonly UserIntegrationRecord[] = [],
+): InMemoryUserIntegrationStore {
+  const loginTransactionStore = {
+    findByIdHash: (idHash: Buffer) => Promise.resolve({
+      idHash,
+      flowKind: 'integration_link' as const,
+      stateHash: Buffer.alloc(32, 1),
+      pkceVerifierEnc: Buffer.from('encrypted-pkce-verifier'),
+      userId: USER_ID,
+      consoleSessionIdHash: Buffer.alloc(32, 2),
+      requestedCapability: null,
+      integrationDescriptorId: provider.integrationDescriptorId ?? null,
+      integrationDescriptorFingerprint: provider.integrationDescriptorFingerprint ?? null,
+      returnTo: SETTINGS_INTEGRATIONS_PATH,
+      createdAt: NOW,
+      expiresAt: new Date(NOW.getTime() + 5 * 60_000),
+      consumedAt: NOW,
+    }),
+  } as unknown as ILoginTransactionStore;
+  return new InMemoryUserIntegrationStore(
+    records,
+    descriptorId => descriptorId === provider.integrationDescriptorId
+      ? provider.integrationDescriptorFingerprint ?? null
+      : null,
+    { loginTransactionStore, now: () => NOW },
+  );
 }
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
@@ -307,6 +344,34 @@ describe('IntegrationModule', () => {
       },
     });
   });
+
+  it.each(['cleanup_pending', 'cleanup_failed'] as const)(
+    'preserves %s through the console privacy projection',
+    async status => {
+      const cleanupNextAttemptAt = status === 'cleanup_pending'
+        ? new Date(NOW.getTime() + 1_000)
+        : null;
+      const { module } = moduleFixture([integrationFixture({
+        status,
+        errorReason: 'revocation_failed',
+        cleanupAttemptCount: 1,
+        cleanupNextAttemptAt,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+        revokedAt: NOW,
+      })]);
+      const getGitHub = findRoute(module.routes, GITHUB_PATH);
+
+      await expect(executeConsoleRoute(getGitHub, consoleRequest())).resolves.toMatchObject({
+        status: 200,
+        body: {
+          provider: 'github',
+          status,
+          error_reason: 'revocation_failed',
+        },
+      });
+    },
+  );
 
   it('lists registered provider catalog entries even when write provider is unavailable', async () => {
     const store = new InMemoryUserIntegrationStore();
@@ -1050,7 +1115,7 @@ describe('IntegrationModule', () => {
       clientSecret: GMAIL_CLIENT_SECRET,
       ...configuredOAuthNetwork(fetchImpl),
     });
-    const store = new InMemoryUserIntegrationStore();
+    const store = descriptorBoundStoreFor(provider);
     const loginTransactions = new InMemoryLoginTransactionStore();
     const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
     const secretEncryption = new AeadSecretEncryptionService({
@@ -1432,18 +1497,231 @@ describe('IntegrationModule', () => {
     await expect(findRoute(module.routes, GMAIL_PATH).handler(consoleRequest()))
       .resolves.toMatchObject({ body: { status: 'disconnected' } });
     await expect(findRoute(module.routes, GMAIL_PATH, 'DELETE').handler(consoleRequest()))
-      .resolves.toMatchObject({ status: 200, body: { status: 'cleanup_failed' } });
+      .resolves.toMatchObject({ status: 200, body: { status: 'cleanup_pending' } });
     expect(revoke).not.toHaveBeenCalled();
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
-    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toMatchObject({
+      integrationDescriptorId: oauthDescriptorFixture().id,
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: expect.any(Buffer),
+    });
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(true);
     await expect(store.listByUser(USER_ID, ['gmail'])).resolves.toEqual([
       expect.objectContaining({
         integrationDescriptorId: oauthDescriptorFixture().id,
-        status: 'cleanup_failed',
+        status: 'cleanup_pending',
         errorReason: 'revocation_failed',
         accessTokenCiphertext: expect.any(Buffer),
       }),
     ]);
+  });
+
+  it('moves a connected credential to terminal cleanup when its provider is removed', async () => {
+    const store = new InMemoryUserIntegrationStore();
+    await store.connect({
+      userId: USER_ID,
+      provider: 'retired-provider',
+      integrationDescriptorId: oauthDescriptorFixture().id,
+      externalAccountLabel: 'retired account',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['read'] },
+      accessTokenCiphertext: Buffer.from('encrypted-retired-token'),
+      refreshTokenCiphertext: null,
+      connectedAt: NOW,
+    });
+    const service = new IntegrationService({
+      store,
+      providers: IntegrationProviderRegistry.empty(),
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: TEST_ENCRYPTION_KEY_ID,
+        key: Buffer.alloc(32, 9),
+      }),
+      now: () => NOW,
+    });
+
+    await expect(service.disconnectProvider(
+      consoleRequest(),
+      'retired-provider' as Parameters<IntegrationService['disconnectProvider']>[1],
+    )).resolves.toMatchObject({ status: 503 });
+
+    await expect(store.findByProvider(USER_ID, 'retired-provider')).resolves.toBeNull();
+    await expect(store.findCredentialCleanupFailed(USER_ID, 'retired-provider')).resolves.toMatchObject({
+      status: 'cleanup_failed',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: Buffer.from('encrypted-retired-token'),
+    });
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(false);
+  });
+
+  it('keeps cleanup retryable when encryption is temporarily unavailable', async () => {
+    const record = integrationFixture();
+    const store = new InMemoryUserIntegrationStore([record]);
+    const provider = new FixtureGitHubIntegrationProvider();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      githubProvider: provider,
+      secretEncryption: null,
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, GITHUB_PATH, 'DELETE').handler(consoleRequest()))
+      .resolves.toMatchObject({ status: 503 });
+    expect(provider.revocations).toHaveLength(0);
+    await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      cleanupAttemptCount: 1,
+      accessTokenCiphertext: record.accessTokenCiphertext,
+    });
+    await expect(store.findCredentialCleanupFailed(USER_ID, 'github')).resolves.toBeNull();
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(true);
+  });
+
+  it('keeps cleanup retryable when a registered provider is temporarily unconfigured', async () => {
+    const record = integrationFixture();
+    const store = new InMemoryUserIntegrationStore([record]);
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: TEST_ENCRYPTION_KEY_ID,
+        key: Buffer.alloc(32, 9),
+      }),
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, GITHUB_PATH, 'DELETE').handler(consoleRequest()))
+      .resolves.toMatchObject({ status: 503 });
+    await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      cleanupAttemptCount: 1,
+      accessTokenCiphertext: record.accessTokenCiphertext,
+    });
+    await expect(store.findCredentialCleanupFailed(USER_ID, 'github')).resolves.toBeNull();
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(true);
+  });
+
+  it('keeps cleanup retryable when a store-backed provider secret cannot be decrypted', async () => {
+    const descriptor = oauthDescriptorFixture();
+    const record = integrationFixture({
+      provider: descriptor.provider,
+      integrationDescriptorId: descriptor.id,
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [GMAIL_READONLY_SCOPE] },
+    });
+    const store = new InMemoryUserIntegrationStore([record]);
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: TEST_ENCRYPTION_KEY_ID,
+      key: Buffer.alloc(32, 9),
+    });
+    const service = new IntegrationService({
+      store,
+      providers: IntegrationProviderRegistry.empty(),
+      resolveProvider: createStoreIntegrationProviderResolver({
+        descriptorStore: new InMemoryIntegrationDescriptorStore([descriptor]),
+        secretEncryption,
+      }),
+      secretEncryption,
+      now: () => NOW,
+    });
+
+    await expect(service.disconnectProvider(consoleRequest(), descriptor.provider))
+      .resolves.toMatchObject({ status: 503 });
+    await expect(store.findCredentialCleanupPending(USER_ID, descriptor.provider)).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      cleanupAttemptCount: 1,
+      accessTokenCiphertext: record.accessTokenCiphertext,
+    });
+    await expect(store.findCredentialCleanupFailed(USER_ID, descriptor.provider)).resolves.toBeNull();
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(true);
+  });
+
+  it('drains parked cleanup before the active credential without creating a second pending row', async () => {
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: TEST_ENCRYPTION_KEY_ID,
+      key: Buffer.alloc(32, 9),
+    });
+    const originalAccessToken = 'original-connected-access-token';
+    const parkedAccessToken = 'parked-relink-access-token';
+    const record = integrationFixture({
+      accessTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from(originalAccessToken, 'utf8'),
+        { secretClass: 'integration_access_token', ownerId: `github:${USER_ID}` },
+      ),
+      refreshTokenCiphertext: null,
+    });
+    const store = new InMemoryUserIntegrationStore([record]);
+    await store.parkCredentialCleanup({
+      userId: USER_ID,
+      provider: 'github',
+      integrationDescriptorId: null,
+      externalAccountLabel: 'failed relink',
+      externalInstallationId: null,
+      authorizedPermissions: record.authorizedPermissions,
+      accessTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from(parkedAccessToken, 'utf8'),
+        { secretClass: 'integration_access_token', ownerId: `github:${USER_ID}` },
+      ),
+      refreshTokenCiphertext: null,
+      descriptorFingerprint: null,
+      connectedAt: NOW,
+      requestedAt: NOW,
+    });
+    const provider = new FixtureGitHubIntegrationProvider();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      githubProvider: provider,
+      secretEncryption,
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, GITHUB_PATH, 'DELETE').handler(consoleRequest()))
+      .resolves.toMatchObject({ status: 200, body: { status: 'disconnected' } });
+    expect(provider.revocations).toEqual([
+      expect.objectContaining({ accessToken: parkedAccessToken }),
+      expect.objectContaining({ accessToken: originalAccessToken }),
+    ]);
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toBeNull();
+    await expect(store.findCredentialCleanupPending(USER_ID, 'github')).resolves.toBeNull();
+  });
+
+  it('keeps a null-FK parked credential blocking when its pinned descriptor is absent', async () => {
+    const provider = 'retired-configured-provider';
+    const parked = integrationFixture({
+      provider,
+      integrationDescriptorId: null,
+      cleanupDescriptorFingerprint: 'a'.repeat(64),
+      externalAccountLabel: 'failed configured-provider link',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['read'] },
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupNextAttemptAt: NOW,
+      cleanupLeaseId: null,
+      cleanupLeaseExpiresAt: null,
+      revokedAt: NOW,
+    });
+    const store = new InMemoryUserIntegrationStore([parked]);
+    const service = new IntegrationService({
+      store,
+      providers: IntegrationProviderRegistry.empty(),
+      now: () => NOW,
+    });
+
+    await expect(service.disconnectProvider(
+      consoleRequest(),
+      provider as Parameters<IntegrationService['disconnectProvider']>[1],
+    )).resolves.toMatchObject({ status: 503 });
+
+    await expect(store.findCredentialCleanupPending(USER_ID, provider)).resolves.toMatchObject({
+      id: parked.id,
+      integrationDescriptorId: null,
+      cleanupDescriptorFingerprint: 'a'.repeat(64),
+      status: 'cleanup_pending',
+      cleanupAttemptCount: 1,
+      accessTokenCiphertext: parked.accessTokenCiphertext,
+    });
+    await expect(store.findCredentialCleanupFailed(USER_ID, provider)).resolves.toBeNull();
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(true);
   });
 
   it('keeps the descriptor binding when configured-provider revocation fails', async () => {
@@ -1492,6 +1770,61 @@ describe('IntegrationModule', () => {
     });
   });
 
+  it('retains configured-provider ciphertext when the first revocation response is 404', async () => {
+    const descriptor = oauthDescriptorFixture();
+    if (!descriptor.oauth) throw new Error('OAuth descriptor fixture is missing OAuth configuration');
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: {
+        ...descriptor,
+        oauth: {
+          ...descriptor.oauth,
+          tokenExchange: {
+            ...descriptor.oauth.tokenExchange,
+            revocationUrl: 'https://accounts.example/oauth/revoke',
+          },
+        },
+      },
+      clientSecret: GMAIL_CLIENT_SECRET,
+      ...configuredOAuthNetwork(() => Promise.resolve(new Response(null, { status: 404 }))),
+    });
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: TEST_ENCRYPTION_KEY_ID,
+      key: Buffer.alloc(32, 9),
+    });
+    const accessTokenCiphertext = secretEncryption.encrypt(
+      Buffer.from(GMAIL_ACCESS_TOKEN, 'utf8'),
+      { secretClass: 'integration_access_token', ownerId: `gmail:${USER_ID}` },
+    );
+    const store = new InMemoryUserIntegrationStore();
+    await store.connect({
+      userId: USER_ID,
+      provider: 'gmail',
+      integrationDescriptorId: descriptor.id,
+      externalAccountLabel: GMAIL_ACCOUNT_LABEL,
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [GMAIL_READONLY_SCOPE] },
+      accessTokenCiphertext,
+      refreshTokenCiphertext: null,
+      connectedAt: NOW,
+    });
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption,
+      configuredProviders: [provider],
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, GMAIL_PATH, 'DELETE').handler(consoleRequest()))
+      .resolves.toMatchObject({
+        status: 200,
+        body: { status: 'cleanup_pending', error_reason: 'revocation_failed' },
+      });
+    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      accessTokenCiphertext,
+    });
+  });
+
   it('revokes exchanged credentials when descriptor-bound persistence fails closed', async () => {
     const fetchImpl = successfulConfiguredOAuthFetch;
     const provider = new ConfiguredOAuthIntegrationProvider({
@@ -1500,8 +1833,9 @@ describe('IntegrationModule', () => {
       ...configuredOAuthNetwork(fetchImpl),
     });
     const revoke = jest.spyOn(provider, 'revokeCredentials').mockResolvedValue();
-    const store = new InMemoryUserIntegrationStore();
-    jest.spyOn(store, 'connect').mockRejectedValue(new Error('descriptor foreign key rejected'));
+    const store = descriptorBoundStoreFor(provider);
+    jest.spyOn(store, 'connectDescriptorCallback')
+      .mockRejectedValue(new Error('descriptor foreign key rejected'));
     const loginTransactions = new InMemoryLoginTransactionStore();
     const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
     const securityEventSink = new FixtureIntegrationSecurityEventSink();
@@ -1534,11 +1868,90 @@ describe('IntegrationModule', () => {
       accessToken: GMAIL_ACCESS_TOKEN,
       refreshToken: GMAIL_REFRESH_TOKEN,
       externalInstallationId: null,
+      isRetry: false,
     });
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
     expect(securityEventSink.events).toEqual([
       expect.objectContaining({ provider: 'gmail', reason: 'credential_persistence_failed' }),
     ]);
+  });
+
+  it('audits a live remote grant when compensating revocation also fails', async () => {
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: GMAIL_CLIENT_SECRET,
+      ...configuredOAuthNetwork(successfulConfiguredOAuthFetch),
+    });
+    jest.spyOn(provider, 'revokeCredentials').mockRejectedValue(new Error('provider revocation unavailable'));
+    const store = descriptorBoundStoreFor(provider);
+    jest.spyOn(store, 'connectDescriptorCallback')
+      .mockRejectedValue(new Error('descriptor persistence failed'));
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions: new InMemoryLoginTransactionStore(),
+      opaqueValues: new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8)),
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: TEST_ENCRYPTION_KEY_ID,
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [provider],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const started = await findRoute(module.routes, GMAIL_CONNECT_PATH, 'POST').handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const state = new URL(String((started.body as { authorize_url: string }).authorize_url))
+      .searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    await expect(findRoute(module.routes, GMAIL_CALLBACK_PATH).handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }))).resolves.toMatchObject({ status: 302, redirectTo: LIST_PATH });
+
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'compensating_revocation_failed' }),
+      expect.objectContaining({ provider: 'gmail', reason: 'credential_persistence_failed' }),
+    ]);
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    const pending = await store.findCredentialCleanupPending(USER_ID, 'gmail');
+    expect(pending).toMatchObject({
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      integrationDescriptorId: oauthDescriptorFixture().id,
+      cleanupDescriptorFingerprint: provider.integrationDescriptorFingerprint,
+    });
+    const encryption = new AeadSecretEncryptionService({
+      keyId: TEST_ENCRYPTION_KEY_ID,
+      key: Buffer.alloc(32, 9),
+    });
+    expect(encryption.decrypt(
+      pending?.accessTokenCiphertext ?? Buffer.alloc(0),
+      { secretClass: 'integration_access_token', ownerId: `gmail:${USER_ID}` },
+    ).toString('utf8')).toBe(GMAIL_ACCESS_TOKEN);
+
+    const changedProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture({ apiHosts: ['changed.example.com'] }),
+      clientSecret: GMAIL_CLIENT_SECRET,
+      ...configuredOAuthNetwork(successfulConfiguredOAuthFetch),
+    });
+    const changedRevoke = jest.spyOn(changedProvider, 'revokeCredentials').mockResolvedValue();
+    const cleanupService = new IntegrationService({
+      store,
+      providers: new IntegrationProviderRegistry([changedProvider]),
+      secretEncryption: encryption,
+      now: () => new Date(NOW.getTime() + 1_000),
+    });
+
+    await expect(cleanupService.disconnectProvider(consoleRequest(), 'gmail'))
+      .resolves.toMatchObject({ status: 200, body: { status: 'cleanup_pending' } });
+    expect(changedRevoke).not.toHaveBeenCalled();
+    await expect(store.findCredentialCleanupPending(USER_ID, 'gmail')).resolves.toMatchObject({
+      cleanupDescriptorFingerprint: provider.integrationDescriptorFingerprint,
+      status: 'cleanup_pending',
+    });
   });
 
   it('revokes exchanged credentials when descriptor rotation invalidates the consumed callback', async () => {
@@ -1549,8 +1962,8 @@ describe('IntegrationModule', () => {
       ...configuredOAuthNetwork(fetchImpl),
     });
     const revoke = jest.spyOn(provider, 'revokeCredentials').mockResolvedValue();
-    const connectDescriptorCallback = jest.fn(() => Promise.resolve(null));
-    const store = Object.assign(new InMemoryUserIntegrationStore(), { connectDescriptorCallback });
+    const store = new InMemoryUserIntegrationStore([], () => '0'.repeat(64));
+    const connectDescriptorCallback = jest.spyOn(store, 'connectDescriptorCallback');
     const loginTransactions = new InMemoryLoginTransactionStore();
     const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
     const securityEventSink = new FixtureIntegrationSecurityEventSink();
@@ -1587,6 +2000,7 @@ describe('IntegrationModule', () => {
       accessToken: GMAIL_ACCESS_TOKEN,
       refreshToken: GMAIL_REFRESH_TOKEN,
       externalInstallationId: null,
+      isRetry: false,
     });
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
     expect(securityEventSink.events).toEqual([
@@ -1596,7 +2010,7 @@ describe('IntegrationModule', () => {
 
   it('stores and revokes static API key credentials without OAuth', async () => {
     const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
-    const store = new InMemoryUserIntegrationStore();
+    const store = descriptorBoundStoreFor(provider);
     const secretEncryption = new AeadSecretEncryptionService({
       keyId: TEST_ENCRYPTION_KEY_ID,
       key: Buffer.alloc(32, 9),
@@ -1676,8 +2090,8 @@ describe('IntegrationModule', () => {
 
   it('rejects static credential persistence when the descriptor changes concurrently', async () => {
     const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
-    const connectDescriptorCredential = jest.fn(() => Promise.resolve(null));
-    const store = Object.assign(new InMemoryUserIntegrationStore(), { connectDescriptorCredential });
+    const store = new InMemoryUserIntegrationStore([], () => '0'.repeat(64));
+    const connectDescriptorCredential = jest.spyOn(store, 'connectDescriptorCredential');
     const module = createIntegrationModule({
       integrationStore: store,
       secretEncryption: new AeadSecretEncryptionService({
@@ -1726,14 +2140,15 @@ describe('IntegrationModule', () => {
   });
 
   it('accepts a static API key containing a well-formed surrogate pair', async () => {
-    const store = new InMemoryUserIntegrationStore();
+    const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
+    const store = descriptorBoundStoreFor(provider);
     const module = createIntegrationModule({
       integrationStore: store,
       secretEncryption: new AeadSecretEncryptionService({
         keyId: TEST_ENCRYPTION_KEY_ID,
         key: Buffer.alloc(32, 9),
       }),
-      configuredProviders: [new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture())],
+      configuredProviders: [provider],
       now: () => NOW,
     });
     const connect = findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST');

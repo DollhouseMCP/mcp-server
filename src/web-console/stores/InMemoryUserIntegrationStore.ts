@@ -4,11 +4,15 @@ import {
   cloneUserIntegrationRecord,
   GITHUB_USER_INTEGRATION_PROVIDER,
   IntegrationCredentialCleanupPendingError,
+  IntegrationCredentialReplacementRequiresCleanupError,
+  type DescriptorCallbackConnectInput,
+  type DescriptorCredentialConnectInput,
   type IUserIntegrationStore,
   type UserIntegrationCleanupAbandonInput,
   type UserIntegrationCleanupClaimInput,
   type UserIntegrationCleanupCompleteInput,
   type UserIntegrationCleanupFailInput,
+  type UserIntegrationCleanupParkInput,
   type UserIntegrationCleanupReleaseInput,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
@@ -19,14 +23,27 @@ import {
   type UserIntegrationRecord,
   validateUserIntegrationRecord,
 } from './IUserIntegrationStore.js';
-import { assertUuid } from './ConsoleStoreValidation.js';
+import { assertUuid, ConsoleStoreValidationError } from './ConsoleStoreValidation.js';
+import type { InMemoryIntegrationMutationCoordinator } from './InMemoryIntegrationMutationCoordinator.js';
+import type { ILoginTransactionStore } from './ILoginTransactionStore.js';
+
+export type InMemoryDescriptorFingerprintResolver = (descriptorId: string) => string | null;
+export interface InMemoryUserIntegrationStoreOptions {
+  readonly mutationCoordinator?: InMemoryIntegrationMutationCoordinator;
+  readonly loginTransactionStore?: ILoginTransactionStore;
+  readonly now?: () => Date;
+}
 
 export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   private readonly records = new Map<string, UserIntegrationRecord>();
   private readonly activeProviderIndex = new Map<string, string>();
   private readonly providerMutationLocks = new Map<string, Promise<void>>();
 
-  constructor(records: readonly UserIntegrationRecord[] = []) {
+  constructor(
+    records: readonly UserIntegrationRecord[] = [],
+    private readonly resolveDescriptorFingerprint: InMemoryDescriptorFingerprintResolver = () => null,
+    private readonly options: InMemoryUserIntegrationStoreOptions = {},
+  ) {
     for (const record of records) {
       this.set(record);
     }
@@ -85,35 +102,74 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
 
   async connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord> {
     assertUuid(input.userId, 'userId');
+    return this.withProviderMutationLock(
+      input.userId,
+      input.provider,
+      () => this.connectLocked(input),
+    );
+  }
+
+  async connectDescriptorCredential(
+    input: DescriptorCredentialConnectInput,
+  ): Promise<UserIntegrationRecord | null> {
+    const operation = () => this.connectDescriptorBound(input);
+    return this.options.mutationCoordinator
+      ? this.options.mutationCoordinator.runExclusive(operation)
+      : operation();
+  }
+
+  async connectDescriptorCallback(
+    input: DescriptorCallbackConnectInput,
+  ): Promise<UserIntegrationRecord | null> {
+    if (input.transactionIdHash.length === 0) {
+      throw new ConsoleStoreValidationError('transactionIdHash must not be empty');
+    }
+    const operation = () => this.connectDescriptorBound(input, async () => {
+      const transaction = await this.options.loginTransactionStore?.findByIdHash(input.transactionIdHash);
+      const now = this.options.now?.() ?? new Date();
+      return transaction?.flowKind === 'integration_link'
+        && transaction.consumedAt !== null
+        && transaction.expiresAt > now
+        && transaction.userId === input.connection.userId
+        && transaction.integrationDescriptorId === input.descriptorId
+        && transaction.integrationDescriptorFingerprint === input.descriptorFingerprint;
+    });
+    return this.options.mutationCoordinator
+      ? this.options.mutationCoordinator.runExclusive(operation)
+      : operation();
+  }
+
+  async parkCredentialCleanup(input: UserIntegrationCleanupParkInput): Promise<UserIntegrationRecord> {
+    assertUuid(input.userId, 'userId');
     return this.withProviderMutationLock(input.userId, input.provider, () => {
       if (this.findCleanupRecord(input.userId, input.provider)) {
         throw new IntegrationCredentialCleanupPendingError();
       }
-      const record: UserIntegrationRecord = {
+      const pending: UserIntegrationRecord = {
         id: randomUUID(),
         userId: input.userId,
         provider: input.provider,
         integrationDescriptorId: input.integrationDescriptorId ?? null,
+        cleanupDescriptorFingerprint: input.descriptorFingerprint,
         externalAccountLabel: input.externalAccountLabel,
         externalInstallationId: input.externalInstallationId,
         authorizedPermissions: input.authorizedPermissions,
         accessTokenCiphertext: input.accessTokenCiphertext,
         refreshTokenCiphertext: input.refreshTokenCiphertext,
         credentialKeyVersion: input.credentialKeyVersion ?? null,
-        status: 'connected',
-        errorReason: null,
+        status: 'cleanup_pending',
+        errorReason: 'revocation_failed',
         cleanupAttemptCount: 0,
-        cleanupNextAttemptAt: null,
+        cleanupNextAttemptAt: input.requestedAt,
         cleanupLeaseId: null,
         cleanupLeaseExpiresAt: null,
         connectedAt: input.connectedAt,
         lastSyncAt: null,
-        revokedAt: null,
+        revokedAt: input.requestedAt,
       };
-      validateUserIntegrationRecord(record);
-      this.clearActive(input.userId, input.provider, input.connectedAt);
-      this.set(record);
-      return cloneUserIntegrationRecord(record);
+      validateUserIntegrationRecord(pending);
+      this.records.set(pending.id, cloneUserIntegrationRecord(pending));
+      return cloneUserIntegrationRecord(pending);
     });
   }
 
@@ -138,6 +194,8 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         return active ? cloneUserIntegrationRecord(active) : null;
       }
       if (input.errorReason === 'revocation_failed' && activeId) {
+        const existingPending = this.findCleanupRecord(input.userId, input.provider);
+        if (existingPending) return cloneUserIntegrationRecord(existingPending);
         const active = this.records.get(activeId);
         if (!active) return null;
         const pending = this.toCleanupPending(active, input.occurredAt);
@@ -150,6 +208,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
         userId: input.userId,
         provider: input.provider,
         integrationDescriptorId: input.integrationDescriptorId ?? null,
+        cleanupDescriptorFingerprint: null,
         externalAccountLabel: null,
         externalInstallationId: null,
         authorizedPermissions: defaultAuthorizedPermissions(input.provider),
@@ -178,6 +237,8 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
     return this.withProviderMutationLock(input.userId, input.provider, () => {
       const key = activeProviderKey(input.userId, input.provider);
+      const existingPending = this.findCleanupRecord(input.userId, input.provider);
+      if (existingPending) return cloneUserIntegrationRecord(existingPending);
       const activeId = this.activeProviderIndex.get(key);
       if (activeId !== input.expectedActiveRecordId) {
         const pending = this.findCleanupRecord(input.userId, input.provider);
@@ -381,6 +442,62 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     if (cloned.revokedAt === null) {
       this.activeProviderIndex.set(activeProviderKey(cloned.userId, cloned.provider), cloned.id);
     }
+  }
+
+  private async connectDescriptorBound(
+    input: DescriptorCredentialConnectInput | DescriptorCallbackConnectInput,
+    validateBeforeWrite: () => Promise<boolean> = () => Promise.resolve(true),
+  ): Promise<UserIntegrationRecord | null> {
+    assertUuid(input.descriptorId, 'descriptorId');
+    assertUuid(input.connection.userId, 'userId');
+    if (!/^[a-f0-9]{64}$/.test(input.descriptorFingerprint)) {
+      throw new ConsoleStoreValidationError('descriptorFingerprint must be a lowercase SHA-256 hex digest');
+    }
+    return this.withProviderMutationLock(
+      input.connection.userId,
+      input.connection.provider,
+      async () => {
+        if (!await validateBeforeWrite()
+            || input.connection.integrationDescriptorId !== input.descriptorId ||
+            this.resolveDescriptorFingerprint(input.descriptorId) !== input.descriptorFingerprint) {
+          return null;
+        }
+        return this.connectLocked(input.connection);
+      },
+    );
+  }
+
+  private connectLocked(input: UserIntegrationConnectInput): UserIntegrationRecord {
+    if (this.findCleanupRecord(input.userId, input.provider)) {
+      throw new IntegrationCredentialCleanupPendingError();
+    }
+    if (this.activeProviderIndex.has(activeProviderKey(input.userId, input.provider))) {
+      throw new IntegrationCredentialReplacementRequiresCleanupError();
+    }
+    const record: UserIntegrationRecord = {
+      id: randomUUID(),
+      userId: input.userId,
+      provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
+      externalAccountLabel: input.externalAccountLabel,
+      externalInstallationId: input.externalInstallationId,
+      authorizedPermissions: input.authorizedPermissions,
+      accessTokenCiphertext: input.accessTokenCiphertext,
+      refreshTokenCiphertext: input.refreshTokenCiphertext,
+      credentialKeyVersion: input.credentialKeyVersion ?? null,
+      status: 'connected',
+      errorReason: null,
+      cleanupAttemptCount: 0,
+      cleanupNextAttemptAt: null,
+      cleanupLeaseId: null,
+      cleanupLeaseExpiresAt: null,
+      connectedAt: input.connectedAt,
+      lastSyncAt: null,
+      revokedAt: null,
+    };
+    validateUserIntegrationRecord(record);
+    this.set(record);
+    return cloneUserIntegrationRecord(record);
   }
 
   private clearActive(userId: string, provider: UserIntegrationProvider, revokedAt: Date): void {

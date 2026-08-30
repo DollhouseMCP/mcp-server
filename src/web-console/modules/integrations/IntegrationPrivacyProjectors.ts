@@ -231,7 +231,8 @@ function stringArray(value: unknown): readonly string[] {
 }
 
 function integrationStatus(value: unknown): IntegrationStatusDtoStatus {
-  if (value === 'connected' || value === 'revoked' || value === 'error' || value === 'disconnected') return value;
+  if (value === 'connected' || value === 'cleanup_pending' || value === 'cleanup_failed' ||
+      value === 'revoked' || value === 'error' || value === 'disconnected') return value;
   return 'disconnected';
 }
 

@@ -5,6 +5,7 @@ import {
   compareDescriptorPageOrder,
   decodeDescriptorPageCursor,
   encodeDescriptorPageCursor,
+  IntegrationDescriptorCredentialConflictError,
   isAfterDescriptorPageCursor,
   resolveDescriptorPageLimit,
   type IIntegrationDescriptorStore,
@@ -18,11 +19,26 @@ import {
 } from './IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from './IUserIntegrationStore.js';
 import { assertUuid } from './ConsoleStoreValidation.js';
+import {
+  integrationDescriptorCredentialBindingFingerprint,
+  integrationDescriptorRoutingFingerprint,
+} from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
+import { InMemoryIntegrationMutationCoordinator } from './InMemoryIntegrationMutationCoordinator.js';
+
+export interface InMemoryIntegrationDescriptorStoreOptions {
+  readonly mutationCoordinator?: InMemoryIntegrationMutationCoordinator;
+  readonly hasBlockingCredentialMaterialByDescriptor?: (descriptorId: string) => Promise<boolean>;
+}
 
 export class InMemoryIntegrationDescriptorStore implements IIntegrationDescriptorStore {
   private readonly records = new Map<string, IntegrationDescriptorRecord>();
+  private readonly mutationCoordinator = new InMemoryIntegrationMutationCoordinator();
 
-  constructor(records: readonly IntegrationDescriptorRecord[] = []) {
+  constructor(
+    records: readonly IntegrationDescriptorRecord[] = [],
+    private readonly options: InMemoryIntegrationDescriptorStoreOptions = {},
+  ) {
+    if (options.mutationCoordinator) this.mutationCoordinator = options.mutationCoordinator;
     for (const record of records) {
       this.set(record);
     }
@@ -94,57 +110,75 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
       : null;
   }
 
+  routingFingerprint(id: string): string | null {
+    const record = this.records.get(id);
+    return record ? integrationDescriptorRoutingFingerprint(record) : null;
+  }
+
   async delete(id: string, ownerUserId: string): Promise<boolean> {
-    await Promise.resolve();
     assertUuid(id, 'id');
     assertUuid(ownerUserId, 'ownerUserId');
-    const record = this.records.get(id);
-    if (record?.ownership !== 'byo' || record.ownerUserId !== ownerUserId) {
-      return false;
-    }
-    this.records.delete(id);
-    return true;
+    return this.mutationCoordinator.runExclusive(async () => {
+      const record = this.records.get(id);
+      if (record?.ownership !== 'byo' || record.ownerUserId !== ownerUserId) return false;
+      await this.assertDescriptorMutationAllowed(id);
+      this.records.delete(id);
+      return true;
+    });
   }
 
   async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
-    await Promise.resolve();
-    const record = [...this.records.values()].find(candidate =>
-      candidate.provider === provider && candidate.ownership === 'curated');
-    if (!record) return false;
-    this.records.delete(record.id);
-    return true;
+    return this.mutationCoordinator.runExclusive(async () => {
+      const record = [...this.records.values()].find(candidate =>
+        candidate.provider === provider && candidate.ownership === 'curated');
+      if (!record) return false;
+      await this.assertDescriptorMutationAllowed(record.id);
+      this.records.delete(record.id);
+      return true;
+    });
   }
 
   async upsert(
     input: IntegrationDescriptorCreateInput,
     _options: IntegrationDescriptorUpsertOptions = {},
   ): Promise<IntegrationDescriptorRecord> {
-    await Promise.resolve();
     validateIntegrationDescriptorInput(input);
-    const existing = [...this.records.values()].find(record =>
-      record.provider === input.provider &&
-      record.ownership === input.ownership &&
-      record.ownerUserId === input.ownerUserId);
-    const record: IntegrationDescriptorRecord = {
-      id: existing?.id ?? randomUUID(),
-      provider: input.provider,
-      ownership: input.ownership,
-      ownerUserId: input.ownerUserId,
-      displayName: input.displayName,
-      category: input.category,
-      authStrategy: input.authStrategy,
-      apiHosts: [...input.apiHosts],
-      oauth: input.oauth ?? null,
-      staticApiKey: input.staticApiKey ?? null,
-      clientSecretCiphertext: input.clientSecretCiphertext ?? null,
-      clientSecretRevision: input.clientSecretRevision ?? null,
-      credentialKeyVersion: input.credentialKeyVersion ?? null,
-      operationPromotion: input.operationPromotion ?? {},
-      createdAt: existing?.createdAt ?? input.createdAt,
-      updatedAt: input.updatedAt,
-    };
-    this.set(record);
-    return cloneIntegrationDescriptorRecord(record);
+    return this.mutationCoordinator.runExclusive(async () => {
+      const existing = [...this.records.values()].find(record =>
+        record.provider === input.provider &&
+        record.ownership === input.ownership &&
+        record.ownerUserId === input.ownerUserId);
+      const record: IntegrationDescriptorRecord = {
+        id: existing?.id ?? randomUUID(),
+        provider: input.provider,
+        ownership: input.ownership,
+        ownerUserId: input.ownerUserId,
+        displayName: input.displayName,
+        category: input.category,
+        authStrategy: input.authStrategy,
+        apiHosts: [...input.apiHosts],
+        oauth: input.oauth ?? null,
+        staticApiKey: input.staticApiKey ?? null,
+        clientSecretCiphertext: input.clientSecretCiphertext ?? null,
+        clientSecretRevision: input.clientSecretRevision ?? null,
+        credentialKeyVersion: input.credentialKeyVersion ?? null,
+        operationPromotion: input.operationPromotion ?? {},
+        createdAt: existing?.createdAt ?? input.createdAt,
+        updatedAt: input.updatedAt,
+      };
+      if (existing && integrationDescriptorCredentialBindingFingerprint(existing) !==
+          integrationDescriptorCredentialBindingFingerprint(record)) {
+        await this.assertDescriptorMutationAllowed(existing.id);
+      }
+      this.set(record);
+      return cloneIntegrationDescriptorRecord(record);
+    });
+  }
+
+  private async assertDescriptorMutationAllowed(descriptorId: string): Promise<void> {
+    if (await this.options.hasBlockingCredentialMaterialByDescriptor?.(descriptorId)) {
+      throw new IntegrationDescriptorCredentialConflictError();
+    }
   }
 
   set(record: IntegrationDescriptorRecord): void {

@@ -132,7 +132,7 @@ describe('GitHubAppIntegrationProvider', () => {
     );
   });
 
-  it.each([404, 410])('treats a %i revocation response as already revoked', async status => {
+  it.each([404, 410])('fails closed on a bare %i revocation response', async status => {
     const fetchMock = jest.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status }));
     const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
 
@@ -140,6 +140,18 @@ describe('GitHubAppIntegrationProvider', () => {
       accessToken: 'github-access-token',
       refreshToken: null,
       installationId: null,
+    })).rejects.toThrow('github_integration_revocation_failed');
+  });
+
+  it.each([404, 410])('accepts an already-removed grant on cleanup retry (%i)', async status => {
+    const fetchMock = jest.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status }));
+    const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
+
+    await expect(provider.revokeCredentials({
+      accessToken: 'github-access-token',
+      refreshToken: null,
+      installationId: null,
+      isRetry: true,
     })).resolves.toBeUndefined();
   });
 

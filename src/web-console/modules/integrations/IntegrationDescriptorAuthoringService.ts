@@ -18,12 +18,13 @@ import {
   isValidDisplayString,
   isWellFormedUnicode,
 } from '../../stores/ConsoleStoreValidation.js';
-import type {
-  IIntegrationDescriptorStore,
-  IntegrationDescriptorCreateInput,
-  IntegrationDescriptorRecord,
-  IntegrationOAuthDescriptor,
-  IntegrationStaticApiKeyDescriptor,
+import {
+  IntegrationDescriptorCredentialConflictError,
+  type IIntegrationDescriptorStore,
+  type IntegrationDescriptorCreateInput,
+  type IntegrationDescriptorRecord,
+  type IntegrationOAuthDescriptor,
+  type IntegrationStaticApiKeyDescriptor,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import type {
@@ -201,7 +202,7 @@ export class IntegrationDescriptorAuthoringService {
 
     try {
       const merged = mergeDescriptor(existing, parsed);
-      if (hasCredentialRoutingChanges(parsed)) {
+      if (hasCredentialBindingChanges(parsed)) {
         if (await this.options.integrationStore.hasBlockingCredentialMaterialByDescriptor(existing.id)) {
           auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
           return connectedDescriptorConflict('updated');
@@ -229,6 +230,10 @@ export class IntegrationDescriptorAuthoringService {
       auditDescriptorDecision(record.provider, 'updated', 'allowed');
       return { status: 200, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
+      if (error instanceof IntegrationDescriptorCredentialConflictError) {
+        auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
+        return connectedDescriptorConflict('updated');
+      }
       if (error instanceof ConsoleStoreValidationError) {
         auditDescriptorDecision(existing.provider, 'updated', 'denied_invalid');
         return unprocessable(error.message);
@@ -265,6 +270,10 @@ export class IntegrationDescriptorAuthoringService {
       auditDescriptorDecision(existing.provider, 'deleted', 'allowed');
       return { status: 204 };
     } catch (error) {
+      if (error instanceof IntegrationDescriptorCredentialConflictError) {
+        auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
+        return connectedDescriptorConflict('deleted');
+      }
       auditDescriptorDecision(existing.provider, 'deleted', 'failed');
       throw error;
     }
@@ -583,15 +592,14 @@ function mergeDescriptor(
   };
 }
 
-function hasCredentialRoutingChanges(parsed: ParsedDescriptorBody): boolean {
-  // Promotion selects which remote operations receive the stored credential,
-  // so changing it is a routing change even though the credential is unchanged.
+function hasCredentialBindingChanges(parsed: ParsedDescriptorBody): boolean {
+  // Promotion and client-secret rotation invalidate outstanding callbacks and
+  // session discovery, but do not change where an already-issued user grant is
+  // sent. Authority/auth-strategy changes still require credential cleanup.
   return parsed.authStrategy !== undefined
     || parsed.apiHosts !== undefined
     || parsed.oauth !== undefined
-    || parsed.staticApiKey !== undefined
-    || parsed.operationPromotion !== undefined
-    || parsed.clientSecret !== undefined;
+    || parsed.staticApiKey !== undefined;
 }
 
 /** A stored secret survives a PATCH only while the descriptor stays OAuth. */

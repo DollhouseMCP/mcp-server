@@ -141,6 +141,7 @@ export class ToolRegistry {
       gateway,
       operationCatalog,
       new Set(this.tools.keys()),
+      toolName => { this.unregister(toolName); },
     ));
   }
 

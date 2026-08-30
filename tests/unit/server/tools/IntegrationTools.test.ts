@@ -368,6 +368,67 @@ describe('IntegrationTools', () => {
     expect(tools[0].tool.name).toBe('integration_gmail_listmessages_2');
   });
 
+  it('invalidates a promoted tool when its descriptor/spec contract changes before use', async () => {
+    const gateway = {
+      request: jest.fn<IntegrationRequestGateway['request']>(),
+    } as unknown as IntegrationRequestGateway;
+    const promoted = {
+      operationId: 'listMessages',
+      method: 'GET',
+      path: '/messages',
+      readWriteClass: 'read' as const,
+      summary: null,
+      description: null,
+      requiredScopes: [],
+      available: true,
+      unavailableReason: null,
+      parameters: [],
+      requestBody: null,
+      responses: [],
+      gatewayRequest: {
+        tool: 'integration_request' as const,
+        provider: 'gmail',
+        method: 'GET',
+        pathTemplate: '/messages',
+      },
+      specContract: {
+        descriptorId: '00000000-0000-4000-8000-000000000001',
+        specHash: 'a'.repeat(64),
+      },
+      scopeAvailability: {
+        enforcement: 'advisory_upstream_oauth_token' as const,
+        note: 'advisory',
+      },
+    };
+    const catalog = {
+      listPromotedOperations: jest.fn<IntegrationOperationCatalog['listPromotedOperations']>()
+        .mockResolvedValueOnce([promoted])
+        .mockResolvedValueOnce([{
+          ...promoted,
+          specContract: { ...promoted.specContract, specHash: 'b'.repeat(64) },
+        }]),
+    } as unknown as IntegrationOperationCatalog;
+    const invalidateTool = jest.fn<(toolName: string) => void>();
+
+    const tools = await getPromotedIntegrationTools(
+      authorized(gateway, allowingPolicy()),
+      authorizedCatalog(catalog, allowingPolicy()),
+      new Set(),
+      invalidateTool,
+    );
+    const result = await tools[0].handler({});
+
+    expect(invalidateTool).toHaveBeenCalledWith('integration_gmail_listmessages');
+    expect(gateway.request).not.toHaveBeenCalled();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'integration_promoted_tool_stale',
+        status: 409,
+      },
+    });
+  });
+
   it('creates remote MCP bridge tools from allowlisted downstream tools', async () => {
     const bridge = {
       listAllowedTools: jest.fn<IntegrationRemoteMcpBridge['listAllowedTools']>().mockResolvedValue([{

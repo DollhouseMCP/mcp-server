@@ -7,7 +7,10 @@ import type {
   UserIntegrationRecord,
   UserIntegrationRefreshResult,
 } from '../../stores/IUserIntegrationStore.js';
-import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
+import {
+  IntegrationProviderTemporarilyUnavailableError,
+  type IntegrationProviderResolver,
+} from './CuratedIntegrationProviders.js';
 import type { IIntegrationProvider } from './IntegrationProvider.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
@@ -136,9 +139,14 @@ export class IntegrationTokenRefreshService {
     userId: string,
     provider: UserIntegrationProvider,
   ): Promise<IIntegrationProvider | null> {
-    return this.options.providers.get(provider)
-      ?? await this.options.resolveProvider?.(userId, provider)
-      ?? null;
+    const registered = this.options.providers.get(provider);
+    if (registered) return registered;
+    try {
+      return await this.options.resolveProvider?.(userId, provider) ?? null;
+    } catch (error) {
+      if (error instanceof IntegrationProviderTemporarilyUnavailableError) return null;
+      throw error;
+    }
   }
 
   private auditResult(

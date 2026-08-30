@@ -73,6 +73,12 @@ export interface IntegrationRevocationRequest {
    */
   readonly refreshToken: string | null;
   readonly externalInstallationId: string | null;
+  /**
+   * True only after a durable cleanup attempt was already recorded. Providers
+   * may use this to distinguish an already-removed credential on retry from a
+   * missing revocation endpoint on the first attempt.
+   */
+  readonly isRetry?: boolean;
 }
 
 export interface IntegrationProviderStatusProjection {
@@ -144,6 +150,7 @@ export function createGitHubIntegrationProvider(
         accessToken: request.accessToken,
         refreshToken: request.refreshToken,
         installationId: request.externalInstallationId,
+        isRetry: request.isRetry,
       });
     },
     projectStatus(record) {

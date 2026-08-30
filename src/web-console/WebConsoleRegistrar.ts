@@ -67,6 +67,7 @@ import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccoun
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryUserIntegrationStore } from './stores/InMemoryUserIntegrationStore.js';
 import { InMemoryIntegrationDescriptorStore } from './stores/InMemoryIntegrationDescriptorStore.js';
+import { InMemoryIntegrationMutationCoordinator } from './stores/InMemoryIntegrationMutationCoordinator.js';
 import { InMemoryIntegrationOpenApiSpecStore } from './stores/InMemoryIntegrationOpenApiSpecStore.js';
 import { InMemoryPortfolioElementStore } from './stores/InMemoryPortfolioElementStore.js';
 import {
@@ -1405,15 +1406,31 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     };
   }
   const { InMemoryConsoleFactorStore } = await import('./stores/InMemoryConsoleFactorStore.js');
+  const loginTransactionStore = new InMemoryLoginTransactionStore();
+  const integrationMutationCoordinator = new InMemoryIntegrationMutationCoordinator();
+  let integrationStore!: InMemoryUserIntegrationStore;
+  const integrationDescriptorStore = new InMemoryIntegrationDescriptorStore([], {
+    mutationCoordinator: integrationMutationCoordinator,
+    hasBlockingCredentialMaterialByDescriptor: descriptorId =>
+      integrationStore.hasBlockingCredentialMaterialByDescriptor(descriptorId),
+  });
+  integrationStore = new InMemoryUserIntegrationStore(
+    [],
+    descriptorId => integrationDescriptorStore.routingFingerprint(descriptorId),
+    {
+      mutationCoordinator: integrationMutationCoordinator,
+      loginTransactionStore,
+    },
+  );
   return {
     sessionStore: new InMemoryConsoleSessionStore(),
-    loginTransactionStore: new InMemoryLoginTransactionStore(),
+    loginTransactionStore,
     idempotencyStore: new InMemoryIdempotencyStore(),
     factorStore: new InMemoryConsoleFactorStore(),
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
     accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
-    integrationStore: new InMemoryUserIntegrationStore(),
-    integrationDescriptorStore: new InMemoryIntegrationDescriptorStore(),
+    integrationStore,
+    integrationDescriptorStore,
     integrationOpenApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
     portfolioStore: new InMemoryPortfolioElementStore(),
     portfolioSyncJobStore: new InMemoryPortfolioSyncJobStore(),

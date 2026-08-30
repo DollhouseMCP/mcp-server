@@ -9,6 +9,7 @@ import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
 import {
+  AgentStateParsedSizeLimitError,
   AgentStateReductionRequiredError,
   AgentStateSizeLimitError,
   FileAgentStateStore,
@@ -338,9 +339,10 @@ stateVersion: ${stateVersion}
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), 'compact-yaml');
 
-    await expect(store.load(key)).rejects.toThrow('Parsed agent state exceeds allowed size');
-    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+    await expect(store.load(key))
       .rejects.toThrow('Parsed agent state exceeds allowed size');
+    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+      .rejects.toBeInstanceOf(AgentStateParsedSizeLimitError);
   });
 
   it('routes an oversized terminal update through the reduction path', async () => {

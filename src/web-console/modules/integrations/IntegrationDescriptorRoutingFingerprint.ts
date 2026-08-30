@@ -33,6 +33,30 @@ export function integrationDescriptorRoutingFingerprint(
   )).toString('hex');
 }
 
+/**
+ * Digest only fields whose mutation could send an existing user credential to
+ * a different authority or interpret it under a different authentication
+ * strategy. Promotion metadata and deployment client-secret rotation affect
+ * future discovery/acquisition, not the binding of grants already issued.
+ */
+export function integrationDescriptorCredentialBindingFingerprint(
+  descriptor: IntegrationDescriptorRecord,
+): string {
+  return Buffer.from(hkdfSync(
+    'sha256',
+    canonicalJson({
+      provider: descriptor.provider,
+      authStrategy: descriptor.authStrategy,
+      apiHosts: descriptor.apiHosts,
+      oauth: descriptor.oauth,
+      staticApiKey: descriptor.staticApiKey,
+    }),
+    descriptor.id,
+    Buffer.alloc(0),
+    32,
+  )).toString('hex');
+}
+
 function canonicalJson(value: unknown): string {
   if (value === undefined) return 'null';
   if (value === null || typeof value !== 'object') {

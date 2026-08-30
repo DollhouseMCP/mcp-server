@@ -704,6 +704,8 @@ describe('PostgresLoginTransactionStore', () => {
       integrationDescriptorFingerprint: bound.integrationDescriptorFingerprint,
     }));
     expect(descriptorLock.for).toHaveBeenCalledWith('key share');
+    expect(descriptorLock.for.mock.invocationCallOrder[0])
+      .toBeLessThan(transaction.execute.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
   });
 
   it('rejects a descriptor-bound flow when routing changes before the row lock is acquired', async () => {
@@ -809,7 +811,7 @@ describe('PostgresUserIntegrationStore', () => {
       authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
     });
     const insert = insertChain([inserted]);
-    transaction.update = jest.fn(() => returningChain([]));
+    transaction.select = jest.fn(() => selectingChain([]));
     transaction.insert = jest.fn(() => insert);
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
 
@@ -829,18 +831,134 @@ describe('PostgresUserIntegrationStore', () => {
     }));
   });
 
+  it('requires explicit cleanup before replacing an active PostgreSQL credential', async () => {
+    const activeLock = selectingChain([{ id: INTEGRATION_ID }]);
+    transaction.select = jest.fn(() => activeLock);
+    transaction.insert = jest.fn();
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.connect({
+      userId: USER_ID,
+      provider: 'github',
+      integrationDescriptorId: null,
+      externalAccountLabel: 'replacement',
+      externalInstallationId: 'replacement-installation',
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+      },
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+      connectedAt: FIVE_MINUTES,
+    })).rejects.toThrow('existing integration credential must be cleaned up before reconnecting');
+    expect(activeLock.for).toHaveBeenCalledWith('update');
+    expect(transaction.insert).not.toHaveBeenCalled();
+  });
+
+  it('parks a failed compensating revocation as durable cleanup work', async () => {
+    const parked = userIntegrationRow({
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupDescriptorFingerprint: 'a'.repeat(64),
+      cleanupNextAttemptAt: FIVE_MINUTES,
+      revokedAt: FIVE_MINUTES,
+    });
+    const pendingLock = selectingChain([]);
+    const descriptorLock = selectingChain([{ id: DESCRIPTOR_ID }]);
+    const insert = insertChain([parked]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(pendingLock);
+    transaction.insert = jest.fn(() => insert);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.parkCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      externalAccountLabel: ALICE_EMAIL,
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(ENCRYPTED_ACCESS_TOKEN),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+      credentialKeyVersion: 'integration-key-v1',
+      descriptorFingerprint: 'a'.repeat(64),
+      connectedAt: NOW,
+      requestedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      status: 'cleanup_pending',
+      accessTokenCiphertext: Buffer.from(ENCRYPTED_ACCESS_TOKEN),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+    });
+    expect(insert.values).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupNextAttemptAt: FIVE_MINUTES,
+      cleanupDescriptorFingerprint: 'a'.repeat(64),
+      revokedAt: FIVE_MINUTES,
+    }));
+    expect(descriptorLock.for).toHaveBeenCalledWith('key share');
+    expect(descriptorLock.for.mock.invocationCallOrder[0])
+      .toBeLessThan(transaction.execute.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
+  });
+
+  it('parks cleanup without a dangling foreign key after concurrent descriptor deletion', async () => {
+    const pendingLock = selectingChain([]);
+    const descriptorLock = selectingChain([]);
+    const parked = userIntegrationRow({
+      provider: 'linear',
+      integrationDescriptorId: null,
+      cleanupDescriptorFingerprint: 'b'.repeat(64),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      status: 'cleanup_pending',
+      errorReason: 'revocation_failed',
+      cleanupNextAttemptAt: FIVE_MINUTES,
+      revokedAt: FIVE_MINUTES,
+    });
+    const insert = insertChain([parked]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(pendingLock);
+    transaction.insert = jest.fn(() => insert);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.parkCredentialCleanup({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: 'b'.repeat(64),
+      externalAccountLabel: ALICE_EMAIL,
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(ENCRYPTED_ACCESS_TOKEN),
+      refreshTokenCiphertext: null,
+      connectedAt: NOW,
+      requestedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      integrationDescriptorId: null,
+      cleanupDescriptorFingerprint: 'b'.repeat(64),
+      status: 'cleanup_pending',
+    });
+    expect(insert.values).toHaveBeenCalledWith(expect.objectContaining({
+      integrationDescriptorId: null,
+      cleanupDescriptorFingerprint: 'b'.repeat(64),
+    }));
+  });
+
   it('atomically verifies a consumed descriptor callback before persisting credentials', async () => {
     const descriptorRow = integrationDescriptorRow();
     const descriptorLock = selectingChain([descriptorRow]);
     const callbackLock = selectingChain([{ idHash: hash(3), consumedAt: NOW }]);
+    const activeLock = selectingChain([]);
     transaction.select = jest.fn()
       .mockReturnValueOnce(descriptorLock)
-      .mockReturnValueOnce(callbackLock);
-    const revokeExisting = returningChain([]);
+      .mockReturnValueOnce(callbackLock)
+      .mockReturnValueOnce(activeLock);
     const completeCallback = returningChain([{ idHash: hash(3) }]);
-    transaction.update = jest.fn()
-      .mockReturnValueOnce(revokeExisting)
-      .mockReturnValueOnce(completeCallback);
+    transaction.update = jest.fn(() => completeCallback);
     transaction.insert = jest.fn(() => insertChain([userIntegrationRow({
       provider: 'gmail',
       integrationDescriptorId: DESCRIPTOR_ID,
@@ -871,6 +989,7 @@ describe('PostgresUserIntegrationStore', () => {
     });
     expect(descriptorLock.for).toHaveBeenCalledWith('key share');
     expect(callbackLock.for).toHaveBeenCalledWith('update');
+    expect(activeLock.for).toHaveBeenCalledWith('update');
     expect(completeCallback.set).toHaveBeenCalledWith({ expiresAt: NOW });
     expect(collectStrings(callbackLock.where.mock.calls[0]?.[0])).toContain(' > statement_timestamp()');
     expect(collectStrings(completeCallback.where.mock.calls[0]?.[0])).toContain(' > statement_timestamp()');
@@ -880,10 +999,9 @@ describe('PostgresUserIntegrationStore', () => {
     const descriptorRow = integrationDescriptorRow();
     transaction.select = jest.fn()
       .mockReturnValueOnce(selectingChain([descriptorRow]))
-      .mockReturnValueOnce(selectingChain([{ idHash: hash(3), consumedAt: NOW }]));
-    transaction.update = jest.fn()
-      .mockReturnValueOnce(returningChain([]))
-      .mockReturnValueOnce(returningChain([]));
+      .mockReturnValueOnce(selectingChain([{ idHash: hash(3), consumedAt: NOW }]))
+      .mockReturnValueOnce(selectingChain([]));
+    transaction.update = jest.fn(() => returningChain([]));
     transaction.insert = jest.fn(() => insertChain([userIntegrationRow({
       provider: 'gmail',
       integrationDescriptorId: DESCRIPTOR_ID,
@@ -947,8 +1065,9 @@ describe('PostgresUserIntegrationStore', () => {
       credentialKeyVersion: null,
     });
     const descriptorLock = selectingChain([descriptorRow]);
-    transaction.select = jest.fn(() => descriptorLock);
-    transaction.update = jest.fn(() => returningChain([]));
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(selectingChain([]));
     transaction.insert = jest.fn(() => insertChain([userIntegrationRow({
       provider: 'gmail',
       integrationDescriptorId: DESCRIPTOR_ID,
@@ -1161,6 +1280,7 @@ describe('PostgresUserIntegrationStore', () => {
     transaction.update = jest.fn()
       .mockReturnValueOnce(pending)
       .mockReturnValueOnce(claimed);
+    transaction.select = jest.fn(() => selectingChain([]));
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
 
     await expect(store.beginCredentialCleanup({
@@ -1454,16 +1574,18 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(transaction.select).toHaveBeenCalledTimes(1);
   });
 
-  it('invalidates bound OAuth callbacks and credentials before routing mutation', async () => {
+  it('invalidates callbacks and credential-free bindings before routing mutation', async () => {
     const descriptorLock = selectingChain([integrationDescriptorRow()]);
-    transaction.select = jest.fn(() => descriptorLock);
-    const invalidateCredentials = returningChain([]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(selectingChain([]));
+    const retireBindings = returningChain([]);
     const updateDescriptor = returningChain([
       integrationDescriptorRow({ apiHosts: [ROUTED_API_HOST] }),
     ]);
     transaction.delete = jest.fn(() => deletingChain());
     transaction.update = jest.fn()
-      .mockReturnValueOnce(invalidateCredentials)
+      .mockReturnValueOnce(retireBindings)
       .mockReturnValueOnce(updateDescriptor);
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
@@ -1471,14 +1593,25 @@ describe('PostgresIntegrationDescriptorStore', () => {
       .resolves.toMatchObject({ apiHosts: [ROUTED_API_HOST] });
     expect(descriptorLock.for).toHaveBeenCalledWith('update');
     expect(transaction.delete).toHaveBeenCalledTimes(1);
-    expect(invalidateCredentials.set).toHaveBeenCalledWith({
-      accessTokenCiphertext: null,
-      refreshTokenCiphertext: null,
+    expect(retireBindings.set).toHaveBeenCalledWith({
       status: 'revoked',
       errorReason: null,
       revokedAt: NOW,
     });
     expect(transaction.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks routing mutation instead of erasing revocable descriptor credentials', async () => {
+    const descriptorLock = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(selectingChain([{ id: 'credential-row' }]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({ apiHosts: [ROUTED_API_HOST] })))
+      .rejects.toMatchObject({ code: 'integration_descriptor_credential_conflict' });
+    expect(transaction.delete).toBeUndefined();
+    expect(transaction.update).toBeUndefined();
   });
 
   it('permits display-only descriptor edits without consulting callback leases', async () => {
@@ -1512,7 +1645,9 @@ describe('PostgresIntegrationDescriptorStore', () => {
   it('initializes only a proven-equal legacy secret revision without invalidating bindings', async () => {
     const legacy = integrationDescriptorRow({ clientSecretRevision: null });
     const initializedRevision = '00000000-0000-8000-8000-000000000202';
-    transaction.select = jest.fn(() => selectingChain([legacy]));
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([legacy]))
+      .mockReturnValueOnce(selectingChain([]));
     transaction.update = jest.fn(() => returningChain([
       integrationDescriptorRow({ clientSecretRevision: initializedRevision }),
     ]));
@@ -1529,7 +1664,9 @@ describe('PostgresIntegrationDescriptorStore', () => {
   it('does not let revision initialization suppress another routing change', async () => {
     const legacy = integrationDescriptorRow({ clientSecretRevision: null });
     const initializedRevision = '00000000-0000-8000-8000-000000000202';
-    transaction.select = jest.fn(() => selectingChain([legacy]));
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([legacy]))
+      .mockReturnValueOnce(selectingChain([]));
     transaction.delete = jest.fn(() => deletingChain());
     transaction.update = jest.fn()
       .mockReturnValueOnce(returningChain([]))
@@ -1552,17 +1689,14 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(transaction.update).toHaveBeenCalledTimes(2);
   });
 
-  it('invalidates descriptor bindings when the logical client-secret revision changes', async () => {
+  it('rotates the logical client secret without retiring existing grants', async () => {
     const descriptorLock = selectingChain([integrationDescriptorRow()]);
     transaction.select = jest.fn(() => descriptorLock);
-    const invalidateCredentials = returningChain([]);
     const updateDescriptor = returningChain([
       integrationDescriptorRow({ clientSecretRevision: '00000000-0000-4000-8000-000000000202' }),
     ]);
     transaction.delete = jest.fn(() => deletingChain());
-    transaction.update = jest.fn()
-      .mockReturnValueOnce(invalidateCredentials)
-      .mockReturnValueOnce(updateDescriptor);
+    transaction.update = jest.fn(() => updateDescriptor);
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
     await expect(store.upsert(integrationDescriptorInput({
@@ -1571,7 +1705,29 @@ describe('PostgresIntegrationDescriptorStore', () => {
       clientSecretRevision: '00000000-0000-4000-8000-000000000202',
     });
     expect(transaction.delete).toHaveBeenCalledTimes(1);
-    expect(transaction.update).toHaveBeenCalledTimes(2);
+    expect(transaction.select).toHaveBeenCalledTimes(1);
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('updates promoted operations without retiring existing grants', async () => {
+    const descriptorLock = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => descriptorLock);
+    transaction.delete = jest.fn(() => deletingChain());
+    transaction.update = jest.fn(() => returningChain([
+      integrationDescriptorRow({
+        operationPromotion: { operations: ['gmail.users.messages.send'] },
+      }),
+    ]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({
+      operationPromotion: { operations: ['gmail.users.messages.send'] },
+    }))).resolves.toMatchObject({
+      operationPromotion: { operations: ['gmail.users.messages.send'] },
+    });
+    expect(transaction.delete).toHaveBeenCalledTimes(1);
+    expect(transaction.select).toHaveBeenCalledTimes(1);
+    expect(transaction.update).toHaveBeenCalledTimes(1);
   });
 
   it('rejects descriptor inputs before writing', async () => {
@@ -1626,7 +1782,8 @@ describe('PostgresIntegrationDescriptorStore', () => {
 
   it('deletes descriptors owner-scoped and reports whether a row was removed', async () => {
     transaction.select = jest.fn()
-      .mockReturnValueOnce(selectingChain([{ id: DESCRIPTOR_ID }]));
+      .mockReturnValueOnce(selectingChain([{ id: DESCRIPTOR_ID }]))
+      .mockReturnValueOnce(selectingChain([]));
     transaction.delete = jest.fn(() => deletingChain([{ id: DESCRIPTOR_ID }]));
     transaction.update = jest.fn(() => returningChain([]));
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);

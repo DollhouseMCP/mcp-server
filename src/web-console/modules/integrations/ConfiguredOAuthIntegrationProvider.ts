@@ -209,6 +209,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         ? { token: request.accessToken, hint: 'access_token' }
         : null,
     ].filter((candidate): candidate is { readonly token: string; readonly hint: string } => candidate !== null);
+    let observedSuccessfulRevocation = false;
     for (const { token, hint } of tokens) {
       const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
         ...credentialedTokenRequestInit(
@@ -219,7 +220,13 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         ),
         redirect: 'error',
       });
-      if (!response.ok && response.status !== 404 && response.status !== 410) {
+      if (response.ok) {
+        observedSuccessfulRevocation = true;
+        continue;
+      }
+      const missingAfterSuccess = (request.isRetry || observedSuccessfulRevocation) &&
+        (response.status === 404 || response.status === 410);
+      if (!missingAfterSuccess) {
         throw new Error('configured_oauth_revocation_failed');
       }
     }

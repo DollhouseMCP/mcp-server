@@ -13,11 +13,13 @@ import {
   type DescriptorCredentialConnectInput,
   GITHUB_USER_INTEGRATION_PROVIDER,
   IntegrationCredentialCleanupPendingError,
+  IntegrationCredentialReplacementRequiresCleanupError,
   type IUserIntegrationStore,
   type UserIntegrationCleanupAbandonInput,
   type UserIntegrationCleanupClaimInput,
   type UserIntegrationCleanupCompleteInput,
   type UserIntegrationCleanupFailInput,
+  type UserIntegrationCleanupParkInput,
   type UserIntegrationCleanupReleaseInput,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
@@ -171,6 +173,52 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       return connected[0] ?? null;
     });
     return row ? fromRow(row) : null;
+  }
+
+  async parkCredentialCleanup(input: UserIntegrationCleanupParkInput): Promise<UserIntegrationRecord> {
+    validateConnectInput(input);
+    const rows = await withSystemContext(this.db, async tx => {
+      let integrationDescriptorId: string | null = null;
+      if (input.integrationDescriptorId) {
+        const descriptors = await tx.select({ id: integrationProviderDescriptors.id })
+          .from(integrationProviderDescriptors)
+          .where(eq(integrationProviderDescriptors.id, input.integrationDescriptorId))
+          .for('key share')
+          .limit(1);
+        integrationDescriptorId = descriptors.at(0)?.id ?? null;
+      }
+      // Descriptor-bound callback persistence takes this same descriptor lock
+      // before the provider advisory lock. Preserve that global order here so
+      // a queued descriptor FOR UPDATE cannot complete a callback -> park ->
+      // descriptor-mutation deadlock cycle.
+      await lockProviderMutation(tx, input.userId, input.provider);
+      const existingPending = await findCredentialCleanupPendingWithTx(tx, input.userId, input.provider);
+      if (existingPending) throw new IntegrationCredentialCleanupPendingError();
+      return tx.insert(userIntegrations).values({
+        userId: input.userId,
+        provider: input.provider,
+        integrationDescriptorId,
+        cleanupDescriptorFingerprint: input.descriptorFingerprint,
+        externalAccountLabel: input.externalAccountLabel,
+        externalInstallationId: input.externalInstallationId,
+        authorizedPermissions: input.authorizedPermissions,
+        accessTokenCiphertext: input.accessTokenCiphertext,
+        refreshTokenCiphertext: input.refreshTokenCiphertext,
+        credentialKeyVersion: input.credentialKeyVersion ?? null,
+        status: 'cleanup_pending',
+        errorReason: 'revocation_failed',
+        cleanupAttemptCount: 0,
+        cleanupNextAttemptAt: input.requestedAt,
+        cleanupLeaseId: null,
+        cleanupLeaseExpiresAt: null,
+        connectedAt: input.connectedAt,
+        lastSyncAt: null,
+        revokedAt: input.requestedAt,
+      }).returning();
+    });
+    const row = rows.at(0);
+    if (!row) throw new Error('PostgreSQL did not return parked integration credential row');
+    return fromRow(row);
   }
 
   async refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
@@ -507,21 +555,12 @@ async function connectWithTx(
     FOR UPDATE
   `);
   if (pending.length > 0) throw new IntegrationCredentialCleanupPendingError();
-  await tx.update(userIntegrations).set({
-    accessTokenCiphertext: null,
-    refreshTokenCiphertext: null,
-    status: 'revoked',
-    errorReason: null,
-    cleanupAttemptCount: 0,
-    cleanupNextAttemptAt: null,
-    cleanupLeaseId: null,
-    cleanupLeaseExpiresAt: null,
-    revokedAt: input.connectedAt,
-  }).where(and(
+  const active = await tx.select({ id: userIntegrations.id }).from(userIntegrations).where(and(
     eq(userIntegrations.userId, input.userId),
     eq(userIntegrations.provider, input.provider),
     isNull(userIntegrations.revokedAt),
-  ));
+  )).for('update').limit(1);
+  if (active.length > 0) throw new IntegrationCredentialReplacementRequiresCleanupError();
   return tx.insert(userIntegrations).values({
     userId: input.userId,
     provider: input.provider,
@@ -596,6 +635,8 @@ async function beginCredentialCleanupWithTx(
   tx: SystemTransaction,
   input: UserIntegrationDisconnectInput,
 ): Promise<typeof userIntegrations.$inferSelect | null> {
+  const existingPending = await findCredentialCleanupPendingWithTx(tx, input.userId, input.provider);
+  if (existingPending) return existingPending;
   const rows = await tx.update(userIntegrations).set({
     status: 'cleanup_pending',
     errorReason: 'revocation_failed',
@@ -611,11 +652,19 @@ async function beginCredentialCleanupWithTx(
     isNull(userIntegrations.revokedAt),
   )).returning();
   if (rows[0]) return rows[0];
+  return findCredentialCleanupPendingWithTx(tx, input.userId, input.provider);
+}
+
+async function findCredentialCleanupPendingWithTx(
+  tx: SystemTransaction,
+  userId: string,
+  provider: UserIntegrationProvider,
+): Promise<typeof userIntegrations.$inferSelect | null> {
   const pending = await tx.select().from(userIntegrations).where(and(
-    eq(userIntegrations.userId, input.userId),
-    eq(userIntegrations.provider, input.provider),
+    eq(userIntegrations.userId, userId),
+    eq(userIntegrations.provider, provider),
     eq(userIntegrations.status, 'cleanup_pending'),
-  )).limit(1);
+  )).for('update').limit(1);
   return pending[0] ?? null;
 }
 
@@ -675,6 +724,9 @@ function fromRow(row: typeof userIntegrations.$inferSelect): UserIntegrationReco
     userId: row.userId,
     provider: row.provider,
     integrationDescriptorId: row.integrationDescriptorId,
+    ...(row.cleanupDescriptorFingerprint
+      ? { cleanupDescriptorFingerprint: row.cleanupDescriptorFingerprint }
+      : {}),
     externalAccountLabel: row.externalAccountLabel,
     externalInstallationId: row.externalInstallationId,
     authorizedPermissions: asJsonRecord(row.authorizedPermissions),

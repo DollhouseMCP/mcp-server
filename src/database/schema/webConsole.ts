@@ -177,6 +177,7 @@ export const userIntegrations = pgTable('user_integrations', {
   provider: text('provider').$type<UserIntegrationProvider>().notNull(),
   integrationDescriptorId: uuid('integration_descriptor_id')
     .references(() => integrationProviderDescriptors.id, { onDelete: 'set null' }),
+  cleanupDescriptorFingerprint: text('cleanup_descriptor_fingerprint'),
   externalAccountLabel: text('external_account_label'),
   externalInstallationId: text('external_installation_id'),
   authorizedPermissions: jsonb('authorized_permissions').notNull().default({
@@ -197,6 +198,10 @@ export const userIntegrations = pgTable('user_integrations', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 }, (table) => [
   check('user_integrations_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
+  check('user_integrations_cleanup_descriptor_fingerprint_check', sql`
+    ${table.cleanupDescriptorFingerprint} IS NULL
+    OR ${table.cleanupDescriptorFingerprint} ~ '^[a-f0-9]{64}$'
+  `),
   check('user_integrations_status_check', sql`${table.status} IN ('connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error')`),
   check('user_integrations_shape_check', sql`
     (${table.externalAccountLabel} IS NULL OR (

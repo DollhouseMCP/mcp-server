@@ -2403,6 +2403,57 @@ describe('IntegrationRequestGateway', () => {
     expect(fetches[1]?.body).toContain('grant_type=refresh_token');
   });
 
+  it('refreshes but does not replay a POST after an upstream 401', async () => {
+    const fetches: Array<{ readonly url: string; readonly authorization: string | null }> = [];
+    const providerFetch: PinnedFetch = (url, init) => {
+      fetches.push({
+        url: urlString(url),
+        authorization: new Headers(init?.headers).get('Authorization'),
+      });
+      return Promise.resolve(jsonResponse(200, {
+        access_token: 'gmail-fresh-access-token',
+        refresh_token: 'gmail-rotated-refresh-token',
+      }));
+    };
+    const oauthProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptor(),
+      clientSecret: 'gmail-client-secret',
+      pinnedOutbound: () => ({ fetch: providerFetch, close: () => Promise.resolve() }),
+      dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+    });
+    const gateway = gatewayFixture({
+      providers: new IntegrationProviderRegistry([oauthProvider]),
+      fetch: (url, init) => {
+        fetches.push({
+          url: urlString(url),
+          authorization: new Headers(init?.headers).get('Authorization'),
+        });
+        return Promise.resolve(fetches.length === 1
+          ? jsonResponse(401, { error: 'expired_after_write' })
+          : jsonResponse(200, { ok: true }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'POST',
+      path: GMAIL_MESSAGES_PATH,
+      body: { operation: 'create_message' },
+    }));
+
+    expect(result).toMatchObject({ status: 401, refreshed: true });
+    expect(fetches).toEqual([
+      {
+        url: `https://${GMAIL_HOST}${GMAIL_MESSAGES_PATH}`,
+        authorization: `Bearer ${GMAIL_ACCESS_TOKEN}`,
+      },
+      {
+        url: 'https://accounts.example/oauth/token',
+        authorization: null,
+      },
+    ]);
+  });
+
   it('refreshes on 401 through a provider resolved from the store, absent from the boot registry', async () => {
     const fetches: Array<{ readonly authorization: string | null }> = [];
     const providerFetch: PinnedFetch = () => Promise.resolve(jsonResponse(200, {
