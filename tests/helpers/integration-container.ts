@@ -25,6 +25,12 @@ function registerStorageStubs(container: DollhouseContainer): void {
   }
 }
 
+const PRODUCTION_BOOTSTRAP_REGISTRATIONS = [
+  'OperatorConfigStore',
+  'UserConfigStore',
+  'SharedCacheStore',
+] as const;
+
 export interface IntegrationContainerOptions {
   /**
    * Base directory to use for the portfolio. When omitted, a unique temporary
@@ -191,6 +197,9 @@ export async function createIntegrationContainer(
     portfolioManager,
     portfolioDir,
     dispose: async () => {
+      const missingBootstrapRegistrations = options.willRunProductionBootstrap
+        ? PRODUCTION_BOOTSTRAP_REGISTRATIONS.filter(name => !container.hasRegistration(name))
+        : [];
       await container.dispose();
       if (previousPortfolioDir === undefined) {
         delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
@@ -212,6 +221,13 @@ export async function createIntegrationContainer(
 
       if (tempRoot) {
         await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+
+      if (missingBootstrapRegistrations.length > 0) {
+        throw new Error(
+          'willRunProductionBootstrap was set, but production bootstrap did not complete; ' +
+          `missing registrations: ${missingBootstrapRegistrations.join(', ')}`,
+        );
       }
     },
   };

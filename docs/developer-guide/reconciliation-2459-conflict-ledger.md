@@ -143,7 +143,7 @@ of the semantic review and verification:
 | Package asset check | Passed |
 | Production-only install check | Passed: packed `2.1.0-beta.1`, installed with dev dependencies omitted, verified `commander@13.1.0`, and executed `dollhouse-allowlist --help` from the installed package |
 | Hosted deployment script tests | Passed, including render, install, update, rollback, remote, and retry paths |
-| PostgreSQL migration inventory | Passed: 45 journal entries match 45 contiguous SQL migrations through `0044` |
+| PostgreSQL migration inventory | Passed: 54 journal entries match 54 contiguous SQL migrations through `0053` |
 | Hosted container/database checks | Containerized permission-hook harness passed. PostgreSQL was unavailable locally; database/RLS suites skipped and remain required in CI |
 | Hosted deployment dry run | Passed for a distinct disposable instance name; no files, images, containers, clones, or HTTP requests were changed |
 | GitHub quality/security checks | Pending |

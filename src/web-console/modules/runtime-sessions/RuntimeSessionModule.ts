@@ -230,8 +230,8 @@ async function terminateSelfSession(req: ConsoleRequest, service: RuntimeSession
 
 async function revokeAllSelfSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
   const actor = requireConsoleAuthentication(req);
-  const body = await service.revokeAllAccountSessions(actor.userId);
-  return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  const body = await service.revokeAllSelfSessions(actor.userId);
+  return { status: 202, body };
 }
 
 async function listAccountSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
@@ -242,18 +242,20 @@ async function listAccountSessions(req: ConsoleRequest, service: RuntimeSessionS
 }
 
 async function terminateAccountSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
+  const actor = requireConsoleAuthentication(req);
   const userId = requiredParam(req, 'user_id');
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
   if (!userId) return invalidParam('user_id');
   if (!sessionId) return invalidParam(SESSION_ID_PARAM);
-  const body = await service.terminateAccountSession(userId, sessionId);
+  const body = await service.terminateAccountSession(userId, sessionId, actor.userId);
   return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
 }
 
 async function revokeAllAccountSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
+  const actor = requireConsoleAuthentication(req);
   const userId = requiredParam(req, 'user_id');
   if (!userId) return invalidParam('user_id');
-  const body = await service.revokeAllAccountSessions(userId);
+  const body = await service.revokeAllAccountSessions(userId, actor.userId);
   return body ? { status: 202, body } : notFound('User principal was not found.');
 }
 

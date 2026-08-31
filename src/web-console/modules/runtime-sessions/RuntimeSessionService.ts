@@ -48,6 +48,10 @@ export class RuntimeSessionService {
     return this.createTermination(session, 'user_requested', { kind: 'self', userId });
   }
 
+  async revokeAllSelfSessions(userId: string): Promise<RuntimeSessionRevokeAllDto> {
+    return this.revokeAllOwnedSessions(userId, 'user_requested', { kind: 'self', userId });
+  }
+
   async listAccountSessions(userId: string): Promise<RuntimeSessionAccountDto[] | null> {
     const principal = await this.options.accountAdminStore.findPrincipal(userId);
     if (!principal) return null;
@@ -55,21 +59,42 @@ export class RuntimeSessionService {
     return sessions.map(toAccountDto);
   }
 
-  async terminateAccountSession(userId: string, sessionId: string): Promise<RuntimeTerminationAcceptedDto | null> {
+  async terminateAccountSession(
+    userId: string,
+    sessionId: string,
+    administratorUserId: string,
+  ): Promise<RuntimeTerminationAcceptedDto | null> {
     const principal = await this.options.accountAdminStore.findPrincipal(userId);
     if (!principal) return null;
     const session = await this.findOwnedPresence(userId, sessionId);
     if (!session) return null;
-    return this.createTermination(session, 'admin_terminated', { kind: 'admin', userId });
+    return this.createTermination(session, 'admin_terminated', {
+      kind: 'admin',
+      userId: administratorUserId,
+    });
   }
 
-  async revokeAllAccountSessions(userId: string): Promise<RuntimeSessionRevokeAllDto | null> {
+  async revokeAllAccountSessions(
+    userId: string,
+    administratorUserId: string,
+  ): Promise<RuntimeSessionRevokeAllDto | null> {
     const principal = await this.options.accountAdminStore.findPrincipal(userId);
     if (!principal) return null;
+    return this.revokeAllOwnedSessions(userId, 'admin_terminated', {
+      kind: 'admin',
+      userId: administratorUserId,
+    });
+  }
+
+  private async revokeAllOwnedSessions(
+    userId: string,
+    reason: RuntimeTerminationReason,
+    requestedBy: { readonly kind: 'self' | 'admin'; readonly userId: string },
+  ): Promise<RuntimeSessionRevokeAllDto> {
     const sessions = await this.options.runtimeStore.listPresenceByUser(userId, { now: this.now(), limit: 500 });
     const commands = [];
     for (const session of sessions) {
-      commands.push(await this.createTermination(session, 'admin_terminated', { kind: 'admin', userId }));
+      commands.push(await this.createTermination(session, reason, requestedBy));
     }
     return {
       user_id: userId,

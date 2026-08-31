@@ -957,6 +957,8 @@ sudo journalctl -u dollhousemcp -f
 
 Migrations run automatically on startup. Watch `/readyz` — it returns 503 with `reason: "migrations_pending"` during a migration window and 200 once everything is current.
 
+Migration `0048` marks a non-GitHub integration credential that cannot be attributed to a provider descriptor as `status='error'` with `error_reason='revocation_failed'`. The encrypted credential is retained so it can still be revoked through its provider, and account deletion remains blocked with HTTP 409 and code `integration_credential_cleanup_pending` until the credential is resolved. There are two exits: the user can open the console integrations page and click **Disconnect** for the provider in the error state, or an administrator can repeat the account-deletion request with `integration_credential_cleanup_override: "abandon_unrevoked_provider_credentials"` in the request body to record an audited abandonment.
+
 ### Monitoring
 
 The minimum-viable monitoring stack:

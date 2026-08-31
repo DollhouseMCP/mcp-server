@@ -293,6 +293,42 @@ describe('RuntimeSessionModule', () => {
     await expect(runtimeStore.listPendingCommandsForReplica('replica-b')).resolves.toHaveLength(1);
   });
 
+  it('persists the invoking actor for self and account-admin termination commands', async () => {
+    const { module, runtimeStore } = await fixture();
+    const selfTerminateRoute = findRoute(module.routes, 'DELETE', '/api/v1/me/sessions/:session_id');
+    const selfRevokeAllRoute = findRoute(module.routes, 'POST', '/api/v1/me/sessions/revoke-all');
+    const adminTerminateRoute = findRoute(
+      module.routes,
+      'DELETE',
+      '/api/v1/admin/accounts/users/:user_id/sessions/:session_id',
+    );
+    const adminRevokeAllRoute = findRoute(
+      module.routes,
+      'POST',
+      '/api/v1/admin/accounts/users/:user_id/sessions/revoke-all',
+    );
+
+    const selfSingle = await selfTerminateRoute.handler(request({ params: { session_id: SESSION_ID } }));
+    const selfBulk = await selfRevokeAllRoute.handler(request());
+    const adminSingle = await adminTerminateRoute.handler(request({
+      params: { user_id: SECOND_USER_ID, session_id: SECOND_SESSION_ID },
+    }));
+    const adminBulk = await adminRevokeAllRoute.handler(request({ params: { user_id: SECOND_USER_ID } }));
+
+    const commandIds = [selfSingle, selfBulk, adminSingle, adminBulk].map(result =>
+      (result.body as { command_id?: string; commands?: Array<{ command_id: string }> }).command_id
+        ?? (result.body as { commands: Array<{ command_id: string }> }).commands[0].command_id,
+    );
+    const commands = await Promise.all(commandIds.map(commandId => runtimeStore.getCommand(commandId)));
+
+    expect(commands.map(command => command?.requestedBy)).toEqual([
+      { kind: 'self', userId: USER_ID },
+      { kind: 'self', userId: USER_ID },
+      { kind: 'admin', userId: USER_ID },
+      { kind: 'admin', userId: USER_ID },
+    ]);
+  });
+
   it('hides cross-user sessions from account-admin scoped termination', async () => {
     const { module, runtimeStore } = await fixture();
     const terminateRoute = findRoute(

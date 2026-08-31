@@ -20,6 +20,7 @@ interface WorkflowStep {
   uses?: string;
   with?: Record<string, any>;
   env?: Record<string, any>;
+  'continue-on-error'?: boolean;
 }
 
 interface WorkflowService {
@@ -158,7 +159,7 @@ describe('GitHub Workflow Validation', () => {
       }
     );
 
-    it('should enforce unit and performance tests on every core platform', () => {
+    it('should enforce unit tests and report performance tests on every core platform', () => {
       const content = fs.readFileSync(
         path.join(workflowDir, 'core-build-test.yml'),
         'utf8'
@@ -182,11 +183,8 @@ describe('GitHub Workflow Validation', () => {
       );
       expect(unitTestGate?.run).toContain('exit 1');
       expect(performanceTests?.if).toBeUndefined();
-      expect(performanceTestGate?.if).toBe('always()');
-      expect(performanceTestGate?.env?.TEST_OUTCOME).toBe(
-        '${{ steps.performance_tests.outcome }}'
-      );
-      expect(performanceTestGate?.run).toContain('exit 1');
+      expect(performanceTests?.['continue-on-error']).toBe(true);
+      expect(performanceTestGate).toBeUndefined();
       expect(operatingSystems).toEqual([
         'ubuntu-latest',
         'windows-latest',

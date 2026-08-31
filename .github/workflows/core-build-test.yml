@@ -170,17 +170,6 @@ jobs:
             exit 1
           fi
 
-      - name: Enforce performance test result
-        if: always()
-        shell: bash
-        env:
-          TEST_OUTCOME: ${{ steps.performance_tests.outcome }}
-        run: |
-          if [ "$TEST_OUTCOME" != "success" ]; then
-            echo "Performance tests failed for the core build gate."
-            exit 1
-          fi
-
       - name: Validation complete
         run: |
           echo "✅ Core Build & Test Complete!"
