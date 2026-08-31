@@ -396,14 +396,7 @@ export class GatekeeperSession {
     } = args;
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
-
-    // LRU eviction at max capacity
-    if (this.state.cliApprovals.size >= this.maxCliApprovals) {
-      const oldestKey = this.state.cliApprovals.keys().next().value;
-      if (oldestKey) {
-        this.state.cliApprovals.delete(oldestKey);
-      }
-    }
+    await this.evictOldestCliApprovalIfAtCapacity();
 
     const requestId = `cli-${randomUUID()}`;
     if (!this.auditHmacResolver) {
@@ -454,6 +447,27 @@ export class GatekeeperSession {
     }
 
     return requestId;
+  }
+
+  private async evictOldestCliApprovalIfAtCapacity(): Promise<void> {
+    if (this.state.cliApprovals.size < this.maxCliApprovals) return;
+    const oldestKey = this.state.cliApprovals.keys().next().value;
+    if (!oldestKey) return;
+
+    const oldestRecord = this.state.cliApprovals.get(oldestKey);
+    this.state.cliApprovals.delete(oldestKey);
+    if (!this.confirmationStore) return;
+
+    this.confirmationStore.deleteCliApproval(oldestKey);
+    try {
+      await this.persistDecision();
+    } catch (error) {
+      if (oldestRecord) {
+        this.state.cliApprovals.set(oldestKey, oldestRecord);
+        this.confirmationStore.saveCliApproval(oldestKey, oldestRecord);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -733,6 +747,10 @@ export class GatekeeperSession {
     // states so decision retries return stable results.
     if (record.consumed && approvalAge(record, now) > approvalTtl(record)) {
       this.state.cliApprovals.delete(key);
+      if (this.confirmationStore) {
+        this.confirmationStore.deleteCliApproval(record.requestId);
+        this.persistToStore();
+      }
     }
   }
 

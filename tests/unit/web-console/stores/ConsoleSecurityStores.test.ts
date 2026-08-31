@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   ConsoleStoreValidationError,
@@ -904,6 +904,44 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
+  it.each(['connected', 'error'] as const)(
+    'retires a credential-free %s row before reconnecting',
+    async status => {
+      const previous = userIntegration({
+        provider: 'linear',
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status,
+        errorReason: status === 'error' ? 'provider_unavailable' : null,
+      });
+      const store = new InMemoryUserIntegrationStore([previous]);
+
+      await expect(store.connect({
+        userId: USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: null,
+        externalAccountLabel: 'replacement',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('replacement-access'),
+        refreshTokenCiphertext: null,
+        connectedAt: FIVE_MINUTES,
+      })).resolves.toMatchObject({
+        status: 'connected',
+        externalAccountLabel: 'replacement',
+      });
+      const records = (store as unknown as {
+        records: Map<string, UserIntegrationRecord>;
+      }).records;
+      expect(records.get(previous.id)).toMatchObject({
+        id: previous.id,
+        status: 'revoked',
+        revokedAt: FIVE_MINUTES,
+      });
+    },
+  );
+
   it('retains descriptor-bound ciphertext behind a fenced cleanup lease until completion', async () => {
     const store = new InMemoryUserIntegrationStore([
       userIntegration({
@@ -1066,6 +1104,87 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.hasBlockingCredentialMaterialByDescriptor(DESCRIPTOR_ID)).resolves.toBe(false);
   });
 
+  it('abandons the legacy marker without terminalizing runtime error states', async () => {
+    const store = new InMemoryUserIntegrationStore(
+      [
+        userIntegration({
+          provider: 'linear',
+          integrationDescriptorId: null,
+          authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+          status: 'error',
+          errorReason: 'revocation_failed',
+          revokedAt: null,
+        }),
+        userIntegration({
+          id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4',
+          provider: 'jira',
+          integrationDescriptorId: DESCRIPTOR_ID,
+          authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        }),
+        userIntegration({
+          id: '55e22a52-dc56-4cd0-9d13-b2802524fbd5',
+          provider: 'slack',
+          integrationDescriptorId: '29b9f7d7-0bf5-4cc0-9892-cf00d0f4f74e',
+          authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        }),
+      ],
+      () => null,
+      { now: () => FIVE_MINUTES },
+    );
+
+    await store.refresh({
+      userId: USER_ID,
+      provider: 'jira',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      staleAccessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+    });
+    await store.refresh({
+      userId: USER_ID,
+      provider: 'slack',
+      integrationDescriptorId: '29b9f7d7-0bf5-4cc0-9892-cf00d0f4f74e',
+      staleAccessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'provider_unavailable' }),
+    });
+    await store.recordError({
+      userId: USER_ID,
+      provider: 'notion',
+      integrationDescriptorId: null,
+      expectedActiveRecordId: null,
+      errorReason: 'revocation_failed',
+      occurredAt: FIVE_MINUTES,
+    });
+
+    await expect(store.abandonCredentialCleanupForUser({ userId: USER_ID })).resolves.toEqual([
+      expect.objectContaining({
+        status: 'cleanup_failed',
+        errorReason: 'revocation_failed',
+        revokedAt: FIVE_MINUTES,
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      }),
+    ]);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'jira')).resolves.toMatchObject({
+      status: 'error',
+      errorReason: 'token_refresh_failed',
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    });
+    await expect(store.findByProvider(USER_ID, 'slack')).resolves.toMatchObject({
+      status: 'error',
+      errorReason: 'provider_unavailable',
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    });
+    await expect(store.findByProvider(USER_ID, 'notion')).resolves.toMatchObject({
+      status: 'error',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: null,
+      refreshTokenCiphertext: null,
+    });
+    await expect(store.hasBlockingCredentialMaterial(USER_ID)).resolves.toBe(true);
+  });
+
   it('validates integration records before storing them', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       authorizedPermissions: {
@@ -1189,6 +1308,24 @@ describe('InMemoryIntegrationDescriptorStore', () => {
       clientSecretRevision: '00000000-0000-4000-8000-000000000202',
       operationPromotion: { operations: ['gmail.users.messages.send'] },
     });
+  });
+
+  it('invalidates callbacks and credential-free bindings before routing mutation', async () => {
+    const invalidateDescriptorBindings = jest.fn<
+      (descriptorId: string, revokedAt: Date) => Promise<void>
+    >().mockResolvedValue();
+    const store = new InMemoryIntegrationDescriptorStore([], {
+      hasBlockingCredentialMaterialByDescriptor: () => Promise.resolve(false),
+      invalidateDescriptorBindings,
+    } as any);
+    const initial = await store.upsert(oauthDescriptorInput());
+
+    await store.upsert(oauthDescriptorInput({
+      apiHosts: ['mail.example.com'],
+      updatedAt: FIVE_MINUTES,
+    }));
+
+    expect(invalidateDescriptorBindings).toHaveBeenCalledWith(initial.id, FIVE_MINUTES);
   });
 
   it('rejects credential-binding mutation while revocable credentials remain', async () => {

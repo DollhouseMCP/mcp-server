@@ -28,6 +28,8 @@ import { InMemoryIntegrationMutationCoordinator } from './InMemoryIntegrationMut
 export interface InMemoryIntegrationDescriptorStoreOptions {
   readonly mutationCoordinator?: InMemoryIntegrationMutationCoordinator;
   readonly hasBlockingCredentialMaterialByDescriptor?: (descriptorId: string) => Promise<boolean>;
+  readonly invalidateCallbacksByDescriptor?: (descriptorId: string) => Promise<void>;
+  readonly invalidateDescriptorBindings?: (descriptorId: string, revokedAt: Date) => Promise<void>;
 }
 
 export class InMemoryIntegrationDescriptorStore implements IIntegrationDescriptorStore {
@@ -121,7 +123,7 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
     return this.mutationCoordinator.runExclusive(async () => {
       const record = this.records.get(id);
       if (record?.ownership !== 'byo' || record.ownerUserId !== ownerUserId) return false;
-      await this.assertDescriptorMutationAllowed(id);
+      await this.invalidateCredentialBindings(id, new Date());
       this.records.delete(id);
       return true;
     });
@@ -132,7 +134,7 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
       const record = [...this.records.values()].find(candidate =>
         candidate.provider === provider && candidate.ownership === 'curated');
       if (!record) return false;
-      await this.assertDescriptorMutationAllowed(record.id);
+      await this.invalidateCredentialBindings(record.id, new Date());
       this.records.delete(record.id);
       return true;
     });
@@ -140,7 +142,7 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
 
   async upsert(
     input: IntegrationDescriptorCreateInput,
-    _options: IntegrationDescriptorUpsertOptions = {},
+    options: IntegrationDescriptorUpsertOptions = {},
   ): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
     return this.mutationCoordinator.runExclusive(async () => {
@@ -166,9 +168,26 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
         createdAt: existing?.createdAt ?? input.createdAt,
         updatedAt: input.updatedAt,
       };
-      if (existing && integrationDescriptorCredentialBindingFingerprint(existing) !==
-          integrationDescriptorCredentialBindingFingerprint(record)) {
-        await this.assertDescriptorMutationAllowed(existing.id);
+      if (existing) {
+        const currentFingerprint = integrationDescriptorRoutingFingerprint(existing);
+        const proposedFingerprint = integrationDescriptorRoutingFingerprint(record);
+        const initializesOnlyRevision = options.initializeClientSecretRevision === true
+          && existing.clientSecretRevision === null
+          && record.clientSecretRevision !== null
+          && currentFingerprint === integrationDescriptorRoutingFingerprint({
+            ...record,
+            clientSecretRevision: null,
+          });
+        if (currentFingerprint !== proposedFingerprint && !initializesOnlyRevision) {
+          const credentialBindingChanged =
+            integrationDescriptorCredentialBindingFingerprint(existing) !==
+            integrationDescriptorCredentialBindingFingerprint(record);
+          if (credentialBindingChanged) {
+            await this.invalidateCredentialBindings(existing.id, input.updatedAt);
+          } else {
+            await this.options.invalidateCallbacksByDescriptor?.(existing.id);
+          }
+        }
       }
       this.set(record);
       return cloneIntegrationDescriptorRecord(record);
@@ -179,6 +198,12 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
     if (await this.options.hasBlockingCredentialMaterialByDescriptor?.(descriptorId)) {
       throw new IntegrationDescriptorCredentialConflictError();
     }
+  }
+
+  private async invalidateCredentialBindings(descriptorId: string, revokedAt: Date): Promise<void> {
+    await this.assertDescriptorMutationAllowed(descriptorId);
+    await this.options.invalidateCallbacksByDescriptor?.(descriptorId);
+    await this.options.invalidateDescriptorBindings?.(descriptorId, revokedAt);
   }
 
   set(record: IntegrationDescriptorRecord): void {

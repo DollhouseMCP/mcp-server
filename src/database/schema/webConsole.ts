@@ -298,6 +298,13 @@ export const userIntegrations = pgTable('user_integrations', {
       ${table.provider} = 'github'
       OR ${table.integrationDescriptorId} IS NOT NULL
       OR ${table.revokedAt} IS NOT NULL
+      OR (
+        ${table.status} = 'error'
+        AND ${table.errorReason} = 'revocation_failed'
+        AND ${table.revokedAt} IS NULL
+        AND ${table.provider} <> 'github'
+        AND ${table.integrationDescriptorId} IS NULL
+      )
     )
   `),
   uniqueIndex('idx_user_integrations_active_provider_unique')

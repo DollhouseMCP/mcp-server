@@ -1,7 +1,19 @@
 import { describe, expect, it } from '@jest/globals';
 import { Linter } from 'eslint';
+import { fileURLToPath } from 'node:url';
 
-import { dmcpPathPlugin } from '../../eslint.config.js';
+import eslintConfig, { dmcpPathPlugin } from '../../eslint.config.js';
+
+const SERVICE_CONFIG_FIXTURE_PATH = fileURLToPath(
+  new URL('../../src/services/BuildInfoService.ts', import.meta.url),
+);
+const AUTH_CONFIG_FIXTURE_PATH = fileURLToPath(
+  new URL('../../src/auth/GitHubAuthManager.ts', import.meta.url),
+);
+const CLI_CONFIG_FIXTURE_PATH = fileURLToPath(
+  new URL('../../src/cli/console-token.ts', import.meta.url),
+);
+const OAUTH_CONFIG_FIXTURE_PATHS = [AUTH_CONFIG_FIXTURE_PATH, CLI_CONFIG_FIXTURE_PATH];
 
 type PortabilityRule =
   | 'no-posix-interpreter-path'
@@ -15,6 +27,15 @@ function verify(code: string, rule: PortabilityRule) {
     plugins: { dmcp: dmcpPathPlugin },
     rules: { [`dmcp/${rule}`]: 'error' },
   });
+}
+
+function verifyConfigured(code: string, filename: string) {
+  const linter = new Linter({ configType: 'flat' });
+  return linter.verify(code, eslintConfig, { filename });
+}
+
+function messagesContaining(code: string, filename: string, marker: string) {
+  return verifyConfigured(code, filename).filter(message => message.message.includes(marker));
 }
 
 describe('DMCP cross-platform ESLint rules', () => {
@@ -92,5 +113,107 @@ describe('DMCP cross-platform ESLint rules', () => {
 
       expect(messages).toHaveLength(0);
     });
+  });
+
+  describe('DMCP-DI-001', () => {
+    it('detects fallback construction and accepts required injection', () => {
+      const rejected = verifyConfigured(
+        'class Service {}\nlet dependency; dependency = dependency ?? new Service();',
+        SERVICE_CONFIG_FIXTURE_PATH,
+      );
+      const accepted = messagesContaining(
+        'class Consumer { constructor(dependency) { this.dependency = dependency; } }',
+        SERVICE_CONFIG_FIXTURE_PATH,
+        'Bastard Injection',
+      );
+
+      expect(rejected.filter(message => message.message.includes('Bastard Injection')).map(message => message.message)).toEqual([
+        expect.stringContaining('Bastard Injection'),
+      ]);
+      expect(accepted).toHaveLength(0);
+    });
+  });
+
+  describe('DMCP-ENV-001', () => {
+    it.each(OAUTH_CONFIG_FIXTURE_PATHS)(
+      'detects raw Dollhouse and GitHub env reads in %s',
+      filename => {
+        const messages = verifyConfigured(
+          'const enabled = process.env.DOLLHOUSE_FEATURE; const token = process.env.GITHUB_TOKEN;',
+          filename,
+        );
+
+        expect(messages.filter(message => message.message.includes('DMCP-ENV-001')).map(message => message.message)).toEqual([
+          expect.stringContaining('DMCP-ENV-001'),
+          expect.stringContaining('DMCP-ENV-001'),
+        ]);
+      },
+    );
+
+    it.each(OAUTH_CONFIG_FIXTURE_PATHS)(
+      'accepts schema-routed env reads in %s',
+      filename => {
+        const messages = messagesContaining(
+          "import { env } from '../config/env.js'; const enabled = env.DOLLHOUSE_FEATURE; const token = env.GITHUB_TOKEN;",
+          filename,
+          'DMCP-ENV-001',
+        );
+
+        expect(messages).toHaveLength(0);
+      },
+    );
+  });
+
+  describe('DMCP-PATH-001', () => {
+    it('detects hardcoded absolute filesystem I/O paths', () => {
+      const messages = verifyConfigured(
+        "import fs from 'node:fs'; fs.readFileSync('/tmp/private.json', 'utf8');",
+        SERVICE_CONFIG_FIXTURE_PATH,
+      );
+
+      const pathMessages = messages.filter(message => message.ruleId === 'dmcp/no-absolute-fs-io-paths');
+      expect(pathMessages.map(message => message.messageId)).toEqual(['absolute']);
+      expect(pathMessages.map(message => message.ruleId)).toEqual(['dmcp/no-absolute-fs-io-paths']);
+    });
+
+    it('accepts resolved filesystem I/O paths', () => {
+      const messages = verifyConfigured(
+        "import fs from 'node:fs'; import path from 'node:path'; fs.readFileSync(path.resolve('data', 'private.json'), 'utf8');",
+        SERVICE_CONFIG_FIXTURE_PATH,
+      ).filter(message => message.ruleId === 'dmcp/no-absolute-fs-io-paths');
+
+      expect(messages).toHaveLength(0);
+    });
+  });
+
+  describe('DMCP-FO2-001', () => {
+    it.each(OAUTH_CONFIG_FIXTURE_PATHS)(
+      'preserves raw integration-authority restrictions in %s',
+      filename => {
+        const messages = verifyConfigured(
+          'new IntegrationRequestGateway(); new IntegrationOperationCatalog(); new IntegrationRemoteMcpBridge();',
+          filename,
+        );
+
+        expect(messages.filter(message => message.message.includes('DMCP-FO2-001')).map(message => message.message)).toEqual([
+          expect.stringContaining('DMCP-FO2-001'),
+          expect.stringContaining('DMCP-FO2-001'),
+          expect.stringContaining('DMCP-FO2-001'),
+        ]);
+      },
+    );
+
+    it.each(OAUTH_CONFIG_FIXTURE_PATHS)(
+      'accepts authorized integration facades in %s',
+      filename => {
+        const messages = messagesContaining(
+          'new AuthorizedIntegrationGateway(); new AuthorizedIntegrationRemoteMcpBridge();',
+          filename,
+          'DMCP-FO2-001',
+        );
+
+        expect(messages).toHaveLength(0);
+      },
+    );
   });
 });

@@ -87,8 +87,8 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     };
 
     container = new DollhouseContainer();
-    container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
-    container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
+    container.replace<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
+    container.replace<FileLockManager>('FileLockManager', () => new FileLockManager());
 
     const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
@@ -104,17 +104,17 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile propagate to the element-read path.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
-    container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
+    container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
-    container.register('SerializationService', () => new SerializationService());
-    container.register('MetadataService', () => metadataService);
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('MetadataService', () => metadataService);
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
 
-    container.register('AgentManager', () => new TestableAgentManager({
+    container.replace('AgentManager', () => new TestableAgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       baseDir: portfolioPath,

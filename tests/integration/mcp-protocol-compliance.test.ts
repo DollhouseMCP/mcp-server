@@ -53,6 +53,9 @@ describe('MCP Protocol Compliance', () => {
       DOLLHOUSE_PORTFOLIO_DIR: portfolioDir,
       LOG_LEVEL: 'error',
       HOME: testDir,
+      GITHUB_TOKEN: '',
+      GITHUB_TEST_TOKEN: '',
+      TEST_GITHUB_TOKEN: '',
     };
 
     let stdoutData = '';
@@ -113,6 +116,9 @@ describe('MCP Protocol Compliance', () => {
       DOLLHOUSE_PORTFOLIO_DIR: portfolioDir,
       LOG_LEVEL: 'debug', // Enable debug logging to ensure dotenv runs
       HOME: testDir,
+      GITHUB_TOKEN: '',
+      GITHUB_TEST_TOKEN: '',
+      TEST_GITHUB_TOKEN: '',
     };
 
     let stdoutData = '';
@@ -153,6 +159,9 @@ describe('MCP Protocol Compliance', () => {
       DOLLHOUSE_DISABLE_ENCRYPTION: 'true',
       DOLLHOUSE_PORTFOLIO_DIR: portfolioDir,
       HOME: testDir,
+      GITHUB_TOKEN: '',
+      GITHUB_TEST_TOKEN: '',
+      TEST_GITHUB_TOKEN: '',
     };
 
     let _stderrData = '';
@@ -216,6 +225,9 @@ describe('MCP Protocol Compliance', () => {
       DOLLHOUSE_DISABLE_ENCRYPTION: 'false', // Explicitly enable encryption
       DOLLHOUSE_PORTFOLIO_DIR: portfolioDir,
       HOME: testDir,
+      GITHUB_TOKEN: '',
+      GITHUB_TEST_TOKEN: '',
+      TEST_GITHUB_TOKEN: '',
     };
 
     // Unset the encryption secret to trigger the error

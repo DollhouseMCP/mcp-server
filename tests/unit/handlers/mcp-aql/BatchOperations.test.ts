@@ -19,6 +19,7 @@ const mockElementCRUD = {
   deactivateElement: jest.fn(),
   getActiveElements: jest.fn(),
   validateElement: jest.fn(),
+  getActiveElementsForPolicy: jest.fn<() => Promise<[]>>().mockResolvedValue([]),
 };
 
 const mockMemoryManager = {

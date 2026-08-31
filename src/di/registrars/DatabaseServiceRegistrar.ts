@@ -40,6 +40,28 @@ import type { DiContainerFacade } from '../DiContainerFacade.js';
 
 export type { DiContainerFacade } from '../DiContainerFacade.js';
 
+interface DatabaseConnectionLifecycleOwner {
+  close(): void | Promise<void>;
+}
+
+/**
+ * Register and materialize the connection wrappers that own database pools.
+ * Container disposal only sees resolved singleton instances, so both distinct
+ * owners must be resolved while a shared owner must be resolved only once.
+ */
+export function registerDatabaseConnectionLifecycleOwners(
+  container: DiContainerFacade,
+  applicationConnection: DatabaseConnectionLifecycleOwner,
+  systemConnection: DatabaseConnectionLifecycleOwner,
+): void {
+  container.register('DatabaseConnection', () => applicationConnection);
+  container.resolve('DatabaseConnection');
+  container.register('SystemDatabaseConnection', () => systemConnection);
+  if (systemConnection !== applicationConnection) {
+    container.resolve('SystemDatabaseConnection');
+  }
+}
+
 
 export class DatabaseServiceRegistrar {
   /**
@@ -73,11 +95,6 @@ export class DatabaseServiceRegistrar {
       ssl: env.DOLLHOUSE_DATABASE_SSL,
     });
 
-    // Connection object (has .close() — picked up by Container.dispose() automatically)
-    container.register('DatabaseConnection', () => result.connection);
-    // Drizzle instance (resolved by stores and storage layers)
-    container.register('DatabaseInstance', () => result.db);
-
     const systemConnection = env.DOLLHOUSE_DATABASE_ADMIN_URL
       ? createDatabaseConnection({
           connectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
@@ -85,7 +102,9 @@ export class DatabaseServiceRegistrar {
           ssl: env.DOLLHOUSE_DATABASE_SSL,
         })
       : result.connection;
-    container.register('SystemDatabaseConnection', () => systemConnection);
+    registerDatabaseConnectionLifecycleOwners(container, result.connection, systemConnection);
+    // Drizzle instances (resolved by stores and storage layers)
+    container.register('DatabaseInstance', () => result.db);
     container.register('SystemDatabaseInstance', () => systemConnection.db);
     // Verify production database readiness over the APP connection (result.db),
     // not the admin/system connection. The expectedCurrentUser check exists to
@@ -129,7 +148,7 @@ export class DatabaseServiceRegistrar {
         ? container.resolve<SessionActivationRegistry>('SessionActivationRegistry')
         : undefined;
       return createUserIdResolver(tracker, registry);
-    });
+    }, { override: true });
     container.register('SessionIdResolver', () => {
       const tracker = container.resolve<ContextTracker>('ContextTracker');
       return createSessionIdResolver(tracker);
@@ -140,11 +159,14 @@ export class DatabaseServiceRegistrar {
     // the DB-specific resolver (not the PathsServiceRegistrar fallback).
     const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
     const sessionIdResolver = container.resolve<SessionIdResolver>('SessionIdResolver');
-    container.register('StorageLayerFactory', () =>
-      new DatabaseStorageLayerFactory(result.db, userIdResolver)
+    container.register(
+      'StorageLayerFactory',
+      () => new DatabaseStorageLayerFactory(result.db, userIdResolver),
+      { override: true },
     );
-    container.register('AgentStateStore', () =>
-      new DatabaseAgentStateStore(
+    container.register(
+      'AgentStateStore',
+      () => new DatabaseAgentStateStore(
         result.db,
         userIdResolver,
         sessionIdResolver,
@@ -161,7 +183,8 @@ export class DatabaseServiceRegistrar {
             : 'inactive';
         },
         systemConnection.db,
-      )
+      ),
+      { override: true },
     );
 
     // UserIdentityService — resolves usernames to DB UUIDs on demand.
@@ -183,7 +206,7 @@ export class DatabaseServiceRegistrar {
     container.register('StdioSession', () => Object.freeze({
       ...createStdioSession(),
       userId: result.userId,
-    }));
+    }), { override: true });
   }
 
   private async registerWebConsoleProductionDatabaseReadiness(

@@ -70,10 +70,10 @@ describe('CollectionBrowser MCP Filtering', () => {
     } as any;
 
     // Register in DI container
-    container.register('GitHubClient', () => mockGitHubClient);
-    container.register('CollectionCache', () => mockCollectionCache);
-    container.register('CollectionIndexManager', () => mockCollectionIndexManager);
-    container.register('CollectionBrowser', () => new CollectionBrowser(
+    container.replace('GitHubClient', () => mockGitHubClient);
+    container.replace('CollectionCache', () => mockCollectionCache);
+    container.replace('CollectionIndexManager', () => mockCollectionIndexManager);
+    container.replace('CollectionBrowser', () => new CollectionBrowser(
       container.resolve('GitHubClient'),
       container.resolve('CollectionCache'),
       container.resolve('CollectionIndexManager')

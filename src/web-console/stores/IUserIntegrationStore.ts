@@ -120,6 +120,7 @@ export interface IUserIntegrationStore {
   claimCredentialCleanup(input: UserIntegrationCleanupClaimInput): Promise<UserIntegrationRecord | null>;
   releaseCredentialCleanup(input: UserIntegrationCleanupReleaseInput): Promise<UserIntegrationRecord | null>;
   failCredentialCleanup(input: UserIntegrationCleanupFailInput): Promise<UserIntegrationRecord | null>;
+  /** Explicitly abandon pending cleanup and the exact blocking legacy-orphan marker. */
   abandonCredentialCleanupForUser(
     input: UserIntegrationCleanupAbandonInput,
   ): Promise<readonly UserIntegrationRecord[]>;

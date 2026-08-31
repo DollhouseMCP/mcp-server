@@ -37,12 +37,12 @@ describe('ConfigWizard', () => {
 
     // Register ConfigManager and ConfigWizard in DI container using di-mocks helper
     const fileOperationsService = createTestFileOperationsService();
-    container.register('FileOperationsService', () => fileOperationsService);
+    container.replace('FileOperationsService', () => fileOperationsService);
     // Phase 4.5: ConfigManager now requires injected stores. Tests use
     // in-memory stores so they're isolated and don't touch disk.
     const operatorStore = new InMemoryOperatorConfigStore();
     const userStore = new InMemoryUserConfigStore();
-    container.register('ConfigManager', () => new ConfigManager(
+    container.replace('ConfigManager', () => new ConfigManager(
       container.resolve('FileOperationsService'),
       os,
       operatorStore,

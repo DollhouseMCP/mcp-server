@@ -35,7 +35,9 @@ describe('Ensemble CRUD Operations (Integration)', () => {
 
   beforeEach(async () => {
     // Create isolated test environment with DI container
-    containerContext = await createIntegrationContainer();
+    containerContext = await createIntegrationContainer({
+      willRunProductionBootstrap: true,
+    });
 
     // Get manager instances from container (for direct access when needed)
     ensembleManager = containerContext.container.resolve('EnsembleManager');

@@ -22,14 +22,14 @@ SET "integration_descriptor_id" = (
 WHERE ui."provider" <> 'github'
   AND ui."revoked_at" IS NULL;
 
--- Fail closed for orphaned legacy credentials that cannot be attributed to a
--- descriptor. Retain the row for audit/history while clearing all secrets.
+-- Preserve orphaned legacy credentials that cannot yet be attributed to a
+-- descriptor. Keep revoked_at NULL so the runtime sees the row as active and
+-- can move it through normal cleanup. The existing active-provider unique index
+-- permits at most one such marker per user/provider, so the later cleanup_pending
+-- transition cannot collide with another migrated orphan.
 UPDATE "user_integrations"
-SET "access_token_ciphertext" = NULL,
-    "refresh_token_ciphertext" = NULL,
-    "status" = 'revoked',
-    "error_reason" = NULL,
-    "revoked_at" = NOW()
+SET "status" = 'error',
+    "error_reason" = 'revocation_failed'
 WHERE "provider" <> 'github'
   AND "integration_descriptor_id" IS NULL
   AND "revoked_at" IS NULL;
@@ -52,6 +52,13 @@ ALTER TABLE "user_integrations"
     "provider" = 'github'
     OR "integration_descriptor_id" IS NOT NULL
     OR "revoked_at" IS NOT NULL
+    OR (
+      "status" = 'error'
+      AND "error_reason" = 'revocation_failed'
+      AND "revoked_at" IS NULL
+      AND "provider" <> 'github'
+      AND "integration_descriptor_id" IS NULL
+    )
   );
 
 CREATE INDEX IF NOT EXISTS "idx_console_login_transactions_descriptor"

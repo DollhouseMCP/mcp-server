@@ -832,7 +832,7 @@ describe('PostgresUserIntegrationStore', () => {
   });
 
   it('requires explicit cleanup before replacing an active PostgreSQL credential', async () => {
-    const activeLock = selectingChain([{ id: INTEGRATION_ID }]);
+    const activeLock = selectingChain([userIntegrationRow()]);
     transaction.select = jest.fn(() => activeLock);
     transaction.insert = jest.fn();
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
@@ -854,6 +854,51 @@ describe('PostgresUserIntegrationStore', () => {
     expect(activeLock.for).toHaveBeenCalledWith('update');
     expect(transaction.insert).not.toHaveBeenCalled();
   });
+
+  it.each(['connected', 'error'] as const)(
+    'retires a credential-free PostgreSQL %s row before reconnecting',
+    async status => {
+      const activeLock = selectingChain([userIntegrationRow({
+        provider: 'linear',
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status,
+        errorReason: status === 'error' ? 'provider_unavailable' : null,
+      })]);
+      const retire = returningChain([]);
+      const inserted = userIntegrationRow({
+        id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4',
+        provider: 'linear',
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('replacement-access'),
+        refreshTokenCiphertext: null,
+        connectedAt: FIVE_MINUTES,
+      });
+      transaction.select = jest.fn(() => activeLock);
+      transaction.update = jest.fn(() => retire);
+      transaction.insert = jest.fn(() => insertChain([inserted]));
+      const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+      await expect(store.connect({
+        userId: USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: null,
+        externalAccountLabel: 'replacement',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('replacement-access'),
+        refreshTokenCiphertext: null,
+        connectedAt: FIVE_MINUTES,
+      })).resolves.toMatchObject({ id: inserted.id, status: 'connected' });
+      expect(retire.set).toHaveBeenCalledWith({
+        status: 'revoked',
+        errorReason: null,
+        revokedAt: FIVE_MINUTES,
+      });
+      expect(transaction.insert).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('parks a failed compensating revocation as durable cleanup work', async () => {
     const parked = userIntegrationRow({
@@ -1317,6 +1362,32 @@ describe('PostgresUserIntegrationStore', () => {
       cleanupLeaseId: leaseId,
       cleanupLeaseExpiresAt: leaseExpiresAt,
     }));
+  });
+
+  it('includes the legacy-marker branch in PostgreSQL abandonment', async () => {
+    const abandonedMarker = userIntegrationRow({
+      provider: 'linear',
+      integrationDescriptorId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      status: 'cleanup_failed',
+      errorReason: 'revocation_failed',
+      revokedAt: FIVE_MINUTES,
+    });
+    const abandon = returningChain([abandonedMarker]);
+    transaction.update = jest.fn(() => abandon);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await store.abandonCredentialCleanupForUser({ userId: USER_ID });
+    expect(abandon.set.mock.calls[0]?.[0]).not.toHaveProperty('errorReason');
+    const predicateStrings = collectStrings(abandon.where.mock.calls[0]?.[0]);
+    for (const expectedPredicatePart of [
+      'cleanup_pending',
+      'error',
+      'revocation_failed',
+    ]) {
+      expect(predicateStrings).toContain(expectedPredicatePart);
+    }
+    expect([...predicateStrings].some(part => part.includes("<> 'github'"))).toBe(true);
   });
 
   it('locks an active integration before updating refreshed credentials', async () => {

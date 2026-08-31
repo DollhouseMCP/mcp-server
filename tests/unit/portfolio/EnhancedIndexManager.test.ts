@@ -106,29 +106,29 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
     container = new DollhouseContainer();
 
     // Register dependencies in dependency order
-    container.register('IndexConfigManager', () => new IndexConfigManager());
+    container.replace('IndexConfigManager', () => new IndexConfigManager());
     const fileOperationsService = createTestFileOperationsService();
-    container.register('FileOperationsService', () => fileOperationsService);
-    container.register('ConfigManager', () => new ConfigManager(
+    container.replace('FileOperationsService', () => fileOperationsService);
+    container.replace('ConfigManager', () => new ConfigManager(
       container.resolve('FileOperationsService'),
       os
     ));
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: portfolioPath }));
-    container.register('PortfolioIndexManager', () => new PortfolioIndexManager(
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: portfolioPath }));
+    container.replace('PortfolioIndexManager', () => new PortfolioIndexManager(
       container.resolve('IndexConfigManager'),
       container.resolve('PortfolioManager'),
       container.resolve('FileOperationsService')
     ));
-    container.register('NLPScoringManager', () => new NLPScoringManager(
+    container.replace('NLPScoringManager', () => new NLPScoringManager(
       container.resolve('IndexConfigManager')
     ));
-    container.register('VerbTriggerManager', () => new VerbTriggerManager(
+    container.replace('VerbTriggerManager', () => new VerbTriggerManager(
       container.resolve('IndexConfigManager')
     ));
-    container.register('RelationshipManager', () => new RelationshipManager(
+    container.replace('RelationshipManager', () => new RelationshipManager(
       container.resolve('IndexConfigManager')
     ));
-    container.register('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
+    container.replace('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
       new ElementDefinitionBuilder(),
       new SemanticRelationshipService({
         nlpScoring: container.resolve('NLPScoringManager'),
@@ -137,7 +137,7 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
       (context) => new ActionTriggerExtractor(context),
       (options) => new TriggerMetricsTracker(options)
     ));
-    container.register('EnhancedIndexManager', () => new EnhancedIndexManager(
+    container.replace('EnhancedIndexManager', () => new EnhancedIndexManager(
       container.resolve('IndexConfigManager'),
       container.resolve('ConfigManager'),
       container.resolve('PortfolioIndexManager'),

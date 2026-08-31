@@ -33,6 +33,81 @@ afterAll(async () => {
 });
 
 describe('migration 0052 terminal integration credential cleanup', () => {
+  it.each(['connected', 'error'] as const)(
+    'retires a credential-free PostgreSQL %s row before reconnecting',
+    async status => {
+      if (!databaseAvailable) return;
+      const db = getTestAdminDb();
+      const store = new PostgresUserIntegrationStore(db);
+      const userId = randomUUID();
+      const provider = 'github';
+      const connectedAt = new Date('2026-08-30T12:00:00.000Z');
+      const reconnectedAt = new Date('2026-08-30T12:05:00.000Z');
+      await db.insert(users).values({
+        id: userId,
+        username: `credential-free-reconnect-${status}-${userId}`,
+      });
+      const connected = await store.connect({
+        userId,
+        provider,
+        integrationDescriptorId: null,
+        externalAccountLabel: 'credential-free',
+        externalInstallationId: null,
+        authorizedPermissions: {
+          repository_selection: 'unknown',
+          permissions: { contents: 'none' },
+        },
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        connectedAt,
+      });
+      const previous = status === 'error'
+        ? await store.recordError({
+          userId,
+          provider,
+          integrationDescriptorId: null,
+          expectedActiveRecordId: connected.id,
+          errorReason: 'provider_unavailable',
+          occurredAt: connectedAt,
+        })
+        : connected;
+      if (!previous) throw new Error('credential-free row was not created');
+
+      const replacement = await store.connect({
+        userId,
+        provider,
+        integrationDescriptorId: null,
+        externalAccountLabel: 'replacement',
+        externalInstallationId: null,
+        authorizedPermissions: {
+          repository_selection: 'selected',
+          permissions: { contents: 'read' },
+        },
+        accessTokenCiphertext: Buffer.from('replacement-access'),
+        refreshTokenCiphertext: null,
+        connectedAt: reconnectedAt,
+      });
+
+      await expect(db.select().from(userIntegrations)
+        .where(eq(userIntegrations.id, previous.id)))
+        .resolves.toEqual([
+          expect.objectContaining({
+            status: 'revoked',
+            revokedAt: reconnectedAt,
+            accessTokenCiphertext: null,
+            refreshTokenCiphertext: null,
+          }),
+        ]);
+      await expect(store.findByProvider(userId, provider)).resolves.toMatchObject({
+        id: replacement.id,
+        status: 'connected',
+        externalAccountLabel: 'replacement',
+      });
+      await terminalizeCredential(store, userId, provider, replacement.id);
+      await db.delete(users).where(eq(users.id, userId));
+    },
+  );
+
   it('blocks the BYO descriptor store from erasing a bound credential before cleanup', async () => {
     if (!databaseAvailable) return;
     const db = getTestAdminDb();
@@ -256,6 +331,192 @@ describe('migration 0052 terminal integration credential cleanup', () => {
       .resolves.toEqual([]);
   });
 
+  it('moves a migrated descriptor-less orphan through cleanup before allowing deletion', async () => {
+    if (!databaseAvailable) return;
+    const db = getTestAdminDb();
+    const store = new PostgresUserIntegrationStore(db);
+    const userId = randomUUID();
+    const provider = 'orphan-provider';
+    await db.insert(users).values({
+      id: userId,
+      username: `cleanup-migrated-orphan-${userId}`,
+    });
+    await insertMigratedOrphan(db, userId, provider);
+    const service = new IntegrationService({
+      store,
+      providers: IntegrationProviderRegistry.empty(),
+    });
+    const request = {
+      params: {},
+      query: {},
+      body: {},
+      headers: {},
+      consoleAuthentication: {
+        sessionIdHash: Buffer.alloc(32, 8),
+        userId,
+        authSub: `test-user:${userId}`,
+        authzVersion: 1,
+        grantedCapabilities: ['console:self'],
+        elevation: null,
+      },
+    } as ConsoleRequest;
+
+    await expect(store.findByProvider(userId, provider)).resolves.toMatchObject({
+      status: 'error',
+      revokedAt: null,
+      accessTokenCiphertext: Buffer.from('encrypted-orphan-token'),
+    });
+    await expect(store.hasBlockingCredentialMaterial(userId)).resolves.toBe(true);
+    await expectCredentialDeleteBlocked(db.delete(users).where(eq(users.id, userId)));
+    await expect(service.disconnectProvider(request, provider)).resolves.toMatchObject({ status: 503 });
+    await expect(store.findCredentialCleanupFailed(userId, provider)).resolves.toMatchObject({
+      status: 'cleanup_failed',
+      accessTokenCiphertext: Buffer.from('encrypted-orphan-token'),
+    });
+    await expect(store.hasBlockingCredentialMaterial(userId)).resolves.toBe(false);
+    await expect(db.delete(users).where(eq(users.id, userId))).resolves.toBeDefined();
+  });
+
+  it('explicitly abandons a migrated orphan through the account-admin escape hatch', async () => {
+    if (!databaseAvailable) return;
+    const db = getTestAdminDb();
+    const store = new PostgresUserIntegrationStore(db);
+    const userId = randomUUID();
+    const provider = 'orphan-provider';
+    const tokenFailureProvider = `abandon-token-${userId.slice(0, 8)}`;
+    const unavailableProvider = `abandon-unavailable-${userId.slice(0, 8)}`;
+    const ciphertextFreeProvider = `abandon-empty-${userId.slice(0, 8)}`;
+    const tokenFailureDescriptorId = randomUUID();
+    const unavailableDescriptorId = randomUUID();
+    await db.insert(users).values({
+      id: userId,
+      username: `cleanup-abandon-orphan-${userId}`,
+    });
+    await db.insert(integrationProviderDescriptors).values([
+      {
+        id: tokenFailureDescriptorId,
+        provider: tokenFailureProvider,
+        ownership: 'curated',
+        ownerUserId: null,
+        displayName: 'Abandon token failure',
+        category: 'Test',
+        authStrategy: 'coded',
+        apiHosts: ['https://api.example.test'],
+      },
+      {
+        id: unavailableDescriptorId,
+        provider: unavailableProvider,
+        ownership: 'curated',
+        ownerUserId: null,
+        displayName: 'Abandon unavailable',
+        category: 'Test',
+        authStrategy: 'coded',
+        apiHosts: ['https://api.example.test'],
+      },
+    ]);
+    await insertMigratedOrphan(db, userId, provider);
+
+    const tokenFailureCiphertext = Buffer.from('encrypted-token-failure');
+    const tokenFailure = await store.connect({
+      userId,
+      provider: tokenFailureProvider,
+      integrationDescriptorId: tokenFailureDescriptorId,
+      externalAccountLabel: 'token failure',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['read'] },
+      accessTokenCiphertext: tokenFailureCiphertext,
+      refreshTokenCiphertext: null,
+      connectedAt: new Date(),
+    });
+    await expect(store.refresh({
+      userId,
+      provider: tokenFailureProvider,
+      integrationDescriptorId: tokenFailureDescriptorId,
+      staleAccessTokenCiphertext: tokenFailureCiphertext,
+      refreshedAt: new Date(),
+      refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+    })).resolves.toMatchObject({
+      kind: 'failed',
+      record: { status: 'error', errorReason: 'token_refresh_failed' },
+    });
+
+    const unavailableCiphertext = Buffer.from('encrypted-provider-unavailable');
+    const unavailable = await store.connect({
+      userId,
+      provider: unavailableProvider,
+      integrationDescriptorId: unavailableDescriptorId,
+      externalAccountLabel: 'provider unavailable',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['read'] },
+      accessTokenCiphertext: unavailableCiphertext,
+      refreshTokenCiphertext: null,
+      connectedAt: new Date(),
+    });
+    await expect(store.refresh({
+      userId,
+      provider: unavailableProvider,
+      integrationDescriptorId: unavailableDescriptorId,
+      staleAccessTokenCiphertext: unavailableCiphertext,
+      refreshedAt: new Date(),
+      refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'provider_unavailable' }),
+    })).resolves.toMatchObject({
+      kind: 'failed',
+      record: { status: 'error', errorReason: 'provider_unavailable' },
+    });
+
+    await expect(store.recordError({
+      userId,
+      provider: ciphertextFreeProvider,
+      integrationDescriptorId: null,
+      expectedActiveRecordId: null,
+      errorReason: 'revocation_failed',
+      occurredAt: new Date(),
+    })).resolves.toMatchObject({
+      status: 'error',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: null,
+      refreshTokenCiphertext: null,
+    });
+
+    await expect(store.abandonCredentialCleanupForUser({ userId })).resolves.toEqual([
+      expect.objectContaining({
+        provider,
+        status: 'cleanup_failed',
+        errorReason: 'revocation_failed',
+        revokedAt: expect.any(Date),
+        accessTokenCiphertext: Buffer.from('encrypted-orphan-token'),
+      }),
+    ]);
+    await expect(store.findByProvider(userId, tokenFailureProvider)).resolves.toMatchObject({
+      id: tokenFailure.id,
+      status: 'error',
+      errorReason: 'token_refresh_failed',
+      accessTokenCiphertext: tokenFailureCiphertext,
+    });
+    await expect(store.findByProvider(userId, unavailableProvider)).resolves.toMatchObject({
+      id: unavailable.id,
+      status: 'error',
+      errorReason: 'provider_unavailable',
+      accessTokenCiphertext: unavailableCiphertext,
+    });
+    await expect(store.findByProvider(userId, ciphertextFreeProvider)).resolves.toMatchObject({
+      status: 'error',
+      errorReason: 'revocation_failed',
+      accessTokenCiphertext: null,
+      refreshTokenCiphertext: null,
+    });
+    await expect(store.hasBlockingCredentialMaterial(userId)).resolves.toBe(true);
+
+    await terminalizeCredential(store, userId, tokenFailureProvider, tokenFailure.id);
+    await terminalizeCredential(store, userId, unavailableProvider, unavailable.id);
+    await expect(store.hasBlockingCredentialMaterial(userId)).resolves.toBe(false);
+    await expect(db.delete(users).where(eq(users.id, userId))).resolves.toBeDefined();
+    await db.delete(integrationProviderDescriptors)
+      .where(eq(integrationProviderDescriptors.id, tokenFailureDescriptorId));
+    await db.delete(integrationProviderDescriptors)
+      .where(eq(integrationProviderDescriptors.id, unavailableDescriptorId));
+  });
+
   it('returns the parked cleanup row instead of violating the one-pending-row index', async () => {
     if (!databaseAvailable) return;
     const db = getTestAdminDb();
@@ -443,4 +704,27 @@ async function terminalizeCredential(
     cleanupRecordId: pending.id,
     leaseId,
   })).resolves.toMatchObject({ status: 'cleanup_failed' });
+}
+
+async function insertMigratedOrphan(
+  db: ReturnType<typeof getTestAdminDb>,
+  userId: string,
+  provider: string,
+): Promise<void> {
+  await db.insert(userIntegrations).values({
+    userId,
+    provider,
+    integrationDescriptorId: null,
+    externalAccountLabel: 'legacy orphan',
+    externalInstallationId: null,
+    authorizedPermissions: { scopes: ['read'] },
+    accessTokenCiphertext: Buffer.from('encrypted-orphan-token'),
+    refreshTokenCiphertext: null,
+    credentialKeyVersion: 'legacy-key',
+    status: 'error',
+    errorReason: 'revocation_failed',
+    connectedAt: new Date('2026-08-01T12:00:00.000Z'),
+    lastSyncAt: null,
+    revokedAt: null,
+  });
 }

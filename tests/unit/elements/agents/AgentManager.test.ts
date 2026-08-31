@@ -105,8 +105,8 @@ describe('AgentManager', () => {
     };
     
     container = new DollhouseContainer();
-    container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
-    container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
+    container.replace<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
+    container.replace<FileLockManager>('FileLockManager', () => new FileLockManager());
     
       const mockFileOperations: any = {
         createDirectory: jest.fn<FileOperationsService['createDirectory']>().mockResolvedValue(),
@@ -122,19 +122,19 @@ describe('AgentManager', () => {
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile via mockResolvedValue still flow through.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
-    container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations);
+    container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations);
 
     // Register DI services
-    container.register('SerializationService', () => new SerializationService());
-    container.register('MetadataService', () => metadataService);
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('MetadataService', () => metadataService);
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
 
     // Using TestableAgentManager to expose protected saveAgentState for testing (Issue #123)
-    container.register('AgentManager', () => new TestableAgentManager({
+    container.replace('AgentManager', () => new TestableAgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       baseDir: portfolioPath,

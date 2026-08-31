@@ -50,8 +50,8 @@ describe('Version Persistence', () => {
     // Initialize container and override PortfolioManager to use the test directory
     container = new DollhouseContainer();
     const fileOperationsService = createTestFileOperationsService();
-    container.register('FileOperationsService', () => fileOperationsService);
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
+    container.replace('FileOperationsService', () => fileOperationsService);
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
 
     // Resolve managers from the container
     skillManager = container.resolve<SkillManager>('SkillManager');
@@ -67,7 +67,7 @@ describe('Version Persistence', () => {
     );
 
     // AgentManager needs a special registration for its baseDir argument
-    container.register('AgentManager', () => new AgentManager({
+    container.replace('AgentManager', () => new AgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       baseDir: testDir,

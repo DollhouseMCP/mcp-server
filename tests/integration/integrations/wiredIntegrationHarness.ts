@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { INTEGRATION_OUTBOUND_OVERRIDES, type DollhouseContainer } from '../../../src/di/Container.js';
 import { WebConsoleRegistrar, WEB_CONSOLE_SERVICE_NAMES } from '../../../src/web-console/WebConsoleRegistrar.js';
@@ -105,9 +106,13 @@ export interface WiredHarnessOptions {
   readonly remoteMcp?: { readonly tools: readonly string[] };
   /** Injected remote MCP client factory (defaults to a stub echo client). */
   readonly remoteMcpClientFactory?: RemoteMcpClientFactory;
+  /** Selects the one handler surface this container will bootstrap. Defaults to HTTP. */
+  readonly transport?: 'http' | 'stdio';
   /** Overrides the connected user id, including for stdio parity coverage. */
   readonly userId?: string;
 }
+
+type HarnessServer = Pick<McpServer, 'connect'>;
 
 export function openApiSpec(host: string = API_HOST): Record<string, unknown> {
   return {
@@ -193,7 +198,10 @@ function parseToolEnvelope(text: string): ToolEnvelope {
 
 export async function bootWiredIntegration(options: WiredHarnessOptions = {}): Promise<WiredHarness> {
   const upstream = await startLocalUpstream();
-  const ic: IntegrationContainer = await createIntegrationContainer({ initializePortfolio: true });
+  const ic: IntegrationContainer = await createIntegrationContainer({
+    initializePortfolio: true,
+    willRunProductionBootstrap: true,
+  });
   const container: DollhouseContainer = ic.container;
   await container.preparePortfolio();
 
@@ -286,15 +294,31 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     connectedAt: TIMESTAMP,
   });
 
-  await container.bootstrapHttpHandlers();
-
   const sessionContext = createHttpSession({ userId });
-  const { server, dispose: disposeSession } = await container.createServerForHttpSession(sessionContext);
-
   const childRegistry = container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
-  const child = childRegistry.get(sessionContext.sessionId);
-  if (!child) throw new Error('per-session container was not registered');
-  const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
+  let server: HarnessServer;
+  let disposeSession: () => Promise<void>;
+  let toolRegistry: ToolRegistry;
+
+  if (options.transport === 'stdio') {
+    const stdioServer = new McpServer(
+      { name: 'stdio-integration-test', version: '1.0.0' },
+      { capabilities: { tools: {} } },
+    );
+    const handlers = await container.createHandlers(stdioServer.server);
+    server = stdioServer;
+    toolRegistry = handlers.toolRegistry;
+    disposeSession = () => stdioServer.close();
+  } else {
+    await container.bootstrapHttpHandlers();
+    const httpSession = await container.createServerForHttpSession(sessionContext);
+    server = httpSession.server;
+    disposeSession = httpSession.dispose;
+
+    const child = childRegistry.get(sessionContext.sessionId);
+    if (!child) throw new Error('per-session container was not registered');
+    toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
+  }
   const contextTracker = container.resolve<ContextTracker>('ContextTracker');
 
   const clients: McpClientHandle[] = [];
@@ -388,6 +412,9 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     },
     lastRemoteMcpBearerToken: () => remoteMcpBearer.value,
     openSession: async forUserId => {
+      if (options.transport === 'stdio') {
+        throw new TypeError('Additional HTTP sessions are unavailable in a stdio harness');
+      }
       const otherContext = createHttpSession({ userId: forUserId });
       const { dispose: disposeOther } = await container.createServerForHttpSession(otherContext);
       extraSessionDisposers.push(disposeOther);

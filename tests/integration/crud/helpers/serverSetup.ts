@@ -65,6 +65,7 @@ export async function setupTestServer(): Promise<TestServerContext> {
   // Create isolated integration container
   const container = await createIntegrationContainer({
     initializePortfolio: true,
+    willRunProductionBootstrap: true,
   });
 
   // FIX: Issue #20 - Pass the container to DollhouseMCPServer to share portfolio directory
@@ -148,7 +149,7 @@ export async function callMCPTool(
 
   // Check method exists
   if (typeof (server as any)[methodName] !== 'function') {
-    throw new Error(`Unknown MCP tool: ${toolName} (method: ${methodName})`);
+    throw new TypeError(`Unknown MCP tool: ${toolName} (method: ${methodName})`);
   }
 
   // Call method with params
@@ -203,7 +204,7 @@ export function pathToInput(path: string, value: unknown): Record<string, unknow
     current[parts[i]] = {};
     current = current[parts[i]] as Record<string, unknown>;
   }
-  current[parts[parts.length - 1]] = value;
+  current[parts.at(-1)!] = value;
 
   return result;
 }

@@ -31,14 +31,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 1
           fetch-tags: true
           persist-credentials: true
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -118,7 +118,7 @@ jobs:
           if [ -f "tests/jest.config.cjs" ]; then cat tests/jest.config.cjs; else echo "Jest config not found"; fi
 
       - name: Cache Jest
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             .jest-cache/
@@ -167,6 +167,17 @@ jobs:
         run: |
           if [ "$TEST_OUTCOME" != "success" ]; then
             echo "Unit tests failed for the core build gate."
+            exit 1
+          fi
+
+      - name: Enforce performance test result
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.performance_tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Performance tests failed for the core build gate."
             exit 1
           fi
 

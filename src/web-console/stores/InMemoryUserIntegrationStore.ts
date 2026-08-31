@@ -330,16 +330,21 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     assertUuid(input.userId, 'userId');
     const abandoned: UserIntegrationRecord[] = [];
     for (const [recordId, record] of this.records) {
-      if (record.userId !== input.userId || record.status !== 'cleanup_pending') continue;
+      if (record.userId !== input.userId ||
+          (record.status !== 'cleanup_pending' && !isBlockingLegacyOrphan(record))) continue;
       const failed: UserIntegrationRecord = {
         ...record,
         status: 'cleanup_failed',
         cleanupNextAttemptAt: null,
         cleanupLeaseId: null,
         cleanupLeaseExpiresAt: null,
+        revokedAt: record.revokedAt ?? this.options.now?.() ?? new Date(),
       };
       validateUserIntegrationRecord(failed);
       this.records.set(recordId, cloneUserIntegrationRecord(failed));
+      if (record.revokedAt === null) {
+        this.activeProviderIndex.delete(activeProviderKey(record.userId, record.provider));
+      }
       abandoned.push(cloneUserIntegrationRecord(failed));
     }
     return abandoned;
@@ -471,8 +476,17 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     if (this.findCleanupRecord(input.userId, input.provider)) {
       throw new IntegrationCredentialCleanupPendingError();
     }
-    if (this.activeProviderIndex.has(activeProviderKey(input.userId, input.provider))) {
-      throw new IntegrationCredentialReplacementRequiresCleanupError();
+    const activeKey = activeProviderKey(input.userId, input.provider);
+    const activeId = this.activeProviderIndex.get(activeKey);
+    if (activeId) {
+      const active = this.records.get(activeId);
+      if (active?.accessTokenCiphertext || active?.refreshTokenCiphertext) {
+        throw new IntegrationCredentialReplacementRequiresCleanupError();
+      }
+      // A credential-free connected/error row has no remote grant to revoke.
+      // Retire it explicitly so the active-provider uniqueness invariant remains
+      // intact without weakening cleanup requirements for real credentials.
+      this.clearActive(input.userId, input.provider, input.connectedAt);
     }
     const record: UserIntegrationRecord = {
       id: randomUUID(),
@@ -520,6 +534,37 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       }));
     }
     this.activeProviderIndex.delete(key);
+  }
+
+  /**
+   * Retire credential-free rows bound to a descriptor during a routing change.
+   * The descriptor store invokes this while holding the shared mutation
+   * coordinator, after it has refused any row containing revocable material.
+   */
+  async retireCredentialFreeBindingsByDescriptor(
+    integrationDescriptorId: string,
+    revokedAt: Date,
+  ): Promise<number> {
+    await Promise.resolve();
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    let retired = 0;
+    for (const record of this.records.values()) {
+      if (record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
+      if (record.accessTokenCiphertext || record.refreshTokenCiphertext) {
+        throw new IntegrationCredentialReplacementRequiresCleanupError();
+      }
+      const retiredRecord: UserIntegrationRecord = {
+        ...record,
+        status: 'revoked',
+        errorReason: null,
+        revokedAt,
+      };
+      validateUserIntegrationRecord(retiredRecord);
+      this.records.set(record.id, cloneUserIntegrationRecord(retiredRecord));
+      this.activeProviderIndex.delete(activeProviderKey(record.userId, record.provider));
+      retired++;
+    }
+    return retired;
   }
 
   private findCleanupRecord(
@@ -603,6 +648,15 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       if (this.providerMutationLocks.get(key) === tail) this.providerMutationLocks.delete(key);
     }
   }
+}
+
+function isBlockingLegacyOrphan(record: UserIntegrationRecord): boolean {
+  return record.provider !== GITHUB_USER_INTEGRATION_PROVIDER
+    && record.integrationDescriptorId === null
+    && record.status === 'error'
+    && record.errorReason === 'revocation_failed'
+    && record.revokedAt === null
+    && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null);
 }
 
 function defaultAuthorizedPermissions(provider: UserIntegrationProvider): Readonly<Record<string, unknown>> {

@@ -20,8 +20,13 @@
  * @since Step 4.5
  */
 
+export interface RegisterOptions {
+  singleton?: boolean;
+  override?: boolean;
+}
+
 export interface DiContainerFacade {
-  register<T>(name: string, factory: () => T, options?: { singleton?: boolean }): void;
+  register<T>(name: string, factory: () => T, options?: RegisterOptions): void;
   resolve<T>(name: string): T;
   hasRegistration(name: string): boolean;
 }

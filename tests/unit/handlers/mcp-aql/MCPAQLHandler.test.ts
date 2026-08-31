@@ -127,6 +127,22 @@ describe('MCPAQLHandler', () => {
     handler = new MCPAQLHandler(mockRegistry);
   });
 
+  it('fails closed when active element policies cannot be loaded', async () => {
+    (mockRegistry.elementCRUD.getActiveElementsForPolicy as jest.Mock)
+      .mockRejectedValue(new Error('policy store unavailable'));
+
+    const result = await handler.handleRead({
+      operation: 'list_elements',
+      params: { element_type: 'persona' },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('policy store unavailable');
+    }
+    expect(mockRegistry.elementCRUD.listElements).not.toHaveBeenCalled();
+  });
+
   describe('handleCreate()', () => {
     describe('create_element operation', () => {
       it('should successfully create an element', async () => {
@@ -1828,7 +1844,7 @@ describe('MCPAQLHandler', () => {
         .toThrow('Gatekeeper instance is required');
     });
 
-    it('should handle getActiveElements failure gracefully', async () => {
+    it('should fail closed when getActiveElementsForPolicy is unavailable', async () => {
       // Make getActiveElementsForPolicy throw
       (enforcingRegistry.elementCRUD as any).getActiveElementsForPolicy
         .mockRejectedValue(new Error('Manager unavailable'));
@@ -1843,9 +1859,9 @@ describe('MCPAQLHandler', () => {
         params: { element_type: 'persona' },
       };
 
-      // Should still work — fails open with empty active elements
       const result = await enforcingHandler.handleRead(input);
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Manager unavailable');
     });
   });
 

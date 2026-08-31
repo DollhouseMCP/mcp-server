@@ -9,6 +9,10 @@ const migrationSql = readFileSync(fileURLToPath(new URL(
 )), 'utf8');
 
 describe('integration credential cleanup-pending migration', () => {
+  it('admits only the runtime-reachable orphan marker before cleanup starts', () => {
+    expect(migrationSql).toMatch(/OR \(\s*"status" = 'error'\s*AND "error_reason" = 'revocation_failed'\s*AND "revoked_at" IS NULL\s*AND "provider" <> 'github'\s*AND "integration_descriptor_id" IS NULL\s*\)/);
+  });
+
   it('adds encrypted durable cleanup state with lease fencing', () => {
     expect(migrationSql).toContain("'connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error'");
     expect(migrationSql).toContain('"cleanup_attempt_count" INTEGER NOT NULL DEFAULT 0');

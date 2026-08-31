@@ -71,10 +71,10 @@ describe('Empty Directory Handling', () => {
 
     // Setup container and register mocks
     container = new DollhouseContainer();
-    container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
+    container.replace<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
     // Register FileOperationsService using di-mocks helper - required by BaseElementManager
     const fileOperationsService = createTestFileOperationsService();
-    container.register('FileOperationsService', () => fileOperationsService);
+    container.replace('FileOperationsService', () => fileOperationsService);
   });
 
   afterEach(async () => {
@@ -102,7 +102,7 @@ describe('Empty Directory Handling', () => {
         new TriggerValidationService(),
         metadataService
       );
-      container.register('AgentManager', () => new AgentManager({
+      container.replace('AgentManager', () => new AgentManager({
         portfolioManager: container.resolve('PortfolioManager'),
         fileLockManager: container.resolve('FileLockManager'),
         baseDir: nonExistentDir,
@@ -138,7 +138,7 @@ describe('Empty Directory Handling', () => {
         new TriggerValidationService(),
         metadataService
       );
-      container.register('AgentManager', () => new AgentManager({
+      container.replace('AgentManager', () => new AgentManager({
         portfolioManager: container.resolve('PortfolioManager'),
         fileLockManager: container.resolve('FileLockManager'),
         baseDir: testDir,
@@ -184,7 +184,7 @@ describe('Empty Directory Handling', () => {
         new TriggerValidationService(),
         metadataService
       );
-      container.register('AgentManager', () => new AgentManager({
+      container.replace('AgentManager', () => new AgentManager({
         portfolioManager: container.resolve('PortfolioManager'),
         fileLockManager: container.resolve('FileLockManager'),
         baseDir: testDir,

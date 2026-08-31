@@ -65,6 +65,7 @@ import type { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js"
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { IChallengeStore } from "../state/IChallengeStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
+import type { RegisterOptions } from "./DiContainerFacade.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 // SharedPoolServiceRegistrar is dynamically imported in preparePortfolio()
@@ -199,7 +200,7 @@ interface ServiceRecord<T = unknown> {
   singleton: boolean;
 }
 
-const DEFAULT_REGISTER_OPTIONS: { singleton?: boolean } = { singleton: true };
+const DEFAULT_REGISTER_OPTIONS: RegisterOptions = { singleton: true };
 
 export class DollhouseContainer {
   private readonly services = new Map<string, ServiceRecord>();
@@ -240,22 +241,52 @@ export class DollhouseContainer {
    * @template T The service type
    * @param name Unique service identifier
    * @param factory Factory function that creates the service instance
-   * @param options Configuration options (singleton behavior)
+   * @param options Configuration options (singleton behavior and explicit replacement)
+   * @throws Error when the name is already registered without `override: true`
    */
-  public register<T>(name: string, factory: () => T, options: { singleton?: boolean } = DEFAULT_REGISTER_OPTIONS): void {
+  public register<T>(name: string, factory: () => T, options: RegisterOptions = DEFAULT_REGISTER_OPTIONS): void {
+    const isReplacement = this.services.has(name);
+    if (isReplacement && !options.override) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'OPERATION_FAILED',
+        severity: 'MEDIUM',
+        source: 'DollhouseContainer.register',
+        details: `Duplicate service registration rejected: ${name}`,
+        additionalData: { serviceName: name }
+      });
+      throw new Error(`Service already registered: ${name}`);
+    }
+
     // FIX: DMCP-SEC-006 - Audit service registration
     SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_CREATED',
+      type: isReplacement ? 'ELEMENT_EDITED' : 'ELEMENT_CREATED',
       severity: 'LOW',
       source: 'DollhouseContainer.register',
-      details: `Service registered: ${name}`,
-      additionalData: { serviceName: name, singleton: options.singleton ?? true }
+      details: isReplacement ? `Service registration replaced: ${name}` : `Service registered: ${name}`,
+      additionalData: {
+        serviceName: name,
+        singleton: options.singleton ?? true,
+        override: isReplacement,
+      }
     });
     this.services.set(name, {
       factory: factory,
       instance: null,
       singleton: options.singleton ?? true
     });
+  }
+
+  /**
+   * Replace an existing service registration explicitly.
+   *
+   * Keeping replacement separate from registration makes test and bootstrap
+   * substitutions visible at the call site and catches misspelled service keys.
+   */
+  public replace<T>(name: string, factory: () => T, options: Omit<RegisterOptions, 'override'> = DEFAULT_REGISTER_OPTIONS): void {
+    if (!this.services.has(name)) {
+      throw new Error(`Service not registered for replacement: ${name}`);
+    }
+    this.register(name, factory, { ...options, override: true });
   }
 
   /**

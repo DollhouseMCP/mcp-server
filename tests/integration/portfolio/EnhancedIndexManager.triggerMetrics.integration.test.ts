@@ -134,28 +134,28 @@ Test element content.
 
     // Create DI container and register all dependencies
     container = new DollhouseContainer();
-    container.register('IndexConfigManager', () => new IndexConfigManager());
-    container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
-    container.register('ConfigManager', () => new ConfigManager(
+    container.replace('IndexConfigManager', () => new IndexConfigManager());
+    container.replace('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    container.replace('ConfigManager', () => new ConfigManager(
       container.resolve('FileOperationsService'),
       os
     ));
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: portfolioPath }));
-    container.register('PortfolioIndexManager', () => new PortfolioIndexManager(
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: portfolioPath }));
+    container.replace('PortfolioIndexManager', () => new PortfolioIndexManager(
       container.resolve('IndexConfigManager'),
       container.resolve('PortfolioManager'),
       container.resolve('FileOperationsService')
     ));
-    container.register('NLPScoringManager', () => new NLPScoringManager(
+    container.replace('NLPScoringManager', () => new NLPScoringManager(
       container.resolve('IndexConfigManager')
     ));
-    container.register('VerbTriggerManager', () => new VerbTriggerManager(
+    container.replace('VerbTriggerManager', () => new VerbTriggerManager(
       container.resolve('IndexConfigManager')
     ));
-    container.register('RelationshipManager', () => new RelationshipManager(
+    container.replace('RelationshipManager', () => new RelationshipManager(
       container.resolve('IndexConfigManager')
     ));
-    container.register('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
+    container.replace('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
       new ElementDefinitionBuilder(),
       new SemanticRelationshipService({
         nlpScoring: container.resolve('NLPScoringManager'),
@@ -164,7 +164,7 @@ Test element content.
       (context) => new ActionTriggerExtractor(context),
       (options) => new TriggerMetricsTracker(options)
     ));
-    container.register('EnhancedIndexManager', () => new EnhancedIndexManager(
+    container.replace('EnhancedIndexManager', () => new EnhancedIndexManager(
       container.resolve('IndexConfigManager'),
       container.resolve('ConfigManager'),
       container.resolve('PortfolioIndexManager'),
@@ -234,25 +234,25 @@ Test element content.
 
       // Create new container and manager to simulate reload
       const newContainer = new DollhouseContainer();
-      newContainer.register('IndexConfigManager', () => new IndexConfigManager());
-      newContainer.register('FileOperationsService', () => new FileOperationsService(newContainer.resolve('FileLockManager')));
-      newContainer.register('ConfigManager', () => new ConfigManager(newContainer.resolve('FileOperationsService'), os));
-      newContainer.register('PortfolioManager', () => new PortfolioManager(newContainer.resolve('FileOperationsService'), { baseDir: portfolioPath }));
-      newContainer.register('PortfolioIndexManager', () => new PortfolioIndexManager(
+      newContainer.replace('IndexConfigManager', () => new IndexConfigManager());
+      newContainer.replace('FileOperationsService', () => new FileOperationsService(newContainer.resolve('FileLockManager')));
+      newContainer.replace('ConfigManager', () => new ConfigManager(newContainer.resolve('FileOperationsService'), os));
+      newContainer.replace('PortfolioManager', () => new PortfolioManager(newContainer.resolve('FileOperationsService'), { baseDir: portfolioPath }));
+      newContainer.replace('PortfolioIndexManager', () => new PortfolioIndexManager(
         newContainer.resolve('IndexConfigManager'),
         newContainer.resolve('PortfolioManager'),
         newContainer.resolve('FileOperationsService')
       ));
-      newContainer.register('NLPScoringManager', () => new NLPScoringManager(
+      newContainer.replace('NLPScoringManager', () => new NLPScoringManager(
         newContainer.resolve('IndexConfigManager')
       ));
-      newContainer.register('VerbTriggerManager', () => new VerbTriggerManager(
+      newContainer.replace('VerbTriggerManager', () => new VerbTriggerManager(
         newContainer.resolve('IndexConfigManager')
       ));
-      newContainer.register('RelationshipManager', () => new RelationshipManager(
+      newContainer.replace('RelationshipManager', () => new RelationshipManager(
         newContainer.resolve('IndexConfigManager')
       ));
-      newContainer.register('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
+      newContainer.replace('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
         new ElementDefinitionBuilder(),
         new SemanticRelationshipService({
           nlpScoring: newContainer.resolve('NLPScoringManager'),
@@ -261,7 +261,7 @@ Test element content.
         (context) => new ActionTriggerExtractor(context),
         (options) => new TriggerMetricsTracker(options)
       ));
-      newContainer.register('EnhancedIndexManager', () => new EnhancedIndexManager(
+      newContainer.replace('EnhancedIndexManager', () => new EnhancedIndexManager(
         newContainer.resolve('IndexConfigManager'),
         newContainer.resolve('ConfigManager'),
         newContainer.resolve('PortfolioIndexManager'),

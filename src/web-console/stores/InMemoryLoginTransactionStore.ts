@@ -1,6 +1,7 @@
 import {
   ConsoleStoreConflictError,
   assertHash,
+  assertUuid,
   buffersEqual,
   hashKey,
 } from './ConsoleStoreValidation.js';
@@ -68,6 +69,17 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
       expiresAt: transaction.consumedAt,
     }));
     return true;
+  }
+
+  async deleteByIntegrationDescriptor(integrationDescriptorId: string): Promise<number> {
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    let deleted = 0;
+    for (const [key, transaction] of this.transactions) {
+      if (transaction.integrationDescriptorId !== integrationDescriptorId) continue;
+      this.transactions.delete(key);
+      deleted++;
+    }
+    return deleted;
   }
 
   async sweepExpired(before: Date = new Date()): Promise<number> {

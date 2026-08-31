@@ -52,6 +52,32 @@ describe('DollhouseContainer', () => {
     }).toThrow('Service not registered: NonExistentService');
   });
 
+  it('rejects duplicate service registration without explicit replacement', () => {
+    const container = new DollhouseContainer();
+    container.register('Slice13Service', () => ({ generation: 1 }));
+
+    expect(() => {
+      container.register('Slice13Service', () => ({ generation: 2 }));
+    }).toThrow("Service already registered: Slice13Service");
+    expect(container.resolve<{ generation: number }>('Slice13Service')).toEqual({ generation: 1 });
+  });
+
+  it('permits an explicit service-registration replacement', () => {
+    const container = new DollhouseContainer();
+    container.register('Slice13Service', () => ({ generation: 1 }));
+    container.register('Slice13Service', () => ({ generation: 2 }), { override: true });
+
+    expect(container.resolve<{ generation: number }>('Slice13Service')).toEqual({ generation: 2 });
+  });
+
+  it('requires replace targets to exist', () => {
+    const container = new DollhouseContainer();
+
+    expect(() => {
+      container.replace('MisspelledService', () => ({ generation: 2 }));
+    }).toThrow('Service not registered for replacement: MisspelledService');
+  });
+
   it('includes configured OAuth providers in the runtime refresh registry', () => {
     const container = new DollhouseContainer();
     const provider = configuredProvider('configured-oauth');

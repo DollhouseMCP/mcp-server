@@ -16,6 +16,10 @@ ALTER TABLE "user_integrations"
   DROP CONSTRAINT IF EXISTS "user_integrations_status_check",
   DROP CONSTRAINT IF EXISTS "user_integrations_shape_check";
 
+-- Migration 0048 orphan markers remain active error rows until normal cleanup claims them.
+-- The active-provider unique index limits this legacy exception to one row per provider;
+-- cleanup then owns the transition to a revoked_at-bearing terminal state.
+
 ALTER TABLE "user_integrations"
   ADD CONSTRAINT "user_integrations_status_check"
   CHECK ("status" IN ('connected', 'cleanup_pending', 'cleanup_failed', 'revoked', 'error')),
@@ -100,6 +104,13 @@ ALTER TABLE "user_integrations"
       "provider" = 'github'
       OR "integration_descriptor_id" IS NOT NULL
       OR "revoked_at" IS NOT NULL
+      OR (
+        "status" = 'error'
+        AND "error_reason" = 'revocation_failed'
+        AND "revoked_at" IS NULL
+        AND "provider" <> 'github'
+        AND "integration_descriptor_id" IS NULL
+      )
     )
   );
 

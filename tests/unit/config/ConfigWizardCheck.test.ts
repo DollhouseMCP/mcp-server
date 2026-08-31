@@ -46,7 +46,7 @@ describe('ConfigWizardCheck', () => {
 
     container = new DollhouseContainer();
     // Register the mocked manager
-    container.register<typeof ConfigManager>('ConfigManager', () => mockConfigManager);
+    container.replace<typeof ConfigManager>('ConfigManager', () => mockConfigManager);
     // Register the class under test
     container.register('ConfigWizardCheck', () => new ConfigWizardCheck(container.resolve('ConfigManager')));
 
@@ -126,7 +126,7 @@ describe('ConfigWizardCheck', () => {
 
       mockConfigManager = new ConfigManager();
       container = new DollhouseContainer();
-      container.register<typeof ConfigManager>('ConfigManager', () => mockConfigManager);
+      container.replace<typeof ConfigManager>('ConfigManager', () => mockConfigManager);
       container.register('ConfigWizardCheck', () => new ConfigWizardCheck(container.resolve('ConfigManager')));
       wizardCheck = container.resolve('ConfigWizardCheck');
     });

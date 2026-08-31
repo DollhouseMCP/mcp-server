@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, rm } from 'fs/promises';
-import os from 'os';
-import path from 'path';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { DollhouseContainer } from '../../src/di/Container.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
@@ -9,10 +9,10 @@ import { InMemoryUserConfigStore } from '../../src/storage/userConfig/InMemoryUs
 import { InMemorySharedCacheStore } from '../../src/storage/sharedCache/InMemorySharedCacheStore.js';
 
 // Phase 4.5 / Phase G: ConfigManager now resolves OperatorConfigStore +
-// UserConfigStore from the container. `preparePortfolio()` is what wires
-// StorageServiceRegistrar in production; these helpers don't run that
-// path, so register InMemory stores up front so any test that resolves
-// ConfigManager (directly or transitively) gets a working façade.
+// UserConfigStore from the container. createIntegrationContainer defaults to
+// service-only setup without preparePortfolio(), so it needs these in-memory
+// stores up front. Production-bootstrap callers and createIsolatedContainer
+// must instead let StorageServiceRegistrar own those registrations.
 function registerStorageStubs(container: DollhouseContainer): void {
   if (!container.hasRegistration('OperatorConfigStore')) {
     container.register('OperatorConfigStore', () => new InMemoryOperatorConfigStore());
@@ -41,6 +41,12 @@ export interface IntegrationContainerOptions {
    * Defaults to true.
    */
   initializePortfolio?: boolean;
+  /**
+   * True when the caller will invoke `container.preparePortfolio()`, which
+   * owns the production storage registrations. Prevents test stubs from
+   * pre-registering the same services ahead of that bootstrap.
+   */
+  willRunProductionBootstrap?: boolean;
 }
 
 export interface IntegrationContainer {
@@ -104,7 +110,6 @@ export async function createIsolatedContainer(
       await mkdir(typeDir, { recursive: true });
       for (const file of files) {
         // Create empty placeholder files — tests can write real content
-        const { writeFile } = await import('fs/promises');
         await writeFile(path.join(typeDir, file), '');
       }
     }
@@ -119,7 +124,6 @@ export async function createIsolatedContainer(
   process.env.DOLLHOUSE_HOME_DIR = tempRoot;
 
   const container = new DollhouseContainer();
-  registerStorageStubs(container);
 
   return {
     container,
@@ -168,15 +172,14 @@ export async function createIntegrationContainer(
 
   const previousHome = process.env.HOME;
   const previousDollhouseHomeDir = process.env.DOLLHOUSE_HOME_DIR;
-  const derivedHome = options.homeDir
-    ?? (tempRoot ? tempRoot : path.resolve(portfolioDir, '..', '..'));
-  if (derivedHome) {
-    process.env.HOME = derivedHome;
-    process.env.DOLLHOUSE_HOME_DIR = derivedHome;
-  }
+  const derivedHome = options.homeDir ?? tempRoot ?? path.resolve(portfolioDir, '..', '..');
+  process.env.HOME = derivedHome;
+  process.env.DOLLHOUSE_HOME_DIR = derivedHome;
 
   const container = new DollhouseContainer();
-  registerStorageStubs(container);
+  if (!options.willRunProductionBootstrap) {
+    registerStorageStubs(container);
+  }
   const portfolioManager = container.resolve<PortfolioManager>('PortfolioManager');
 
   if (shouldInit) {

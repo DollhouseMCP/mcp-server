@@ -9,7 +9,6 @@ on:
     #   - "src/**/*.tsx"
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
-  workflow_dispatch:  # Allow manual runs on fork PRs by maintainers
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number || github.run_id }}

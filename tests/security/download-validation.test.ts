@@ -46,7 +46,7 @@ describe('ElementInstaller Security - Download-Then-Validate Vulnerability Fix',
     
     // Create container and override GitHubClient with our mock
     container = new DollhouseContainer();
-    container.register<GitHubClient>('GitHubClient', () => mockGitHubClient);
+    container.replace<GitHubClient>('GitHubClient', () => mockGitHubClient);
 
     // Resolve the installer - it will get the mock client and a real portfolio manager
     installer = container.resolve<ElementInstaller>('ElementInstaller');

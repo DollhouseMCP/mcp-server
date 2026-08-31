@@ -1413,6 +1413,12 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     mutationCoordinator: integrationMutationCoordinator,
     hasBlockingCredentialMaterialByDescriptor: descriptorId =>
       integrationStore.hasBlockingCredentialMaterialByDescriptor(descriptorId),
+    invalidateCallbacksByDescriptor: async descriptorId => {
+      await loginTransactionStore.deleteByIntegrationDescriptor(descriptorId);
+    },
+    invalidateDescriptorBindings: async (descriptorId, revokedAt) => {
+      await integrationStore.retireCredentialFreeBindingsByDescriptor(descriptorId, revokedAt);
+    },
   });
   integrationStore = new InMemoryUserIntegrationStore(
     [],

@@ -37,15 +37,15 @@ describe('Memory Concurrent Access', () => {
     container = new DollhouseContainer();
 
     // Register PortfolioManager, FileOperationsService and MemoryManager in DI container
-    container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
-    container.register('SerializationService', () => new SerializationService());
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
-    container.register('MemoryManager', () => new MemoryManager({
+    container.replace('MemoryManager', () => new MemoryManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),
@@ -157,10 +157,10 @@ describe('Memory Concurrent Access', () => {
       // Verify all searches completed
       expect(results).toHaveLength(5);
       expect(results[0].length).toBeGreaterThan(0); // Query search
-      expect(results[1].length).toBe(50); // Common tag
-      expect(results[2].length).toBe(10); // Limited
-      expect(results[3].length).toBe(10); // tag1 (50/5)
-      expect(results[4].length).toBe(50); // All
+      expect(results[1]).toHaveLength(50); // Common tag
+      expect(results[2]).toHaveLength(10); // Limited
+      expect(results[3]).toHaveLength(10); // tag1 (50/5)
+      expect(results[4]).toHaveLength(50); // All
     });
     
     it('should not corrupt data during concurrent read/write', async () => {
@@ -183,7 +183,7 @@ describe('Memory Concurrent Access', () => {
       
       // Verify data integrity
       const finalSearch = await memory.search({ tags: ['concurrent'] });
-      expect(finalSearch.length).toBe(10);
+      expect(finalSearch).toHaveLength(10);
       
       // Check for duplicates
       const contents = finalSearch.map(e => e.content);

@@ -161,6 +161,9 @@ describe('Startup Readiness (Issue #706)', () => {
         DOLLHOUSE_PORTFOLIO_DIR: portfolioDir,
         HOME: testDir,
         ...extraEnv,
+        GITHUB_TOKEN: '',
+        GITHUB_TEST_TOKEN: '',
+        TEST_GITHUB_TOKEN: '',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

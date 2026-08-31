@@ -75,6 +75,7 @@ describe('Memory addEntry Transport Regression', () => {
         DOLLHOUSE_WEB_CONSOLE: 'false',
         GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
+        TEST_GITHUB_TOKEN: '',
       },
     });
 

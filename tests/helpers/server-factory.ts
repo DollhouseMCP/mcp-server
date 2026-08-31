@@ -76,6 +76,7 @@ export async function createRealDollhouseMCPServer(
     portfolioDir: options.portfolioDir,
     homeDir: options.homeDir,
     initializePortfolio: options.initializePortfolio,
+    willRunProductionBootstrap: true,
   });
 
   const server = new DollhouseMCPServer(container.container);

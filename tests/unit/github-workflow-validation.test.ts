@@ -172,6 +172,9 @@ describe('GitHub Workflow Validation', () => {
       const performanceTests = steps.find(
         (step) => step.id === 'performance_tests'
       );
+      const performanceTestGate = steps.find(
+        (step) => step.name === 'Enforce performance test result'
+      );
 
       expect(unitTestGate?.if).toBe('always()');
       expect(unitTestGate?.env?.TEST_OUTCOME).toBe(
@@ -179,6 +182,11 @@ describe('GitHub Workflow Validation', () => {
       );
       expect(unitTestGate?.run).toContain('exit 1');
       expect(performanceTests?.if).toBeUndefined();
+      expect(performanceTestGate?.if).toBe('always()');
+      expect(performanceTestGate?.env?.TEST_OUTCOME).toBe(
+        '${{ steps.performance_tests.outcome }}'
+      );
+      expect(performanceTestGate?.run).toContain('exit 1');
       expect(operatingSystems).toEqual([
         'ubuntu-latest',
         'windows-latest',
@@ -187,6 +195,32 @@ describe('GitHub Workflow Validation', () => {
       expect(steps).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ if: false })])
       );
+    });
+
+    it('pins every external action in the primary hosted matrix', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const externalActions = workflow.jobs['hosted-test'].steps
+        .map((step) => step.uses)
+        .filter((uses): uses is string => Boolean(uses));
+
+      expect(externalActions).not.toHaveLength(0);
+      for (const action of externalActions) {
+        expect(action).toMatch(/^[^@]+@[a-f0-9]{40}$/);
+      }
+    });
+
+    it('builds package artifacts from a clean dist tree', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'build-artifacts.yml'), 'utf8')
+      ) as Workflow;
+      const steps = workflow.jobs['build-artifacts'].steps;
+      const buildCache = steps.find((step) => step.name === 'Cache TypeScript build');
+      const build = steps.find((step) => step.name === 'Build project');
+
+      expect(buildCache).toBeUndefined();
+      expect(build?.run).toBe('npm run rebuild');
     });
 
     it('should enforce the full PostgreSQL integration suite against a pinned service', () => {
@@ -320,21 +354,46 @@ describe('GitHub Workflow Validation', () => {
       workflowFiles.forEach(file => {
         const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
         const workflow = yaml.load(content) as Workflow;
+
+        if (workflow.env?.TEST_PERSONAS_DIR) {
+          expect(workflow.env.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
+        }
         
         Object.entries(workflow.jobs).forEach(([_jobName, job]) => {
-          // Check for TEST_PERSONAS_DIR usage
           if (job.env?.TEST_PERSONAS_DIR) {
-            // Should use proper GitHub Actions syntax
-            expect(job.env.TEST_PERSONAS_DIR).toMatch(/\$\{\{.*\}\}|[^$]/);
+            expect(job.env.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
           }
           
           job.steps.forEach(step => {
             if (step.env?.TEST_PERSONAS_DIR) {
-              expect(step.env.TEST_PERSONAS_DIR).toMatch(/\$\{\{.*\}\}|[^$]/);
+              expect(step.env.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
             }
           });
         });
       });
+    });
+
+    it('clears every GitHub token alias from spawned test servers', () => {
+      const spawnedServerTests = [
+        'tests/integration/mcp-protocol-compliance.test.ts',
+        'tests/integration/console-lifecycle.test.ts',
+        'tests/integration/startup/startup-readiness.test.ts',
+        'tests/integration/web-console-e2e/setup/provision.ts',
+        'tests/integration/web-console-e2e/setup/globalSetup.ts',
+        'tests/integration/database/mcp-database-e2e.test.ts',
+        'tests/integration/database/http-database-e2e.test.ts',
+        'tests/integration/database/auth-identity-e2e.test.ts',
+        'tests/integration/mcp-aql/addentry-transport.test.ts',
+        'tests/unit/scripts/qa-mcp-mode-contract.test.ts',
+        'tests/todd/mcp-protocol-smoke.test.ts',
+      ];
+
+      for (const relativePath of spawnedServerTests) {
+        const content = fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+        expect(content).toContain("GITHUB_TOKEN: ''");
+        expect(content).toContain("GITHUB_TEST_TOKEN: ''");
+        expect(content).toContain("TEST_GITHUB_TOKEN: ''");
+      }
     });
   });
 
@@ -456,6 +515,10 @@ describe('GitHub Workflow Validation', () => {
     beforeAll(() => {
       const workflowPath = path.join(workflowDir, 'claude-code-review.yml');
       workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as Workflow;
+    });
+
+    it('does not advertise an unusable manual dispatch route', () => {
+      expect(workflow.on?.workflow_dispatch).toBeUndefined();
     });
 
     it('cancels superseded reviews for the same pull request', () => {

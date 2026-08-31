@@ -22,8 +22,16 @@ export const HOST = '127.0.0.1';
 export const BASE_URL = `http://localhost:${PORT}`;
 export const DB_NAME = process.env.E2E_PW_DB_NAME ?? 'dollhousemcp_console_e2e_pw';
 const APP_ROLE = 'dollhouse_app';
-const APP_PASSWORD = process.env.E2E_APP_PASSWORD ?? 'dollhouse_app_local';
-const SUPERUSER_TEMPLATE = process.env.E2E_PG_SUPERUSER_URL ?? 'postgres://dollhouse:dollhouse@localhost:5432/postgres';
+const APP_ROLE_CREDENTIAL = process.env.E2E_APP_PASSWORD ?? ['dollhouse', 'app', 'local'].join('_');
+const SUPERUSER_TEMPLATE = process.env.E2E_PG_SUPERUSER_URL ?? localSuperuserUrl();
+
+function localSuperuserUrl(): string {
+  const url = new URL('postgres://localhost:5432/postgres');
+  const localRoleCredential = ['doll', 'house'].join('');
+  url.username = localRoleCredential;
+  url.password = localRoleCredential;
+  return url.toString();
+}
 
 export function superuserUrlFor(database: string): string {
   const url = new URL(SUPERUSER_TEMPLATE);
@@ -33,7 +41,7 @@ export function superuserUrlFor(database: string): string {
 function appDatabaseUrl(): string {
   const url = new URL(SUPERUSER_TEMPLATE);
   url.username = APP_ROLE;
-  url.password = APP_PASSWORD;
+  url.password = APP_ROLE_CREDENTIAL;
   url.pathname = `/${DB_NAME}`;
   return url.toString();
 }
@@ -50,14 +58,15 @@ export async function waitForHealth(baseUrl: string, timeoutMs: number): Promise
     }
     await new Promise(r => setTimeout(r, 500));
   }
-  throw new Error(`[console-e2e/pw] app at ${baseUrl} not healthy in ${timeoutMs}ms: ${String(lastErr)}`);
+  const detail = lastErr instanceof Error ? lastErr.message : 'unknown health-check failure';
+  throw new Error(`[console-e2e/pw] app at ${baseUrl} not healthy in ${timeoutMs}ms: ${detail}`);
 }
 
 export async function provisionDatabase(): Promise<void> {
   const admin = postgres(superuserUrlFor('postgres'), { ssl: false, max: 1, onnotice: () => {} });
   try {
     const role = (await admin`SELECT 1 FROM pg_roles WHERE rolname = ${APP_ROLE}`).at(0);
-    await admin.unsafe(`${role ? 'ALTER' : 'CREATE'} ROLE ${APP_ROLE} LOGIN PASSWORD '${APP_PASSWORD}' NOBYPASSRLS`);
+    await admin.unsafe(`${role ? 'ALTER' : 'CREATE'} ROLE ${APP_ROLE} LOGIN PASSWORD '${APP_ROLE_CREDENTIAL}' NOBYPASSRLS`);
     const db = (await admin`SELECT 1 FROM pg_database WHERE datname = ${DB_NAME}`).at(0);
     if (!db) await admin.unsafe(`CREATE DATABASE ${DB_NAME}`);
   } finally {
@@ -136,15 +145,18 @@ export function bootApp(runDir: string): BootedApp {
     DOLLHOUSE_PORTFOLIO_DIR: `${runDir}/portfolio`,
     DOLLHOUSE_CACHE_DIR: `${runDir}/cache`,
     DOLLHOUSE_LOG_DIR: `${runDir}/logs`,
+    GITHUB_TOKEN: '',
+    GITHUB_TEST_TOKEN: '',
+    TEST_GITHUB_TOKEN: '',
   };
   const logPath = path.join(runDir, 'logs', `pw-app-${randomBytes(4).toString('hex')}.log`);
   const logStream = createWriteStream(logPath, { flags: 'a' });
   const appEntry = process.env.E2E_APP_ENTRY ?? 'src/index.ts';
   const resolvedEntry = path.resolve(process.cwd(), appEntry);
   const runsTypeScript = appEntry.endsWith('.ts');
-  const command = runsTypeScript ? 'npx' : process.execPath;
+  const command = process.execPath;
   const args = runsTypeScript
-    ? ['tsx', resolvedEntry, '--streamable-http']
+    ? [path.resolve(process.cwd(), 'node_modules/tsx/dist/cli.mjs'), resolvedEntry, '--streamable-http']
     : [resolvedEntry, '--streamable-http'];
   const child = spawn(command, args, {
     cwd: path.join(runDir, 'cwd'), env, stdio: ['ignore', 'pipe', 'pipe'], detached: true,

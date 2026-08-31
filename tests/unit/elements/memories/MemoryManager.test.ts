@@ -2,6 +2,7 @@
  * Unit tests for MemoryManager
  */
 
+import { jest } from '@jest/globals';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
 import { Memory } from '../../../../src/elements/memories/Memory.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
@@ -38,16 +39,16 @@ describe('MemoryManager', () => {
     container = new DollhouseContainer();
 
     // Register PortfolioManager, FileLockManager, FileOperationsService, and MemoryManager in DI container
-    container.register('FileLockManager', () => new FileLockManager());
-    container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
-    container.register('SerializationService', () => new SerializationService());
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('FileLockManager', () => new FileLockManager());
+    container.replace('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
-    container.register('MemoryManager', () => new MemoryManager({
+    container.replace('MemoryManager', () => new MemoryManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),
@@ -789,11 +790,7 @@ data:
 
       // Save both memories - the second should detect a duplicate
       await manager.save(memory1);
-      await manager.save(memory2);
-
-      // Test passes if no exception is thrown during duplicate detection
-      // The actual SecurityMonitor logging is tested implicitly
-      expect(true).toBe(true);
+      await expect(manager.save(memory2)).resolves.toBeUndefined();
     });
   });
 
@@ -809,6 +806,7 @@ data:
         { content: 'no-whitespace---', expectedStart: 'no-' },
         { content: '', expectedStart: '' }
       ];
+      const loadSpy = jest.spyOn(manager, 'load');
 
       for (const testCase of testCases) {
         // Create a temporary file to test
@@ -828,8 +826,7 @@ data:
         await fs.unlink(testFile);
       }
 
-      // Test passes if all cases are handled without errors
-      expect(true).toBe(true);
+      expect(loadSpy).toHaveBeenCalledTimes(5);
     });
 
     it('should handle large files with leading whitespace efficiently', async () => {
@@ -1054,7 +1051,7 @@ data:
 
       // Should only have the normal memory
       expect(memoryNames).toContain('normal-memory');
-      expect(memoryNames.length).toBe(1);
+      expect(memoryNames).toHaveLength(1);
     });
 
     it('should not load backup files even if marked as auto-load', async () => {

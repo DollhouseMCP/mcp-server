@@ -704,8 +704,9 @@ export class MCPAQLHandler {
    * Issue #452: Provides element context for Layer 2 (element policy resolution).
    * Issue #449: Includes executing agents alongside personas/skills/ensembles.
    *
-   * @returns Array of active elements with their gatekeeper policies, or empty
-   *          array if gathering fails (fail-open: only route policies apply).
+   * @returns Array of active elements with their gatekeeper policies.
+   * @throws When the authoritative policy set cannot be loaded. Proceeding
+   *         without it would silently disable active-element restrictions.
    */
   private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
     try {
@@ -742,10 +743,13 @@ export class MCPAQLHandler {
 
       return activeElements;
     } catch (error) {
-      // Fail open — if we can't gather active elements, enforce without them
-      // This means only route validation and default policies will apply
       logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error, sessionId });
-      return [];
+      throw new Error(
+        `Failed to gather active elements for Gatekeeper policy evaluation: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error instanceof Error ? error : undefined },
+      );
     }
   }
 

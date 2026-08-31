@@ -60,16 +60,16 @@ describe('MemoryManager save size limits (#2329)', () => {
     process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
 
     container = new DollhouseContainer();
-    container.register('FileLockManager', () => new FileLockManager());
-    container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
-    container.register('SerializationService', () => new SerializationService());
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('FileLockManager', () => new FileLockManager());
+    container.replace('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
-    container.register('MemoryManager', () => new MemoryManager({
+    container.replace('MemoryManager', () => new MemoryManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),

@@ -31,7 +31,7 @@ describe('BuildInfoTools', () => {
       ),
     } as any;
 
-    container.register('BuildInfoService', () => mockBuildInfoService);
+    container.replace('BuildInfoService', () => mockBuildInfoService);
     
     // Get the tools, passing the mocked service
     tools = getBuildInfoTools(container.resolve('BuildInfoService'));

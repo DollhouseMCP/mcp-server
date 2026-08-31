@@ -433,12 +433,25 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     const rows = await withSystemContext(this.db, tx =>
       tx.update(userIntegrations).set({
         status: 'cleanup_failed',
+        // Do not clear revocation_failed here: cleanup_failed requires it. Writing
+        // errorReason: null would fail with 23514 and re-strand the account at abandon time.
         cleanupNextAttemptAt: null,
         cleanupLeaseId: null,
         cleanupLeaseExpiresAt: null,
+        revokedAt: sql`COALESCE(${userIntegrations.revokedAt}, statement_timestamp())`,
       }).where(and(
         eq(userIntegrations.userId, input.userId),
-        eq(userIntegrations.status, 'cleanup_pending'),
+        or(
+          eq(userIntegrations.status, 'cleanup_pending'),
+          and(
+            eq(userIntegrations.status, 'error'),
+            eq(userIntegrations.errorReason, 'revocation_failed'),
+            isNull(userIntegrations.integrationDescriptorId),
+            isNull(userIntegrations.revokedAt),
+            sql`${userIntegrations.provider} <> 'github'`,
+            sql`(${userIntegrations.accessTokenCiphertext} IS NOT NULL OR ${userIntegrations.refreshTokenCiphertext} IS NOT NULL)`,
+          ),
+        ),
       )).returning(),
     );
     return rows.map(fromRow);
@@ -555,12 +568,29 @@ async function connectWithTx(
     FOR UPDATE
   `);
   if (pending.length > 0) throw new IntegrationCredentialCleanupPendingError();
-  const active = await tx.select({ id: userIntegrations.id }).from(userIntegrations).where(and(
+  const active = await tx.select({
+    id: userIntegrations.id,
+    accessTokenCiphertext: userIntegrations.accessTokenCiphertext,
+    refreshTokenCiphertext: userIntegrations.refreshTokenCiphertext,
+  }).from(userIntegrations).where(and(
     eq(userIntegrations.userId, input.userId),
     eq(userIntegrations.provider, input.provider),
     isNull(userIntegrations.revokedAt),
   )).for('update').limit(1);
-  if (active.length > 0) throw new IntegrationCredentialReplacementRequiresCleanupError();
+  const existing = active.at(0);
+  if (existing?.accessTokenCiphertext || existing?.refreshTokenCiphertext) {
+    throw new IntegrationCredentialReplacementRequiresCleanupError();
+  }
+  if (existing) {
+    await tx.update(userIntegrations).set({
+      status: 'revoked',
+      errorReason: null,
+      revokedAt: input.connectedAt,
+    }).where(and(
+      eq(userIntegrations.id, existing.id),
+      isNull(userIntegrations.revokedAt),
+    ));
+  }
   return tx.insert(userIntegrations).values({
     userId: input.userId,
     provider: input.provider,
