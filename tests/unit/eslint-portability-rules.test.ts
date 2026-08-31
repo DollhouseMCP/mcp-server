@@ -1,19 +1,24 @@
 import { describe, expect, it } from '@jest/globals';
 import { Linter } from 'eslint';
-import { fileURLToPath } from 'node:url';
 
 import eslintConfig, { dmcpPathPlugin } from '../../eslint.config.js';
 
-const SERVICE_CONFIG_FIXTURE_PATH = fileURLToPath(
-  new URL('../../src/services/BuildInfoService.ts', import.meta.url),
-);
-const AUTH_CONFIG_FIXTURE_PATH = fileURLToPath(
-  new URL('../../src/auth/GitHubAuthManager.ts', import.meta.url),
-);
-const CLI_CONFIG_FIXTURE_PATH = fileURLToPath(
-  new URL('../../src/cli/console-token.ts', import.meta.url),
-);
+const SERVICE_CONFIG_FIXTURE_PATH = 'src/services/BuildInfoService.ts';
+const AUTH_CONFIG_FIXTURE_PATH = 'src/auth/GitHubAuthManager.ts';
+const CLI_CONFIG_FIXTURE_PATH = 'src/cli/console-token.ts';
 const OAUTH_CONFIG_FIXTURE_PATHS = [AUTH_CONFIG_FIXTURE_PATH, CLI_CONFIG_FIXTURE_PATH];
+
+// These fixtures exercise JavaScript syntax and the repository's real flat-config
+// matching/rule composition. Keep the production parser out of this synthetic
+// harness: @typescript-eslint/parser crosses Jest's ESM VM boundary on Node 20 in
+// a way that prevents complex no-restricted-syntax selectors from firing. The
+// production config remains unchanged; only parser selection for these snippets
+// is replaced by Linter's default ESTree parser.
+const syntaxFixtureConfig = eslintConfig.map(config => {
+  if (!config.languageOptions || !('parser' in config.languageOptions)) return config;
+  const { parser: _parser, parserOptions: _parserOptions, ...languageOptions } = config.languageOptions;
+  return { ...config, languageOptions };
+});
 
 type PortabilityRule =
   | 'no-posix-interpreter-path'
@@ -30,8 +35,8 @@ function verify(code: string, rule: PortabilityRule) {
 }
 
 function verifyConfigured(code: string, filename: string) {
-  const linter = new Linter({ configType: 'flat' });
-  return linter.verify(code, eslintConfig, { filename });
+  const linter = new Linter({ configType: 'flat', cwd: process.cwd() });
+  return linter.verify(code, syntaxFixtureConfig, { filename });
 }
 
 function messagesContaining(code: string, filename: string, marker: string) {
@@ -153,12 +158,18 @@ describe('DMCP cross-platform ESLint rules', () => {
     it.each(OAUTH_CONFIG_FIXTURE_PATHS)(
       'accepts schema-routed env reads in %s',
       filename => {
+        const positiveControl = messagesContaining(
+          'const enabled = process.env.DOLLHOUSE_FEATURE; const token = process.env.GITHUB_TOKEN;',
+          filename,
+          'DMCP-ENV-001',
+        );
         const messages = messagesContaining(
           "import { env } from '../config/env.js'; const enabled = env.DOLLHOUSE_FEATURE; const token = env.GITHUB_TOKEN;",
           filename,
           'DMCP-ENV-001',
         );
 
+        expect(positiveControl).toHaveLength(2);
         expect(messages).toHaveLength(0);
       },
     );
@@ -177,11 +188,16 @@ describe('DMCP cross-platform ESLint rules', () => {
     });
 
     it('accepts resolved filesystem I/O paths', () => {
+      const positiveControl = verifyConfigured(
+        "import fs from 'node:fs'; fs.readFileSync('/tmp/private.json', 'utf8');",
+        SERVICE_CONFIG_FIXTURE_PATH,
+      ).filter(message => message.ruleId === 'dmcp/no-absolute-fs-io-paths');
       const messages = verifyConfigured(
         "import fs from 'node:fs'; import path from 'node:path'; fs.readFileSync(path.resolve('data', 'private.json'), 'utf8');",
         SERVICE_CONFIG_FIXTURE_PATH,
       ).filter(message => message.ruleId === 'dmcp/no-absolute-fs-io-paths');
 
+      expect(positiveControl).toHaveLength(1);
       expect(messages).toHaveLength(0);
     });
   });
@@ -206,12 +222,18 @@ describe('DMCP cross-platform ESLint rules', () => {
     it.each(OAUTH_CONFIG_FIXTURE_PATHS)(
       'accepts authorized integration facades in %s',
       filename => {
+        const positiveControl = messagesContaining(
+          'new IntegrationRequestGateway(); new IntegrationOperationCatalog(); new IntegrationRemoteMcpBridge();',
+          filename,
+          'DMCP-FO2-001',
+        );
         const messages = messagesContaining(
           'new AuthorizedIntegrationGateway(); new AuthorizedIntegrationRemoteMcpBridge();',
           filename,
           'DMCP-FO2-001',
         );
 
+        expect(positiveControl).toHaveLength(3);
         expect(messages).toHaveLength(0);
       },
     );
