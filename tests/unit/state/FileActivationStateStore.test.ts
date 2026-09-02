@@ -528,6 +528,37 @@ describe('FileActivationStateStore', () => {
       ]);
     });
 
+    it('should deactivate only the explicit filename among legacy records with colliding names', async () => {
+      const persisted = {
+        version: 1,
+        sessionId: 'test-session',
+        lastUpdated: '2026-04-13T00:00:00Z',
+        activations: {
+          agent: [
+            {
+              name: 'Shared Name',
+              filename: 'first.md',
+              activatedAt: '2026-04-13T00:00:00Z',
+            },
+            {
+              name: 'Shared Name',
+              filename: 'second.md',
+              activatedAt: '2026-04-13T00:00:00Z',
+            },
+          ],
+        },
+      };
+      mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+      await store.initialize();
+
+      store.recordDeactivation('agent', 'Shared Name', 'second.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({ name: 'Shared Name', filename: 'first.md' }),
+      ]);
+    });
+
     it('should not treat another record filename as a name-only deactivation match', () => {
       store.recordActivation('persona', 'First Persona', 'Shared Name');
       store.recordActivation('persona', 'Shared Name', 'second-persona.md');

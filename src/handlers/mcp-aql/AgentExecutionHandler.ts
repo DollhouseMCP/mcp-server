@@ -106,7 +106,7 @@ export class AgentExecutionHandler {
   }
 
   private ensureNotDangerZoneBlocked(method: string, elementName: string): void {
-    if (method === 'getState' || !this.handlers.dangerZoneEnforcer) {
+    if (method === 'getState' || method === 'abort' || !this.handlers.dangerZoneEnforcer) {
       return;
     }
     const blockCheck = this.handlers.dangerZoneEnforcer.check(elementName);
@@ -547,7 +547,7 @@ export class AgentExecutionHandler {
       const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
       const ownedGoalIds = this.getOwnedActiveGoalIds(activeGoalIds, executionPolicyAtStart);
       if (ownedGoalIds.length === 0) {
-        return this.recoverStalePolicy(
+        return await this.recoverStalePolicy(
           manager,
           elementName,
           executionKey,
@@ -587,7 +587,6 @@ export class AgentExecutionHandler {
       if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
         this.executingAgents.delete(executionKey);
       }
-      this.unblockDangerZone(elementName);
       this.logAbort(elementName, ownedGoalIds, reason);
 
       return {
@@ -643,7 +642,6 @@ export class AgentExecutionHandler {
 
     if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
       this.executingAgents.delete(executionKey);
-      this.unblockDangerZone(elementName);
       SecurityMonitor.logSecurityEvent({
         type: 'AGENT_POLICY_RECOVERED',
         severity: 'MEDIUM',
@@ -697,14 +695,6 @@ export class AgentExecutionHandler {
         `Execution state changed while aborting agent '${elementName}'. ` +
         'The newer execution policy was preserved; retry abort_execution to abort it.'
       );
-    }
-  }
-
-  private unblockDangerZone(elementName: string): void {
-    try {
-      this.handlers.dangerZoneEnforcer?.unblock(elementName);
-    } catch {
-      // Non-fatal: agent may not have been blocked
     }
   }
 

@@ -285,7 +285,7 @@ flowchart TD
     subgraph EXEC_DETAIL["Execute Module Detail"]
         direction TB
         EX_IN["dispatchExecute(method, params)"]
-        EX_IN --> EX_DANGER{"DangerZone<br/>check:<br/>agent blocked?"}
+        EX_IN --> EX_DANGER{"DangerZone check:<br/>agent blocked and method<br/>is not getState or abort?"}
         EX_DANGER -- "Yes" --> EX_BLOCKED["Throw: agent blocked<br/>Include verify instructions"]:::denied
         EX_DANGER -- "No" --> EX_ABORT_CHECK{"Goal<br/>aborted?"}
         EX_ABORT_CHECK -- "Yes" --> EX_ABORT_DENY["Throw: execution aborted<br/>Use execute_agent for new run"]:::denied
@@ -294,7 +294,7 @@ flowchart TD
         EX_METHOD -- "getState" --> EX_STATE["AgentManager.getAgentState()"]
         EX_METHOD -- "updateState" --> EX_UPDATE["AgentManager.recordAgentStep()<br/>Returns autonomy directive"]
         EX_METHOD -- "complete" --> EX_COMPLETE["AgentManager.completeAgentGoal()<br/>Remove from executingAgents"]
-        EX_METHOD -- "abort" --> EX_ABORT_DO["Mark goals aborted<br/>Clean up executingAgents<br/>Unblock DangerZone"]
+        EX_METHOD -- "abort" --> EX_ABORT_DO["Mark goals aborted<br/>Clean up executingAgents<br/>Preserve DangerZone block"]
     end
 
     H_EXEC --> EX_IN

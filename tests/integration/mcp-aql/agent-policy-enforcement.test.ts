@@ -12,7 +12,7 @@
  * then tests the MCP-AQL execute + gatekeeper enforcement integration.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -117,6 +117,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteResult.success).toBe(false);
       if (!deleteResult.success) {
         expect(deleteResult.error).toContain('deny-agent');
+        expect(deleteResult.error).toContain('abort_execution');
       }
 
       // list_elements should still work (not in deny list)
@@ -183,6 +184,558 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
     });
   });
 
+  describe('Stale execution policy recovery', () => {
+    it('should preserve READ restrictions on get_active_elements', async () => {
+      await createAgent('read-restricted-agent', {
+        tools: {
+          allowed: ['mcp_aql_create', 'mcp_aql_update', 'mcp_aql_delete', 'mcp_aql_execute'],
+          denied: ['mcp_aql_read'],
+        },
+      });
+
+      expect((await executeAgent('read-restricted-agent')).success).toBe(true);
+
+      const activeElements = await mcpAqlHandler.handleRead({
+        operation: 'get_active_elements',
+        params: {},
+      });
+
+      expect(activeElements.success).toBe(false);
+    });
+
+    it('should keep abort_execution reachable despite an explicit deny', async () => {
+      await createAgent('abort-denying-agent', {
+        gatekeeper: { deny: ['abort_execution', 'delete_element'] },
+      });
+
+      expect((await executeAgent('abort-denying-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'abort-denying-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'abort-denying-agent', reason: 'Recover stale policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+    });
+
+    it('should preserve the policy when durable state lookup fails', async () => {
+      await createAgent('lookup-failure-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('lookup-failure-agent')).success).toBe(true);
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
+        .mockRejectedValueOnce(new Error('Agent state storage unavailable'));
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'lookup-failure-agent', reason: 'Recover stale policy' },
+      });
+
+      expect(recovery.success).toBe(false);
+      if (!recovery.success) {
+        expect(recovery.error).toContain('Agent state storage unavailable');
+      }
+      stateSpy.mockRestore();
+
+      const deleteWhilePolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'lookup-failure-agent' },
+      });
+      expect(deleteWhilePolicyRemains.success).toBe(false);
+    });
+
+    it('should let abort_execution remove a policy whose durable goal is already gone', async () => {
+      await createAgent('stale-policy-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('stale-policy-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'stale-policy-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'stale-policy-agent', reason: 'Recover stale policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({
+          _type: 'AbortResult',
+          recoveredStalePolicy: true,
+        }));
+      }
+
+      const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'stale-policy-agent' },
+      });
+      expect(deleteAfterRecovery.success).toBe(true);
+    });
+
+    it('should recover policy state through an equivalent agent-name alias', async () => {
+      await createAgent('alias-policy-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('AliasPolicyAgent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'alias-policy-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'alias-policy-agent', reason: 'Recover aliased policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+
+      const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'alias-policy-agent' },
+      });
+      expect(deleteAfterRecovery.success).toBe(true);
+    });
+
+    it('should use the storage fallback identity for separator-only agent names', async () => {
+      await createAgent('---', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('---')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'unnamed',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'unnamed', reason: 'Recover fallback identity policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+    });
+
+    it('should recover a stale policy after the executing agent is deleted', async () => {
+      await createAgent('deleted-executing-agent', {
+        gatekeeper: { deny: ['list_elements'] },
+      });
+
+      expect((await executeAgent('deleted-executing-agent')).success).toBe(true);
+      const deletion = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'deleted-executing-agent' },
+      });
+      expect(deletion.success).toBe(true);
+      expect((await attemptList()).success).toBe(false);
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'deleted-executing-agent', reason: 'Recover deleted agent policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+      expect((await attemptList()).success).toBe(true);
+    });
+
+    it('should serialize a restart behind stale policy recovery', async () => {
+      await createAgent('restarted-during-recovery-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('restarted-during-recovery-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'restarted-during-recovery-agent',
+        outcome: 'failure',
+        summary: 'First execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'restarted-during-recovery-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restarted-during-recovery-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+      const executeSpy = jest.spyOn(agentManager, 'executeAgent');
+      const restartPromise = executeAgent('restarted-during-recovery-agent');
+      expect(executeSpy).not.toHaveBeenCalled();
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      stateSpy.mockRestore();
+      expect(recovery.success).toBe(true);
+      expect((await restartPromise).success).toBe(true);
+      executeSpy.mockRestore();
+
+      const deleteWhileNewPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restarted-during-recovery-agent' },
+      });
+      expect(deleteWhileNewPolicyRemains.success).toBe(false);
+    });
+
+    it('should preserve the sandbox when a restart begins before its goal is persisted', async () => {
+      await createAgent('restart-before-persist-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('restart-before-persist-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'restart-before-persist-agent',
+        outcome: 'failure',
+        summary: 'First execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'restart-before-persist-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restart-before-persist-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+
+      let markRestartStarted!: () => void;
+      let releaseRestart!: () => void;
+      const restartStarted = new Promise<void>(resolve => { markRestartStarted = resolve; });
+      const restartBlocked = new Promise<void>(resolve => { releaseRestart = resolve; });
+      const originalRead = agentManager.read.bind(agentManager);
+      const readSpy = jest.spyOn(agentManager, 'read')
+        .mockImplementationOnce(async (name: string) => {
+          markRestartStarted();
+          await restartBlocked;
+          return originalRead(name);
+        });
+      // Use the legacy/shared manager entry point directly. The generation hook
+      // must not depend on dispatch through MCPAQLHandler.
+      const restartPromise = agentManager.executeAgent(
+        'restart-before-persist-agent',
+        { task: 'legacy-entry-point-restart' },
+      );
+      await restartStarted;
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      expect(recovery.success).toBe(false);
+      if (!recovery.success) {
+        expect(recovery.error).toContain('Execution state changed');
+        expect(recovery.error).toContain('newer execution policy was preserved');
+      }
+
+      releaseRestart();
+      await expect(restartPromise).resolves.toBeDefined();
+      readSpy.mockRestore();
+      stateSpy.mockRestore();
+
+      const deleteWhileSandboxRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restart-before-persist-agent' },
+      });
+      expect(deleteWhileSandboxRemains.success).toBe(false);
+    });
+
+    it('should ignore another agent execution during stale policy recovery', async () => {
+      await createAgent('independent-stale-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      await createAgent('unrelated-running-agent');
+
+      expect((await executeAgent('independent-stale-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'independent-stale-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'independent-stale-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'independent-stale-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+      expect((await executeAgent('unrelated-running-agent')).success).toBe(true);
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      stateSpy.mockRestore();
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({
+          recoveredStalePolicy: true,
+          agentName: 'independent-stale-agent',
+        }));
+      }
+    });
+
+    it('should recover a stale policy without clearing a DangerZone block', async () => {
+      const dangerZoneEnforcer = container.resolve<
+        import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer
+      >('DangerZoneEnforcer');
+      await createAgent('danger-zone-stale-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('danger-zone-stale-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'danger-zone-stale-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared after a dangerous action',
+      });
+      dangerZoneEnforcer.block(
+        'danger-zone-stale-agent',
+        'Dangerous action requires verification',
+        ['test-pattern'],
+        'test-verification-id',
+      );
+
+      try {
+        const recovery = await mcpAqlHandler.handleExecute({
+          operation: 'abort_execution',
+          params: { element_name: 'danger-zone-stale-agent', reason: 'Recover stale policy' },
+        });
+
+        expect(recovery.success).toBe(true);
+        expect(dangerZoneEnforcer.check('danger-zone-stale-agent').blocked).toBe(true);
+
+        const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
+          operation: 'delete_element',
+          element_type: 'agent',
+          params: { element_name: 'danger-zone-stale-agent' },
+        });
+        expect(deleteAfterRecovery.success).toBe(true);
+      } finally {
+        dangerZoneEnforcer.unblock('danger-zone-stale-agent');
+      }
+    });
+
+    it('should abort an active goal without clearing a DangerZone block', async () => {
+      const dangerZoneEnforcer = container.resolve<
+        import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer
+      >('DangerZoneEnforcer');
+      await createAgent('danger-zone-active-agent');
+
+      expect((await executeAgent('danger-zone-active-agent')).success).toBe(true);
+      dangerZoneEnforcer.block(
+        'danger-zone-active-agent',
+        'Dangerous action requires verification',
+        ['test-pattern'],
+        'test-verification-id',
+      );
+
+      try {
+        const abort = await mcpAqlHandler.handleExecute({
+          operation: 'abort_execution',
+          params: { element_name: 'danger-zone-active-agent', reason: 'Stop dangerous execution' },
+        });
+
+        expect(abort.success).toBe(true);
+        expect(dangerZoneEnforcer.check('danger-zone-active-agent').blocked).toBe(true);
+      } finally {
+        dangerZoneEnforcer.unblock('danger-zone-active-agent');
+      }
+    });
+
+    it('should complete the durable goal when the ordinary state cache is stale', async () => {
+      await createAgent('stale-cache-abort-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      const preExecutionAgent = await agentManager.read('stale-cache-abort-agent');
+      expect(preExecutionAgent).not.toBeNull();
+      const emptyState = preExecutionAgent!.getState();
+
+      expect((await executeAgent('stale-cache-abort-agent')).success).toBe(true);
+      const stateCache = (
+        agentManager as unknown as {
+          stateCache: { set: (key: string, value: unknown) => unknown };
+        }
+      ).stateCache;
+      stateCache.set('stale-cache-abort-agent', emptyState);
+
+      const abort = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'stale-cache-abort-agent', reason: 'Stop cached execution' },
+      });
+
+      expect(abort.success).toBe(true);
+      const durableState = await agentManager.getAgentStateForRecovery({
+        agentName: 'stale-cache-abort-agent',
+      });
+      expect(durableState.state.goals).toEqual([
+        expect.objectContaining({ status: 'failed' }),
+      ]);
+    });
+
+    it('should preserve policy when durable goal completion fails', async () => {
+      await createAgent('abort-save-conflict-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      expect((await executeAgent('abort-save-conflict-agent')).success).toBe(true);
+      const completionSpy = jest.spyOn(agentManager, 'completeAgentGoalForRecovery')
+        .mockRejectedValueOnce(new Error('State version conflict'));
+
+      const abort = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'abort-save-conflict-agent', reason: 'Conflicting abort' },
+      });
+      completionSpy.mockRestore();
+
+      expect(abort.success).toBe(false);
+      const stepAfterFailedAbort = await mcpAqlHandler.handleCreate({
+        operation: 'record_execution_step',
+        params: {
+          element_name: 'abort-save-conflict-agent',
+          stepDescription: 'Continue after failed abort',
+          outcome: 'success',
+          findings: 'The durable goal remains active',
+          confidence: 0.9,
+        },
+      });
+      expect(stepAfterFailedAbort.success).toBe(true);
+
+      const deleteWhilePolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'abort-save-conflict-agent' },
+      });
+      expect(deleteWhilePolicyRemains.success).toBe(false);
+    });
+
+    it('should serialize a restart behind active abort', async () => {
+      await createAgent('restart-during-active-abort-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      expect((await executeAgent('restart-during-active-abort-agent')).success).toBe(true);
+
+      let markOldGoalCompleted!: () => void;
+      let releaseCompletion!: () => void;
+      const oldGoalCompleted = new Promise<void>(resolve => { markOldGoalCompleted = resolve; });
+      const completionBlocked = new Promise<void>(resolve => { releaseCompletion = resolve; });
+      const originalCompletion = agentManager.completeAgentGoalForRecovery.bind(agentManager);
+      const completionSpy = jest.spyOn(agentManager, 'completeAgentGoalForRecovery')
+        .mockImplementationOnce(async params => {
+          const result = await originalCompletion(params);
+          markOldGoalCompleted();
+          await completionBlocked;
+          return result;
+        });
+
+      const abortPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restart-during-active-abort-agent',
+          reason: 'Abort the original execution',
+        },
+      });
+      await oldGoalCompleted;
+
+      const executeSpy = jest.spyOn(agentManager, 'executeAgent');
+      const restartPromise = executeAgent('restart-during-active-abort-agent');
+      expect(executeSpy).not.toHaveBeenCalled();
+      releaseCompletion();
+
+      const abort = await abortPromise;
+      completionSpy.mockRestore();
+      expect(abort.success).toBe(true);
+      expect((await restartPromise).success).toBe(true);
+      executeSpy.mockRestore();
+
+      const deleteWhileNewPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restart-during-active-abort-agent' },
+      });
+      expect(deleteWhileNewPolicyRemains.success).toBe(false);
+    });
+  });
+
   describe('Agent without gatekeeper has no restrictions', () => {
     it('should not restrict operations when agent has no gatekeeper policy', async () => {
       // Create agent with no gatekeeper field
@@ -222,6 +775,26 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
   });
 
   describe('Concurrent agent execution with different policies', () => {
+    it('should not collide sanitized and hyphenated agent identities', async () => {
+      await createAgent('foo-bar', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      await createAgent('foobar', {
+        gatekeeper: { deny: ['list_elements'] },
+      });
+
+      expect((await executeAgent('foo-bar')).success).toBe(true);
+      expect((await executeAgent('foo&bar')).success).toBe(true);
+      expect((await completeAgent('foo&bar')).success).toBe(true);
+
+      const deleteWhileHyphenatedPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'foo-bar' },
+      });
+      expect(deleteWhileHyphenatedPolicyRemains.success).toBe(false);
+    });
+
     it('should enforce independent policies for multiple executing agents', async () => {
       // Create two agents with different restrictions
       await createAgent('agent-no-delete', {

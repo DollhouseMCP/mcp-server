@@ -109,6 +109,7 @@ import type { SerializationService } from '../../services/SerializationService.j
 import type { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError, ErrorCategory, ErrorHandler } from '../../utils/ErrorHandler.js';
+import { normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
@@ -155,6 +156,16 @@ interface ExecutionGenerationEntry {
   token: object;
   activeExecutions: number;
   observers: number;
+}
+
+interface FlexibleReadCandidate {
+  agent: Agent;
+  storagePath: string;
+}
+
+interface FlexibleReadCandidates {
+  candidates: FlexibleReadCandidate[];
+  loadFailures: unknown[];
 }
 
 export interface AgentActivationResult {
@@ -494,37 +505,56 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Read an agent by name (without extension).
    *
    * @param name - Agent name (without extension)
-   * @returns Agent instance or null if not found
-   */
+  * @returns Agent instance or null if not found
+  */
   async read(name: string): Promise<Agent | null> {
+    const sanitizedName = sanitizeInput(name, 100);
     try {
-      const sanitizedName = sanitizeInput(name, 100);
-      // Use findByName — consults the storage-layer index (name → UUID in DB
-      // mode, name → filename in file mode) instead of assuming a filename
-      // shape. Passing a filename straight to load() breaks in DB mode where
-      // load expects the element UUID, not a ".md" path.
-      const found = await this.findByName(sanitizedName);
-      if (found) {
-        await this.ensureStateHydrated(found);
-        return found;
-      }
-      // Fallback: flexible matching via list scan (#607) — for legacy files
-      // whose on-disk name diverges from their metadata name.
-      const flexible = await this.readFlexibly(name);
-      if (flexible) {
-        await this.ensureStateHydrated(flexible);
-      }
-      return flexible;
+      const storagePath = await this.resolveDirectAgentStoragePath(sanitizedName);
+      if (!storagePath) return this.readFlexibly(name, false);
+
+      const found = await this.findByStorageIdentity(storagePath);
+      if (!found) return this.readFlexibly(name, false);
+      await this.ensureStateHydrated(found);
+      return found;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        const flexible = await this.readFlexibly(name);
-        if (flexible) {
-          await this.ensureStateHydrated(flexible);
-        }
-        return flexible;
+        return this.readFlexibly(name, false);
       }
       throw error;
     }
+  }
+
+  /** Resolve an exact name without allowing cached state into strict recovery. */
+  private async readWithStatePolicy(name: string, strictStateErrors: boolean): Promise<Agent | null> {
+    if (!strictStateErrors) return this.read(name);
+
+    const sanitizedName = sanitizeInput(name, 100);
+    try {
+      const storagePath = await this.resolveDirectAgentStoragePath(sanitizedName);
+      if (!storagePath) return this.readFlexibly(name, true);
+
+      const definition = await this.loadElementDefinition(storagePath);
+      return this.createRecoveryAgent(definition, name, false);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return this.readFlexibly(name, true);
+      }
+      throw error;
+    }
+  }
+
+  private async resolveDirectAgentStoragePath(name: string): Promise<string | undefined> {
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return this.getFilename(name);
+    }
+
+    let storagePath = this.storageLayer.getPathByName(name);
+    if (!storagePath && !this.storageLayer.hasCompletedScan()) {
+      await this.storageLayer.scan();
+      storagePath = this.storageLayer.getPathByName(name);
+    }
+    return storagePath;
   }
 
   /**
@@ -539,37 +569,72 @@ export class AgentManager extends BaseElementManager<Agent> {
    * // Flexible fallback matches via metadata name:
    * const agent = await read("legacy-poster"); // resolves via fallback
    */
-  private async readFlexibly(name: string): Promise<Agent | null> {
+  private async readFlexibly(name: string, strictStateErrors = false): Promise<Agent | null> {
     try {
-      const agents = await this.list();
-      if (agents.length === 0) return null;
+      const { candidates, loadFailures } = await this.listForFlexibleRead(strictStateErrors);
 
       const searchLower = name.toLowerCase();
       const searchSlug = this.normalizeFilename(name);
 
       // Pass 1: exact case-insensitive match on metadata name
-      let match = agents.find(
-        (a) => a.metadata.name.toLowerCase() === searchLower
+      let match = candidates.find(
+        ({ agent }) => agent.metadata.name.toLowerCase() === searchLower
       );
 
       // Pass 2: slug match (handles dashes, underscores, casing differences)
-      match ??= agents.find((a) => {
-        const slug = this.normalizeFilename(a.metadata.name);
+      match ??= candidates.find(({ agent }) => {
+        const slug = this.normalizeFilename(agent.metadata.name);
         return slug === searchSlug || slug === searchLower;
       });
 
       if (match) {
+        if (strictStateErrors) {
+          const recoveryAgent = await this.createRecoveryAgent(match.agent, name, true);
+          logger.warn(
+            `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
+            `Consider renaming the file to match the expected convention (#607).`
+          );
+          return recoveryAgent;
+        }
+        await this.hydrateAgentState(match.agent, this.stripExtension(match.storagePath));
         logger.warn(
-          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.metadata.name}". ` +
+          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
           `Consider renaming the file to match the expected convention (#607).`
         );
+        return match.agent;
       }
 
-      return match ?? null;
-    } catch (listError) {
-      logger.debug(`Flexible agent lookup failed for "${name}": ${listError}`);
+      if (loadFailures.length > 0) throw loadFailures[0];
       return null;
+    } catch (lookupError) {
+      logger.debug(`Flexible agent lookup failed for "${name}": ${lookupError}`);
+      throw lookupError;
     }
+  }
+
+  private async listForFlexibleRead(strictStateErrors: boolean): Promise<FlexibleReadCandidates> {
+    let storagePaths: string[];
+    if (isWritableStorageLayer(this.storageLayer)) {
+      await this.storageLayer.scan();
+      storagePaths = (await this.storageLayer.listSummaries()).map(summary => summary.filePath);
+    } else {
+      storagePaths = strictStateErrors
+        ? await this.portfolioManager.listElements(ElementType.AGENT, { throwOnFilesystemError: true })
+        : await this.portfolioManager.listElements(ElementType.AGENT);
+    }
+
+    const results = await Promise.allSettled(
+      storagePaths.map(storagePath => this.loadElementDefinition(storagePath))
+    );
+    const candidates: FlexibleReadCandidates = { candidates: [], loadFailures: [] };
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') {
+        candidates.candidates.push({ agent: result.value, storagePath: storagePaths[index] });
+      } else {
+        candidates.loadFailures.push(result.reason);
+      }
+    }
+    return candidates;
   }
 
   /**
@@ -1337,7 +1402,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Canonical identity shared by agent lookup and execution lifecycle state. */
   public canonicalizeExecutionName(name: string): string {
-    return this.normalizeFilename(name) || 'unnamed';
+    return normalizeElementStorageIdentity(sanitizeInput(name, 100));
   }
 
   private getExecutionGenerationKey(name: string): string {
@@ -2295,16 +2360,20 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.hydratedAgents.add(agent);
   }
 
-  private async readWithStatePolicy(name: string, strict: boolean): Promise<Agent | null> {
-    const agent = await this.read(name);
-    if (!strict || !agent) {
-      return agent;
-    }
-
+  private async createRecoveryAgent(
+    agent: Agent,
+    name: string,
+    requireDurableState: boolean,
+  ): Promise<Agent> {
     const state = await this.stateStore.load({
       name,
       agentElementId: this.getAgentElementId(agent, name),
     }, { strict: true, allowOversizedRecovery: true });
+    if (requireDurableState && !state) {
+      throw new Error(
+        `Cannot verify durable state for flexibly matched agent "${name}" under its requested identity`
+      );
+    }
     const recoveryAgent = new Agent(agent.metadata, this.metadataService);
     const serialized = JSON.parse(agent.serializeToJSON());
     serialized.state = state ?? {
@@ -2318,7 +2387,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     recoveryAgent.deserialize(JSON.stringify(serialized));
     recoveryAgent[COMMIT_PERSISTED_VERSION](state?.stateVersion ?? 0);
     recoveryAgent.markStatePersisted();
-    this.recoverySourceAgents.set(recoveryAgent, agent);
+    const cachedSource = this.getCachedElementsForCurrentNamespace().find(candidate =>
+      candidate.id === agent.id || candidate.metadata.name === agent.metadata.name
+    );
+    this.recoverySourceAgents.set(recoveryAgent, cachedSource ?? agent);
     return recoveryAgent;
   }
 

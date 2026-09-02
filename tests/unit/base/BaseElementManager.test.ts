@@ -807,6 +807,21 @@ describe('BaseElementManager - Requirements & Contract', () => {
   // ============================================
 
   describe('findByName() Cache Key Consistency', () => {
+    it('findByStorageIdentity() reuses a stable path when the display name has changed', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'stable-element.md'),
+        `---\nname: Renamed Element\n---\n\nContent`
+      );
+
+      const found = await manager.findByStorageIdentity('stable-element.md');
+      const cached = await manager.findByStorageIdentity('stable-element.md');
+
+      expect(found).toBeDefined();
+      expect(found?.metadata.name).toBe('Renamed Element');
+      expect((found as TestElement & { filename?: string })?.filename).toBe('stable-element.md');
+      expect(cached).toBe(found);
+    });
+
     it('findByName() hits cache after list() populates it', async () => {
       // Setup: create files on disk
       await fs.writeFile(
@@ -988,7 +1003,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, 'long.md');
       const loaded = await manager.load('long.md');
 
-      expect(loaded.content.trim().length).toBe(10000);
+      expect(loaded.content.trim()).toHaveLength(10000);
     });
 
     it('handles concurrent load operations correctly', async () => {

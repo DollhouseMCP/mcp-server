@@ -3,8 +3,8 @@
  */
 
 import { randomInt } from 'node:crypto';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { ADJECTIVES, ANIMALS } from '../config/constants.js';
 import { logger } from './logger.js';
 import { IFileOperationsService, FileOperationsService } from '../services/FileOperationsService.js';
@@ -22,9 +22,7 @@ function generateIdSuffix(): string {
 }
 
 function getFileOperationsService(): IFileOperationsService {
-  if (!fileOperationsService) {
-    fileOperationsService = new FileOperationsService(new FileLockManager());
-  }
+  fileOperationsService ??= new FileOperationsService(new FileLockManager());
   return fileOperationsService;
 }
 
@@ -44,6 +42,31 @@ export function generateAnonymousId(): string {
 // Pre-compiled regex for better performance (avoids creating regex on each character)
 const ALPHANUMERIC_REGEX = /[a-z0-9]/;
 
+/**
+ * Normalize an element name to the canonical filename identity used by managers.
+ */
+export function normalizeElementFilename(name: string): string {
+  if (!name || name.trim().length === 0) {
+    return 'unnamed';
+  }
+
+  const normalized = name
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
+    .replace(/[\s_]+/g, '-')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-');
+
+  const start = normalized.startsWith('-') ? 1 : 0;
+  const end = normalized.endsWith('-') ? -1 : undefined;
+  return normalized.slice(start, end);
+}
+
+/** Canonical non-empty identity used for element files and related runtime maps. */
+export function normalizeElementStorageIdentity(name: string): string {
+  return normalizeElementFilename(name) || 'unnamed';
+}
+
 export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');
@@ -56,13 +79,15 @@ export function generateUniqueId(personaName: string, author?: string): string {
   // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
   // Now: Single-pass transformation with built-in length limit
   const normalized = personaName.toLowerCase();
-  const sanitizedName = normalized
+  const collapsedName = normalized
     .split('')
     .map(char => ALPHANUMERIC_REGEX.test(char) ? char : '-')
     .join('')
     .substring(0, 100) // Limit after transformation to preserve structure
-    .replaceAll(/(^-+)|(-+$)/g, '') // Only trim leading/trailing hyphens
     .replaceAll(/-{2,}/g, '-'); // Collapse multiple hyphens
+  const start = collapsedName.startsWith('-') ? 1 : 0;
+  const end = collapsedName.endsWith('-') ? -1 : undefined;
+  const sanitizedName = collapsedName.slice(start, end);
   const whoMadeIt = author || generateAnonymousId();
 
   return `${sanitizedName}_${dateStr}-${timeStr}${msStr}-${rand}_${whoMadeIt}`;

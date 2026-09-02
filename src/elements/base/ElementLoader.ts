@@ -142,6 +142,20 @@ export class ElementLoader<T extends IElement> {
     }
   }
 
+  /**
+   * Load and parse an element definition without running post-load hooks or
+   * mutating the shared element cache. Callers use this for discovery and
+   * security-sensitive reads that must hydrate their own state snapshot.
+   */
+  async loadDefinition(filePath: string): Promise<T> {
+    const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
+    const content = await this.readContent(relativePath, absolutePath);
+    const parsed = this.host.parseContent(content);
+    this.host.migrateMetadataDefaults(parsed.data, relativePath);
+    const metadata = await this.host.parseMetadata(parsed.data);
+    return this.host.createElement(metadata, parsed.content);
+  }
+
   private async readContent(relativePath: string, absolutePath: string): Promise<string> {
     if (isWritableStorageLayer(this.storageLayer)) {
       return this.storageLayer.readContent(relativePath);

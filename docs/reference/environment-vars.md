@@ -12,7 +12,7 @@ Environment variables allow you to tweak runtime behavior without editing the YA
 |----------|---------|---------|
 | `DOLLHOUSE_GITHUB_CLIENT_ID` | Overrides the OAuth client ID used by `setup_github_auth`. If unset, the bundled public client is used. | Bundled client |
 | `DOLLHOUSE_PORTFOLIO_DIR` | Forces the portfolio base directory (instead of `~/.dollhouse/portfolio`). Must be an absolute path. | `~/.dollhouse/portfolio` |
-| `DOLLHOUSE_CACHE_DIR` | Custom cache directory for collection/index caches. | `<cwd>/.dollhousemcp/cache` |
+| `DOLLHOUSE_CACHE_DIR` | Exact custom cache directory for collection/index caches. | Platform cache directory (`~/.cache/dollhousemcp` on Linux) |
 | `DOLLHOUSE_DEBUG` | Enables verbose logging when set to a truthy value. | Disabled |
 
 ---
@@ -147,7 +147,6 @@ CI pipelines usually set these via workflow files (GitHub Actions, etc.).
 | Variable | Purpose |
 |----------|---------|
 | `PERSONAS_DIR` (legacy) | Used by `PathValidator` fallbacks; prefer `DOLLHOUSE_PORTFOLIO_DIR`. |
-| `DOLLHOUSE_CACHE_DIR` | Shared cache location for collection/index data. |
 | `DOLLHOUSE_MEMORY_*` | (When implemented) memory-system storage options. |
 
 ---

@@ -242,20 +242,26 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       expect(removeStaleSpy).not.toHaveBeenCalledWith('skill', 'real-skill');
     });
 
-    it('should prune stale agent activations when activateAgent returns failure', async () => {
+    it('should prune filename-backed stale agent activations by stable identity', async () => {
       const agentManager = container.resolve<any>('AgentManager');
       const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
       jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
       jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
       jest.spyOn(activationStore, 'getActivations').mockImplementation((type: string) => {
-        if (type === 'agent') return [{ name: 'missing-agent', activatedAt: new Date().toISOString() }];
+        if (type === 'agent') {
+          return [{
+            name: 'Colliding Agent',
+            filename: 'missing-agent.md',
+            activatedAt: new Date().toISOString(),
+          }];
+        }
         return [];
       });
       const removeStaleSpy = jest.spyOn(activationStore, 'removeStaleActivation')
         .mockImplementation(() => {});
 
-      jest.spyOn(agentManager, 'activateAgent').mockResolvedValue({
+      const activateAgentSpy = jest.spyOn(agentManager, 'activateAgentByStorageIdentity').mockResolvedValue({
         success: false,
         message: 'Agent not found'
       });
@@ -263,7 +269,49 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.preparePortfolio();
       await container.completeDeferredSetup();
 
-      expect(removeStaleSpy).toHaveBeenCalledWith('agent', 'missing-agent');
+      expect(activateAgentSpy).toHaveBeenCalledWith(
+        { kind: 'file', value: 'missing-agent.md' },
+        'Colliding Agent',
+      );
+      expect(removeStaleSpy).toHaveBeenCalledWith(
+        'agent',
+        'Colliding Agent',
+        'missing-agent.md',
+        undefined,
+      );
+    });
+
+    it('should restore renamed agents by stable filename', async () => {
+      const agentManager = container.resolve<any>('AgentManager');
+      const activationStore = container.resolve<any>('ActivationStore');
+
+      jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
+      jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
+      jest.spyOn(activationStore, 'getActivations').mockImplementation((type: string) => {
+        if (type === 'agent') {
+          return [{
+            name: 'Pre-Rename Agent',
+            filename: 'stable-agent.md',
+            activatedAt: new Date().toISOString(),
+          }];
+        }
+        return [];
+      });
+      const activateAgentSpy = jest.spyOn(agentManager, 'activateAgentByStorageIdentity').mockResolvedValue({
+        success: true,
+        message: 'Activated renamed agent',
+      });
+      const removeStaleSpy = jest.spyOn(activationStore, 'removeStaleActivation')
+        .mockImplementation(() => {});
+
+      await container.preparePortfolio();
+      await container.completeDeferredSetup();
+
+      expect(activateAgentSpy).toHaveBeenCalledWith(
+        { kind: 'file', value: 'stable-agent.md' },
+        'Pre-Rename Agent',
+      );
+      expect(removeStaleSpy).not.toHaveBeenCalledWith('agent', 'Pre-Rename Agent');
     });
 
     it('should upgrade a successfully restored legacy agent record with durable identity', async () => {

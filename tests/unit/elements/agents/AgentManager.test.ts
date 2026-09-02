@@ -222,6 +222,31 @@ describe('AgentManager', () => {
       expect(active[0].metadata.name).toBe('Renamed Agent');
     });
 
+    it('reuses the cached active agent for durable-identity policy reads', async () => {
+      const cachedAgent = new Agent({
+        name: 'Cached Agent',
+        description: 'Cached active agent',
+      }, metadataService);
+      (agentManager as any).cacheElement(cachedAgent, 'cached-agent.md');
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
+      fileOperationsService.readFile.mockClear();
+
+      const activated = await agentManager.activateAgentByStorageIdentity({
+        kind: 'file',
+        value: 'cached-agent.md',
+      });
+      const first = await agentManager.getActiveAgents();
+      const second = await agentManager.getActiveAgents();
+
+      expect(activated.success).toBe(true);
+      expect(first).toEqual([cachedAgent]);
+      expect(second).toEqual([cachedAgent]);
+      expect(first[0]).toBe(cachedAgent);
+      expect(second[0]).toBe(cachedAgent);
+      expect(cachedAgent.getState().sessionCount).toBe(1);
+      expect(fileOperationsService.readFile).not.toHaveBeenCalled();
+    });
+
     it('preserves same-name agents with distinct storage identities', async () => {
       const first = new Agent({ name: 'Shared Name' }, metadataService);
       const second = new Agent({ name: 'Shared Name' }, metadataService);

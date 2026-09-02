@@ -5,6 +5,7 @@ import * as os from 'os';
 import { CollectionCache, CollectionItem, CollectionCacheEntry } from '../../../src/cache/CollectionCache.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
+import { resolveDataDirectory } from '../../../src/paths/resolveDataDirectory.js';
 
 /**
  * Integration tests for CollectionCache - filesystem operations
@@ -190,6 +191,36 @@ describe('CollectionCache Integration Tests', () => {
   });
 
   describe('saveCache', () => {
+    it('should write the default cache under Dollhouse home without touching the CWD', async () => {
+      const originalCwd = process.cwd();
+      const originalHomeDir = process.env.DOLLHOUSE_HOME_DIR;
+      const scratchCwd = path.join(testBaseDir, 'project');
+      const testHome = path.join(testBaseDir, 'home');
+
+      await fs.mkdir(scratchCwd, { recursive: true });
+      process.chdir(scratchCwd);
+      process.env.DOLLHOUSE_HOME_DIR = testHome;
+
+      try {
+        const expectedCacheFile = path.join(resolveDataDirectory('cache'), 'collection-cache.json');
+        const fileOperations = new FileOperationsService(new FileLockManager());
+        const defaultCache = new CollectionCache(fileOperations);
+        await defaultCache.saveCache(mockItems, 'test-etag');
+
+        await expect(fs.access(expectedCacheFile)).resolves.toBeUndefined();
+        await expect(fs.access(path.join(scratchCwd, '.dollhousemcp'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        process.chdir(originalCwd);
+        if (originalHomeDir === undefined) {
+          delete process.env.DOLLHOUSE_HOME_DIR;
+        } else {
+          process.env.DOLLHOUSE_HOME_DIR = originalHomeDir;
+        }
+      }
+    });
+
     it('should save cache successfully', async () => {
       await cache.saveCache(mockItems, 'test-etag');
 
@@ -227,8 +258,7 @@ describe('CollectionCache Integration Tests', () => {
       // Make base dir unwritable
       await fs.chmod(testBaseDir, 0o444);
 
-      await cache.saveCache(mockItems, 'test-etag');
-      // Should not throw - errors are handled gracefully
+      await expect(cache.saveCache(mockItems, 'test-etag')).resolves.toBeUndefined();
 
       // Restore permissions for cleanup
       await fs.chmod(testBaseDir, 0o755);
@@ -240,8 +270,7 @@ describe('CollectionCache Integration Tests', () => {
       await fs.writeFile(testCacheFile, '{}', 'utf8');
       await fs.chmod(testCacheFile, 0o444);
 
-      await cache.saveCache(mockItems, 'test-etag');
-      // Should not throw - errors are handled gracefully
+      await expect(cache.saveCache(mockItems, 'test-etag')).resolves.toBeUndefined();
 
       // Restore permissions for cleanup
       await fs.chmod(testCacheFile, 0o644);
@@ -263,37 +292,15 @@ describe('CollectionCache Integration Tests', () => {
       await fs.writeFile(testCacheFile, JSON.stringify(validCacheEntry), 'utf8');
     });
 
-    it('should search by filename', async () => {
-      const results = await cache.searchCache('test-persona');
-      // Note: search uses includes() so 'test persona' matches both items with 'test' or 'persona'
-      expect(results).toHaveLength(2); // Matches 'test-persona' and 'another-persona' (contains 'persona')
-      expect(results.some(r => r.name === 'test-persona.md')).toBe(true);
-    });
-
-    it('should search by path', async () => {
-      const results = await cache.searchCache('personas');
-      expect(results).toHaveLength(2);
-      expect(results.every(item => item.path.includes('personas'))).toBe(true);
-    });
-
-    it('should search by content', async () => {
-      const results = await cache.searchCache('Another test');
-      expect(results).toHaveLength(1);
-      expect(results[0].name).toBe('another-persona.md');
-    });
-
-    it('should perform case-insensitive search', async () => {
-      const results = await cache.searchCache('TEST-PERSONA');
-      // Note: normalized to 'test persona' which matches items containing 'persona'
-      expect(results).toHaveLength(2); // Matches 'test-persona' and 'another-persona'
-      expect(results.some(r => r.name === 'test-persona.md')).toBe(true);
-    });
-
-    it('should handle search with normalization', async () => {
-      const results = await cache.searchCache('test persona');
-      // Note: 'test persona' matches items containing 'persona'
-      expect(results).toHaveLength(2); // Matches both persona files
-      expect(results.some(r => r.name === 'test-persona.md')).toBe(true);
+    it.each([
+      ['filename', 'test-persona', ['another-persona.md', 'test-persona.md']],
+      ['path', 'personas', ['another-persona.md', 'test-persona.md']],
+      ['content', 'Another test', ['another-persona.md']],
+      ['case-insensitive filename', 'TEST-PERSONA', ['another-persona.md', 'test-persona.md']],
+      ['normalized filename', 'test persona', ['another-persona.md', 'test-persona.md']],
+    ])('should search by %s', async (_label, query, expectedNames) => {
+      const results = await cache.searchCache(query);
+      expect(results.map(result => result.name).sort()).toEqual(expectedNames);
     });
 
     it('should return empty array when cache is not available', async () => {
@@ -433,7 +440,7 @@ describe('CollectionCache Integration Tests', () => {
     });
 
     it('should handle non-existent file gracefully', async () => {
-      await cache.clearCache(); // Should not throw
+      await expect(cache.clearCache()).resolves.toBeUndefined();
     });
 
     it('should handle other file system errors', async () => {
@@ -442,7 +449,7 @@ describe('CollectionCache Integration Tests', () => {
       // Make file unremovable
       await fs.chmod(testCacheDir, 0o444);
 
-      await cache.clearCache(); // Should not throw
+      await expect(cache.clearCache()).resolves.toBeUndefined();
 
       // Restore permissions for cleanup
       await fs.chmod(testCacheDir, 0o755);
@@ -623,7 +630,7 @@ describe('CollectionCache Integration Tests', () => {
       const results = await cache.getItemsByPath('category0/');
       const filterTime = Date.now() - startTime;
 
-      expect(results.length).toBe(200);
+      expect(results).toHaveLength(200);
       expect(filterTime).toBeLessThan(50);
     });
   });

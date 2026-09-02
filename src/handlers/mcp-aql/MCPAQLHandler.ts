@@ -1059,7 +1059,8 @@ export class MCPAQLHandler {
       (decision.reason as string | undefined) ?? 'Operation blocked by policy',
       decision.permissionLevel
     );
-    throw new Error(`[Gatekeeper] ${decision.reason}`);
+    const suggestion = decision.suggestion ? ` Suggestion: ${decision.suggestion}` : '';
+    throw new Error(`[Gatekeeper] ${decision.reason}${suggestion}`);
   }
 
   private autoConfirmGatekeeperDecision(

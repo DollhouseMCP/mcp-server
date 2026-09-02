@@ -30,7 +30,7 @@ import { logger } from '../../utils/logger.js';
 import type { FileLockManager } from '../../security/fileLockManager.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import type { LRUCache } from '../../cache/LRUCache.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { PathValidator } from '../../security/pathValidator.js';
 import type { ElementEventDispatcher, ElementEventPayload } from '../../events/ElementEventDispatcher.js';
@@ -291,7 +291,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     } else if (typeof (this.portfolioManager as { getElementDir?: unknown }).getElementDir === 'function') {
       this.staticElementDir = (this.portfolioManager as { getElementDir(t: ElementType): string }).getElementDir(elementType);
     } else {
-      throw new Error(
+      throw new TypeError(
         `Unable to resolve element directory for ${elementType}. ` +
         'Provide an elementDirOverride when instantiating this manager.'
       );
@@ -462,6 +462,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._loader.load(filePath);
   }
 
+  /**
+   * Parse a fresh element definition without post-load hydration or cache
+   * mutation. Intended for subclasses that must select an identity before
+   * attaching state (for example, AgentManager's recovery reads).
+   */
+  protected async loadElementDefinition(filePath: string): Promise<T> {
+    return this._loader.loadDefinition(filePath);
+  }
+
   async save(element: T, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
     return this._persister.save(element, filePath, options);
   }
@@ -520,6 +529,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     ) {
       return undefined;
     }
+    const cached = this._cache.getCachedByPath(normalizedIdentity);
+    if (cached) return cached;
     try {
       return await this.load(normalizedIdentity);
     } catch (error) {

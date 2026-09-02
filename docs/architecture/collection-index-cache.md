@@ -22,7 +22,7 @@ It supplies data to `UnifiedIndexManager` and `CollectionSearch` so `search_all`
 
 1. **In-memory LRU (`memoryCache`)** – fastest path; TTL default 5 minutes.  
 2. **In-process snapshot (`this.cache`)** – retains last loaded index with fetched-at timestamp.  
-3. **Persistent disk cache** – stored under `~/.dollhousemcp/cache/collection-index-cache.json`. Used when network fetch fails.
+3. **Persistent cache** – routed through the configured shared-cache backend in hosted mode. Local filesystem mode uses the platform cache directory (for example `~/.cache/dollhousemcp/collection-index-cache.json` on Linux). Used when network fetch fails.
 
 ---
 
@@ -55,7 +55,7 @@ Security considerations:
 
 - TTL (default 15 minutes) is hard-coded in the class but could be made configurable via `IndexConfigManager` in future.  
 - `CacheFactory.createAPICache()` sets memory cache size (max 50 entries, ~10 MB).  
-- Base directory defaults to `process.cwd()`; DI can override in tests.
+- Cache directory resolution uses the exact `DOLLHOUSE_CACHE_DIR` override when set. Otherwise `PathService` selects the platform cache directory (XDG on Linux, `Library/Caches` on macOS, and `LOCALAPPDATA` on Windows); legacy callers with an explicit base directory retain the pre-v2.1 `.dollhousemcp/cache` layout.
 
 ---
 

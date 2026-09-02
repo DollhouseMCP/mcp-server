@@ -737,6 +737,33 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
 
+  it('holds the execution-generation observation through stale revalidation', async () => {
+    const mocks = createManager();
+    let markRevalidationStarted: (() => void) | undefined;
+    const revalidationStarted = new Promise<void>((resolve) => {
+      markRevalidationStarted = resolve;
+    });
+    let resolveRevalidation: ((value: ReturnType<typeof stateWithGoals>) => void) | undefined;
+    mocks.getAgentStateForRecovery
+      .mockResolvedValueOnce(stateWithGoals([]))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRevalidation = resolve;
+        markRevalidationStarted?.();
+      }));
+    const executingAgents = new Map([['session-a:test-agent', policy()]]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    const abort = handler.dispatch('abort', { element_name: 'test-agent' });
+    await revalidationStarted;
+    expect(mocks.release).not.toHaveBeenCalled();
+
+    resolveRevalidation?.(stateWithGoals([]));
+    await expect(abort).resolves.toEqual(expect.objectContaining({
+      recoveredStalePolicy: true,
+    }));
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves policy when strict durable-state lookup fails', async () => {
     const mocks = createManager();
     mocks.getAgentStateForRecovery.mockRejectedValue(new Error('state store unavailable'));
