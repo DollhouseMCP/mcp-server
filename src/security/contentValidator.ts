@@ -19,6 +19,9 @@ import type { SecurityTelemetry } from './telemetry/SecurityTelemetry.js';
 // FIX: SonarCloud typescript:S4323 - Extract union type to type alias for maintainability
 export type SecuritySeverity = 'low' | 'medium' | 'high' | 'critical';
 
+const CRITICAL_SEVERITY = 'critical' as const;
+const INSTRUCTION_OVERRIDE_DESCRIPTION = 'Instruction override';
+
 export interface ContentValidationResult {
   isValid: boolean;
   sanitizedContent?: string;
@@ -103,57 +106,57 @@ export class ContentValidator {
   // tests/integration/security-audit-batch-a.integration.test.ts) and new attack vectors.
   private static readonly INJECTION_PATTERNS: Array<{ pattern: RegExp; severity: 'high' | 'critical'; description: string }> = [
     // System prompt override attempts
-    { pattern: /\[SYSTEM:\s*.*?\]/gi, severity: 'critical', description: 'System prompt override' },
-    { pattern: /\[ADMIN:\s*.*?\]/gi, severity: 'critical', description: 'Admin prompt override' },
-    { pattern: /\[ASSISTANT:\s*.*?\]/gi, severity: 'critical', description: 'Assistant prompt override' },
-    { pattern: /\[USER:\s*.*?\]/gi, severity: 'high', description: 'User prompt override' },
+    { pattern: /\[SYSTEM:[^\]\r\n]*\]/gi, severity: CRITICAL_SEVERITY, description: 'System prompt override' },
+    { pattern: /\[ADMIN:[^\]\r\n]*\]/gi, severity: CRITICAL_SEVERITY, description: 'Admin prompt override' },
+    { pattern: /\[ASSISTANT:[^\]\r\n]*\]/gi, severity: CRITICAL_SEVERITY, description: 'Assistant prompt override' },
+    { pattern: /\[USER:[^\]\r\n]*\]/gi, severity: 'high', description: 'User prompt override' },
     
     // Instruction manipulation
-    { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /ignore\s+(all\s+)?prior\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /disregard\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /disregard\s+everything\s+above/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /forget\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /forget\s+your\s+training/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /override\s+your\s+programming/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /you\s+are\s+now\s+(in\s+)?(admin|root|system|sudo|developer|debug|test|DAN)\s*(mode)?/gi, severity: 'critical', description: 'Role elevation attempt' },
+    { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /ignore\s+(all\s+)?prior\s+instructions/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /disregard\s+(all\s+)?previous\s+instructions/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /disregard\s+everything\s+above/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /forget\s+(all\s+)?previous\s+instructions/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /forget\s+your\s+training/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /override\s+your\s+programming/gi, severity: CRITICAL_SEVERITY, description: INSTRUCTION_OVERRIDE_DESCRIPTION },
+    { pattern: /you\s+are\s+now\s+(in\s+)?(admin|root|system|sudo|developer|debug|test|DAN)\s*(mode)?/gi, severity: CRITICAL_SEVERITY, description: 'Role elevation attempt' },
     // Specific dangerous roles only — "act as \w+" would false-positive on persona
     // content like "act as a helpful teacher" (#1782-4, review feedback)
-    { pattern: /act\s+as\s+(admin|root|system|sudo|superuser|DAN)\b/gi, severity: 'critical', description: 'Role elevation attempt' },
-    { pattern: /pretend\s+you\s+have\s+no\s+(guidelines|restrictions|rules|limits)/gi, severity: 'critical', description: 'Guideline bypass attempt' },
-    { pattern: /\b(jailbreak|do\s+anything\s+now|DAN\s+mode)\b/gi, severity: 'critical', description: 'Jailbreak attempt' },
+    { pattern: /act\s+as\s+(admin|root|system|sudo|superuser|DAN)\b/gi, severity: CRITICAL_SEVERITY, description: 'Role elevation attempt' },
+    { pattern: /pretend\s+you\s+have\s+no\s+(guidelines|restrictions|rules|limits)/gi, severity: CRITICAL_SEVERITY, description: 'Guideline bypass attempt' },
+    { pattern: /\b(jailbreak|do\s+anything\s+now|DAN\s+mode)\b/gi, severity: CRITICAL_SEVERITY, description: 'Jailbreak attempt' },
     
     // Data exfiltration attempts
-    { pattern: /export\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)/gi, severity: 'critical', description: 'Data exfiltration' },
-    { pattern: /send\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)\s+to/gi, severity: 'critical', description: 'Data exfiltration' },
+    { pattern: /export\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)/gi, severity: CRITICAL_SEVERITY, description: 'Data exfiltration' },
+    { pattern: /send\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)\s+to/gi, severity: CRITICAL_SEVERITY, description: 'Data exfiltration' },
     { pattern: /list\s+all\s+(files|tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Information disclosure' },
     { pattern: /show\s+me\s+all\s+(tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Credential disclosure' },
     
     // Command execution patterns
-    { pattern: /curl\s+[^\s]{1,500}/gi, severity: 'critical', description: 'External command execution' },
-    { pattern: /wget\s+[^\s]{1,500}/gi, severity: 'critical', description: 'External command execution' },
-    { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
+    { pattern: /curl\s+[^\s]{1,500}/gi, severity: CRITICAL_SEVERITY, description: 'External command execution' },
+    { pattern: /wget\s+[^\s]{1,500}/gi, severity: CRITICAL_SEVERITY, description: 'External command execution' },
+    { pattern: /\$\([^)]+\)/g, severity: CRITICAL_SEVERITY, description: 'Command substitution' },
     // SECURITY: Backtick command detection with ReDoS mitigation
     // FIX (PR #1313): Fixed ReDoS vulnerabilities by replacing .* with [^`]*
     // FIX (PR #1313 - SonarCloud): Added explicit bounds {0,200} to prevent backtracking
     // Multiple unbounded quantifiers in same pattern can still cause backtracking even with [^`]*
     // Bounded quantifiers prevent exponential time complexity while matching realistic commands
-    { pattern: /`[^`]{0,200}(?:rm\s+-rf?\s+[/~]|sudo\s+rm|chmod\s+777|chown\s+root)[^`]{0,200}`/gi, severity: 'critical', description: 'Dangerous shell command in backticks' },
-    { pattern: /`[^`]{0,200}(?:cat|ls)\s+\/etc\/[^`]{0,200}`/gi, severity: 'critical', description: 'Sensitive file access in backticks' },
-    { pattern: /`[^`]{0,200}(?:bash|sh)\s+-c\s+['"][^`]{0,200}`/gi, severity: 'critical', description: 'Shell execution in backticks' },
-    { pattern: /`[^`]{0,200}(?:passwd|shadow|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]{0,200}`/gi, severity: 'critical', description: 'Dangerous command in backticks' },
-    { pattern: /`[^`]{0,200}(?:curl|wget)\s+[^`]{0,200}\|\s*(?:sh|bash)[^`]{0,200}`/gi, severity: 'critical', description: 'Pipe to shell in backticks' },
-    { pattern: /`[^`]{0,200}(?:\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su)[^`]{0,200}`/gi, severity: 'critical', description: 'Sensitive file or privilege escalation in backticks' },
-    { pattern: /`[^`]{0,200}(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[^`]{0,200}(?:exec|eval|system|subprocess)[^`]{0,200}`/gi, severity: 'critical', description: 'Script interpreter with dangerous function in backticks' },
-    { pattern: /eval\s*\(/gi, severity: 'critical', description: 'Code evaluation' },
-    { pattern: /exec\s*\(/gi, severity: 'critical', description: 'Code execution' },
-    { pattern: /os\.system\s*\(/gi, severity: 'critical', description: 'System command execution' },
-    { pattern: /subprocess\.(call|run|Popen)/gi, severity: 'critical', description: 'Subprocess execution' },
+    { pattern: /`[^`]{0,200}(?:rm\s+-rf?\s+[/~]|sudo\s+rm|chmod\s+777|chown\s+root)[^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Dangerous shell command in backticks' },
+    { pattern: /`[^`]{0,200}(?:cat|ls)\s+\/etc\/[^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Sensitive file access in backticks' },
+    { pattern: /`[^`]{0,200}(?:bash|sh)\s+-c\s+['"][^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Shell execution in backticks' },
+    { pattern: /`[^`]{0,200}(?:passwd|shadow|nc\s+-l|netcat\s+-l|ssh\s+root@)[^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Dangerous command in backticks' },
+    { pattern: /`[^`]{0,200}(?:curl|wget)\s+[^`]{0,200}\|\s*(?:sh|bash)[^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Pipe to shell in backticks' },
+    { pattern: /`[^`]{0,200}(?:\/etc\/passwd|\/etc\/shadow|\.ssh\/id_|sudo\s+su)[^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Sensitive file or privilege escalation in backticks' },
+    { pattern: /`[^`]{0,200}(?:python|perl|ruby|php|node)\s+(?:-e|-c)\s+[^`]{0,200}(?:exec|eval|system|subprocess)[^`]{0,200}`/gi, severity: CRITICAL_SEVERITY, description: 'Script interpreter with dangerous function in backticks' },
+    { pattern: /eval\s*\(/gi, severity: CRITICAL_SEVERITY, description: 'Code evaluation' },
+    { pattern: /exec\s*\(/gi, severity: CRITICAL_SEVERITY, description: 'Code execution' },
+    { pattern: /os\.system\s*\(/gi, severity: CRITICAL_SEVERITY, description: 'System command execution' },
+    { pattern: /subprocess\.(call|run|Popen)/gi, severity: CRITICAL_SEVERITY, description: 'Subprocess execution' },
     
     // Token/credential patterns
     { pattern: /GITHUB_TOKEN/gi, severity: 'high', description: 'Token reference' },
-    { pattern: /ghp_[a-zA-Z0-9]{36}/g, severity: 'critical', description: 'GitHub token exposure' },
-    { pattern: /gho_[a-zA-Z0-9]{36}/g, severity: 'critical', description: 'GitHub OAuth token exposure' },
+    { pattern: /ghp_[a-zA-Z0-9]{36}/g, severity: CRITICAL_SEVERITY, description: 'GitHub token exposure' },
+    { pattern: /gho_[a-zA-Z0-9]{36}/g, severity: CRITICAL_SEVERITY, description: 'GitHub OAuth token exposure' },
     
     // Path traversal in content
     { pattern: /\.\.\/\.\.\/\.\.\//g, severity: 'high', description: 'Path traversal attempt' },
@@ -162,17 +165,17 @@ export class ContentValidator {
 
     // HTML/XSS patterns — defense-in-depth for community-sourced content
     // DOMPurify on the client is the primary defense; these catch threats at ingest
-    { pattern: /<script[\s>]/gi, severity: 'critical', description: 'HTML script injection' },
-    { pattern: /<\/script>/gi, severity: 'critical', description: 'HTML script injection' },
-    { pattern: /<iframe[\s>]/gi, severity: 'critical', description: 'HTML iframe injection' },
+    { pattern: /<script[\s>]/gi, severity: CRITICAL_SEVERITY, description: 'HTML script injection' },
+    { pattern: /<\/script>/gi, severity: CRITICAL_SEVERITY, description: 'HTML script injection' },
+    { pattern: /<iframe[\s>]/gi, severity: CRITICAL_SEVERITY, description: 'HTML iframe injection' },
     { pattern: /<object[\s>]/gi, severity: 'high', description: 'HTML object injection' },
     { pattern: /<embed[\s>]/gi, severity: 'high', description: 'HTML embed injection' },
-    { pattern: /\bon\w+=\s*["']/gi, severity: 'critical', description: 'HTML event handler injection' },
-    { pattern: /javascript[ \t]*:[ \t]*\S/gi, severity: 'critical', description: 'JavaScript protocol injection' },
+    { pattern: /\bon\w+=\s*["']/gi, severity: CRITICAL_SEVERITY, description: 'HTML event handler injection' },
+    { pattern: /javascript[ \t]*:[ \t]*\S/gi, severity: CRITICAL_SEVERITY, description: 'JavaScript protocol injection' },
     // Entity-encoded variants: &#106;avascript, &#x6a;avascript, &#106;&#97;vascript, etc.
-    { pattern: /&#x?[0-9a-f]+;?\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t/gi, severity: 'critical', description: 'Encoded JavaScript protocol injection' },
+    { pattern: /&#x?[0-9a-f]+;?\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t/gi, severity: CRITICAL_SEVERITY, description: 'Encoded JavaScript protocol injection' },
     // Fully/partially entity-encoded: detects &#...script pattern (covers multi-entity encoding)
-    { pattern: /(?:&#x?[0-9a-f]+;?\s*){2,}s\s*c\s*r\s*i\s*p\s*t/gi, severity: 'critical', description: 'Encoded JavaScript protocol injection' },
+    { pattern: /(?:&#x?[0-9a-f]+;?\s*){2,}s\s*c\s*r\s*i\s*p\s*t/gi, severity: CRITICAL_SEVERITY, description: 'Encoded JavaScript protocol injection' },
   ];
 
   // Malicious YAML patterns
@@ -183,11 +186,11 @@ export class ContentValidator {
     // Example: &a [*a] or &bomb ["test", *bomb]
     /&(\w+)\s*\[[^\]]*\*\1[^\]]*\]/,      // Direct recursion in array
     /&(\w+)\s*\{[^}]*\*\1[^}]*\}/,        // Direct recursion in object
-    /^\s*\w+:\s*&(\w+)\s*\n\s*\w+:\s*\*\1/m,  // Multi-line value recursion (data: &ref / value: *ref)
+    /^[ \t]*\w+:[ \t]*&(\w+)[ \t]*\r?\n[ \t]*\w+:[ \t]*\*\1/m,  // Multi-line value recursion (data: &ref / value: *ref)
     
     // Simplified pattern to detect deeply nested anchors (less ReDoS risk)
     // Looks for 3+ anchor definitions in close proximity
-    /&\w+[^&]*&\w+[^&]*&\w+/,            // 3+ anchors (simplified, less backtracking)
+    /&\w[^&]*&\w[^&]*&\w+/,             // 3+ anchors (simplified, linear matching)
     
     // Detects excessive aliases in close proximity (potential amplification)
     // Example: [*a, *b, *c, *d, *e, *f, *g, *h, *i, *j]
@@ -247,12 +250,12 @@ export class ContentValidator {
     /\.(?:get|post|put|delete)\s*\(\s*["']https?:\/\//,    // Method chaining with HTTP requests
     
     // File system operations - require suspicious context
-    /(?:fs\.|file\.|)\s*open\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,     // File open with suspicious paths
+    /(?:(?:fs|file)\.)?open\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,       // File open with suspicious paths
     /file_get_contents\s*\(/,                                             // PHP file reading function
     /file_put_contents\s*\(/,                                             // PHP file writing function
     /fopen\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,                       // File open with dangerous system paths
-    /(?:fs\.)?\s*readFile\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,        // Node.js file read with path traversal
-    /(?:fs\.)?\s*writeFile\s*\(\s*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/,   // Node.js file write to system dirs
+    /(?:fs\.)?readFile\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,           // Node.js file read with path traversal
+    /(?:fs\.)?writeFile\s*\(\s*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/,      // Node.js file write to system dirs
     
     // Protocol handlers
     /file:\/\//,
@@ -441,7 +444,7 @@ export class ContentValidator {
         logger.debug(`Content injection blocked: ${description} (${severity}) — pattern: ${pattern.source}`);
 
         // Update highest severity
-        if (severity === 'critical' || (severity === 'high' && highestSeverity !== 'critical')) {
+        if (severity === CRITICAL_SEVERITY || highestSeverity !== CRITICAL_SEVERITY) {
           highestSeverity = severity;
         }
 
@@ -488,12 +491,10 @@ export class ContentValidator {
     // This prevents huge payloads from hitting the normalization code path
     // while still allowing legitimate content with some Unicode overhead
     const DOS_PREVENTION_MULTIPLIER = 2;
-    if (!options.skipSizeCheck) {
-      if (content.length > maxLength * DOS_PREVENTION_MULTIPLIER) {
-        throw new SecurityError(
-          `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
-        );
-      }
+    if (!options.skipSizeCheck && content.length > maxLength * DOS_PREVENTION_MULTIPLIER) {
+      throw new SecurityError(
+        `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
+      );
     }
 
     const detectedPatterns: string[] = [];
@@ -504,12 +505,10 @@ export class ContentValidator {
     // SECURITY FIX (DMCP-SEC-004): Phase 2 - Check length on NORMALIZED content
     // This prevents bypass attacks using combining characters or zero-width chars
     // that would inflate raw length but collapse after normalization
-    if (!options.skipSizeCheck) {
-      if (unicodeCheck.sanitized.length > maxLength) {
-        throw new SecurityError(
-          `Content exceeds maximum length of ${maxLength} characters after normalization (${unicodeCheck.sanitized.length} provided)`
-        );
-      }
+    if (!options.skipSizeCheck && unicodeCheck.sanitized.length > maxLength) {
+      throw new SecurityError(
+        `Content exceeds maximum length of ${maxLength} characters after normalization (${unicodeCheck.sanitized.length} provided)`
+      );
     }
 
     // Skip injection-pattern scanning for verified bundled elements.
@@ -580,7 +579,7 @@ export class ContentValidator {
       detectedPatterns: [
         ...new Set([...(validation.detectedPatterns ?? []), MALICIOUS_YAML_CONTENT_PATTERN]),
       ],
-      severity: 'critical',
+      severity: CRITICAL_SEVERITY,
     };
   }
 
@@ -597,22 +596,9 @@ export class ContentValidator {
    *   MALICIOUS_YAML_PATTERNS scan below is bounded by MAX_CONTENT_LENGTH, so
    *   larger content is rejected here rather than scanned or thrown on.
    */
-  static validateYamlContent(
-    yamlContent: string,
-    maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH,
-    options: { detectContentPatterns?: boolean } = {},
-  ): boolean {
+  static validateYamlContent(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
     const effectiveMaxLength = Math.min(maxLength, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-    // Length validation before pattern matching
-    if (yamlContent.length > effectiveMaxLength) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_INJECTION_ATTEMPT',
-        severity: 'HIGH',
-        source: 'yaml_validation',
-        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${effectiveMaxLength}`
-      });
-      return false;
-    }
+    if (!this.hasValidYamlLength(yamlContent, effectiveMaxLength)) return false;
 
     if (this.hasYamlBombPattern(yamlContent, effectiveMaxLength)) {
       return false;
@@ -626,21 +612,45 @@ export class ContentValidator {
       return false;
     }
 
-    // Unicode normalization preprocessing for YAML content
+    const normalizedContent = this.normalizeYamlForValidation(yamlContent);
+    if (normalizedContent === null) return false;
+
+    return !this.hasMaliciousYamlPattern(normalizedContent);
+  }
+
+  /**
+   * Validate transport-level YAML safety without interpreting scalar text as a
+   * content-policy violation. Safe-schema callers use this for code-bearing
+   * elements, then enforce their element policy after parsing.
+   */
+  static validateYamlStructure(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
+    return this.hasValidYamlLength(yamlContent, maxLength)
+      && this.normalizeYamlForValidation(yamlContent) !== null;
+  }
+
+  private static hasValidYamlLength(yamlContent: string, effectiveMaxLength: number): boolean {
+    if (yamlContent.length <= effectiveMaxLength) return true;
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_INJECTION_ATTEMPT',
+      severity: 'HIGH',
+      source: 'yaml_validation',
+      details: `YAML content exceeds maximum length: ${yamlContent.length} > ${effectiveMaxLength}`
+    });
+    return false;
+  }
+
+  private static normalizeYamlForValidation(yamlContent: string): string | null {
     const unicodeResult = UnicodeValidator.normalize(yamlContent);
-
-    if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_UNICODE_ATTACK',
-        severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
-        source: 'yaml_validation',
-        details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
-      });
-      return false;
+    if (unicodeResult.isValid || !unicodeResult.detectedIssues) {
+      return unicodeResult.normalizedContent;
     }
-
-    return options.detectContentPatterns === false ||
-      !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_UNICODE_ATTACK',
+      severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
+      source: 'yaml_validation',
+      details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
+    });
+    return null;
   }
 
   /**
@@ -720,7 +730,7 @@ export class ContentValidator {
   private static buildAnchorReferenceMap(lines: string[]): Map<string, Set<string>> {
     const anchorRefs = new Map<string, Set<string>>();
     for (let i = 0; i < lines.length; i++) {
-      const anchorMatch = lines[i].match(/&(\w+)/);
+      const anchorMatch = /&(\w+)/.exec(lines[i]);
       if (anchorMatch) {
         const anchorName = anchorMatch[1];
         // Get references in next 5 lines
@@ -754,7 +764,7 @@ export class ContentValidator {
       for (const refAnchor of refs1) {
         const refs2 = anchorRefs.get(refAnchor);
         // Check if the referenced anchor references back to the original
-        if (refs2 && refs2.has(anchor1)) {
+        if (refs2?.has(anchor1)) {
           SecurityMonitor.logSecurityEvent({
             type: 'YAML_INJECTION_ATTEMPT',
             severity: 'CRITICAL',
@@ -811,9 +821,10 @@ export class ContentValidator {
     // locally can also be installed from the collection.
     instructions: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
     content: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
-    // Descriptions can be substantive LLM-authored text — bound them by
-    // the YAML/frontmatter limit rather than the short 1KB metadata cap.
-    description: SECURITY_LIMITS.MAX_YAML_LENGTH,
+    // Element description is a short summary field with its own dedicated cap
+    // (tighter than the generic metadata-field cap); substantive long-form text
+    // belongs in instructions/content or nested documentation fields.
+    description: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
     // Default for everything else (name, category, author, version,
     // tags-as-string, custom fields) — strict 1KB cap.
   };
@@ -871,7 +882,7 @@ export class ContentValidator {
    */
   static sanitizePersonaContent(content: string): string {
     // Extract frontmatter
-    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(content);
     
     if (!frontmatterMatch) {
       // No frontmatter, just validate content

@@ -530,6 +530,82 @@ describe('SchemaDispatcher', () => {
     });
   });
 
+  describe('dispatch() - element import and export contracts', () => {
+    const mockElementCRUD = {
+      getElementDetails: jest.fn(),
+      createElement: jest.fn(),
+    };
+    const registryWithElementCRUD = {
+      ...mockRegistry,
+      elementCRUD: mockElementCRUD as any,
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockElementCRUD.getElementDetails.mockResolvedValue({
+        metadata: { name: 'portable-persona', description: 'Portable' },
+        content: 'Portable content',
+      });
+      mockElementCRUD.createElement.mockResolvedValue({ created: true });
+    });
+
+    it('uses the schema-provided JSON default when exporting', async () => {
+      const result = await SchemaDispatcher.dispatch(
+        'export_element',
+        { element_name: 'portable-persona', element_type: 'persona' },
+        registryWithElementCRUD
+      );
+
+      expect(mockElementCRUD.getElementDetails).toHaveBeenCalledWith('portable-persona', 'persona');
+      expect(result).toEqual(expect.objectContaining({
+        elementName: 'portable-persona',
+        elementType: 'persona',
+        format: 'json',
+      }));
+    });
+
+    it('creates an imported element when the storage lookup reports not found', async () => {
+      mockElementCRUD.getElementDetails.mockRejectedValue(new Error('Persona not found'));
+      const data = {
+        exportVersion: '1.0',
+        elementType: 'personas',
+        elementName: 'imported-persona',
+        format: 'json',
+        data: {
+          name: 'imported-persona',
+          description: 'Imported',
+          content: 'Imported content',
+        },
+      };
+
+      await SchemaDispatcher.dispatch('import_element', { data }, registryWithElementCRUD);
+
+      expect(mockElementCRUD.createElement).toHaveBeenCalledWith({
+        name: 'imported-persona',
+        type: 'personas',
+        description: 'Imported',
+        content: 'Imported content',
+        instructions: undefined,
+        metadata: undefined,
+      });
+    });
+
+    it('rejects an existing imported element when overwrite is false', async () => {
+      const data = {
+        exportVersion: '1.0',
+        elementType: 'personas',
+        elementName: 'existing-persona',
+        format: 'json',
+        data: { name: 'existing-persona', description: 'Duplicate' },
+      };
+
+      await expect(
+        SchemaDispatcher.dispatch('import_element', { data, overwrite: false }, registryWithElementCRUD)
+      ).rejects.toThrow("Element 'existing-persona' already exists. Use overwrite: true to replace.");
+      expect(mockElementCRUD.createElement).not.toHaveBeenCalled();
+    });
+  });
+
   describe('dispatch() - Portfolio paramStyle conversion (Issue #252)', () => {
     const mockPortfolioHandler = {
       portfolioStatus: jest.fn().mockResolvedValue({ status: 'ok' }),
@@ -617,6 +693,27 @@ describe('SchemaDispatcher', () => {
           pageSize: 20,
           sortBy: 'name',
         })
+      );
+    });
+
+    it('validates fields as a string or an array containing only strings', async () => {
+      await SchemaDispatcher.dispatch(
+        'search_portfolio',
+        { query: 'test', fields: 'minimal' },
+        registryWithPortfolio
+      );
+      await SchemaDispatcher.dispatch(
+        'search_portfolio',
+        { query: 'test', fields: ['element_name', 'description'] },
+        registryWithPortfolio
+      );
+
+      await expect(SchemaDispatcher.dispatch(
+        'search_portfolio',
+        { query: 'test', fields: ['element_name', 42] },
+        registryWithPortfolio
+      )).rejects.toThrow(
+        "Parameter 'fields' for operation 'search_portfolio' must be a string or string array, got array"
       );
     });
 

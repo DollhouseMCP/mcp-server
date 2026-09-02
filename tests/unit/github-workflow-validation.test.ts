@@ -13,19 +13,36 @@ import * as yaml from 'js-yaml';
 
 interface WorkflowStep {
   name?: string;
+  id?: string;
+  if?: string;
   run?: string;
   shell?: string;
   uses?: string;
   with?: Record<string, any>;
   env?: Record<string, any>;
+  'continue-on-error'?: boolean;
+}
+
+interface WorkflowService {
+  image: string;
+  env?: Record<string, any>;
+  ports?: Array<string | number>;
+  options?: string;
 }
 
 interface WorkflowJob {
   name?: string;
   'runs-on': string | string[];
   steps: WorkflowStep[];
+  strategy?: {
+    matrix?: {
+      os?: string | string[];
+    };
+  };
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
+  services?: Record<string, WorkflowService>;
+  'timeout-minutes'?: number;
 }
 
 interface Workflow {
@@ -92,18 +109,212 @@ describe('GitHub Workflow Validation', () => {
           });
         });
 
-        it('should have proper permissions set', () => {
-          // Check if workflow has permissions defined (for security)
-          if (workflow.jobs) {
-            Object.entries(workflow.jobs).forEach(([jobName, job]) => {
-              // This is more of a warning than a hard requirement
-              if (!job.permissions && !workflow.permissions) {
-                console.warn(`Job ${jobName} in ${file} has no explicit permissions`);
-              }
-            });
-          }
+        it('should avoid write-all permissions and report missing explicit permissions', () => {
+          const parsedJobs = (workflow as Partial<Workflow>).jobs;
+          expect(parsedJobs).toBeDefined();
+
+          Object.entries(parsedJobs ?? {}).forEach(([jobName, job]) => {
+            const effectivePermissions = job.permissions ?? workflow.permissions;
+            expect(effectivePermissions).not.toBe('write-all');
+            if (!effectivePermissions) {
+              console.warn(`Job ${jobName} in ${file} has no explicit permissions`);
+            }
+          });
         });
       });
+    });
+  });
+
+  describe('Beta CI policy', () => {
+    const hostedBranch = 'codex/hosted-http-integration';
+    const requiredPushWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+    ];
+    const requiredPullRequestWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+    ];
+    it.each(requiredPushWorkflows)(
+      'should not retain the retired hosted branch push trigger in %s',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.push?.branches).not.toContain(hostedBranch);
+      }
+    );
+
+    it.each(requiredPullRequestWorkflows)(
+      'should not retain the retired hosted branch pull-request trigger in %s',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.pull_request?.branches).not.toContain(hostedBranch);
+      }
+    );
+
+    it('should enforce unit tests and report performance tests on every core platform', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'core-build-test.yml'),
+        'utf8'
+      );
+      const workflow = yaml.load(content) as Workflow;
+      const steps = workflow.jobs['hosted-test'].steps;
+      const operatingSystems = workflow.jobs['hosted-test'].strategy?.matrix?.os;
+      const unitTestGate = steps.find(
+        (step) => step.name === 'Enforce unit test result'
+      );
+      const performanceTests = steps.find(
+        (step) => step.id === 'performance_tests'
+      );
+      const performanceTestGate = steps.find(
+        (step) => step.name === 'Enforce performance test result'
+      );
+
+      expect(unitTestGate?.if).toBe('always()');
+      expect(unitTestGate?.env?.TEST_OUTCOME).toBe(
+        '${{ steps.original_tests.outcome }}'
+      );
+      expect(unitTestGate?.run).toContain('exit 1');
+      expect(performanceTests?.if).toBeUndefined();
+      expect(performanceTests?.['continue-on-error']).toBe(true);
+      expect(performanceTestGate).toBeUndefined();
+      expect(operatingSystems).toEqual([
+        'ubuntu-latest',
+        'windows-latest',
+        'macos-latest',
+      ]);
+      expect(steps).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ if: false })])
+      );
+    });
+
+    it('pins every external action in the primary hosted matrix', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const externalActions = workflow.jobs['hosted-test'].steps
+        .map((step) => step.uses)
+        .filter((uses): uses is string => Boolean(uses));
+
+      expect(externalActions).not.toHaveLength(0);
+      for (const action of externalActions) {
+        expect(action).toMatch(/^[^@]+@[a-f0-9]{40}$/);
+      }
+    });
+
+    it('builds package artifacts from a clean dist tree', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'build-artifacts.yml'), 'utf8')
+      ) as Workflow;
+      const steps = workflow.jobs['build-artifacts'].steps;
+      const buildCache = steps.find((step) => step.name === 'Cache TypeScript build');
+      const build = steps.find((step) => step.name === 'Build project');
+
+      expect(buildCache).toBeUndefined();
+      expect(build?.run).toBe('npm run rebuild');
+    });
+
+    it('should enforce the full PostgreSQL integration suite against a pinned service', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const job = workflow.jobs['postgres-integration'];
+      const postgres = job?.services?.postgres;
+      const integrationStep = job?.steps.find(
+        (step) => step.name === 'Run required PostgreSQL integration suite'
+      );
+      const buildStepIndex = job?.steps.findIndex(
+        (step) => step.name === 'Build project'
+      ) ?? -1;
+      const integrationStepIndex = job?.steps.findIndex(
+        (step) => step.name === 'Run required PostgreSQL integration suite'
+      ) ?? -1;
+
+      expect(job?.name).toBe('PostgreSQL Integration');
+      expect(job?.['runs-on']).toBe('ubuntu-latest');
+      expect(job?.['timeout-minutes']).toBe(30);
+      expect(job?.permissions).toEqual({ contents: 'read' });
+      expect(job?.env?.DOLLHOUSE_REQUIRE_TEST_DATABASE).toBe('1');
+      expect(job?.env?.DOLLHOUSE_REQUIRE_PG_AUTH_TESTS).toBe('1');
+      expect(job?.env?.DOLLHOUSE_TEST_DATABASE_URL).toBe(
+        'postgres://dollhouse_app@localhost:5432/dollhousemcp_test'
+      );
+      expect(job?.env?.DOLLHOUSE_TEST_DATABASE_ADMIN_URL).toBe(
+        'postgres://dollhouse@localhost:5432/dollhousemcp_test'
+      );
+      expect(job?.env?.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
+      expect(buildStepIndex).toBeGreaterThan(-1);
+      expect(job?.steps[buildStepIndex]?.run).toBe('npm run build');
+      expect(buildStepIndex).toBeLessThan(integrationStepIndex);
+      expect(postgres?.image).toBe(
+        'postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73'
+      );
+      expect(postgres?.env).toEqual({
+        POSTGRES_USER: 'dollhouse',
+        POSTGRES_HOST_AUTH_METHOD: 'trust',
+        POSTGRES_DB: 'postgres',
+      });
+      expect(postgres?.ports).toEqual(['5432:5432']);
+      expect(integrationStep?.run).toBe('npm run test:integration -- --runInBand');
+
+      const externalActions = job?.steps
+        .map((step) => step.uses)
+        .filter((uses): uses is string => Boolean(uses));
+      expect(externalActions).toEqual([
+        'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683',
+        'actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af',
+      ]);
+    });
+
+    it('should hard-fail integration setup when PostgreSQL is required', () => {
+      const setup = fs.readFileSync(path.join(process.cwd(), 'tests', 'setup.ts'), 'utf8');
+
+      expect(setup).toContain("process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1'");
+      expect(setup).toContain('throw new Error(`Required PostgreSQL integration setup failed: ${msg}`');
+    });
+
+    it('should give core and extended compatibility checks distinct names', () => {
+      const core = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const extended = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'extended-node-compatibility.yml'), 'utf8')
+      ) as Workflow;
+
+      expect(core.jobs['hosted-test'].name).toContain('Test (');
+      expect(extended.jobs['extended-compatibility'].name).toContain('Extended (');
+      expect(core.jobs['hosted-test'].name).not.toBe(
+        extended.jobs['extended-compatibility'].name
+      );
+    });
+
+    it('should require successful MCP payloads from every Docker gate', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'docker-testing.yml'),
+        'utf8'
+      );
+      const failureMessages = [
+        'MCP initialize response is missing expected serverInfo',
+        'tools/list response does not contain a non-empty result.tools array',
+        'Docker Compose initialize response is missing expected serverInfo',
+      ];
+
+      for (const message of failureMessages) {
+        const marker = content.indexOf(message);
+
+        expect(marker).toBeGreaterThanOrEqual(0);
+        expect(content.slice(marker, marker + 200)).toContain('exit 1');
+      }
+
+      expect(content).toContain('notifications/initialized');
+      expect(content).toContain(".result.tools | type == \"array\" and length > 0");
     });
   });
 
@@ -124,7 +335,7 @@ describe('GitHub Workflow Validation', () => {
           job.steps.forEach((step, _index) => {
             if (step.run && !step.shell) {
               problematicPatterns.forEach(({ pattern, description: _description }) => {
-                if (pattern.test(step.run!)) {
+                if (pattern.test(step.run)) {
                   // This should fail - we need shell: bash for these patterns
                   expect(step.shell).toBe('bash');
                 }
@@ -141,21 +352,46 @@ describe('GitHub Workflow Validation', () => {
       workflowFiles.forEach(file => {
         const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
         const workflow = yaml.load(content) as Workflow;
+
+        if (workflow.env?.TEST_PERSONAS_DIR) {
+          expect(workflow.env.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
+        }
         
         Object.entries(workflow.jobs).forEach(([_jobName, job]) => {
-          // Check for TEST_PERSONAS_DIR usage
           if (job.env?.TEST_PERSONAS_DIR) {
-            // Should use proper GitHub Actions syntax
-            expect(job.env.TEST_PERSONAS_DIR).toMatch(/\$\{\{.*\}\}|[^$]/);
+            expect(job.env.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
           }
           
           job.steps.forEach(step => {
             if (step.env?.TEST_PERSONAS_DIR) {
-              expect(step.env.TEST_PERSONAS_DIR).toMatch(/\$\{\{.*\}\}|[^$]/);
+              expect(step.env.TEST_PERSONAS_DIR).toBe('${{ github.workspace }}/test-personas');
             }
           });
         });
       });
+    });
+
+    it('clears every GitHub token alias from spawned test servers', () => {
+      const spawnedServerTests = [
+        'tests/integration/mcp-protocol-compliance.test.ts',
+        'tests/integration/console-lifecycle.test.ts',
+        'tests/integration/startup/startup-readiness.test.ts',
+        'tests/integration/web-console-e2e/setup/provision.ts',
+        'tests/integration/web-console-e2e/setup/globalSetup.ts',
+        'tests/integration/database/mcp-database-e2e.test.ts',
+        'tests/integration/database/http-database-e2e.test.ts',
+        'tests/integration/database/auth-identity-e2e.test.ts',
+        'tests/integration/mcp-aql/addentry-transport.test.ts',
+        'tests/unit/scripts/qa-mcp-mode-contract.test.ts',
+        'tests/todd/mcp-protocol-smoke.test.ts',
+      ];
+
+      for (const relativePath of spawnedServerTests) {
+        const content = fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+        expect(content).toContain("GITHUB_TOKEN: ''");
+        expect(content).toContain("GITHUB_TEST_TOKEN: ''");
+        expect(content).toContain("TEST_GITHUB_TOKEN: ''");
+      }
     });
   });
 
@@ -224,8 +460,50 @@ describe('GitHub Workflow Validation', () => {
       const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
       const betaDeployWorkflow = fs.readFileSync(path.join(workflowDir, 'deploy-beta-alpha-vps.yml'), 'utf8');
 
-      expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
-      expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+      expect(betaPublishWorkflow).toContain(String.raw`-beta(\.[0-9A-Za-z.-]+)?$`);
+      expect(betaDeployWorkflow).toContain(String.raw`-beta(\.[0-9A-Za-z.-]+)?$`);
+    });
+
+    it('should dispatch and await every beta artifact publisher at the release tag', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('actions: write');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-npm.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-github-packages.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-mcpb.yml');
+      expect(betaPublishWorkflow).toContain('gh workflow run "${workflow}" --ref "${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('--field tag_name="${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('gh run list');
+      expect(betaPublishWorkflow).toContain('gh run watch "${run_id}" --exit-status');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids=()');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${npm_run_id}")');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
+    });
+
+    it('should reuse only a matching published prerelease and safely retry publishers', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('refs/tags/${tag_name}^{}');
+      expect(betaPublishWorkflow).toContain('[[ "${remote_tag_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('echo "tag_exists=${tag_exists}"');
+      expect(betaPublishWorkflow).toContain('--json tagName,isPrerelease,isDraft,targetCommitish');
+      expect(betaPublishWorkflow).toContain('[[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]');
+      expect(betaPublishWorkflow).toContain('[[ "${release_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('::warning::Release ${tag_name} records a different targetCommitish');
+      expect(betaPublishWorkflow).not.toContain('::error::Release ${tag_name} targets');
+      expect(betaPublishWorkflow).toContain('echo "release_exists=${release_exists}"');
+      expect(betaPublishWorkflow).toContain('echo "npm_publish_complete=${npm_publish_complete}"');
+      expect(betaPublishWorkflow).toContain('beta_is_newer()');
+      expect(betaPublishWorkflow).not.toContain('import semver from');
+      expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
+      expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
+      expect(betaPublishWorkflow).toContain('RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${TAG_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('if [[ "${RELEASE_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('gh release create "${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('NPM_PUBLISH_COMPLETE: ${{ steps.release.outputs.npm_publish_complete }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
     });
   });
 
@@ -235,6 +513,10 @@ describe('GitHub Workflow Validation', () => {
     beforeAll(() => {
       const workflowPath = path.join(workflowDir, 'claude-code-review.yml');
       workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as Workflow;
+    });
+
+    it('does not advertise an unusable manual dispatch route', () => {
+      expect(workflow.on?.workflow_dispatch).toBeUndefined();
     });
 
     it('cancels superseded reviews for the same pull request', () => {
@@ -299,7 +581,7 @@ function checkForTestPersonasDir(job: WorkflowJob): boolean {
     }
     
     // Check if it's set in a run command
-    if (step.run && step.run.includes('TEST_PERSONAS_DIR')) {
+    if (step.run?.includes('TEST_PERSONAS_DIR')) {
       return true;
     }
     

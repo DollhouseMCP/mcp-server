@@ -55,13 +55,21 @@ describe('supply-chain install policy', () => {
     const buildWorkflow = read('.github/workflows/build-artifacts.yml');
     const coreWorkflow = read('.github/workflows/core-build-test.yml');
     const qaWorkflow = read('.github/workflows/qa-tests.yml');
+    const qaInspectorRunner = read('scripts/qa-inspector-cli-test.js');
+    const packageManifest = JSON.parse(read('package.json')) as {
+      scripts?: Record<string, string>;
+    };
     const registryWorkflow = read('.github/workflows/publish-mcp-registry.yml');
     const bundleWorkflow = read('.github/workflows/publish-mcpb.yml');
 
     expect(buildWorkflow).toContain('apt-get install -y --no-install-recommends shellcheck');
     expect(executableLines(coreWorkflow).some(line => /\bnpx\b/.test(line))).toBe(false);
     expect(executableLines(qaWorkflow).some(line => /\bnpx\b/.test(line))).toBe(false);
-    expect(qaWorkflow).toContain('./node_modules/.bin/mcp-inspector --version');
+    expect(qaWorkflow).toContain('npm run qa:inspector');
+    expect(packageManifest.scripts?.['qa:inspector'])
+      .toBe('node scripts/qa-inspector-cli-test.js');
+    expect(qaInspectorRunner)
+      .toContain("require.resolve('@modelcontextprotocol/inspector-cli/build/index.js')");
     expect(registryWorkflow.match(/--proto '=https' --proto-redir '=https'/g)).toHaveLength(2);
     expect(bundleWorkflow).toContain('@anthropic-ai/mcpb@2.1.2');
   });

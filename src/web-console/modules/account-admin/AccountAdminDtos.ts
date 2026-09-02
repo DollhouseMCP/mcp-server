@@ -1,3 +1,4 @@
+import type { ConsolePageDto, ConsolePageInfo } from '../../platform/ConsolePlatformTypes.js';
 import type {
   ConsoleAdminRole,
   ConsolePrincipalSummary,
@@ -18,9 +19,8 @@ export interface AccountPrincipalDto {
   readonly admin_factor_enrolled: boolean;
 }
 
-export interface AccountPrincipalListDto {
-  readonly users: readonly AccountPrincipalDto[];
-}
+/** Family-B cursor page of the cross-tenant users directory. */
+export type AccountPrincipalListDto = ConsolePageDto<AccountPrincipalDto>;
 
 export interface AccountRoleListDto {
   readonly user_id: string;
@@ -85,9 +85,11 @@ export function serializeAccountPrincipal(summary: ConsolePrincipalSummary): Acc
 
 export function serializeAccountPrincipalList(
   summaries: readonly ConsolePrincipalSummary[],
+  page: ConsolePageInfo,
 ): AccountPrincipalListDto {
   return {
-    users: summaries.map(summary => serializeAccountPrincipal(summary)),
+    items: summaries.map(summary => serializeAccountPrincipal(summary)),
+    page,
   };
 }
 

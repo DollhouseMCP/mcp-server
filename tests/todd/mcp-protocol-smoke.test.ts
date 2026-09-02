@@ -200,6 +200,7 @@ describe('MCP Protocol Smoke Tests', () => {
         MCP_INTERFACE_MODE: 'mcpaql',
         DOLLHOUSE_WEB_CONSOLE: 'false',
         GITHUB_TOKEN: '',
+        TEST_GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
       },
     });
@@ -1100,18 +1101,12 @@ describe('MCP Protocol Smoke Tests', () => {
   // =========================================================================
 
   describe('Gatekeeper Confirmation', () => {
-    it('should accept explicit pre-confirmation for create', async () => {
-      const response = await confirm(client, 'create_element');
-      expect(response).toMatch(/confirmed|approved|success/i);
-    }, TEST_TIMEOUT);
-
-    it('should accept explicit pre-confirmation for delete', async () => {
-      const response = await confirm(client, 'delete_element');
-      expect(response).toMatch(/confirmed|approved|success/i);
-    }, TEST_TIMEOUT);
-
-    it('should accept explicit pre-confirmation for edit', async () => {
-      const response = await confirm(client, 'edit_element');
+    it.each([
+      ['create', 'create_element'],
+      ['delete', 'delete_element'],
+      ['edit', 'edit_element'],
+    ])('should accept explicit pre-confirmation for %s', async (_label, operation) => {
+      const response = await confirm(client, operation);
       expect(response).toMatch(/confirmed|approved|success/i);
     }, TEST_TIMEOUT);
   });

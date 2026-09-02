@@ -11,6 +11,8 @@
  * the metadata-driven common/type-specific/extra path.
  */
 
+import { parseBrowserYaml } from './yaml-safety.js';
+
 const PLURAL_TO_SINGULAR = { personas: 'persona', skills: 'skill', templates: 'template', agents: 'agent', memories: 'memory', ensembles: 'ensemble' };
 
 /* ── Memory rendering (pure YAML) — LIFTED VERBATIM from legacy app.js ─────── */
@@ -26,7 +28,7 @@ function safeParseYaml(content) {
   if (!globalThis.jsyaml) return null;
   if (typeof content !== 'string' || content.length > YAML_MAX_SIZE) return null;
   try {
-    return globalThis.jsyaml.load(content, { schema: globalThis.jsyaml.CORE_SCHEMA }) || null;
+    return parseBrowserYaml(content, { maxBytes: YAML_MAX_SIZE, schema: 'core' }) || null;
   } catch {
     return null;
   }
@@ -638,10 +640,6 @@ function renderMemoryView(content) {
   /** Sanitize HTML through DOMPurify (falls back to escapeHtml if DOMPurify is unavailable). */
   function sanitizeHtml(html) {
     return globalThis.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(html);
-  }
-
-  function escapeAttr(str) {
-    return String(str || '').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
   }
 
   function capitalize(str) {

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
+import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import {
@@ -10,7 +11,7 @@ import {
   type ConsolePortfolioElementDetailRecord,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const MAX_SKILL_BYTES = 12 * 1024;
@@ -165,11 +166,9 @@ export class IntegrationOperationCatalog {
         403,
       );
     }
-    const normalizedSpec = normalizeOpenApiSpec(input.spec);
-    assertSpecHostsAllowed(normalizedSpec, context.descriptor);
-    const specHash = sha256Json(normalizedSpec);
+    const { normalizedSpec, specHash } = prepareOpenApiSpecForDescriptor(input.spec, context.descriptor);
     const now = this.now();
-    const granted = await this.resolveGrantedScopes(context.userId, context.descriptor.provider);
+    const granted = await this.resolveGrantedScopes(context.userId, context.descriptor);
     const operations = deriveOperations(context.descriptor, normalizedSpec, granted);
     await this.options.specStore.upsert({
       descriptorId: context.descriptor.id,
@@ -237,7 +236,7 @@ export class IntegrationOperationCatalog {
   async listPromotedOperations(input: IntegrationPromotedOperationListInput = {}): Promise<readonly IntegrationOperationDetails[]> {
     const session = this.currentUserId();
     const descriptors = input.provider
-      ? [await this.options.descriptorStore.findVisibleByProvider(session, input.provider)]
+      ? [await this.options.descriptorStore.findVisibleByProvider(session, input.provider as UserIntegrationProvider)]
       : await this.options.descriptorStore.listVisible(session);
     const promoted: IntegrationOperationDetails[] = [];
     for (const descriptor of descriptors) {
@@ -246,7 +245,7 @@ export class IntegrationOperationCatalog {
       if (promotedIds.size === 0) continue;
       const spec = await this.options.specStore.findByDescriptorId(descriptor.id);
       if (!spec) continue;
-      const grantedScopes = await this.resolveGrantedScopesForPromotion(session, descriptor.provider);
+      const grantedScopes = await this.resolveGrantedScopesForPromotion(session, descriptor);
       if (!grantedScopes) continue;
       const operations = deriveOperationDetails(descriptor, spec.spec, grantedScopes);
       for (const operation of operations) {
@@ -288,7 +287,7 @@ export class IntegrationOperationCatalog {
         404,
       );
     }
-    const grantedScopes = await this.resolveGrantedScopes(context.userId, context.descriptor.provider);
+    const grantedScopes = await this.resolveGrantedScopes(context.userId, context.descriptor);
     return {
       descriptor: context.descriptor,
       spec,
@@ -308,7 +307,7 @@ export class IntegrationOperationCatalog {
         401,
       );
     }
-    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
+    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider as UserIntegrationProvider);
     if (!descriptor) {
       throw new IntegrationOperationCatalogError(
         'integration_operation_provider_not_found',
@@ -319,9 +318,12 @@ export class IntegrationOperationCatalog {
     return { userId: session.userId, descriptor };
   }
 
-  private async resolveGrantedScopes(userId: string, provider: string): Promise<ReadonlySet<string>> {
-    const integration = await this.options.integrationStore.findByProvider(userId, provider);
-    if (integration?.status !== 'connected' || integration.revokedAt !== null) {
+  private async resolveGrantedScopes(
+    userId: string,
+    descriptor: IntegrationDescriptorRecord,
+  ): Promise<ReadonlySet<string>> {
+    const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
+    if (!isIntegrationConnectedToDescriptor(integration, descriptor.id)) {
       throw new IntegrationOperationCatalogError(
         'integration_operation_connection_required',
         'Integration operation discovery requires a connected integration credential.',
@@ -331,11 +333,12 @@ export class IntegrationOperationCatalog {
     return grantedScopes(integration);
   }
 
-  private async resolveGrantedScopesForPromotion(userId: string, provider: string): Promise<ReadonlySet<string> | null> {
-    const integration = await this.options.integrationStore.findByProvider(userId, provider);
-    return integration?.status === 'connected' && integration.revokedAt === null
-      ? grantedScopes(integration)
-      : null;
+  private async resolveGrantedScopesForPromotion(
+    userId: string,
+    descriptor: IntegrationDescriptorRecord,
+  ): Promise<ReadonlySet<string> | null> {
+    const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
+    return isIntegrationConnectedToDescriptor(integration, descriptor.id) ? grantedScopes(integration) : null;
   }
 
   private async writeGeneratedSkill(
@@ -436,6 +439,45 @@ export class IntegrationOperationCatalog {
     }
     return session.userId;
   }
+}
+
+/**
+ * Shared ingestion core for storing an OpenAPI spec against a descriptor:
+ * validate/normalize the document, enforce the descriptor host allowlist,
+ * and compute the stable content hash. Used by the agent-facing catalog and
+ * the console spec-management endpoints so both surfaces accept exactly the
+ * same specs. Throws IntegrationOperationCatalogError on invalid specs.
+ */
+export function prepareOpenApiSpecForDescriptor(
+  spec: unknown,
+  descriptor: IntegrationDescriptorRecord,
+): {
+  readonly normalizedSpec: Readonly<Record<string, unknown>>;
+  readonly specHash: string;
+} {
+  const normalizedSpec = normalizeOpenApiSpec(spec);
+  assertSpecHostsAllowed(normalizedSpec, descriptor);
+  return { normalizedSpec, specHash: sha256Json(normalizedSpec) };
+}
+
+/** Scope-independent operation count for spec metadata surfaces. */
+export function countSpecOperations(
+  descriptor: IntegrationDescriptorRecord,
+  spec: Readonly<Record<string, unknown>>,
+): number {
+  return deriveOperations(descriptor, spec, new Set()).length;
+}
+
+/**
+ * Scope-independent operation summaries for the spec-authoring surface. Works on an
+ * owned-but-not-connected descriptor (no granted scopes), so it powers the BYO
+ * "which operations does this spec expose" picker without requiring a live connection.
+ */
+export function deriveSpecOperationSummaries(
+  descriptor: IntegrationDescriptorRecord,
+  spec: Readonly<Record<string, unknown>>,
+): readonly IntegrationOperationSummary[] {
+  return deriveOperations(descriptor, spec, new Set());
 }
 
 function deriveOperations(
@@ -680,8 +722,12 @@ function buildNormalizedPaths(rawPaths: Readonly<Record<string, unknown>>): Reco
   const normalizedPaths: Record<string, unknown> = {};
   const operationIds = new Set<string>();
   for (const [path, pathItemValue] of Object.entries(rawPaths).sort(([left], [right]) => left.localeCompare(right))) {
-    if (!path.startsWith('/')) {
-      throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI paths must start with /.', 400);
+    if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        'OpenAPI paths must be absolute paths without protocol-relative or backslash forms.',
+        400,
+      );
     }
     if (path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) {
       throw new IntegrationOperationCatalogError(
@@ -721,7 +767,6 @@ function normalizePathItem(
 }
 
 function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descriptor: IntegrationDescriptorRecord): void {
-  const allowed = new Set(descriptor.apiHosts);
   const servers = Array.isArray(spec.servers) ? spec.servers : [];
   for (const serverValue of servers) {
     const url = readString(asRecord(serverValue).url);
@@ -732,7 +777,7 @@ function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descrip
     } catch {
       continue;
     }
-    if (parsed.protocol !== 'https:' || !allowed.has(parsed.hostname)) {
+    if (parsed.protocol !== 'https:' || !isIntegrationApiHostAllowed(parsed.hostname, descriptor.apiHosts)) {
       throw new IntegrationOperationCatalogError(
         'invalid_openapi_spec',
         'OpenAPI servers must use HTTPS hosts present in the descriptor apiHosts allowlist.',
@@ -743,7 +788,16 @@ function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descrip
 }
 
 function assertNoExternalRefs(value: unknown, depth = 0): void {
-  if (depth > 40 || value === null || typeof value !== 'object') return;
+  if (depth > 40) {
+    // Fail closed: nodes past the recursion limit are never inspected, so a
+    // deeper external $ref would silently escape the check if we returned here.
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      'OpenAPI spec exceeds the supported nesting depth of 40.',
+      400,
+    );
+  }
+  if (value === null || typeof value !== 'object') return;
   if (Array.isArray(value)) {
     for (const item of value) assertNoExternalRefs(item, depth + 1);
     return;

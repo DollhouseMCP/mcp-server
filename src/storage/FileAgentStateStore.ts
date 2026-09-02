@@ -1,6 +1,7 @@
 import * as path from 'node:path';
+import { types as utilTypes } from 'node:util';
 
-import type { AgentState } from '../elements/agents/types.js';
+import type { AgentDecision, AgentGoal, AgentState } from '../elements/agents/types.js';
 import { ElementType } from '../portfolio/types.js';
 import type { FileLockManager } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -49,6 +50,35 @@ export interface FileAgentStateStoreDeps {
   maxYamlSize?: number;
 }
 
+type SerializedAgentGoal = Omit<
+  AgentGoal,
+  'importance' | 'urgency' | 'estimatedEffort' | 'createdAt' | 'updatedAt' | 'completedAt'
+> & {
+  importance?: unknown;
+  urgency?: unknown;
+  estimatedEffort?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  completedAt?: unknown;
+};
+
+type SerializedAgentDecision = Omit<AgentDecision, 'confidence' | 'timestamp'> & {
+  confidence?: unknown;
+  timestamp?: unknown;
+};
+
+type SerializedAgentState = Omit<
+  AgentState,
+  'goals' | 'decisions' | 'context' | 'lastActive' | 'sessionCount' | 'stateVersion'
+> & {
+  goals?: SerializedAgentGoal[];
+  decisions?: SerializedAgentDecision[];
+  context?: Record<string, unknown>;
+  lastActive?: unknown;
+  sessionCount?: unknown;
+  stateVersion?: unknown;
+};
+
 export class FileAgentStateStore implements IAgentStateStore {
   private readonly stateDirProvider: () => string;
   private readonly maxYamlSize: number;
@@ -64,8 +94,9 @@ export class FileAgentStateStore implements IAgentStateStore {
   async load(key: AgentStateKey, options: AgentStateLoadOptions = {}): Promise<AgentState | null> {
     const normalizedName = this.normalizeFilename(key.name);
 
-    if (!options.strict && this.deps.stateCache.has(normalizedName)) {
-      return this.deps.stateCache.get(normalizedName)!;
+    const cachedState = this.deps.stateCache.get(normalizedName);
+    if (!options.strict && cachedState !== undefined) {
+      return cachedState;
     }
 
     const statePath = path.join(this.stateDir, `${normalizedName}${AGENT_STATE_FILE_EXTENSION}`);
@@ -84,8 +115,7 @@ export class FileAgentStateStore implements IAgentStateStore {
         source: 'FileAgentStateStore.load',
       });
 
-      const state = result.data as AgentState;
-      this.normalizeLoadedState(state);
+      const state = this.normalizeLoadedState(result.data as SerializedAgentState);
       const parsedStateBytes = Buffer.byteLength(JSON.stringify(state), 'utf8');
       if (parsedStateBytes > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
         throw new AgentStateParsedSizeLimitError(parsedStateBytes);
@@ -113,12 +143,14 @@ export class FileAgentStateStore implements IAgentStateStore {
     }
   }
 
-  async reclaimOrphaned(
-    key: AgentStateKey,
+  reclaimOrphaned(
+    _key: AgentStateKey,
     _options: AgentStateReclaimOptions = {},
   ): Promise<AgentState | null> {
-    // File-backed state has no session ownership, so excluded goal IDs do not apply.
-    return this.load(key, { strict: true, allowOversizedRecovery: true });
+    // A single file contains session-neutral state and carries no durable
+    // ownership or presence record. Reclaiming it could therefore steal a
+    // still-live execution from another local transport session.
+    return Promise.resolve(null);
   }
 
   async save(
@@ -136,7 +168,7 @@ export class FileAgentStateStore implements IAgentStateStore {
     const normalizedName = this.normalizeFilename(key.name);
     const filePath = path.join(this.stateDir, `${normalizedName}${AGENT_STATE_FILE_EXTENSION}`);
 
-    await this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
+    return this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
       // load() does not acquire an `agent-state:*` lock. Its disk read uses
       // FileOperationsService's distinct `file:<absolute path>` namespace, so
       // this is not a reentrant acquisition of the transaction lock.
@@ -210,11 +242,10 @@ export class FileAgentStateStore implements IAgentStateStore {
         agentName: key.name,
         normalizedName,
         stateVersion: state.stateVersion,
-        goalCount: state.goals?.length ?? 0,
+        goalCount: state.goals.length,
       });
+      return nextVersion;
     });
-
-    return state.stateVersion!;
   }
 
   async delete(key: AgentStateKey): Promise<void> {
@@ -277,24 +308,28 @@ export class FileAgentStateStore implements IAgentStateStore {
   private prepareStateForSerialization(state: AgentState): Record<string, unknown> {
     return {
       ...state,
-      lastActive: state.lastActive instanceof Date ? state.lastActive.toISOString() : state.lastActive,
-      sessionCount: String(state.sessionCount ?? 0),
+      lastActive: this.serializeDate(state.lastActive),
+      sessionCount: String(state.sessionCount),
       stateVersion: state.stateVersion === undefined ? '1' : String(state.stateVersion),
       goals: state.goals.map(goal => ({
         ...goal,
-        createdAt: goal.createdAt instanceof Date ? goal.createdAt.toISOString() : goal.createdAt,
-        updatedAt: goal.updatedAt instanceof Date ? goal.updatedAt.toISOString() : goal.updatedAt,
-        completedAt: goal.completedAt instanceof Date ? goal.completedAt.toISOString() : goal.completedAt,
-        importance: goal.importance === undefined ? undefined : String(goal.importance),
-        urgency: goal.urgency === undefined ? undefined : String(goal.urgency),
+        createdAt: this.serializeDate(goal.createdAt),
+        updatedAt: this.serializeDate(goal.updatedAt),
+        completedAt: this.serializeDate(goal.completedAt),
+        importance: String(goal.importance),
+        urgency: String(goal.urgency),
         estimatedEffort: goal.estimatedEffort === undefined ? undefined : String(goal.estimatedEffort),
       })),
       decisions: state.decisions.map(decision => ({
         ...decision,
-        timestamp: decision.timestamp instanceof Date ? decision.timestamp.toISOString() : decision.timestamp,
-        confidence: decision.confidence === undefined ? undefined : String(decision.confidence),
+        timestamp: this.serializeDate(decision.timestamp),
+        confidence: String(decision.confidence),
       })),
     };
+  }
+
+  private serializeDate(value: unknown): unknown {
+    return utilTypes.isDate(value) ? value.toISOString() : value;
   }
 
   private validateCandidateSize(
@@ -322,7 +357,7 @@ export class FileAgentStateStore implements IAgentStateStore {
     }
   }
 
-  private normalizeLoadedState(state: AgentState): void {
+  private normalizeLoadedState(state: SerializedAgentState): AgentState {
     state.goals ??= [];
     state.decisions ??= [];
     state.context ??= {};
@@ -330,22 +365,45 @@ export class FileAgentStateStore implements IAgentStateStore {
     state.sessionCount = this.parseIntegerOrDefault(state.sessionCount, 0);
     state.stateVersion = this.parseIntegerOrDefault(state.stateVersion, 1);
     if (state.lastActive) {
-      state.lastActive = new Date(state.lastActive);
+      state.lastActive = this.deserializeDate(state.lastActive);
     }
 
     state.goals.forEach(goal => {
-      if (goal.importance !== undefined) goal.importance = Number.parseInt(String(goal.importance), 10);
-      if (goal.urgency !== undefined) goal.urgency = Number.parseInt(String(goal.urgency), 10);
-      if (goal.estimatedEffort !== undefined) goal.estimatedEffort = Number.parseFloat(String(goal.estimatedEffort));
-      if (goal.createdAt) goal.createdAt = new Date(goal.createdAt);
-      if (goal.updatedAt) goal.updatedAt = new Date(goal.updatedAt);
-      if (goal.completedAt) goal.completedAt = new Date(goal.completedAt);
+      if (goal.importance !== undefined) goal.importance = this.parsePersistedNumber(goal.importance, true);
+      if (goal.urgency !== undefined) goal.urgency = this.parsePersistedNumber(goal.urgency, true);
+      if (goal.estimatedEffort !== undefined) goal.estimatedEffort = this.parsePersistedNumber(goal.estimatedEffort, false);
+      if (goal.createdAt) goal.createdAt = this.deserializeDate(goal.createdAt);
+      if (goal.updatedAt) goal.updatedAt = this.deserializeDate(goal.updatedAt);
+      if (goal.completedAt) goal.completedAt = this.deserializeDate(goal.completedAt);
     });
 
     state.decisions.forEach(decision => {
-      if (decision.confidence !== undefined) decision.confidence = Number.parseFloat(String(decision.confidence));
-      if (decision.timestamp) decision.timestamp = new Date(decision.timestamp);
+      if (decision.confidence !== undefined) decision.confidence = this.parsePersistedNumber(decision.confidence, false);
+      if (decision.timestamp) decision.timestamp = this.deserializeDate(decision.timestamp);
     });
+
+    return state as AgentState;
+  }
+
+  private deserializeDate(value: unknown): Date {
+    if (utilTypes.isDate(value)) {
+      return new Date(value);
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      return new Date(value);
+    }
+    return new Date(Number.NaN);
+  }
+
+  private parsePersistedNumber(value: unknown, integer: boolean): number {
+    if (typeof value !== 'number' && typeof value !== 'string') {
+      return Number.NaN;
+    }
+    const text = String(value);
+    if (integer) {
+      return Number.parseInt(text, 10);
+    }
+    return Number.parseFloat(text);
   }
 
   private parseIntegerOrDefault(value: unknown, fallback: number): number {

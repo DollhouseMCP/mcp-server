@@ -187,25 +187,32 @@ export function getElementTools(server: ElementCRUDHandler): Array<{ tool: ToolD
           required: ["type"],
         },
       },
-      handler: (args: ListElementsArgs) => server.listElements(args.type, {
-        pagination: {
-          page: args.page,
-          pageSize: args.pageSize,
-        },
-        sort: {
-          sortBy: args.sortBy,
-          sortOrder: args.sortOrder,
-        },
-        filters: {
-          nameContains: args.nameContains,
-          tags: args.tags,
-          tagsAny: args.tagsAny,
-          author: args.author,
-          createdAfter: args.createdAfter,
-          createdBefore: args.createdBefore,
-          status: args.status,
-        },
-      })
+      handler: async (args: ListElementsArgs) => {
+        const result = await server.listElements(args.type, {
+          pagination: {
+            page: args.page,
+            pageSize: args.pageSize,
+          },
+          sort: {
+            sortBy: args.sortBy,
+            sortOrder: args.sortOrder,
+          },
+          filters: {
+            nameContains: args.nameContains,
+            tags: args.tags,
+            tagsAny: args.tagsAny,
+            author: args.author,
+            createdAfter: args.createdAfter,
+            createdBefore: args.createdBefore,
+            status: args.status,
+          },
+        });
+
+        return {
+          structuredContent: result,
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
     },
     {
       tool: {

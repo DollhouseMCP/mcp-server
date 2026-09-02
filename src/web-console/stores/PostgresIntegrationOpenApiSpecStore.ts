@@ -26,6 +26,16 @@ export class PostgresIntegrationOpenApiSpecStore implements IIntegrationOpenApiS
     return rows[0] ? fromSpecRow(rows[0]) : null;
   }
 
+  async deleteByDescriptorId(descriptorId: string): Promise<boolean> {
+    assertUuid(descriptorId, 'descriptorId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.delete(integrationOpenApiSpecs).where(
+        eq(integrationOpenApiSpecs.descriptorId, descriptorId),
+      ).returning({ id: integrationOpenApiSpecs.id }),
+    );
+    return rows.length > 0;
+  }
+
   async upsert(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord> {
     validateIntegrationOpenApiSpecInput(input);
     const rows = await withSystemContext(this.db, tx => {

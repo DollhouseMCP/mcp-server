@@ -78,7 +78,7 @@ describe('InstallationDetector', () => {
         // Build actual Windows path format or Unix equivalent for testing
         const npmPath = isWindows
           ? 'C:\\Users\\User\\AppData\\Roaming\\npm\\node_modules\\@dollhousemcp\\mcp-server\\dist\\utils\\installation.js'
-          : path.join('/usr', 'local', 'lib', 'node_modules', '@dollhousemcp', 'mcp-server', 'dist', 'utils', 'installation.js');
+          : path.resolve('/usr', 'local', 'lib', 'node_modules', '@dollhousemcp', 'mcp-server', 'dist', 'utils', 'installation.js');
 
         const mockFs: IFileSystem = {
           realpathSync: jest.fn().mockReturnValue(getExpectedDirFormat(npmPath)),

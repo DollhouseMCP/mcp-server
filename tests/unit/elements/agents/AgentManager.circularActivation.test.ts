@@ -234,8 +234,8 @@ This agent activates personas (no cycles).
     };
 
     container = new DollhouseContainer();
-    container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
-    container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
+    container.replace<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
+    container.replace<FileLockManager>('FileLockManager', () => new FileLockManager());
 
     // Mock FileOperationsService
     const fileStore = new Map<string, string>(); // Track written files
@@ -327,12 +327,12 @@ activates:
     // BaseElementManager.load uses readElementFile. Wire it dynamically so tests
     // that replace mockFileOperations.readFile later still take effect.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
-    container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
+    container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
-    container.register('SerializationService', () => new SerializationService());
-    container.register('MetadataService', () => metadataService);
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('MetadataService', () => metadataService);
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
@@ -369,7 +369,7 @@ activates:
       elementManagerResolver,
     });
 
-    container.register('AgentManager', () => agentManagerInstance);
+    container.replace('AgentManager', () => agentManagerInstance);
 
     agentManager = container.resolve<AgentManager>('AgentManager');
 

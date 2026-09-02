@@ -65,6 +65,7 @@ import type { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js"
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { IChallengeStore } from "../state/IChallengeStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
+import type { RegisterOptions } from "./DiContainerFacade.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 // SharedPoolServiceRegistrar is dynamically imported in preparePortfolio()
@@ -89,18 +90,27 @@ import type {
 import type { ISecretEncryptionService } from "../web-console/security/SecretEncryption.js";
 import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
 import {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
   createGitHubIntegrationProvider,
-  IntegrationOperationCatalog,
-  IntegrationRemoteMcpBridge,
+  createStoreIntegrationProviderResolver,
   IntegrationRequestPolicyEnforcer,
-  IntegrationRequestGateway,
   IntegrationTokenRefreshService,
   serializeGitHubIntegrationStatus,
   type IIntegrationProvider,
+  type IntegrationRequestPolicyEnforcerOptions,
   type RemoteMcpClientFactory,
 } from "../web-console/modules/integrations/index.js";
+// The raw execution authorities are deliberately NOT exported from the module
+// barrel (FO2): only this composition root may construct them, and everything
+// tool-facing receives the policy-authorized facades above.
+import { IntegrationRequestGateway } from "../web-console/modules/integrations/IntegrationRequestGateway.js";
+import { IntegrationOperationCatalog } from "../web-console/modules/integrations/IntegrationOperationCatalog.js";
+import { IntegrationRemoteMcpBridge } from "../web-console/modules/integrations/IntegrationRemoteMcpBridge.js";
 import type { DnsLookup } from "../web-console/modules/integrations/IntegrationPublicHostGuard.js";
 import type { PinnedOutboundFactory } from "../web-console/modules/integrations/PinnedOutboundFactory.js";
+import { INTEGRATION_OUTBOUND_OVERRIDES } from "../web-console/modules/integrations/IntegrationOutboundOverrides.js";
 import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
@@ -168,25 +178,12 @@ export interface HandlerBundle {
   toolRegistry: ToolRegistry;
   enhancedIndexHandler: EnhancedIndexHandler;
   mcpAqlHandler: MCPAQLHandler;
-  integrationRequestGateway?: IntegrationRequestGateway;
-  integrationRequestPolicyEnforcer?: IntegrationRequestPolicyEnforcer;
-  integrationOperationCatalog?: IntegrationOperationCatalog;
-  integrationRemoteMcpBridge?: IntegrationRemoteMcpBridge;
+  authorizedIntegrationGateway?: AuthorizedIntegrationGateway;
+  authorizedIntegrationOperationCatalog?: AuthorizedIntegrationOperationCatalog;
+  authorizedIntegrationRemoteMcpBridge?: AuthorizedIntegrationRemoteMcpBridge;
 }
 
-/**
- * Optional DI override points for the outbound integration transport. When a service
- * is registered under one of these names the gateway/bridge use it instead of the
- * production default (pinned outbound transport / DNS resolver / SDK MCP client). Defaults to
- * production behavior when unregistered. Wired integration tests register these to
- * route outbound calls through a local server while keeping the SSRF host guard fully
- * enforced (the injected DNS resolver returns a controlled public address).
- */
-export const INTEGRATION_OUTBOUND_OVERRIDES = {
-  pinnedOutbound: 'IntegrationPinnedOutbound',
-  dnsLookup: 'IntegrationOutboundDnsLookup',
-  remoteMcpClientFactory: 'IntegrationRemoteMcpClientFactory',
-} as const;
+export { INTEGRATION_OUTBOUND_OVERRIDES };
 
 /**
  * Type-safe service record for dependency injection container
@@ -203,9 +200,12 @@ interface ServiceRecord<T = unknown> {
   singleton: boolean;
 }
 
+const DEFAULT_REGISTER_OPTIONS: RegisterOptions = { singleton: true };
+
 export class DollhouseContainer {
-  private services = new Map<string, ServiceRecord>();
+  private readonly services = new Map<string, ServiceRecord>();
   private personasDir: string | null = null;
+  private readonly securityMonitorInstance: SecurityMonitor | null;
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
   public deferredSetupComplete = false;
 
@@ -223,6 +223,8 @@ export class DollhouseContainer {
       details: 'Dependency injection container initializing'
     });
     this.registerServices();
+    const securityMonitor = this.services.get('SecurityMonitor')?.instance;
+    this.securityMonitorInstance = securityMonitor instanceof SecurityMonitor ? securityMonitor : null;
     // Issue #1948: Register LifecycleService in DI if provided
     if (lifecycleService) {
       this.register('LifecycleService', () => lifecycleService);
@@ -239,22 +241,52 @@ export class DollhouseContainer {
    * @template T The service type
    * @param name Unique service identifier
    * @param factory Factory function that creates the service instance
-   * @param options Configuration options (singleton behavior)
+   * @param options Configuration options (singleton behavior and explicit replacement)
+   * @throws Error when the name is already registered without `override: true`
    */
-  public register<T>(name: string, factory: () => T, options: { singleton?: boolean } = { singleton: true }): void {
+  public register<T>(name: string, factory: () => T, options: RegisterOptions = DEFAULT_REGISTER_OPTIONS): void {
+    const isReplacement = this.services.has(name);
+    if (isReplacement && !options.override) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'OPERATION_FAILED',
+        severity: 'MEDIUM',
+        source: 'DollhouseContainer.register',
+        details: `Duplicate service registration rejected: ${name}`,
+        additionalData: { serviceName: name }
+      });
+      throw new Error(`Service already registered: ${name}`);
+    }
+
     // FIX: DMCP-SEC-006 - Audit service registration
     SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_CREATED',
+      type: isReplacement ? 'ELEMENT_EDITED' : 'ELEMENT_CREATED',
       severity: 'LOW',
       source: 'DollhouseContainer.register',
-      details: `Service registered: ${name}`,
-      additionalData: { serviceName: name, singleton: options.singleton ?? true }
+      details: isReplacement ? `Service registration replaced: ${name}` : `Service registered: ${name}`,
+      additionalData: {
+        serviceName: name,
+        singleton: options.singleton ?? true,
+        override: isReplacement,
+      }
     });
     this.services.set(name, {
       factory: factory,
       instance: null,
       singleton: options.singleton ?? true
     });
+  }
+
+  /**
+   * Replace an existing service registration explicitly.
+   *
+   * Keeping replacement separate from registration makes test and bootstrap
+   * substitutions visible at the call site and catches misspelled service keys.
+   */
+  public replace<T>(name: string, factory: () => T, options: Omit<RegisterOptions, 'override'> = DEFAULT_REGISTER_OPTIONS): void {
+    if (!this.services.has(name)) {
+      throw new Error(`Service not registered for replacement: ${name}`);
+    }
+    this.register(name, factory, { ...options, override: true });
   }
 
   /**
@@ -1232,16 +1264,6 @@ export class DollhouseContainer {
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
-    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
-    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
-    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
-    const integrationRequestPolicyEnforcer = integrationRequestGateway
-      ? new IntegrationRequestPolicyEnforcer({
-        gatekeeper: handlerDeps.gatekeeper,
-        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
-      })
-      : null;
-
     return {
       personaHandler,
       elementCrudHandler,
@@ -1255,10 +1277,7 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry, // No tool registry in bootstrap-only mode
       enhancedIndexHandler,
       mcpAqlHandler,
-      integrationRequestGateway: integrationRequestGateway ?? undefined,
-      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
-      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
-      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
+      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
     };
   }
 
@@ -1783,15 +1802,6 @@ export class DollhouseContainer {
     });
 
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
-    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
-    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
-    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
-    const integrationRequestPolicyEnforcer = integrationRequestGateway
-      ? new IntegrationRequestPolicyEnforcer({
-        gatekeeper: handlerDeps.gatekeeper,
-        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
-      })
-      : null;
     return {
       personaHandler,
       elementCrudHandler,
@@ -1805,10 +1815,45 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
       mcpAqlHandler,
-      integrationRequestGateway: integrationRequestGateway ?? undefined,
-      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
-      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
-      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
+      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
+    };
+  }
+
+  /**
+   * Build the policy-authorized integration facades for a handler bundle.
+   *
+   * The enforcer is constructed unconditionally (it only needs the gatekeeper
+   * and the active-element closure), so a facade exists exactly when its raw
+   * authority does — there is no representable "authority present, policy
+   * absent" state (FO2). The raw gateway/bridge/catalog never leave this
+   * composition root.
+   */
+  private buildAuthorizedIntegrationServices(
+    gatekeeper: IntegrationRequestPolicyEnforcerOptions['gatekeeper'],
+    mcpAqlHandler: MCPAQLHandler,
+  ): Pick<
+    HandlerBundle,
+    'authorizedIntegrationGateway' | 'authorizedIntegrationOperationCatalog' | 'authorizedIntegrationRemoteMcpBridge'
+  > {
+    const policyEnforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+    });
+    const gateway = this.resolveIntegrationRequestGateway();
+    const catalog = this.resolveIntegrationOperationCatalog();
+    const bridge = this.resolveIntegrationRemoteMcpBridge(
+      provider => policyEnforcer.evaluateDiscovery(provider),
+    );
+    return {
+      authorizedIntegrationGateway: gateway
+        ? new AuthorizedIntegrationGateway({ gateway, policyEnforcer })
+        : undefined,
+      authorizedIntegrationOperationCatalog: catalog
+        ? new AuthorizedIntegrationOperationCatalog({ catalog, policyEnforcer })
+        : undefined,
+      authorizedIntegrationRemoteMcpBridge: bridge
+        ? new AuthorizedIntegrationRemoteMcpBridge({ bridge, policyEnforcer })
+        : undefined,
     };
   }
 
@@ -1825,9 +1870,15 @@ export class DollhouseContainer {
     const rateLimitStore = this.hasRegistration('RateLimitStore')
       ? this.resolve<IRateLimitStore>('RateLimitStore')
       : null;
-    const tokenRefresh = this.createIntegrationTokenRefreshService(integrationStore, secretEncryption);
-    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutbound);
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
     const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
+    const tokenRefresh = this.createIntegrationTokenRefreshService(
+      integrationStore,
+      descriptorStore,
+      secretEncryption,
+      pinnedOutboundOverride,
+      dnsLookupOverride,
+    );
     return new IntegrationRequestGateway({
       integrationStore,
       descriptorStore,
@@ -1868,12 +1919,11 @@ export class DollhouseContainer {
     sessionContext: Readonly<SessionContext>,
   ): Promise<void> {
     const {
-      integrationRequestGateway,
-      integrationOperationCatalog,
-      integrationRemoteMcpBridge,
-      integrationRequestPolicyEnforcer,
+      authorizedIntegrationGateway,
+      authorizedIntegrationOperationCatalog,
+      authorizedIntegrationRemoteMcpBridge,
     } = bundle;
-    if (integrationRequestGateway && integrationOperationCatalog) {
+    if (authorizedIntegrationGateway && authorizedIntegrationOperationCatalog) {
       const promotionContext = contextTracker.createSessionContext(
         'llm-request',
         sessionContext,
@@ -1882,9 +1932,8 @@ export class DollhouseContainer {
       await contextTracker.runAsync(promotionContext, async () => {
         try {
           await toolRegistry.registerPromotedIntegrationTools(
-            integrationRequestGateway,
-            integrationOperationCatalog,
-            integrationRequestPolicyEnforcer,
+            authorizedIntegrationGateway,
+            authorizedIntegrationOperationCatalog,
           );
         } catch (error) {
           logger.warn('[Integration Session] Promoted integration tool registration skipped', {
@@ -1893,7 +1942,7 @@ export class DollhouseContainer {
         }
       });
     }
-    if (integrationRemoteMcpBridge) {
+    if (authorizedIntegrationRemoteMcpBridge) {
       const remoteMcpContext = contextTracker.createSessionContext(
         'llm-request',
         sessionContext,
@@ -1902,8 +1951,7 @@ export class DollhouseContainer {
       await contextTracker.runAsync(remoteMcpContext, async () => {
         try {
           await toolRegistry.registerRemoteMcpBridgeTools(
-            integrationRemoteMcpBridge,
-            integrationRequestPolicyEnforcer,
+            authorizedIntegrationRemoteMcpBridge,
           );
         } catch (error) {
           logger.warn('[Integration Session] Remote MCP bridge tool registration skipped', {
@@ -1914,7 +1962,9 @@ export class DollhouseContainer {
     }
   }
 
-  private resolveIntegrationRemoteMcpBridge(): IntegrationRemoteMcpBridge | null {
+  private resolveIntegrationRemoteMcpBridge(
+    discoveryGate: (provider: string) => Promise<boolean>,
+  ): IntegrationRemoteMcpBridge | null {
     if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
         !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
         !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
@@ -1922,29 +1972,51 @@ export class DollhouseContainer {
       return null;
     }
     const integrationStore = this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore);
+    const descriptorStore = this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore);
     const secretEncryption = this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption);
     const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
-    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutbound);
     const clientFactoryOverride = this.resolveIntegrationOverride<RemoteMcpClientFactory>(INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory);
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
     return new IntegrationRemoteMcpBridge({
       integrationStore,
-      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      descriptorStore,
       secretEncryption,
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
-      tokenRefresh: this.createIntegrationTokenRefreshService(integrationStore, secretEncryption),
-      ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
+      tokenRefresh: this.createIntegrationTokenRefreshService(
+        integrationStore,
+        descriptorStore,
+        secretEncryption,
+        pinnedOutboundOverride,
+        dnsLookupOverride,
+      ),
+      discoveryGate,
       ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
       ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
+      ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
     });
   }
 
   private createIntegrationTokenRefreshService(
     integrationStore: IUserIntegrationStore,
+    descriptorStore: IIntegrationDescriptorStore,
     secretEncryption: ISecretEncryptionService,
+    pinnedOutbound?: PinnedOutboundFactory,
+    dnsLookup?: DnsLookup,
   ): IntegrationTokenRefreshService {
     return new IntegrationTokenRefreshService({
       store: integrationStore,
       providers: this.resolveIntegrationProviderRegistry(),
+      // Boot-time providers cover bespoke/explicit integrations. Curated and
+      // runtime-authored BYO descriptors resolve per request, so refresh works
+      // immediately without restarting the process.
+      resolveProvider: createStoreIntegrationProviderResolver({
+        descriptorStore,
+        secretEncryption,
+        outbound: {
+          ...(pinnedOutbound ? { pinnedOutbound } : {}),
+          ...(dnsLookup ? { dnsLookup } : {}),
+        },
+      }),
       secretEncryption,
     });
   }
@@ -1995,11 +2067,10 @@ export class DollhouseContainer {
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
     }
-    if (bundle.integrationRequestGateway) {
+    if (bundle.authorizedIntegrationGateway) {
       toolRegistry.registerIntegrationTools(
-        bundle.integrationRequestGateway,
-        bundle.integrationRequestPolicyEnforcer,
-        bundle.integrationOperationCatalog,
+        bundle.authorizedIntegrationGateway,
+        bundle.authorizedIntegrationOperationCatalog,
       );
     }
   }
@@ -2182,6 +2253,7 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    try {
     // Close the HTTP server first so the port is freed immediately (#1856)
     try {
       const { shutdownWebServer } = await import('../web/server.js');
@@ -2203,6 +2275,11 @@ export class DollhouseContainer {
     const disposalPromises = this.buildDisposalPromises();
     const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
     this.reportDisposalFailures(disposalPromises, results);
+    } finally {
+      if (this.securityMonitorInstance) {
+        SecurityMonitor.clearInstance(this.securityMonitorInstance);
+      }
+    }
   }
 
   private buildDisposalPromises(): Array<{ name: string; promise: Promise<void> }> {

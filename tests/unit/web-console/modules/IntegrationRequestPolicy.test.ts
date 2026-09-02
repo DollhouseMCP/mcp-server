@@ -1,11 +1,15 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/index.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
-import { IntegrationRequestPolicyEnforcer } from '../../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
+import {
+  IntegrationPolicyUnavailableError,
+  IntegrationRequestPolicyEnforcer,
+} from '../../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
 
 const SEND_PATH = '/gmail/v1/users/me/messages/send';
+const REMOTE_DOCS = 'remote-docs';
 
 function approvalRequestId(decision: { readonly approvalRequest?: { readonly requestId: string } }): string {
   if (!decision.approvalRequest) throw new Error('expected an approval request');
@@ -273,6 +277,151 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       path: `${SEND_PATH}?mode=draft`,
       body: { raw: 'abc' },
     })).resolves.toMatchObject({ allowed: true });
+  });
+
+  it('evaluateDiscovery allows unrestricted providers without creating approval requests', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-allow-test',
+      new StaticAuditHmacKeyResolver('dd'.repeat(32)),
+    );
+    const createSpy = jest.spyOn(gatekeeper, 'createCliApprovalRequest');
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([]),
+    });
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('evaluateDiscovery fails closed on confirm policies without creating approval requests', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-confirm-test',
+      new StaticAuditHmacKeyResolver('ee'.repeat(32)),
+    );
+    const createSpy = jest.spyOn(gatekeeper, 'createCliApprovalRequest');
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      // integrationReadGuard confirms every integration read; discovery is a
+      // session-start read with nobody present to confirm, so it must skip.
+      getActiveElements: () => Promise.resolve([integrationReadGuard()]),
+    });
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('evaluateDiscovery honors standing tool_session read approvals', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-standing-test',
+      new StaticAuditHmacKeyResolver('ff'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([integrationReadGuard()]),
+    });
+
+    const first = await enforcer.authorize({
+      provider: REMOTE_DOCS,
+      method: 'GET',
+      path: '/anything',
+    });
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+  });
+
+  it('evaluateDiscovery checks newly active deny policies before standing approvals', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-deny-test',
+      new StaticAuditHmacKeyResolver('11'.repeat(32)),
+    );
+    let activeElements: ActiveElement[] = [integrationReadGuard()];
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve(activeElements),
+    });
+
+    const first = await enforcer.authorize({
+      provider: REMOTE_DOCS,
+      method: 'GET',
+      path: '/anything',
+    });
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    activeElements = [integrationDenyGuard()];
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+  });
+
+  it('evaluateDiscovery fails closed when policy evaluation is unavailable', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-unavailable-test',
+      new StaticAuditHmacKeyResolver('22'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.reject(new Error('element resolution failed')),
+    });
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+  });
+
+  it('normalizes active-element loading failures to policy unavailability', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-elements-unavailable-test',
+      new StaticAuditHmacKeyResolver('33'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.reject(new Error('element resolution failed')),
+    });
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/anything',
+    })).rejects.toBeInstanceOf(IntegrationPolicyUnavailableError);
+  });
+
+  it('normalizes approval-request persistence failures to policy unavailability', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-approval-unavailable-test',
+      new StaticAuditHmacKeyResolver('44'.repeat(32)),
+    );
+    jest.spyOn(gatekeeper, 'createCliApprovalRequest')
+      .mockRejectedValue(new Error('approval store unavailable'));
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([integrationWriteGuard()]),
+    });
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'POST',
+      path: SEND_PATH,
+      body: { raw: 'abc' },
+    })).rejects.toBeInstanceOf(IntegrationPolicyUnavailableError);
   });
 });
 

@@ -12,8 +12,11 @@ import {
   IntegrationRequestPathError,
   type CanonicalIntegrationRequestPath,
 } from './IntegrationRequestPath.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
 const INTEGRATION_TOOL_NAME = 'integration_request';
+const INTERNAL_INTEGRATION_POLICY_PREFIX = '_internal:/integration/';
+const REMOTE_MCP_DISCOVERY_POLICY_PATH = '_internal:/integration/remote_mcp_discovery';
 
 export interface IntegrationRequestPolicyInput {
   readonly provider: string;
@@ -55,24 +58,17 @@ export class IntegrationRequestPolicyEnforcer {
 
   async authorize(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
     try {
-      const decision = await this.authorizeInternal(input);
-      this.auditDecision(decision);
-      return decision;
+      return await this.evaluateAuthorization(input);
     } catch (error) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'OPERATION_FAILED',
-        severity: 'MEDIUM',
-        source: 'IntegrationRequestPolicyEnforcer.authorize',
-        details: 'Integration policy evaluation failed closed',
-      });
-      throw error;
+      if (error instanceof IntegrationPolicyUnavailableError) throw error;
+      throw new IntegrationPolicyUnavailableError(error);
     }
   }
 
-  private async authorizeInternal(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
-    let canonicalPath: CanonicalIntegrationRequestPath;
+  private async evaluateAuthorization(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
+    let toolInput: Record<string, unknown>;
     try {
-      canonicalPath = canonicalizeIntegrationRequestPath(input.path);
+      toolInput = integrationToolInput(input);
     } catch (error) {
       if (!(error instanceof IntegrationRequestPathError)) throw error;
       return {
@@ -84,7 +80,6 @@ export class IntegrationRequestPolicyEnforcer {
         },
       };
     }
-    const toolInput = integrationToolInput(input, canonicalPath);
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const activeElements = await this.options.getActiveElements();
     const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
@@ -137,17 +132,49 @@ export class IntegrationRequestPolicyEnforcer {
     return { allowed: true, policyContext: elementDecision.policyContext };
   }
 
-  private auditDecision(decision: IntegrationRequestPolicyDecision): void {
+  /**
+   * Side-effect-free policy check for remote-MCP tool discovery — the
+   * session-start credentialed egress that decrypts a descriptor's bearer
+   * token and connects outbound to list its tools. Unlike `authorize()`, this
+   * NEVER creates an approval request (discovery runs at session
+   * establishment where nobody is present to approve, and creating one per
+   * session would flood the approval queue). A standing approval counts;
+   * anything policy would deny or ask confirmation for — including policy
+   * evaluation being unavailable — fails closed to `false`, and the caller
+   * skips discovery for that provider.
+   */
+  async evaluateDiscovery(provider: string): Promise<boolean> {
+    try {
+      const toolInput = integrationToolInput({
+        provider,
+        method: 'GET',
+        path: REMOTE_MCP_DISCOVERY_POLICY_PATH,
+      });
+      const activeElements = await this.options.getActiveElements();
+      const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+      if (elementDecision.behavior === 'deny') return this.auditDiscovery(provider, false);
+      const existingApproval = await this.checkExistingApproval(toolInput, 'read');
+      if (existingApproval) return this.auditDiscovery(provider, true);
+      if (elementDecision.behavior === 'confirm') return this.auditDiscovery(provider, false);
+      const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
+      const approvalPolicy = resolveCliApprovalPolicy(activeElements);
+      return this.auditDiscovery(
+        provider,
+        !approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous'),
+      );
+    } catch {
+      return this.auditDiscovery(provider, false);
+    }
+  }
+
+  private auditDiscovery(provider: string, allowed: boolean): boolean {
     SecurityMonitor.logSecurityEvent({
-      type: decision.allowed ? 'OPERATION_COMPLETED' : 'OPERATION_FAILED',
-      severity: decision.allowed ? 'LOW' : 'MEDIUM',
-      source: 'IntegrationRequestPolicyEnforcer.authorize',
-      details: 'Integration policy decision recorded',
-      additionalData: {
-        allowed: decision.allowed,
-        approvalRequired: decision.approvalRequest !== undefined,
-      },
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: allowed ? 'LOW' : 'MEDIUM',
+      source: 'IntegrationRequestPolicyEnforcer.evaluateDiscovery',
+      details: `Integration discovery ${allowed ? 'allowed' : 'denied'} for provider ${safeIntegrationAuditProvider(provider)}`,
     });
+    return allowed;
   }
 
   private async checkExistingApproval(toolInput: Record<string, unknown>, readWriteClass: 'read' | 'write') {
@@ -205,16 +232,14 @@ export class IntegrationRequestPolicyEnforcer {
 }
 
 export class IntegrationPolicyUnavailableError extends Error {
-  constructor() {
-    super('Integration request policy is temporarily unavailable.');
+  constructor(cause?: unknown) {
+    super('Integration request policy is temporarily unavailable.', cause === undefined ? undefined : { cause });
     this.name = 'IntegrationPolicyUnavailableError';
   }
 }
 
-function integrationToolInput(
-  input: IntegrationRequestPolicyInput,
-  canonicalPath: CanonicalIntegrationRequestPath,
-): Record<string, unknown> {
+function integrationToolInput(input: IntegrationRequestPolicyInput): Record<string, unknown> {
+  const canonicalPath = canonicalizePolicyPath(input.path);
   const method = input.method.toUpperCase();
   return {
     provider: input.provider,
@@ -224,5 +249,16 @@ function integrationToolInput(
     read_write_class: method === 'GET' ? 'read' : 'write',
     ...(input.query ? { query: input.query } : {}),
     ...(input.body === undefined ? {} : { body: input.body }),
+  };
+}
+
+function canonicalizePolicyPath(path: string): CanonicalIntegrationRequestPath {
+  if (!path.startsWith(INTERNAL_INTEGRATION_POLICY_PREFIX)) {
+    return canonicalizeIntegrationRequestPath(path);
+  }
+  const canonical = canonicalizeIntegrationRequestPath(`/${path}`);
+  return {
+    pathname: canonical.pathname.slice(1),
+    search: canonical.search,
   };
 }

@@ -15,6 +15,10 @@ import {
 
 type StepOutcome = 'success' | 'failure' | 'partial';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export class AgentExecutionHandler {
   private static readonly MAX_RECENT_BLOCKS = 50;
   // Keep policy ownership and its durable state mutation in one lifecycle operation.
@@ -36,7 +40,7 @@ export class AgentExecutionHandler {
     return this.executionOperationLock.runExclusive(executionKey, async () => {
       await this.ensureAgentCanExecute(method, manager, elementName);
 
-      const handlers: Record<string, () => Promise<unknown>> = {
+      const handlers: Partial<Record<string, () => Promise<unknown>>> = {
         execute: () => this.executeAgent(manager, elementName, params),
         getState: () => this.getState(manager, elementName, params),
         updateState: () => this.updateState(manager, elementName, params),
@@ -358,7 +362,7 @@ export class AgentExecutionHandler {
     const executingAgent = this.executingAgents.get(executionKey)
       ?? await this.reclaimOrphanedExecution(manager, elementName);
     const ownedGoalId = executingAgent?.goalIds?.at(-1);
-    if (!ownedGoalId) {
+    if (!executingAgent || !ownedGoalId) {
       throw new Error(
         `No active goal found for agent '${elementName}' in this session. ` +
         'Use execute_agent to start a new goal first.',
@@ -374,11 +378,11 @@ export class AgentExecutionHandler {
       confidence: params.confidence as number,
       nextActionHint,
       riskScore,
-      maxStepsOverride: executingAgent?.metadata?.maxAutonomousSteps as number | undefined,
+      maxStepsOverride: executingAgent.metadata.maxAutonomousSteps as number | undefined,
     });
 
     const finalResult = this.evaluateResilience(elementName, updateResult, params.outcome as string) ?? updateResult;
-    this.attachNotifications(elementName, finalResult);
+    this.attachNotifications(elementName, ownedGoalId, finalResult);
     return { _type: 'StepResult', ...finalResult };
   }
 
@@ -402,12 +406,16 @@ export class AgentExecutionHandler {
     return value;
   }
 
-  private attachNotifications(agentName: string, result: Record<string, unknown>): void {
+  private attachNotifications(
+    agentName: string,
+    goalId: string,
+    result: Record<string, unknown>,
+  ): void {
     const autonomy = result.autonomy as Record<string, unknown> | undefined;
     if (!autonomy) {
       return;
     }
-    const notifications = this.collectNotifications(agentName, autonomy);
+    const notifications = this.collectNotifications(agentName, goalId, autonomy);
     if (notifications.length > 0) {
       autonomy.notifications = notifications;
     }
@@ -755,9 +763,16 @@ export class AgentExecutionHandler {
     const defaults = { activeElements: { agents: [elementName] }, successCriteria: [] as string[] };
     try {
       const agentElement = await manager.read(elementName);
-      const meta = agentElement?.metadata as AgentMetadataV2 | undefined;
-      const activeElements = { ...(meta?.activates as Record<string, string[]> | undefined) };
-      activeElements.agents = [...new Set([...(activeElements.agents ?? []), elementName])];
+      const meta = agentElement?.metadata as Partial<AgentMetadataV2> | undefined;
+      const activeElements: Record<string, string[]> = { agents: [elementName] };
+      for (const [elementType, names] of Object.entries(meta?.activates ?? {})) {
+        if (!names) {
+          continue;
+        }
+        activeElements[elementType] = elementType === 'agents'
+          ? [...new Set([...names, elementName])]
+          : [...names];
+      }
       return { activeElements, successCriteria: meta?.goal?.successCriteria || [] };
     } catch {
       return defaults;
@@ -791,7 +806,7 @@ export class AgentExecutionHandler {
       elementName,
       restoredState.goalId,
     );
-    const callerParams = (params.parameters as Record<string, unknown>) || {};
+    const callerParams = isRecord(params.parameters) ? params.parameters : {};
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
       goalId: ownedGoalId,
@@ -824,11 +839,15 @@ export class AgentExecutionHandler {
     };
   }
 
-  private collectNotifications(agentName: string, autonomy: Record<string, unknown>): AgentNotification[] {
+  private collectNotifications(
+    agentName: string,
+    goalId: string,
+    autonomy: Record<string, unknown>,
+  ): AgentNotification[] {
     return [
       ...this.collectGatekeeperNotifications(agentName),
       ...this.collectAutonomyNotifications(autonomy),
-      ...this.collectDangerZoneNotifications(),
+      ...this.collectDangerZoneNotifications(agentName, goalId),
     ];
   }
 
@@ -862,7 +881,11 @@ export class AgentExecutionHandler {
     if (autonomy.continue !== false) {
       return [];
     }
-    const reason = (autonomy.reason as string) || (autonomy.factors as string[] || []).join(', ');
+    const explicitReason = typeof autonomy.reason === 'string' ? autonomy.reason : '';
+    const factors = Array.isArray(autonomy.factors)
+      ? autonomy.factors.filter((factor): factor is string => typeof factor === 'string')
+      : [];
+    const reason = explicitReason || factors.join(', ');
     return reason ? [{
       type: 'autonomy_pause',
       message: `Agent paused: ${reason}`,
@@ -871,24 +894,40 @@ export class AgentExecutionHandler {
     }] : [];
   }
 
-  private collectDangerZoneNotifications(): AgentNotification[] {
+  private collectDangerZoneNotifications(agentName: string, goalId: string): AgentNotification[] {
     const enforcer = this.handlers.dangerZoneEnforcer;
-    if (!enforcer?.hasBlockedAgents()) {
+    if (!enforcer) {
       return [];
     }
-    return enforcer.getBlockedAgents().flatMap(blockedAgent => {
-      const blockCheck = enforcer.check(blockedAgent);
-      return blockCheck.blocked ? [{
-        type: 'danger_zone',
-        message: `Agent '${blockedAgent}' is blocked due to danger zone trigger: ${blockCheck.reason}`,
-        metadata: {
-          agentName: blockedAgent,
-          reason: blockCheck.reason,
-          verificationId: blockCheck.verificationId,
-        },
-        timestamp: new Date().toISOString(),
-      }] : [];
-    });
+
+    const blockCheck = enforcer.check(agentName);
+    const sessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+    // Execution responses are not a global operator feed: only return the block
+    // created for this agent's active goal in this exact session. Undefined
+    // session IDs match for stdio, but a session-owned block is suppressed when
+    // runtime context is unavailable. Legacy blocks without goal ownership are
+    // likewise enforced without being replayed as fresh goal notifications.
+    if (
+      !blockCheck.blocked ||
+      blockCheck.sessionId !== sessionId ||
+      blockCheck.goalId !== goalId ||
+      !blockCheck.blockedAt
+    ) {
+      return [];
+    }
+
+    return [{
+      type: 'danger_zone',
+      message: `Agent '${agentName}' is blocked due to danger zone trigger: ${blockCheck.reason}`,
+      metadata: {
+        agentName,
+        eventId: blockCheck.eventId,
+        goalId,
+        reason: blockCheck.reason,
+        verificationId: blockCheck.verificationId,
+      },
+      timestamp: blockCheck.blockedAt,
+    }];
   }
 
   private evaluateResilience(
@@ -901,18 +940,18 @@ export class AgentExecutionHandler {
       this.executionKey(this.handlers.agentManager, agentName),
     );
     const context = this.buildResilienceContext(agentName, stepOutcome, autonomy, executingAgent);
-    if (!context || !executingAgent?.resiliencePolicy) {
+    if (!autonomy || !context || !executingAgent?.resiliencePolicy) {
       return null;
     }
 
     const action = evaluateResiliencePolicy(executingAgent.resiliencePolicy, context, this.handlers.circuitBreaker);
     switch (action.action) {
       case 'continue':
-        return this.continueAfterResilience(agentName, updateResult, autonomy!, executingAgent, action, context);
+        return this.continueAfterResilience(agentName, updateResult, autonomy, executingAgent, action, context);
       case 'retry':
-        return this.retryAfterResilience(agentName, updateResult, autonomy!, executingAgent, action, context);
+        return this.retryAfterResilience(agentName, updateResult, autonomy, executingAgent, action, context);
       case 'restart':
-        return this.restartAfterResilience(agentName, updateResult, autonomy!, executingAgent, action, context);
+        return this.restartAfterResilience(agentName, updateResult, autonomy, executingAgent, action, context);
       case 'pause':
         this.recordResiliencePause(action.reason);
         return null;
@@ -1051,9 +1090,9 @@ export class AgentExecutionHandler {
       const stateResult = strict
         ? await manager.getAgentStateForRecovery({ agentName })
         : await manager.getAgentState({ agentName });
-      return stateResult?.state?.goals
-        ?.filter((g: { status: string }) => g.status === 'in_progress')
-        .map((g: { id: string }) => g.id) ?? [];
+      return stateResult.state.goals
+        .filter((g: { status: string }) => g.status === 'in_progress')
+        .map((g: { id: string }) => g.id);
     } catch (error) {
       if (strict && !(error instanceof ElementNotFoundError)) {
         throw error;

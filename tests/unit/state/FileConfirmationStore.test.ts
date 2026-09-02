@@ -215,6 +215,26 @@ describe('FileConfirmationStore', () => {
   });
 
   describe('CLI approval CRUD', () => {
+    it('does not resolve persist before the file write completes', async () => {
+      let releaseWrite: (() => void) | undefined;
+      mockFileOps.writeFile.mockImplementationOnce(() => new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      }));
+
+      let persisted = false;
+      const persistence = store.persist().then(() => {
+        persisted = true;
+      });
+      await Promise.resolve();
+
+      expect(mockFileOps.writeFile).toHaveBeenCalled();
+      expect(persisted).toBe(false);
+
+      releaseWrite?.();
+      await persistence;
+      expect(persisted).toBe(true);
+    });
+
     it('should save and retrieve CLI approvals', () => {
       const record = {
         requestId: 'cli-123',

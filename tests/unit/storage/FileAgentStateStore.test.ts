@@ -9,10 +9,13 @@ import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
 import {
+  AgentStateParsedSizeLimitError,
   AgentStateReductionRequiredError,
   AgentStateSizeLimitError,
   FileAgentStateStore,
 } from '../../../src/storage/FileAgentStateStore.js';
+
+const RECOVERY_AGENT_STATE_FILE = 'recovery-agent.state.yaml';
 
 const key = { name: 'Recovery Agent', agentElementId: 'agent-id' };
 
@@ -55,7 +58,11 @@ describe('FileAgentStateStore strict recovery I/O', () => {
 
   it('bypasses stale process-local state during a strict read', async () => {
     await store.save(key, state(), 0);
-    cache.get('recovery-agent')!.goals.push({
+    const cachedState = cache.get('recovery-agent');
+    if (!cachedState) {
+      throw new Error('Expected saved state in the process-local cache');
+    }
+    cachedState.goals.push({
       id: 'cached-only',
       description: 'not durable',
       priority: 'medium',
@@ -72,26 +79,56 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     expect(cache.get('recovery-agent')?.goals).toHaveLength(1);
   });
 
-  it('reclaims from durable state instead of the process-local cache', async () => {
-    await store.save(key, state(), 0);
-    cache.get('recovery-agent')!.context.cachedOnly = true;
+  it('preserves runtime dates when saving a structured-cloned state', async () => {
+    const original = state();
+    original.goals.push({
+      id: 'dated-goal',
+      description: 'Preserve timestamps',
+      priority: 'medium',
+      status: 'completed',
+      importance: 5,
+      urgency: 5,
+      createdAt: new Date('2026-01-02T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-03T00:00:00.000Z'),
+      completedAt: new Date('2026-01-04T00:00:00.000Z'),
+    });
+    original.decisions.push({
+      id: 'dated-decision',
+      goalId: 'dated-goal',
+      timestamp: new Date('2026-01-03T12:00:00.000Z'),
+      decision: 'complete',
+      reasoning: 'done',
+      framework: 'llm_driven',
+      confidence: 1,
+    });
 
-    const reclaimed = await store.reclaimOrphaned(key);
+    await store.save(key, original, 0);
+    const durable = await store.load(key, { strict: true });
 
-    expect(reclaimed?.context).toEqual({});
+    expect(durable?.lastActive.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    expect(durable?.goals[0].createdAt.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+    expect(durable?.goals[0].updatedAt.toISOString()).toBe('2026-01-03T00:00:00.000Z');
+    expect(durable?.goals[0].completedAt?.toISOString()).toBe('2026-01-04T00:00:00.000Z');
+    expect(durable?.decisions[0].timestamp.toISOString()).toBe('2026-01-03T12:00:00.000Z');
   });
 
-  it('permits a bounded oversized read while reclaiming orphaned state', async () => {
-    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+  it('fails closed when asked to reclaim session-neutral file state', async () => {
+    await store.save(key, state(), 0);
+    const cachedState = cache.get('recovery-agent');
+    if (!cachedState) {
+      throw new Error('Expected saved state in the process-local cache');
+    }
+    cachedState.context.cachedOnly = true;
 
     const reclaimed = await store.reclaimOrphaned(key);
 
-    expect(String(reclaimed?.context.payload)).toHaveLength(70 * 1024);
+    expect(reclaimed).toBeNull();
+    expect(cache.get('recovery-agent')?.context).toEqual({ cachedOnly: true });
   });
 
   it('defaults malformed integer fields when loading durable state', async () => {
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), `
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), `
 goals: []
 decisions: []
 context: {}
@@ -106,6 +143,60 @@ stateVersion:
     expect(loaded).toMatchObject({ sessionCount: 0, stateVersion: 1 });
   });
 
+  it('normalizes malformed nested scalar fields without object stringification', async () => {
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), `
+goals:
+  - id: malformed-goal
+    description: malformed nested values
+    priority: medium
+    status: in_progress
+    importance:
+      unexpected: object
+    urgency: true
+    estimatedEffort:
+      - 1
+    createdAt:
+      unexpected: object
+    updatedAt: 2025-01-02T00:00:00Z
+decisions:
+  - id: malformed-decision
+    goalId: malformed-goal
+    decision: inspect
+    reasoning: regression proof
+    framework: llm_driven
+    confidence:
+      unexpected: object
+    timestamp:
+      unexpected: object
+context: {}
+lastActive: 2025-01-01T00:00:00Z
+sessionCount: 0
+stateVersion: 1
+`);
+
+    const loaded = await store.load(key, { strict: true });
+    expect(loaded).not.toBeNull();
+    if (!loaded) {
+      throw new Error('Expected malformed nested scalar fixture to load');
+    }
+    const goal = loaded.goals.at(0);
+    const decision = loaded.decisions.at(0);
+    expect(goal).toBeDefined();
+    expect(decision).toBeDefined();
+    if (!goal || !decision) {
+      throw new Error('Expected malformed goal and decision fixtures');
+    }
+
+    expect(Number.isNaN(goal.importance)).toBe(true);
+    expect(Number.isNaN(goal.urgency)).toBe(true);
+    expect(Number.isNaN(goal.estimatedEffort)).toBe(true);
+    expect(Number.isNaN(goal.createdAt.getTime())).toBe(true);
+    expect(goal.updatedAt.toISOString()).toBe('2025-01-02T00:00:00.000Z');
+    expect(Number.isNaN(decision.confidence)).toBe(true);
+    expect(Number.isNaN(decision.timestamp.getTime())).toBe(true);
+  });
+
   it.each([
     ['12oops', 1],
     ['3.5', 1],
@@ -114,7 +205,7 @@ stateVersion:
     [Number.MAX_SAFE_INTEGER + 1, 1],
   ])('defaults a non-integer stateVersion value (%p)', async (stateVersion, expected) => {
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), `
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), `
 goals: []
 decisions: []
 context: {}
@@ -130,7 +221,7 @@ stateVersion: ${stateVersion}
 
   it('surfaces malformed durable state instead of returning no state', async () => {
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), ': invalid: yaml: [');
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), ': invalid: yaml: [');
 
     await expect(store.load(key, { strict: true })).rejects.toThrow();
   });
@@ -206,20 +297,26 @@ stateVersion: ${stateVersion}
     await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
     const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
     expect(recovered).not.toBeNull();
+    if (!recovered) {
+      throw new Error('Expected oversized state to load in recovery mode');
+    }
 
-    recovered!.context = { payload: 'x'.repeat(68 * 1024) };
-    await expect(store.save(key, recovered!, 1, {
+    recovered.context = { payload: 'x'.repeat(68 * 1024) };
+    await expect(store.save(key, recovered, 1, {
       requireExisting: true,
       allowOversizedReduction: true,
     })).resolves.toBe(2);
-    expect(recovered?.stateVersion).toBe(2);
+    expect(recovered.stateVersion).toBe(2);
 
     const unchanged = await store.load(key, { strict: true, allowOversizedRecovery: true });
-    await expect(store.save(key, unchanged!, 2, {
+    if (!unchanged) {
+      throw new Error('Expected reduced state to remain loadable');
+    }
+    await expect(store.save(key, unchanged, 2, {
       requireExisting: true,
       allowOversizedReduction: true,
     })).rejects.toThrow('must strictly reduce');
-    expect(unchanged?.stateVersion).toBe(2);
+    expect(unchanged.stateVersion).toBe(2);
   });
 
   it('rejects recovery content beyond the bounded recovery ceiling', async () => {
@@ -240,24 +337,28 @@ stateVersion: ${stateVersion}
       content: '',
     });
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-yaml');
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), 'compact-yaml');
 
-    await expect(store.load(key)).rejects.toThrow('Parsed agent state exceeds allowed size');
-    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+    await expect(store.load(key))
       .rejects.toThrow('Parsed agent state exceeds allowed size');
+    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+      .rejects.toBeInstanceOf(AgentStateParsedSizeLimitError);
   });
 
   it('routes an oversized terminal update through the reduction path', async () => {
     await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(98 * 1024) } });
     const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
     expect(recovered).not.toBeNull();
-    recovered!.context = { payload: 'x'.repeat(101 * 1024) };
+    if (!recovered) {
+      throw new Error('Expected oversized state to load for terminal cleanup');
+    }
+    recovered.context = { payload: 'x'.repeat(101 * 1024) };
 
-    await expect(store.save(key, recovered!, 1, {
+    await expect(store.save(key, recovered, 1, {
       requireExisting: true,
       allowOversizedReduction: true,
     })).rejects.toBeInstanceOf(AgentStateReductionRequiredError);
-    expect(recovered?.stateVersion).toBe(1);
+    expect(recovered.stateVersion).toBe(1);
   });
 
   it('routes a normal candidate beyond the recovery ceiling through terminal cleanup', async () => {
@@ -275,7 +376,7 @@ stateVersion: ${stateVersion}
       content: '',
     });
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-legacy-state');
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), 'compact-legacy-state');
     const candidate = { ...state(1), context: { payload: 'x'.repeat(68 * 1024) } };
 
     await expect(store.save(key, candidate, 1, {
@@ -301,6 +402,6 @@ stateVersion: ${stateVersion}
       sessionCount: String(agentState.sessionCount),
       stateVersion: String(agentState.stateVersion),
     }, { schema: 'json', noRefs: true, sortKeys: true });
-    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), yaml);
+    await fs.writeFile(path.join(stateDir, RECOVERY_AGENT_STATE_FILE), yaml);
   }
 });

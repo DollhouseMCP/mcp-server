@@ -173,7 +173,7 @@ describe('AgentManager v2 Metadata Persistence', () => {
     };
 
     container = new DollhouseContainer();
-    container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
+    container.replace<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
 
     // Configure FileLockManager mock to execute callbacks (withLock pass-through).
     // Tests need actual file writes to verify V2 field persistence on disk.
@@ -193,24 +193,24 @@ describe('AgentManager v2 Metadata Persistence', () => {
         return fsImport.readFile(filePath, options);
       }
     );
-    container.register<FileLockManager>('FileLockManager', () => mockFileLockManager);
+    container.replace<FileLockManager>('FileLockManager', () => mockFileLockManager);
 
     // Use real FileOperationsService for this test (needs the FileLockManager for writeFile)
-    container.register<FileOperationsService>('FileOperationsService', () =>
+    container.replace<FileOperationsService>('FileOperationsService', () =>
       new FileOperationsService(container.resolve('FileLockManager'))
     );
 
     // Register DI services
     serializationService = new SerializationService();
-    container.register('SerializationService', () => serializationService);
-    container.register('MetadataService', () => metadataService);
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('SerializationService', () => serializationService);
+    container.replace('MetadataService', () => metadataService);
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
 
-    container.register('AgentManager', () => new AgentManager({
+    container.replace('AgentManager', () => new AgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       baseDir: portfolioPath,

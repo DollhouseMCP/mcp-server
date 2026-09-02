@@ -39,17 +39,17 @@ describe('TemplateManager', () => {
     container = new DollhouseContainer();
 
     // Register all required services for TemplateManager
-    container.register('FileLockManager', () => new FileLockManager());
-    container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
-    container.register('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
-    container.register('SerializationService', () => new SerializationService());
-    container.register('MetadataService', () => metadataService);
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('FileLockManager', () => new FileLockManager());
+    container.replace('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    container.replace('PortfolioManager', () => new PortfolioManager(container.resolve('FileOperationsService'), { baseDir: testDir }));
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('MetadataService', () => metadataService);
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
     ));
-    container.register('TemplateManager', () => new TemplateManager({
+    container.replace('TemplateManager', () => new TemplateManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),

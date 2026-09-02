@@ -6,6 +6,12 @@ import type {
 import {
   ConsoleProtectedCorrelationRateLimitDependencyError,
 } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
+import type {
+  ConsoleCollectionFetchRateLimiter,
+} from '../services/rate-limit/ConsoleCollectionFetchRateLimiter.js';
+import {
+  ConsoleCollectionFetchRateLimitDependencyError,
+} from '../services/rate-limit/ConsoleCollectionFetchRateLimiter.js';
 import { requireConsoleAuthentication } from './ConsoleAuthentication.js';
 import { requireConsoleRequestContext } from '../platform/ConsoleRequestContext.js';
 import { sendProblemResponse } from '../platform/ProblemResponses.js';
@@ -13,6 +19,7 @@ import type { ConsoleRateLimitPolicy, ConsoleRequest, ConsoleRouteDefinition } f
 
 export interface ConsoleRateLimitOptions {
   readonly protectedCorrelationRateLimiter?: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly collectionFetchRateLimiter?: ConsoleCollectionFetchRateLimiter | null;
 }
 
 export function createConsoleRateLimitMiddleware(
@@ -21,22 +28,23 @@ export function createConsoleRateLimitMiddleware(
 ): RequestHandler {
   const policy: ConsoleRateLimitPolicy = route.rateLimit ?? 'none';
   if (policy === 'none') return (_request, _response, next): void => next();
-  if (!options.protectedCorrelationRateLimiter) {
-    throw new Error('protected_correlation_resolution route requires a protected correlation rate limiter');
-  }
+  const enforce = resolveEnforcer(policy, options);
 
   return (request, response, next): void => {
     const req = request as ConsoleRequest;
     void (async (): Promise<void> => {
       try {
-        await enforceProtectedCorrelationResolution(req, response, options.protectedCorrelationRateLimiter);
+        await enforce(req, response);
       } catch (error) {
-        if (error instanceof ConsoleProtectedCorrelationRateLimitDependencyError) {
+        if (
+          error instanceof ConsoleProtectedCorrelationRateLimitDependencyError ||
+          error instanceof ConsoleCollectionFetchRateLimitDependencyError
+        ) {
           sendProblemResponse(response, {
             status: 503,
             code: 'service_unavailable',
             title: 'Service unavailable',
-            detail: 'The protected rate-limit policy could not be evaluated.',
+            detail: 'The rate-limit policy could not be evaluated.',
           }, requireConsoleRequestContext(req).correlationId);
           return;
         }
@@ -47,6 +55,56 @@ export function createConsoleRateLimitMiddleware(
       next();
     })();
   };
+}
+
+type RateLimitEnforcer = (
+  req: ConsoleRequest,
+  response: Parameters<typeof sendProblemResponse>[0],
+) => Promise<void>;
+
+function resolveEnforcer(
+  policy: Exclude<ConsoleRateLimitPolicy, 'none'>,
+  options: ConsoleRateLimitOptions,
+): RateLimitEnforcer {
+  if (policy === 'collection_fetch') {
+    const limiter = options.collectionFetchRateLimiter;
+    if (!limiter) {
+      throw new Error('collection_fetch route requires a collection fetch rate limiter');
+    }
+    return (req, response) => enforceCollectionFetch(req, response, limiter);
+  }
+  const limiter = options.protectedCorrelationRateLimiter;
+  if (!limiter) {
+    throw new Error('protected_correlation_resolution route requires a protected correlation rate limiter');
+  }
+  return (req, response) => enforceProtectedCorrelationResolution(req, response, limiter);
+}
+
+async function enforceCollectionFetch(
+  req: ConsoleRequest,
+  response: Parameters<typeof sendProblemResponse>[0],
+  limiter: ConsoleCollectionFetchRateLimiter,
+): Promise<void> {
+  const authentication = requireConsoleAuthentication(req);
+  const result = await limiter.consume({
+    consoleSessionIdHash: authentication.sessionIdHash,
+    ip: req.ip,
+  });
+  if (result.allowed) return;
+
+  if (result.retryAfterSeconds !== null) {
+    response.setHeader('Retry-After', String(result.retryAfterSeconds));
+  }
+  sendProblemResponse(response, {
+    status: 429,
+    code: 'rate_limited',
+    title: 'Rate limited',
+    detail: 'The collection fetch rate limit was exceeded.',
+    extensions: {
+      window_resets_at: result.windowResetsAt.toISOString(),
+      exceeded_scopes: result.exceededScopes,
+    },
+  }, requireConsoleRequestContext(req).correlationId);
 }
 
 async function enforceProtectedCorrelationResolution(

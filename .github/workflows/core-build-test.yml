@@ -31,14 +31,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 1
           fetch-tags: true
           persist-credentials: true
 
       - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -118,7 +118,7 @@ jobs:
           if [ -f "tests/jest.config.cjs" ]; then cat tests/jest.config.cjs; else echo "Jest config not found"; fi
 
       - name: Cache Jest
-        uses: actions/cache@v4
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             .jest-cache/
@@ -159,21 +159,76 @@ jobs:
             echo "✗ package.json NOT FOUND"
           fi
 
-      - name: Run compiled tests approach
-        if: false  # Temporarily disabled - see PR #845
-        # Original condition: if: steps.original_tests.outcome == 'failure'
-        working-directory: ${{ github.workspace }}
+      - name: Enforce unit test result
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
         run: |
-          echo "=== Running compiled test approach ==="
-          echo "Explicitly setting working directory to: ${{ github.workspace }}"
-          pwd
-          # Build the tests first
-          npm run build:test
-          # Run the compiled tests using cross-env
-          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config tests/jest.config.compiled.cjs --ci --watchAll=false
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Unit tests failed for the core build gate."
+            exit 1
+          fi
 
       - name: Validation complete
         run: |
           echo "✅ Core Build & Test Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
+
+  postgres-integration:
+    name: PostgreSQL Integration
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    # The first complete 126-suite serial runs consumed 1,048-1,080 seconds
+    # (87-90% of the former 20-minute cap). Keep capacity headroom as the
+    # required integration tree grows; per-test startup timeouts are repaired
+    # independently and are not masked by this job-level budget.
+    timeout-minutes: 30
+    env:
+      DOLLHOUSE_REQUIRE_TEST_DATABASE: '1'
+      DOLLHOUSE_REQUIRE_PG_AUTH_TESTS: '1'
+      DOLLHOUSE_TEST_DATABASE_URL: postgres://dollhouse_app@localhost:5432/dollhousemcp_test
+      DOLLHOUSE_TEST_DATABASE_ADMIN_URL: postgres://dollhouse@localhost:5432/dollhousemcp_test
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_USER: dollhouse
+          # The service is isolated to an ephemeral hosted runner. Trust auth
+          # avoids committing even a test-only database credential to YAML.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dollhouse -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run required PostgreSQL integration suite
+        run: npm run test:integration -- --runInBand

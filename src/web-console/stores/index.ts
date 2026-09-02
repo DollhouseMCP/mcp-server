@@ -7,6 +7,7 @@ export * from './IUserIntegrationStore.js';
 export * from './InMemoryUserIntegrationStore.js';
 export * from './IIntegrationDescriptorStore.js';
 export * from './InMemoryIntegrationDescriptorStore.js';
+export * from './InMemoryIntegrationMutationCoordinator.js';
 export * from './PostgresIntegrationDescriptorStore.js';
 export * from './IIntegrationOpenApiSpecStore.js';
 export * from './InMemoryIntegrationOpenApiSpecStore.js';

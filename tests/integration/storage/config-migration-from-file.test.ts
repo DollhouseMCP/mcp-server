@@ -18,6 +18,9 @@ import { InMemoryOperatorConfigStore } from '../../../src/storage/operatorConfig
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
+const CONFIG_FILE_NAME = 'config.yml';
+const OAUTH_SIGNING_KEY_FILE_NAME = 'oauth-signing-key.json';
+
 const TEST_USER_ID = '00000000-0000-0000-0000-000000000123';
 
 const SAMPLE_CONFIG_YAML = `
@@ -118,8 +121,8 @@ describe('configToDatabase migration', () => {
 
   describe('full migration: config.yml + JWKS + cookie secret', () => {
     beforeEach(async () => {
-      await fs.writeFile(path.join(configRoot, 'config.yml'), SAMPLE_CONFIG_YAML);
-      await fs.writeFile(path.join(runRoot, 'oauth-signing-key.json'), SAMPLE_JWKS_KEYFILE);
+      await fs.writeFile(path.join(configRoot, CONFIG_FILE_NAME), SAMPLE_CONFIG_YAML);
+      await fs.writeFile(path.join(runRoot, OAUTH_SIGNING_KEY_FILE_NAME), SAMPLE_JWKS_KEYFILE);
       await fs.writeFile(path.join(runRoot, 'cookie-signing-secret.bin'), SAMPLE_COOKIE_SECRET);
     });
 
@@ -136,7 +139,10 @@ describe('configToDatabase migration', () => {
       expect(result.cookieSecretMigrated).toBe(true);
       const marker = await readMarker(configRoot);
       expect(marker).not.toBeNull();
-      expect(marker!.version).toBe(1);
+      if (!marker) {
+        throw new Error('Expected the migration marker to be written');
+      }
+      expect(marker.version).toBe(1);
     });
 
     it('routes per-host sections to operator store', async () => {
@@ -169,6 +175,23 @@ describe('configToDatabase migration', () => {
       expect(u.autoActivateConfig.personas).toEqual(['helpful-assistant']);
     });
 
+    it('preserves inert code-like scalar values in legacy configuration', async () => {
+      await fs.writeFile(
+        path.join(configRoot, CONFIG_FILE_NAME),
+        'display:\n  custom_format: "eval(result) via file:// reference"\n',
+      );
+
+      await runConfigToDatabaseMigration({
+        operatorStore, userStore, signingKeyStore,
+        userId: TEST_USER_ID,
+        legacyConfigRoot: configRoot,
+        legacyRunRoot: runRoot,
+      });
+
+      const user = await userStore.load(TEST_USER_ID);
+      expect(user.displayConfig.custom_format).toBe('eval(result) via file:// reference');
+    });
+
     it('preserves the original JWKS kid (currently-issued tokens stay valid)', async () => {
       await runConfigToDatabaseMigration({
         operatorStore, userStore, signingKeyStore,
@@ -193,16 +216,19 @@ describe('configToDatabase migration', () => {
       });
       const active = await signingKeyStore.getActive('cookie');
       expect(active?.kid).toMatch(/^cookie-migrated-/);
-      const payload = active!.payload as { secret: string; length: number };
-      expect(payload.length).toBe(32);
+      if (!active) {
+        throw new Error('Expected an active migrated cookie-signing key');
+      }
+      const payload = active.payload as { secret: string; length: number };
+      expect(payload).toHaveLength(32);
       expect(Buffer.from(payload.secret, 'base64').equals(SAMPLE_COOKIE_SECRET)).toBe(true);
     });
   });
 
   describe('idempotence', () => {
     beforeEach(async () => {
-      await fs.writeFile(path.join(configRoot, 'config.yml'), SAMPLE_CONFIG_YAML);
-      await fs.writeFile(path.join(runRoot, 'oauth-signing-key.json'), SAMPLE_JWKS_KEYFILE);
+      await fs.writeFile(path.join(configRoot, CONFIG_FILE_NAME), SAMPLE_CONFIG_YAML);
+      await fs.writeFile(path.join(runRoot, OAUTH_SIGNING_KEY_FILE_NAME), SAMPLE_JWKS_KEYFILE);
       await fs.writeFile(path.join(runRoot, 'cookie-signing-secret.bin'), SAMPLE_COOKIE_SECRET);
     });
 
@@ -227,7 +253,7 @@ describe('configToDatabase migration', () => {
 
   describe('preview / dry-run mode', () => {
     beforeEach(async () => {
-      await fs.writeFile(path.join(configRoot, 'config.yml'), SAMPLE_CONFIG_YAML);
+      await fs.writeFile(path.join(configRoot, CONFIG_FILE_NAME), SAMPLE_CONFIG_YAML);
     });
 
     it('returns preview status without writing to stores or marker', async () => {
@@ -244,13 +270,13 @@ describe('configToDatabase migration', () => {
       // No writes occurred
       expect(await readMarker(configRoot)).toBeNull();
       const op = await operatorStore.load();
-      expect(Object.keys(op.consoleConfig).length).toBe(0);
+      expect(Object.keys(op.consoleConfig)).toHaveLength(0);
     });
   });
 
   describe('failure modes', () => {
     it('throws on malformed YAML rather than silently dropping config', async () => {
-      await fs.writeFile(path.join(configRoot, 'config.yml'), 'not-an-object: [\n  unbalanced');
+      await fs.writeFile(path.join(configRoot, CONFIG_FILE_NAME), 'not-an-object: [\n  unbalanced');
       await expect(
         runConfigToDatabaseMigration({
           operatorStore, userStore, signingKeyStore,
@@ -261,8 +287,38 @@ describe('configToDatabase migration', () => {
       ).rejects.toThrow();
     });
 
+    it('rejects alias-amplification payloads in legacy config', async () => {
+      const aliases = Array.from({ length: 6 }, () => '  - *defaults').join('\n');
+      await fs.writeFile(
+        path.join(configRoot, CONFIG_FILE_NAME),
+        `defaults: &defaults\n  enabled: true\nuser:\n${aliases}\n`,
+      );
+
+      await expect(
+        runConfigToDatabaseMigration({
+          operatorStore, userStore, signingKeyStore,
+          userId: TEST_USER_ID,
+          legacyConfigRoot: configRoot,
+          legacyRunRoot: runRoot,
+        }),
+      ).rejects.toThrow('YAML aliases exceed safe reuse limits');
+    });
+
+    it('rejects legacy config larger than the bounded migration input', async () => {
+      await fs.writeFile(path.join(configRoot, CONFIG_FILE_NAME), `user:\n  value: ${'x'.repeat(64 * 1024)}\n`);
+
+      await expect(
+        runConfigToDatabaseMigration({
+          operatorStore, userStore, signingKeyStore,
+          userId: TEST_USER_ID,
+          legacyConfigRoot: configRoot,
+          legacyRunRoot: runRoot,
+        }),
+      ).rejects.toThrow('exceeds maximum allowed size');
+    });
+
     it('throws on malformed JWKS keyfile rather than silently skipping', async () => {
-      await fs.writeFile(path.join(runRoot, 'oauth-signing-key.json'), '{"not": "a-keypair"}');
+      await fs.writeFile(path.join(runRoot, OAUTH_SIGNING_KEY_FILE_NAME), '{"not": "a-keypair"}');
       await expect(
         runConfigToDatabaseMigration({
           operatorStore, userStore, signingKeyStore,
@@ -288,7 +344,7 @@ describe('configToDatabase migration', () => {
 
   describe('keys-only migration (no config.yml)', () => {
     beforeEach(async () => {
-      await fs.writeFile(path.join(runRoot, 'oauth-signing-key.json'), SAMPLE_JWKS_KEYFILE);
+      await fs.writeFile(path.join(runRoot, OAUTH_SIGNING_KEY_FILE_NAME), SAMPLE_JWKS_KEYFILE);
     });
 
     it('migrates JWKS even when config.yml is absent', async () => {
@@ -308,7 +364,7 @@ describe('configToDatabase migration', () => {
 
   describe('skip when DB already has active keys', () => {
     beforeEach(async () => {
-      await fs.writeFile(path.join(runRoot, 'oauth-signing-key.json'), SAMPLE_JWKS_KEYFILE);
+      await fs.writeFile(path.join(runRoot, OAUTH_SIGNING_KEY_FILE_NAME), SAMPLE_JWKS_KEYFILE);
     });
 
     it('does not overwrite an existing active JWKS', async () => {

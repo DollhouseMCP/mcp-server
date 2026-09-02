@@ -14,7 +14,7 @@
  * - Without a backing store, crash = fresh session (security-first default)
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprovalScope, CreateCliApprovalArgs } from './GatekeeperTypes.js';
 import { env } from '../../config/env.js';
 import type { IConfirmationStore } from '../../state/IConfirmationStore.js';
@@ -291,11 +291,13 @@ export class GatekeeperSession {
     this.touch();
 
     const key = this.getConfirmationKey(operation, elementType);
+    let resolvedKey = key;
     let confirmation = this.state.confirmations.get(key);
 
     // Fall back to unscoped confirmation when element-type-scoped key not found.
     // A session-wide confirmation for "create_element" covers "create_element:skill" etc.
     if (!confirmation && elementType) {
+      resolvedKey = operation;
       confirmation = this.state.confirmations.get(operation);
     }
 
@@ -308,11 +310,10 @@ export class GatekeeperSession {
 
     // For CONFIRM_SINGLE_USE, invalidate after first use
     if (confirmation.permissionLevel === 'CONFIRM_SINGLE_USE') {
-      const deleteKey = this.state.confirmations.has(key) ? key : operation;
-      this.state.confirmations.delete(deleteKey);
+      this.state.confirmations.delete(resolvedKey);
 
       if (this.confirmationStore) {
-        this.confirmationStore.deleteConfirmation(deleteKey);
+        this.confirmationStore.deleteConfirmation(resolvedKey);
         this.persistToStore();
       }
     }
@@ -395,14 +396,7 @@ export class GatekeeperSession {
     } = args;
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
-
-    // LRU eviction at max capacity
-    if (this.state.cliApprovals.size >= this.maxCliApprovals) {
-      const oldestKey = this.state.cliApprovals.keys().next().value;
-      if (oldestKey) {
-        this.state.cliApprovals.delete(oldestKey);
-      }
-    }
+    await this.evictOldestCliApprovalIfAtCapacity();
 
     const requestId = `cli-${randomUUID()}`;
     if (!this.auditHmacResolver) {
@@ -453,6 +447,27 @@ export class GatekeeperSession {
     }
 
     return requestId;
+  }
+
+  private async evictOldestCliApprovalIfAtCapacity(): Promise<void> {
+    if (this.state.cliApprovals.size < this.maxCliApprovals) return;
+    const oldestKey = this.state.cliApprovals.keys().next().value;
+    if (!oldestKey) return;
+
+    const oldestRecord = this.state.cliApprovals.get(oldestKey);
+    this.state.cliApprovals.delete(oldestKey);
+    if (!this.confirmationStore) return;
+
+    this.confirmationStore.deleteCliApproval(oldestKey);
+    try {
+      await this.persistDecision();
+    } catch (error) {
+      if (oldestRecord) {
+        this.state.cliApprovals.set(oldestKey, oldestRecord);
+        this.confirmationStore.saveCliApproval(oldestKey, oldestRecord);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -732,6 +747,10 @@ export class GatekeeperSession {
     // states so decision retries return stable results.
     if (record.consumed && approvalAge(record, now) > approvalTtl(record)) {
       this.state.cliApprovals.delete(key);
+      if (this.confirmationStore) {
+        this.confirmationStore.deleteCliApproval(record.requestId);
+        this.persistToStore();
+      }
     }
   }
 

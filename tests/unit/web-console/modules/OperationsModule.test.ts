@@ -17,6 +17,7 @@ import {
   type ISystemMetricsSource,
   type OperationsHealthChecks,
 } from '../../../../src/web-console/index.js';
+import { OPERATION_HEALTH_COMPONENTS } from '../../../../src/web-console/modules/operations/OperationsHealth.js';
 
 const NOW = new Date('2026-05-29T10:30:00.000Z');
 const MUST_NOT_LEAK = 'must-not-leak';
@@ -33,6 +34,7 @@ const SYSTEM_METRICS_PATH = '/api/v1/admin/operate/metrics/system';
 const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
 const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
 const CONSOLE_PORT_KEY = 'console.port';
+type ConsoleRouteRequest = Parameters<ConsoleRouteDefinition['handler']>[0];
 
 class RacingOperatorConfigStore extends InMemoryOperatorConfigStore {
   private raceInjected = false;
@@ -279,7 +281,7 @@ describe('OperationsModule', () => {
   it('returns detailed operator health with stable failure codes', async () => {
     const route = findRoute(createModule().routes, 'GET', '/api/v1/admin/operate/health');
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
 
     expect(result.status).toBe(200);
     expect(projectOperationHealthSummary(result.body)).toEqual({
@@ -318,7 +320,7 @@ describe('OperationsModule', () => {
       now: () => NOW,
     }).routes, 'GET', OPERATE_CONFIG_PATH);
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
     const projected = projectOperatorConfigList(result.body);
 
     expect(projected.items).toEqual(expect.arrayContaining([
@@ -342,7 +344,7 @@ describe('OperationsModule', () => {
     const result = await route.handler({
       query: {},
       params: { key: CONSOLE_PORT_KEY },
-    } as never);
+    } as unknown as ConsoleRouteRequest);
     const projected = projectOperatorConfigSetting(result.body);
 
     expect(result.headers).toEqual({ ETag: projected.etag });
@@ -365,7 +367,7 @@ describe('OperationsModule', () => {
     });
     const getRoute = findRoute(module.routes, 'GET', LICENSE_KEY_PATH);
     const putRoute = findRoute(module.routes, 'PUT', LICENSE_KEY_PATH);
-    const before = await getRoute.handler({ query: {}, params: { key: CONSOLE_PORT_KEY } } as never);
+    const before = await getRoute.handler({ query: {}, params: { key: CONSOLE_PORT_KEY } } as unknown as ConsoleRouteRequest);
     const etag = projectOperatorConfigSetting(before.body).etag;
 
     const result = await putRoute.handler({
@@ -373,7 +375,7 @@ describe('OperationsModule', () => {
       params: { key: CONSOLE_PORT_KEY },
       headers: { 'if-match': etag },
       body: { value: 3100 },
-    } as never);
+    } as unknown as ConsoleRouteRequest);
 
     const projected = projectOperatorConfigSetting(result.body);
     expect(result.status).toBe(200);
@@ -398,26 +400,26 @@ describe('OperationsModule', () => {
       params: { key: CONSOLE_PORT_KEY },
       headers: {},
       body: { value: 3100 },
-    } as never)).resolves.toMatchObject({ status: 428, body: { code: 'precondition_required' } });
+    } as unknown as ConsoleRouteRequest)).resolves.toMatchObject({ status: 428, body: { code: 'precondition_required' } });
 
     await expect(putRoute.handler({
       query: {},
       params: { key: CONSOLE_PORT_KEY },
       headers: { 'if-match': 'W/"stale"' },
       body: { value: 3100 },
-    } as never)).resolves.toMatchObject({ status: 412, body: { code: 'precondition_failed' } });
+    } as unknown as ConsoleRouteRequest)).resolves.toMatchObject({ status: 412, body: { code: 'precondition_failed' } });
 
     const getRoute = findRoute(module.routes, 'GET', LICENSE_KEY_PATH);
     const etag = projectOperatorConfigSetting((await getRoute.handler({
       query: {},
       params: { key: CONSOLE_PORT_KEY },
-    } as never)).body).etag;
+    } as unknown as ConsoleRouteRequest)).body).etag;
     await expect(putRoute.handler({
       query: {},
       params: { key: CONSOLE_PORT_KEY },
       headers: { 'if-match': etag },
       body: { value: 70000 },
-    } as never)).resolves.toMatchObject({ status: 422, body: { code: 'validation_failed' } });
+    } as unknown as ConsoleRouteRequest)).resolves.toMatchObject({ status: 422, body: { code: 'validation_failed' } });
   });
 
   it('maps store-level operator config compare-and-swap races to precondition failures', async () => {
@@ -433,14 +435,14 @@ describe('OperationsModule', () => {
     const etag = projectOperatorConfigSetting((await getRoute.handler({
       query: {},
       params: { key: CONSOLE_PORT_KEY },
-    } as never)).body).etag;
+    } as unknown as ConsoleRouteRequest)).body).etag;
 
     await expect(putRoute.handler({
       query: {},
       params: { key: CONSOLE_PORT_KEY },
       headers: { 'if-match': etag },
       body: { value: 3100 },
-    } as never)).resolves.toMatchObject({
+    } as unknown as ConsoleRouteRequest)).resolves.toMatchObject({
       status: 412,
       body: { code: 'precondition_failed' },
     });
@@ -500,7 +502,7 @@ describe('OperationsModule', () => {
       database: () => false,
     }).routes, 'GET', '/api/v1/admin/operate/health/database');
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
 
     expect(result).toEqual({
       status: 503,
@@ -519,7 +521,7 @@ describe('OperationsModule', () => {
       database: () => false,
     }).routes, 'GET', '/api/v1/admin/operate/health');
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
 
     expect(result.status).toBe(503);
     expect(projectOperationHealthSummary(result.body)).toMatchObject({
@@ -543,7 +545,7 @@ describe('OperationsModule', () => {
       },
     }).routes, 'GET', '/api/v1/admin/operate/health/auth-server');
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
 
     expect(result.status).toBe(503);
     expect(projectOperationHealthComponent(result.body)).toEqual({
@@ -560,7 +562,7 @@ describe('OperationsModule', () => {
     const result = await route.handler({
       query: { subsystem: 'runtime', limit: '10' },
       params: {},
-    } as never);
+    } as unknown as ConsoleRouteRequest);
 
     expect(projectOperationalLogs(result.body)).toEqual({
       items: [
@@ -589,22 +591,24 @@ describe('OperationsModule', () => {
   it('bounds operational log limits for invalid and extreme requests', async () => {
     const route = findRoute(createModule(HEALTH_CHECKS, createTelemetry(150)).routes, 'GET', OPERATE_LOGS_PATH);
 
-    await expect(route.handler({ query: { limit: '0' }, params: {} } as never))
-      .resolves.toMatchObject({ body: { items: expect.arrayContaining([expect.any(Object)]), page: { limit: 1 } } });
-    await expect(route.handler({ query: { limit: '-10' }, params: {} } as never))
-      .resolves.toMatchObject({ body: { page: { limit: 1 } } });
-    await expect(route.handler({ query: { limit: '1000' }, params: {} } as never))
+    // Sub-1 and unparsable limits are invalid input → the endpoint default
+    // (shared ConsoleQueryParams semantics), not a clamp to 1.
+    await expect(route.handler({ query: { limit: '0' }, params: {} } as unknown as ConsoleRouteRequest))
+      .resolves.toMatchObject({ body: { items: expect.arrayContaining([expect.any(Object)]), page: { limit: 100 } } });
+    await expect(route.handler({ query: { limit: '-10' }, params: {} } as unknown as ConsoleRouteRequest))
+      .resolves.toMatchObject({ body: { page: { limit: 100 } } });
+    await expect(route.handler({ query: { limit: '1000' }, params: {} } as unknown as ConsoleRouteRequest))
       .resolves.toMatchObject({ body: { items: expect.any(Array), page: { limit: 100 } } });
-    await expect(route.handler({ query: { limit: 'not-a-number' }, params: {} } as never))
+    await expect(route.handler({ query: { limit: 'not-a-number' }, params: {} } as unknown as ConsoleRouteRequest))
       .resolves.toMatchObject({ body: { items: expect.any(Array), page: { limit: 100 } } });
-    await expect(route.handler({ query: {}, params: {} } as never))
+    await expect(route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest))
       .resolves.toMatchObject({ body: { items: expect.any(Array), page: { limit: 100 } } });
   });
 
   it('emits and consumes operational log cursors without trusting malformed cursors', async () => {
     const route = findRoute(createModule(HEALTH_CHECKS, createTelemetry(3)).routes, 'GET', OPERATE_LOGS_PATH);
 
-    const first = await route.handler({ query: { limit: '2' }, params: {} } as never);
+    const first = await route.handler({ query: { limit: '2' }, params: {} } as unknown as ConsoleRouteRequest);
     const firstPage = projectOperationalLogs(first.body);
     expect(firstPage.items).toHaveLength(2);
     expect(firstPage.page.next_cursor).toEqual(expect.any(String));
@@ -612,7 +616,7 @@ describe('OperationsModule', () => {
     const second = await route.handler({
       query: { limit: '2', cursor: firstPage.page.next_cursor },
       params: {},
-    } as never);
+    } as unknown as ConsoleRouteRequest);
     expect(projectOperationalLogs(second.body)).toMatchObject({
       items: [{ session_id: 'session-3' }],
       page: {
@@ -622,7 +626,7 @@ describe('OperationsModule', () => {
       },
     });
 
-    const malformed = await route.handler({ query: { limit: '2', cursor: 'not-valid-base64url' }, params: {} } as never);
+    const malformed = await route.handler({ query: { limit: '2', cursor: 'not-valid-base64url' }, params: {} } as unknown as ConsoleRouteRequest);
     expect(projectOperationalLogs(malformed.body).items.map(item => item.session_id)).toEqual(['session-1', 'session-2']);
   });
 
@@ -632,7 +636,7 @@ describe('OperationsModule', () => {
     const result = await route.handler({
       query: { level: 'info', event: GATEKEEPER_DECISION_EVENT },
       params: {},
-    } as never);
+    } as unknown as ConsoleRouteRequest);
 
     expect(projectOperationalLogs(result.body).items).toEqual([
       expect.objectContaining({ level: 'info', event: GATEKEEPER_DECISION_EVENT, session_id: 'session-2' }),
@@ -647,7 +651,7 @@ describe('OperationsModule', () => {
       query: { subsystem: 'runtime', limit: '10' },
       params: {},
       headers: {},
-    } as never);
+    } as unknown as ConsoleRouteRequest);
 
     expect(result.stream?.init).toMatchObject({
       stream_id: 'admin.operate.logs',
@@ -692,7 +696,7 @@ describe('OperationsModule', () => {
       query: {},
       params: {},
       headers: { 'last-event-id': 'operational-log:0' },
-    } as never)).toThrow('Invalid Last-Event-ID');
+    } as unknown as ConsoleRouteRequest)).toThrow('Invalid Last-Event-ID');
   });
 
   it('queries operational metrics through the allowlisted telemetry boundary', async () => {
@@ -701,7 +705,7 @@ describe('OperationsModule', () => {
     const result = await route.handler({
       query: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
       params: {},
-    } as never);
+    } as unknown as ConsoleRouteRequest);
 
     expect(projectOperationalMetrics(result.body)).toEqual({
       checked_at: NOW.toISOString(),
@@ -748,11 +752,12 @@ describe('OperationsModule', () => {
       now: () => NOW,
     }).routes, 'GET', SYSTEM_METRICS_PATH);
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
 
     expect(result.status).toBe(200);
+    // Cursor-family envelope; ring-buffer anchors stay top-level.
     expect(projectSystemMetrics(result.body)).toEqual({
-      snapshots: [{
+      items: [{
         id: 'snap-1',
         timestamp: NOW.toISOString(),
         duration_ms: 5,
@@ -762,22 +767,61 @@ describe('OperationsModule', () => {
           { name: 'op.latency', source: 'perf', unit: 'ms', type: 'histogram', value: { count: 3, sum: 30, min: 5, p95: 20 } },
         ],
       }],
-      total: 1,
-      has_more: false,
-      limit: 50,
-      offset: 0,
+      page: { limit: 50, cursor: null, next_cursor: null },
       oldest_available: NOW.toISOString(),
       newest_available: NOW.toISOString(),
     });
   });
 
+  it('walks System A pages through opaque cursors, never raw offsets', async () => {
+    const source: ISystemMetricsSource = {
+      query: (options) => ({
+        snapshots: [{
+          id: `snap-${(options?.offset ?? 0) + 1}`,
+          timestamp: NOW.toISOString(),
+          durationMs: 5,
+          errors: [],
+          metrics: [],
+        }],
+        total: 2,
+        hasMore: (options?.offset ?? 0) === 0,
+        limit: 1,
+        offset: options?.offset ?? 0,
+        oldestAvailable: NOW.toISOString(),
+        newestAvailable: NOW.toISOString(),
+      }),
+    };
+    const route = findRoute(createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      systemMetrics: source,
+      now: () => NOW,
+    }).routes, 'GET', SYSTEM_METRICS_PATH);
+
+    const first = projectSystemMetrics((await route.handler({ query: { limit: '1' }, params: {} } as unknown as ConsoleRouteRequest)).body);
+    expect(first.items[0].id).toBe('snap-1');
+    expect(first.page.next_cursor).not.toBeNull();
+    // The cursor is opaque — the raw offset never appears as a query param.
+    const second = projectSystemMetrics((await route.handler({
+      query: { limit: '1', cursor: first.page.next_cursor },
+      params: {},
+    } as unknown as ConsoleRouteRequest)).body);
+    expect(second.items[0].id).toBe('snap-2');
+    expect(second.page.cursor).toBe(first.page.next_cursor);
+    expect(second.page.next_cursor).toBeNull();
+  });
+
   it('returns an empty System A result when metrics collection is disabled (no sink)', async () => {
     const route = findRoute(createModule().routes, 'GET', SYSTEM_METRICS_PATH);
 
-    const result = await route.handler({ query: {}, params: {} } as never);
+    const result = await route.handler({ query: {}, params: {} } as unknown as ConsoleRouteRequest);
 
     expect(result.status).toBe(200);
-    expect(projectSystemMetrics(result.body)).toMatchObject({ snapshots: [], total: 0, has_more: false });
+    expect(projectSystemMetrics(result.body)).toMatchObject({
+      items: [],
+      page: { cursor: null, next_cursor: null },
+    });
   });
 
   it('streams operational metrics through SSE update events with allowlisted payloads', async () => {
@@ -787,7 +831,7 @@ describe('OperationsModule', () => {
       query: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
       params: {},
       headers: {},
-    } as never);
+    } as unknown as ConsoleRouteRequest);
 
     expect(result.stream?.init).toMatchObject({
       stream_id: 'admin.operate.metrics',
@@ -829,7 +873,7 @@ describe('OperationsModule', () => {
       query: {},
       params: {},
       headers: { 'last-event-id': 'operational-metric:0' },
-    } as never)).toThrow('Invalid Last-Event-ID');
+    } as unknown as ConsoleRouteRequest)).toThrow('Invalid Last-Event-ID');
   });
 
   it('projects logs and metrics by allowlist rather than source object shape', () => {
@@ -905,6 +949,78 @@ describe('OperationsModule', () => {
         },
       }],
     });
+  });
+
+  it('drops telemetry codes that are not well-formed stable identifiers (fail-closed)', () => {
+    const projected = projectOperationalLogs({
+      items: [{
+        ts: NOW.toISOString(),
+        level: 'error',
+        subsystem: 'user report: crash in payment flow',
+        event: 'evt@example.com',
+        correlation_id: 'correlation-9',
+        account_correlation_id: 'account-9',
+        session_id: 'session-9',
+        replica: 'replica-a',
+        duration_ms: 3,
+        status_code: 500,
+        error_code: `contains spaces ${'x'.repeat(80)}`,
+      }],
+      page: { limit: 1, cursor: null, next_cursor: null },
+    });
+    expect(projected.items[0]).toMatchObject({
+      subsystem: '',
+      event: '',
+      replica: 'replica-a',
+      error_code: null,
+      correlation_id: 'correlation-9',
+      session_id: 'session-9',
+    });
+
+    const metrics = projectOperationalMetrics({
+      checked_at: NOW.toISOString(),
+      metrics: [{
+        name: RUNTIME_ERRORS_METRIC,
+        kind: 'counter',
+        value: 1,
+        unit: 'count',
+        dimensions: {
+          subsystem: 'runtime',
+          event: 'has space',
+          error_code: 'ok_code',
+          transport: 'tcp/secure',
+          latency_bucket: 'not a bucket!!',
+          account_correlation_id: 'account-4',
+        },
+      }],
+    });
+    expect(metrics.metrics[0].dimensions).toEqual({
+      subsystem: 'runtime',
+      error_code: 'ok_code',
+      transport: 'tcp/secure',
+      account_correlation_id: 'account-4',
+    });
+  });
+
+  it('accepts every health component the builder can emit (no silent drift to the fallback)', () => {
+    for (const component of OPERATION_HEALTH_COMPONENTS) {
+      const projected = projectOperationHealthComponent({
+        component,
+        status: 'ok',
+        checked_at: NOW.toISOString(),
+        failure_codes: [],
+      });
+      expect(projected.component).toBe(component);
+    }
+    // A component the builder never emits is coerced to a valid member (defensive), not passed through.
+    const coerced = projectOperationHealthComponent({
+      component: 'queue_processor',
+      status: 'ok',
+      checked_at: NOW.toISOString(),
+      failure_codes: [],
+    });
+    expect(OPERATION_HEALTH_COMPONENTS).toContain(coerced.component);
+    expect(coerced.component).not.toBe('queue_processor');
   });
 
   it('projects health by allowlist rather than source object shape', () => {

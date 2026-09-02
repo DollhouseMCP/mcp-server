@@ -31,13 +31,12 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { createDatabaseConnection, type DatabaseInstance } from '../../../src/database/connection.js';
 import { elements } from '../../../src/database/schema/elements.js';
 import { users } from '../../../src/database/schema/users.js';
+import { TEST_DB_ADMIN_URL as DB_ADMIN_URL, TEST_DB_URL as DB_URL } from './test-db-helpers.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
 const STARTUP_TIMEOUT = 60_000;
 const TEST_TIMEOUT = 30_000;
-const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
-const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
 const TEST_MASTER_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString('base64');
 
@@ -218,6 +217,7 @@ describe('MCP HTTP+Database E2E Tests', () => {
       DOLLHOUSE_AUTH_ENABLED: 'false',
       GITHUB_TOKEN: '',
       GITHUB_TEST_TOKEN: '',
+      TEST_GITHUB_TOKEN: '',
     };
 
     const spawned = await spawnHttpServer(serverEnv, testDir);

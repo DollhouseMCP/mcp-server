@@ -1,6 +1,7 @@
 import {
   ConsoleStoreConflictError,
   assertHash,
+  assertUuid,
   buffersEqual,
   hashKey,
 } from './ConsoleStoreValidation.js';
@@ -10,6 +11,7 @@ import type {
 } from './ILoginTransactionStore.js';
 import {
   cloneLoginTransaction,
+  CONSUMED_TRANSACTION_COMPLETION_LEASE_MS,
   validateLoginTransaction,
 } from './ILoginTransactionStore.js';
 
@@ -40,7 +42,11 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
         || !buffersEqual(transaction.stateHash, stateHash)) {
       return null;
     }
-    const consumed = cloneLoginTransaction({ ...transaction, consumedAt });
+    const consumed = cloneLoginTransaction({
+      ...transaction,
+      consumedAt,
+      expiresAt: new Date(consumedAt.getTime() + CONSUMED_TRANSACTION_COMPLETION_LEASE_MS),
+    });
     this.transactions.set(key, consumed);
     return cloneLoginTransaction(consumed);
   }
@@ -52,11 +58,37 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
     return transaction ? cloneLoginTransaction(transaction) : null;
   }
 
+  async completeConsumed(idHash: Buffer): Promise<boolean> {
+    await Promise.resolve();
+    assertHash(idHash, 'idHash');
+    const key = hashKey(idHash);
+    const transaction = this.transactions.get(key);
+    if (!transaction?.consumedAt) return false;
+    this.transactions.set(key, cloneLoginTransaction({
+      ...transaction,
+      expiresAt: transaction.consumedAt,
+    }));
+    return true;
+  }
+
+  async deleteByIntegrationDescriptor(integrationDescriptorId: string): Promise<number> {
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    let deleted = 0;
+    for (const [key, transaction] of this.transactions) {
+      if (transaction.integrationDescriptorId !== integrationDescriptorId) continue;
+      this.transactions.delete(key);
+      deleted++;
+    }
+    return deleted;
+  }
+
   async sweepExpired(before: Date = new Date()): Promise<number> {
     await Promise.resolve();
     let deleted = 0;
     for (const [key, transaction] of this.transactions) {
-      if (transaction.expiresAt <= before || transaction.consumedAt) {
+      // Consumed callbacks remain live through their bounded completion lease.
+      // completeConsumed() makes a completed row eligible for the next sweep.
+      if (transaction.expiresAt <= before) {
         this.transactions.delete(key);
         deleted += 1;
       }

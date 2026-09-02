@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   IRuntimeSessionControlStore,
+  RuntimeOperationalCursor,
+  RuntimeOperationalListQuery,
+  RuntimeOperationalPresencePage,
   RuntimeSessionHeartbeatInput,
   RuntimeSessionHeartbeatResult,
   RuntimeSessionListQuery,
@@ -17,6 +20,7 @@ import {
   cloneRuntimeTerminationAck,
   cloneRuntimeTerminationCommand,
   validateRuntimeListQuery,
+  validateRuntimeOperationalListQuery,
   validateRuntimeSessionHeartbeatInput,
   validateRuntimeSessionPresenceInput,
   validateRuntimeTerminationAckInput,
@@ -118,14 +122,20 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
       .map(item => cloneRuntimeSessionPresence(item));
   }
 
-  async listOperationalPresence(query: RuntimeSessionListQuery = {}): Promise<RuntimeSessionPresence[]> {
+  async listOperationalPresence(query: RuntimeOperationalListQuery = {}): Promise<RuntimeOperationalPresencePage> {
     await Promise.resolve();
-    const parsed = validateRuntimeListQuery(query);
-    return [...this.presence.values()]
-      .filter(item => isVisiblePresence(item, parsed.now))
-      .sort(comparePresence)
-      .slice(0, parsed.limit)
-      .map(item => cloneRuntimeSessionPresence(item));
+    const parsed = validateRuntimeOperationalListQuery(query);
+    const filtered = [...this.presence.values()]
+      .filter(item => item.status === (parsed.status ?? 'active') && item.leaseUntil > parsed.now)
+      .filter(item => !parsed.userId || item.userId === parsed.userId)
+      .filter(item => !parsed.after || isAfterOperationalKey(item, parsed.after))
+      .sort(compareOperationalKey);
+    const items = filtered.slice(0, parsed.limit).map(item => cloneRuntimeSessionPresence(item));
+    const last = items.at(-1);
+    const nextCursor: RuntimeOperationalCursor | null = filtered.length > parsed.limit && last
+      ? { lastActiveAt: last.lastActiveAt, sessionId: last.sessionId }
+      : null;
+    return { items, nextCursor };
   }
 
   async createTerminationCommand(input: RuntimeTerminationCommandInput): Promise<RuntimeTerminationCommand> {
@@ -179,6 +189,24 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
     const ack = this.acknowledgements.get(commandId);
     return ack ? cloneRuntimeTerminationAck(ack) : null;
   }
+
+  async getCommand(commandId: string): Promise<RuntimeTerminationCommand | null> {
+    await Promise.resolve();
+    assertUuid(commandId, 'commandId');
+    const command = this.commands.get(commandId);
+    return command ? cloneRuntimeTerminationCommand(command) : null;
+  }
+}
+
+/** In-memory mirror of the Postgres `(last_active_at DESC, session_id DESC)` operational ordering + `< cursor` predicate. */
+function compareOperationalKey(left: RuntimeSessionPresence, right: RuntimeSessionPresence): number {
+  const byTime = right.lastActiveAt.getTime() - left.lastActiveAt.getTime();
+  return byTime === 0 ? right.sessionId.localeCompare(left.sessionId) : byTime;
+}
+
+function isAfterOperationalKey(item: RuntimeSessionPresence, after: RuntimeOperationalCursor): boolean {
+  const byTime = item.lastActiveAt.getTime() - after.lastActiveAt.getTime();
+  return byTime === 0 ? item.sessionId.localeCompare(after.sessionId) < 0 : byTime < 0;
 }
 
 function isVisiblePresence(presence: RuntimeSessionPresence, now: Date): boolean {

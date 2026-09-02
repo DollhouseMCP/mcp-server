@@ -17,12 +17,15 @@
  */
 
 import { stepUp, stepDown } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
 import { fetchFactorStatus, openSecurityPanel } from './security.js';
 
 const ELEVATED_KEY = 'dh-elevated'; // sessionStorage marker → toast only on real transitions
 const WARN_THRESHOLD_MS = 60_000;
 
 let toast = () => {};
+let hasRoute = noConsoleRoute;
+let factorDiscoveryAvailable = false;
 let control;          // #elevation-control
 let band;             // #admin-band
 let capabilities = [];
@@ -32,6 +35,8 @@ let warned = false;
 
 export function initElevation(principal, ctx = {}) {
   toast = ctx.toast || toast;
+  hasRoute = ctx.hasRoute || hasRoute;
+  factorDiscoveryAvailable = hasRoute('GET', '/me/security/factors');
   control = document.getElementById('elevation-control');
   band = document.getElementById('admin-band');
   capabilities = Array.isArray(principal?.available_admin_capabilities)
@@ -86,6 +91,14 @@ function renderNormal() {
   hide(band);
   control.hidden = false;
   control.classList.remove('is-elevated');
+  if (!factorDiscoveryAvailable) {
+    control.innerHTML = `
+      <button class="btn btn-elevate" id="elevate-btn" type="button" disabled
+        title="Admin elevation is unavailable because factor discovery is not enabled">
+        <span class="elevate-icon" aria-hidden="true">&#x1f6e1;</span> Elevation unavailable
+      </button>`;
+    return;
+  }
   control.innerHTML = `
     <button class="btn btn-elevate" id="elevate-btn" type="button" title="Elevate to admin access (requires a one-time code)">
       <span class="elevate-icon" aria-hidden="true">&#x1f6e1;</span> Elevate
@@ -157,11 +170,23 @@ async function onElevate() {
   if (elevateBtn) elevateBtn.disabled = true;
   const status = await fetchFactorStatus();
   if (elevateBtn) elevateBtn.disabled = false;
-  if (!status?.totp?.enrolled) {
-    toast('Set up an authenticator first to elevate to admin access.', 'warn');
-    openSecurityPanel({ toast });
+  if (!status) {
+    toast('Could not verify authenticator status. Try again.', 'warn');
     return;
   }
+  if (!status?.totp?.enrolled) {
+    if (!hasRoute('GET', '/me/security/factors/enroll/totp')) {
+      toast('Authenticator enrollment is not available in this deployment.', 'warn');
+      return;
+    }
+    toast('Set up an authenticator first to elevate to admin access.', 'warn');
+    openSecurityPanel({ toast, hasRoute });
+    return;
+  }
+  startStepUp();
+}
+
+function startStepUp() {
   // Any one capability is enough — step-up grants the full role-entitled set.
   // Return to wherever we are now (relative path; validated server-side).
   const activeTab = document.querySelector('.console-tab.active')?.dataset.tab || 'portfolio';

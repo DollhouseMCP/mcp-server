@@ -5,8 +5,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { UnifiedIndexManager } from '../../src/portfolio/UnifiedIndexManager.js';
-import { PerformanceMonitor } from '../../src/utils/PerformanceMonitor.js';
+import type { UnifiedIndexManager } from '../../src/portfolio/UnifiedIndexManager.js';
+import type { PerformanceMonitor } from '../../src/utils/PerformanceMonitor.js';
 import { LRUCache } from '../../src/cache/LRUCache.js';
 import { IndexPerformanceBenchmark } from '../../src/benchmarks/IndexPerformanceBenchmark.js';
 import { createIntegrationContainer, type IntegrationContainer } from '../helpers/integration-container.js';
@@ -183,7 +183,9 @@ describe('Index Performance Optimization Tests', () => {
         await unifiedIndexManager.search({
           query: `memory_test_${i}`,
           pageSize: 100,
-          includeLocal: true
+          includeLocal: true,
+          includeGitHub: false,
+          includeCollection: false,
         });
       }
 
@@ -191,8 +193,8 @@ describe('Index Performance Optimization Tests', () => {
       unifiedIndexManager.invalidateAfterAction('memory_test');
 
       // Allow garbage collection
-      if (global.gc) {
-        global.gc();
+      if (globalThis.gc) {
+        globalThis.gc();
       }
 
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -274,8 +276,8 @@ describe('Index Performance Optimization Tests', () => {
         if (growthMB > 100) {
           // Trigger cleanup if memory grows too much
           unifiedIndexManager.invalidateAfterAction('cleanup');
-          if (global.gc) {
-            global.gc();
+          if (globalThis.gc) {
+            globalThis.gc();
           }
         }
       }

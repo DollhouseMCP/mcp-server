@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 
 import type { IConsoleIdentityResolver } from '../../../web-console/identity/IConsoleIdentityResolver.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
+import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
 import type { IRateLimitStore } from '../storage/IRateLimitStore.js';
 import { AdminTotpError, type AdminTotpService } from './AdminTotpService.js';
 import {
@@ -18,6 +19,13 @@ const ROUTE_CSRF_MODEL = 'AdminTotpRouteCsrf';
 const ROUTE_CSRF_TTL_SECONDS = 10 * 60;
 const ENROLL_CONFIRM_RATE_SCOPE = 'admin_totp_enroll';
 const DISABLE_CONFIRM_RATE_SCOPE = 'admin_totp_disable';
+const HTML_ESCAPE_REPLACEMENTS: Readonly<Record<string, string>> = Object.freeze({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+});
 
 export interface AdminTotpInteractionRouteDeps {
   storage: IAuthStorageLayer;
@@ -40,7 +48,8 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
     void (async () => {
       const principal = await resolvePrincipal(req, res, deps);
       if (!principal) return;
-      const label = typeof req.query.label === 'string' ? req.query.label : 'DollhouseMCP Admin';
+      const rawLabel = typeof req.query.label === 'string' ? req.query.label : 'DollhouseMCP Admin';
+      const label = UnicodeValidator.normalize(rawLabel).normalizedContent;
       try {
         const enrollment = await deps.totpService.beginEnrollment(principal.userId, label);
         const csrf = await issueRouteCsrf(deps.storage, enrollment.pendingId, principal.userId);
@@ -238,12 +247,7 @@ function page(title: string, body: string): string {
 }
 
 function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\'', '&#39;');
+  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPE_REPLACEMENTS[character] ?? character);
 }
 
 function escapeHtmlAttr(value: string): string {

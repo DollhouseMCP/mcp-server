@@ -12,10 +12,13 @@
 
 import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { SkillElementValidator } from '../../../../src/services/validation/SkillElementValidator.js';
-import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
-import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
-import { MetadataService } from '../../../../src/services/MetadataService.js';
+import type { ValidationService } from '../../../../src/services/validation/ValidationService.js';
+import type { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
+import type { MetadataService } from '../../../../src/services/MetadataService.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
+
+const MUST_BE_STRING_FRAGMENT = 'must be a string';
+const MISSING_REQUIRED_FRAGMENT = "missing required";
 
 jest.mock('../../../../src/services/validation/ValidationService.js');
 jest.mock('../../../../src/services/validation/TriggerValidationService.js');
@@ -81,6 +84,15 @@ describe('SkillElementValidator', () => {
   });
 
   describe('validateCreate', () => {
+    it('passes the skill context to content validation', async () => {
+      await validator.validateCreate(validSkillData);
+
+      expect(mockValidationService.validateContent).toHaveBeenCalledWith(
+        validSkillData.content,
+        expect.objectContaining({ contentContext: 'skill' }),
+      );
+    });
+
     describe('Complexity Validation', () => {
       const validComplexities = ['beginner', 'intermediate', 'advanced', 'expert'];
 
@@ -118,37 +130,15 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes('must be a string'))).toBe(true);
+        expect(result.errors.some(e => e.includes(MUST_BE_STRING_FRAGMENT))).toBe(true);
       });
     });
 
     describe('Proficiency Level Validation', () => {
-      it('should accept proficiency level 0', async () => {
+      it.each([0, 50, 100])('should accept proficiency level %i', async (proficiencyLevel) => {
         const data = {
           ...validSkillData,
-          proficiency_level: 0,
-        };
-
-        const result = await validator.validateCreate(data);
-
-        expect(result.isValid).toBe(true);
-      });
-
-      it('should accept proficiency level 50', async () => {
-        const data = {
-          ...validSkillData,
-          proficiency_level: 50,
-        };
-
-        const result = await validator.validateCreate(data);
-
-        expect(result.isValid).toBe(true);
-      });
-
-      it('should accept proficiency level 100', async () => {
-        const data = {
-          ...validSkillData,
-          proficiency_level: 100,
+          proficiency_level: proficiencyLevel,
         };
 
         const result = await validator.validateCreate(data);
@@ -292,7 +282,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'name'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'name'"))).toBe(true);
       });
 
       it('should reject parameter missing type', async () => {
@@ -309,7 +299,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'type'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'type'"))).toBe(true);
       });
 
       it('should reject parameter with invalid type', async () => {
@@ -403,7 +393,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'title'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'title'"))).toBe(true);
       });
 
       it('should reject example missing description', async () => {
@@ -419,7 +409,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'description'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'description'"))).toBe(true);
       });
 
       it('should not warn when examples array is empty (handled by Skill.validate())', async () => {
@@ -479,7 +469,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes('must be a string'))).toBe(true);
+        expect(result.errors.some(e => e.includes(MUST_BE_STRING_FRAGMENT))).toBe(true);
       });
     });
 
@@ -591,7 +581,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes('must be a string'))).toBe(true);
+        expect(result.errors.some(e => e.includes(MUST_BE_STRING_FRAGMENT))).toBe(true);
       });
     });
 
@@ -677,7 +667,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes('languages[1]') && e.includes('must be a string'))).toBe(true);
+        expect(result.errors.some(e => e.includes('languages[1]') && e.includes(MUST_BE_STRING_FRAGMENT))).toBe(true);
       });
     });
 
@@ -756,7 +746,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'name'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'name'"))).toBe(true);
       });
 
       it('should reject parameter missing type in metadata', async () => {
@@ -773,7 +763,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'type'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'type'"))).toBe(true);
       });
 
       it('should reject parameter with invalid type in metadata', async () => {
@@ -843,7 +833,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'title'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'title'"))).toBe(true);
       });
 
       it('should reject example missing description in metadata', async () => {
@@ -859,7 +849,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes("missing required") && e.includes("'description'"))).toBe(true);
+        expect(result.errors.some(e => e.includes(MISSING_REQUIRED_FRAGMENT) && e.includes("'description'"))).toBe(true);
       });
 
       it('should not warn about empty examples array in metadata (handled by Skill.validate())', async () => {
@@ -919,7 +909,7 @@ describe('SkillElementValidator', () => {
         const result = await validator.validateMetadata(metadata);
 
         expect(result.isValid).toBe(false);
-        expect(result.errors.some(e => e.includes('must be a string'))).toBe(true);
+        expect(result.errors.some(e => e.includes(MUST_BE_STRING_FRAGMENT))).toBe(true);
       });
     });
 

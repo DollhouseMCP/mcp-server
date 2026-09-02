@@ -29,7 +29,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from '@jest/gl
 import { execFile } from 'node:child_process';
 import { access, mkdtemp, rm, mkdir, writeFile, readFile, chmod } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
@@ -150,7 +150,7 @@ describe('Generated script — execution', () => {
       ...process.env,
       HOME: tempDir,
       NVM_DIR: join(tempDir, '.nvm'),
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
     await execFileAsync('bash', [wrapperPath, '@dollhousemcp/mcp-server@latest'], { env, timeout: 10_000 });
@@ -175,7 +175,7 @@ describe('Generated script — execution', () => {
       ...process.env,
       HOME: tempDir,
       NVM_DIR: join(tempDir, '.nvm'),
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
     await execFileAsync('bash', [wrapperPath, '@dollhousemcp/mcp-server@rc', '--yes'], { env, timeout: 10_000 });
@@ -201,7 +201,7 @@ describe('Generated script — execution', () => {
       ...process.env,
       HOME: tempDir,
       NVM_DIR: join(tempDir, '.nvm'),  // no nvm.sh here
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
     await execFileAsync('bash', [wrapperPath, 'test-arg'], { env, timeout: 10_000 });
@@ -229,7 +229,7 @@ describe('Generated script — execution', () => {
     const env = {
       ...process.env,
       HOME: tempDir,
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
     await execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 });
@@ -285,7 +285,7 @@ describe('Non-standard NVM_DIR', () => {
     const env = {
       ...process.env,
       HOME: tempDir,
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
 
     await execFileAsync('bash', [wrapperPath, 'test'], { env, timeout: 10_000 });
@@ -386,7 +386,7 @@ describe('Generated script — shell compatibility', () => {
       ...process.env,
       HOME: tempDir,
       NVM_DIR: join(tempDir, '.nvm'),
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
     await expect(
       execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 })
@@ -418,7 +418,7 @@ describe('Generated script — shell compatibility', () => {
       ...process.env,
       HOME: tempDir,
       NVM_DIR: join(tempDir, '.nvm'),
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+      PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
     };
     await expect(
       execFileAsync(shPath, [wrapperPath, 'dummy'], { env, timeout: 10_000 })

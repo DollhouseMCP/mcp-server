@@ -4,9 +4,9 @@
  */
 
 import { CollectionBrowser } from '../../../src/collection/CollectionBrowser.js';
-import { GitHubClient } from '../../../src/collection/GitHubClient.js';
-import { CollectionCache, CollectionItem } from '../../../src/cache/CollectionCache.js';
-import { CollectionIndexManager } from '../../../src/collection/CollectionIndexManager.js';
+import type { GitHubClient } from '../../../src/collection/GitHubClient.js';
+import type { CollectionCache, CollectionItem } from '../../../src/cache/CollectionCache.js';
+import type { CollectionIndexManager } from '../../../src/collection/CollectionIndexManager.js';
 import { ElementType } from '../../../src/portfolio/types.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { describe, expect, it, beforeEach, afterEach, jest } from '@jest/globals';
@@ -15,6 +15,9 @@ import { describe, expect, it, beforeEach, afterEach, jest } from '@jest/globals
 jest.mock('../../../src/collection/GitHubClient.js');
 jest.mock('../../../src/cache/CollectionCache.js');
 jest.mock('../../../src/collection/CollectionIndexManager.js');
+
+const INVALID_TYPE = 'invalid-type';
+const PERSONA1_MD = 'persona1.md';
 
 describe('CollectionBrowser MCP Filtering', () => {
   let collectionBrowser: InstanceType<typeof CollectionBrowser>;
@@ -31,12 +34,12 @@ describe('CollectionBrowser MCP Filtering', () => {
     { name: 'templates', type: 'dir', path: 'library/templates' },
     { name: 'memories', type: 'dir', path: 'library/memories' }, // Valid MCP type
     { name: 'ensembles', type: 'dir', path: 'library/ensembles' }, // Should be filtered out
-    { name: 'invalid-type', type: 'dir', path: 'library/invalid-type' }, // Should be filtered out
+    { name: INVALID_TYPE, type: 'dir', path: 'library/invalid-type' }, // Should be filtered out
     { name: 'readme.md', type: 'file', path: 'library/readme.md' } // Should be ignored (not a directory)
   ];
 
   const mockCacheItems: CollectionItem[] = [
-    { name: 'persona1.md', path: 'library/personas/persona1.md', sha: 'sha1' },
+    { name: PERSONA1_MD, path: 'library/personas/persona1.md', sha: 'sha1' },
     { name: 'persona2.md', path: 'library/personas/persona2.md', sha: 'sha2' },
     { name: 'skill1.md', path: 'library/skills/skill1.md', sha: 'sha3' },
     { name: 'agent1.md', path: 'library/agents/agent1.md', sha: 'sha4' },
@@ -67,10 +70,10 @@ describe('CollectionBrowser MCP Filtering', () => {
     } as any;
 
     // Register in DI container
-    container.register('GitHubClient', () => mockGitHubClient);
-    container.register('CollectionCache', () => mockCollectionCache);
-    container.register('CollectionIndexManager', () => mockCollectionIndexManager);
-    container.register('CollectionBrowser', () => new CollectionBrowser(
+    container.replace('GitHubClient', () => mockGitHubClient);
+    container.replace('CollectionCache', () => mockCollectionCache);
+    container.replace('CollectionIndexManager', () => mockCollectionIndexManager);
+    container.replace('CollectionBrowser', () => new CollectionBrowser(
       container.resolve('GitHubClient'),
       container.resolve('CollectionCache'),
       container.resolve('CollectionIndexManager')
@@ -100,7 +103,7 @@ describe('CollectionBrowser MCP Filtering', () => {
       
       // Should NOT contain unsupported types
       expect(categoryNames).not.toContain('ensembles');
-      expect(categoryNames).not.toContain('invalid-type');
+      expect(categoryNames).not.toContain(INVALID_TYPE);
     });
 
     it('should handle empty directory response', async () => {
@@ -115,7 +118,7 @@ describe('CollectionBrowser MCP Filtering', () => {
     it('should handle response with no valid content types', async () => {
       const invalidResponse = [
         { name: 'ensembles', type: 'dir', path: 'library/ensembles' },
-        { name: 'invalid-type', type: 'dir', path: 'library/invalid-type' },
+        { name: INVALID_TYPE, type: 'dir', path: 'library/invalid-type' },
         { name: 'tools', type: 'dir', path: 'library/tools' },
         { name: 'readme.md', type: 'file', path: 'library/readme.md' }
       ];
@@ -129,7 +132,7 @@ describe('CollectionBrowser MCP Filtering', () => {
 
     it('should not filter when browsing specific content types', async () => {
       const personaFiles = [
-        { name: 'persona1.md', type: 'file', path: 'library/personas/persona1.md' },
+        { name: PERSONA1_MD, type: 'file', path: 'library/personas/persona1.md' },
         { name: 'persona2.md', type: 'file', path: 'library/personas/persona2.md' }
       ];
       
@@ -185,7 +188,7 @@ describe('CollectionBrowser MCP Filtering', () => {
       
       // Should NOT contain unsupported types
       expect(categoryNames).not.toContain('ensembles');
-      expect(categoryNames).not.toContain('invalid-type');
+      expect(categoryNames).not.toContain(INVALID_TYPE);
     });
 
     it('should handle empty cache gracefully', async () => {
@@ -210,7 +213,7 @@ describe('CollectionBrowser MCP Filtering', () => {
 
       expect(result.items).toHaveLength(2); // Only persona items
       const itemNames = result.items.map((item: any) => item.name);
-      expect(itemNames).toContain('persona1.md');
+      expect(itemNames).toContain(PERSONA1_MD);
       expect(itemNames).toContain('persona2.md');
       
       // Should not contain items from other types
@@ -220,7 +223,7 @@ describe('CollectionBrowser MCP Filtering', () => {
   });
 
   describe('getContentTypesFromItems - type safety', () => {
-    it('should only return supported content types from cache items', async () => {
+    it('should only return supported content types from cache items', () => {
       // Access private method via any cast for testing
       const browser = collectionBrowser as any;
       
@@ -237,7 +240,7 @@ describe('CollectionBrowser MCP Filtering', () => {
 
       // Should NOT contain unsupported types
       expect(typeNames).not.toContain('ensembles');
-      expect(typeNames).not.toContain('invalid-type');
+      expect(typeNames).not.toContain(INVALID_TYPE);
       
       // All returned items should have correct structure
       contentTypes.forEach((type: any) => {
@@ -246,13 +249,13 @@ describe('CollectionBrowser MCP Filtering', () => {
       });
     });
 
-    it('should handle items with invalid paths gracefully', async () => {
+    it('should handle items with invalid paths gracefully', () => {
       const browser = collectionBrowser as any;
       
       const invalidItems: CollectionItem[] = [
         { name: 'invalid.md', path: 'invalid', sha: 'sha1' }, // No library prefix
         { name: 'invalid2.md', path: 'library', sha: 'sha2' }, // No type specified
-        { name: 'persona1.md', path: 'library/personas/persona1.md', sha: 'sha3' } // Valid
+        { name: PERSONA1_MD, path: 'library/personas/persona1.md', sha: 'sha3' } // Valid
       ];
       
       const contentTypes = browser.getContentTypesFromItems(invalidItems);
@@ -261,11 +264,11 @@ describe('CollectionBrowser MCP Filtering', () => {
       expect(contentTypes[0].name).toBe('personas');
     });
 
-    it('should deduplicate content types from multiple items', async () => {
+    it('should deduplicate content types from multiple items', () => {
       const browser = collectionBrowser as any;
       
       const duplicateItems: CollectionItem[] = [
-        { name: 'persona1.md', path: 'library/personas/persona1.md', sha: 'sha1' },
+        { name: PERSONA1_MD, path: 'library/personas/persona1.md', sha: 'sha1' },
         { name: 'persona2.md', path: 'library/personas/persona2.md', sha: 'sha2' },
         { name: 'persona3.md', path: 'library/personas/persona3.md', sha: 'sha3' },
         { name: 'skill1.md', path: 'library/skills/skill1.md', sha: 'sha4' }
@@ -382,6 +385,34 @@ describe('CollectionBrowser MCP Filtering', () => {
       const cacheTypes = new Set(cacheResult.categories.map((cat: any) => cat.name));
       
       expect(apiTypes).toEqual(cacheTypes);
+    });
+  });
+
+  describe('browseCollection - SSRF input guards', () => {
+    it('rejects an unknown section without any GitHub fetch', async () => {
+      const result = await collectionBrowser.browseCollection('../../../orgs/DollhouseMCP');
+
+      expect(result).toEqual({ items: [], categories: [] });
+      expect(mockGitHubClient.fetchFromGitHub).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown/path-traversal type without any GitHub fetch', async () => {
+      const result = await collectionBrowser.browseCollection('library', '../../../orgs/DollhouseMCP');
+
+      expect(result).toEqual({ items: [], categories: [] });
+      expect(mockGitHubClient.fetchFromGitHub).not.toHaveBeenCalled();
+    });
+
+    it('accepts the known sections (library/showcase/catalog)', async () => {
+      // getIndex rejects in this suite, so browse falls through to the GitHub
+      // fallback — proving the section passed validation and was allowed through.
+      mockGitHubClient.fetchFromGitHub.mockResolvedValue([]);
+
+      for (const section of ['library', 'showcase', 'catalog']) {
+        mockGitHubClient.fetchFromGitHub.mockClear();
+        await collectionBrowser.browseCollection(section);
+        expect(mockGitHubClient.fetchFromGitHub).toHaveBeenCalled();
+      }
     });
   });
 });

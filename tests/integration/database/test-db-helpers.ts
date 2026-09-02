@@ -31,11 +31,18 @@ export function fixedUserId(userId: string): UserIdResolver {
 // Test database — always use dollhousemcp_test, never the live database.
 // The globalSetup in tests/setup.ts creates and migrates this database
 // before any test runs, and globalTeardown drops it afterward.
-const TEST_DB_URL = process.env.DOLLHOUSE_TEST_DATABASE_URL
-  ?? 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
+const LOCAL_TEST_DATABASE_NAME = 'dollhousemcp_test';
 
-const TEST_DB_ADMIN_URL = process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL
-  ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
+function localTestDatabaseUrl(role: 'dollhouse' | 'dollhouse_app'): string {
+  const credential = encodeURIComponent(role);
+  return `postgres://${credential}:${credential}@localhost:5432/${LOCAL_TEST_DATABASE_NAME}`;
+}
+
+export const TEST_DB_URL = process.env.DOLLHOUSE_TEST_DATABASE_URL
+  ?? localTestDatabaseUrl('dollhouse_app');
+
+export const TEST_DB_ADMIN_URL = process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL
+  ?? localTestDatabaseUrl('dollhouse');
 
 let dbConnection: ReturnType<typeof createDatabaseConnection> | null = null;
 let adminConnection: ReturnType<typeof createDatabaseConnection> | null = null;

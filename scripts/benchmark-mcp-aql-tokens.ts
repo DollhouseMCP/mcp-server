@@ -42,15 +42,32 @@
  *   npx tsx scripts/benchmark-mcp-aql-tokens.ts --help               # Show usage
  */
 
+import { pathToFileURL } from 'node:url';
+
 // ============================================================================
 // CLI ARGUMENT PARSING
 // ============================================================================
 
+const TOKENIZER_METHODS = ['4char', 'tiktoken', 'claude'] as const;
+type TokenizerMethod = (typeof TOKENIZER_METHODS)[number];
+
 interface CliArgs {
-  tokenizer: '4char' | 'tiktoken' | 'claude';
+  tokenizer: TokenizerMethod;
   compare: boolean;
   json: boolean;
   help: boolean;
+}
+
+function parseTokenizerMethod(value: string | undefined): TokenizerMethod {
+  if (!value || value.startsWith('-')) {
+    console.error('Error: --tokenizer requires a value (4char, tiktoken, or claude)');
+    process.exit(1);
+  }
+  if (!TOKENIZER_METHODS.includes(value as TokenizerMethod)) {
+    console.error(`Error: Invalid tokenizer "${value}". Valid options: 4char, tiktoken, claude`);
+    process.exit(1);
+  }
+  return value as TokenizerMethod;
 }
 
 /**
@@ -76,24 +93,10 @@ function parseArgs(): CliArgs {
     } else if (arg === '--json' || arg === '-j') {
       result.json = true;
     } else if (arg === '--tokenizer' || arg === '-t') {
-      const value = args[i + 1];
-      if (!value || value.startsWith('-')) {
-        console.error('Error: --tokenizer requires a value (4char, tiktoken, or claude)');
-        process.exit(1);
-      }
-      if (!['4char', 'tiktoken', 'claude'].includes(value)) {
-        console.error(`Error: Invalid tokenizer "${value}". Valid options: 4char, tiktoken, claude`);
-        process.exit(1);
-      }
-      result.tokenizer = value as '4char' | 'tiktoken' | 'claude';
+      result.tokenizer = parseTokenizerMethod(args[i + 1]);
       i++; // Skip the value
     } else if (arg.startsWith('--tokenizer=')) {
-      const value = arg.split('=')[1];
-      if (!['4char', 'tiktoken', 'claude'].includes(value)) {
-        console.error(`Error: Invalid tokenizer "${value}". Valid options: 4char, tiktoken, claude`);
-        process.exit(1);
-      }
-      result.tokenizer = value as '4char' | 'tiktoken' | 'claude';
+      result.tokenizer = parseTokenizerMethod(arg.slice('--tokenizer='.length));
     } else if (!arg.startsWith('-')) {
       // Ignore positional arguments
     } else {
@@ -1293,6 +1296,11 @@ async function runComparison(): Promise<TokenizerResult[]> {
  * const results = await runTokenBenchmark();
  * console.log(results.savings.percent); // e.g., 85.0
  */
+async function runTokenBenchmark() {
+  return runBenchmarkWithTokenizer(create4CharTokenizer());
+}
+
+/** Run the command-line interface with process arguments. */
 async function main() {
   const args = parseArgs();
 
@@ -1630,7 +1638,15 @@ function estimateTokens(content: string | object): number {
   return Math.ceil(text.length / 4);
 }
 
-// Run benchmark
-main().catch(console.error);
+// Run the CLI only when this module is the process entrypoint. The performance
+// suite imports the benchmark helpers and must not parse Jest's CLI arguments.
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(error);
+  }
+}
 
-export { main as runTokenBenchmark, estimateTokens, discreteTools, mcpAqlTools, parseArgs, create4CharTokenizer };
+export { runTokenBenchmark, estimateTokens, discreteTools, mcpAqlTools, parseArgs, create4CharTokenizer };

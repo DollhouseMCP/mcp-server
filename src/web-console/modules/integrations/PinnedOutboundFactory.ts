@@ -4,6 +4,10 @@ import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } fr
 
 import { canonicalizeIntegrationApiHost } from '../../security/IntegrationApiHosts.js';
 
+/**
+ * A DNS resolution vetted by the public-host guard. The connection must reach
+ * only `address`; `hostname` remains the Host/SNI/certificate identity.
+ */
 export interface OutboundPin {
   readonly hostname: string;
   readonly address: string;
@@ -12,14 +16,20 @@ export interface OutboundPin {
 
 export type PinnedFetch = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+/** A host-bound fetch and the socket pool whose lifetime it owns. */
 export interface PinnedOutbound {
   readonly fetch: PinnedFetch;
   close(): Promise<void>;
 }
 
+/** Convert one vetted DNS answer into a transport pinned to that address. */
 export type PinnedOutboundFactory = (pin: OutboundPin) => PinnedOutbound;
 
-/** Create an outbound pool whose connect-time lookup can use only the vetted address. */
+/**
+ * Create an undici Agent whose connect-time lookup can return only the vetted
+ * address. The URL retains the vetted hostname for Host, SNI, and certificate
+ * validation, and redirects cannot replay a credential-bearing request.
+ */
 export function createPinnedOutboundFactory(): PinnedOutboundFactory {
   return pin => {
     const canonicalPinHostname = canonicalizeIntegrationApiHost(pin.hostname, 'pinned outbound hostname');
@@ -39,7 +49,6 @@ export function createPinnedOutboundFactory(): PinnedOutboundFactory {
       }
       const response = await undiciFetch(url, {
         ...(init as UndiciRequestInit),
-        // A credential-bearing request must never be replayed to a redirect target.
         redirect: 'error',
         dispatcher,
       });

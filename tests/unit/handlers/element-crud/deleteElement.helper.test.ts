@@ -7,6 +7,11 @@ const { ElementNotFoundError } = await import('../../../../src/utils/ErrorHandle
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 
+const MOCK_ROOT = path.resolve('mock');
+const MOCK_ELEMENTS_DIR = path.join(MOCK_ROOT, 'elements');
+const MOCK_MEMORIES_DIR = path.join(MOCK_ROOT, 'memories');
+const MOCK_MEMORY_FILE = path.join(MOCK_MEMORIES_DIR, '2025-10-24', 'test-memory.yaml');
+
 describe('deleteElement helper', () => {
   let mockContext: ElementCrudContext;
   let mockFileOperations: jest.Mocked<IFileOperationsService>;
@@ -51,15 +56,15 @@ describe('deleteElement helper', () => {
       },
       memoryManager: {
         list: jest.fn().mockResolvedValue([
-          { metadata: { name: 'test-memory' }, id: 'memory-1', filePath: '/mock/memories/2025-10-24/test-memory.yaml', getFilePath: () => '/mock/memories/2025-10-24/test-memory.yaml', getStatus: () => 'inactive' },
+          { metadata: { name: 'test-memory' }, id: 'memory-1', filePath: MOCK_MEMORY_FILE, getFilePath: () => MOCK_MEMORY_FILE, getStatus: () => 'inactive' },
         ]),
         delete: jest.fn().mockResolvedValue(undefined),
         clearCache: jest.fn(),
       },
       portfolioManager: {
         getElementDir: jest.fn().mockImplementation((type: string) => {
-          if (type === ElementType.MEMORY) return '/mock/memories';
-          return '/mock/elements';
+          if (type === ElementType.MEMORY) return MOCK_MEMORIES_DIR;
+          return MOCK_ELEMENTS_DIR;
         }),
         getFileExtension: jest.fn().mockReturnValue('.md'),
       },
@@ -117,7 +122,7 @@ describe('deleteElement helper', () => {
 
       // Handler delegates to memoryManager.delete()
       expect(mockContext.memoryManager.delete).toHaveBeenCalledWith(
-        '/mock/memories/2025-10-24/test-memory.yaml'
+        MOCK_MEMORY_FILE
       );
       expect(result.content[0].text).toContain('✅');
     });
@@ -238,7 +243,7 @@ describe('deleteElement helper', () => {
 
       // Handler delegates to memoryManager.delete()
       expect(mockContext.memoryManager.delete).toHaveBeenCalledWith(
-        '/mock/memories/2025-10-24/test-memory.yaml'
+        MOCK_MEMORY_FILE
       );
       expect(result.content[0].text).toContain('✅');
     });
@@ -287,7 +292,7 @@ describe('deleteElement helper', () => {
 
       // Should delete both agent and data files
       // Use path.join for cross-platform compatibility (Windows uses backslashes)
-      const expectedStatePath = path.join('/mock/elements', '.state', 'test-agent-state.json');
+      const expectedStatePath = path.join(MOCK_ELEMENTS_DIR, '.state', 'test-agent-state.json');
       expect(mockContext.agentManager.delete).toHaveBeenCalledWith('test-agent.md');
       expect(mockFileOperations.deleteFile).toHaveBeenCalledWith(
         expectedStatePath,

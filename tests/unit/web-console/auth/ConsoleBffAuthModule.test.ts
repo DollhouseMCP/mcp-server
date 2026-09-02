@@ -9,6 +9,7 @@ import {
   createConsoleBffAuthModule,
   HmacConsoleOpaqueValueService,
   InMemoryAdminAuditWriter,
+  InMemoryConsoleAccountAdminStore,
   InMemoryConsoleIdentityResolver,
   InMemoryConsoleSessionStore,
   InMemoryIdempotencyStore,
@@ -16,6 +17,7 @@ import {
   InMemoryRuntimeSessionControlStore,
   type ConsoleLoginFlowKind,
   type ConsolePrincipalSecurityState,
+  type ConsolePrincipalSummary,
   type ConsoleOAuthCodeExchangeRequest,
   type ConsoleOAuthIdentityClaims,
   type ConsoleAuthorizationUrlRequest,
@@ -80,7 +82,28 @@ class FakeConsoleOAuthClient implements IConsoleOAuthClient {
 interface FixtureOptions {
   readonly now?: () => Date;
   readonly principals?: readonly ConsolePrincipalSecurityState[];
+  readonly accountPrincipals?: readonly ConsolePrincipalSummary[];
   readonly secretEncryption?: ISecretEncryptionService;
+}
+
+function accountPrincipal(overrides: Partial<ConsolePrincipalSummary> = {}): ConsolePrincipalSummary {
+  return {
+    userId: USER_ID,
+    primarySub: AUTH_SUB,
+    username: 'alice',
+    displayName: 'Alice Example',
+    email: 'alice@example.test',
+    emailVerified: true,
+    authMethods: ['github'],
+    roles: [],
+    disabledAt: null,
+    createdAt: NOW,
+    lastLoginAt: null,
+    adminFactorEnrolled: false,
+    accountCorrelationId: '7f0a2f6e-9be2-4d5f-8a4e-1c2b3d4e5f60',
+    authzVersion: 3,
+    ...overrides,
+  };
 }
 
 function buildFixture(options: FixtureOptions = {}): {
@@ -101,6 +124,9 @@ function buildFixture(options: FixtureOptions = {}): {
     authzVersion: 3,
   }];
   const identityResolver = new InMemoryConsoleIdentityResolver(principals);
+  const accountAdminStore = new InMemoryConsoleAccountAdminStore(
+    options.accountPrincipals ?? [accountPrincipal()],
+  );
   const secretEncryption = options.secretEncryption ?? new AeadSecretEncryptionService({
     keyId: 'test-key',
     key: SECRET_KEY,
@@ -111,6 +137,7 @@ function buildFixture(options: FixtureOptions = {}): {
     loginTransactions,
     sessionStore,
     identityResolver,
+    accountAdminStore,
     opaqueValues,
     secretEncryption,
     publicBaseUrl: ORIGIN,
@@ -180,10 +207,30 @@ describe('ConsoleBffAuthModule', () => {
     expect(me.body).toEqual({
       user_id: USER_ID,
       auth_sub: AUTH_SUB,
+      display_name: 'Alice Example',
+      email: 'alice@example.test',
+      auth_methods: ['github'],
       granted_capabilities: [SELF_CAPABILITY],
       available_admin_capabilities: [],
       elevation: { active: false, expires_at: null, acr: null },
     });
+  });
+
+  it('serves /auth/me with null profile fields when the principal row is gone', async () => {
+    const { app } = buildFixture({ accountPrincipals: [] });
+    const login = await request(app).get(LOGIN_PATH);
+    const state = new URL(login.headers.location).searchParams.get('state');
+    const loginCookie = cookieHeader(login.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE);
+    const callback = await request(app)
+      .get(`${CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', loginCookie);
+    const sessionCookie = cookieHeader(callback.headers['set-cookie'], CONSOLE_SESSION_COOKIE);
+
+    const me = await request(app).get(ME_PATH).set('Cookie', sessionCookie);
+    expect(me.status).toBe(200);
+    expect(me.body.display_name).toBeNull();
+    expect(me.body.email).toBeNull();
+    expect(me.body.auth_methods).toEqual([]);
   });
 
   it('reports the role-entitled admin capabilities a principal can step up into', async () => {
@@ -457,6 +504,23 @@ describe('ConsoleBffAuthModule', () => {
     expect(redirect.searchParams.get('redirect_uri')).toBe(`${ORIGIN}${STEP_UP_CALLBACK_PATH}`);
   });
 
+  it('rejects an invalid step-up capability as an RFC 9457 problem document', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=not-a-capability`)
+      .set('Cookie', session.sessionCookie);
+
+    expect(response.status).toBe(400);
+    // The handler error must ride the kernel's problem lift like every other
+    // module error: typed type URI, instance = correlation id, problem+json.
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.body.type).toBe('https://dollhousemcp.com/errors/invalid_capability');
+    expect(response.body.code).toBe('invalid_capability');
+    expect(response.body.instance).toBe(response.headers['x-correlation-id']);
+  });
+
   it('completes step-up once and attaches TOTP-backed elevation to the current session', async () => {
     const fixture = buildFixture();
     fixture.oauthClient.claims = {
@@ -676,9 +740,14 @@ describe('ConsoleBffAuthModule', () => {
       .set('Cookie', session.sessionCookie);
 
     expect(response.status).toBe(400);
+    // Full RFC 9457 problem document via the kernel lift.
     expect(response.body).toEqual({
+      type: 'https://dollhousemcp.com/errors/invalid_capability',
+      title: 'Invalid request',
+      status: 400,
       code: 'invalid_capability',
       detail: 'Step-up requires a valid administrative console capability.',
+      instance: response.headers['x-correlation-id'],
     });
     expect(response.headers['set-cookie']).toBeUndefined();
   });

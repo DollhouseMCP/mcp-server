@@ -35,7 +35,12 @@ import type {
 import type { IAuthStorageLayer, StoredAccount } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
+import {
+  checkAllowlistGate,
+  provisionAccountThroughAllowlistGate,
+  renderAllowlistDeniedPage,
+  type SignInAllowlistAuthority,
+} from '../allowlistGate.js';
 
 const LOCAL_PROVIDER = 'local';
 /** Single error reason returned to users; precise causes go to logs only. */
@@ -72,12 +77,10 @@ const MIN_PASSWORD_LENGTH = 12;
  */
 let dummyPasswordHashPromise: Promise<string> | null = null;
 function getDummyPasswordHash(): Promise<string> {
-  if (!dummyPasswordHashPromise) {
-    dummyPasswordHashPromise = argon2.hash(
+  dummyPasswordHashPromise ??= argon2.hash(
       randomBytes(16).toString('hex'),
       ARGON2_OPTIONS,
     );
-  }
   return dummyPasswordHashPromise;
 }
 
@@ -261,27 +264,13 @@ export class LocalAccountMethod implements IAuthMethod {
     // invite-redemption leaves no account row. The invite itself is
     // burned in the consume call above; a re-allowlisted user needs a
     // fresh invite. Bootstrap admin always passes via rule 1.
-    const gate = await checkAllowlistGate(
-      {
-        sub,
-        method: 'local-password',
-        email: consume.payload.email,
-        provider: LOCAL_PROVIDER,
-        externalSub,
-      },
-      {
-        storage: this.options.storage,
-        authority: this.options.signInAllowlistAuthority,
-        required: this.options.allowlistRequired ?? false,
-      },
-    );
-    if (!gate.allowed) {
-      return { kind: 'denied', reason: gate.reason };
-    }
-
-    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
-    // (and linked on first login), NOT stamped onto the auth account — so this
-    // path just records the credential/profile.
+    const gateIdentity = {
+      sub,
+      method: 'local-password' as const,
+      email: consume.payload.email,
+      provider: LOCAL_PROVIDER,
+      externalSub,
+    };
     const existing = await this.options.storage.getAccount(sub);
     const account: StoredAccount = {
       sub,
@@ -296,8 +285,22 @@ export class LocalAccountMethod implements IAuthMethod {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    await this.options.storage.upsertAccount(account);
+    const gate = await provisionAccountThroughAllowlistGate(
+      gateIdentity,
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
+      account,
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
+    }
 
+    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
+    // (and linked on first login), NOT stamped onto the auth account — so this
+    // path just records the credential/profile.
     return { kind: 'ok', sub, email: consume.payload.email };
   }
 

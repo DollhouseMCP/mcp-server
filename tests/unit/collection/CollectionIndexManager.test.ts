@@ -108,7 +108,7 @@ describe('CollectionIndexManager - Essential Tests', () => {
     };
 
     // Register manager with test config in DI container
-    container.register('CollectionIndexManager', () => new CollectionIndexManager({
+    container.replace('CollectionIndexManager', () => new CollectionIndexManager({
       ttlMs: 60 * 60 * 1000, // 1 hour
       fetchTimeoutMs: 5000,
       maxRetries: 3,

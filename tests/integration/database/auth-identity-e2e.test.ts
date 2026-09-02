@@ -26,11 +26,10 @@ import { createDatabaseConnection, type DatabaseInstance } from '../../../src/da
 import { elements } from '../../../src/database/schema/elements.js';
 import { users } from '../../../src/database/schema/users.js';
 import { LocalDevAuthProvider } from '../../../src/auth/LocalDevAuthProvider.js';
+import { TEST_DB_ADMIN_URL as DB_ADMIN_URL, TEST_DB_URL as DB_URL } from './test-db-helpers.js';
 
 const STARTUP_TIMEOUT = 60_000;
 const TEST_TIMEOUT = 30_000;
-const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
-const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 const SERVER_READY_REGEX = /Streamable HTTP server listening on (https?:\/\/[^\s]+)/;
 const TEST_MASTER_ENCRYPTION_KEY = Buffer.alloc(32, 14).toString('base64');
 
@@ -171,6 +170,7 @@ describe('Auth Identity E2E Tests', () => {
       DOLLHOUSE_LOG_FLUSH_INTERVAL_MS: '100',
       GITHUB_TOKEN: '',
       GITHUB_TEST_TOKEN: '',
+      TEST_GITHUB_TOKEN: '',
     };
 
     const spawned = await spawnAuthServer(serverEnv);

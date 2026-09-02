@@ -66,14 +66,14 @@ describe('AgentManager.executeAgent', () => {
     };
 
     container = new DollhouseContainer();
-    container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
+    container.replace<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
 
     // Fix FileLockManager.withLock — use jest.spyOn so the callback actually executes
     const fileLockManager = new FileLockManager();
     jest.spyOn(fileLockManager, 'withLock').mockImplementation(
       async <T>(_key: string, fn: () => Promise<T>) => fn()
     );
-    container.register<FileLockManager>('FileLockManager', () => fileLockManager);
+    container.replace<FileLockManager>('FileLockManager', () => fileLockManager);
 
     // Mock FileOperationsService with fileStore-backed read/write/exists
     const readFileImpl = jest.fn().mockImplementation(async (filePath: string) => {
@@ -97,12 +97,12 @@ describe('AgentManager.executeAgent', () => {
     // BaseElementManager.load uses readElementFile. Wire dynamically so tests
     // that reassign readFile later propagate to the element-read path.
     mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
-    container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
+    container.replace<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
-    container.register('SerializationService', () => new SerializationService());
-    container.register('MetadataService', () => metadataService);
-    container.register('ValidationRegistry', () => new ValidationRegistry(
+    container.replace('SerializationService', () => new SerializationService());
+    container.replace('MetadataService', () => metadataService);
+    container.replace('ValidationRegistry', () => new ValidationRegistry(
       new ValidationService(),
       new TriggerValidationService(),
       metadataService
@@ -199,7 +199,7 @@ describe('AgentManager.executeAgent', () => {
       elementManagerResolver,
     });
 
-    container.register('AgentManager', () => agentManagerInstance);
+    container.replace('AgentManager', () => agentManagerInstance);
 
     agentManager = container.resolve<AgentManager>('AgentManager');
     fileOperationsService = container.resolve<FileOperationsService>('FileOperationsService') as jest.Mocked<FileOperationsService>;

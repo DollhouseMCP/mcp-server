@@ -2,11 +2,11 @@
  * Type definitions for Agent elements
  */
 
-import { ElementType } from '../../portfolio/types.js';
+import type { ElementType } from '../../portfolio/types.js';
 // ElementType is used in AgentMetadataV2
-import { IElementMetadata } from '../../types/elements/index.js';
+import type { IElementMetadata } from '../../types/elements/index.js';
 import type { ElementGatekeeperPolicy } from '../../handlers/mcp-aql/GatekeeperTypes.js';
-import {
+import type {
   DecisionFramework,
   RiskTolerance,
   GoalPriority,
@@ -32,8 +32,6 @@ import type {
   SafetyTierResult as _SafetyTierResult,
 } from '@dollhousemcp/safety';
 
-import { DEFAULT_SAFETY_CONFIG as _DEFAULT_SAFETY_CONFIG } from '@dollhousemcp/safety';
-
 // Re-export for consumers
 export type SafetyTier = _SafetyTier;
 export type VerificationChallengeType = _VerificationChallengeType;
@@ -43,7 +41,7 @@ export type ConfirmationRequest = _ConfirmationRequest;
 export type DangerZoneOperation = _DangerZoneOperation;
 export type ExecutionContext = _ExecutionContext;
 export type SafetyTierResult = _SafetyTierResult;
-export const DEFAULT_SAFETY_CONFIG = _DEFAULT_SAFETY_CONFIG;
+export { DEFAULT_SAFETY_CONFIG } from '@dollhousemcp/safety';
 
 // Re-export types from constants for convenience
 // Using 'export type' to ensure proper ESM compatibility with Jest's cjs-module-lexer
@@ -696,6 +694,8 @@ export interface AgentNotification {
   message: string;
   /** Structured metadata for programmatic consumption */
   metadata?: {
+    /** Stable source event identifier */
+    eventId?: string;
     /** The MCP-AQL operation that was blocked */
     operation?: string;
     /** Element type involved in the block */
@@ -706,8 +706,10 @@ export interface AgentNotification {
     level?: string;
     /** Verification ID (for danger_zone blocks) */
     verificationId?: string;
-    /** Agent name (used in danger_zone broadcasts to identify which agent is blocked) */
+    /** Agent name associated with a danger_zone notification */
     agentName?: string;
+    /** Goal that produced the notification */
+    goalId?: string;
   };
   /** ISO 8601 timestamp when the event occurred */
   timestamp: string;

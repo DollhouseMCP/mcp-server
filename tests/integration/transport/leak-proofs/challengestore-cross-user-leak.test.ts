@@ -33,6 +33,14 @@ const TEST_TIMEOUT = 45_000;
 const USER_A = 'alice';
 const USER_B = 'bob';
 
+async function disconnectIfConnected(handle: HttpClientHandle | undefined): Promise<void> {
+  await handle?.disconnect();
+}
+
+async function cleanupIfStarted(environment: HttpTestEnvironment | undefined): Promise<void> {
+  await environment?.cleanup();
+}
+
 describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer are session-scoped', () => {
   let env: HttpTestEnvironment;
   let homeOverride: string;
@@ -52,9 +60,9 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
   }, ENV_STARTUP_TIMEOUT);
 
   afterAll(async () => {
-    await handleA?.disconnect();
-    await handleB?.disconnect();
-    await env?.cleanup();
+    await disconnectIfConnected(handleA);
+    await disconnectIfConnected(handleB);
+    await cleanupIfStarted(env);
     await fs.rm(homeOverride, { recursive: true, force: true }).catch(() => {});
   });
 
@@ -74,10 +82,13 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
 
     expect(childA).toBeDefined();
     expect(childB).toBeDefined();
+    if (!childA || !childB) {
+      throw new Error('Expected both HTTP session child containers');
+    }
 
     const rootStore = env.container.resolve<IChallengeStore>('ChallengeStore');
-    const storeA = childA!.resolve<IChallengeStore>('ChallengeStore');
-    const storeB = childB!.resolve<IChallengeStore>('ChallengeStore');
+    const storeA = childA.resolve<IChallengeStore>('ChallengeStore');
+    const storeB = childB.resolve<IChallengeStore>('ChallengeStore');
 
     expect(storeA).not.toBe(rootStore);
     expect(storeB).not.toBe(rootStore);
@@ -88,8 +99,11 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
     const childA = registry.get(env.sessionContexts[0].sessionId);
     expect(childA).toBeDefined();
+    if (!childA) {
+      throw new Error('Expected session A child container');
+    }
 
-    const store = childA!.resolve<IChallengeStore>('ChallengeStore');
+    const store = childA.resolve<IChallengeStore>('ChallengeStore');
     const challengeId = randomUUID();
     const code = 'ALICE01';
 
@@ -129,23 +143,26 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     const rootEnforcer = env.container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
     const childA = registry.get(env.sessionContexts[0].sessionId);
     const childB = registry.get(env.sessionContexts[1].sessionId);
+    if (!childA || !childB) {
+      throw new Error('Expected both HTTP session child containers');
+    }
 
     expect(mcpAqlHandler.handlers.verificationStore).toBe(rootStore);
     expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(rootEnforcer);
 
     await contextTracker.runAsync(
       contextTracker.createSessionContext('llm-request', env.sessionContexts[0], { toolName: 'mcp_aql_execute' }),
-      async () => {
-        expect(mcpAqlHandler.handlers.verificationStore).toBe(childA!.resolve<IChallengeStore>('ChallengeStore'));
-        expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer'));
+      () => {
+        expect(mcpAqlHandler.handlers.verificationStore).toBe(childA.resolve<IChallengeStore>('ChallengeStore'));
+        expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(childA.resolve<DangerZoneEnforcer>('DangerZoneEnforcer'));
       },
     );
 
     await contextTracker.runAsync(
       contextTracker.createSessionContext('llm-request', env.sessionContexts[1], { toolName: 'mcp_aql_execute' }),
-      async () => {
-        expect(mcpAqlHandler.handlers.verificationStore).toBe(childB!.resolve<IChallengeStore>('ChallengeStore'));
-        expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer'));
+      () => {
+        expect(mcpAqlHandler.handlers.verificationStore).toBe(childB.resolve<IChallengeStore>('ChallengeStore'));
+        expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(childB.resolve<DangerZoneEnforcer>('DangerZoneEnforcer'));
       },
     );
   });
@@ -156,6 +173,9 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     const childB = registry.get(env.sessionContexts[1].sessionId);
     expect(childA).toBeDefined();
     expect(childB).toBeDefined();
+    if (!childA || !childB) {
+      throw new Error('Expected both HTTP session child containers');
+    }
 
     const triggerText = await create(handleA.client, {
       operation: 'beetlejuice_beetlejuice_beetlejuice',
@@ -164,14 +184,17 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     const trigger = JSON.parse(triggerText) as { success?: boolean; data?: { challenge_id?: string } };
     const challengeId = trigger.data?.challenge_id;
     expect(challengeId).toBeTruthy();
+    if (!challengeId) {
+      throw new Error('Expected session A danger-zone challenge ID');
+    }
 
-    const storeA = childA!.resolve<IChallengeStore>('ChallengeStore');
-    const storeB = childB!.resolve<IChallengeStore>('ChallengeStore');
-    const enforcerA = childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
-    const enforcerB = childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const storeA = childA.resolve<IChallengeStore>('ChallengeStore');
+    const storeB = childB.resolve<IChallengeStore>('ChallengeStore');
+    const enforcerA = childA.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const enforcerB = childB.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
 
-    expect(storeA.get(challengeId!)).toBeDefined();
-    expect(storeB.get(challengeId!)).toBeUndefined();
+    expect(storeA.get(challengeId)).toBeDefined();
+    expect(storeB.get(challengeId)).toBeUndefined();
     expect(enforcerA.check('session-a-danger-agent').blocked).toBe(true);
     expect(enforcerB.check('session-a-danger-agent').blocked).toBe(false);
   }, TEST_TIMEOUT);
@@ -182,6 +205,9 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     const childB = registry.get(env.sessionContexts[1].sessionId);
     expect(childA).toBeDefined();
     expect(childB).toBeDefined();
+    if (!childA || !childB) {
+      throw new Error('Expected both HTTP session child containers');
+    }
 
     const agentName = 'session-a-autonomy-danger-agent';
 
@@ -213,7 +239,7 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
         element_name: agentName,
         stepDescription: 'Completed setup',
         outcome: 'success',
-        nextActionHint: 'rm -rf /tmp/session-a-autonomy-danger',
+        nextActionHint: 'beetlejuice_beetlejuice_beetlejuice',
         riskScore: 100,
       },
     });
@@ -228,15 +254,21 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     const challengeId = step.data?.autonomy?.verification?.verificationId;
     expect(step.success).toBe(true);
     expect(challengeId).toBeTruthy();
+    if (!challengeId) {
+      throw new Error('Expected an autonomy danger-zone challenge ID');
+    }
 
-    const storeA = childA!.resolve<IChallengeStore>('ChallengeStore');
-    const storeB = childB!.resolve<IChallengeStore>('ChallengeStore');
-    const enforcerA = childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
-    const enforcerB = childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const storeA = childA.resolve<IChallengeStore>('ChallengeStore');
+    const storeB = childB.resolve<IChallengeStore>('ChallengeStore');
+    const enforcerA = childA.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const enforcerB = childB.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
 
-    const challenge = storeA.get(challengeId!);
+    const challenge = storeA.get(challengeId);
     expect(challenge).toBeDefined();
-    expect(storeB.get(challengeId!)).toBeUndefined();
+    if (!challenge) {
+      throw new Error('Expected session A to retain its autonomy challenge');
+    }
+    expect(storeB.get(challengeId)).toBeUndefined();
 
     const blockA = enforcerA.check(agentName);
     expect(blockA.blocked).toBe(true);
@@ -248,12 +280,12 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
       operation: 'verify_challenge',
       params: {
         challenge_id: challengeId,
-        code: challenge!.code,
+        code: challenge.code,
       },
     });
 
     expect(bobResult).toMatch(/not found|expired|failed|error/i);
     expect(enforcerA.check(agentName).blocked).toBe(true);
-    expect(storeA.get(challengeId!)).toBeDefined();
+    expect(storeA.get(challengeId)).toBeDefined();
   }, TEST_TIMEOUT);
 });

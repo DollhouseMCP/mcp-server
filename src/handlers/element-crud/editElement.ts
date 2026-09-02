@@ -1,12 +1,12 @@
 import { ElementType } from '../../portfolio/PortfolioManager.js';
-import { Skill } from '../../elements/skills/Skill.js';
-import { Template } from '../../elements/templates/Template.js';
-import { Agent } from '../../elements/agents/Agent.js';
-import { Memory } from '../../elements/memories/Memory.js';
+import type { Skill } from '../../elements/skills/Skill.js';
+import type { Template } from '../../elements/templates/Template.js';
+import type { Agent } from '../../elements/agents/Agent.js';
+import type { Memory } from '../../elements/memories/Memory.js';
 import { Ensemble } from '../../elements/ensembles/Ensemble.js';
 import type { EnsembleElementInput } from '../../elements/ensembles/types.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
-import { ElementCrudContext } from './types.js';
+import type { ElementCrudContext } from './types.js';
 import { generateMemoryId } from '../../elements/memories/utils.js';
 import { logger } from '../../utils/logger.js';
 import { normalizeVersion } from '../../elements/BaseElement.js';
@@ -15,13 +15,13 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { deepMerge, DANGEROUS_PROPERTIES } from '../../utils/deepMerge.js';
+import type { ElementManagerOperations } from './helpers.js';
 import {
   normalizeElementTypeInput,
   formatValidElementTypesList,
   getElementFilename,
   getElementTypeLabel,
   resolveElementByName,
-  ElementManagerOperations,
   KNOWN_METADATA_PROPERTIES,
   detectUnknownMetadataProperties,
   formatUnknownPropertyWarnings,
@@ -35,22 +35,6 @@ import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.
 type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
   save(element: T, filePath: string): Promise<void>;
   delete?(filePath: string): Promise<void>;
-};
-
-type EditableElementRecord = Record<string, unknown> & {
-  metadata: Record<string, unknown> & {
-    name?: string;
-    description?: string;
-    tags?: unknown[];
-    modified?: string;
-  };
-  instructions?: string;
-  content?: string;
-  entries?: unknown;
-  extensions?: Record<string, unknown>;
-  getFilePath?: () => string;
-  filePath?: string;
-  filename?: string;
 };
 
 /**
@@ -75,7 +59,7 @@ export interface EditElementArgs {
   name: string;
   type: string;
   /** Nested input object - fields are deep-merged with existing element */
-  input: Record<string, unknown>;
+  input: unknown;
 }
 
 // Read-only fields that cannot be modified through the edit API
@@ -99,7 +83,7 @@ function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
     case 'name':
       return SECURITY_LIMITS.MAX_NAME_LENGTH;
     case 'description':
-      return SECURITY_LIMITS.MAX_YAML_LENGTH;
+      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
     case 'content':
       return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
     case 'filename':
@@ -115,11 +99,11 @@ function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
  *
  * Key: field name, Value: { expected: type description, check: validator function }
  */
-const FIELD_TYPE_RULES: Record<string, {
+const FIELD_TYPE_RULES: Partial<Record<string, {
   expected: string;
   check: (value: unknown) => boolean;
   elementTypes?: ElementType[];
-}> = {
+}>> = {
   // Array fields (across multiple types)
   tags: { expected: 'array of strings', check: (v) => Array.isArray(v) },
   triggers: { expected: 'array of strings', check: (v) => Array.isArray(v) },
@@ -206,6 +190,14 @@ const MERGE_OPTIONS = {
   skipProperties: DANGEROUS_PROPERTIES,
   readOnlyFields: READ_ONLY_FIELDS
 };
+const SPECIAL_ROUTE_FIELDS = new Set(['instructions', 'content', 'elements', 'metadata', 'entries', 'version']);
+const CONTENT_CONTEXT_BY_TYPE: Partial<Record<ElementType, 'persona' | 'skill' | 'template' | 'agent' | 'memory'>> = {
+  [ElementType.AGENT]: 'agent',
+  [ElementType.SKILL]: 'skill',
+  [ElementType.TEMPLATE]: 'template',
+  [ElementType.PERSONA]: 'persona',
+  [ElementType.MEMORY]: 'memory',
+};
 
 /**
  * Map field names to their appropriate validation field types.
@@ -283,68 +275,12 @@ function validateAndNormalizeEnsembleElements(value: unknown): {
   elements: EnsembleElementInput[];
   error?: string;
 } {
-  // Case 1: Already an array — validate each item
   if (Array.isArray(value)) {
-    const errors: string[] = [];
-    const normalized: EnsembleElementInput[] = [];
-
-    for (let i = 0; i < value.length; i++) {
-      const item = value[i];
-      if (!item || typeof item !== 'object' || Array.isArray(item)) {
-        errors.push(`Element at index ${i} must be an object with element_name and element_type`);
-        continue;
-      }
-      const obj = item as Record<string, unknown>;
-      const name = obj.element_name || obj.name;
-      const type = obj.element_type || obj.type;
-      if (!name) {
-        errors.push(`Element at index ${i} is missing element_name (or name)`);
-        continue;
-      }
-      // Validate _remove is strictly boolean if present
-      if ('_remove' in obj && typeof obj._remove !== 'boolean') {
-        errors.push(`Element '${String(name)}' has invalid _remove value — must be boolean true, got ${typeof obj._remove}`);
-        continue;
-      }
-      // Normalize to standard field names, only including defined values
-      const entry: EnsembleElementInput = { ...obj, element_name: String(name) };
-      if (type) {
-        entry.element_type = String(type);
-      }
-      normalized.push(entry);
-    }
-
-    if (errors.length > 0) {
-      return { success: false, elements: [], error: errors.join('; ') };
-    }
-    return { success: true, elements: normalized };
+    return normalizeEnsembleElementArray(value);
   }
 
-  // Case 2: Dict-keyed format — convert to array
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    const dict = value as Record<string, unknown>;
-    const normalized: EnsembleElementInput[] = [];
-
-    for (const [key, val] of Object.entries(dict)) {
-      if (!val || typeof val !== 'object' || Array.isArray(val)) {
-        return {
-          success: false,
-          elements: [],
-          error: `Element '${key}' in dict format must be an object with at least element_type (or type). ` +
-            `Expected: { "${key}": { type: "memory", role: "support", ... } }`
-        };
-      }
-      const inner = val as Record<string, unknown>;
-      normalized.push({
-        ...inner,
-        element_name: String(inner.element_name || inner.name || key),
-        element_type: String(inner.element_type || inner.type),
-        role: (inner.role as EnsembleElementInput['role']) || 'support',
-        activation: (inner.activation as EnsembleElementInput['activation']) || 'always',
-        priority: (inner.priority as number) ?? 50,
-      });
-    }
-    return { success: true, elements: normalized };
+    return normalizeEnsembleElementDictionary(value as Record<string, unknown>);
   }
 
   // Case 3: Invalid type
@@ -353,6 +289,89 @@ function validateAndNormalizeEnsembleElements(value: unknown): {
     elements: [],
     error: `'elements' must be an array of objects or a dict-keyed object. Got: ${typeof value}`
   };
+}
+
+function normalizeEnsembleElementArray(value: unknown[]): {
+  success: boolean;
+  elements: EnsembleElementInput[];
+  error?: string;
+} {
+  const errors: string[] = [];
+  const normalized: EnsembleElementInput[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const result = normalizeEnsembleArrayItem(value[index], index);
+    if (result.error) {
+      errors.push(result.error);
+    } else if (result.element) {
+      normalized.push(result.element);
+    }
+  }
+  return errors.length > 0
+    ? { success: false, elements: [], error: errors.join('; ') }
+    : { success: true, elements: normalized };
+}
+
+function normalizeEnsembleArrayItem(
+  item: unknown,
+  index: number
+): { element?: EnsembleElementInput; error?: string } {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return { error: `Element at index ${index} must be an object with element_name and element_type` };
+  }
+  const object = item as Record<string, unknown>;
+  const name = object.element_name || object.name;
+  const type = object.element_type || object.type;
+  if (typeof name !== 'string' || name.length === 0) {
+    return { error: `Element at index ${index} is missing element_name (or name)` };
+  }
+  if (type !== undefined && typeof type !== 'string') {
+    return { error: `Element '${name}' has invalid element_type (or type) — must be a string` };
+  }
+  if ('_remove' in object && typeof object._remove !== 'boolean') {
+    return { error: `Element '${name}' has invalid _remove value — must be boolean true, got ${typeof object._remove}` };
+  }
+  const element: EnsembleElementInput = { ...object, element_name: name };
+  if (type) {
+    element.element_type = type;
+  }
+  return { element };
+}
+
+function normalizeEnsembleElementDictionary(value: Record<string, unknown>): {
+  success: boolean;
+  elements: EnsembleElementInput[];
+  error?: string;
+} {
+  const normalized: EnsembleElementInput[] = [];
+  for (const [key, item] of Object.entries(value)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return {
+        success: false,
+        elements: [],
+        error: `Element '${key}' in dict format must be an object with at least element_type (or type). ` +
+          `Expected: { "${key}": { type: "memory", role: "support", ... } }`,
+      };
+    }
+    const inner = item as Record<string, unknown>;
+    const name = inner.element_name || inner.name || key;
+    const type = inner.element_type || inner.type;
+    if (typeof name !== 'string' || typeof type !== 'string') {
+      return {
+        success: false,
+        elements: [],
+        error: `Element '${key}' in dict format must use string element_name/name and element_type/type values`,
+      };
+    }
+    normalized.push({
+      ...inner,
+      element_name: name,
+      element_type: type,
+      role: (inner.role as EnsembleElementInput['role']) || 'support',
+      activation: (inner.activation as EnsembleElementInput['activation']) || 'always',
+      priority: (inner.priority as number | null | undefined) ?? 50,
+    });
+  }
+  return { success: true, elements: normalized };
 }
 
 /**
@@ -517,34 +536,11 @@ function handleMemoryEntryUpdate(entries: unknown[]): {
   const errors: string[] = [];
 
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (!entry || typeof entry !== 'object') {
-      errors.push(`Entry at index ${i} is not a valid object`);
-      continue;
-    }
-
-    const entryObj = entry as Record<string, unknown>;
-    const entryId = entryObj.id as string | undefined;
-    if (!entryId) {
-      entryObj.id = generateMemoryId();
-    }
-
-    try {
-      const timestamp = entryObj.timestamp ? new Date(entryObj.timestamp as string) : new Date();
-      if (Number.isNaN(timestamp.getTime())) {
-        throw new Error('Invalid timestamp');
-      }
-
-      const normalizedEntry = {
-        ...entryObj,
-        timestamp,
-        tags: Array.isArray(entryObj.tags) ? entryObj.tags : [],
-        metadata: typeof entryObj.metadata === 'object' && entryObj.metadata !== null ? entryObj.metadata : {}
-      };
-
-      entriesMap.set(entryObj.id, normalizedEntry);
-    } catch {
-      errors.push(`Entry '${entryObj.id}' has invalid timestamp`);
+    const result = normalizeMemoryEntry(entries[i], i);
+    if (result.error) {
+      errors.push(result.error);
+    } else if (result.id && result.entry) {
+      entriesMap.set(result.id, result.entry);
     }
   }
 
@@ -553,6 +549,423 @@ function handleMemoryEntryUpdate(entries: unknown[]): {
   }
 
   return { success: true, entriesMap };
+}
+
+function normalizeMemoryEntry(
+  entry: unknown,
+  index: number
+): { id?: string; entry?: Record<string, unknown>; error?: string } {
+  if (!entry || typeof entry !== 'object') {
+    return { error: `Entry at index ${index} is not a valid object` };
+  }
+  const entryObject = entry as Record<string, unknown>;
+  if (!entryObject.id) {
+    entryObject.id = generateMemoryId();
+  }
+  try {
+    const timestamp = entryObject.timestamp ? new Date(entryObject.timestamp as string) : new Date();
+    if (Number.isNaN(timestamp.getTime())) {
+      throw new TypeError('Invalid timestamp');
+    }
+    return {
+      id: entryObject.id as string,
+      entry: {
+        ...entryObject,
+        timestamp,
+        tags: Array.isArray(entryObject.tags) ? entryObject.tags : [],
+        metadata: typeof entryObject.metadata === 'object' && entryObject.metadata !== null
+          ? entryObject.metadata
+          : {},
+      },
+    };
+  } catch {
+    return { error: `Entry '${String(entryObject.id)}' has invalid timestamp` };
+  }
+}
+
+async function resolveForkedElement(
+  context: ElementCrudContext,
+  manager: ElementManagerWithPersistence<any>,
+  normalizedType: ElementType,
+  name: string,
+  element: any
+): Promise<any> {
+  if (!context.forkOnEditStrategy) {
+    return element;
+  }
+  const forkResult = await context.forkOnEditStrategy.evaluateAndFork({
+    element: element as { metadata: { name: string }; id?: string; getFilePath?: () => string; rawContent?: string },
+    elementType: normalizedType,
+    userElementDir: context.portfolioManager.getElementDir(normalizedType),
+  });
+  if (!forkResult.forked) {
+    return element;
+  }
+  return await resolveElementByName(manager, normalizedType, name) ?? element;
+}
+
+function collectUnknownEditProperties(
+  normalizedType: ElementType,
+  input: Record<string, unknown>
+): ReturnType<typeof detectUnknownMetadataProperties> {
+  const warnings = detectUnknownMetadataProperties(normalizedType, input);
+  if (input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)) {
+    warnings.push(...detectUnknownMetadataProperties(
+      normalizedType,
+      input.metadata as Record<string, unknown>
+    ));
+  }
+  return warnings;
+}
+
+function logUnknownEditProperties(
+  normalizedType: ElementType,
+  name: string,
+  warnings: ReturnType<typeof detectUnknownMetadataProperties>
+): void {
+  if (warnings.length === 0) {
+    return;
+  }
+  logger.warn('[editElement] Unknown properties detected', {
+    elementType: normalizedType,
+    elementName: name,
+    warningCount: warnings.length,
+    unknownProperties: warnings.map(warning => ({
+      property: warning.property,
+      suggestion: warning.suggestion,
+    })),
+  });
+}
+
+function validateEditInput(
+  input: Record<string, unknown>,
+  normalizedType: ElementType,
+  validator: ValidationService
+): string | undefined {
+  if (normalizedType === ElementType.MEMORY && 'content' in input) {
+    return `Memory content cannot be modified via edit_element. ` +
+      `Memory uses an append-only architecture. ` +
+      `Use the 'addEntry' operation to add new entries to this memory.`;
+  }
+
+  const typeErrors = validateFieldTypes(input, normalizedType);
+  if (typeErrors.length > 0) {
+    const formattedErrors = typeErrors.map(typeError => `  • ${typeError}`).join('\n');
+    return `Field type validation failed:\n${formattedErrors}`;
+  }
+  const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
+  if (gatekeeperErrors.length > 0) {
+    return formatGatekeeperValidationMessage(gatekeeperErrors);
+  }
+  const oversizedDescriptionFields = findOversizedDescriptionFields(input);
+  if (oversizedDescriptionFields.length > 0) {
+    const formattedErrors = oversizedDescriptionFields
+      .map(descriptionError => `  • ${descriptionError}`)
+      .join('\n');
+    return `Description length validation failed:\n${formattedErrors}`;
+  }
+
+  for (const [field, value] of Object.entries(input)) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    const validationError = validateFieldValue(validator, field, value);
+    if (validationError) {
+      return `Invalid value for '${field}': ${validationError}`;
+    }
+  }
+  return undefined;
+}
+
+interface EditUpdatePlan {
+  updateObject: Record<string, unknown>;
+  unrecognizedFieldWarnings: string[];
+  collectionWarnings: string[];
+  appliedFields: string[];
+  skippedFields: string[];
+  error?: string;
+}
+
+interface EditRoutingState {
+  normalizedType: ElementType;
+  name: string;
+  element: any;
+  metadataFields: ReadonlySet<string>;
+  updateObject: Record<string, unknown>;
+  unrecognizedFieldWarnings: string[];
+  collectionWarnings: string[];
+}
+
+function buildElementUpdate(
+  input: Record<string, unknown>,
+  normalizedType: ElementType,
+  name: string,
+  element: any
+): EditUpdatePlan {
+  const plan: EditUpdatePlan = {
+    updateObject: {},
+    unrecognizedFieldWarnings: [],
+    collectionWarnings: [],
+    appliedFields: [],
+    skippedFields: [],
+  };
+  const state: EditRoutingState = {
+    normalizedType,
+    name,
+    element,
+    metadataFields: KNOWN_METADATA_PROPERTIES[normalizedType],
+    updateObject: plan.updateObject,
+    unrecognizedFieldWarnings: plan.unrecognizedFieldWarnings,
+    collectionWarnings: plan.collectionWarnings,
+  };
+
+  for (const [key, value] of Object.entries(input)) {
+    if (DANGEROUS_PROPERTIES.includes(key)) {
+      plan.skippedFields.push(key);
+      continue;
+    }
+    if (READ_ONLY_FIELDS.has(key)) {
+      logger.warn(`[editElement] Skipping read-only field: ${key}`);
+      plan.skippedFields.push(key);
+      continue;
+    }
+    const routeResult = routeEditField(key, value, state);
+    if (routeResult.error) {
+      plan.error = routeResult.error;
+      return plan;
+    }
+    if (routeResult.applied) {
+      plan.appliedFields.push(key);
+    }
+  }
+  return plan;
+}
+
+function routeEditField(
+  key: string,
+  value: unknown,
+  state: EditRoutingState
+): { applied: boolean; error?: string } {
+  if (state.metadataFields.has(key) && !SPECIAL_ROUTE_FIELDS.has(key)) {
+    const metadata = ensureUpdateMetadata(state.updateObject);
+    metadata[key] = value;
+    return { applied: true };
+  }
+  if (key === 'elements' && state.normalizedType === ElementType.ENSEMBLE) {
+    const updateError = applyEnsembleElementsUpdate(
+      value,
+      state.element,
+      state.updateObject,
+      state.collectionWarnings
+    );
+    return updateError ? { applied: true, error: updateError } : { applied: true };
+  }
+  if (key === 'metadata' && typeof value === 'object' && value !== null) {
+    const updateError = routeNestedMetadata(value as Record<string, unknown>, state);
+    return updateError ? { applied: true, error: updateError } : { applied: true };
+  }
+  if (key === 'instructions' && typeof value === 'string') {
+    applyInstructionsUpdate(value, state.normalizedType, state.element);
+    return { applied: true };
+  }
+  if (key === 'content' && typeof value === 'string') {
+    applyContentUpdate(value, state.normalizedType, state.element);
+    return { applied: true };
+  }
+  if (SPECIAL_ROUTE_FIELDS.has(key)) {
+    return { applied: false };
+  }
+
+  state.updateObject[key] = value;
+  state.unrecognizedFieldWarnings.push(
+    `Field '${key}' is not a recognized metadata property for ${getElementTypeLabel(state.normalizedType)} — it may not persist after save.`
+  );
+  logger.warn(`[editElement] Unrecognized field '${key}' for ${state.normalizedType}, routing to element object`, {
+    elementType: state.normalizedType,
+    elementName: state.name,
+    field: key,
+  });
+  return { applied: true };
+}
+
+function ensureUpdateMetadata(updateObject: Record<string, unknown>): Record<string, unknown> {
+  if (!updateObject.metadata) {
+    updateObject.metadata = {};
+  }
+  return updateObject.metadata as Record<string, unknown>;
+}
+
+function routeNestedMetadata(
+  metadataValue: Record<string, unknown>,
+  state: EditRoutingState
+): string | undefined {
+  if (state.normalizedType !== ElementType.ENSEMBLE || !hasOwnRecordProperty(metadataValue, 'elements')) {
+    state.updateObject.metadata = deepMerge(
+      (state.updateObject.metadata || {}) as Record<string, unknown>,
+      metadataValue,
+      MERGE_OPTIONS
+    );
+    return undefined;
+  }
+
+  const updateError = applyEnsembleElementsUpdate(
+    metadataValue.elements,
+    state.element,
+    state.updateObject,
+    state.collectionWarnings
+  );
+  if (updateError) {
+    return updateError;
+  }
+  const { elements: _extracted, ...restMetadata } = metadataValue;
+  if (Object.keys(restMetadata).length > 0) {
+    state.updateObject.metadata = deepMerge(
+      state.updateObject.metadata as Record<string, unknown>,
+      restMetadata,
+      MERGE_OPTIONS
+    );
+  }
+  return undefined;
+}
+
+function applyInstructionsUpdate(value: string, normalizedType: ElementType, element: any): void {
+  const validation = ContentValidator.validateAndSanitize(value, {
+    maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    contentContext: CONTENT_CONTEXT_BY_TYPE[normalizedType],
+  });
+  const sanitizedInstructions = validation.sanitizedContent || '';
+  element.instructions = sanitizedInstructions;
+  if (normalizedType === ElementType.AGENT) {
+    element.extensions ??= {};
+    element.extensions.instructions = sanitizedInstructions;
+  }
+}
+
+function applyContentUpdate(value: string, normalizedType: ElementType, element: any): void {
+  const validation = ContentValidator.validateAndSanitize(value, {
+    maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    contentContext: CONTENT_CONTEXT_BY_TYPE[normalizedType],
+  });
+  element.content = validation.sanitizedContent || '';
+}
+
+function applyMergedElementUpdate(
+  element: any,
+  updateObject: Record<string, unknown>,
+  normalizedType: ElementType,
+  input: Record<string, unknown>
+): string | undefined {
+  const mergedData = deepMerge(element, updateObject, MERGE_OPTIONS);
+  const descriptionErrors = findOversizedDescriptionFields(mergedData.metadata, 'element.metadata');
+  if (descriptionErrors.length > 0) {
+    const formattedErrors = descriptionErrors
+      .map(descriptionError => `  • ${descriptionError}`)
+      .join('\n');
+    return `Description length validation failed:\n${formattedErrors}`;
+  }
+  for (const [key, value] of Object.entries(mergedData)) {
+    if (key !== 'metadata') {
+      element[key] = value;
+    }
+  }
+  if (mergedData.metadata && element.metadata) {
+    element.metadata = deepMerge(
+      element.metadata,
+      mergedData.metadata as Record<string, unknown>,
+      MERGE_OPTIONS
+    );
+  }
+  if (normalizedType === ElementType.MEMORY && input.entries && Array.isArray(input.entries)) {
+    const memoryResult = handleMemoryEntryUpdate(input.entries);
+    if (!memoryResult.success) {
+      return `Memory entry validation errors:\n${memoryResult.message}\n\nValid entries were saved.`;
+    }
+    element.entries = memoryResult.entriesMap;
+  }
+  return undefined;
+}
+
+function normalizeEditedMetadata(element: any): void {
+  if (!element.metadata) {
+    return;
+  }
+  element.metadata.description ??= '';
+  element.metadata.tags ??= [];
+  element.metadata.modified = new Date().toISOString();
+}
+
+function applyEditVersion(element: any, inputVersion: unknown): string | undefined {
+  if (inputVersion === undefined) {
+    autoIncrementVersion(element);
+    return undefined;
+  }
+  if (typeof inputVersion !== 'string' && typeof inputVersion !== 'number') {
+    return 'Invalid version format: version must be a string or number';
+  }
+  const update = updateVersionExplicit(element, inputVersion.toString());
+  return update.success ? undefined : update.message || 'Failed to update version';
+}
+
+async function saveEditedElement(
+  manager: ElementManagerWithPersistence<any>,
+  element: any,
+  normalizedType: ElementType,
+  name: string
+): Promise<string | undefined> {
+  const filePathCandidate = typeof element.getFilePath === 'function'
+    ? element.getFilePath()
+    : (element.filePath || element.filename);
+  const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
+    ? filePathCandidate
+    : getElementFilename(normalizedType, element.metadata?.name || name);
+  try {
+    await manager.save(element, filename);
+    return undefined;
+  } catch (saveError) {
+    return `Failed to save element: ${saveError instanceof Error ? saveError.message : 'Unknown error'}`;
+  }
+}
+
+function formatEditWarningSection(title: string, warnings: string[]): string {
+  if (warnings.length === 0) {
+    return '';
+  }
+  return [`⚠️ **${title}:**`, ...warnings.map(warning => `   • ${warning}`), ''].join('\n');
+}
+
+function formatEditSuccess(
+  normalizedType: ElementType,
+  name: string,
+  element: any,
+  warningText: string,
+  resolutionWarningText: string,
+  plan: EditUpdatePlan
+) {
+  const label = getElementTypeLabel(normalizedType);
+  const displayName = element.metadata?.name || name;
+  if (plan.appliedFields.length === 0 && plan.skippedFields.length > 0) {
+    return {
+      content: [{
+        type: 'text',
+        text: `⚠️ No fields applied to ${label} '${displayName}'. ` +
+          `Skipped: ${plan.skippedFields.join(', ')} (dangerous or read-only fields are not editable).`,
+      }],
+    };
+  }
+  const unrecognizedWarningText = formatEditWarningSection(
+    'Unrecognized Field Warnings',
+    plan.unrecognizedFieldWarnings
+  );
+  const collectionWarningText = formatEditWarningSection('Collection Warnings', plan.collectionWarnings);
+  const skippedText = plan.skippedFields.length > 0
+    ? `\n⚠️ Skipped: ${plan.skippedFields.join(', ')} (dangerous or read-only)`
+    : '';
+  return {
+    content: [{
+      type: 'text',
+      text: `${warningText}${resolutionWarningText}${unrecognizedWarningText}${collectionWarningText}✅ Updated ${label} '${displayName}' - fields: ${plan.appliedFields.join(', ')}${skippedText}`,
+    }],
+  };
 }
 
 /**
@@ -572,12 +985,13 @@ export async function editElement(
   // Use injected validation service or create default
   const validator = validationService ?? new ValidationService();
 
-  const { name, type, input } = args;
+  const { name, type, input: rawInput } = args;
 
   // Validate input is provided
-  if (!input || typeof input !== 'object') {
+  if (rawInput === null || typeof rawInput !== 'object') {
     return error('Missing or invalid input object. Provide fields to update as a nested object.');
   }
+  const input = rawInput as Record<string, unknown>;
 
   const { type: normalizedType } = normalizeElementTypeInput(type);
 
@@ -597,242 +1011,31 @@ export async function editElement(
     throw new ElementNotFoundError(label, name);
   }
 
-  // Step 4.6: Fork-on-edit — if the element is from the shared pool,
-  // materialize a private copy in the user's portfolio before editing.
-  if (context.forkOnEditStrategy) {
-    const forkResult = await context.forkOnEditStrategy.evaluateAndFork({
-      element: element as { metadata: { name: string }; id?: string; getFilePath?: () => string; rawContent?: string },
-      elementType: normalizedType,
-      userElementDir: context.portfolioManager.getElementDir(normalizedType),
-    });
-    if (forkResult.forked) {
-      // Re-resolve the element from the user's portfolio (the fork)
-      const forkedElement = await resolveElementByName(manager, normalizedType, name);
-      if (forkedElement) {
-        element = forkedElement;
-      }
-    }
-  }
+  element = await resolveForkedElement(context, manager, normalizedType, name, element);
 
-  const editableElement = element as typeof element & EditableElementRecord;
+  const editableElement = element;
 
-  // Check for unknown properties and generate warnings
-  const unknownPropertyWarnings = detectUnknownMetadataProperties(
-    normalizedType,
-    input as Record<string, unknown>
-  );
-
-  // Also validate nested metadata sub-object (the top-level 'metadata' key is
-  // skipped by detectUnknownMetadataProperties as a special route field, so
-  // dangerous/unknown properties inside it would go unchecked otherwise)
-  if (input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)) {
-    const nestedWarnings = detectUnknownMetadataProperties(
-      normalizedType,
-      input.metadata as Record<string, unknown>
-    );
-    unknownPropertyWarnings.push(...nestedWarnings);
-  }
-
+  const unknownPropertyWarnings = collectUnknownEditProperties(normalizedType, input);
   const warningText = formatUnknownPropertyWarnings(unknownPropertyWarnings);
-
-  if (unknownPropertyWarnings.length > 0) {
-    logger.warn(`[editElement] Unknown properties detected`, {
-      elementType: normalizedType,
-      elementName: name,
-      warningCount: unknownPropertyWarnings.length,
-      unknownProperties: unknownPropertyWarnings.map(w => ({
-        property: w.property,
-        suggestion: w.suggestion
-      }))
-    });
+  logUnknownEditProperties(normalizedType, name, unknownPropertyWarnings);
+  const validationError = validateEditInput(input, normalizedType, validator);
+  if (validationError) {
+    return error(validationError);
   }
 
-  // Issue #1591: Validate element-specific constraints before attempting edits
-  // Memory content is read-only (append-only architecture) - reject attempts to edit it
-  if (normalizedType === ElementType.MEMORY && 'content' in input) {
-    return error(
-      `Memory content cannot be modified via edit_element. ` +
-      `Memory uses an append-only architecture. ` +
-      `Use the 'addEntry' operation to add new entries to this memory.`
-    );
+  const updatePlan = buildElementUpdate(input, normalizedType, name, editableElement);
+  if (updatePlan.error) {
+    return error(updatePlan.error);
   }
 
-  // Issue #662: Validate field types before applying (prevents silent data corruption)
-  const typeErrors = validateFieldTypes(input, normalizedType);
-  if (typeErrors.length > 0) {
-    return error(`Field type validation failed:\n${typeErrors.map(e => `  • ${e}`).join('\n')}`);
-  }
-
-  const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
-  if (gatekeeperErrors.length > 0) {
-    return error(formatGatekeeperValidationMessage(gatekeeperErrors));
-  }
-
-  const oversizedDescriptionFields = findOversizedDescriptionFields(input);
-  if (oversizedDescriptionFields.length > 0) {
-    const formattedErrors = oversizedDescriptionFields.map(descriptionError => `  • ${descriptionError}`).join('\n');
-    return error(
-      `Description length validation failed:\n${formattedErrors}`
-    );
-  }
-
-  // Validate string field values using injected validator
-  for (const [field, value] of Object.entries(input)) {
-    if (typeof value === 'string') {
-      const validationError = validateFieldValue(validator, field, value);
-      if (validationError) {
-        return error(`Invalid value for '${field}': ${validationError}`);
-      }
-    }
-  }
-
-  // Build the update object, mapping top-level fields to metadata where appropriate
-  // Issue #565: Use type-specific metadata properties from authoritative source
-  const metadataFields = KNOWN_METADATA_PROPERTIES[normalizedType] ?? new Set<string>();
-  const updateObj: Record<string, unknown> = {};
-  const unrecognizedFieldWarnings: string[] = [];
-  const collectionWarnings: string[] = [];
-  const appliedFields: string[] = [];
-  const skippedFields: string[] = [];
-
-  // Fields handled by dedicated branches (not metadata routing)
-  const specialRouteFields = new Set(['instructions', 'content', 'elements', 'metadata', 'entries', 'version']);
-
-  // Content context map shared by instructions and content validation branches
-  const contentContextMap: Record<string, 'persona' | 'skill' | 'template' | 'agent' | 'memory'> = {
-    [ElementType.AGENT]: 'agent',
-    [ElementType.SKILL]: 'skill',
-    [ElementType.TEMPLATE]: 'template',
-    [ElementType.PERSONA]: 'persona',
-    [ElementType.MEMORY]: 'memory',
-  };
-
-  for (const [key, value] of Object.entries(input)) {
-    // Skip dangerous properties
-    if (DANGEROUS_PROPERTIES.includes(key)) {
-      skippedFields.push(key);
-      continue;
-    }
-
-    // Skip read-only fields
-    if (READ_ONLY_FIELDS.has(key)) {
-      logger.warn(`[editElement] Skipping read-only field: ${key}`);
-      skippedFields.push(key);
-      continue;
-    }
-
-    // Every branch below applies the field — track once at the end
-    let fieldApplied = true;
-
-    // Map known metadata fields automatically (type-specific)
-    if (metadataFields.has(key) && !specialRouteFields.has(key)) {
-      if (!updateObj.metadata) {
-        updateObj.metadata = {};
-      }
-      (updateObj.metadata as Record<string, unknown>)[key] = value;
-    } else if (key === 'elements' && normalizedType === ElementType.ENSEMBLE) {
-      // Issue #658: Validate and normalize elements input (array or dict format)
-      const elemError = applyEnsembleElementsUpdate(value, element, updateObj, collectionWarnings);
-      if (elemError) return error(elemError);
-    } else if (key === 'metadata' && typeof value === 'object' && value !== null) {
-      const metaValue = value as Record<string, unknown>;
-
-      // If metadata.elements is provided for an ensemble, extract and route through
-      // the ensemble elements handler for proper validation/normalization/merge.
-      if (normalizedType === ElementType.ENSEMBLE && hasOwnRecordProperty(metaValue, 'elements')) {
-        const elemError = applyEnsembleElementsUpdate(metaValue.elements, element, updateObj, collectionWarnings);
-        if (elemError) return error(elemError);
-
-        // Remove elements from metadata value before deep merge to avoid double-processing
-        const { elements: _extracted, ...restMetadata } = metaValue;
-        if (Object.keys(restMetadata).length > 0) {
-          updateObj.metadata = deepMerge(
-            updateObj.metadata as Record<string, unknown>,
-            restMetadata,
-            MERGE_OPTIONS
-          );
-        }
-      } else {
-        // Merge nested metadata with security options
-        updateObj.metadata = deepMerge(
-          (updateObj.metadata || {}) as Record<string, unknown>,
-          metaValue,
-          MERGE_OPTIONS
-        );
-      }
-    } else if (key === 'instructions' && typeof value === 'string') {
-      // Issue #602 resolved: 'instructions' is a first-class field (behavioral directives)
-      const contentValidation = ContentValidator.validateAndSanitize(value, {
-        maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
-        contentContext: contentContextMap[normalizedType]
-      });
-      const sanitizedInstructions = contentValidation.sanitizedContent || '';
-      // Set instructions on the element directly (all types now have this property)
-      editableElement.instructions = sanitizedInstructions;
-      // For agents, also update extensions.instructions for backward compat
-      if (normalizedType === ElementType.AGENT) {
-        if (!editableElement.extensions) {
-          editableElement.extensions = {};
-        }
-        editableElement.extensions.instructions = sanitizedInstructions;
-      }
-    } else if (key === 'content' && typeof value === 'string') {
-      // Issue #585/#602: Handle content updates (reference material)
-      const contentValidation = ContentValidator.validateAndSanitize(value, {
-        maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
-        contentContext: contentContextMap[normalizedType]
-      });
-      const sanitizedContent = contentValidation.sanitizedContent || '';
-      // Set content on the element directly (all types now have this property)
-      editableElement.content = sanitizedContent;
-    } else if (specialRouteFields.has(key)) {
-      // Special route field — handled elsewhere, skip
-      fieldApplied = false;
-    } else {
-      // Issue #565: Field not in type-specific metadata set and not a special route —
-      // still route to updateObj for backward compat, but warn that it may not persist
-      updateObj[key] = value;
-      unrecognizedFieldWarnings.push(
-        `Field '${key}' is not a recognized metadata property for ${getElementTypeLabel(normalizedType)} — it may not persist after save.`
-      );
-      logger.warn(`[editElement] Unrecognized field '${key}' for ${normalizedType}, routing to element object`, {
-        elementType: normalizedType,
-        elementName: name,
-        field: key,
-      });
-    }
-
-    if (fieldApplied) {
-      appliedFields.push(key);
-    }
-  }
-
-  // Deep merge the update into the element with security options
-  const mergedData = deepMerge(editableElement, updateObj, MERGE_OPTIONS);
-
-  // Apply merged data back to element
-  for (const [key, value] of Object.entries(mergedData)) {
-    if (key !== 'metadata') {
-      editableElement[key] = value;
-    }
-  }
-
-  // Handle metadata separately to preserve nested siblings after partial edits.
-  if (mergedData.metadata && element.metadata) {
-    editableElement.metadata = deepMerge(
-      editableElement.metadata,
-      mergedData.metadata as Record<string, unknown>,
-      MERGE_OPTIONS
-    );
-  }
-
-  // Handle memory entries specially (extracted for clarity)
-  if (normalizedType === ElementType.MEMORY && input.entries && Array.isArray(input.entries)) {
-    const memoryResult = handleMemoryEntryUpdate(input.entries);
-    if (!memoryResult.success) {
-      return error(`Memory entry validation errors:\n${memoryResult.message}\n\nValid entries were saved.`);
-    }
-    editableElement.entries = memoryResult.entriesMap;
+  const mergeError = applyMergedElementUpdate(
+    editableElement,
+    updatePlan.updateObject,
+    normalizedType,
+    input
+  );
+  if (mergeError) {
+    return error(mergeError);
   }
 
   // Sync ensemble elements from metadata (extracted for clarity)
@@ -845,88 +1048,23 @@ export async function editElement(
     }
   }
 
-  // Fix #911: Normalize metadata after merge to ensure structural consistency.
-  // BaseElement constructor runs normalizeMetadata on create/load, but the edit path
-  // modifies metadata in-place. This ensures essential defaults survive edits.
-  if (element.metadata) {
-    element.metadata.description ??= '';
-    element.metadata.tags ??= [];
-    // Update modified timestamp
-    element.metadata.modified = new Date().toISOString();
+  normalizeEditedMetadata(element);
+  const versionError = applyEditVersion(element, input.version);
+  if (versionError) {
+    return error(versionError);
   }
-
-  // Handle version updates
-  if (input.version !== undefined) {
-    const update = updateVersionExplicit(element, String(input.version));
-    if (!update.success) {
-      return error(update.message || 'Failed to update version');
-    }
-  } else {
-    autoIncrementVersion(element);
+  const saveError = await saveEditedElement(manager, element, normalizedType, name);
+  if (saveError) {
+    return error(saveError);
   }
-
-  // Determine file path for saving
-  const filePathCandidate = typeof editableElement.getFilePath === 'function'
-    ? editableElement.getFilePath()
-    : (editableElement.filePath || editableElement.filename);
-  const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
-    ? filePathCandidate
-    : getElementFilename(normalizedType, element.metadata?.name || name);
-
-  try {
-    await manager.save(element, filename);
-  } catch (err) {
-    return error(`Failed to save element: ${err instanceof Error ? err.message : 'Unknown error'}`);
-  }
-
-  const label = getElementTypeLabel(normalizedType);
-  const displayName = element.metadata?.name || name;
-  const updatedFields = appliedFields.join(', ');
-
-  // Issue #1656: If all fields were silently skipped, report honestly
-  if (appliedFields.length === 0 && skippedFields.length > 0) {
-    return {
-      content: [{
-        type: 'text',
-        text: `⚠️ No fields applied to ${label} '${displayName}'. ` +
-          `Skipped: ${skippedFields.join(', ')} (dangerous or read-only fields are not editable).`
-      }]
-    };
-  }
-
-  // Issue #565: Include warnings for unrecognized fields in response
-  let unrecognizedWarningText = '';
-  if (unrecognizedFieldWarnings.length > 0) {
-    const lines = ['⚠️ **Unrecognized Field Warnings:**'];
-    for (const warning of unrecognizedFieldWarnings) {
-      lines.push(`   • ${warning}`);
-    }
-    lines.push('');
-    unrecognizedWarningText = lines.join('\n');
-  }
-
-  // Issue #662: Include collection operation warnings
-  let collectionWarningText = '';
-  if (collectionWarnings.length > 0) {
-    const lines = ['⚠️ **Collection Warnings:**'];
-    for (const warning of collectionWarnings) {
-      lines.push(`   • ${warning}`);
-    }
-    lines.push('');
-    collectionWarningText = lines.join('\n');
-  }
-
-  // Issue #1656: Report skipped fields so LLMs don't assume they were applied
-  const skippedText = skippedFields.length > 0
-    ? `\n⚠️ Skipped: ${skippedFields.join(', ')} (dangerous or read-only)`
-    : '';
-
-  return {
-    content: [{
-      type: 'text',
-      text: `${warningText}${resolutionWarningText}${unrecognizedWarningText}${collectionWarningText}✅ Updated ${label} '${displayName}' - fields: ${updatedFields}${skippedText}`
-    }]
-  };
+  return formatEditSuccess(
+    normalizedType,
+    name,
+    element,
+    warningText,
+    resolutionWarningText,
+    updatePlan
+  );
 }
 
 function error(message: string) {
@@ -983,42 +1121,7 @@ function updateVersionExplicit(element: any, versionString: string) {
 
 function autoIncrementVersion(element: any) {
   try {
-    if (element.version) {
-      // First normalize the version to 3-part format (handles legacy 2-part versions)
-      const normalized = normalizeVersion(String(element.version));
-
-      // Check for pre-release versions
-      const preReleaseMatch = normalized.match(/^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/);
-
-      if (preReleaseMatch) {
-        const baseVersion = preReleaseMatch[1];
-        const preReleaseTag = preReleaseMatch[3];
-
-        if (preReleaseTag) {
-          // Increment pre-release version (e.g., "1.0.0-beta.1" → "1.0.0-beta.2")
-          const preReleaseNumberMatch = preReleaseTag.match(/^([a-zA-Z]+)\.?(\d+)?$/);
-          if (preReleaseNumberMatch) {
-            const preReleaseType = preReleaseNumberMatch[1];
-            const preReleaseNumber = Number.parseInt(preReleaseNumberMatch[2] || '0') + 1;
-            element.version = `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
-          } else {
-            // No pre-release number, bump patch
-            const [major, minor, patch] = baseVersion.split('.').map(Number);
-            element.version = `${major}.${minor}.${patch + 1}`;
-          }
-        } else {
-          // Standard version, bump patch (e.g., "1.0.0" → "1.0.1")
-          const [major, minor, patch] = baseVersion.split('.').map(Number);
-          element.version = `${major}.${minor}.${patch + 1}`;
-        }
-      } else {
-        // Shouldn't reach here after normalization, but fallback to safe default
-        element.version = '1.0.1';
-      }
-    } else {
-      // No version, start at 1.0.0
-      element.version = '1.0.0';
-    }
+    element.version = nextElementVersion(element.version);
 
     // Sync version to metadata
     if (element.metadata) {
@@ -1027,4 +1130,35 @@ function autoIncrementVersion(element: any) {
   } catch (error) {
     logger.error('Failed to auto-increment version', { error });
   }
+}
+
+function nextElementVersion(version: unknown): string {
+  if (!version) {
+    return '1.0.0';
+  }
+  if (typeof version !== 'string' && typeof version !== 'number') {
+    return '1.0.1';
+  }
+  const normalized = normalizeVersion(version.toString());
+  const preReleaseMatch = /^(\d+\.\d+\.\d+)(-([a-zA-Z0-9.-]+))?$/.exec(normalized);
+  if (!preReleaseMatch) {
+    return '1.0.1';
+  }
+  const baseVersion = preReleaseMatch[1];
+  const preReleaseTag = preReleaseMatch[3];
+  if (!preReleaseTag) {
+    return incrementPatchVersion(baseVersion);
+  }
+  const preReleaseNumberMatch = /^([a-zA-Z]+)\.?(\d+)?$/.exec(preReleaseTag);
+  if (!preReleaseNumberMatch) {
+    return incrementPatchVersion(baseVersion);
+  }
+  const preReleaseType = preReleaseNumberMatch[1];
+  const preReleaseNumber = Number.parseInt(preReleaseNumberMatch[2] || '0') + 1;
+  return `${baseVersion}-${preReleaseType}.${preReleaseNumber}`;
+}
+
+function incrementPatchVersion(baseVersion: string): string {
+  const [major, minor, patch] = baseVersion.split('.').map(Number);
+  return `${major}.${minor}.${patch + 1}`;
 }

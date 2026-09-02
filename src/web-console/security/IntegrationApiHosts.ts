@@ -9,11 +9,15 @@ const CANONICAL_DNS_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?
 export class IntegrationApiHostValidationError extends Error {}
 
 export interface IntegrationApiHostCanonicalizationOptions {
-  /** Read-only compatibility for old descriptors; never use for new writes or egress. */
+  /** Read-only compatibility for suffixes accepted before #2494; never use for new writes or egress checks. */
   readonly allowLegacyPrivateSuffixes?: boolean;
 }
 
-/** Canonicalize a DNS hostname to the lowercase ASCII form used by URL.hostname. */
+/**
+ * Convert a user-supplied DNS hostname to the representation used by URL.hostname:
+ * lowercase ASCII with IDNs encoded as punycode. A single DNS root dot is accepted
+ * and removed so equivalent URL spellings compare consistently.
+ */
 export function canonicalizeIntegrationApiHost(
   value: string,
   name = 'API host',
@@ -27,7 +31,9 @@ export function canonicalizeIntegrationApiHost(
   }
 
   const withoutRootDot = value.endsWith('.') ? value.slice(0, -1) : value;
-  if (withoutRootDot === '' || withoutRootDot.endsWith('.')) throw invalidHost(name);
+  if (withoutRootDot === '' || withoutRootDot.endsWith('.')) {
+    throw invalidHost(name);
+  }
 
   let parsed: URL;
   try {
@@ -35,6 +41,7 @@ export function canonicalizeIntegrationApiHost(
   } catch {
     throw invalidHost(name);
   }
+
   if (parsed.username || parsed.password || parsed.port || parsed.pathname !== '/' || parsed.search || parsed.hash) {
     throw invalidHost(name);
   }
@@ -49,6 +56,7 @@ export function canonicalizeIntegrationApiHost(
   return canonical;
 }
 
+/** Canonicalize and de-duplicate a descriptor host list while preserving order. */
 export function canonicalizeIntegrationApiHosts(
   values: readonly string[],
   name = 'apiHosts',
@@ -69,6 +77,7 @@ export function canonicalizeIntegrationApiHosts(
   return canonical;
 }
 
+/** Compare a URL parser hostname against a canonical descriptor allowlist. */
 export function isIntegrationApiHostAllowed(
   hostname: string,
   canonicalAllowedHosts: readonly string[],

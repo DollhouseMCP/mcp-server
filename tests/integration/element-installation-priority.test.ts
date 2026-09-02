@@ -84,7 +84,8 @@ describe('Element Installation Priority Integration Tests', () => {
     // Initialize element installer
     elementInstaller = new ElementInstaller(githubClient, {
       portfolioManager,
-      unifiedIndexManager
+      unifiedIndexManager,
+      fileOperations
     });
   });
 
@@ -154,7 +155,7 @@ describe('Element Installation Priority Integration Tests', () => {
       expect(exists).toBe(false);
     });
 
-    it('should respect preferredSource option', async () => {
+    it('should respect preferredSource option', () => {
       // Setup: Configure preferred source
 
       // Action: Install with preferred source (collection)
@@ -188,7 +189,7 @@ describe('Element Installation Priority Integration Tests', () => {
       expect(pathParts.length).toBeGreaterThanOrEqual(3);
     });
 
-    it('should handle installation errors gracefully', async () => {
+    it('should handle installation errors gracefully', () => {
       // Setup: Invalid collection path
       const invalidPath = 'invalid/path';
 
@@ -204,7 +205,7 @@ describe('Element Installation Priority Integration Tests', () => {
   });
 
   describe('Fallback Behavior', () => {
-    it('should respect fallbackOnError configuration', async () => {
+    it('should respect fallbackOnError configuration', () => {
       // Setup: Configure with fallbackOnError: false
       const config = createTestSourcePriorityConfig(
         [ElementSource.GITHUB, ElementSource.COLLECTION],
@@ -216,7 +217,7 @@ describe('Element Installation Priority Integration Tests', () => {
       expect(config.fallbackOnError).toBe(false);
     });
 
-    it('should attempt fallback when fallbackOnError is true', async () => {
+    it('should attempt fallback when fallbackOnError is true', () => {
       // Setup: Configure with fallbackOnError: true (default)
       const config = createTestSourcePriorityConfig(
         [ElementSource.GITHUB, ElementSource.COLLECTION],
@@ -228,7 +229,7 @@ describe('Element Installation Priority Integration Tests', () => {
       expect(config.fallbackOnError).toBe(true);
     });
 
-    it('should handle case when no sources are available', async () => {
+    it('should handle case when no sources are available', () => {
       // Setup: All sources disabled
       const config = createTestSourcePriorityConfig([], { fallbackOnError: true });
 
@@ -252,7 +253,7 @@ describe('Element Installation Priority Integration Tests', () => {
       expect(options.force).toBe(true);
     });
 
-    it('should handle preferredSource with fallback', async () => {
+    it('should handle preferredSource with fallback', () => {
       // Setup: Preferred source with fallback enabled
       const options = {
         preferredSource: ElementSource.GITHUB as ElementSource,
@@ -283,59 +284,4 @@ describe('Element Installation Priority Integration Tests', () => {
     });
   });
 
-  describe('Element Type Support', () => {
-    it('should support installing personas', async () => {
-      const elementType = 'personas';
-      const collectionPath = 'library/personas/test-persona.md';
-
-      // Verify element type is valid
-      expect(elementType).toBe('personas');
-      expect(collectionPath).toMatch(/^library\/personas\/.+\.md$/);
-    });
-
-    it('should support installing skills', async () => {
-      const elementType = 'skills';
-      const collectionPath = 'library/skills/test-skill.md';
-
-      // Verify element type is valid
-      expect(elementType).toBe('skills');
-      expect(collectionPath).toMatch(/^library\/skills\/.+\.md$/);
-    });
-
-    it('should support installing templates', async () => {
-      const elementType = 'templates';
-      const collectionPath = 'library/templates/test-template.md';
-
-      // Verify element type is valid
-      expect(elementType).toBe('templates');
-      expect(collectionPath).toMatch(/^library\/templates\/.+\.md$/);
-    });
-
-    it('should support installing agents', async () => {
-      const elementType = 'agents';
-      const collectionPath = 'library/agents/test-agent.md';
-
-      // Verify element type is valid
-      expect(elementType).toBe('agents');
-      expect(collectionPath).toMatch(/^library\/agents\/.+\.md$/);
-    });
-
-    it('should support installing memories', async () => {
-      const elementType = 'memories';
-      const collectionPath = 'library/memories/test-memory.yaml';
-
-      // Verify element type is valid
-      expect(elementType).toBe('memories');
-      expect(collectionPath).toMatch(/^library\/memories\/.+\.yaml$/);
-    });
-
-    it('should support installing ensembles', async () => {
-      const elementType = 'ensembles';
-      const collectionPath = 'library/ensembles/test-ensemble.md';
-
-      // Verify element type is valid
-      expect(elementType).toBe('ensembles');
-      expect(collectionPath).toMatch(/^library\/ensembles\/.+\.md$/);
-    });
-  });
 });

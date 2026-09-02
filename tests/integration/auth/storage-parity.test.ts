@@ -24,6 +24,7 @@ import type { IAuthStorageLayer, StoredAccount } from '../../../src/auth/embedde
 import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 const ALICE_EMAIL = 'alice@example.com';
+const JOSE_NFC_EMAIL = 'jos\u00e9@example.com';
 
 function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -329,8 +330,8 @@ function runContractSuite(
       );
       const wins = results.filter((r) => r === true);
       const losses = results.filter((r) => r === false);
-      expect(wins.length).toBe(1);
-      expect(losses.length).toBe(candidates.length - 1);
+      expect(wins).toHaveLength(1);
+      expect(losses).toHaveLength(candidates.length - 1);
     });
 
     it('genericInsertIfAbsent: respects expiresInSec — expired entry is treated as absent', async () => {
@@ -432,13 +433,13 @@ function runContractSuite(
       await expect(storage.withGenericLock(
         'AuthModeFingerprint',
         'current',
-        async () => { throw new Error('simulated owner failure'); },
+        () => Promise.reject(new Error('simulated owner failure')),
       )).rejects.toThrow('simulated owner failure');
 
       await expect(storage.withGenericLock(
         'AuthModeFingerprint',
         'current',
-        async () => 'recovered',
+        () => Promise.resolve('recovered'),
       )).resolves.toBe('recovered');
     });
 
@@ -562,8 +563,8 @@ function runContractSuite(
       const failures = results.filter(
         (r): r is PromiseRejectedResult => r.status === 'rejected',
       );
-      expect(successes.length).toBe(1);
-      expect(failures.length).toBe(candidates.length - 1);
+      expect(successes).toHaveLength(1);
+      expect(failures).toHaveLength(candidates.length - 1);
       // Every failure must be the admin-transfer rejection, not some
       // other error (network blip, lock contention timeout, etc).
       for (const fail of failures) {
@@ -644,7 +645,7 @@ function runContractSuite(
         storage.genericConsume('AuthorizationCode', 'race-1'),
         storage.genericConsume('AuthorizationCode', 'race-1'),
       ]);
-      expect(results.filter((r) => r === true).length).toBe(1);
+      expect(results.filter((r) => r === true)).toHaveLength(1);
     });
 
     it('genericInsertIfAbsent against a non-expiring existing row rejects', async () => {
@@ -674,7 +675,7 @@ function runContractSuite(
       const found = await storage.listIdentityEvents({
         type: 'auth.test.duplicate',
       });
-      expect(found.length).toBe(2);
+      expect(found).toHaveLength(2);
     });
   });
 
@@ -806,6 +807,20 @@ function runContractSuite(
       expect(await storage.allowlistMatchesIdentity({ email: 'bob@example.com' })).toBe(false);
     });
 
+    it('matchesIdentity() preserves distinct Unicode email principals', async () => {
+      const cyrillicAlice = '\u0430lice@example.com';
+      await storage.allowlistAdd({ kind: 'email', value: cyrillicAlice });
+
+      expect(await storage.allowlistMatchesIdentity({ email: cyrillicAlice })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).toBe(false);
+    });
+
+    it('matchesIdentity() accepts canonically equivalent Unicode email encodings', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'jose\u0301@example.com' });
+
+      expect(await storage.allowlistMatchesIdentity({ email: JOSE_NFC_EMAIL })).toBe(true);
+    });
+
     it('matchesIdentity() matches by github_username (case-insensitive input)', async () => {
       await storage.allowlistAdd({ kind: 'github_username', value: 'insomnolence' });
       expect(await storage.allowlistMatchesIdentity({ githubUsername: 'insomnolence' })).toBe(true);
@@ -847,8 +862,8 @@ function runContractSuite(
 
 describe('IAuthStorageLayer contract: InMemoryAuthStorageLayer', () => {
   runContractSuite(
-    async () => new InMemoryAuthStorageLayer(),
-    async () => { /* Maps are GC'd with the instance. */ },
+    () => Promise.resolve(new InMemoryAuthStorageLayer()),
+    () => Promise.resolve(), // Maps are GC'd with the instance.
   );
 });
 
@@ -866,7 +881,8 @@ describe('IAuthStorageLayer contract: FilesystemAuthStorageLayer', () => {
 
 // ── Postgres fixture (gated on local Docker DB + CI env) ──────────────
 //
-// CI sets `DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1` so the absence of Postgres
+// The PostgreSQL integration CI job sets `DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1`
+// so the absence of Postgres
 // is a hard failure (catches a deployment that THINKS it's testing
 // Postgres parity but isn't). Local dev without Docker: the suite is
 // `describe.skip`-ed entirely so the run is green and the dev sees a
@@ -892,7 +908,8 @@ afterAll(async () => {
   if (pgAvailable) await closeTestDb();
 });
 
-// CI sets DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1 → describe runs and fails if
+// The PostgreSQL integration CI job sets DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1
+// → describe runs and fails if
 // Postgres isn't reachable. Local dev without it → describe.skip so the
 // skip is visible in the jest output instead of silently substituting
 // InMemoryAuthStorageLayer (which is what the previous shape did, hiding
@@ -935,6 +952,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
       if (pgAvailable) await reset();
     },
   );
+
 });
 
 // ── Filesystem-only durability tests ───────────────────────────────────
@@ -991,6 +1009,54 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
       .rejects.toThrow(/authorization storage record/i);
   });
 
+  it('matches and deduplicates a decomposed Unicode value from a legacy file', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([{
+      id: 'legacy-nfd',
+      kind: 'email',
+      value: 'jose\u0301@example.com',
+      note: null,
+      createdBy: null,
+      createdAt: new Date().toISOString(),
+    }]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: JOSE_NFC_EMAIL,
+    })).resolves.toBe(true);
+    await expect(storage.allowlistAdd({
+      kind: 'email',
+      value: JOSE_NFC_EMAIL,
+    })).rejects.toThrow('already exists');
+
+    await storage.allowlistUpdate('legacy-nfd', { note: 'canonicalized' });
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(dir, 'allowlist.json'), 'utf8'),
+    ) as Array<{ value: string }>;
+    expect(persisted[0].value).toBe(JOSE_NFC_EMAIL);
+  });
+
+  it('fails closed when legacy file entries collide after canonicalization', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([
+      {
+        id: 'legacy-nfd',
+        kind: 'email',
+        value: 'jose\u0301@example.com',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'canonical-nfc',
+        kind: 'email',
+        value: JOSE_NFC_EMAIL,
+        createdAt: new Date().toISOString(),
+      },
+    ]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: JOSE_NFC_EMAIL,
+    })).rejects.toThrow('allowlist normalization collision');
+  });
+
   it('cycle-16: bootstrap state survives across instances', async () => {
     // Without this, an AS restart re-enters the 503 bootstrap-required
     // gate even though the operator already ran the CLI — locking out
@@ -1018,8 +1084,8 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
     ]);
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
     const rejected = results.filter((r) => r.status === 'rejected');
-    expect(fulfilled.length).toBe(1);
-    expect(rejected.length).toBe(1);
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
   });
 
   it('rejects unsafe model names with path separators', async () => {

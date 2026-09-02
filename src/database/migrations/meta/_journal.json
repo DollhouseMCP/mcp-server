@@ -316,6 +316,69 @@
       "when": 1787580000000,
       "tag": "0044_integration_oauth_account_label_compatibility",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1787580100000,
+      "tag": "0045_drop_portfolio_sync_cancelled_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1787580200000,
+      "tag": "0046_web_console_list_keyset_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1787580300000,
+      "tag": "0047_normalize_allowlist_identities",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1787580400000,
+      "tag": "0048_bind_integrations_to_descriptors",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1787580500000,
+      "tag": "0049_bind_oauth_flows_to_descriptor_routing",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1787580600000,
+      "tag": "0050_allowlist_authority_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1787580700000,
+      "tag": "0051_integration_descriptor_secret_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1787580800000,
+      "tag": "0052_integration_credential_cleanup_pending",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1788069000000,
+      "tag": "0053_integration_cleanup_descriptor_fingerprint",
+      "breakpoints": true
     }
   ]
 }

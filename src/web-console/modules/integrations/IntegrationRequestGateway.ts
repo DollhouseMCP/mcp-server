@@ -3,10 +3,12 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
+import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
 import {
   canonicalizeIntegrationRequestPath,
@@ -19,6 +21,13 @@ import {
   type DnsLookupAddress,
 } from './IntegrationPublicHostGuard.js';
 import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
+import { readBoundedResponseText as readBoundedText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
+import {
+  buildCredentialRedactions,
+  type CredentialRedactions,
+  type EffectiveCredentialInjection,
+  redactIntegrationResponseBody,
+} from './IntegrationCredentialRedactor.js';
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
@@ -26,7 +35,6 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_MAX = 60;
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const REDACTED = '[redacted]';
 const RATE_LIMIT_SCOPE = 'web-console:integrations:request-gateway:v1';
 
 interface RateLimitState {
@@ -121,9 +129,23 @@ export class IntegrationRequestGateway {
     const session = this.options.contextTracker.requireSessionContext('IntegrationRequestGateway');
     const provider = normalizeProvider(input.provider);
     const method = normalizeMethod(input.method);
-    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
+    let descriptor: IntegrationDescriptorRecord | null;
+    try {
+      descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
+    } catch (error) {
+      await this.auditLookupFailure({
+        provider: 'unresolved',
+        userId: session.userId,
+        sessionId: session.sessionId,
+        method,
+        host: null,
+        path: null,
+        reason: 'descriptor_lookup_failed',
+      });
+      throw error;
+    }
     if (!descriptor) {
-      await this.auditDenied(provider, session.userId, session.sessionId, method, null, null, 'descriptor_not_found');
+      await this.auditDenied('unresolved', session.userId, session.sessionId, method, null, null, 'descriptor_not_found');
       throw new IntegrationRequestError('integration_descriptor_not_found', 'Integration descriptor was not found.', 404);
     }
     const url = await this.buildAuditedUrl(descriptor, provider, session.userId, session.sessionId, method, input.path, input.query);
@@ -140,34 +162,64 @@ export class IntegrationRequestGateway {
       await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'rate_limited');
       throw new IntegrationRequestError('integration_request_rate_limited', 'Integration request rate limit exceeded.', 429);
     }
-    const record = await this.options.integrationStore.findByProvider(session.userId, provider);
-    if (!isConnected(record)) {
+    let record: UserIntegrationRecord | null;
+    try {
+      record = await this.options.integrationStore.findByProvider(session.userId, provider);
+    } catch (error) {
+      await this.auditLookupFailure({
+        provider: descriptor.provider,
+        userId: session.userId,
+        sessionId: session.sessionId,
+        method,
+        host: url.hostname,
+        path: url.pathname,
+        reason: 'credential_lookup_failed',
+      });
+      throw error;
+    }
+    if (!isIntegrationConnectedToDescriptor(record, descriptor.id)) {
       await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'credential_not_connected');
       throw new IntegrationRequestError('integration_not_connected', 'Integration is not connected.', 409);
     }
+    const staleAccessTokenCiphertext = record.accessTokenCiphertext;
     const firstCredential = await this.decryptAuditedAccessToken(record, session.userId, session.sessionId, method, url, false);
     const body = await this.serializeAuditedRequestBody(provider, session.userId, session.sessionId, method, url, input.body);
     const first = await this.auditedSend(requestContext, descriptor, body, firstCredential, false);
     const tokenRefresh = this.options.tokenRefresh;
-    if (first.status !== 401 || !tokenRefresh?.canRefresh(descriptor, record)) {
+    if (first.status !== 401 || !tokenRefresh || !staleAccessTokenCiphertext ||
+        !await tokenRefresh.canRefresh(session.userId, descriptor, record)) {
       return this.finish(provider, session.userId, session.sessionId, method, url, first, false);
     }
 
-    const refresh = await this.refreshAudited(
+    const refresh = await this.refreshAudited({
       tokenRefresh,
-      session.userId,
-      session.sessionId,
+      userId: session.userId,
+      sessionId: session.sessionId,
       provider,
+      integrationDescriptorId: descriptor.id,
       method,
       url,
-      record.accessTokenCiphertext,
-    );
+      staleAccessTokenCiphertext,
+    });
     if (refresh.kind !== 'refreshed' && refresh.kind !== 'reused') {
       await this.auditCredentialError(provider, session.userId, session.sessionId, method, url, 'refresh_failed');
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
     }
+    // Refresh is safe and updates only local credential state. Replaying the
+    // upstream operation is a separate decision: only GET is idempotent under
+    // this gateway contract, so writes return their original 401 after refresh.
+    if (!canAutomaticallyRetryAfterUnauthorized(method)) {
+      return this.finish(provider, session.userId, session.sessionId, method, url, first, true);
+    }
     const retryCredential = await this.decryptAuditedAccessToken(refresh.record, session.userId, session.sessionId, method, url, true);
-    const retry = await this.auditedSend(requestContext, descriptor, body, retryCredential, true);
+    const retry = await this.auditedSend(
+      requestContext,
+      descriptor,
+      body,
+      retryCredential,
+      true,
+      [firstCredential],
+    );
     return this.finish(provider, session.userId, session.sessionId, method, url, retry, true);
   }
 
@@ -226,23 +278,33 @@ export class IntegrationRequestGateway {
     }
   }
 
-  private async refreshAudited(
-    tokenRefresh: IntegrationTokenRefreshService,
-    userId: string,
-    sessionId: string | null,
-    provider: string,
-    method: string,
-    url: URL,
-    staleAccessTokenCiphertext: Buffer,
-  ) {
+  private async refreshAudited(input: {
+    readonly tokenRefresh: IntegrationTokenRefreshService;
+    readonly userId: string;
+    readonly sessionId: string | null;
+    readonly provider: UserIntegrationProvider;
+    readonly integrationDescriptorId: string;
+    readonly method: string;
+    readonly url: URL;
+    readonly staleAccessTokenCiphertext: Buffer;
+  }) {
     try {
-      return await tokenRefresh.refreshOnDemand({
-        userId,
-        provider,
-        staleAccessTokenCiphertext,
+      return await input.tokenRefresh.refreshOnDemand({
+        userId: input.userId,
+        provider: input.provider,
+        integrationDescriptorId: input.integrationDescriptorId,
+        staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
       });
     } catch (error) {
-      await this.auditCredentialError(provider, userId, sessionId, method, url, error instanceof IntegrationRequestError ? error.code : 'refresh_failed', true);
+      await this.auditCredentialError(
+        input.provider,
+        input.userId,
+        input.sessionId,
+        input.method,
+        input.url,
+        error instanceof IntegrationRequestError ? error.code : 'refresh_failed',
+        true,
+      );
       throw error;
     }
   }
@@ -253,9 +315,10 @@ export class IntegrationRequestGateway {
     body: string | null,
     credential: string,
     refreshed: boolean,
+    previousCredentials: readonly string[] = [],
   ): Promise<IntegrationHttpResponse> {
     try {
-      return await this.send(descriptor, ctx.url, ctx.method, body, credential);
+      return await this.send(descriptor, ctx.url, ctx.method, body, credential, previousCredentials);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         await this.audit({
@@ -282,11 +345,28 @@ export class IntegrationRequestGateway {
     method: string,
     body: string | null,
     credential: string,
+    previousCredentials: readonly string[],
   ): Promise<IntegrationHttpResponse> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
-    injectCredential(descriptor, url, headers, credential);
+    const effectiveInjection = injectCredential(descriptor, url, headers, credential);
+    const additionalCredentials = previousCredentials.map(previousCredential => {
+      const redactionUrl = new URL(url);
+      const redactionHeaders = new Headers({ Accept: 'application/json' });
+      if (body !== null) redactionHeaders.set('Content-Type', 'application/json');
+      return {
+        credential: previousCredential,
+        injection: injectCredential(descriptor, redactionUrl, redactionHeaders, previousCredential),
+      };
+    });
+    const credentialRedactions = buildCredentialRedactions(
+      credential,
+      effectiveInjection,
+      additionalCredentials,
+    );
     const vetted = await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
+    // Pin the connection to the vetted address so a second connect-time DNS
+    // resolution cannot retarget the request (DNS-rebinding TOCTOU).
     const outbound = this.pinnedOutboundFactory({
       hostname: url.hostname,
       address: vetted.address,
@@ -300,9 +380,11 @@ export class IntegrationRequestGateway {
         headers,
         body,
         signal: controller.signal,
+        // Fail closed on redirects: the host allowlist + SSRF guard only validated the
+        // initial URL, so a 3xx to an internal or non-allowlisted host must not be followed.
         redirect: 'error',
       });
-      return await readBoundedResponse(response, controller, credential);
+      return await readBoundedResponse(response, controller, credentialRedactions);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         throw error;
@@ -446,17 +528,31 @@ export class IntegrationRequestGateway {
     });
   }
 
+  private async auditLookupFailure(event: {
+    readonly provider: string;
+    readonly userId: string;
+    readonly sessionId: string | null;
+    readonly method: string;
+    readonly host: string | null;
+    readonly path: string | null;
+    readonly reason: string;
+  }): Promise<void> {
+    await this.audit({
+      ...event,
+      result: 'upstream_error',
+      status: null,
+      refreshed: false,
+      occurredAt: new Date(),
+    });
+  }
+
   private async audit(event: IntegrationRequestAuditEvent): Promise<void> {
+    const reasonSuffix = event.reason ? ` (${event.reason})` : '';
     SecurityMonitor.logSecurityEvent({
-      type: event.result === 'success' ? 'OPERATION_COMPLETED' : 'OPERATION_FAILED',
+      type: 'INTEGRATION_SECURITY_DECISION',
       severity: event.result === 'success' ? 'LOW' : 'MEDIUM',
       source: 'IntegrationRequestGateway.request',
-      details: 'Integration request security decision recorded',
-      additionalData: {
-        result: event.result,
-        reason: event.reason,
-        refreshed: event.refreshed,
-      },
+      details: `Integration request ${event.result}${reasonSuffix} for provider ${safeIntegrationAuditProvider(event.provider)}`,
     });
     try {
       await this.options.auditSink?.recordIntegrationRequest(event);
@@ -490,12 +586,18 @@ interface GatewayRequestContext {
   readonly url: URL;
 }
 
+// Single-replica/dev fallback used only when no IRateLimitStore is injected (production
+// passes the auto-expiring store). Bounded by a time-amortized sweep that drops expired
+// buckets at most once per window — so the Map size tracks active keys in the current
+// window, not lifetime traffic, without an O(n) scan on the request hot path.
 class InMemoryIntegrationRateLimiter {
   private readonly buckets = new Map<string, { windowStart: number; count: number }>();
+  private lastSweepAt = 0;
 
   constructor(private readonly windowMs: number, private readonly maxRequests: number) {}
 
   check(key: string, now: number): boolean {
+    this.maybeSweep(now);
     const current = this.buckets.get(key);
     if (!current || now - current.windowStart >= this.windowMs) {
       this.buckets.set(key, { windowStart: now, count: 1 });
@@ -504,6 +606,14 @@ class InMemoryIntegrationRateLimiter {
     if (current.count >= this.maxRequests) return false;
     current.count += 1;
     return true;
+  }
+
+  private maybeSweep(now: number): void {
+    if (now - this.lastSweepAt < this.windowMs) return;
+    this.lastSweepAt = now;
+    for (const [bucketKey, bucket] of this.buckets) {
+      if (now - bucket.windowStart >= this.windowMs) this.buckets.delete(bucketKey);
+    }
   }
 }
 
@@ -524,11 +634,11 @@ function stepRateLimit(
   };
 }
 
-function normalizeProvider(provider: string): string {
+function normalizeProvider(provider: string): UserIntegrationProvider {
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(provider)) {
-    throw new IntegrationRequestError('invalid_integration_provider', 'Invalid integration provider.', 400);
+    throw new IntegrationRequestError('invalid_integration_provider', 'Integration provider must be a lowercase id of 2-64 chars (a-z, 0-9, _, -).', 400);
   }
-  return provider;
+  return provider as UserIntegrationProvider;
 }
 
 function normalizeMethod(method: string): string {
@@ -537,6 +647,10 @@ function normalizeMethod(method: string): string {
     throw new IntegrationRequestError('integration_method_not_allowed', 'Integration request method is not allowed.', 400);
   }
   return normalized;
+}
+
+function canAutomaticallyRetryAfterUnauthorized(method: string): boolean {
+  return method === 'GET';
 }
 
 function buildAllowedUrl(
@@ -555,7 +669,7 @@ function buildAllowedUrl(
   }
   const base = `https://${descriptor.apiHosts[0]}`;
   const url = new URL(`${canonicalPath.pathname}${canonicalPath.search}`, base);
-  if (url.protocol !== 'https:' || !descriptor.apiHosts.includes(url.hostname)) {
+  if (url.protocol !== 'https:' || !isIntegrationApiHostAllowed(url.hostname, descriptor.apiHosts)) {
     throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
   }
   url.username = '';
@@ -618,21 +732,83 @@ function injectCredential(
   url: URL,
   headers: Headers,
   credential: string,
-): void {
+): EffectiveCredentialInjection {
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
-    headers.set('Authorization', `Bearer ${credential}`);
-    return;
+    return injectHeaderCredential(headers, 'Authorization', `Bearer ${credential}`, credential, true);
   }
   if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
+    if (descriptor.staticApiKey.injection.location === 'basic') {
+      // The stored credential is `username:password` (RFC 7617); encode at
+      // injection time so the vault never holds base64-obscured material.
+      const encoded = Buffer.from(credential, 'utf8').toString('base64');
+      const password = credential.slice(credential.indexOf(':') + 1);
+      const injection = injectHeaderCredential(headers, 'Authorization', `Basic ${encoded}`, encoded, true);
+      return {
+        ...injection,
+        additionalSensitiveValues: [password],
+        additionalBoundedValues: [credential],
+        additionalStructuredValues: [{
+          name: 'password',
+          value: password,
+          caseInsensitiveName: true,
+        }],
+      };
+    }
     const value = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
     if (descriptor.staticApiKey.injection.location === 'header') {
-      headers.set(descriptor.staticApiKey.injection.name, value);
-      return;
+      const caseInsensitivePrefix = descriptor.staticApiKey.injection.name.toLowerCase() === 'authorization' &&
+        Boolean(descriptor.staticApiKey.injection.valuePrefix);
+      return injectHeaderCredential(
+        headers,
+        descriptor.staticApiKey.injection.name,
+        value,
+        credential,
+        caseInsensitivePrefix,
+      );
     }
-    url.searchParams.set(descriptor.staticApiKey.injection.name, value);
-    return;
+    const name = descriptor.staticApiKey.injection.name;
+    url.searchParams.set(name, value);
+    return {
+      location: 'query',
+      name,
+      value: url.searchParams.get(name) ?? value,
+      sensitiveValue: credential,
+    };
   }
   throw new IntegrationRequestError('integration_auth_strategy_not_supported', 'Integration auth strategy is not supported.', 400);
+}
+
+function injectHeaderCredential(
+  headers: Headers,
+  name: string,
+  value: string,
+  sensitiveValue: string,
+  caseInsensitivePrefix: boolean,
+): EffectiveCredentialInjection {
+  headers.set(name, value);
+  const effectiveValue = headers.get(name);
+  if (effectiveValue === null) {
+    throw new IntegrationRequestError('integration_credential_injection_failed', 'Integration credential could not be injected.', 500);
+  }
+  const normalizedSensitiveValue = new Headers([[name, sensitiveValue]]).get(name);
+  const effectiveSensitiveValue = normalizedSensitiveValue !== null &&
+      normalizedSensitiveValue !== '' && effectiveValue.endsWith(normalizedSensitiveValue)
+    ? normalizedSensitiveValue
+    : effectiveValue;
+  const prefixLength = effectiveValue.length - effectiveSensitiveValue.length;
+  const configuredPrefixLength = value.length - sensitiveValue.length;
+  return {
+    location: 'header',
+    name,
+    value: effectiveValue,
+    sensitiveValue: effectiveSensitiveValue,
+    caseInsensitivePrefixLength: caseInsensitivePrefix && prefixLength > 0 ? prefixLength : undefined,
+    configuredValue: value,
+    configuredSensitiveValue: sensitiveValue,
+    configuredCaseInsensitivePrefixLength: caseInsensitivePrefix && configuredPrefixLength > 0
+      ? configuredPrefixLength
+      : undefined,
+  };
 }
 
 async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup): Promise<DnsLookupAddress> {
@@ -652,90 +828,18 @@ async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup):
 async function readBoundedResponse(
   response: Response,
   controller: AbortController,
-  activeCredential: string,
+  credentialRedactions: CredentialRedactions,
 ): Promise<IntegrationHttpResponse> {
-  const text = await readBoundedResponseText(response, controller);
-  return {
-    status: response.status,
-    body: parseResponseBody(text, response.headers.get('content-type'), activeCredential),
-  };
-}
-
-async function readBoundedResponseText(response: Response, controller: AbortController): Promise<string> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength !== null && Number.parseInt(contentLength, 10) > MAX_RESPONSE_BODY_BYTES) {
+  let text: string;
+  try {
+    text = await readBoundedText(response, MAX_RESPONSE_BODY_BYTES);
+  } catch (error) {
+    if (!(error instanceof ResponseBodyTooLargeError)) throw error;
     controller.abort();
     throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
   }
-  if (!response.body) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BODY_BYTES) {
-      controller.abort();
-      throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
-    }
-    return text;
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_RESPONSE_BODY_BYTES) {
-        controller.abort();
-        await reader.cancel();
-        throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, totalBytes).toString('utf8');
-}
-
-function parseResponseBody(text: string, contentType: string | null, activeCredential: string): unknown {
-  if (text === '') return null;
-  if (isJsonMediaType(contentType)) {
-    try {
-      return redactCredentialFields(JSON.parse(text) as unknown, activeCredential);
-    } catch {
-      return REDACTED;
-    }
-  }
-  return redactExactCredential(text, activeCredential);
-}
-
-function isJsonMediaType(contentType: string | null): boolean {
-  if (!contentType) return false;
-  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
-  return mediaType === 'application/json' ||
-    (mediaType?.startsWith('application/') === true && mediaType.endsWith('+json'));
-}
-
-function redactCredentialFields(value: unknown, activeCredential: string): unknown {
-  if (typeof value === 'string') return redactExactCredential(value, activeCredential);
-  if (Array.isArray(value)) return value.map(field => redactCredentialFields(field, activeCredential));
-  if (!value || typeof value !== 'object') return value;
-  const output: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(value)) {
-    const safeKey = redactExactCredential(key, activeCredential);
-    output[safeKey] = isCredentialKey(key) ? REDACTED : redactCredentialFields(field, activeCredential);
-  }
-  return output;
-}
-
-function redactExactCredential(value: string, activeCredential: string): string {
-  return activeCredential === '' ? value : value.replaceAll(activeCredential, REDACTED);
-}
-
-function isCredentialKey(key: string): boolean {
-  return /(^|_)(access|refresh)?_?token($|_)|authorization|api[_-]?key|secret|ciphertext/i.test(key);
-}
-
-function isConnected(record: UserIntegrationRecord | null): record is UserIntegrationRecord {
-  return record?.status === 'connected' && record.revokedAt === null;
+  return {
+    status: response.status,
+    body: redactIntegrationResponseBody(text, response.headers.get('content-type'), credentialRedactions),
+  };
 }

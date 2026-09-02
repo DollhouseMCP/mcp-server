@@ -63,7 +63,7 @@ THIS IS A TEST PERSONA - Created for QA Testing Purposes`;
     container = new DollhouseContainer();
 
     // Register PortfolioRepoManager in DI container with real TokenManager
-    container.register('PortfolioRepoManager', () => createRealPortfolioRepoManager());
+    container.replace('PortfolioRepoManager', () => createRealPortfolioRepoManager());
     portfolioManager = container.resolve('PortfolioRepoManager');
 
     // Create temp directory for test

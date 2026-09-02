@@ -1,4 +1,8 @@
-import type { RuntimeTerminationReason } from '../../services/runtime/IRuntimeSessionControlStore.js';
+import type { ConsolePageDto } from '../../platform/ConsolePlatformTypes.js';
+import type {
+  RuntimeTerminationAckResult,
+  RuntimeTerminationReason,
+} from '../../services/runtime/IRuntimeSessionControlStore.js';
 
 export interface RuntimeSessionSelfDto {
   readonly session_id: string;
@@ -34,12 +38,27 @@ export interface RuntimeSessionOperationalDto extends RuntimeSessionAccountDto {
   } | null;
 }
 
+/** Family-B cursor page of the cross-user operational sessions list. */
+export type RuntimeSessionOperationalListDto = ConsolePageDto<RuntimeSessionOperationalDto>;
+
 export interface RuntimeTerminationAcceptedDto {
   readonly session_id: string;
   readonly command_id: string;
   readonly target_replica_id: string;
   readonly reason: RuntimeTerminationReason;
   readonly status: 'accepted';
+}
+
+/**
+ * Completion status of an async termination command. `pending` = no ack row yet
+ * (the owning replica has not reported back); otherwise the replica's ack result.
+ */
+export interface RuntimeTerminationCommandStatusDto {
+  readonly command_id: string;
+  readonly status: 'pending' | RuntimeTerminationAckResult;
+  readonly acknowledged_at: string | null;
+  readonly replica_id: string | null;
+  readonly error_code: string | null;
 }
 
 export interface RuntimeSessionRevokeAllDto {

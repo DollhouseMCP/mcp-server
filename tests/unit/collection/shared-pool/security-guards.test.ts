@@ -67,14 +67,12 @@ describe('Security Guards', () => {
       expect(elementId).not.toContain('\0');
     });
 
-    it('handles dot-only names safely', async () => {
+    it('rejects dot-only names', async () => {
       const request = makeRequest({ name: '..' });
-      const result = await strategy.writeElement(request, 'a'.repeat(64));
+      await expect(strategy.writeElement(request, 'a'.repeat(64)))
+        .rejects.toThrow('must contain a valid filename');
 
-      // path.basename('..') returns '..' — the written file must stay inside the pool
-      const writtenPath = path.resolve(path.join(tmpDir, result));
-      const basePath = path.resolve(tmpDir);
-      expect(writtenPath.startsWith(basePath + path.sep)).toBe(true);
+      await expect(fs.readdir(path.join(tmpDir, 'personas'))).resolves.toEqual([]);
     });
 
     it('rejects invalid element types', async () => {
@@ -160,8 +158,11 @@ describe('Security Guards', () => {
       const found2 = await store.findByElementId('skills/shared.md');
       expect(found1).not.toBeNull();
       expect(found2).not.toBeNull();
-      expect(found1!.sourceUrl).toBe('source-1');
-      expect(found2!.sourceUrl).toBe('source-2');
+      if (!found1 || !found2) {
+        throw new Error('Expected both provenance records');
+      }
+      expect(found1.sourceUrl).toBe('source-1');
+      expect(found2.sourceUrl).toBe('source-2');
     });
 
     it('path traversal in elementId is neutralized by slash-to-dash conversion', async () => {

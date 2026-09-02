@@ -4,7 +4,10 @@ import {
   AgentSkillConverter,
   AGENT_SKILL_MAPPING_VERSION,
   type AgentSkillStructure,
+  type SkillConversionOptions,
 } from '../../src/converters/AgentSkillConverter.js';
+
+const DOLLHOUSE_CONTENT_PATH = 'dollhouse.content';
 
 function parseMarkdownWithFrontmatter(markdown: string): { frontmatter: Record<string, unknown>; body: string } {
   const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u.exec(markdown);
@@ -17,7 +20,7 @@ function parseMarkdownWithFrontmatter(markdown: string): { frontmatter: Record<s
   }
   return {
     frontmatter: frontmatter as Record<string, unknown>,
-    body: match[2] ?? '',
+    body: match[2],
   };
 }
 
@@ -36,6 +39,39 @@ function extractContentBlocks(content: string): Record<string, { language: strin
 
 describe('AgentSkillConverter', () => {
   const converter = new AgentSkillConverter();
+
+  it('rejects an unsupported runtime conversion direction explicitly', () => {
+    const invalidOptions = { direction: 'sideways' } as unknown as SkillConversionOptions;
+
+    expect(() => converter.convert(invalidOptions)).toThrow(
+      "Unsupported conversion direction 'sideways'",
+    );
+  });
+
+  it('bounds and converts malformed runtime artifact fields using safe empty values', () => {
+    const malformedOptions = {
+      direction: 'dollhouse_to_agent',
+      dollhouse: {
+        metadata: null,
+        instructions: null,
+        content: null,
+      },
+      prefer_roundtrip_state: false,
+    } as unknown as SkillConversionOptions;
+
+    const result = converter.convert(malformedOptions);
+    const markdown = result.agent_skill?.['SKILL.md'];
+    expect(typeof markdown).toBe('string');
+    if (typeof markdown !== 'string') {
+      throw new Error('Expected malformed runtime artifact to produce SKILL.md');
+    }
+    const parsed = parseMarkdownWithFrontmatter(markdown);
+    expect(parsed.frontmatter).toMatchObject({
+      name: 'Converted Dollhouse Skill',
+      description: 'No description provided',
+    });
+    expect(parsed.body.trim()).toBe('');
+  });
 
   const sampleAgentSkill: AgentSkillStructure = {
     'SKILL.md': `---
@@ -138,7 +174,7 @@ Reference section from Dollhouse content.
     expect(reverse.agent_skill?.['SKILL.md']).toContain('Follow these instructions.');
     expect(reverse.agent_skill?.['SKILL.md']).toContain('Additional Dollhouse Content');
     expect(reverse.report.roundTripAvailable).toBe(false);
-    expect(reverse.report.warnings.some(w => w.path === 'dollhouse.content')).toBe(true);
+    expect(reverse.report.warnings.some(w => w.path === DOLLHOUSE_CONTENT_PATH)).toBe(true);
   });
 
   it('throws a clear error for missing YAML frontmatter in SKILL.md', () => {
@@ -450,7 +486,7 @@ Use this fixture skill.
     expect(result.agent_skill?.['references/']).toEqual({
       'guide.md': 'Reference content.',
     });
-    expect(result.report.warnings.some(w => w.path === 'dollhouse.content')).toBe(false);
+    expect(result.report.warnings.some(w => w.path === DOLLHOUSE_CONTENT_PATH)).toBe(false);
   });
 
   it('remaps non-allowlisted directories into safe references paths', () => {
@@ -507,7 +543,7 @@ Body
       'openai.yaml': 'display_name: Sample Skill\nshort_description: A sample',
     });
     expect(reverse.agent_skill?.['SKILL.md']).toContain('Use this skill to validate conversion behavior.');
-    expect(reverse.report.warnings.some(w => w.path === 'dollhouse.content')).toBe(false);
+    expect(reverse.report.warnings.some(w => w.path === DOLLHOUSE_CONTENT_PATH)).toBe(false);
   });
 
   it('reverse conversion supports allowlisted directories including binaries and top-level blocks', () => {
@@ -525,7 +561,7 @@ Body
     });
 
     expect(reverse.report.unsupportedFields).toEqual([]);
-    expect(reverse.report.warnings.some(w => w.path === 'dollhouse.content')).toBe(false);
+    expect(reverse.report.warnings.some(w => w.path === DOLLHOUSE_CONTENT_PATH)).toBe(false);
     expect(reverse.agent_skill?.['binaries/']).toEqual({
       'logo.png': '@binary-link ./binaries/logo.png',
     });
@@ -548,7 +584,7 @@ Body
 
     expect(reverse.report.unsupportedFields.some(path => path.endsWith('../secrets/token.txt'))).toBe(true);
     expect(reverse.report.unsupportedFields.some(path => path.endsWith('scripts/../../leak.txt'))).toBe(true);
-    expect(reverse.report.warnings.some(w => w.path === 'dollhouse.content')).toBe(true);
+    expect(reverse.report.warnings.some(w => w.path === DOLLHOUSE_CONTENT_PATH)).toBe(true);
     expect(reverse.agent_skill?.['scripts/']).toBeUndefined();
     expect(reverse.agent_skill?.['SKILL.md']).toContain('../secrets/token.txt');
   });

@@ -173,7 +173,7 @@ describe('ReDoS Pathological Input Tests', () => {
      */
     
     it('should handle empty base64 strings', async () => {
-      container.register('PersonaImporter', () => new PersonaImporter('/tmp/test', () => 'test-user'));
+      container.replace('PersonaImporter', () => new PersonaImporter('/tmp/test', () => 'test-user'));
       const importer: InstanceType<typeof PersonaImporter> = container.resolve('PersonaImporter');
 
       // Empty string might be accepted by the importer
@@ -188,7 +188,7 @@ describe('ReDoS Pathological Input Tests', () => {
     });
 
     it('should process base64-like patterns', async () => {
-      container.register('PersonaImporter', () => new PersonaImporter('/tmp/test', () => 'test-user'));
+      container.replace('PersonaImporter', () => new PersonaImporter('/tmp/test', () => 'test-user'));
       const importer: InstanceType<typeof PersonaImporter> = container.resolve('PersonaImporter');
 
       // Test various patterns

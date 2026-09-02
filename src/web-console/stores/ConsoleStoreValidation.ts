@@ -20,6 +20,14 @@ export class ConsoleStoreConflictError extends Error {
   }
 }
 
+/** A descriptor-bound write lost a race with descriptor rotation or deletion. */
+export class IntegrationDescriptorChangedError extends ConsoleStoreConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IntegrationDescriptorChangedError';
+  }
+}
+
 export function isUniqueViolation(error: unknown): boolean {
   return hasPostgresErrorCode(error, '23505');
 }
@@ -67,16 +75,30 @@ export function assertDigest(value: Buffer, name: string): void {
 }
 
 export function assertUuid(value: string, name: string): void {
-  if (!UUID_PATTERN.test(value)) {
+  if (!isUuid(value)) {
     throw new ConsoleStoreValidationError(`${name} must be a UUID`);
   }
 }
 
+/** Non-throwing UUID-format check, for request parsers that return a 400 rather than throw. */
+export function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
+/**
+ * Non-throwing form of the display-string record rule, so route-layer payload
+ * validation can enforce the exact same contract BEFORE a store write instead
+ * of discovering the violation post-persist.
+ */
+export function isValidDisplayString(value: string, maxLength: number): boolean {
+  return typeof value === 'string' &&
+    value.trim() !== '' &&
+    value.length <= maxLength &&
+    !containsControlCharacter(value);
+}
+
 export function assertDisplayString(value: string, name: string, maxLength: number): void {
-  if (typeof value !== 'string' ||
-      value.trim() === '' ||
-      value.length > maxLength ||
-      containsControlCharacter(value)) {
+  if (!isValidDisplayString(value, maxLength)) {
     throw new ConsoleStoreValidationError(`${name} must be a printable non-empty string up to ${maxLength} characters`);
   }
 }
@@ -84,6 +106,23 @@ export function assertDisplayString(value: string, name: string, maxLength: numb
 export function assertNullableDisplayString(value: string | null, name: string, maxLength: number): void {
   if (value === null) return;
   assertDisplayString(value, name, maxLength);
+}
+
+export function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return false;
+    if (codePoint > 0xffff) {
+      index += 1;
+    }
+  }
+  return true;
+}
+
+export function assertWellFormedUnicode(value: string, name: string): void {
+  if (!isWellFormedUnicode(value)) {
+    throw new ConsoleStoreValidationError(`${name} must contain well-formed Unicode`);
+  }
 }
 
 /**

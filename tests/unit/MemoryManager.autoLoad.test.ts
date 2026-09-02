@@ -12,7 +12,7 @@
  * See: InstallMemoryBug.md for details on the content loss bug
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
 import { createRealMemoryManager } from '../helpers/di-mocks.js';
 import type { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import * as path from 'node:path';
@@ -23,6 +23,15 @@ import { dirname } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const SEED_MEMORY_NAME = 'dollhousemcp-baseline-knowledge';
+const SEED_MEMORY_FILE = `${SEED_MEMORY_NAME}.yaml`;
+const SEED_BACKUP_PREFIX = `${SEED_MEMORY_NAME}.backup-`;
+
+function requireDefined<T>(value: T | undefined, label: string = 'seed memory'): T {
+  expect(value).toBeDefined();
+  if (value === undefined) throw new Error(`Expected ${label} to be defined`);
+  return value;
+}
 
 describe('MemoryManager - Auto-Load Functionality', () => {
   let memoryManager: MemoryManager;
@@ -81,6 +90,10 @@ describe('MemoryManager - Auto-Load Functionality', () => {
     // FIX #1430: Create new MemoryManager instance for each test
     // This ensures the date folder cache is fresh and not stale from previous tests
     memoryManager = createRealMemoryManager(testDir);
+  });
+
+  afterEach(() => {
+    memoryManager.dispose();
   });
 
   describe('getAutoLoadMemories', () => {
@@ -362,7 +375,7 @@ Content B
   describe('installSeedMemories', () => {
     it('should install seed memory when it does not exist', async () => {
       // Verify seed file doesn't exist yet
-      const exists = await memoryManager.exists('dollhousemcp-baseline-knowledge.yaml');
+      const exists = await memoryManager.exists(SEED_MEMORY_FILE);
       expect(exists).toBe(false);
 
       // Install seed memories
@@ -370,17 +383,18 @@ Content B
 
       // Verify seed file was installed
       const memories = await memoryManager.list();
-      const seedMemory = memories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seedMemory).toBeDefined();
-      expect(seedMemory?.metadata.autoLoad).toBe(true);
-      expect(seedMemory?.metadata.priority).toBe(1);
+      const seedMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
+      );
+      expect(seedMemory.metadata.autoLoad).toBe(true);
+      expect(seedMemory.metadata.priority).toBe(1);
     });
 
     it('should skip reinstallation if seed already exists with content (Issue #1430)', async () => {
       // ISSUE #1430: Skip reinstallation to preserve cache and activation status
       // Create a version of the seed memory with content
       const existingContent = `---
-name: dollhousemcp-baseline-knowledge
+name: ${SEED_MEMORY_NAME}
 type: memory
 description: Custom version of baseline knowledge
 version: 2.0.0
@@ -394,7 +408,7 @@ tags:
 
 This is a custom version with user content.
 `;
-      await fs.writeFile(path.join(memoriesDir, 'dollhousemcp-baseline-knowledge.yaml'), existingContent);
+      await fs.writeFile(path.join(memoriesDir, SEED_MEMORY_FILE), existingContent);
 
       // Install seed memories (should skip since seed already exists with content)
       await memoryManager.installSeedMemories();
@@ -402,12 +416,13 @@ This is a custom version with user content.
       const memories = await memoryManager.list();
 
       // Verify existing seed was preserved (NOT replaced)
-      const seedMemory = memories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seedMemory).toBeDefined();
-      expect(seedMemory?.metadata.description).toContain('Custom version of baseline knowledge'); // Original preserved
+      const seedMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
+      );
+      expect(seedMemory.metadata.description).toContain('Custom version of baseline knowledge');
 
       // Verify NO backup was created (reinstallation was skipped)
-      const backup = memories.find(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
+      const backup = memories.find(m => m.metadata.name.startsWith(SEED_BACKUP_PREFIX));
       expect(backup).toBeUndefined(); // No backup when skipping reinstallation
     });
 
@@ -415,7 +430,7 @@ This is a custom version with user content.
       // ISSUE #5: Empty files get no backup (nothing to preserve), just install latest
       // Create an empty memory file (simulating the broken state found in user portfolios)
       const emptyContent = `---
-name: dollhousemcp-baseline-knowledge
+name: ${SEED_MEMORY_NAME}
 type: memory
 description: Baseline knowledge (empty)
 version: 1.0.0
@@ -426,7 +441,7 @@ entries: []
 `;
       const datePath = path.join(memoriesDir, '2025-10-30');
       await fs.mkdir(datePath, { recursive: true });
-      await fs.writeFile(path.join(datePath, 'dollhousemcp-baseline-knowledge.yaml'), emptyContent);
+      await fs.writeFile(path.join(datePath, SEED_MEMORY_FILE), emptyContent);
 
       // Install seed memories (should skip backup for empty file, install latest)
       await memoryManager.installSeedMemories();
@@ -434,15 +449,16 @@ entries: []
       const memories = await memoryManager.list();
 
       // Verify the latest seed was installed with content
-      const seedMemory = memories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seedMemory).toBeDefined();
+      const seedMemory = requireDefined(
+        memories.find(m => m.metadata.name === SEED_MEMORY_NAME)
+      );
 
       // Check that it now has content (not empty)
-      const entries = seedMemory!.getAllEntries();
+      const entries = seedMemory.getAllEntries();
       expect(entries.length).toBeGreaterThan(0);
 
       // Verify no backup was created (nothing to backup from empty file)
-      const backup = memories.find(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
+      const backup = memories.find(m => m.metadata.name.startsWith(SEED_BACKUP_PREFIX));
       expect(backup).toBeUndefined();
     });
 
@@ -452,7 +468,7 @@ entries: []
 
       // Create an empty seed file first
       const emptyVersion = `---
-name: dollhousemcp-baseline-knowledge
+name: ${SEED_MEMORY_NAME}
 type: memory
 description: Empty seed
 version: 1.0.0
@@ -461,18 +477,18 @@ version: 1.0.0
 entries: []
 `;
 
-      await fs.writeFile(path.join(memoriesDir, 'dollhousemcp-baseline-knowledge.yaml'), emptyVersion);
+      await fs.writeFile(path.join(memoriesDir, SEED_MEMORY_FILE), emptyVersion);
 
       // First install: should replace empty file with real seed content
       await memoryManager.installSeedMemories();
 
       let memories = await memoryManager.list();
-      let seeds = memories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      let backups = memories.filter(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
+      let seeds = memories.filter(m => m.metadata.name === SEED_MEMORY_NAME);
+      let backups = memories.filter(m => m.metadata.name.startsWith(SEED_BACKUP_PREFIX));
 
       // Should have seed, no backup (empty file gets no backup)
-      expect(seeds.length).toBe(1);
-      expect(backups.length).toBe(0);
+      expect(seeds).toHaveLength(1);
+      expect(backups).toHaveLength(0);
 
       // Install again - should skip because seed now exists with content
       await memoryManager.installSeedMemories();
@@ -481,11 +497,11 @@ entries: []
 
       // After second install: should still have seed, still no backups
       memories = await memoryManager.list();
-      seeds = memories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      backups = memories.filter(m => m.metadata.name?.startsWith('dollhousemcp-baseline-knowledge.backup-'));
+      seeds = memories.filter(m => m.metadata.name === SEED_MEMORY_NAME);
+      backups = memories.filter(m => m.metadata.name.startsWith(SEED_BACKUP_PREFIX));
 
-      expect(seeds.length).toBe(1);
-      expect(backups.length).toBe(0); // No backups when reinstallation is skipped
+      expect(seeds).toHaveLength(1);
+      expect(backups).toHaveLength(0); // No backups when reinstallation is skipped
     });
 
     it('should not fail server startup if seed file is missing', async () => {
@@ -503,10 +519,10 @@ entries: []
       // Verify it was installed in the system folder (not date folder)
       const systemDir = path.join(memoriesDir, 'system');
       const systemFiles = await fs.readdir(systemDir);
-      const seedFile = systemFiles.find(f => f.includes('dollhousemcp-baseline-knowledge'));
+      const seedFile = systemFiles.find(file => file.includes(SEED_MEMORY_NAME));
 
       expect(seedFile).toBeDefined();
-      expect(seedFile).toContain('dollhousemcp-baseline-knowledge');
+      expect(seedFile).toContain(SEED_MEMORY_NAME);
     });
 
     it('should only install once on multiple calls', async () => {
@@ -516,7 +532,7 @@ entries: []
 
       // Verify only one copy exists
       const memories = await memoryManager.list();
-      const seedMemories = memories.filter(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      const seedMemories = memories.filter(m => m.metadata.name === SEED_MEMORY_NAME);
       expect(seedMemories).toHaveLength(1);
     });
 
@@ -528,13 +544,14 @@ entries: []
       const autoLoadMemories = await memoryManager.getAutoLoadMemories();
 
       // Verify seed memory is in the auto-load list
-      const seedMemory = autoLoadMemories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seedMemory).toBeDefined();
-      expect(seedMemory?.metadata.priority).toBe(1);
+      const seedMemory = requireDefined(
+        autoLoadMemories.find(m => m.metadata.name === SEED_MEMORY_NAME)
+      );
+      expect(seedMemory.metadata.priority).toBe(1);
 
       // REGRESSION TEST: Verify seed memory has content from the actual seed file
       // This is critical - seed memories are useless if they're just empty metadata
-      const entries = seedMemory!.getAllEntries();
+      const entries = seedMemory.getAllEntries();
       expect(entries.length).toBeGreaterThan(0);
       expect(entries[0].content).toContain('DollhouseMCP');
       expect(entries[0].content.length).toBeGreaterThan(100); // Should be substantial
@@ -554,9 +571,10 @@ entries: []
       }
 
       // Verify memories are activated
-      const seedMemory = autoLoadMemories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seedMemory).toBeDefined();
-      expect(seedMemory?.getStatus()).toBe('active');
+      const seedMemory = requireDefined(
+        autoLoadMemories.find(m => m.metadata.name === SEED_MEMORY_NAME)
+      );
+      expect(seedMemory.getStatus()).toBe('active');
     });
 
     it('should persist activation via metadata, not instance status (Issue #1430)', async () => {
@@ -565,19 +583,20 @@ entries: []
       const autoLoadMemories = await memoryManager.getAutoLoadMemories();
 
       // Activate the memory
-      const seedMemory = autoLoadMemories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
-      expect(seedMemory).toBeDefined();
-      await seedMemory!.activate();
+      const seedMemory = requireDefined(
+        autoLoadMemories.find(m => m.metadata.name === SEED_MEMORY_NAME)
+      );
+      await seedMemory.activate();
 
       // Verify activation worked
-      expect(seedMemory!.getStatus()).toBe('active');
+      expect(seedMemory.getStatus()).toBe('active');
 
       // Clear cache to simulate memory reload
       memoryManager.clearCache();
 
       // Reload memories from disk
       const reloadedMemories = await memoryManager.list();
-      const reloadedSeed = reloadedMemories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      const reloadedSeed = reloadedMemories.find(m => m.metadata.name === SEED_MEMORY_NAME);
 
       // The key point: metadata.autoLoad persists to disk
       expect((reloadedSeed?.metadata as any).autoLoad).toBe(true);
@@ -586,7 +605,7 @@ entries: []
       // getAutoLoadMemories uses metadata.autoLoad, not instance status
       // This is why it works reliably across restarts
       const autoLoadAfterReload = await memoryManager.getAutoLoadMemories();
-      const seedAfterReload = autoLoadAfterReload.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      const seedAfterReload = autoLoadAfterReload.find(m => m.metadata.name === SEED_MEMORY_NAME);
       expect(seedAfterReload).toBeDefined();
       expect((seedAfterReload?.metadata as any).autoLoad).toBe(true);
     });
@@ -609,11 +628,11 @@ entries: []
 
       // metadata.autoLoad should find the seed memory
       expect(activeViaMetadata.length).toBeGreaterThan(0);
-      expect(activeViaMetadata.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge')).toBeDefined();
+      expect(activeViaMetadata.find(m => m.metadata.name === SEED_MEMORY_NAME)).toBeDefined();
 
       // Instance status might be inactive if memory wasn't explicitly activated
       // This demonstrates why we can't rely on instance status
-      expect(activeViaStatus.length).toBe(0);
+      expect(activeViaStatus).toHaveLength(0);
     });
   });
 
@@ -714,7 +733,7 @@ Content
 
       // Verify seed memory was installed
       const memories = await memoryManager.list();
-      const seedMemory = memories.find(m => m.metadata.name === 'dollhousemcp-baseline-knowledge');
+      const seedMemory = memories.find(m => m.metadata.name === SEED_MEMORY_NAME);
 
       expect(seedMemory).toBeDefined();
       expect(result.loaded).toBeGreaterThan(0);

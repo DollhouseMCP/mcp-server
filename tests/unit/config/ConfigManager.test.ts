@@ -54,7 +54,7 @@ describe('ConfigManager', () => {
     delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
 
     const { operatorStore, userStore } = makeStores();
-    container.register('ConfigManager', () => new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null));
+    container.replace('ConfigManager', () => new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null));
     configManager = container.resolve('ConfigManager');
   });
 

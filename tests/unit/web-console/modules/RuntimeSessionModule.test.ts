@@ -21,6 +21,7 @@ const SECOND_SESSION_ID = 'mcp-session-2';
 const RUNTIME_TRANSPORT = 'streamable-http';
 const NOW = new Date('2026-05-28T14:00:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-28T14:05:00.000Z');
+const OPERATE_SESSIONS_PATH = '/api/v1/admin/operate/sessions';
 
 function accountStore(): InMemoryConsoleAccountAdminStore {
   return new InMemoryConsoleAccountAdminStore([
@@ -158,6 +159,14 @@ describe('RuntimeSessionModule', () => {
       }),
       expect.objectContaining({
         method: 'GET',
+        path: '/api/v1/me/sessions/commands/:command_id',
+        audience: 'self',
+        requiredCapability: 'console:self',
+        ownership: 'authenticated_user',
+        idempotency: 'not_applicable',
+      }),
+      expect.objectContaining({
+        method: 'GET',
         path: '/api/v1/admin/accounts/users/:user_id/sessions',
         requiredCapability: 'console:admin:accounts',
         elevation: 'admin_30m',
@@ -178,10 +187,16 @@ describe('RuntimeSessionModule', () => {
       }),
       expect.objectContaining({
         method: 'GET',
-        path: '/api/v1/admin/operate/sessions',
+        path: OPERATE_SESSIONS_PATH,
         requiredCapability: 'console:admin:operate',
         privacyClass: 'operational_allowlist',
         auditOperation: 'operate.sessions.list',
+      }),
+      expect.objectContaining({
+        method: 'GET',
+        path: '/api/v1/admin/operate/sessions/commands/:command_id',
+        requiredCapability: 'console:admin:operate',
+        auditOperation: 'operate.sessions.command_status',
       }),
       expect.objectContaining({
         method: 'GET',
@@ -204,10 +219,13 @@ describe('RuntimeSessionModule', () => {
 
     await expect(listRoute.handler(request())).resolves.toMatchObject({
       status: 200,
-      body: [{
-        session_id: SESSION_ID,
-        client_info: { name: 'Dollhouse CLI', version: '1.0.0' },
-      }],
+      // Snapshot-family envelope: noun-keyed, never a bare array.
+      body: {
+        sessions: [{
+          session_id: SESSION_ID,
+          client_info: { name: 'Dollhouse CLI', version: '1.0.0' },
+        }],
+      },
     });
     const result = await showRoute.handler(request({ params: { session_id: SESSION_ID } }));
     expect(result.body).not.toHaveProperty('account_correlation_id');
@@ -239,7 +257,8 @@ describe('RuntimeSessionModule', () => {
     const route = findRoute(module.routes, 'GET', '/api/v1/admin/accounts/users/:user_id/sessions');
 
     const result = await route.handler(request({ params: { user_id: USER_ID } }));
-    const projected = projectRuntimeSessionAccount((result.body as unknown[])[0]);
+    const sessions = (result.body as { sessions: unknown[] }).sessions;
+    const projected = projectRuntimeSessionAccount(sessions[0]);
 
     expect(projected).toEqual({
       session_id: SESSION_ID,
@@ -272,6 +291,42 @@ describe('RuntimeSessionModule', () => {
 
     await expect(runtimeStore.listPendingCommandsForReplica('replica-a')).resolves.toHaveLength(1);
     await expect(runtimeStore.listPendingCommandsForReplica('replica-b')).resolves.toHaveLength(1);
+  });
+
+  it('persists the invoking actor for self and account-admin termination commands', async () => {
+    const { module, runtimeStore } = await fixture();
+    const selfTerminateRoute = findRoute(module.routes, 'DELETE', '/api/v1/me/sessions/:session_id');
+    const selfRevokeAllRoute = findRoute(module.routes, 'POST', '/api/v1/me/sessions/revoke-all');
+    const adminTerminateRoute = findRoute(
+      module.routes,
+      'DELETE',
+      '/api/v1/admin/accounts/users/:user_id/sessions/:session_id',
+    );
+    const adminRevokeAllRoute = findRoute(
+      module.routes,
+      'POST',
+      '/api/v1/admin/accounts/users/:user_id/sessions/revoke-all',
+    );
+
+    const selfSingle = await selfTerminateRoute.handler(request({ params: { session_id: SESSION_ID } }));
+    const selfBulk = await selfRevokeAllRoute.handler(request());
+    const adminSingle = await adminTerminateRoute.handler(request({
+      params: { user_id: SECOND_USER_ID, session_id: SECOND_SESSION_ID },
+    }));
+    const adminBulk = await adminRevokeAllRoute.handler(request({ params: { user_id: SECOND_USER_ID } }));
+
+    const commandIds = [selfSingle, selfBulk, adminSingle, adminBulk].map(result =>
+      (result.body as { command_id?: string; commands?: Array<{ command_id: string }> }).command_id
+        ?? (result.body as { commands: Array<{ command_id: string }> }).commands[0].command_id,
+    );
+    const commands = await Promise.all(commandIds.map(commandId => runtimeStore.getCommand(commandId)));
+
+    expect(commands.map(command => command?.requestedBy)).toEqual([
+      { kind: 'self', userId: USER_ID },
+      { kind: 'self', userId: USER_ID },
+      { kind: 'admin', userId: USER_ID },
+      { kind: 'admin', userId: USER_ID },
+    ]);
   });
 
   it('hides cross-user sessions from account-admin scoped termination', async () => {
@@ -313,12 +368,14 @@ describe('RuntimeSessionModule', () => {
 
   it('exposes operator pseudonymous projection and operator termination', async () => {
     const { module, runtimeStore } = await fixture();
-    const listRoute = findRoute(module.routes, 'GET', '/api/v1/admin/operate/sessions');
+    const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
     const showRoute = findRoute(module.routes, 'GET', '/api/v1/admin/operate/sessions/:session_id');
     const deleteRoute = findRoute(module.routes, 'DELETE', '/api/v1/admin/operate/sessions/:session_id');
 
     const list = await listRoute.handler(request());
-    const projected = projectRuntimeSessionOperational((list.body as unknown[])[0]);
+    const items = (list.body as { items: Array<{ session_id: string }> }).items;
+    const target = items.find(session => session.session_id === SESSION_ID);
+    const projected = projectRuntimeSessionOperational(target);
     expect(projected).toMatchObject({
       session_id: SESSION_ID,
       account_correlation_id: ACCOUNT_CORRELATION_ID,
@@ -404,5 +461,205 @@ describe('RuntimeSessionModule', () => {
         status: 'accepted',
       })).toMatchObject({ reason });
     }
+  });
+
+  it('reports operator command status transitioning from pending to acknowledged, and 404s unknown commands', async () => {
+    const { module, runtimeStore } = await fixture();
+    const route = findRoute(module.routes, 'GET', '/api/v1/admin/operate/sessions/commands/:command_id');
+
+    const command = await runtimeStore.createTerminationCommand({
+      sessionId: SESSION_ID,
+      targetReplicaId: 'replica-a',
+      reason: 'operator_terminated',
+      requestedAt: NOW,
+      requestedBy: { kind: 'operator', userId: SECOND_USER_ID },
+    });
+
+    await expect(route.handler(request({ params: { command_id: command.commandId } })))
+      .resolves.toMatchObject({
+        status: 200,
+        body: {
+          command_id: command.commandId,
+          status: 'pending',
+          replica_id: null,
+          acknowledged_at: null,
+        },
+      });
+
+    await expect(runtimeStore.acknowledgeCommand({
+      commandId: command.commandId,
+      replicaId: 'replica-a',
+      acknowledgedAt: FIVE_MINUTES,
+      result: 'terminated',
+    })).resolves.toBe(true);
+
+    await expect(route.handler(request({ params: { command_id: command.commandId } })))
+      .resolves.toMatchObject({
+        status: 200,
+        body: {
+          command_id: command.commandId,
+          status: 'terminated',
+          replica_id: 'replica-a',
+          acknowledged_at: FIVE_MINUTES.toISOString(),
+        },
+      });
+
+    await expect(route.handler(request({ params: { command_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+  });
+
+  it('scopes self command status to the requesting user and hides commands requested by others', async () => {
+    const { module, runtimeStore } = await fixture();
+    const route = findRoute(module.routes, 'GET', '/api/v1/me/sessions/commands/:command_id');
+
+    const ownCommand = await runtimeStore.createTerminationCommand({
+      sessionId: SESSION_ID,
+      targetReplicaId: 'replica-a',
+      reason: 'user_requested',
+      requestedAt: NOW,
+      requestedBy: { kind: 'self', userId: USER_ID },
+    });
+    const foreignCommand = await runtimeStore.createTerminationCommand({
+      sessionId: SECOND_SESSION_ID,
+      targetReplicaId: 'replica-b',
+      reason: 'user_requested',
+      requestedAt: NOW,
+      requestedBy: { kind: 'self', userId: SECOND_USER_ID },
+    });
+
+    // request() authenticates as USER_ID (see the fixture above).
+    await expect(route.handler(request({ params: { command_id: ownCommand.commandId } })))
+      .resolves.toMatchObject({
+        status: 200,
+        body: { command_id: ownCommand.commandId, status: 'pending' },
+      });
+    await expect(route.handler(request({ params: { command_id: foreignCommand.commandId } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+    await expect(route.handler(request({ params: { command_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+  });
+
+  it('paginates operator session listing via keyset cursor with a deterministic tiebreak', async () => {
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    await runtimeStore.registerPresence({
+      sessionId: 'mcp-session-a',
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+    // Same lastActiveAt as mcp-session-a: the (last_active_at DESC, session_id DESC)
+    // tiebreaker must place this one first ('b' > 'a').
+    await runtimeStore.registerPresence({
+      sessionId: 'mcp-session-b',
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+    await runtimeStore.registerPresence({
+      sessionId: 'mcp-session-c',
+      userId: SECOND_USER_ID,
+      accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-b',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: FIVE_MINUTES,
+      leaseUntil: new Date(FIVE_MINUTES.getTime() + 300_000),
+    });
+    const module = createRuntimeSessionModule({
+      runtimeStore,
+      accountAdminStore: accountStore(),
+      now: () => NOW,
+    });
+    const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await listRoute.handler(request({ query: { limit: '1', ...(cursor ? { cursor } : {}) } }));
+      const body = result.body as {
+        items: Array<{ session_id: string }>;
+        page: { next_cursor: string | null };
+      };
+      expect(body.items).toHaveLength(1);
+      collected.push(...body.items.map(item => item.session_id));
+      if (!body.page.next_cursor) break;
+      cursor = body.page.next_cursor;
+    }
+
+    // Descending (last_active_at, session_id): c (latest) first, then b before a (tiebreak).
+    expect(collected).toEqual(['mcp-session-c', 'mcp-session-b', 'mcp-session-a']);
+    expect(new Set(collected).size).toBe(3);
+  });
+
+  it('filters operator session listing by user_id and status', async () => {
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    await runtimeStore.registerPresence({
+      sessionId: 'mcp-session-x',
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+    await runtimeStore.registerPresence({
+      sessionId: 'mcp-session-y',
+      userId: SECOND_USER_ID,
+      accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-b',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+    await runtimeStore.markPresenceClosing('mcp-session-y', NOW);
+    const module = createRuntimeSessionModule({
+      runtimeStore,
+      accountAdminStore: accountStore(),
+      now: () => NOW,
+    });
+    const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
+
+    const byUser = await listRoute.handler(request({ query: { user_id: USER_ID } }));
+    expect((byUser.body as { items: Array<{ session_id: string }> }).items.map(item => item.session_id))
+      .toEqual(['mcp-session-x']);
+
+    const byStatusClosing = await listRoute.handler(request({ query: { status: 'closing' } }));
+    expect((byStatusClosing.body as { items: Array<{ session_id: string }> }).items.map(item => item.session_id))
+      .toEqual(['mcp-session-y']);
+
+    // Default (no status filter) only surfaces active sessions.
+    const defaultActive = await listRoute.handler(request());
+    expect((defaultActive.body as { items: Array<{ session_id: string }> }).items.map(item => item.session_id))
+      .toEqual(['mcp-session-x']);
+  });
+
+  it('treats a garbage session-list cursor as the first page rather than erroring', async () => {
+    const { module } = await fixture();
+    const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
+
+    const result = await listRoute.handler(request({ query: { cursor: 'not-a-real-cursor', limit: '10' } }));
+    expect(result.status).toBe(200);
+    const body = result.body as { items: Array<{ session_id: string }> };
+    expect(body.items.map(item => item.session_id).sort((a, b) => a.localeCompare(b)))
+      .toEqual([SECOND_SESSION_ID, SESSION_ID].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('rejects a non-UUID user_id filter with a 400 rather than reaching the store', async () => {
+    const { module } = await fixture();
+    const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
+
+    const result = await listRoute.handler(request({ query: { user_id: 'not-a-uuid' } }));
+    expect(result.status).toBe(400);
+    expect((result.body as { code: string }).code).toBe('invalid_request');
   });
 });

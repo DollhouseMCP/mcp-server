@@ -146,7 +146,20 @@ docker compose run --rm dollhousemcp \
 
 For **filesystem mode** (no DB), the same CLI works, OR you can edit `~/.dollhouse/auth/allowlist.json` directly — the server picks up changes within ~1 second via fsnotify, no restart needed.
 
-**Match rules:** the gate ORs across all configured kinds. An entry matches if **any** of the verified identity values (email, GitHub username, GitHub numeric ID) is on the list. Values are lowercased on insert; matching is case-insensitive for emails and usernames.
+**Match rules:** the gate ORs across all configured kinds. An entry matches if **any** of the verified identity values (email, GitHub username, GitHub numeric ID) is on the list. Values use NFC canonicalization without rewriting cross-script look-alikes. Email and GitHub username comparison remains case-insensitive without mapping look-alikes across scripts; numeric IDs remain exact.
+
+**Unicode normalization upgrades:** database migration `0047_normalize_allowlist_identities` canonicalizes the authoritative `auth_allowlist` and keeps its indexed sign-in checks intact. Back up PostgreSQL before upgrading. The migration aborts before changing data if two active entries would become the same canonical identity; remove or revoke the duplicate identified by an allowlist inventory, then rerun the migration. Do not start the new application version against an older schema. Rolling back the application after the migration is safe because NFC-normalized values remain compatible with the older lookup behavior; restore the pre-upgrade database backup only if the original byte representation itself must be recovered. Filesystem deployments canonicalize legacy values while matching and persist the canonical form on the next allowlist write.
+
+Older `account_allowlist_entries` need an additional review before that currently dormant console table can become the sign-in authority. Some earlier builds applied a lossy confusable-character mapping before storing both `display_value` and `normalized_value`; the original principal cannot be recovered reliably from either column. Migration 0045 copies every active legacy row into `account_allowlist_identity_migration_reviews` before rebuilding the best available NFC lookup key. Do not enable account-allowlist authority cutover while this query returns rows:
+
+```sql
+SELECT entry_id, kind, legacy_display_value, legacy_normalized_value
+FROM account_allowlist_identity_migration_reviews
+WHERE reviewed_at IS NULL
+ORDER BY captured_at, entry_id;
+```
+
+For each result, verify the intended principal against the external identity provider. Revoke and recreate an entry if the stored display value is not the intended principal, then record the review with a timestamp and a non-sensitive note. Embedded PostgreSQL startup fails closed while any review remains pending, so the uncertain table cannot silently become the live sign-in authority. This explicit operator step avoids making visually similar cross-script identities equivalent during migration.
 
 **Denial behavior:** a denied user sees an "Access denied" HTML page (not a raw JSON error), and an `auth.allowlist_denied` event lands in `auth_identity_events` with their identity values for operator diagnosis. The audit log is queryable via `psql` or the future web console.
 
@@ -943,6 +956,8 @@ sudo journalctl -u dollhousemcp -f
 ```
 
 Migrations run automatically on startup. Watch `/readyz` — it returns 503 with `reason: "migrations_pending"` during a migration window and 200 once everything is current.
+
+Migration `0048` marks a non-GitHub integration credential that cannot be attributed to a provider descriptor as `status='error'` with `error_reason='revocation_failed'`. The encrypted credential is retained so it can still be revoked through its provider, and account deletion remains blocked with HTTP 409 and code `integration_credential_cleanup_pending` until the credential is resolved. There are two exits: the user can open the console integrations page and click **Disconnect** for the provider in the error state, or an administrator can repeat the account-deletion request with `integration_credential_cleanup_override: "abandon_unrevoked_provider_credentials"` in the request body to record an audited abandonment.
 
 ### Monitoring
 

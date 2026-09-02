@@ -1,79 +1,43 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest } from '@jest/globals';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+
+const CODE_REVIEW_NAME = 'Code Review';
 
 const { findElementFlexibly, sanitizeMetadata, validateGatekeeperPolicy } = await import('../../../../src/handlers/element-crud/helpers.js');
 
 describe('element-crud helpers', () => {
   describe('findElementFlexibly', () => {
     const mockElements = [
-      { metadata: { name: 'Code Review' } },
+      { metadata: { name: CODE_REVIEW_NAME } },
       { metadata: { name: 'Data Analysis' } },
       { metadata: { name: 'Creative Writing Helper' } },
       { metadata: { name: 'test-skill-name' } },
     ];
 
-    describe('exact matches', () => {
-      it('should find element by exact name match', () => {
-        const result = findElementFlexibly('Code Review', mockElements);
+    describe('successful matching', () => {
+      it.each([
+        { description: 'by exact name match', searchName: CODE_REVIEW_NAME, expectedName: CODE_REVIEW_NAME },
+        { description: 'by case-insensitive match', searchName: 'code review', expectedName: CODE_REVIEW_NAME },
+        { description: 'with all uppercase', searchName: 'CODE REVIEW', expectedName: CODE_REVIEW_NAME },
+        { description: 'with mixed case', searchName: 'CoDe ReViEw', expectedName: CODE_REVIEW_NAME },
+        { description: 'by slugified name', searchName: 'code-review', expectedName: CODE_REVIEW_NAME },
+        {
+          description: 'with spaces converted to dashes',
+          searchName: 'creative-writing-helper',
+          expectedName: 'Creative Writing Helper',
+        },
+        { description: 'with underscores', searchName: 'test_skill_name', expectedName: 'test-skill-name' },
+        { description: 'by partial slug match', searchName: 'writing', expectedName: 'Creative Writing Helper' },
+        { description: 'by partial name match', searchName: 'analysis', expectedName: 'Data Analysis' },
+        {
+          description: 'by partial case-insensitive match',
+          searchName: 'WRITING',
+          expectedName: 'Creative Writing Helper',
+        },
+      ])('should find element $description', ({ searchName, expectedName }) => {
+        const result = findElementFlexibly(searchName, mockElements);
         expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Code Review');
-      });
-
-      it('should find element by case-insensitive match', () => {
-        const result = findElementFlexibly('code review', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Code Review');
-      });
-
-      it('should find element with all uppercase', () => {
-        const result = findElementFlexibly('CODE REVIEW', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Code Review');
-      });
-
-      it('should find element with mixed case', () => {
-        const result = findElementFlexibly('CoDe ReViEw', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Code Review');
-      });
-    });
-
-    describe('slug matching', () => {
-      it('should find element by slugified name', () => {
-        const result = findElementFlexibly('code-review', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Code Review');
-      });
-
-      it('should find element with spaces converted to dashes', () => {
-        const result = findElementFlexibly('creative-writing-helper', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Creative Writing Helper');
-      });
-
-      it('should find element with underscores', () => {
-        const result = findElementFlexibly('test_skill_name', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('test-skill-name');
-      });
-    });
-
-    describe('partial matching', () => {
-      it('should find element by partial slug match', () => {
-        const result = findElementFlexibly('writing', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Creative Writing Helper');
-      });
-
-      it('should find element by partial name match', () => {
-        const result = findElementFlexibly('analysis', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Data Analysis');
-      });
-
-      it('should find element by partial case-insensitive match', () => {
-        const result = findElementFlexibly('WRITING', mockElements);
-        expect(result).toBeDefined();
-        expect(result?.metadata?.name).toBe('Creative Writing Helper');
+        expect(result.metadata.name).toBe(expectedName);
       });
     });
 
@@ -89,7 +53,7 @@ describe('element-crud helpers', () => {
       });
 
       it('should return undefined for empty element list', () => {
-        const result = findElementFlexibly('Code Review', []);
+        const result = findElementFlexibly(CODE_REVIEW_NAME, []);
         expect(result).toBeUndefined();
       });
 
@@ -138,10 +102,10 @@ describe('element-crud helpers', () => {
       it('should prefer exact match over partial match', () => {
         const elements = [
           { metadata: { name: 'Code' } },
-          { metadata: { name: 'Code Review' } },
+          { metadata: { name: CODE_REVIEW_NAME } },
         ];
         const result = findElementFlexibly('Code', elements);
-        expect(result?.metadata?.name).toBe('Code');
+        expect(result.metadata.name).toBe('Code');
       });
 
       it('should prefer exact case-insensitive match over slug match', () => {
@@ -150,13 +114,36 @@ describe('element-crud helpers', () => {
           { metadata: { name: 'Test Slug Match' } },
         ];
         const result = findElementFlexibly('test slug match', elements);
-        expect(result?.metadata?.name).toBe('Test Slug Match');
+        expect(result.metadata.name).toBe('Test Slug Match');
       });
     });
   });
 
   describe('sanitizeMetadata', () => {
     describe('basic sanitization', () => {
+      it('does not emit a security event when all metadata is safe', () => {
+        const eventSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+
+        sanitizeMetadata({ name: 'Test', nested: { safe: true } });
+
+        expect(eventSpy).not.toHaveBeenCalled();
+        eventSpy.mockRestore();
+      });
+
+      it('emits one security event listing dangerous properties that were removed', () => {
+        const eventSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+        const input = JSON.parse('{"name":"Test","constructor":{},"nested":{"prototype":{}}}') as Record<string, unknown>;
+
+        sanitizeMetadata(input);
+
+        expect(eventSpy).toHaveBeenCalledTimes(1);
+        expect(eventSpy).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'ELEMENT_VALIDATED',
+          additionalData: { removedKeys: ['constructor', 'prototype'] },
+        }));
+        eventSpy.mockRestore();
+      });
+
       it('should preserve safe properties', () => {
         const input = {
           name: 'Test',
@@ -286,7 +273,7 @@ describe('element-crud helpers', () => {
 
     describe('edge cases', () => {
       it('should return empty object for undefined input', () => {
-        const result = sanitizeMetadata(undefined);
+        const result = sanitizeMetadata();
         expect(result).toEqual({});
       });
 
@@ -458,7 +445,7 @@ describe('element-crud helpers', () => {
           confirm: ['edit_element'],
         },
       });
-      expect(warnings.length).toBe(1);
+      expect(warnings).toHaveLength(1);
       expect(warnings[0].property).toBe('gatekeeper');
       expect(warnings[0].message).toContain("'edit_element' appears in both allow and confirm");
       expect(warnings[0].message).toContain('confirm');
@@ -471,7 +458,7 @@ describe('element-crud helpers', () => {
           confirm: ['create_element', 'delete_element'],
         },
       });
-      expect(warnings.length).toBe(2);
+      expect(warnings).toHaveLength(2);
     });
 
     it('should not warn when allow and confirm lists have no overlap', () => {
@@ -481,7 +468,7 @@ describe('element-crud helpers', () => {
           confirm: ['delete_element'],
         },
       });
-      expect(warnings.length).toBe(0);
+      expect(warnings).toHaveLength(0);
     });
 
     it('should return warnings for exact pattern overlap', () => {
@@ -502,7 +489,7 @@ describe('element-crud helpers', () => {
       const warnings = validateGatekeeperPolicy({
         gatekeeper: 'invalid',
       });
-      expect(warnings.length).toBe(1);
+      expect(warnings).toHaveLength(1);
       expect(warnings[0].property).toBe('gatekeeper');
       expect(warnings[0].message).toContain('must be an object');
     });

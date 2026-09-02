@@ -11,7 +11,7 @@ import {
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { PortfolioSyncJobRecord } from '../../stores/IPortfolioSyncJobStore.js';
 import { integrationSecretContext } from '../../modules/integrations/IntegrationSecretContext.js';
@@ -26,7 +26,7 @@ import type {
 
 const GITHUB_API_BASE = 'https://api.github.com';
 const DEFAULT_PORTFOLIO_REPOSITORY = 'dollhouse-portfolio';
-const GITHUB_SECRET_PROVIDER = 'github';
+const GITHUB_SECRET_PROVIDER = 'github' as UserIntegrationProvider;
 
 export interface ConsolePortfolioSyncExecutorOptions {
   readonly integrationStore: IUserIntegrationStore;
@@ -331,6 +331,9 @@ class GitHubPortfolioContentsClient {
         'User-Agent': 'DollhouseMCP-WebConsole/1.0',
       },
       body: body ? JSON.stringify(body) : undefined,
+      // Fail closed on redirects so a 3xx from the GitHub host can never replay
+      // the Bearer access token to a redirect target (matches the gateway guard).
+      redirect: 'error',
     });
     if (response.status === 404) return null;
     if (!response.ok) {
@@ -362,7 +365,7 @@ function isUsableIntegration(
   integration: UserIntegrationRecord | null,
   expectedIntegrationId: string,
 ): integration is UserIntegrationRecord {
-  return integration?.status === 'connected' &&
+  return isIntegrationConnected(integration) &&
     integration.id === expectedIntegrationId;
 }
 

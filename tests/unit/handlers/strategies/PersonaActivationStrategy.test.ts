@@ -3,6 +3,8 @@ import { PersonaActivationStrategy } from '../../../../src/handlers/strategies/P
 import type { PersonaManager } from '../../../../src/persona/PersonaManager.js';
 import type { PersonaIndicatorService } from '../../../../src/services/PersonaIndicatorService.js';
 
+const TEST_PERSONA_NAME = 'test-persona';
+
 describe('PersonaActivationStrategy', () => {
   let strategy: PersonaActivationStrategy;
   let mockPersonaManager: jest.Mocked<PersonaManager>;
@@ -16,6 +18,7 @@ describe('PersonaActivationStrategy', () => {
       // Issue #281: Add getActivePersonas for multiple active personas support
       getActivePersonas: jest.fn().mockReturnValue([]),
       findPersona: jest.fn(),
+      findPersonaAsync: jest.fn(),
     } as unknown as jest.Mocked<PersonaManager>;
 
     mockPersonaIndicatorService = {
@@ -33,9 +36,10 @@ describe('PersonaActivationStrategy', () => {
       const mockPersona = {
         filename: 'test-persona.md',
         metadata: {
-          name: 'test-persona',
+          name: TEST_PERSONA_NAME,
           description: 'A test persona'
         },
+        instructions: '',
         content: 'Persona instructions here',
         unique_id: 'test-persona-id'
       };
@@ -46,17 +50,17 @@ describe('PersonaActivationStrategy', () => {
         message: 'Activated'
       });
 
-      const result = await strategy.activate('test-persona');
+      const result = await strategy.activate(TEST_PERSONA_NAME);
 
       expect(result.content[0].text).toContain('>>'); // indicator
-      expect(result.content[0].text).toContain('test-persona');
+      expect(result.content[0].text).toContain(TEST_PERSONA_NAME);
       expect(result.content[0].text).toContain('A test persona');
       expect(result.content[0].text).toContain('Persona instructions here');
       expect(result.activationRecord).toEqual({
-        name: 'test-persona',
+        name: TEST_PERSONA_NAME,
         filename: 'test-persona.md',
       });
-      expect(mockPersonaManager.activatePersona).toHaveBeenCalledWith('test-persona');
+      expect(mockPersonaManager.activatePersona).toHaveBeenCalledWith(TEST_PERSONA_NAME);
     });
 
     it('should handle persona with empty content', async () => {
@@ -65,6 +69,7 @@ describe('PersonaActivationStrategy', () => {
           name: 'empty-persona',
           description: 'Empty'
         },
+        instructions: '',
         content: '',
         unique_id: 'empty-id'
       };
@@ -87,6 +92,7 @@ describe('PersonaActivationStrategy', () => {
           name: 'whitespace-persona',
           description: 'Whitespace'
         },
+        instructions: '',
         content: '   \n\n  ',
         unique_id: 'whitespace-id'
       };
@@ -134,6 +140,7 @@ describe('PersonaActivationStrategy', () => {
 
       const mockPersona = {
         metadata: { name: 'test', description: 'Test' },
+        instructions: '',
         content: 'Content',
         unique_id: 'test-id'
       };
@@ -149,12 +156,33 @@ describe('PersonaActivationStrategy', () => {
       expect(result.content[0].text).toContain('🎭>>');
       expect(mockPersonaIndicatorService.getPersonaIndicator).toHaveBeenCalled();
     });
+
+    it('uses behavioral instructions and keeps reference content separate', async () => {
+      const mockPersona = {
+        filename: 'dual-field.md',
+        metadata: { name: 'dual-field', description: 'Dual field persona' },
+        instructions: 'Follow these instructions',
+        content: 'Use this reference material',
+        unique_id: 'dual-field-id'
+      };
+
+      mockPersonaManager.activatePersona.mockReturnValue({
+        success: true,
+        persona: mockPersona,
+        message: 'Activated'
+      });
+
+      const result = await strategy.activate('dual-field');
+
+      expect(result.content[0].text).toContain('**Instructions:**\nFollow these instructions');
+      expect(result.content[0].text).toContain('**Reference:**\nUse this reference material');
+    });
   });
 
   describe('deactivate', () => {
     const mockPersona = {
       filename: 'test-persona.md',
-      metadata: { name: 'test-persona', description: 'Test' },
+      metadata: { name: TEST_PERSONA_NAME, description: 'Test' },
       content: 'Content',
       unique_id: 'test-id'
     };
@@ -166,13 +194,13 @@ describe('PersonaActivationStrategy', () => {
         message: 'Persona deactivated'
       });
 
-      const result = await strategy.deactivate('test-persona');
+      const result = await strategy.deactivate(TEST_PERSONA_NAME);
 
       expect(result.content[0].text).toContain('>>');
       expect(result.content[0].text).toContain('✅');
       expect(result.content[0].text).toContain('Persona deactivated');
       expect(result.activationRecord).toEqual({
-        name: 'test-persona',
+        name: TEST_PERSONA_NAME,
         filename: 'test-persona.md',
       });
       expect(mockPersonaManager.deactivatePersona).toHaveBeenCalled();
@@ -185,7 +213,7 @@ describe('PersonaActivationStrategy', () => {
         message: 'No persona is currently active'
       });
 
-      const result = await strategy.deactivate('test-persona');
+      const result = await strategy.deactivate(TEST_PERSONA_NAME);
 
       expect(result.content[0].text).toContain('>>');
       expect(result.content[0].text).toContain('❌');
@@ -209,7 +237,7 @@ describe('PersonaActivationStrategy', () => {
         message: 'Deactivated'
       });
 
-      const result = await strategy.deactivate('test-persona');
+      const result = await strategy.deactivate(TEST_PERSONA_NAME);
 
       expect(result.content[0].text).toContain('🎭>>');
       expect(mockPersonaIndicatorService.getPersonaIndicator).toHaveBeenCalled();
@@ -287,6 +315,30 @@ describe('PersonaActivationStrategy', () => {
 
       expect(result.content[0].text).toContain('Unknown'); // default author
     });
+
+    it('summarizes typed Gatekeeper external restrictions', async () => {
+      const restrictedPersona = {
+        metadata: {
+          name: 'restricted-persona',
+          description: 'Restricted',
+          gatekeeper: {
+            externalRestrictions: {
+              description: 'Read-only shell access'
+            }
+          }
+        },
+        unique_id: 'restricted-id',
+        instructions: 'Stay safe',
+        content: ''
+      };
+
+      mockPersonaManager.getActivePersonas.mockReturnValue([restrictedPersona]);
+
+      const result = await strategy.getActiveElements();
+
+      expect(result.content[0].text).toContain('**Loaded CLI Restrictions:**');
+      expect(result.content[0].text).toContain('**restricted-persona**: Read-only shell access');
+    });
   });
 
   describe('getElementDetails', () => {
@@ -304,7 +356,7 @@ describe('PersonaActivationStrategy', () => {
         unique_id: 'detailed-123'
       };
 
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       const result = await strategy.getElementDetails('detailed-persona');
 
@@ -329,7 +381,7 @@ describe('PersonaActivationStrategy', () => {
         unique_id: 'no-ver-id'
       };
 
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       const result = await strategy.getElementDetails('no-version');
 
@@ -347,7 +399,7 @@ describe('PersonaActivationStrategy', () => {
         unique_id: 'no-auth-id'
       };
 
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       const result = await strategy.getElementDetails('no-author');
 
@@ -366,7 +418,7 @@ describe('PersonaActivationStrategy', () => {
         unique_id: 'no-trig-id'
       };
 
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       const result = await strategy.getElementDetails('no-triggers');
 
@@ -384,7 +436,7 @@ describe('PersonaActivationStrategy', () => {
         unique_id: 'null-trig-id'
       };
 
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       const result = await strategy.getElementDetails('null-triggers');
 
@@ -402,7 +454,7 @@ describe('PersonaActivationStrategy', () => {
         unique_id: 'empty-id'
       };
 
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       const result = await strategy.getElementDetails('empty-content');
 
@@ -410,11 +462,29 @@ describe('PersonaActivationStrategy', () => {
     });
 
     it('should throw ElementNotFoundError when persona not found', async () => {
-      mockPersonaManager.findPersona.mockReturnValue(null);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue();
 
       // Issue #275: Now throws error instead of returning error content
       await expect(strategy.getElementDetails('missing-persona'))
         .rejects.toThrow('Persona \'missing-persona\' not found');
+    });
+
+    it('uses the storage-backed lookup when the persona is not cached', async () => {
+      const recoveredPersona = {
+        metadata: {
+          name: 'recovered-persona',
+          description: 'Recovered after cache invalidation',
+        },
+        content: 'Recovered instructions',
+        filename: 'recovered-persona.md',
+        unique_id: 'recovered-id',
+      };
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(recoveredPersona);
+
+      const result = await strategy.getElementDetails('recovered-persona');
+
+      expect(mockPersonaManager.findPersonaAsync).toHaveBeenCalledWith('recovered-persona');
+      expect(result.content[0].text).toContain('Recovered after cache invalidation');
     });
   });
 });

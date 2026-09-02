@@ -3,13 +3,13 @@
  * Handles authentication for MCP servers without requiring client secrets
  */
 
-import { TokenManager } from '../security/tokenManager.js';
+import type { TokenManager } from '../security/tokenManager.js';
 import { logger } from '../utils/logger.js';
-import { APICache } from '../cache/APICache.js';
+import type { APICache } from '../cache/APICache.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
-import { ConfigManager } from '../config/ConfigManager.js';
+import type { ConfigManager } from '../config/ConfigManager.js';
 import { env } from '../config/env.js';
 import { createHash } from 'node:crypto';
 
@@ -60,9 +60,9 @@ export class GitHubAuthManager {
   private readonly MAX_POLL_ATTEMPTS = 180; // 15 minutes total
   
   private readonly configManager: ConfigManager;
-  private apiCache: APICache;
+  private readonly apiCache: APICache;
   private activePolling: AbortController | null = null;
-  private tokenManager: TokenManager;
+  private readonly tokenManager: TokenManager;
 
   private userInfoCacheKey(token: string): string {
     const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
@@ -325,7 +325,7 @@ export class GitHubAuthManager {
       status: response.status,
       statusText: response.statusText,
       responseBody: responseText,
-      clientId: clientId?.substring(0, 8) + '...'
+      clientId: clientId.substring(0, 8) + '...'
     });
 
     try {
@@ -338,11 +338,11 @@ export class GitHubAuthManager {
 
   private throwDeviceFlowApiError(errorData: { error?: string; error_description?: string }, clientId: string): void {
     if (errorData.error === 'unauthorized_client') {
-      throw new Error(`OAUTH_CLIENT_UNAUTHORIZED: OAuth app '${clientId?.substring(0, 8)}...' is not authorized for device flow. The app may need reconfiguration.`);
+      throw new Error(`OAUTH_CLIENT_UNAUTHORIZED: OAuth app '${clientId.substring(0, 8)}...' is not authorized for device flow. The app may need reconfiguration.`);
     }
 
     if (errorData.error === 'invalid_client') {
-      throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
+      throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId.substring(0, 8)}...'. The app may not exist or be disabled.`);
     }
 
     if (errorData.error_description) {
@@ -352,7 +352,7 @@ export class GitHubAuthManager {
 
   private throwDeviceFlowStatusError(response: Response, clientId: string): never {
     if (response.status === 401) {
-      throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
+      throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId.substring(0, 8)}...'. The app may not exist or be disabled.`);
     }
 
     if (response.status === 403) {
@@ -483,64 +483,10 @@ export class GitHubAuthManager {
         });
         
         const data = await response.json();
-
-        // RFC 8628 Section 3.5: Handle OAuth device flow responses
-        if (data.error) {
-          const errorCode = data.error;  // Extract error code for robust detection
-
-          switch (errorCode) {
-            case 'authorization_pending': {
-              // Transient: User hasn't authorized yet, continue polling
-              logger.debug('Authorization pending, continuing to poll', { attempt: attempts });
-              break;
-            }
-
-            case 'slow_down': {
-              // Transient: Server requests slower polling, adjust interval
-              interval = Math.min(interval * 1.5, 30000); // Max 30 seconds
-              logger.debug('Slowing down polling interval per server request', {
-                newInterval: interval,
-                attempt: attempts
-              });
-              break;
-            }
-
-            case 'expired_token': {
-              // TERMINAL: Authorization code expired (RFC 8628 Section 3.5)
-              throw new Error('The authorization code has expired. Please start over.');
-            }
-
-            case 'access_denied': {
-              // TERMINAL: User explicitly denied authorization (RFC 8628 Section 3.5)
-              throw new Error('Authorization was denied. Please try again.');
-            }
-
-            case 'unsupported_grant_type':
-            case 'invalid_grant': {
-              // TERMINAL: Configuration or code issue (RFC 6749 Section 5.2)
-              logger.error('OAuth grant error', {
-                error: errorCode,
-                description: data.error_description
-              });
-              throw new Error('Authentication failed. Please try starting the process again.');
-            }
-
-            default: {
-              // Unknown error - treat as terminal to avoid infinite polling
-              logger.debug('Unknown OAuth error, treating as terminal', {
-                error: errorCode,
-                description: data.error_description
-              });
-              // Embed error code in Error object for isTerminalOAuthError detection
-              const unknownError = new Error('Authentication failed. Please try starting the process again.');
-              (unknownError as any).code = errorCode;
-              throw unknownError;
-            }
-          }
-        } else if (data.access_token) {
-          // Success! User authorized and token is ready
-          logger.info('OAuth device flow completed successfully', { attempts });
-          return data as TokenResponse;
+        const pollResult = this.classifyTokenPollResponse(data, attempts, interval);
+        interval = pollResult.interval;
+        if (pollResult.token) {
+          return pollResult.token;
         }
 
         // No error and no token - wait and continue polling
@@ -574,6 +520,55 @@ export class GitHubAuthManager {
     } finally {
       // Clear active polling reference
       this.activePolling = null;
+    }
+  }
+
+  private classifyTokenPollResponse(
+    data: Record<string, any>,
+    attempts: number,
+    interval: number
+  ): { interval: number; token?: TokenResponse } {
+    if (!data.error) {
+      if (data.access_token) {
+        logger.info('OAuth device flow completed successfully', { attempts });
+        return { interval, token: data as TokenResponse };
+      }
+      return { interval };
+    }
+
+    const errorCode = data.error;
+    switch (errorCode) {
+      case 'authorization_pending':
+        logger.debug('Authorization pending, continuing to poll', { attempt: attempts });
+        return { interval };
+      case 'slow_down': {
+        const slowerInterval = Math.min(interval * 1.5, 30000);
+        logger.debug('Slowing down polling interval per server request', {
+          newInterval: slowerInterval,
+          attempt: attempts,
+        });
+        return { interval: slowerInterval };
+      }
+      case 'expired_token':
+        throw new Error('The authorization code has expired. Please start over.');
+      case 'access_denied':
+        throw new Error('Authorization was denied. Please try again.');
+      case 'unsupported_grant_type':
+      case 'invalid_grant':
+        logger.error('OAuth grant error', {
+          error: errorCode,
+          description: data.error_description,
+        });
+        throw new Error('Authentication failed. Please try starting the process again.');
+      default: {
+        logger.debug('Unknown OAuth error, treating as terminal', {
+          error: errorCode,
+          description: data.error_description,
+        });
+        const unknownError = new Error('Authentication failed. Please try starting the process again.');
+        (unknownError as any).code = errorCode;
+        throw unknownError;
+      }
     }
   }
   
@@ -661,7 +656,32 @@ export class GitHubAuthManager {
       throw ErrorHandler.wrapError(error, 'Failed to store GitHub token', ErrorCategory.AUTH_ERROR);
     }
   }
-  
+
+  /**
+   * Store a token obtained by the detached OAuth device-flow helper, then confirm
+   * it is retrievable through this session's TokenManager before reporting
+   * success. The helper runs outside the DI/session context and cannot write the
+   * session's ITokenStore (in database mode it has no DB pool, master key, or RLS
+   * context), so the server performs the authoritative write here for both file
+   * and database token stores. A helper result file alone is never proof of
+   * storage — only a successful read-back through the session store is.
+   */
+  async importOAuthHelperToken(token: string): Promise<void> {
+    await this.storeToken(token);
+    // Verify through the STORE ONLY (retrieveGitHubToken), not getGitHubTokenAsync
+    // which is env-first: if the operator has GITHUB_TOKEN set in the process
+    // environment, an env hit would mask a failed session-store write (e.g. a
+    // silently-failed database write) and we would falsely report success.
+    const stored = await this.tokenManager.retrieveGitHubToken();
+    if (!stored) {
+      throw ErrorHandler.wrapError(
+        new Error('token was not retrievable from the session token store after storage'),
+        'OAuth helper token import failed',
+        ErrorCategory.AUTH_ERROR,
+      );
+    }
+  }
+
   /**
    * Fetch user information from GitHub
    */
@@ -804,7 +824,8 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
   /**
    * Clean up any active operations (called on server shutdown)
    */
-  async cleanup(): Promise<void> {
+  cleanup(): Promise<void> {
+    try {
     // Abort any active polling
     if (this.activePolling) {
       this.activePolling.abort();
@@ -825,6 +846,10 @@ Don't have a GitHub account? You'll be prompted to create one (it's free!)
     
     // Clear API cache
     this.apiCache.clear();
+    return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
   
   /**

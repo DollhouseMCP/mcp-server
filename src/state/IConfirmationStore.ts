@@ -47,7 +47,9 @@ export interface IConfirmationStore {
 
   /**
    * Persist current state to the backing store.
-   * Implementations should use fire-and-forget with retry.
+   * The returned promise must settle only after the backing write completes.
+   * Callers may deliberately fire-and-forget housekeeping writes, while
+   * security decisions await this boundary before acknowledging them.
    */
   persist(): Promise<void>;
 

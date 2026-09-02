@@ -32,7 +32,7 @@ describe('IndexConfig', () => {
     }
 
     // Create instance via DI container
-    container.register('IndexConfigManager', () => new IndexConfigManager());
+    container.replace('IndexConfigManager', () => new IndexConfigManager());
     configManager = container.resolve('IndexConfigManager');
   });
 

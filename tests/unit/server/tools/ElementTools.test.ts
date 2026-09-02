@@ -124,6 +124,23 @@ describe('ElementTools', () => {
       });
     });
 
+    it('should return the structured result through the MCP response envelope', async () => {
+      const listTool = tools.find(t => t.tool.name === 'list_elements');
+      const structuredResult = {
+        items: [],
+        pagination: { page: 1, pageSize: 25, totalItems: 0, totalPages: 0 },
+        element_type: 'skill',
+      };
+      mockHandler.listElements.mockResolvedValueOnce(structuredResult as any);
+
+      const result = await listTool!.handler({ type: ElementType.SKILL });
+
+      expect(result).toEqual({
+        structuredContent: structuredResult,
+        content: [{ type: 'text', text: JSON.stringify(structuredResult, null, 2) }],
+      });
+    });
+
     it('should validate element type enum includes only MCP-supported types', () => {
       const listTool = tools.find(t => t.tool.name === 'list_elements');
       const enumValues = listTool!.tool.inputSchema.properties.type.enum;

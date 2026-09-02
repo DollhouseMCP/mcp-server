@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { GithubSocialMethod } from '../../../../../src/auth/embedded-as/methods/GithubSocialMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import type { SignInAllowlistAuthority } from '../../../../../src/auth/embedded-as/allowlistGate.js';
+
+const OLD_EMAIL = 'old@example.com';
+const NEW_EMAIL = 'new@example.com';
+const IDENTITY_CHANGED_EVENT_TYPE = 'auth.social.identity_changed';
 
 function resolveUrl(input: RequestInfo | URL): string {
   if (typeof input === 'string') return input;
@@ -25,7 +30,7 @@ function makeFetchMock(handlers: Record<string, (call: FetchCall) => Response>):
   calls: FetchCall[];
 } {
   const calls: FetchCall[] = [];
-  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrl(input);
     const call: FetchCall = {
       url,
@@ -38,10 +43,10 @@ function makeFetchMock(handlers: Record<string, (call: FetchCall) => Response>):
     calls.push(call);
     for (const [matcher, handler] of Object.entries(handlers)) {
       if (url.includes(matcher)) {
-        return handler(call);
+        return Promise.resolve(handler(call));
       }
     }
-    return new Response('not mocked', { status: 500 });
+    return Promise.resolve(new Response('not mocked', { status: 500 }));
   }) as typeof fetch;
   return { fetch: fetchImpl, calls };
 }
@@ -223,7 +228,7 @@ describe('GithubSocialMethod', () => {
         sub: 'github_42',
         provider: 'github',
         externalSub: '42',
-        email: 'old@example.com',
+        email: OLD_EMAIL,
         emailVerified: true,
         displayName: 'Octo Cat',
         createdAt: 1000,
@@ -233,7 +238,7 @@ describe('GithubSocialMethod', () => {
       const { fetch } = makeFetchMock({
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
         'api.github.com/user/emails': () => jsonResponse([
-          { email: 'new@example.com', verified: true, primary: true },
+          { email: NEW_EMAIL, verified: true, primary: true },
         ]),
         'api.github.com/user': () => jsonResponse({ id: 42, login: 'octocat', name: 'Octo Cat' }),
       });
@@ -248,12 +253,12 @@ describe('GithubSocialMethod', () => {
       expect(result.kind).toBe('ok');
 
       const events = await storage.listIdentityEvents();
-      const change = events.find(e => e.type === 'auth.social.identity_changed');
+      const change = events.find(e => e.type === IDENTITY_CHANGED_EVENT_TYPE);
       expect(change).toBeDefined();
       expect(change?.externalSub).toBe('42');
       expect(change?.details).toMatchObject({
-        previousEmail: 'old@example.com',
-        newEmail: 'new@example.com',
+        previousEmail: OLD_EMAIL,
+        newEmail: NEW_EMAIL,
       });
     });
 
@@ -263,7 +268,7 @@ describe('GithubSocialMethod', () => {
         sub: 'github_42',
         provider: 'github',
         externalSub: '42',
-        email: 'old@example.com',
+        email: OLD_EMAIL,
         emailVerified: true,
         displayName: 'Octo Cat',
         createdAt: 1000, updatedAt: 1000,
@@ -280,7 +285,7 @@ describe('GithubSocialMethod', () => {
       const { fetch } = makeFetchMock({
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
         'api.github.com/user/emails': () => jsonResponse([
-          { email: 'new@example.com', verified: true, primary: true },
+          { email: NEW_EMAIL, verified: true, primary: true },
         ]),
         'api.github.com/user': () => jsonResponse({ id: 42, login: 'octocat', name: 'Octo Cat' }),
       });
@@ -301,9 +306,89 @@ describe('GithubSocialMethod', () => {
       expect(await storage.genericGet('AccessToken', 't-other')).not.toBeNull();
 
       // Audit event records the revocation count.
-      const events = await storage.listIdentityEvents({ type: 'auth.social.identity_changed' });
+      const events = await storage.listIdentityEvents({ type: IDENTITY_CHANGED_EVENT_TYPE });
       expect(events).toHaveLength(1);
       expect(events[0].details).toMatchObject({ grantsRevoked: 2 });
+    });
+
+    it('keeps the old email durable when identity-change grant revocation fails', async () => {
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: OLD_EMAIL,
+        emailVerified: true,
+        displayName: 'Octo Cat',
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+      await storage.genericSet('Grant', 'g-affected', { accountId: 'github_42', clientId: 'c1' });
+      jest.spyOn(storage, 'genericRevokeByGrantId').mockRejectedValueOnce(new Error('revocation failed'));
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
+        'api.github.com/user/emails': () => jsonResponse([
+          { email: NEW_EMAIL, verified: true, primary: true },
+        ]),
+        'api.github.com/user': () => jsonResponse({ id: 42, login: 'octocat', name: 'Octo Cat' }),
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: CALLBACK_URL,
+        storage, fetchImpl: fetch,
+      });
+
+      await expect(method.processCallback({ code: 'c', state: 'i' })).rejects.toThrow('revocation failed');
+      await expect(storage.findAccountByExternalId('github', '42')).resolves.toMatchObject({
+        email: OLD_EMAIL,
+      });
+    });
+
+    it('does not retain an identity-change audit when the final atomic gate denies provisioning', async () => {
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: OLD_EMAIL,
+        emailVerified: true,
+        displayName: 'Octo Cat',
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+      const provisionAccountIfAllowed = jest.fn<
+        NonNullable<SignInAllowlistAuthority['provisionAccountIfAllowed']>
+      >().mockResolvedValue({ allowed: false, reason: 'deleted concurrently' });
+      const authority: SignInAllowlistAuthority = {
+        matchesIdentity: () => Promise.resolve(true),
+        hasAnyEntries: () => Promise.resolve(true),
+        listEntries: () => Promise.resolve([]),
+        provisionAccountIfAllowed,
+      };
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
+        'api.github.com/user/emails': () => jsonResponse([
+          { email: NEW_EMAIL, verified: true, primary: true },
+        ]),
+        'api.github.com/user': () => jsonResponse({ id: 42, login: 'octocat', name: 'Octo Cat' }),
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: CALLBACK_URL,
+        storage, fetchImpl: fetch,
+        signInAllowlistAuthority: authority,
+      });
+
+      await expect(method.processCallback({ code: 'c', state: 'i' })).resolves.toEqual({
+        kind: 'denied',
+        reason: 'deleted concurrently',
+      });
+      expect(provisionAccountIfAllowed).toHaveBeenCalledWith(expect.objectContaining({
+        successAuditEvent: expect.objectContaining({
+          type: IDENTITY_CHANGED_EVENT_TYPE,
+          sub: 'github_42',
+        }),
+      }));
+      await expect(storage.listIdentityEvents({ type: IDENTITY_CHANGED_EVENT_TYPE }))
+        .resolves.toHaveLength(0);
     });
 
     it('does NOT emit identity_changed when the email is unchanged', async () => {
@@ -335,7 +420,7 @@ describe('GithubSocialMethod', () => {
       await method.processCallback({ code: 'c', state: 'i' });
 
       const events = await storage.listIdentityEvents();
-      expect(events.find(e => e.type === 'auth.social.identity_changed')).toBeUndefined();
+      expect(events.find(e => e.type === IDENTITY_CHANGED_EVENT_TYPE)).toBeUndefined();
     });
 
     it('returns error when the GitHub token exchange fails', async () => {
@@ -365,9 +450,9 @@ describe('GithubSocialMethod', () => {
     });
 
     it('returns structured error when token-exchange fetch throws (network failure) — H7', async () => {
-      const fetchImpl = (async () => {
-        throw new TypeError('fetch failed: ECONNREFUSED');
-      }) as unknown as typeof fetch;
+      const fetchImpl = (() => Promise.reject(
+        new TypeError('fetch failed: ECONNREFUSED'),
+      )) as unknown as typeof fetch;
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
         callbackUrl: CALLBACK_URL,
@@ -381,9 +466,9 @@ describe('GithubSocialMethod', () => {
 
     it('returns structured error when token-exchange returns non-JSON body — H7', async () => {
       // GitHub has been observed returning HTML on 5xx; .json() throws.
-      const fetchImpl = (async () => new Response('<html>oops</html>', {
+      const fetchImpl = (() => Promise.resolve(new Response('<html>oops</html>', {
         status: 200, headers: { 'Content-Type': 'text/html' },
-      })) as unknown as typeof fetch;
+      }))) as unknown as typeof fetch;
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
         callbackUrl: CALLBACK_URL,

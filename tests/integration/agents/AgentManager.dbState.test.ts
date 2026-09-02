@@ -1,3 +1,6 @@
+/// <reference types="node" />
+
+import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -29,7 +32,38 @@ import {
   isDatabaseAvailable,
 } from '../database/test-db-helpers.js';
 
+const DB_STATE_AGENT_NAME = 'db-state-agent';
+
 let dbAvailable = false;
+
+function createDbAgentManager(tempDir: string, tracker: ContextTracker): AgentManager {
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+  const metadataService = new MetadataService();
+  const portfolioManager = new PortfolioManager(fileOperations, { baseDir: tempDir });
+  const validationRegistry = new ValidationRegistry(
+    new ValidationService(),
+    new TriggerValidationService(),
+    metadataService,
+  );
+  const userIdResolver = createUserIdResolver(tracker);
+  const sessionIdResolver = createSessionIdResolver(tracker);
+
+  return new AgentManager({
+    portfolioManager,
+    fileLockManager,
+    baseDir: tempDir,
+    fileOperationsService: fileOperations,
+    validationRegistry,
+    serializationService: new SerializationService(),
+    metadataService,
+    eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
+    stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
+    contextTracker: tracker,
+    getCurrentUserId: userIdResolver,
+  });
+}
 
 beforeAll(async () => {
   dbAvailable = await isDatabaseAvailable();
@@ -57,35 +91,6 @@ describe('AgentManager DB-backed runtime state', () => {
     const userId = await ensureTestUser();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-state-'));
     const tracker = new ContextTracker();
-    const userIdResolver = createUserIdResolver(tracker);
-    const sessionIdResolver = createSessionIdResolver(tracker);
-
-    const createManager = (): AgentManager => {
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const metadataService = new MetadataService();
-      const portfolioManager = new PortfolioManager(fileOperations, { baseDir: tempDir });
-      const validationRegistry = new ValidationRegistry(
-        new ValidationService(),
-        new TriggerValidationService(),
-        metadataService,
-      );
-
-      return new AgentManager({
-        portfolioManager,
-        fileLockManager,
-        baseDir: tempDir,
-        fileOperationsService: fileOperations,
-        validationRegistry,
-        serializationService: new SerializationService(),
-        metadataService,
-        eventDispatcher: new ElementEventDispatcher(),
-        storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
-        stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
-        contextTracker: tracker,
-        getCurrentUserId: userIdResolver,
-      });
-    };
 
     const session = {
       userId,
@@ -98,9 +103,9 @@ describe('AgentManager DB-backed runtime state', () => {
 
     try {
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
-        const manager = createManager();
+        const manager = createDbAgentManager(tempDir, tracker);
         const created = await manager.create(
-          'db-state-agent',
+          DB_STATE_AGENT_NAME,
           'Persists runtime state in Postgres',
           'Use the provided objective as the active goal.',
           {
@@ -112,7 +117,7 @@ describe('AgentManager DB-backed runtime state', () => {
         );
         expect(created.success).toBe(true);
 
-        await manager.executeAgent('db-state-agent', { objective: 'remember me' });
+        await manager.executeAgent(DB_STATE_AGENT_NAME, { objective: 'remember me' });
 
         const rows = await withUserRead(getTestDb(), userId, (tx) =>
           tx
@@ -134,9 +139,9 @@ describe('AgentManager DB-backed runtime state', () => {
           ]),
         );
 
-        const reloadedManager = createManager();
+        const reloadedManager = createDbAgentManager(tempDir, tracker);
         const reloaded = await reloadedManager.getAgentState({
-          agentName: 'db-state-agent',
+          agentName: DB_STATE_AGENT_NAME,
           includeDecisionHistory: true,
         });
 
@@ -147,26 +152,85 @@ describe('AgentManager DB-backed runtime state', () => {
         );
 
         const recoveryState = await reloadedManager.getAgentStateForRecovery({
-          agentName: 'db-state-agent',
+          agentName: DB_STATE_AGENT_NAME,
         });
         const activeGoal = recoveryState.state.goals.find((goal) => goal.status === 'in_progress');
         expect(activeGoal).toBeDefined();
+        if (!activeGoal) {
+          throw new Error('Expected an active recovery goal');
+        }
 
         await reloadedManager.completeAgentGoalForRecovery({
-          agentName: 'db-state-agent',
-          goalId: activeGoal!.id,
+          agentName: DB_STATE_AGENT_NAME,
+          goalId: activeGoal.id,
           outcome: 'failure',
           summary: 'Recovery-path integration test',
         });
 
         const completedState = await reloadedManager.getAgentStateForRecovery({
-          agentName: 'db-state-agent',
+          agentName: DB_STATE_AGENT_NAME,
         });
         expect(completedState.state.goals).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ id: activeGoal!.id, status: 'failed' }),
+            expect.objectContaining({ id: activeGoal.id, status: 'failed' }),
           ]),
         );
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('deletes DB-backed agents and their UUID-keyed runtime state by canonical filename', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-delete-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-delete-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const manager = createDbAgentManager(tempDir, tracker);
+        const created = await manager.create(
+          'db-delete-agent',
+          'Deletes its runtime state with the element',
+          'Use the provided objective as the active goal.',
+          {
+            goal: {
+              template: '{objective}',
+              parameters: [{ name: 'objective', type: 'string', required: true }],
+            },
+          },
+        );
+        expect(created.success).toBe(true);
+        await manager.executeAgent('db-delete-agent', { objective: 'delete me' });
+
+        const beforeDelete = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(beforeDelete).toHaveLength(1);
+
+        await manager.delete('db-delete-agent.md');
+
+        expect(await manager.read('db-delete-agent')).toBeNull();
+        const afterDelete = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(afterDelete).toEqual([]);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -179,35 +243,6 @@ describe('AgentManager DB-backed runtime state', () => {
     const userId = await ensureTestUser();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-state-isolation-'));
     const tracker = new ContextTracker();
-    const userIdResolver = createUserIdResolver(tracker);
-    const sessionIdResolver = createSessionIdResolver(tracker);
-
-    const createManager = (): AgentManager => {
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const metadataService = new MetadataService();
-      const portfolioManager = new PortfolioManager(fileOperations, { baseDir: tempDir });
-      const validationRegistry = new ValidationRegistry(
-        new ValidationService(),
-        new TriggerValidationService(),
-        metadataService,
-      );
-
-      return new AgentManager({
-        portfolioManager,
-        fileLockManager,
-        baseDir: tempDir,
-        fileOperationsService: fileOperations,
-        validationRegistry,
-        serializationService: new SerializationService(),
-        metadataService,
-        eventDispatcher: new ElementEventDispatcher(),
-        storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
-        stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
-        contextTracker: tracker,
-        getCurrentUserId: userIdResolver,
-      });
-    };
 
     const sessionAlpha = {
       userId,
@@ -227,8 +262,10 @@ describe('AgentManager DB-backed runtime state', () => {
     };
 
     try {
+      // Production HTTP sessions share the root AgentManager. Reuse one here
+      // so this test catches session state leaking through its element cache.
+      const manager = createDbAgentManager(tempDir, tracker);
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createManager();
         const created = await manager.create(
           'shared-state-agent',
           'Persists isolated runtime state in Postgres',
@@ -245,7 +282,6 @@ describe('AgentManager DB-backed runtime state', () => {
       });
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionBeta }, async () => {
-        const manager = createManager();
         await manager.executeAgent('shared-state-agent', { objective: 'goal from beta' });
       });
 
@@ -272,7 +308,6 @@ describe('AgentManager DB-backed runtime state', () => {
       );
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createManager();
         const state = await manager.getAgentState({ agentName: 'shared-state-agent' });
         expect(state.state.goals).toEqual(
           expect.arrayContaining([expect.objectContaining({ description: 'goal from alpha' })]),

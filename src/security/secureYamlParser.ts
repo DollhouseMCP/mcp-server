@@ -10,10 +10,8 @@
  * - Template files (e.g., meeting-notes.md)
  * - Any Markdown file with YAML frontmatter between --- markers
  * 
- * DO NOT USE THIS FOR:
- * - Pure YAML configuration files (use js-yaml directly with FAILSAFE_SCHEMA)
- * - JSON files
- * - Plain text files without frontmatter
+ * For bounded pure-YAML documents, use parseRawYaml() and select the schema
+ * required by the data contract. Do not call js-yaml directly at input boundaries.
  * 
  * FILE FORMAT EXPECTED:
  * ```
@@ -37,6 +35,7 @@ import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 import { SecurityError } from '../errors/SecurityError.js';
 import { ContentValidator } from './contentValidator.js';
+import { SECURITY_LIMITS } from './constants.js';
 import { SecurityMonitor } from './securityMonitor.js';
 
 export interface SecureParseOptions {
@@ -49,6 +48,15 @@ export interface SecureParseOptions {
   contentContext?: 'persona' | 'skill' | 'template' | 'agent' | 'memory';
 }
 
+export interface SecureRawYamlParseOptions {
+  maxSize?: number;
+  schema?: 'core' | 'json' | 'failsafe';
+  /** Strict scans scalar text; structure-only leaves element content policy to its owner. */
+  contentPolicy?: 'strict' | 'structure-only';
+  /** When provided, recursively validates parsed scalar values using the element's content policy. */
+  contentContext?: NonNullable<SecureParseOptions['contentContext']>;
+}
+
 export interface ParsedContent {
   data: Record<string, any>;
   content: string;
@@ -56,6 +64,12 @@ export interface ParsedContent {
 }
 
 export class SecureYamlParser {
+  private static readonly RAW_YAML_MAX_DEPTH = 64;
+  private static readonly RAW_YAML_MAX_EXPANDED_NODES = 100_000;
+  private static readonly RAW_YAML_MAX_REFERENCE_REUSE = SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD;
+  private static readonly RAW_YAML_MAX_TEXT_EXPANSION_RATIO =
+    SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD + 1;
+
   private static readonly DEFAULT_OPTIONS: SecureParseOptions = {
     maxYamlSize: 64 * 1024,      // 64KB for YAML
     maxContentSize: 1024 * 1024,  // 1MB for content
@@ -128,15 +142,17 @@ export class SecureYamlParser {
    */
   static parse(input: string, options: SecureParseOptions = {}): ParsedContent {
     const opts = { ...this.DEFAULT_OPTIONS, ...options };
+    const maxContentSize = opts.maxContentSize ?? 1024 * 1024;
+    const maxYamlSize = opts.maxYamlSize ?? 64 * 1024;
 
     // 1. Size validation
-    if (input.length > (opts.maxContentSize || this.DEFAULT_OPTIONS.maxContentSize!)) {
+    if (input.length > maxContentSize) {
       throw new SecurityError('Content exceeds maximum allowed size', 'medium');
     }
 
     // 2. Extract frontmatter boundaries
     // FIX: Support both Unix (\n) and Windows (\r\n) line endings
-    const frontmatterMatch = input.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const frontmatterMatch = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
     if (!frontmatterMatch) {
       // No frontmatter, return empty data
       return {
@@ -149,29 +165,66 @@ export class SecureYamlParser {
     const markdownContent = input.substring(frontmatterMatch[0].length);
 
     // 3. Validate YAML size
-    if (yamlContent.length > (opts.maxYamlSize || this.DEFAULT_OPTIONS.maxYamlSize!)) {
+    if (yamlContent.length > maxYamlSize) {
       throw new SecurityError('YAML frontmatter exceeds maximum allowed size', 'medium');
     }
 
     // 4. Pre-parse security validation
-    // FIX (Issue #1211): Only validate content if validateContent option is true
-    if (opts.validateContent && !ContentValidator.validateYamlContent(yamlContent)) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_INJECTION_ATTEMPT',
-        severity: 'CRITICAL',
-        source: 'SecureYamlParser',
-        details: 'Malicious YAML pattern detected during parsing'
-      });
-      throw new SecurityError('Malicious YAML content detected', 'critical');
-    }
+    this.validateFrontmatterSecurity(yamlContent, opts);
 
     // 5. Parse with safe schema
-    let data: any;
+    const data = this.loadFrontmatterYaml(yamlContent);
+
+    this.assertBoundedRawYamlStructure(data, yamlContent.length);
+
+    // 6. Ensure data is an object
+    this.assertObjectRoot(data);
+
+    // 7. Validate allowed keys if specified
+    this.assertAllowedKeys(data, opts.allowedKeys);
+
+    // 8. Validate field types and content
+    this.validateParsedFields(data, opts);
+
+    // 9. Validate markdown content if requested
+    const finalContent = this.validateMarkdownContent(markdownContent, opts);
+
+    return {
+      data,
+      content: finalContent
+    };
+  }
+
+  private static validateFrontmatterSecurity(
+    yamlContent: string,
+    options: SecureParseOptions
+  ): void {
+    // FIX (Issue #1211): Only validate content if validateContent option is true.
+    if (!options.validateContent) return;
+
+    const structureOnly = options.contentContext === 'skill'
+      || options.contentContext === 'template'
+      || options.contentContext === 'agent';
+    const yamlIsValid = structureOnly
+      ? ContentValidator.validateYamlStructure(yamlContent, options.maxYamlSize)
+      : ContentValidator.validateYamlContent(yamlContent, options.maxYamlSize);
+    if (yamlIsValid) return;
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_INJECTION_ATTEMPT',
+      severity: 'CRITICAL',
+      source: 'SecureYamlParser',
+      details: 'Malicious YAML pattern detected during parsing'
+    });
+    throw new SecurityError('Malicious YAML content detected', 'critical');
+  }
+
+  private static loadFrontmatterYaml(yamlContent: string): unknown {
     try {
-      data = yaml.load(yamlContent, {
+      return yaml.load(yamlContent, {
         schema: this.SAFE_SCHEMA,
-        json: false,  // Don't allow JSON-specific types
-        onWarning: (warning) => {
+        json: false,
+        onWarning: warning => {
           SecurityMonitor.logSecurityEvent({
             type: 'YAML_PARSING_WARNING',
             severity: 'LOW',
@@ -181,61 +234,108 @@ export class SecureYamlParser {
         }
       });
     } catch (error) {
-      throw new SecurityError(`YAML parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'high');
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new SecurityError(`YAML parsing failed: ${message}`, 'high');
     }
+  }
 
-    // 6. Ensure data is an object
+  private static assertObjectRoot(data: unknown): asserts data is Record<string, any> {
     if (typeof data !== 'object' || data === null || Array.isArray(data)) {
       throw new SecurityError('YAML must contain an object at root level', 'medium');
     }
+  }
 
-    // 7. Validate allowed keys if specified
-    if (opts.allowedKeys) {
-      const invalidKeys = Object.keys(data).filter(key => !opts.allowedKeys!.includes(key));
-      if (invalidKeys.length > 0) {
-        throw new SecurityError(`Invalid YAML keys detected: ${invalidKeys.join(', ')}`, 'medium');
-      }
+  private static assertAllowedKeys(
+    data: Record<string, any>,
+    allowedKeys?: string[]
+  ): void {
+    if (!allowedKeys) return;
+
+    const invalidKeys = Object.keys(data).filter(key => !allowedKeys.includes(key));
+    if (invalidKeys.length > 0) {
+      throw new SecurityError(`Invalid YAML keys detected: ${invalidKeys.join(', ')}`, 'medium');
     }
+  }
 
-    // 8. Validate field types and content
+  private static validateParsedFields(
+    data: Record<string, any>,
+    options: SecureParseOptions
+  ): void {
+    const visitedValues = new WeakSet<object>();
     for (const [key, value] of Object.entries(data)) {
-      const hasFieldValidator = Object.prototype.hasOwnProperty.call(this.FIELD_VALIDATORS, key);
+      const hasFieldValidator = Object.hasOwn(this.FIELD_VALIDATORS, key);
       const fieldValidator = hasFieldValidator ? this.FIELD_VALIDATORS[key] : undefined;
-
-      // Check field-specific validators only if field validation is enabled
-      if (opts.validateFields && typeof fieldValidator === 'function' && !fieldValidator(value)) {
+      if (options.validateFields && typeof fieldValidator === 'function' && !fieldValidator(value)) {
         throw new SecurityError(`Invalid value for field '${key}'`, 'medium');
       }
 
-      // Validate string fields for injection patterns
-      if (typeof value === 'string' && opts.validateContent) {
-        const validation = ContentValidator.validateAndSanitize(value, {
-          contentContext: opts.contentContext,
-        });
-        if (!validation.isValid && validation.severity === 'critical') {
-          throw new SecurityError(`Security threat detected in field '${key}'`, 'critical');
-        }
-        // Replace with sanitized content
-        data[key] = validation.sanitizedContent;
+      if (options.validateContent) {
+        data[key] = this.validateAndSanitizeParsedValue(
+          value,
+          key,
+          options.contentContext,
+          visitedValues,
+        );
       }
     }
+  }
 
-    // 9. Validate markdown content if requested
-    let finalContent = markdownContent;
-    if (opts.validateContent) {
-      const contentValidation = ContentValidator.validateAndSanitize(markdownContent, {
-        contentContext: opts.contentContext,
-      });
-      if (!contentValidation.isValid && contentValidation.severity === 'critical') {
-        throw new SecurityError('Security threat detected in content', 'critical');
+  private static validateMarkdownContent(
+    markdownContent: string,
+    options: SecureParseOptions
+  ): string {
+    if (!options.validateContent) return markdownContent;
+
+    const validation = ContentValidator.validateAndSanitize(markdownContent, {
+      contentContext: options.contentContext,
+    });
+    if (!validation.isValid && validation.severity === 'critical') {
+      throw new SecurityError('Security threat detected in content', 'critical');
+    }
+    return validation.sanitizedContent || markdownContent;
+  }
+
+  private static validateAndSanitizeParsedValue(
+    value: unknown,
+    path: string,
+    contentContext: SecureParseOptions['contentContext'],
+    visited: WeakSet<object>,
+  ): unknown {
+    if (typeof value === 'string') {
+      const validation = ContentValidator.validateAndSanitize(value, { contentContext });
+      if (!validation.isValid && validation.severity === 'critical') {
+        throw new SecurityError(`Security threat detected in field '${path}'`, 'critical');
       }
-      finalContent = contentValidation.sanitizedContent || markdownContent;
+      return validation.sanitizedContent ?? value;
     }
 
-    return {
-      data,
-      content: finalContent
-    };
+    if (typeof value !== 'object' || value === null || visited.has(value)) {
+      return value;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        value[index] = this.validateAndSanitizeParsedValue(
+          value[index],
+          `${path}[${index}]`,
+          contentContext,
+          visited,
+        );
+      }
+      return value;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      record[key] = this.validateAndSanitizeParsedValue(
+        child,
+        `${path}.${key}`,
+        contentContext,
+        visited,
+      );
+    }
+    return record;
   }
 
   /**
@@ -294,7 +394,7 @@ export class SecureYamlParser {
             if (typeof parsed !== 'object' || parsed === null) {
               return {};
             }
-            return parsed as object;
+            return parsed;
           },
           stringify: (obj: any) => {
             return yaml.dump(obj, {
@@ -328,11 +428,19 @@ export class SecureYamlParser {
    */
   static parseRawYaml(
     yamlContent: string,
-    maxSize: number = 64 * 1024,
-    options: { detectContentPatterns?: boolean } = {},
+    maxSizeOrOptions: number | SecureRawYamlParseOptions = 64 * 1024,
   ): Record<string, unknown> {
+    const options = typeof maxSizeOrOptions === 'number'
+      ? { maxSize: maxSizeOrOptions, schema: 'core' as const, contentPolicy: 'strict' as const }
+      : {
+          maxSize: 64 * 1024,
+          schema: 'core' as const,
+          contentPolicy: 'strict' as const,
+          ...maxSizeOrOptions,
+        };
+
     // Size validation
-    if (yamlContent.length > maxSize) {
+    if (yamlContent.length > options.maxSize) {
       throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
     }
 
@@ -341,7 +449,10 @@ export class SecureYamlParser {
     // Issue #2329: pass maxSize through — validateYamlContent's own default cap is
     // 64KB (frontmatter-sized), which rejected larger pure-YAML documents even
     // when the caller allowed them.
-    if (!ContentValidator.validateYamlContent(yamlContent, maxSize, options)) {
+    const isValid = options.contentPolicy === 'structure-only'
+      ? ContentValidator.validateYamlStructure(yamlContent, options.maxSize)
+      : ContentValidator.validateYamlContent(yamlContent, options.maxSize);
+    if (!isValid) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',
@@ -353,15 +464,78 @@ export class SecureYamlParser {
 
     // Parse with safe schema
     const parsed = yaml.load(yamlContent, {
-      schema: this.SAFE_SCHEMA,  // CORE_SCHEMA - safe basic types only
+      schema: this.rawYamlSchema(options.schema),
       json: false
     });
 
     // Ensure result is an object
-    if (typeof parsed !== 'object' || parsed === null) {
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new SecurityError('YAML content must parse to an object', 'medium');
+    }
+    this.assertBoundedRawYamlStructure(parsed, yamlContent.length);
+    if (options.contentContext) {
+      this.validateAndSanitizeParsedValue(
+        parsed,
+        'frontmatter',
+        options.contentContext,
+        new WeakSet<object>(),
+      );
     }
 
     return parsed as Record<string, unknown>;
+  }
+
+  private static assertBoundedRawYamlStructure(root: unknown, sourceLength: number): void {
+    const referenceVisits = new WeakMap<object, number>();
+    const visiting = new WeakSet<object>();
+    const maxExpandedTextCharacters = Math.max(sourceLength, 1) * this.RAW_YAML_MAX_TEXT_EXPANSION_RATIO;
+    let nodes = 0;
+    let expandedTextCharacters = 0;
+
+    const visit = (value: unknown, depth: number): void => {
+      nodes += 1;
+      if (nodes > this.RAW_YAML_MAX_EXPANDED_NODES || depth > this.RAW_YAML_MAX_DEPTH) {
+        throw new SecurityError('YAML structure exceeds safe complexity limits', 'high');
+      }
+      if (typeof value === 'string') {
+        expandedTextCharacters += value.length;
+        if (expandedTextCharacters > maxExpandedTextCharacters) {
+          throw new SecurityError('YAML content expansion exceeds safe limits', 'high');
+        }
+        return;
+      }
+      if (typeof value !== 'object' || value === null) return;
+      const referenceVisitCount = (referenceVisits.get(value) ?? 0) + 1;
+      referenceVisits.set(value, referenceVisitCount);
+      if (referenceVisitCount - 1 > this.RAW_YAML_MAX_REFERENCE_REUSE) {
+        throw new SecurityError('YAML aliases exceed safe reuse limits', 'high');
+      }
+      if (visiting.has(value)) {
+        throw new SecurityError('YAML aliases may not create cyclic data', 'high');
+      }
+      visiting.add(value);
+      for (const [key, child] of Object.entries(value)) {
+        expandedTextCharacters += key.length;
+        if (expandedTextCharacters > maxExpandedTextCharacters) {
+          throw new SecurityError('YAML content expansion exceeds safe limits', 'high');
+        }
+        visit(child, depth + 1);
+      }
+      visiting.delete(value);
+    };
+
+    visit(root, 0);
+  }
+
+  private static rawYamlSchema(schema: SecureRawYamlParseOptions['schema']): yaml.Schema {
+    switch (schema) {
+      case 'failsafe':
+        return yaml.FAILSAFE_SCHEMA;
+      case 'json':
+        return yaml.JSON_SCHEMA;
+      case 'core':
+      case undefined:
+        return this.SAFE_SCHEMA;
+    }
   }
 }

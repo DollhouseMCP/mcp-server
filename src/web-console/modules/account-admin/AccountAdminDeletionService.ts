@@ -5,6 +5,7 @@ import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } fro
 import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
 import type { IConsoleAccountAdminStore, PrincipalDeletionOutcome } from '../../stores/IConsoleAccountAdminStore.js';
+import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountDeletion, type AccountDeletionDto } from './AccountAdminDtos.js';
 import {
@@ -13,12 +14,15 @@ import {
   type AccountRuntimeTerminationSummary,
 } from './AccountAdminRuntimeTerminationService.js';
 
+const INTEGRATION_CREDENTIAL_CLEANUP_OVERRIDE = 'abandon_unrevoked_provider_credentials';
+
 export interface AccountAdminDeletionServiceOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly sessionStore: IConsoleSessionStore;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
   readonly runtimeTerminationService?: AccountAdminRuntimeTerminationService | null;
+  readonly integrationStore?: IUserIntegrationStore | null;
   readonly now?: () => Date;
 }
 
@@ -64,6 +68,9 @@ export class AccountAdminDeletionService {
         'Deleting this principal would leave zero enabled account administrators.',
       );
     }
+    const cleanupPreparation = await this.prepareIntegrationCredentialDeletion(req, route, userId);
+    if (cleanupPreparation.blockedResult) return cleanupPreparation.blockedResult;
+    const cleanupOverrideApplied = cleanupPreparation.overrideApplied;
 
     // Revoke sessions/grants/runtime BEFORE removing the identity: grant
     // revocation resolves the user's auth_accounts subjects, which the delete
@@ -82,6 +89,7 @@ export class AccountAdminDeletionService {
     } catch {
       await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
         phase: 'pre_delete_revocation',
+        ...cleanupOverrideAuditArgs(cleanupOverrideApplied),
       });
       return problem(503, 'service_unavailable', 'Service unavailable', 'Credential revocation failed before the account was removed.');
     }
@@ -89,7 +97,11 @@ export class AccountAdminDeletionService {
     let deletion: PrincipalDeletionOutcome;
     try {
       deletion = await this.options.transactionRunner.run(async tx => {
-        const result = await tx.deletePrincipal({ userId, deletedAt: occurredAt });
+        const result = await tx.deletePrincipal({
+          userId,
+          deletedByUserId: actor.userId,
+          deletedAt: occurredAt,
+        });
         if (!result) throw new PrincipalVanishedError();
         // The tombstone row still exists and can anchor an acknowledged
         // invalidation; a hard-deleted user has nothing left to invalidate.
@@ -115,7 +127,11 @@ export class AccountAdminDeletionService {
           // via the (FK-free) resourceId text field instead.
           targetUserId: result.outcome === 'anonymized' ? userId : null,
           resourceId: userId,
-          argsRedacted: { operation: 'delete', outcome: result.outcome },
+          argsRedacted: {
+            operation: 'delete',
+            outcome: result.outcome,
+            ...cleanupOverrideAuditArgs(cleanupOverrideApplied),
+          },
           resultDetailRedacted: { outcome: result.outcome, new_authz_version: result.authzVersion },
         }));
         return result;
@@ -164,6 +180,41 @@ export class AccountAdminDeletionService {
     }
   }
 
+  private async prepareIntegrationCredentialDeletion(
+    req: ConsoleRequest,
+    route: ConsoleRouteDefinition,
+    userId: string,
+  ): Promise<{ readonly blockedResult: ConsoleHandlerResult | null; readonly overrideApplied: boolean }> {
+    const store = this.options.integrationStore;
+    if (!store || !await store.hasBlockingCredentialMaterial(userId)) {
+      return { blockedResult: null, overrideApplied: false };
+    }
+    const abandoned = requestsIntegrationCredentialCleanupOverride(req)
+      ? await store.abandonCredentialCleanupForUser({ userId })
+      : [];
+    const overrideApplied = abandoned.length > 0;
+    if (!await store.hasBlockingCredentialMaterial(userId)) {
+      return { blockedResult: null, overrideApplied };
+    }
+    await this.writeAttemptAudit(
+      req,
+      route,
+      'rejected',
+      'integration_credential_cleanup_pending',
+      userId,
+      cleanupOverrideAuditArgs(overrideApplied),
+    );
+    return {
+      blockedResult: problem(
+        409,
+        'integration_credential_cleanup_pending',
+        'Conflict',
+        'Provider credentials must be disconnected and remotely revoked before deleting this account.',
+      ),
+      overrideApplied,
+    };
+  }
+
   private async writeAttemptAudit(
     req: ConsoleRequest,
     route: ConsoleRouteDefinition,
@@ -188,6 +239,14 @@ export class AccountAdminDeletionService {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+}
+
+function requestsIntegrationCredentialCleanupOverride(req: ConsoleRequest): boolean {
+  return req.body.integration_credential_cleanup_override === INTEGRATION_CREDENTIAL_CLEANUP_OVERRIDE;
+}
+
+function cleanupOverrideAuditArgs(applied: boolean): Readonly<Record<string, unknown>> {
+  return applied ? { integrationCredentialCleanupOverride: true } : {};
 }
 
 interface DeletionAuditEventInput {

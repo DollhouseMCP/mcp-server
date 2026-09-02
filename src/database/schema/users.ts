@@ -8,7 +8,7 @@
  * @since v2.2.0 — Phase 4, Step 4.1
  */
 
-import { pgTable, uuid, varchar, timestamp, jsonb, bigint, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, jsonb, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
@@ -29,6 +29,9 @@ export const users = pgTable('users', {
 }, (table) => [
   uniqueIndex('idx_users_username').on(table.username),
   uniqueIndex('idx_users_account_correlation_id').on(table.accountCorrelationId),
+  // Keyset pagination for the cross-tenant users directory (Family B): `(created_at, id)`
+  // over live accounts only, matching `ORDER BY created_at ASC, id ASC` + `(created_at, id) > cursor`.
+  index('idx_users_created_at_id_active').on(table.createdAt, table.id).where(sql`deleted_at IS NULL`),
 ]);
 
 // Identity fields (username, email, displayName) live exclusively in the

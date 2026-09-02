@@ -70,6 +70,143 @@ describe('GatekeeperSession CLI approval store', () => {
       // First one should be evicted
       expect(pending.find(p => p.requestId === ids[0])).toBeUndefined();
     });
+
+    it('deletes a capacity-evicted approval from the backing store', async () => {
+      const store = {
+        initialize: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        persist: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        getAllConfirmations: jest.fn().mockReturnValue([]),
+        getAllCliApprovals: jest.fn().mockReturnValue([]),
+        getAllCliSessionApprovals: jest.fn().mockReturnValue([]),
+        getPermissionPromptActive: jest.fn().mockReturnValue(false),
+        saveConfirmation: jest.fn(),
+        getConfirmation: jest.fn(),
+        deleteConfirmation: jest.fn(),
+        clearAllConfirmations: jest.fn(),
+        saveCliApproval: jest.fn(),
+        getCliApproval: jest.fn(),
+        deleteCliApproval: jest.fn(),
+        saveCliSessionApproval: jest.fn(),
+        getCliSessionApproval: jest.fn(),
+        findApprovals: jest.fn().mockResolvedValue([]),
+        getRawApprovalDetail: jest.fn().mockResolvedValue(null),
+        savePermissionPromptActive: jest.fn(),
+        getSessionId: jest.fn().mockReturnValue(TEST_SESSION_ID),
+      };
+      const durableSession = new GatekeeperSession(
+        undefined,
+        100,
+        1,
+        store,
+        TEST_SESSION_ID,
+        auditResolver,
+      );
+      const evictedId = await durableSession.createCliApprovalRequest(moderateArgs('Tool0'));
+
+      await durableSession.createCliApprovalRequest(moderateArgs('Tool1'));
+
+      expect(store.deleteCliApproval).toHaveBeenCalledWith(evictedId);
+    });
+
+    it('does not expose a replacement approval until capacity eviction is durable', async () => {
+      let releaseEvictionPersist: (() => void) | undefined;
+      const evictionPersist = new Promise<void>((resolve) => {
+        releaseEvictionPersist = resolve;
+      });
+      const store = {
+        initialize: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        persist: jest.fn<() => Promise<void>>()
+          .mockResolvedValueOnce()
+          .mockImplementationOnce(() => evictionPersist)
+          .mockResolvedValue(),
+        getAllConfirmations: jest.fn().mockReturnValue([]),
+        getAllCliApprovals: jest.fn().mockReturnValue([]),
+        getAllCliSessionApprovals: jest.fn().mockReturnValue([]),
+        getPermissionPromptActive: jest.fn().mockReturnValue(false),
+        saveConfirmation: jest.fn(),
+        getConfirmation: jest.fn(),
+        deleteConfirmation: jest.fn(),
+        clearAllConfirmations: jest.fn(),
+        saveCliApproval: jest.fn(),
+        getCliApproval: jest.fn(),
+        deleteCliApproval: jest.fn(),
+        saveCliSessionApproval: jest.fn(),
+        getCliSessionApproval: jest.fn(),
+        findApprovals: jest.fn().mockResolvedValue([]),
+        getRawApprovalDetail: jest.fn().mockResolvedValue(null),
+        savePermissionPromptActive: jest.fn(),
+        getSessionId: jest.fn().mockReturnValue(TEST_SESSION_ID),
+      };
+      const durableSession = new GatekeeperSession(
+        undefined,
+        100,
+        1,
+        store,
+        TEST_SESSION_ID,
+        auditResolver,
+      );
+      await durableSession.createCliApprovalRequest(moderateArgs('Tool0'));
+
+      let replacementVisible = false;
+      const replacement = durableSession.createCliApprovalRequest(moderateArgs('Tool1'))
+        .then((requestId) => {
+          replacementVisible = true;
+          return requestId;
+        });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(store.deleteCliApproval).toHaveBeenCalled();
+      expect(replacementVisible).toBe(false);
+
+      releaseEvictionPersist?.();
+      await replacement;
+      expect(replacementVisible).toBe(true);
+    });
+
+    it('deletes stale consumed approvals from the backing store', async () => {
+      const store = {
+        initialize: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        persist: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        getAllConfirmations: jest.fn().mockReturnValue([]),
+        getAllCliApprovals: jest.fn().mockReturnValue([]),
+        getAllCliSessionApprovals: jest.fn().mockReturnValue([]),
+        getPermissionPromptActive: jest.fn().mockReturnValue(false),
+        saveConfirmation: jest.fn(),
+        getConfirmation: jest.fn(),
+        deleteConfirmation: jest.fn(),
+        clearAllConfirmations: jest.fn(),
+        saveCliApproval: jest.fn(),
+        getCliApproval: jest.fn(),
+        deleteCliApproval: jest.fn(),
+        saveCliSessionApproval: jest.fn(),
+        getCliSessionApproval: jest.fn(),
+        findApprovals: jest.fn().mockResolvedValue([]),
+        getRawApprovalDetail: jest.fn().mockResolvedValue(null),
+        savePermissionPromptActive: jest.fn(),
+        getSessionId: jest.fn().mockReturnValue(TEST_SESSION_ID),
+      };
+      const durableSession = new GatekeeperSession(
+        undefined,
+        100,
+        1,
+        store,
+        TEST_SESSION_ID,
+        auditResolver,
+      );
+      const requestId = await durableSession.createCliApprovalRequest({
+        ...moderateArgs('Tool0'),
+        ttlMs: 1_000,
+      });
+      const record = requireRecord(durableSession.getCliApproval(requestId));
+      record.consumed = true;
+      record.approvedAt = new Date(Date.now() - 5_000).toISOString();
+      record.requestedAt = new Date(Date.now() - 5_000).toISOString();
+
+      durableSession.getPendingCliApprovals();
+
+      expect(store.deleteCliApproval).toHaveBeenCalledWith(requestId);
+      expect(store.persist).toHaveBeenCalled();
+    });
   });
 
   describe('approveCliRequest', () => {

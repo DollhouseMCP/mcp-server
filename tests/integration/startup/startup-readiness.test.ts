@@ -20,6 +20,39 @@ import * as os from 'node:os';
 
 const SERVER_PATH = path.join(process.cwd(), 'dist', 'index.js');
 let nextId = 1;
+const activeServers = new Set<ChildProcess>();
+const closedServers = new WeakSet<ChildProcess>();
+
+function waitForServerClose(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (closedServers.has(proc)) return Promise.resolve(true);
+
+  return new Promise(resolve => {
+    const finish = (closed: boolean) => {
+      clearTimeout(timer);
+      proc.removeListener('close', onClose);
+      resolve(closed);
+    };
+    const onClose = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    proc.once('close', onClose);
+    if (closedServers.has(proc)) finish(true);
+  });
+}
+
+async function stopServer(proc: ChildProcess): Promise<void> {
+  if (closedServers.has(proc)) return;
+
+  proc.stdin?.end();
+  if (proc.exitCode === null && proc.signalCode === null) {
+    proc.kill('SIGTERM');
+  }
+  if (!(await waitForServerClose(proc, 5_000))) {
+    proc.kill('SIGKILL');
+    if (!(await waitForServerClose(proc, 5_000))) {
+      throw new Error(`Server process ${proc.pid ?? 'unknown'} did not close after SIGKILL`);
+    }
+  }
+}
 
 /** Send a JSON-RPC request and wait for the matching response. */
 function sendRequest(
@@ -108,6 +141,7 @@ describe('Startup Readiness (Issue #706)', () => {
   });
 
   afterAll(async () => {
+    await Promise.all([...activeServers].map(proc => stopServer(proc)));
     await fs.rm(testDir, { recursive: true, force: true });
   });
 
@@ -119,7 +153,7 @@ describe('Startup Readiness (Issue #706)', () => {
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_OPTIONS;
 
-    return spawn('node', [SERVER_PATH], {
+    const proc = spawn('node', [SERVER_PATH], {
       env: {
         ...cleanEnv,
         NODE_ENV: 'production',
@@ -127,19 +161,26 @@ describe('Startup Readiness (Issue #706)', () => {
         DOLLHOUSE_PORTFOLIO_DIR: portfolioDir,
         HOME: testDir,
         ...extraEnv,
+        GITHUB_TOKEN: '',
+        GITHUB_TEST_TOKEN: '',
+        TEST_GITHUB_TOKEN: '',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    activeServers.add(proc);
+    proc.once('close', () => {
+      closedServers.add(proc);
+      activeServers.delete(proc);
+    });
+    return proc;
   }
 
   it('should emit DOLLHOUSEMCP_READY on stderr', async () => {
     const proc = spawnServer();
     try {
-      await waitForReady(proc, 15_000);
-      // If we get here, the sentinel was seen
-      expect(true).toBe(true);
+      await expect(waitForReady(proc, 15_000)).resolves.toBeUndefined();
     } finally {
-      proc.kill();
+      await stopServer(proc);
     }
   }, 20_000);
 
@@ -186,7 +227,7 @@ describe('Startup Readiness (Issue #706)', () => {
       expect(text).toContain('Startup');
       expect(text).toContain('Ready');
     } finally {
-      proc.kill();
+      await stopServer(proc);
     }
   }, 30_000);
 
@@ -223,7 +264,7 @@ describe('Startup Readiness (Issue #706)', () => {
       expect(text).toContain('Deferred Work');
       expect(text).toContain('Total Startup');
     } finally {
-      proc.kill();
+      await stopServer(proc);
     }
   }, 25_000);
 
@@ -254,7 +295,7 @@ describe('Startup Readiness (Issue #706)', () => {
       const toolNames = listResp.result.tools.map((t: any) => t.name);
       expect(toolNames).toContain('mcp_aql_read');
     } finally {
-      proc.kill();
+      await stopServer(proc);
     }
   }, 20_000);
 });

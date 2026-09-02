@@ -3,6 +3,9 @@ import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore
 export type IntegrationCallbackRejectedReason =
   | 'user_mismatch'
   | 'session_mismatch'
+  | 'descriptor_mismatch'
+  | 'credential_persistence_failed'
+  | 'compensating_revocation_failed'
   | 'expired'
   | 'consumed'
   | 'missing';

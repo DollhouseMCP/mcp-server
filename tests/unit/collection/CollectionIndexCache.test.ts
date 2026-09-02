@@ -20,18 +20,18 @@ describe('CollectionIndexCache', () => {
   beforeEach(() => {
     container = new DollhouseContainer();
 
-    container.register('APICache', () => new APICache());
+    container.replace('APICache', () => new APICache());
     mockApiCache = container.resolve('APICache');
 
-    container.register('GitHubClient', () => new GitHubClient(mockApiCache, new Map()));
+    container.replace('GitHubClient', () => new GitHubClient(mockApiCache, new Map()));
     mockGithubClient = container.resolve('GitHubClient');
 
     const fileOperationsService = createTestFileOperationsService();
-    container.register('FileOperationsService', () => fileOperationsService);
-    container.register('PerformanceMonitor', () => new PerformanceMonitor());
+    container.replace('FileOperationsService', () => fileOperationsService);
+    container.replace('PerformanceMonitor', () => new PerformanceMonitor());
 
     const baseDir = os.homedir();
-    container.register('CollectionIndexCache', () => new CollectionIndexCache(
+    container.replace('CollectionIndexCache', () => new CollectionIndexCache(
       mockGithubClient,
       baseDir,
       container.resolve('PerformanceMonitor'),
@@ -62,15 +62,16 @@ describe('CollectionIndexCache', () => {
 
   describe('cache path resolution', () => {
     it('uses an exact canonical cache directory without nesting it again', () => {
+      const canonicalCacheDir = path.resolve('canonical', 'cache');
       const canonicalCache = new CollectionIndexCache({
         githubClient: mockGithubClient,
-        cacheDir: '/canonical/cache',
+        cacheDir: canonicalCacheDir,
         performanceMonitor: container.resolve('PerformanceMonitor'),
         fileOperations: container.resolve('FileOperationsService'),
       });
 
       const cacheFile = (canonicalCache as unknown as { cacheFile: string }).cacheFile;
-      expect(cacheFile).toBe(path.join('/canonical/cache', 'collection-index-cache.json'));
+      expect(cacheFile).toBe(path.join(canonicalCacheDir, 'collection-index-cache.json'));
     });
   });
 

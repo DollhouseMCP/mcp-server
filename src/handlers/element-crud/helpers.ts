@@ -33,15 +33,12 @@ export function findElementFlexibly<T extends { metadata?: { name?: string } }>(
     (e) => e.metadata?.name?.toLowerCase() === searchNameLower
   );
 
-  if (!element) {
-    element = elementList.find((e) => {
+  element ??= elementList.find((e) => {
       const elementSlug = slugify(e.metadata?.name || '');
       return elementSlug === searchNameSlug || elementSlug === searchNameLower;
     });
-  }
 
-  if (!element) {
-    element = elementList.find((e) => {
+  element ??= elementList.find((e) => {
       const elementName = e.metadata?.name || '';
       const elementSlug = slugify(elementName);
       return (
@@ -49,7 +46,6 @@ export function findElementFlexibly<T extends { metadata?: { name?: string } }>(
         elementName.toLowerCase().includes(searchNameLower)
       );
     });
-  }
 
   return element;
 }
@@ -59,25 +55,34 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
     return {};
   }
 
-  // FIX: DMCP-SEC-006 - Add security audit logging for sanitization
-  SecurityMonitor.logSecurityEvent({
-    type: 'ELEMENT_VALIDATED',
-    severity: 'LOW',
-    source: 'helpers.sanitizeMetadata',
-    details: 'Metadata sanitized for element creation/update',
-    additionalData: { fieldCount: Object.keys(metadata).length }
-  });
+  const removedKeys: string[] = [];
+  const sanitized = sanitizeMetadataObject(metadata, removedKeys);
 
-  const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
+  if (removedKeys.length > 0) {
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_VALIDATED',
+      severity: 'LOW',
+      source: 'helpers.sanitizeMetadata',
+      details: 'Dangerous metadata properties removed during sanitization',
+      additionalData: { removedKeys: [...new Set(removedKeys)] }
+    });
+  }
+
+  return sanitized;
+}
+
+function sanitizeMetadataObject(metadata: Record<string, any>, removedKeys: string[]): Record<string, any> {
+  const dangerousProperties = new Set(['__proto__', 'constructor', 'prototype']);
   const sanitized: Record<string, any> = {};
 
   for (const [key, value] of Object.entries(metadata)) {
-    if (dangerousProperties.includes(key)) {
+    if (dangerousProperties.has(key)) {
+      removedKeys.push(key);
       continue;
     }
 
     if (value && typeof value === 'object' && !Array.isArray(value)) {
-      sanitized[key] = sanitizeMetadata(value as Record<string, any>);
+      sanitized[key] = sanitizeMetadataObject(value as Record<string, any>, removedKeys);
     } else {
       sanitized[key] = value;
     }
@@ -87,49 +92,59 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
 }
 
 /**
- * Find description fields that would exceed the YAML/frontmatter parser limit.
+ * Find description fields that would leave insufficient YAML/frontmatter space.
  *
  * Element descriptions are metadata and are serialized into YAML frontmatter, so
- * the real upper bound is the YAML safety limit rather than the legacy short
- * description display limit. This walks nested metadata too because templates,
- * agents, and skills all have description-like nested fields.
+ * the field limit deliberately reserves space for required structural metadata.
+ * The same budget applies across all nested description fields, preventing several
+ * individually valid fields from collectively exceeding the frontmatter limit.
  */
 export function findOversizedDescriptionFields(
   value: unknown,
   path = 'input',
-  maxLength = SECURITY_LIMITS.MAX_YAML_LENGTH,
-  seen = new WeakSet<object>()
+  maxLength = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
 ): string[] {
-  if (!value || typeof value !== 'object') {
-    return [];
-  }
+  const descriptions: Array<{ readonly path: string; readonly length: number }> = [];
+  const seen = new WeakSet<object>();
 
-  if (seen.has(value)) {
-    return [];
-  }
-  seen.add(value);
+  const collect = (candidate: unknown, candidatePath: string): void => {
+    if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) return;
+    seen.add(candidate);
 
-  const errors: string[] = [];
-  const entries = Array.isArray(value)
-    ? value.map((item, index) => [String(index), item] as const)
-    : Object.entries(value);
+    const entries = Array.isArray(candidate)
+      ? candidate.map((item, index) => [String(index), item] as const)
+      : Object.entries(candidate);
 
-  for (const [key, child] of entries) {
-    let childPath: string;
-    if (Array.isArray(value)) {
-      childPath = `${path}[${key}]`;
-    } else if (key.length > 0) {
-      childPath = `${path}.${key}`;
-    } else {
-      childPath = `${path}[""]`;
+    for (const [key, child] of entries) {
+      let childPath: string;
+      if (Array.isArray(candidate)) {
+        childPath = `${candidatePath}[${key}]`;
+      } else if (key.length > 0) {
+        childPath = `${candidatePath}.${key}`;
+      } else {
+        childPath = `${candidatePath}[""]`;
+      }
+
+      if (key === 'description' && typeof child === 'string') {
+        descriptions.push({ path: childPath, length: child.length });
+      }
+      collect(child, childPath);
     }
+  };
 
-    if (key === 'description' && typeof child === 'string' && child.length > maxLength) {
-      errors.push(`${childPath} exceeds maximum YAML/frontmatter length of ${maxLength} characters`);
-      continue;
-    }
+  collect(value, path);
 
-    errors.push(...findOversizedDescriptionFields(child, childPath, maxLength, seen));
+  const errors = descriptions
+    .filter(description => description.length > maxLength)
+    .map(description =>
+      `${description.path} exceeds maximum description length of ${maxLength} characters (frontmatter overhead reserved)`
+    );
+  const aggregateLength = descriptions.reduce((total, description) => total + description.length, 0);
+  if (descriptions.length > 1 && aggregateLength > maxLength) {
+    errors.push(
+      `${path} description fields total ${aggregateLength} characters, exceeding the aggregate ` +
+      `frontmatter description budget of ${maxLength} characters`
+    );
   }
 
   return errors;
@@ -162,7 +177,7 @@ export function formatGatekeeperValidationMessage(errors: string[]): string {
   ].join('\n');
 }
 // Delegate to shared normalization utility (Issue #433)
-const ELEMENT_TYPE_ALIASES = ELEMENT_TYPE_MAP;
+const ELEMENT_TYPE_ALIASES: Partial<Record<string, ElementType>> = ELEMENT_TYPE_MAP;
 
 const ELEMENT_TYPE_LABELS: Record<ElementType, { singular: string; plural: string }> = {
   [ElementType.PERSONA]: { singular: 'persona', plural: 'personas' },
@@ -199,9 +214,6 @@ export function formatValidElementTypesList(): string {
 
 export function getElementTypeLabel(type: ElementType, options: { plural?: boolean } = {}): string {
   const label = ELEMENT_TYPE_LABELS[type];
-  if (!label) {
-    return options.plural ? type : type.replace(/s$/, '');
-  }
   return options.plural ? label.plural : label.singular;
 }
 
@@ -321,7 +333,7 @@ export const KNOWN_METADATA_PROPERTIES: Record<ElementType, Set<string>> = {
  * // Type-specific correction (only applies to specified types):
  * 'members': { correct: 'elements', elementTypes: [ElementType.ENSEMBLE] }
  */
-const PROPERTY_CORRECTIONS: Record<string, { correct: string; elementTypes?: ElementType[] }> = {
+const PROPERTY_CORRECTIONS: Partial<Record<string, { correct: string; elementTypes?: ElementType[] }>> = {
   // Ensemble: 'members' is a common mistake - should be 'elements'
   'members': { correct: 'elements', elementTypes: [ElementType.ENSEMBLE] },
   'member': { correct: 'elements', elementTypes: [ElementType.ENSEMBLE] },
@@ -349,6 +361,50 @@ export interface UnknownPropertyWarning {
   message: string;
 }
 
+function collectOperationOverlapWarnings(
+  allow: string[] | undefined,
+  confirm: string[] | undefined
+): UnknownPropertyWarning[] {
+  if (!allow?.length || !confirm?.length) {
+    return [];
+  }
+  const allowSet = new Set(allow);
+  return confirm
+    .filter(operation => allowSet.has(operation))
+    .map(operation => ({
+      property: 'gatekeeper',
+      message: `Operation '${operation}' appears in both allow and confirm — most restrictive policy (confirm) will apply.`,
+    }));
+}
+
+function collectPatternConflictWarnings(
+  denyPatterns: string[] | undefined,
+  comparedPatterns: string[] | undefined,
+  messagePrefix: string
+): UnknownPropertyWarning[] {
+  if (!denyPatterns?.length || !comparedPatterns?.length) {
+    return [];
+  }
+  return findPatternConflicts(denyPatterns, comparedPatterns).map(conflict => ({
+    property: 'gatekeeper.externalRestrictions',
+    message: `${messagePrefix}: ${conflict}`,
+  }));
+}
+
+function collectPatternSyntaxWarnings(
+  patternFields: Array<[string[] | undefined, string]>
+): UnknownPropertyWarning[] {
+  return patternFields.flatMap(([patterns, fieldName]) => {
+    if (!patterns?.length) {
+      return [];
+    }
+    return analyzePatternSyntax(patterns, fieldName).map(message => ({
+      property: 'gatekeeper.externalRestrictions',
+      message,
+    }));
+  });
+}
+
 /**
  * Validate a gatekeeper policy in element metadata.
  * Returns warnings (not throws) for invalid policy structures,
@@ -366,63 +422,39 @@ export function validateGatekeeperPolicy(
 
   try {
     const policy = parseElementPolicy(metadata);
+    if (!policy) {
+      return [];
+    }
     const warnings: UnknownPropertyWarning[] = [];
 
     // Issue #674: Warn when an operation appears in both allow and confirm lists
     // The most restrictive policy (confirm) will apply, but the overlap is likely a mistake
-    if (policy?.allow?.length && policy?.confirm?.length) {
-      const allowSet = new Set(policy.allow);
-      for (const op of policy.confirm) {
-        if (allowSet.has(op)) {
-          warnings.push({
-            property: 'gatekeeper',
-            message: `Operation '${op}' appears in both allow and confirm — most restrictive policy (confirm) will apply.`,
-          });
-        }
-      }
-    }
+    warnings.push(...collectOperationOverlapWarnings(policy.allow, policy.confirm));
 
     // Issue #625 Phase 2: Detect allow/deny pattern conflicts
-    if (policy?.externalRestrictions) {
+    if (policy.externalRestrictions) {
       const { allowPatterns, denyPatterns, confirmPatterns } = policy.externalRestrictions;
-      if (allowPatterns?.length && denyPatterns?.length) {
-        const conflicts = findPatternConflicts(denyPatterns, allowPatterns);
-        for (const conflict of conflicts) {
-          warnings.push({
-            property: 'gatekeeper.externalRestrictions',
-            message: `Pattern conflict (deny takes precedence): ${conflict}`,
-          });
-        }
-      }
-
-      // Issue #1660: Detect confirm/deny pattern conflicts
-      if (confirmPatterns?.length && denyPatterns?.length) {
-        const conflicts = findPatternConflicts(denyPatterns, confirmPatterns);
-        for (const conflict of conflicts) {
-          warnings.push({
-            property: 'gatekeeper.externalRestrictions',
-            message: `Pattern conflict (deny takes precedence over confirm): ${conflict}`,
-          });
-        }
-      }
+      warnings.push(
+        ...collectPatternConflictWarnings(
+          denyPatterns,
+          allowPatterns,
+          'Pattern conflict (deny takes precedence)'
+        ),
+        // Issue #1660: Detect confirm/deny pattern conflicts
+        ...collectPatternConflictWarnings(
+          denyPatterns,
+          confirmPatterns,
+          'Pattern conflict (deny takes precedence over confirm)'
+        ),
+      );
 
       // Issue #1664: Enhanced pattern syntax validation
-      const allPatternArrays: [string[] | undefined, string][] = [
+      const allPatternArrays: Array<[string[] | undefined, string]> = [
         [denyPatterns, 'denyPatterns'],
         [confirmPatterns, 'confirmPatterns'],
         [allowPatterns, 'allowPatterns'],
       ];
-      for (const [patterns, fieldName] of allPatternArrays) {
-        if (patterns?.length) {
-          const syntaxWarnings = analyzePatternSyntax(patterns, fieldName);
-          for (const warning of syntaxWarnings) {
-            warnings.push({
-              property: 'gatekeeper.externalRestrictions',
-              message: warning,
-            });
-          }
-        }
-      }
+      warnings.push(...collectPatternSyntaxWarnings(allPatternArrays));
     }
 
     return warnings;
@@ -458,9 +490,6 @@ export function detectUnknownMetadataProperties(
   }
 
   const knownProperties = KNOWN_METADATA_PROPERTIES[elementType];
-  if (!knownProperties) {
-    return [];
-  }
 
   const warnings: UnknownPropertyWarning[] = [];
 
@@ -579,7 +608,7 @@ function elementMatchesName<T extends ElementWithOptionalName>(
   loweredName: string,
   nameSlug: string
 ): boolean {
-  const candidateName = candidate?.metadata?.name;
+  const candidateName = candidate.metadata?.name;
   if (typeof candidateName !== 'string') {
     return false;
   }

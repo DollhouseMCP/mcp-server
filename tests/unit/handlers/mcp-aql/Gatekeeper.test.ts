@@ -25,6 +25,10 @@ import {
 import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
+const legacyGatekeeper: {
+  validate(operation: string, calledEndpoint: CRUDEndpoint): void;
+} = Gatekeeper;
+
 describe('Gatekeeper', () => {
   // Clean up security events after each test to prevent pollution
   afterEach(() => {
@@ -35,31 +39,31 @@ describe('Gatekeeper', () => {
     describe('CREATE operations', () => {
       it('should allow create_element via CREATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('create_element', 'CREATE');
+          legacyGatekeeper.validate('create_element', 'CREATE');
         }).not.toThrow();
       });
 
       it('should allow import_element via CREATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('import_element', 'CREATE');
+          legacyGatekeeper.validate('import_element', 'CREATE');
         }).not.toThrow();
       });
 
       it('should reject create_element via READ endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('create_element', 'READ');
+          legacyGatekeeper.validate('create_element', 'READ');
         }).toThrow(/Security violation.*create_element.*mcp_aql_create.*not mcp_aql_read/);
       });
 
       it('should reject create_element via UPDATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('create_element', 'UPDATE');
+          legacyGatekeeper.validate('create_element', 'UPDATE');
         }).toThrow(/Security violation.*create_element.*mcp_aql_create.*not mcp_aql_update/);
       });
 
       it('should reject create_element via DELETE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('create_element', 'DELETE');
+          legacyGatekeeper.validate('create_element', 'DELETE');
         }).toThrow(/Security violation.*create_element.*mcp_aql_create.*not mcp_aql_delete/);
       });
     });
@@ -77,25 +81,25 @@ describe('Gatekeeper', () => {
       readOps.forEach(operation => {
         it(`should allow ${operation} via READ endpoint`, () => {
           expect(() => {
-            Gatekeeper.validate(operation, 'READ');
+            legacyGatekeeper.validate(operation, 'READ');
           }).not.toThrow();
         });
 
         it(`should reject ${operation} via CREATE endpoint`, () => {
           expect(() => {
-            Gatekeeper.validate(operation, 'CREATE');
+            legacyGatekeeper.validate(operation, 'CREATE');
           }).toThrow(/Security violation.*mcp_aql_read.*not mcp_aql_create/);
         });
 
         it(`should reject ${operation} via UPDATE endpoint`, () => {
           expect(() => {
-            Gatekeeper.validate(operation, 'UPDATE');
+            legacyGatekeeper.validate(operation, 'UPDATE');
           }).toThrow(/Security violation.*mcp_aql_read.*not mcp_aql_update/);
         });
 
         it(`should reject ${operation} via DELETE endpoint`, () => {
           expect(() => {
-            Gatekeeper.validate(operation, 'DELETE');
+            legacyGatekeeper.validate(operation, 'DELETE');
           }).toThrow(/Security violation.*mcp_aql_read.*not mcp_aql_delete/);
         });
       });
@@ -104,25 +108,25 @@ describe('Gatekeeper', () => {
     describe('UPDATE operations', () => {
       it('should allow edit_element via UPDATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('edit_element', 'UPDATE');
+          legacyGatekeeper.validate('edit_element', 'UPDATE');
         }).not.toThrow();
       });
 
       it('should reject edit_element via CREATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('edit_element', 'CREATE');
+          legacyGatekeeper.validate('edit_element', 'CREATE');
         }).toThrow(/Security violation.*mcp_aql_update.*not mcp_aql_create/);
       });
 
       it('should reject edit_element via READ endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('edit_element', 'READ');
+          legacyGatekeeper.validate('edit_element', 'READ');
         }).toThrow(/Security violation.*mcp_aql_update.*not mcp_aql_read/);
       });
 
       it('should reject edit_element via DELETE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('edit_element', 'DELETE');
+          legacyGatekeeper.validate('edit_element', 'DELETE');
         }).toThrow(/Security violation.*mcp_aql_update.*not mcp_aql_delete/);
       });
     });
@@ -130,25 +134,25 @@ describe('Gatekeeper', () => {
     describe('DELETE operations', () => {
       it('should allow delete_element via DELETE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('delete_element', 'DELETE');
+          legacyGatekeeper.validate('delete_element', 'DELETE');
         }).not.toThrow();
       });
 
       it('should reject delete_element via CREATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('delete_element', 'CREATE');
+          legacyGatekeeper.validate('delete_element', 'CREATE');
         }).toThrow(/Security violation.*delete_element.*mcp_aql_delete.*not mcp_aql_create/);
       });
 
       it('should reject delete_element via READ endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('delete_element', 'READ');
+          legacyGatekeeper.validate('delete_element', 'READ');
         }).toThrow(/Security violation.*delete_element.*mcp_aql_delete.*not mcp_aql_read/);
       });
 
       it('should reject delete_element via UPDATE endpoint', () => {
         expect(() => {
-          Gatekeeper.validate('delete_element', 'UPDATE');
+          legacyGatekeeper.validate('delete_element', 'UPDATE');
         }).toThrow(/Security violation.*delete_element.*mcp_aql_delete.*not mcp_aql_update/);
       });
     });
@@ -156,19 +160,19 @@ describe('Gatekeeper', () => {
     describe('Unknown operations', () => {
       it('should throw error for unknown operation', () => {
         expect(() => {
-          Gatekeeper.validate('nonexistent_operation', 'READ');
+          legacyGatekeeper.validate('nonexistent_operation', 'READ');
         }).toThrow(/Unknown operation: "nonexistent_operation".*tool descriptions/);
       });
 
       it('should throw error for empty operation name', () => {
         expect(() => {
-          Gatekeeper.validate('', 'READ');
+          legacyGatekeeper.validate('', 'READ');
         }).toThrow(/Unknown operation: "".*tool descriptions/);
       });
 
       it('should throw error for whitespace-only operation name', () => {
         expect(() => {
-          Gatekeeper.validate('   ', 'READ');
+          legacyGatekeeper.validate('   ', 'READ');
         }).toThrow(/Unknown operation: " {3}".*tool descriptions/);
       });
     });
@@ -176,25 +180,25 @@ describe('Gatekeeper', () => {
     describe('Error message content', () => {
       it('should include permission reason in error for CREATE violation', () => {
         expect(() => {
-          Gatekeeper.validate('create_element', 'READ');
+          legacyGatekeeper.validate('create_element', 'READ');
         }).toThrow(/additive, non-destructive nature/);
       });
 
       it('should include permission reason in error for READ violation', () => {
         expect(() => {
-          Gatekeeper.validate('get_element', 'CREATE');
+          legacyGatekeeper.validate('get_element', 'CREATE');
         }).toThrow(/read-only, safe nature/);
       });
 
       it('should include permission reason in error for UPDATE violation', () => {
         expect(() => {
-          Gatekeeper.validate('edit_element', 'READ');
+          legacyGatekeeper.validate('edit_element', 'READ');
         }).toThrow(/data modification capabilities/);
       });
 
       it('should include permission reason in error for DELETE violation', () => {
         expect(() => {
-          Gatekeeper.validate('delete_element', 'READ');
+          legacyGatekeeper.validate('delete_element', 'READ');
         }).toThrow(/destructive potential/);
       });
     });
@@ -291,9 +295,13 @@ describe('Gatekeeper', () => {
     });
 
     describe('enforce()', () => {
-      it('should allow auto-approved operations', () => {
+      it.each([
+        { description: 'standard auto-approved operations', operation: 'list_elements' },
+        { description: 'READ-routed activate_element', operation: 'activate_element' },
+        { description: 'READ-routed deactivate_element', operation: 'deactivate_element' },
+      ] as const)('should auto-approve $description', ({ operation }) => {
         const decision = gatekeeper.enforce({
-          operation: 'list_elements',
+          operation,
           endpoint: 'READ',
         });
 
@@ -309,26 +317,6 @@ describe('Gatekeeper', () => {
 
         expect(decision.allowed).toBe(false);
         expect(decision.errorCode).toBe(GatekeeperErrorCode.ENDPOINT_MISMATCH);
-      });
-
-      it('should auto-approve READ-routed operations like activate_element', () => {
-        const decision = gatekeeper.enforce({
-          operation: 'activate_element',
-          endpoint: 'READ',
-        });
-
-        expect(decision.allowed).toBe(true);
-        expect(decision.permissionLevel).toBe(PermissionLevel.AUTO_APPROVE);
-      });
-
-      it('should auto-approve deactivate_element on READ endpoint', () => {
-        const decision = gatekeeper.enforce({
-          operation: 'deactivate_element',
-          endpoint: 'READ',
-        });
-
-        expect(decision.allowed).toBe(true);
-        expect(decision.permissionLevel).toBe(PermissionLevel.AUTO_APPROVE);
       });
 
       it('should require confirmation for session-confirm operations', () => {
@@ -712,6 +700,15 @@ describe('Gatekeeper', () => {
       expect(confirmation2).toBeUndefined();
     });
 
+    it('consumes the exact unscoped confirmation selected by scoped fallback', () => {
+      session.recordConfirmation('create_element', PermissionLevel.CONFIRM_SINGLE_USE);
+      session.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION, 'persona');
+
+      expect(session.checkConfirmation('create_element', 'skill')).toBeDefined();
+      expect(session.peekConfirmation('create_element')).toBeUndefined();
+      expect(session.peekConfirmation('create_element', 'persona')).toBeDefined();
+    });
+
     it('should keep session confirmations', () => {
       session.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
 
@@ -871,7 +868,7 @@ describe('Gatekeeper', () => {
       const events = SecurityMonitor.getRecentEvents(10);
       const gatekeeperEvents = events.filter(e => e.source.includes('Gatekeeper'));
       if (decision.allowed) {
-        expect(gatekeeperEvents.length).toBe(0);
+        expect(gatekeeperEvents).toHaveLength(0);
       }
     });
   });

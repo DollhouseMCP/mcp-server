@@ -3,15 +3,30 @@ import type {
   AllowlistMatchValues,
 } from '../../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type {
+  AtomicAccountProvisioningInput,
+  AllowlistGateResult,
   SignInAllowlistAuthority,
 } from '../../../auth/embedded-as/allowlistGate.js';
 import type { IConsoleAccountAllowlistStore } from '../../stores/IConsoleAccountAllowlistStore.js';
 
 export class ConsoleAccountAllowlistSignInAuthority implements SignInAllowlistAuthority {
-  constructor(private readonly store: IConsoleAccountAllowlistStore) {}
+  readonly provisionAccountIfAllowed?: (
+    input: AtomicAccountProvisioningInput,
+  ) => Promise<AllowlistGateResult>;
+
+  constructor(private readonly store: IConsoleAccountAllowlistStore) {
+    const provisionAccountIfAllowed = store.provisionAccountIfAllowed;
+    if (provisionAccountIfAllowed) {
+      this.provisionAccountIfAllowed = input => provisionAccountIfAllowed.call(store, input);
+    }
+  }
 
   async matchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
     return this.store.matchesIdentity(values);
+  }
+
+  async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    return this.store.deniesIdentity(values);
   }
 
   async hasAnyEntries(): Promise<boolean> {

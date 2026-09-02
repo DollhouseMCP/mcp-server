@@ -28,7 +28,7 @@ describe('Portfolio Single Element Upload - GitHub API Response Fix', () => {
 
     // Register PortfolioRepoManager with real TokenManager and JUST the repo name (not "owner/repo")
     // The username is retrieved from the GitHub API token
-    container.register('PortfolioRepoManager', () => createRealPortfolioRepoManager(undefined, expectedRepo));
+    container.replace('PortfolioRepoManager', () => createRealPortfolioRepoManager(undefined, expectedRepo));
     portfolioManager = container.resolve('PortfolioRepoManager');
 
     originalFetch = (global as any).fetch;

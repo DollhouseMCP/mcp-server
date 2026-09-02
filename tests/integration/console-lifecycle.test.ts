@@ -63,7 +63,13 @@ function spawnClientConnection(port: number): Promise<import('node:child_process
         `,
       ],
       {
-        env: { ...process.env, TEST_PORT: String(port) },
+        env: {
+          ...process.env,
+          TEST_PORT: String(port),
+          GITHUB_TOKEN: '',
+          GITHUB_TEST_TOKEN: '',
+          TEST_GITHUB_TOKEN: '',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
@@ -298,7 +304,7 @@ describe('Console Lifecycle Integration (#1850)', () => {
       const { readdir: readDir } = await import('node:fs/promises');
       const files = await readDir(runDir);
       const portFiles = files.filter(f => f.includes('permission-server'));
-      expect(portFiles.length).toBe(6);
+      expect(portFiles).toHaveLength(6);
     });
 
     it('sweepStalePortFiles removes dead PID files and preserves alive', async () => {
@@ -316,7 +322,7 @@ describe('Console Lifecycle Integration (#1850)', () => {
       const { readdir: readDir } = await import('node:fs/promises');
       const remaining = await readDir(runDir);
       const remainingPid = remaining.filter(f => /^permission-server-\d+\.port$/.test(f));
-      expect(remainingPid.length).toBe(1); // Only our PID survives
+      expect(remainingPid).toHaveLength(1); // Only our PID survives
       expect(remaining).toContain('permission-server.port'); // Non-PID file preserved
     });
   });

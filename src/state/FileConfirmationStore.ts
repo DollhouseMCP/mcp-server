@@ -26,7 +26,7 @@ import { APPROVAL_SEARCH_ROW_LIMIT } from './DatabaseConfirmationStore.js';
 import type { ApprovalRef, ApprovalSearchFilter, IConfirmationStore } from './IConfirmationStore.js';
 import { approvalMatches, toApprovalRef } from './approvalSearch.js';
 import { validateExternalSessionId } from './FileActivationStateStore.js';
-import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
+import { handleInitializeError, withRetry } from './persistence-utils.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -143,8 +143,7 @@ export class FileConfirmationStore implements IConfirmationStore {
   }
 
   persist(): Promise<void> {
-    this.persistAsync();
-    return Promise.resolve();
+    return withRetry(() => this.persistToDisk());
   }
 
   // ── Confirmation Records ──────────────────────────────────────────
@@ -244,10 +243,6 @@ export class FileConfirmationStore implements IConfirmationStore {
   }
 
   // ── Private persistence methods ───────────────────────────────────
-
-  private persistAsync(): void {
-    fireAndForgetPersist(() => this.persistToDisk(), STORE_NAME, 'confirmation state', this.sessionId);
-  }
 
   private async persistToDisk(): Promise<void> {
     const state: PersistedConfirmationState = {

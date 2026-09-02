@@ -1,6 +1,8 @@
 import { describe, test, expect } from '@jest/globals';
 import { MCPInputValidator } from '../../src/security/InputValidator.js';
 
+const PRIVATE_URL_ERROR = 'Private network URLs are not allowed';
+
 describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
   describe('validatePersonaIdentifier', () => {
     test('should accept valid persona identifiers', () => {
@@ -86,14 +88,32 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
     });
 
     test('should reject private network URLs (SSRF protection)', () => {
-      expect(() => MCPInputValidator.validateImportUrl('http://localhost:8080/admin')).toThrow('Private network URLs are not allowed');
-      expect(() => MCPInputValidator.validateImportUrl('http://127.0.0.1:22')).toThrow('Private network URLs are not allowed');
-      expect(() => MCPInputValidator.validateImportUrl('http://192.168.1.1/config')).toThrow('Private network URLs are not allowed');
-      expect(() => MCPInputValidator.validateImportUrl('http://10.0.0.1/secrets')).toThrow('Private network URLs are not allowed');
-      expect(() => MCPInputValidator.validateImportUrl('http://172.16.0.1/admin')).toThrow('Private network URLs are not allowed');
+      expect(() => MCPInputValidator.validateImportUrl('http://localhost:8080/admin')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://127.0.0.1:22')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://192.168.1.1/config')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://10.0.0.1/secrets')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://172.16.0.1/admin')).toThrow(PRIVATE_URL_ERROR);
       // Test enhanced SSRF protection
       expect(() => MCPInputValidator.validateImportUrl('//localhost/admin')).toThrow('Protocol-relative URLs are not allowed');
       expect(() => MCPInputValidator.validateImportUrl('//127.0.0.1/secrets')).toThrow('Protocol-relative URLs are not allowed');
+    });
+
+    test('should reject internal addresses in every textual form (canonical classifier)', () => {
+      // Full 127/8, not just 127.0.0.1
+      expect(() => MCPInputValidator.validateImportUrl('http://127.0.0.2/admin')).toThrow(PRIVATE_URL_ERROR);
+      // Cloud metadata endpoint (link-local)
+      expect(() => MCPInputValidator.validateImportUrl('http://169.254.169.254/latest/meta-data')).toThrow(PRIVATE_URL_ERROR);
+      // Bracketed IPv6 forms: ULA, hex IPv4-mapped loopback, NAT64-wrapped metadata
+      expect(() => MCPInputValidator.validateImportUrl('http://[fc00::1]/admin')).toThrow(PRIVATE_URL_ERROR);
+      // Percent-encoded brackets: the decode step must run before hostname classification
+      expect(() => MCPInputValidator.validateImportUrl('http://%5B::1%5D/admin')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://[::ffff:7f00:1]/admin')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://[64:ff9b::a9fe:a9fe]/admin')).toThrow(PRIVATE_URL_ERROR);
+      // Decimal-encoded loopback variant beyond 127.0.0.1
+      expect(() => MCPInputValidator.validateImportUrl('http://2130706434/admin')).toThrow('not allowed');
+      // Multicast and CGNAT
+      expect(() => MCPInputValidator.validateImportUrl('http://224.0.0.1/admin')).toThrow(PRIVATE_URL_ERROR);
+      expect(() => MCPInputValidator.validateImportUrl('http://100.64.0.1/admin')).toThrow(PRIVATE_URL_ERROR);
     });
 
     test('should reject malformed URLs', () => {
@@ -125,7 +145,7 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
     });
 
     test('should reject non-numeric values', () => {
-      expect(() => MCPInputValidator.validateExpiryDays(NaN)).toThrow('Expiry days must be a valid number');
+      expect(() => MCPInputValidator.validateExpiryDays(Number.NaN)).toThrow('Expiry days must be a valid number');
       expect(() => MCPInputValidator.validateExpiryDays(Infinity)).toThrow('Expiry days must be a valid number');
       expect(() => MCPInputValidator.validateExpiryDays('7' as any)).toThrow('Expiry days must be a valid number');
     });
