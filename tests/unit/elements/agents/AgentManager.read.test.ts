@@ -61,6 +61,21 @@ specializations:
 
 Post things`;
 
+const AGENT_CONTENT_WRONG_DIRECT_IDENTITY = AGENT_CONTENT_STANDARD.replace(
+  'name: my-agent',
+  'name: different-agent',
+);
+
+const AGENT_CONTENT_REQUESTED_IDENTITY = AGENT_CONTENT_STANDARD.replace(
+  'name: my-agent',
+  'name: requested-agent',
+);
+
+const AGENT_CONTENT_STORAGE_FALLBACK_IDENTITY = AGENT_CONTENT_STANDARD.replace(
+  'name: my-agent',
+  'name: "---"',
+);
+
 const ACTIVE_REQUESTED_STATE = `---
 goals:
   - id: goal_requested_active
@@ -162,6 +177,56 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       expect(agent).not.toBeNull();
       expect(agent?.metadata.name).toBe('my-agent');
+    });
+
+    it('should accept metadata that resolves to the requested storage fallback identity', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (path.basename(filePath) === 'unnamed.md') {
+          return AGENT_CONTENT_STORAGE_FALLBACK_IDENTITY;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      const agent = await agentManager.read('unnamed');
+
+      expect(agent?.metadata.name).toBe('---');
+      expect(mockPortfolioManager.listElements).not.toHaveBeenCalled();
+    });
+
+    it('should fall back when the direct filename contains a different agent', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'requested-agent.md') return AGENT_CONTENT_WRONG_DIRECT_IDENTITY;
+        if (filename === 'legacy-requested-agent.md') return AGENT_CONTENT_REQUESTED_IDENTITY;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue([
+        'requested-agent.md',
+        'legacy-requested-agent.md',
+      ]);
+
+      const agent = await agentManager.read('requested-agent');
+
+      expect(agent?.metadata.name).toBe('requested-agent');
+      expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(ElementType.AGENT);
+    });
+
+    it('should not attach requested recovery state to a mismatched direct definition', async () => {
+      const stateReads: string[] = [];
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'requested-agent.md') return AGENT_CONTENT_WRONG_DIRECT_IDENTITY;
+        if (filename.endsWith('.state.yaml')) {
+          stateReads.push(filename);
+          return ACTIVE_REQUESTED_STATE;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['requested-agent.md']);
+
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'requested-agent' }))
+        .rejects.toThrow("Agent 'requested-agent' not found");
+      expect(stateReads).toEqual([]);
     });
   });
 

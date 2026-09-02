@@ -515,6 +515,12 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       const found = await this.findByStorageIdentity(storagePath);
       if (!found) return this.readFlexibly(name, false);
+      if (
+        !isWritableStorageLayer(this.storageLayer) &&
+        !this.matchesRequestedAgentIdentity(found, sanitizedName)
+      ) {
+        return this.readFlexibly(name, false);
+      }
       await this.ensureStateHydrated(found);
       return found;
     } catch (error) {
@@ -535,6 +541,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       if (!storagePath) return this.readFlexibly(name, true);
 
       const definition = await this.loadElementDefinition(storagePath);
+      if (
+        !isWritableStorageLayer(this.storageLayer) &&
+        !this.matchesRequestedAgentIdentity(definition, sanitizedName)
+      ) {
+        return this.readFlexibly(name, true);
+      }
       return this.createRecoveryAgent(definition, name, false);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -555,6 +567,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       storagePath = this.storageLayer.getPathByName(name);
     }
     return storagePath;
+  }
+
+  /** Preserve name-based read semantics when a legacy filename disagrees with its metadata. */
+  private matchesRequestedAgentIdentity(agent: Agent, requestedName: string): boolean {
+    return this.getFilename(agent.metadata.name) === this.getFilename(requestedName)
+      || agent.id === requestedName;
   }
 
   /**
