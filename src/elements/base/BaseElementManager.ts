@@ -625,6 +625,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Resolve the cached instance backing a storage identity (relative file path
+   * in file mode, row UUID in database mode). Storage identity is the only key
+   * that distinguishes elements sharing a display name, so callers that must
+   * address a specific live instance use this rather than a name lookup.
+   */
+  protected getCachedElementByStorageIdentity(identity: string): T | undefined {
+    return this._cache.getCachedByPath(identity);
+  }
+
+  /**
    * Record an access on a cached element by ID. Exposes ElementCache.touchById
    * so subclasses doing name- or filename-based iteration (which can't go
    * through `get(id)`) can keep the LRU ordering and hit metrics honest.

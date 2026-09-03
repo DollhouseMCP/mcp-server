@@ -216,17 +216,25 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   }
 
   getPathByName(name: string): string | undefined {
-    const direct = this.nameToIdMap.get(name) ?? this.nameToIdMap.get(name.toLowerCase());
+    // Preserve exact, case-sensitive row identity first. PostgreSQL's unique
+    // index permits case/canonical variants (for example `Agent_Name` and
+    // `agent-name`), so a folded lookup must never choose one arbitrarily.
+    const direct = this.nameToIdMap.get(name);
     if (direct !== undefined) return direct;
     // The web-console addresses elements by their filename stem (lowercased, with
     // spaces/underscores hyphenated), which won't match a raw mixed-case index
     // key like "Meeting-Notes". Fall back to a canonical comparison so resolve
     // and delete work for any-cased name (only scans on a direct miss).
     const target = canonicalNameKey(name);
+    let match: string | undefined;
     for (const [key, id] of this.nameToIdMap) {
-      if (canonicalNameKey(key) === target) return id;
+      if (canonicalNameKey(key) !== target) continue;
+      if (match !== undefined && match !== id) {
+        return undefined;
+      }
+      match = id;
     }
-    return undefined;
+    return match;
   }
 
   /**

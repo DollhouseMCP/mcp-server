@@ -230,6 +230,25 @@ describe('DatabaseStorageLayer', () => {
     expect(layer.getNameById(elementId)).toBe('indexed-skill');
   });
 
+  it('should require an exact name when multiple rows share a canonical identity', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+
+    const firstName = 'Case_Sensitive-Skill';
+    const secondName = 'case-sensitive-skill';
+    const firstId = await layer.writeContent('skills', firstName, buildSkillContent(firstName), {
+      author: '', version: '', description: '', tags: [],
+    });
+    const secondId = await layer.writeContent('skills', secondName, buildSkillContent(secondName), {
+      author: '', version: '', description: '', tags: [],
+    });
+
+    expect(layer.getPathByName(firstName)).toBe(firstId);
+    expect(layer.getPathByName(secondName)).toBe(secondId);
+    expect(layer.getPathByName('Case-Sensitive-Skill')).toBeUndefined();
+  });
+
   // ── clear / invalidate ────────────────────────────────────────────
 
   it('should clear all state', async () => {

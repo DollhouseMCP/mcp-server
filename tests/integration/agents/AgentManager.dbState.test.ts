@@ -21,8 +21,10 @@ import { ValidationService } from '../../../src/services/validation/ValidationSe
 import { createSessionIdResolver, createUserIdResolver } from '../../../src/database/UserContext.js';
 import { withUserRead } from '../../../src/database/rls.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
+import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import { DatabaseStorageLayerFactory } from '../../../src/storage/DatabaseStorageLayerFactory.js';
 import { agentStates } from '../../../src/database/schema/agents.js';
+import { elements } from '../../../src/database/schema/elements.js';
 import {
   cleanupAllTestData,
   cleanupTestAgentStates,
@@ -231,6 +233,162 @@ describe('AgentManager DB-backed runtime state', () => {
             .where(eq(agentStates.userId, userId))
         );
         expect(afterDelete).toEqual([]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps case/canonical-colliding agents isolated by exact name and durable UUID', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-identity-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-identity-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    const firstName = 'Case_Sensitive-Agent';
+    const secondName = 'case-sensitive-agent';
+    const ambiguousName = 'Case Sensitive Agent';
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const seedingManager = createDbAgentManager(tempDir, tracker);
+        const created = await seedingManager.create(
+          firstName,
+          'First canonical-collision agent',
+          'Use the provided objective as the active goal.',
+          {
+            goal: {
+              template: '{objective}',
+              parameters: [{ name: 'objective', type: 'string', required: true }],
+            },
+          },
+        );
+        expect(created.success).toBe(true);
+        if (!created.element) {
+          throw new Error('Expected the first DB identity test agent to be created');
+        }
+
+        const secondContent = (await seedingManager.exportElement(created.element))
+          .replace(/^name:.*$/mu, `name: ${secondName}`)
+          .replace('First canonical-collision agent', 'Second canonical-collision agent');
+        const directLayer = new DatabaseStorageLayer(
+          getTestDb(),
+          createUserIdResolver(tracker),
+          'agents',
+        );
+        await directLayer.writeContent('agents', secondName, secondContent, {
+          author: '',
+          version: '1.0.0',
+          description: 'Second canonical-collision agent',
+          tags: [],
+        });
+
+        const manager = createDbAgentManager(tempDir, tracker);
+        await expect(manager.read(firstName)).resolves.toMatchObject({
+          metadata: expect.objectContaining({ name: firstName }),
+        });
+        await expect(manager.read(secondName)).resolves.toMatchObject({
+          metadata: expect.objectContaining({ name: secondName }),
+        });
+        await expect(manager.read(ambiguousName)).resolves.toBeNull();
+        await expect(manager.getAgentStateForRecovery({ agentName: ambiguousName }))
+          .rejects.toThrow(/not found/iu);
+
+        await manager.executeAgent(firstName, { objective: 'first identity goal' });
+        await manager.executeAgent(secondName, { objective: 'second identity goal' });
+
+        const elementRows = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const firstId = elementRows.find((row) => row.name === firstName)?.id;
+        const secondId = elementRows.find((row) => row.name === secondName)?.id;
+        expect(firstId).toBeDefined();
+        expect(secondId).toBeDefined();
+        expect(firstId).not.toBe(secondId);
+
+        const reloadedManager = createDbAgentManager(tempDir, tracker);
+        const firstState = await reloadedManager.getAgentState({ agentName: firstName });
+        const secondState = await reloadedManager.getAgentState({ agentName: secondName });
+        expect(firstState.state.goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'first identity goal' })]),
+        );
+        expect(firstState.state.goals).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'second identity goal' })]),
+        );
+        expect(secondState.state.goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'second identity goal' })]),
+        );
+
+        const reclaimed = await reloadedManager.reclaimOrphanedAgentState({ agentName: firstName });
+        expect(reclaimed?.goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'first identity goal' })]),
+        );
+        expect(reclaimed?.goals).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'second identity goal' })]),
+        );
+
+        const recoveryState = await reloadedManager.getAgentStateForRecovery({ agentName: firstName });
+        const activeGoal = recoveryState.state.goals.find((goal) => goal.status === 'in_progress');
+        expect(activeGoal).toBeDefined();
+        if (!activeGoal) {
+          throw new Error('Expected an active goal for strict DB recovery');
+        }
+        await reloadedManager.completeAgentGoalForRecovery({
+          agentName: firstName,
+          goalId: activeGoal.id,
+          outcome: 'success',
+          summary: 'Complete only the exact requested DB agent',
+        });
+
+        const stateRows = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ agentId: agentStates.agentId, goals: agentStates.goals })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        const firstRow = stateRows.find((row) => row.agentId === firstId);
+        const secondRow = stateRows.find((row) => row.agentId === secondId);
+        expect(firstRow?.goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: activeGoal.id, status: 'completed' })]),
+        );
+        expect(secondRow?.goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'second identity goal', status: 'in_progress' })]),
+        );
+
+        await reloadedManager.delete(`${secondName}.md`);
+        await expect(reloadedManager.read(firstName)).resolves.toMatchObject({
+          metadata: expect.objectContaining({ name: firstName }),
+        });
+
+        const remainingElementRows = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        expect(remainingElementRows).toEqual([
+          expect.objectContaining({ id: firstId, name: firstName }),
+        ]);
+
+        const remainingStateRows = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(remainingStateRows.map((row) => row.agentId)).toEqual([firstId]);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

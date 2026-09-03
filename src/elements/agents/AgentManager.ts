@@ -118,6 +118,7 @@ import type { PersistedActivationIdentity } from '../../state/IActivationStateSt
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
+const DB_STORAGE_IDENTITY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
 const MAX_FILE_SIZE = 100 * 1024;
 
@@ -185,6 +186,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateStore: IAgentStateStore;
   private readonly hydratedAgents = new WeakSet<Agent>();
   private readonly recoverySourceAgents = new WeakMap<Agent, Agent>();
+  private readonly agentStorageIdentities = new WeakMap<Agent, string>();
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Covers direct/legacy manager entry points that bypass AgentExecutionHandler.
   private readonly stateOperationLock = new AsyncKeyedLock();
@@ -515,6 +517,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       const found = await this.findByStorageIdentity(storagePath);
       if (!found) return this.readFlexibly(name, false);
+      this.bindAgentStorageIdentity(found, storagePath);
       if (
         !isWritableStorageLayer(this.storageLayer) &&
         !this.matchesRequestedAgentIdentity(found, sanitizedName)
@@ -547,7 +550,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       ) {
         return this.readFlexibly(name, true);
       }
-      return this.createRecoveryAgent(definition, name, false);
+      return this.createRecoveryAgent(definition, name, false, storagePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return this.readFlexibly(name, true);
@@ -595,25 +598,38 @@ export class AgentManager extends BaseElementManager<Agent> {
       const searchSlug = this.normalizeFilename(name);
 
       // Pass 1: exact case-insensitive match on metadata name
-      let match = candidates.find(
+      let matches = candidates.filter(
         ({ agent }) => agent.metadata.name.toLowerCase() === searchLower
       );
 
       // Pass 2: slug match (handles dashes, underscores, casing differences)
-      match ??= candidates.find(({ agent }) => {
-        const slug = this.normalizeFilename(agent.metadata.name);
-        return slug === searchSlug || slug === searchLower;
-      });
+      if (matches.length === 0) {
+        matches = candidates.filter(({ agent }) => {
+          const slug = this.normalizeFilename(agent.metadata.name);
+          return slug === searchSlug || slug === searchLower;
+        });
+      }
+
+      // Database names are case-sensitive and may legally differ only by case
+      // or canonical punctuation. A non-exact folded request is therefore
+      // ambiguous and must not inherit whichever row happened to scan first.
+      if (isWritableStorageLayer(this.storageLayer) && matches.length > 1) {
+        logger.warn(`Ambiguous database agent identity for "${name}"; exact name required`);
+        return null;
+      }
+
+      const match = matches[0];
 
       if (match) {
         if (strictStateErrors) {
-          const recoveryAgent = await this.createRecoveryAgent(match.agent, name, true);
+          const recoveryAgent = await this.createRecoveryAgent(match.agent, name, true, match.storagePath);
           logger.warn(
             `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
             `Consider renaming the file to match the expected convention (#607).`
           );
           return recoveryAgent;
         }
+        this.bindAgentStorageIdentity(match.agent, match.storagePath);
         await this.hydrateAgentState(match.agent, this.stripExtension(match.storagePath));
         logger.warn(
           `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
@@ -881,6 +897,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     filePath: string,
   ): Promise<void> {
     if (isWritableStorageLayer(this.storageLayer)) {
+      this.bindAgentStorageIdentity(agent, filePath);
       await this.warnOnceForDbModeOrphanedStateFiles();
     } else {
       await this.hydrateAgentState(agent, this.stripExtension(filePath));
@@ -898,6 +915,13 @@ export class AgentManager extends BaseElementManager<Agent> {
         author: agent.metadata.author,
       }
     });
+  }
+
+  protected override afterSave(agent: Agent, filePath: string): Promise<void> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      this.bindAgentStorageIdentity(agent, filePath);
+    }
+    return Promise.resolve();
   }
 
   /**
@@ -967,25 +991,35 @@ export class AgentManager extends BaseElementManager<Agent> {
     const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
       : this.normalizeAgentFilePath(filePath);
-    // State-file name derives from the agent's logical name in DB mode, or
-    // from the stripped filename in file mode.
-    // DB callers may still supply the canonical filename used by the portfolio
-    // adapter. Resolve it by logical name so we can recover elements.id before
-    // deleting the associated UUID-keyed state rows.
-    const lookupPath = isDb ? this.stripExtension(sanitizedPath) : sanitizedPath;
-    const existing = isDb
-      ? await this.findByName(lookupPath).catch(() => null)
-      : await this.load(lookupPath).catch(() => null);
-    const name = isDb
-      ? existing?.metadata.name ?? sanitizedPath
-      : this.stripExtension(sanitizedPath);
-    // Agent.id is a logical runtime identifier, not necessarily elements.id.
-    // The DB storage index maps the resolved metadata name to the actual UUID
-    // path used by the elements and agent_states foreign-key columns.
-    const indexedElementId = isDb && existing
-      ? this.storageLayer.getPathByName(existing.metadata.name)
-      : undefined;
-    const agentElementId = indexedElementId ?? existing?.id ?? sanitizedPath;
+    if (isDb) {
+      const lookupName = this.stripExtension(sanitizedPath);
+      const storageIdentity = DB_STORAGE_IDENTITY_PATTERN.test(sanitizedPath)
+        ? sanitizedPath
+        : await this.resolveDirectAgentStoragePath(lookupName);
+
+      // Let the base deletion path produce its normal not-found error for an
+      // unresolved or ambiguous folded name. Crucially, do not delete state
+      // under a guessed runtime id or a sibling row's canonical match.
+      if (!storageIdentity) {
+        await super.delete(sanitizedPath);
+        return;
+      }
+
+      const existing = await this.findByStorageIdentity(storageIdentity) ?? null;
+      const name = existing?.metadata.name
+        ?? this.storageLayer.getNameById?.(storageIdentity)
+        ?? lookupName;
+      if (existing) {
+        this.bindAgentStorageIdentity(existing, storageIdentity);
+      }
+      await super.delete(storageIdentity);
+      await this.stateStore.delete({ name, agentElementId: storageIdentity });
+      return;
+    }
+
+    const existing = await this.load(sanitizedPath).catch(() => null);
+    const name = this.stripExtension(sanitizedPath);
+    const agentElementId = existing?.id ?? sanitizedPath;
     await super.delete(sanitizedPath);
 
     await this.stateStore.delete({ name, agentElementId });
@@ -2382,7 +2416,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent: Agent,
     name: string,
     requireDurableState: boolean,
+    storageIdentity: string,
   ): Promise<Agent> {
+    this.bindAgentStorageIdentity(agent, storageIdentity);
     const state = await this.stateStore.load({
       name,
       agentElementId: this.getAgentElementId(agent, name),
@@ -2405,9 +2441,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     recoveryAgent.deserialize(JSON.stringify(serialized));
     recoveryAgent[COMMIT_PERSISTED_VERSION](state?.stateVersion ?? 0);
     recoveryAgent.markStatePersisted();
-    const cachedSource = this.getCachedElementsForCurrentNamespace().find(candidate =>
-      candidate.id === agent.id || candidate.metadata.name === agent.metadata.name
-    );
+    this.bindAgentStorageIdentity(recoveryAgent, storageIdentity);
+    // Bind the recovery clone to the live instance backing the SAME storage
+    // identity. `agent` is a fresh parse whose id is timestamped, so an id
+    // comparison never matches the cached instance, and display names may be
+    // shared by distinct files; only the storage identity selects the instance
+    // that synchronizeRecoveryState must update.
+    const cachedSource = this.getCachedElementByStorageIdentity(storageIdentity);
     this.recoverySourceAgents.set(recoveryAgent, cachedSource ?? agent);
     return recoveryAgent;
   }
@@ -2544,9 +2584,23 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       return agent.id;
     }
-    return this.storageLayer.getPathByName(agent.metadata.name)
-      ?? this.storageLayer.getPathByName(name)
-      ?? agent.id;
+    const attachedIdentity = this.agentStorageIdentities.get(agent);
+    if (attachedIdentity) {
+      return attachedIdentity;
+    }
+    const resolvedIdentity = this.storageLayer.getPathByName(agent.metadata.name)
+      ?? this.storageLayer.getPathByName(name);
+    if (!resolvedIdentity) {
+      throw new Error(`Cannot resolve durable database identity for agent "${name}"`);
+    }
+    this.bindAgentStorageIdentity(agent, resolvedIdentity);
+    return resolvedIdentity;
+  }
+
+  private bindAgentStorageIdentity(agent: Agent, storageIdentity: string): void {
+    if (isWritableStorageLayer(this.storageLayer) && storageIdentity) {
+      this.agentStorageIdentities.set(agent, storageIdentity);
+    }
   }
 
   async ensureStateHydrated(agent: Agent): Promise<void> {

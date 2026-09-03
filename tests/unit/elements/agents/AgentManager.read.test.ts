@@ -76,6 +76,11 @@ const AGENT_CONTENT_STORAGE_FALLBACK_IDENTITY = AGENT_CONTENT_STANDARD.replace(
   'name: "---"',
 );
 
+const AGENT_CONTENT_SHARED_NAME = AGENT_CONTENT_STANDARD.replace(
+  'name: my-agent',
+  'name: shared-agent',
+);
+
 const ACTIVE_REQUESTED_STATE = `---
 goals:
   - id: goal_requested_active
@@ -475,6 +480,40 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       const ordinaryRead = await agentManager.getAgentState({ agentName: 'my-agent' });
       expect(ordinaryRead.state.goals[0]?.status).toBe('completed');
+    });
+    it('should synchronize strict recovery into the cached instance for the requested file when display names collide', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-shared.md') return AGENT_CONTENT_SHARED_NAME.replace('Standard agent', 'Legacy duplicate');
+        if (filename === 'shared-agent.md') return AGENT_CONTENT_SHARED_NAME;
+        if (filename === 'shared-agent.state.yaml') return ACTIVE_REQUESTED_STATE;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      // Cache the intended file, then touch a same-named legacy file so it is the
+      // most recently used entry; a name-keyed cache lookup would find it first.
+      const intendedInstance = await agentManager.read('shared-agent');
+      const legacyInstance = await agentManager.load('legacy-shared.md');
+      expect(intendedInstance).not.toBeNull();
+      expect(intendedInstance).not.toBe(legacyInstance);
+      expect(intendedInstance?.metadata.name).toBe(legacyInstance.metadata.name);
+      expect(intendedInstance?.getState().goals[0]?.status).toBe('in_progress');
+      expect(legacyInstance.getState().goals).toEqual([]);
+
+      const result = await agentManager.completeAgentGoalForRecovery({
+        agentName: 'shared-agent',
+        goalId: 'goal_requested_active',
+        outcome: 'success',
+        summary: 'Recovered after restart',
+      });
+      expect(result.goal.status).toBe('completed');
+
+      // The recovered state belongs to shared-agent.md's live instance, never to a
+      // different file that merely shares its display name.
+      expect(legacyInstance.getState().goals).toEqual([]);
+      expect(intendedInstance?.getState().goals).toEqual([
+        expect.objectContaining({ id: 'goal_requested_active', status: 'completed' }),
+      ]);
     });
   });
 
