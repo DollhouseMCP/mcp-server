@@ -3,14 +3,19 @@ name: Publish to npm
 # This workflow publishes the package to npm registry when a release is published.
 # Uses npm Trusted Publishing (OIDC) for secure, token-free authentication.
 #
-# Trusted Publishing Setup Required:
-# 1. Go to https://www.npmjs.com/package/@dollhousemcp/mcp-server/access
-# 2. Add Trusted Publisher:
+# Trusted Publishing Setup Required for both @dollhousemcp/mcp-server and
+# @dollhousemcp/safety:
+# 1. Open each package's settings on npmjs.com.
+# 2. Add the same Trusted Publisher to each package:
 #    - Provider: GitHub Actions
 #    - Organization: DollhouseMCP
 #    - Repository: mcp-server
 #    - Workflow: publish-npm.yml
 #    - Environment: (leave blank)
+#    - Allowed action: npm publish
+#
+# The safety package job completes before the server package job. Existing
+# safety versions are skipped so server-only releases remain idempotent.
 
 on:
   release:
@@ -36,8 +41,67 @@ env:
   CI: true
 
 jobs:
+  publish-safety:
+    name: Publish safety package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: packages/safety/package-lock.json
+        env:
+          NODE_AUTH_TOKEN: ''
+
+      - name: Install safety package dependencies
+        working-directory: packages/safety
+        run: npm ci --ignore-scripts --workspaces=false
+
+      - name: Build safety package
+        working-directory: packages/safety
+        run: npm run build
+
+      - name: Check safety package version
+        id: safety_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/safety/package.json').version")
+          REQUIRED_RANGE=$(node -p "require('./package.json').dependencies['@dollhousemcp/safety']")
+          EXPECTED_RANGE="^$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ "$REQUIRED_RANGE" != "$EXPECTED_RANGE" ]; then
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Safety workspace version $VERSION is not the server dependency floor ($REQUIRED_RANGE); skipping."
+          elif npm view "@dollhousemcp/safety@$VERSION" version >/dev/null 2>&1; then
+            echo "needs_publish=false" >> "$GITHUB_OUTPUT"
+            echo "@dollhousemcp/safety@$VERSION is already published; skipping."
+          else
+            echo "needs_publish=true" >> "$GITHUB_OUTPUT"
+            echo "@dollhousemcp/safety@$VERSION is not published yet."
+          fi
+
+      - name: Publish safety package (with provenance)
+        if: github.event.inputs.dry_run != 'true' && steps.safety_version.outputs.needs_publish == 'true'
+        working-directory: packages/safety
+        env:
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: npm publish --provenance --access public --loglevel verbose
+
+      - name: Dry run safety package
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/safety
+        run: npm publish --dry-run
+
   publish-npm:
     name: Publish to npm Registry
+    needs: publish-safety
     runs-on: ubuntu-latest
 
     steps:

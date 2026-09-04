@@ -26,6 +26,7 @@ interface WorkflowJob {
   steps: WorkflowStep[];
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
+  needs?: string | string[];
 }
 
 interface Workflow {
@@ -204,6 +205,45 @@ describe('GitHub Workflow Validation', () => {
       expect(downloadStep?.run).toContain('--certificate-oidc-issuer "$EXPECTED_ISSUER"');
       expect(downloadStep?.run).toContain('EXPECTED_ISSUER');
       expect(downloadStep?.run).toContain('https://token.actions.githubusercontent.com');
+    });
+  });
+
+  describe('Publish to npm Workflow', () => {
+    let workflow: Workflow;
+
+    beforeAll(() => {
+      const workflowPath = path.join(workflowDir, 'publish-npm.yml');
+      workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as Workflow;
+    });
+
+    it('should publish the safety package before the server package', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const serverJob = workflow.jobs['publish-npm'];
+
+      expect(safetyJob).toBeDefined();
+      expect(serverJob.needs).toBe('publish-safety');
+    });
+
+    it('should publish safety only when its version is absent from npm', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
+      const publishStep = safetyJob.steps.find(step => step.name === 'Publish safety package (with provenance)');
+
+      expect(versionStep?.run).toContain('@dollhousemcp/safety@$VERSION');
+      expect(versionStep?.run).toContain("dependencies['@dollhousemcp/safety']");
+      expect(versionStep?.run).toContain('REQUIRED_RANGE');
+      expect(versionStep?.run).toContain('EXPECTED_RANGE="^$VERSION"');
+      expect(versionStep?.run).toContain('needs_publish=false');
+      expect(versionStep?.run).toContain('needs_publish=true');
+      expect(publishStep?.run).toBe('npm publish --provenance --access public --loglevel verbose');
+      expect(publishStep?.env?.NPM_CONFIG_PROVENANCE).toBe('true');
+    });
+
+    it('should retain a safety-package dry run path', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const dryRunStep = safetyJob.steps.find(step => step.name === 'Dry run safety package');
+
+      expect(dryRunStep?.run).toBe('npm publish --dry-run');
     });
   });
 });
