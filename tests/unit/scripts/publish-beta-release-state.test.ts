@@ -179,7 +179,7 @@ describe('Publish Beta Release state validation', () => {
       tagTarget: expectedSha,
       release: matchingRelease(),
       npmExists: true,
-      npmBetaVersion: '2.1.0-beta.2',
+      npmBetaVersion: '2.1.0-beta.3',
       npmLatestVersion: '2.0.40',
     });
 
