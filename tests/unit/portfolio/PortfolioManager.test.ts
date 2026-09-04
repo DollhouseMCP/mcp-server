@@ -244,6 +244,53 @@ describe('PortfolioManager', () => {
         const templates = await portfolioManager.listElements(ElementType.TEMPLATE);
         expect(templates).toEqual([]);
       });
+
+      it.each(['EACCES', 'EPERM'])(
+        'should propagate %s when filesystem errors are requested',
+        async (code) => {
+          const accessError = Object.assign(new Error(`${code}: portfolio unavailable`), {
+            code
+          });
+          const listDirectorySpy = jest
+            .spyOn(fileOperations, 'listDirectory')
+            .mockRejectedValueOnce(accessError);
+
+          await expect(
+            portfolioManager.listElements(ElementType.AGENT, {
+              throwOnFilesystemError: true
+            })
+          ).rejects.toBe(accessError);
+
+          listDirectorySpy.mockRestore();
+        }
+      );
+
+      it('should preserve best-effort permission handling by default', async () => {
+        const accessError = Object.assign(new Error('EACCES: portfolio unavailable'), {
+          code: 'EACCES'
+        });
+        const listDirectorySpy = jest
+          .spyOn(fileOperations, 'listDirectory')
+          .mockRejectedValueOnce(accessError);
+
+        await expect(
+          portfolioManager.listElements(ElementType.AGENT)
+        ).resolves.toEqual([]);
+
+        listDirectorySpy.mockRestore();
+      });
+
+      it('should propagate a missing directory when filesystem errors are requested', async () => {
+        await fs.rm(portfolioManager.getElementDir(ElementType.AGENT), {
+          recursive: true
+        });
+
+        await expect(
+          portfolioManager.listElements(ElementType.AGENT, {
+            throwOnFilesystemError: true
+          })
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+      });
     });
     
     describe('getElementPath', () => {

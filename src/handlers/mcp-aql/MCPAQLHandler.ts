@@ -733,6 +733,7 @@ export class MCPAQLHandler {
           activeElements.push({
             type: 'agent',
             name: agentEntry.name,
+            executionIdentity: agentEntry.identity,
             metadata: {
               name: agentEntry.name,
               gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
@@ -1057,9 +1058,11 @@ export class MCPAQLHandler {
       operation,
       elementType,
       (decision.reason as string | undefined) ?? 'Operation blocked by policy',
-      decision.permissionLevel
+      decision.permissionLevel,
+      decision.sourceIdentity,
     );
-    throw new Error(`[Gatekeeper] ${decision.reason}`);
+    const suggestion = decision.suggestion ? ` Suggestion: ${decision.suggestion}` : '';
+    throw new Error(`[Gatekeeper] ${decision.reason}${suggestion}`);
   }
 
   private autoConfirmGatekeeperDecision(

@@ -35,9 +35,6 @@ jest.mock('../../../src/utils/logger.js');
 import { logger as _logger } from '../../../src/utils/logger.js';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
-const cacheKeyFor = (manager: unknown, elementId: string): string =>
-  `${(manager as { getCacheNamespace: () => string }).getCacheNamespace()}:${elementId}`;
-
 // Test element for concrete implementation
 interface TestElementMetadata {
   name: string;
@@ -639,7 +636,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, testPath);
 
       // Cache should contain the saved element
-      expect((manager as any).elements.has(cacheKeyFor(manager, element.id))).toBe(true);
+      expect((manager as any).getCachedElementByStorageIdentity(testPath)).toBe(element);
     });
 
     it('removes an element from the cache when deleting', async () => {
@@ -742,9 +739,9 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, 'path2.md');
 
       const stats = (manager as any).getCacheStats();
-      // Should have 1 element but 2 filepath mappings (latest wins)
+      // Rebinding one object prunes the obsolete path metadata.
       expect(stats.elementCount).toBe(1);
-      expect(stats.pathMappings).toBe(2);
+      expect(stats.pathMappings).toBe(1);
     });
 
     it('clearCache removes both element and filepath mappings', async () => {
@@ -807,6 +804,21 @@ describe('BaseElementManager - Requirements & Contract', () => {
   // ============================================
 
   describe('findByName() Cache Key Consistency', () => {
+    it('findByStorageIdentity() reuses a stable path when the display name has changed', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'stable-element.md'),
+        `---\nname: Renamed Element\n---\n\nContent`
+      );
+
+      const found = await manager.findByStorageIdentity('stable-element.md');
+      const cached = await manager.findByStorageIdentity('stable-element.md');
+
+      expect(found).toBeDefined();
+      expect(found?.metadata.name).toBe('Renamed Element');
+      expect((found as TestElement & { filename?: string })?.filename).toBe('stable-element.md');
+      expect(cached).toBe(found);
+    });
+
     it('findByName() hits cache after list() populates it', async () => {
       // Setup: create files on disk
       await fs.writeFile(
@@ -988,7 +1000,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, 'long.md');
       const loaded = await manager.load('long.md');
 
-      expect(loaded.content.trim().length).toBe(10000);
+      expect(loaded.content.trim()).toHaveLength(10000);
     });
 
     it('handles concurrent load operations correctly', async () => {

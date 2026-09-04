@@ -129,7 +129,7 @@ export class FileAgentStateStore implements IAgentStateStore {
         if (options.strict) {
           // A missing state file is valid only when its parent directory is
           // reachable. Otherwise ENOENT may describe a failed/unmounted store.
-          await this.deps.fileOperations.stat(this.stateDir);
+          await this.assertStateDirectoryAvailable();
         }
         return null;
       }
@@ -140,6 +140,18 @@ export class FileAgentStateStore implements IAgentStateStore {
         throw error;
       }
       return null;
+    }
+  }
+
+  private async assertStateDirectoryAvailable(): Promise<void> {
+    try {
+      const stats = await this.deps.fileOperations.stat(this.stateDir);
+      if (!stats.isDirectory()) {
+        throw new Error('Agent state storage path is not a directory');
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Agent state directory unavailable: ${reason}`);
     }
   }
 

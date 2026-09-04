@@ -3,8 +3,8 @@
  */
 
 
-import * as path from 'path';
-import { homedir } from 'os';
+import * as path from 'node:path';
+import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
 import { ElementType, PortfolioConfig } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -27,6 +27,11 @@ const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
 
 // Default extension for backward compatibility
 const DEFAULT_ELEMENT_FILE_EXTENSION = '.md';
+
+interface ListElementsOptions {
+  /** Preserve filesystem failures instead of representing them as an empty portfolio. */
+  throwOnFilesystemError?: boolean;
+}
 
 /**
  * Get the file extension for an element type without requiring a PortfolioManager instance.
@@ -66,8 +71,8 @@ export interface PortfolioManagerOptions {
 
 export class PortfolioManager {
   private initializationPromise: Promise<void> | null = null;
-  private baseDir: string;
-  private fileOperations: FileOperationsService;
+  private readonly baseDir: string;
+  private readonly fileOperations: FileOperationsService;
   private readonly pathService?: PathService;
   private readonly contextTracker: ContextTracker | null;
 
@@ -344,7 +349,10 @@ export class PortfolioManager {
   /**
    * List all elements of a specific type
    */
-  public async listElements(type: ElementType): Promise<string[]> {
+  public async listElements(
+    type: ElementType,
+    options: ListElementsOptions = {}
+  ): Promise<string[]> {
     const elementDir = this.getElementDir(type);
     const fileExtension = ELEMENT_FILE_EXTENSIONS[type] || DEFAULT_ELEMENT_FILE_EXTENSION;
 
@@ -373,14 +381,20 @@ export class PortfolioManager {
       const err = error as NodeJS.ErrnoException;
       
       if (err.code === 'ENOENT') {
+        if (options.throwOnFilesystemError) {
+          throw error;
+        }
         // Directory doesn't exist yet - this is expected for new installations
         logger.debug(`[PortfolioManager] Element directory doesn't exist yet: ${elementDir}`);
         return [];
       }
       
       if (err.code === 'EACCES' || err.code === 'EPERM') {
-        // Permission denied - log but return empty array
         ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
+        if (options.throwOnFilesystemError) {
+          throw error;
+        }
+        // Permission denied - preserve the legacy best-effort listing behavior
         return [];
       }
       
@@ -502,58 +516,53 @@ export class PortfolioManager {
     };
     
     for (const [oldName, newName] of Object.entries(oldToNew)) {
-      // Unicode normalize the directory names (even though they're hardcoded, for security audit)
-      const normalizedOld = UnicodeValidator.normalize(oldName);
-      const normalizedNew = UnicodeValidator.normalize(newName);
-      
-      if (!normalizedOld.isValid || !normalizedNew.isValid) {
-        // This should never happen with our hardcoded values, but for completeness
-        logger.error(`[PortfolioManager] Invalid Unicode in directory names during migration`);
-        continue;
+      await this.migrateSingularDirectory(oldName, newName);
+    }
+  }
+
+  private async migrateSingularDirectory(oldName: string, newName: string): Promise<void> {
+    const normalizedOld = UnicodeValidator.normalize(oldName);
+    const normalizedNew = UnicodeValidator.normalize(newName);
+    if (!normalizedOld.isValid || !normalizedNew.isValid) {
+      logger.error('[PortfolioManager] Invalid Unicode in directory names during migration');
+      return;
+    }
+
+    const oldDir = path.join(this.baseDir, normalizedOld.normalizedContent);
+    const newDir = path.join(this.baseDir, normalizedNew.normalizedContent);
+    try {
+      if (!await this.fileOperations.exists(oldDir)) return;
+      const newFileCount = await this.countExistingDirectoryFiles(newDir);
+      if (newFileCount > 0) {
+        logger.warn(
+          `[PortfolioManager] Both ${oldName} and ${newName} directories exist. Keeping ${newName}, skipping migration.`,
+          { oldDir, newDir, fileCount: newFileCount },
+        );
+        return;
       }
-      
-      const oldDir = path.join(this.baseDir, normalizedOld.normalizedContent);
-      const newDir = path.join(this.baseDir, normalizedNew.normalizedContent);
-      
-      try {
-        // Check if old directory exists
-        if (!await this.fileOperations.exists(oldDir)) continue;
-        
-        // Check if new directory already has content
-        try {
-          if (await this.fileOperations.exists(newDir)) {
-            const newDirFiles = await this.fileOperations.listDirectory(newDir);
-            if (newDirFiles.length > 0) {
-              logger.warn(
-                `[PortfolioManager] Both ${oldName} and ${newName} directories exist. Keeping ${newName}, skipping migration.`,
-                { oldDir, newDir, fileCount: newDirFiles.length }
-              );
-              continue;
-            }
-          }
-        } catch {
-          // New directory doesn't exist or is empty, proceed with migration
-        }
-        
-        // Perform the migration
-        logger.info(`[PortfolioManager] Migrating ${oldName} → ${newName}`);
-        await this.fileOperations.renameFile(oldDir, newDir);
-        
-        // Log security event for audit trail
-        SecurityMonitor.logSecurityEvent({
-          type: 'DIRECTORY_MIGRATION',
-          severity: 'LOW',
-          source: 'PortfolioManager.migrateFromSingularDirectories',
-          details: `Migrated directory from ${oldName} to ${newName} for v1.4.3 compatibility`,
-          metadata: { oldDir, newDir }
-        });
-        
-      } catch (error) {
-        // Old directory doesn't exist, which is fine
-        if ((error as any).code !== 'ENOENT') {
-          logger.error(`[PortfolioManager] Error during migration of ${oldName}:`, error);
-        }
+
+      logger.info(`[PortfolioManager] Migrating ${oldName} → ${newName}`);
+      await this.fileOperations.renameFile(oldDir, newDir);
+      SecurityMonitor.logSecurityEvent({
+        type: 'DIRECTORY_MIGRATION',
+        severity: 'LOW',
+        source: 'PortfolioManager.migrateFromSingularDirectories',
+        details: `Migrated directory from ${oldName} to ${newName} for v1.4.3 compatibility`,
+        metadata: { oldDir, newDir },
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.error(`[PortfolioManager] Error during migration of ${oldName}:`, error);
       }
+    }
+  }
+
+  private async countExistingDirectoryFiles(directory: string): Promise<number> {
+    try {
+      if (!await this.fileOperations.exists(directory)) return 0;
+      return (await this.fileOperations.listDirectory(directory)).length;
+    } catch {
+      return 0;
     }
   }
 }

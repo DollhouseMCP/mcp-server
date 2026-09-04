@@ -54,6 +54,7 @@ describe('CollectionHandler', () => {
         isCacheValid: jest.fn(),
         saveCache: jest.fn(),
         getCacheStats: jest.fn<() => Promise<any>>().mockResolvedValue({ isValid: true, itemCount: 10, cacheAge: 1000 }),
+        getCacheFilePath: jest.fn<() => string>().mockReturnValue('/mock/.dollhouse/cache/collection-cache.json'),
       },
       portfolioManager: {
         getElementDir: jest.fn().mockImplementation((type: ElementType) => `/mock/${type}`),
@@ -72,6 +73,11 @@ describe('CollectionHandler', () => {
       indicatorService: {
         getPersonaIndicator: jest.fn<() => string>().mockReturnValue('>>'),
       },
+      fileOperations: {
+        stat: jest.fn<() => Promise<never>>().mockRejectedValue(
+          Object.assign(new Error('Cache file does not exist'), { code: 'ENOENT' })
+        ),
+      },
     };
 
     container = new DollhouseContainer();
@@ -89,7 +95,8 @@ describe('CollectionHandler', () => {
       mockServices.submitToPortfolioTool,
       mockServices.unifiedIndexManager,
       mockServices.initService,
-      mockServices.indicatorService
+      mockServices.indicatorService,
+      mockServices.fileOperations
     );
   });
 
@@ -236,6 +243,9 @@ describe('CollectionHandler', () => {
       expect(result.content[0].text).toContain('Collection Cache Health Check');
       expect(result.content[0].text).toContain('Collection Cache (Legacy)');
       expect(result.content[0].text).toContain('Index Cache (Enhanced Search)');
+      expect(mockServices.fileOperations.stat).toHaveBeenCalledWith(
+        '/mock/.dollhouse/cache/collection-cache.json'
+      );
     });
 
     it('should handle errors when getting cache health', async () => {

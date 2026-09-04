@@ -99,7 +99,8 @@ describe('MCPAQLHandler', () => {
         assertPersistable: jest.fn().mockResolvedValue(),
       },
       agentManager: {
-        canonicalizeExecutionName: jest.fn((name: string) => name),
+        resolveExecutionIdentity: jest.fn((name: string) =>
+          Promise.resolve({ kind: 'file', value: `${name}.md` })),
         executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
         getAgentState: jest.fn().mockResolvedValue({ status: 'idle', steps: [] }),
         recordAgentStep: jest.fn().mockResolvedValue({ recorded: true }),
@@ -1411,7 +1412,8 @@ describe('MCPAQLHandler', () => {
         }
         expect(mockRegistry.agentManager.executeAgent).toHaveBeenCalledWith(
           'test-agent',
-          { goal: 'test goal' }
+          { goal: 'test goal' },
+          { executionIdentity: { kind: 'file', value: 'test-agent.md' } },
         );
       });
     });
@@ -1431,6 +1433,7 @@ describe('MCPAQLHandler', () => {
         expect(result.success).toBe(true);
         expect(mockRegistry.agentManager.getAgentState).toHaveBeenCalledWith({
           agentName: 'test-agent',
+          executionIdentity: { kind: 'file', value: 'test-agent.md' },
           includeDecisionHistory: true,
           includeContext: undefined,
         });
@@ -1716,7 +1719,8 @@ describe('MCPAQLHandler', () => {
           assertPersistable: jest.fn().mockResolvedValue(),
         },
         agentManager: {
-          canonicalizeExecutionName: jest.fn((name: string) => name),
+          resolveExecutionIdentity: jest.fn((name: string) =>
+            Promise.resolve({ kind: 'file', value: `${name}.md` })),
           executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
           getAgentState: jest.fn().mockResolvedValue({ status: 'idle', steps: [] }),
           recordAgentStep: jest.fn().mockResolvedValue({ recorded: true }),

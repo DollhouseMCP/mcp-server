@@ -169,12 +169,6 @@ export class CollectionCache {
       });
 
       logger.debug(`Saved ${items.length} items to collection cache`);
-
-      // SECURITY FIX: Add audit logging for cache write operations
-      logger.debug('Security audit: Cache write operation completed successfully');
-
-      // Log operation completed successfully
-      logger.debug(`Cache file operation completed with ${items.length} items`);
     } catch (error) {
       logger.error(`Failed to save collection cache: ${error}`);
       // Don't throw - caching failures shouldn't break functionality

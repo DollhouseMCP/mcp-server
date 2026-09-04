@@ -13,13 +13,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { eq, and, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext } from '../database/rls.js';
 import { elements } from '../database/schema/elements.js';
 import type { UserIdResolver } from '../database/UserContext.js';
-import { isUniqueViolation } from '../database/db-utils.js';
-import { FrontmatterParser } from './FrontmatterParser.js';
+import { getErrorCode, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { FrontmatterParser, type FrontmatterData } from './FrontmatterParser.js';
 import { RelationshipExtractor } from './RelationshipExtractor.js';
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
 import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
@@ -30,6 +30,40 @@ const STORE_NAME = 'DatabaseStorageLayer';
 
 /** Regex to split frontmatter from markdown body. */
 const FRONTMATTER_REGEX = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+
+interface PreparedElementWrite {
+  userId: string;
+  elementType: string;
+  elementName: string;
+  content: string;
+  contentHash: string;
+  byteSize: number;
+  bodyContent: string | null;
+  frontmatter: FrontmatterData;
+}
+
+interface ElementWriteValues {
+  userId: string;
+  rawContent: string;
+  bodyContent: string | null;
+  contentHash: string;
+  byteSize: number;
+  elementType: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  elementCreated: string | null;
+  metadata: Record<string, unknown>;
+  visibility: string;
+  memoryType: string | null;
+  autoLoad: boolean | null;
+  priority: number | null;
+}
+
+interface ElementIdRow {
+  id: string;
+}
 
 // ── Implementation ──────────────────────────────────────────────────
 
@@ -58,74 +92,34 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     // Use the caller-provided name as authoritative, falling back to frontmatter
     const elementName = name || frontmatter.name;
 
-    const elementId = await withUserContext(this.db, this.userId, async (tx) => {
-      // Build the column values once — both the insert and the upsert SET
-      // reuse the same object so adding a column requires one change, not two.
-      const values = {
-        userId: this.userId,
-        rawContent: content,
-        bodyContent,
-        contentHash,
-        byteSize,
+    const userId = this.userId;
+    let elementId: string;
+    try {
+      elementId = await withUserContext(this.db, userId, tx => this.persistContentInTransaction(
+        tx,
+        {
+          userId,
+          elementType,
+          elementName,
+          content,
+          contentHash,
+          byteSize,
+          bodyContent,
+          frontmatter,
+        },
+        metadata,
+        options,
+      ));
+    } catch (error) {
+      if (getErrorCode(error) !== 'ESTALE') throw error;
+      if ((error as { code?: unknown }).code === 'ESTALE') throw error;
+      throw this.createStaleWriteError(
         elementType,
-        name: elementName,
-        description: metadata.description || frontmatter.description,
-        version: metadata.version || frontmatter.version,
-        author: metadata.author || frontmatter.author,
-        elementCreated: typeof frontmatter.created === 'string' ? frontmatter.created : null,
-        metadata: extractTypeSpecificMetadata(frontmatter),
-        visibility: metadata.visibility ?? 'private',
-        memoryType: typeof frontmatter.memoryType === 'string' ? frontmatter.memoryType : null,
-        autoLoad: typeof frontmatter.autoLoad === 'boolean' ? frontmatter.autoLoad : null,
-        priority: typeof frontmatter.priority === 'number' ? frontmatter.priority : null,
-      };
-      // Build the SET clause from `values` but strip identity columns
-      // (userId, elementType, name) — those are the conflict target — and
-      // force updatedAt to NOW(). Extracting here keeps one source of truth
-      // for all other fields.
-      const buildUpdateSet = () => {
-        const { userId: _u, elementType: _et, name: _n, ...rest } = values;
-        return { ...rest, updatedAt: sql`NOW()` };
-      };
-
-      let rows;
-      if (options?.exclusive) {
-        // Atomic create-or-fail — mirrors file-mode createFileExclusive semantics.
-        // Unique index on (user_id, element_type, name) raises 23505 on duplicate.
-        try {
-          rows = await tx.insert(elements).values(values).returning({ id: elements.id });
-        } catch (err) {
-          if (isUniqueViolation(err)) {
-            // Use the caller-provided singular label (e.g. "Agent") so the
-            // error matches the file-mode format. Fall back to capitalizing
-            // the plural `elementType` only if no label was passed.
-            const label = options?.elementLabel ?? capitalize(elementType);
-            throw new Error(`${label} '${elementName}' already exists`);
-          }
-          throw err;
-        }
-      } else {
-        rows = await tx
-          .insert(elements)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [elements.userId, elements.elementType, elements.name],
-            set: buildUpdateSet(),
-          })
-          .returning({ id: elements.id });
-      }
-
-      const row = rows[0];
-      if (!row) {
-        throw new Error(`[${STORE_NAME}] Upsert returned no row for ${elementType}/${elementName}`);
-      }
-
-      // Replace tags atomically within the same transaction
-      const tags = metadata.tags.length > 0 ? metadata.tags : frontmatter.tags;
-      await this.replaceTags(tx, row.id, tags);
-
-      return row.id;
-    });
+        elementName,
+        options?.expectedIdentity,
+        error,
+      );
+    }
 
     // Update in-memory index
     this.setIndex(elementName, elementId);
@@ -141,22 +135,146 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     return elementId;
   }
 
+  private async persistContentInTransaction(
+    tx: DrizzleTx,
+    prepared: PreparedElementWrite,
+    metadata: ElementWriteMetadata,
+    options?: WriteContentOptions,
+  ): Promise<string> {
+    const values = this.buildElementWriteValues(prepared, metadata);
+    const rows = await this.writeElementRow(tx, values, options);
+    const row = rows[0];
+    if (!row) {
+      throw new Error(
+        `[${STORE_NAME}] Upsert returned no row for ${prepared.elementType}/${prepared.elementName}`,
+      );
+    }
+
+    // Replace tags atomically within the same transaction.
+    const tags = metadata.tags.length > 0 ? metadata.tags : prepared.frontmatter.tags;
+    await this.replaceTags(tx, row.id, tags);
+    return row.id;
+  }
+
+  private buildElementWriteValues(
+    prepared: PreparedElementWrite,
+    metadata: ElementWriteMetadata,
+  ): ElementWriteValues {
+    const { frontmatter } = prepared;
+    return {
+      userId: prepared.userId,
+      rawContent: prepared.content,
+      bodyContent: prepared.bodyContent,
+      contentHash: prepared.contentHash,
+      byteSize: prepared.byteSize,
+      elementType: prepared.elementType,
+      name: prepared.elementName,
+      description: metadata.description || frontmatter.description,
+      version: metadata.version || frontmatter.version,
+      author: metadata.author || frontmatter.author,
+      elementCreated: typeof frontmatter.created === 'string' ? frontmatter.created : null,
+      metadata: extractTypeSpecificMetadata(frontmatter),
+      visibility: metadata.visibility ?? 'private',
+      memoryType: typeof frontmatter.memoryType === 'string' ? frontmatter.memoryType : null,
+      autoLoad: typeof frontmatter.autoLoad === 'boolean' ? frontmatter.autoLoad : null,
+      priority: typeof frontmatter.priority === 'number' ? frontmatter.priority : null,
+    };
+  }
+
+  private writeElementRow(
+    tx: DrizzleTx,
+    values: ElementWriteValues,
+    options?: WriteContentOptions,
+  ): Promise<ElementIdRow[]> {
+    if (options?.expectedIdentity) {
+      return this.updateExpectedElementRow(tx, values, options.expectedIdentity);
+    }
+    if (options?.exclusive) {
+      return this.insertElementRowExclusive(tx, values, options.elementLabel);
+    }
+    return tx
+      .insert(elements)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [elements.userId, elements.elementType, elements.name],
+        set: this.buildElementUpdateSet(values),
+      })
+      .returning({ id: elements.id });
+  }
+
+  private async updateExpectedElementRow(
+    tx: DrizzleTx,
+    values: ElementWriteValues,
+    expected: NonNullable<WriteContentOptions['expectedIdentity']>,
+  ): Promise<ElementIdRow[]> {
+    if (expected.name !== values.name) {
+      throw this.createStaleWriteError(values.elementType, values.name, expected);
+    }
+    const rows = await tx
+      .update(elements)
+      .set(this.buildElementUpdateSet(values))
+      .where(and(
+        eq(elements.userId, values.userId),
+        eq(elements.elementType, values.elementType),
+        eq(elements.id, expected.id),
+        eq(elements.name, expected.name),
+      ))
+      .returning({ id: elements.id });
+    if (rows.length !== 1) {
+      throw this.createStaleWriteError(values.elementType, values.name, expected);
+    }
+    return rows;
+  }
+
+  private async insertElementRowExclusive(
+    tx: DrizzleTx,
+    values: ElementWriteValues,
+    elementLabel?: string,
+  ): Promise<ElementIdRow[]> {
+    // Atomic create-or-fail — mirrors file-mode createFileExclusive semantics.
+    // Unique index on (user_id, element_type, name) raises 23505 on duplicate.
+    try {
+      return await tx.insert(elements).values(values).returning({ id: elements.id });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        const label = elementLabel ?? capitalize(values.elementType);
+        throw new Error(`${label} '${values.name}' already exists`);
+      }
+      throw error;
+    }
+  }
+
+  private buildElementUpdateSet(values: ElementWriteValues) {
+    const { userId: _u, elementType: _et, name: _n, ...rest } = values;
+    return { ...rest, updatedAt: sql`NOW()` };
+  }
+
+  private createStaleWriteError(
+    elementType: string,
+    name: string,
+    expectedIdentity?: { id: string },
+    cause?: unknown,
+  ): NodeJS.ErrnoException {
+    const expected = expectedIdentity ? `; expected row ${expectedIdentity.id}` : '';
+    const error = new Error(
+      `Element not found or identity changed during save: ${elementType}/${name}${expected}`,
+      { cause: cause instanceof Error ? cause : undefined },
+    ) as NodeJS.ErrnoException;
+    error.code = 'ESTALE';
+    return error;
+  }
+
   async deleteContent(elementType: string, name: string): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
-      await tx
-        .delete(elements)
-        .where(and(
-          eq(elements.userId, this.userId),
-          eq(elements.elementType, elementType),
-          eq(elements.name, name),
-        ));
-    });
-
-    this.removeIndex(name);
-
-    this.logPersistEvent('ELEMENT_DELETED', 'MEDIUM', `${STORE_NAME}.deleteContent`,
-      `Element deleted from database: ${elementType}/${name}`,
-      { elementType, name });
+    try {
+      await this.deleteContentByIdentity(elementType, name);
+    } catch (error) {
+      // Preserve the legacy best-effort contract: a row hidden by RLS is
+      // indistinguishable from a missing row and must remain a silent no-op.
+      // Lifecycle callers use deleteContentByIdentity directly when ENOENT is
+      // required to detect a stale or missing authorized target.
+      if (getErrorCode(error) === 'ENOENT') return;
+      throw error;
+    }
   }
 }
 

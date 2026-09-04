@@ -205,6 +205,54 @@ describe('DatabaseMemoryStorageLayer', () => {
     await expect(layer.readContent(elementId)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('deletes a canonical alias by its authorized durable identity', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const rawName = 'Atomic_Memory';
+    const elementId = await layer.writeContent('memories', rawName, buildMemoryContent(rawName), {
+      author: '', version: '', description: '', tags: [],
+    });
+    const identity = await layer.resolveContentIdentity('memories', 'atomic-memory');
+    expect(identity).toEqual({ id: elementId, name: rawName });
+
+    await expect(layer.deleteContentByIdentity('memories', 'atomic-memory', identity))
+      .resolves.toEqual(identity);
+    await expect(layer.readContent(elementId)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails closed when a memory identity changes before its authorized delete', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const externalLayer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const rawName = 'Stale_Memory';
+    const originalId = await layer.writeContent('memories', rawName, buildMemoryContent(rawName), {
+      author: '', version: '', description: '', tags: [],
+    });
+    const identity = await layer.resolveContentIdentity('memories', 'stale-memory');
+    expect(identity).toEqual({ id: originalId, name: rawName });
+    const siblingId = await externalLayer.writeContent(
+      'memories', 'stale-memory', buildMemoryContent('stale-memory'),
+      { author: '', version: '', description: '', tags: [] },
+    );
+
+    await expect(layer.deleteContentByIdentity('memories', 'stale-memory', identity))
+      .rejects.toMatchObject({ code: 'ESTALE' });
+    await expect(layer.readContent(originalId)).resolves.toBeTruthy();
+    await expect(layer.readContent(siblingId)).resolves.toBeTruthy();
+  });
+
+  it('reports ENOENT instead of succeeding when no memory row is deleted', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+
+    await expect(layer.deleteContent('memories', 'missing-memory'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   // ── listSummaries with totalEntries ───────────────────────────────
 
   it('should include totalEntries count in summaries', async () => {

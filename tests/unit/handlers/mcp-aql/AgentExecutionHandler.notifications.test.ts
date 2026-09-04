@@ -15,6 +15,7 @@ const GOAL_ID = 'goal-1';
 function executionEntry(): ExecutingAgentEntry {
   return {
     name: AGENT_NAME,
+    identity: { kind: 'file', value: `${AGENT_NAME}.md` },
     goalIds: [GOAL_ID],
     metadata: {},
     startedAt: Date.now(),
@@ -47,7 +48,10 @@ function createHarness(
     autonomy: { continue: true },
   });
   const manager = {
-    canonicalizeExecutionName: jest.fn((name: string) => name),
+    resolveExecutionIdentity: jest.fn(() => Promise.resolve({
+      kind: 'file' as const,
+      value: `${AGENT_NAME}.md`,
+    })),
     recordAgentStep,
   } as unknown as AgentManager;
   const handlers = {
@@ -55,7 +59,7 @@ function createHarness(
     dangerZoneEnforcer: { check },
   } as unknown as HandlerRegistry;
   const executingAgents = new Map<string, ExecutingAgentEntry>([
-    [`default:${AGENT_NAME}`, executionEntry()],
+    [`default:file:${AGENT_NAME}.md`, executionEntry()],
   ]);
   const handler = new AgentExecutionHandler(
     handlers,

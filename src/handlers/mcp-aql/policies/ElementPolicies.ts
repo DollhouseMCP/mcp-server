@@ -23,6 +23,7 @@ import { getDefaultPermissionLevel, canOperationBeElevated, getOperationPolicy }
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
 import { MAX_GLOB_PATTERN_LENGTH } from '../../../utils/patternMatcher.js';
+import type { PersistedActivationIdentity } from '../../../state/IActivationStateStore.js';
 
 /**
  * Metadata structure for elements with Gatekeeper policies.
@@ -43,6 +44,7 @@ export interface ActiveElement {
   type: string;
   name: string;
   metadata: ElementMetadataWithPolicy;
+  executionIdentity?: PersistedActivationIdentity;
 }
 
 export interface GatekeeperPolicyDiagnostics {
@@ -60,6 +62,8 @@ export interface ElementPolicyResult {
   permissionLevel: PermissionLevel;
   /** Which element's policy determined this result */
   sourceElement?: string;
+  /** Durable source identity when the policy belongs to an executing agent. */
+  sourceIdentity?: PersistedActivationIdentity;
   /** The specific policy field that matched (allow/confirm/deny) */
   matchedPolicy?: 'allow' | 'confirm' | 'deny' | 'scope_restriction';
   /** Whether the operation was blocked by scope restrictions */
@@ -70,6 +74,85 @@ export interface ElementPolicyResult {
    * Issue #674: allow cannot override confirm.
    */
   conflictingElements?: Array<{ name: string; wantedLevel: PermissionLevel }>;
+}
+
+type MatchedElementPolicy = NonNullable<ElementPolicyResult['matchedPolicy']>;
+
+interface ElementPolicyResolutionState {
+  permissionLevel: PermissionLevel;
+  sourceElement?: string;
+  sourceIdentity?: PersistedActivationIdentity;
+  matchedPolicy?: MatchedElementPolicy;
+  scopeBlocked: boolean;
+  confirmedByElement: boolean;
+  conflictingElements: Array<{ name: string; wantedLevel: PermissionLevel }>;
+}
+
+function applyScopeRestriction(
+  state: ElementPolicyResolutionState,
+  element: ActiveElement,
+  policy: ElementGatekeeperPolicy,
+  targetElementType?: string,
+): boolean {
+  if (!targetElementType || !policy.scopeRestrictions) return false;
+
+  const { allowedTypes, blockedTypes } = policy.scopeRestrictions;
+  const outsideAllowList = Boolean(allowedTypes && !allowedTypes.includes(targetElementType));
+  const insideBlockList = blockedTypes?.includes(targetElementType) ?? false;
+  if (!outsideAllowList && !insideBlockList) return false;
+
+  state.scopeBlocked = true;
+  state.sourceElement = element.name;
+  state.sourceIdentity = element.executionIdentity;
+  state.matchedPolicy = 'scope_restriction';
+  return true;
+}
+
+function applyConfirmPolicy(
+  state: ElementPolicyResolutionState,
+  element: ActiveElement,
+  policy: ElementGatekeeperPolicy,
+  operation: string,
+): void {
+  if (state.scopeBlocked
+      || !policy.confirm?.includes(operation)
+      || state.permissionLevel === PermissionLevel.DENY) return;
+
+  state.permissionLevel = PermissionLevel.CONFIRM_SESSION;
+  state.confirmedByElement = true;
+  state.sourceElement = element.name;
+  state.sourceIdentity = element.executionIdentity;
+  state.matchedPolicy = 'confirm';
+}
+
+function applyAllowPolicy(
+  state: ElementPolicyResolutionState,
+  element: ActiveElement,
+  policy: ElementGatekeeperPolicy,
+  operation: string,
+): void {
+  if (state.scopeBlocked
+      || !policy.allow?.includes(operation)
+      || !canOperationBeElevated(operation)) return;
+
+  if (state.confirmedByElement) {
+    state.conflictingElements.push({
+      name: element.name,
+      wantedLevel: PermissionLevel.AUTO_APPROVE,
+    });
+    return;
+  }
+
+  state.permissionLevel = PermissionLevel.AUTO_APPROVE;
+  state.sourceElement = element.name;
+  state.sourceIdentity = element.executionIdentity;
+  state.matchedPolicy = 'allow';
+}
+
+function optionalConflicts(
+  conflicts: ElementPolicyResolutionState['conflictingElements'],
+): ElementPolicyResult['conflictingElements'] {
+  return conflicts.length > 0 ? conflicts : undefined;
 }
 
 /**
@@ -86,100 +169,118 @@ export function resolveElementPolicy(
   activeElements: ActiveElement[],
   targetElementType?: string
 ): ElementPolicyResult {
-  // Start with the default operation permission level
-  let effectiveLevel = getDefaultPermissionLevel(operation);
-  let sourceElement: string | undefined;
-  let matchedPolicy: ElementPolicyResult['matchedPolicy'];
-  let scopeBlocked = false;
-  // Issue #674: Track whether CONFIRM was set by an element policy (not just the route default)
-  // allow can override the route default but NOT another element's confirm policy
-  let confirmedByElement = false;
-  // Track elements that wanted allow but were overridden by an element-set confirm/deny
-  const conflictingElements: Array<{ name: string; wantedLevel: PermissionLevel }> = [];
+  const state: ElementPolicyResolutionState = {
+    permissionLevel: getDefaultPermissionLevel(operation),
+    scopeBlocked: false,
+    confirmedByElement: false,
+    conflictingElements: [],
+  };
 
-  // Check each active element's policy in order
   for (const element of activeElements) {
     const policy = element.metadata.gatekeeper;
-    if (!policy) {
-      continue;
-    }
+    if (!policy) continue;
 
-    // 1. Check deny list first (highest priority)
     if (policy.deny?.includes(operation)) {
       return {
         permissionLevel: PermissionLevel.DENY,
         sourceElement: element.name,
+        sourceIdentity: element.executionIdentity,
         matchedPolicy: 'deny',
-        conflictingElements: conflictingElements.length > 0 ? conflictingElements : undefined,
+        conflictingElements: optionalConflicts(state.conflictingElements),
       };
     }
 
-    // 2. Check scope restrictions
-    if (targetElementType && policy.scopeRestrictions) {
-      const { allowedTypes, blockedTypes } = policy.scopeRestrictions;
-
-      // If allowedTypes is specified, target must be in the list
-      if (allowedTypes && !allowedTypes.includes(targetElementType)) {
-        scopeBlocked = true;
-        sourceElement = element.name;
-        matchedPolicy = 'scope_restriction';
-        continue; // Check other elements, might have different policy
-      }
-
-      // If blockedTypes is specified, target must NOT be in the list
-      if (blockedTypes?.includes(targetElementType)) {
-        scopeBlocked = true;
-        sourceElement = element.name;
-        matchedPolicy = 'scope_restriction';
-        continue;
-      }
-    }
-
-    // 3. Check confirm list (requires confirmation)
-    if (policy.confirm?.includes(operation)) {
-      // Don't downgrade from DENY or CONFIRM_SINGLE_USE
-      if (effectiveLevel !== PermissionLevel.DENY) {
-        effectiveLevel = PermissionLevel.CONFIRM_SESSION;
-        confirmedByElement = true;
-        sourceElement = element.name;
-        matchedPolicy = 'confirm';
-      }
-    }
-
-    // 4. Check allow list (auto-approves)
-    // Issue #674: allow CAN override the route default, but NOT another element's confirm policy.
-    // Priority hierarchy: element deny > element confirm > element allow > route default
-    if (policy.allow?.includes(operation)) {
-      // Only elevate if the operation allows elevation
-      if (canOperationBeElevated(operation)) {
-        if (!confirmedByElement) {
-          // No element has confirmed this — safe to elevate (overrides route default)
-          effectiveLevel = PermissionLevel.AUTO_APPROVE;
-          sourceElement = element.name;
-          matchedPolicy = 'allow';
-        } else {
-          // Another element's confirm policy takes priority over this allow
-          conflictingElements.push({ name: element.name, wantedLevel: PermissionLevel.AUTO_APPROVE });
-        }
-      }
-    }
+    if (applyScopeRestriction(state, element, policy, targetElementType)) continue;
+    applyConfirmPolicy(state, element, policy, operation);
+    applyAllowPolicy(state, element, policy, operation);
   }
 
-  // If scope was blocked by all elements with restrictions
-  if (scopeBlocked) {
+  if (state.scopeBlocked) {
     return {
       permissionLevel: PermissionLevel.DENY,
-      sourceElement,
+      sourceElement: state.sourceElement,
+      sourceIdentity: state.sourceIdentity,
       matchedPolicy: 'scope_restriction',
       scopeBlocked: true,
     };
   }
 
   return {
-    permissionLevel: effectiveLevel,
-    sourceElement,
-    matchedPolicy,
-    conflictingElements: conflictingElements.length > 0 ? conflictingElements : undefined,
+    permissionLevel: state.permissionLevel,
+    sourceElement: state.sourceElement,
+    sourceIdentity: state.sourceIdentity,
+    matchedPolicy: state.matchedPolicy,
+    conflictingElements: optionalConflicts(state.conflictingElements),
+  };
+}
+
+function createDenyDecision(
+  operation: string,
+  result: ElementPolicyResult,
+  targetElementType?: string,
+): GatekeeperDecision {
+  const { permissionLevel, sourceElement, scopeBlocked } = result;
+  if (scopeBlocked) {
+    return {
+      allowed: false,
+      permissionLevel,
+      errorCode: GatekeeperErrorCode.SCOPE_RESTRICTION,
+      reason: `Operation "${operation}" is not allowed on element type "${targetElementType}" due to scope restrictions in active element "${sourceElement}"`,
+      suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element or use a different element type`,
+      policySource: 'element_policy',
+      sourceIdentity: result.sourceIdentity,
+    };
+  }
+
+  return {
+    allowed: false,
+    permissionLevel,
+    errorCode: GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION,
+    reason: `Operation "${operation}" is blocked by active element "${sourceElement}"'s deny policy`,
+    suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element to proceed`,
+    policySource: 'element_policy',
+    sourceIdentity: result.sourceIdentity,
+  };
+}
+
+function confirmationRationale(
+  operation: string,
+  result: ElementPolicyResult,
+): string {
+  const policy = getOperationPolicy(operation);
+  if (result.sourceElement && result.matchedPolicy === 'confirm') {
+    const policyDetail = policy?.rationale ? ` ${policy.rationale}` : '';
+    return `Active element "${result.sourceElement}" policy requires confirmation for this operation.${policyDetail}`;
+  }
+  return policy?.rationale ?? 'This operation modifies data and requires human approval before proceeding';
+}
+
+function conflictNote(conflictingElements?: ElementPolicyResult['conflictingElements']): string {
+  if (!conflictingElements?.length) return '';
+
+  const names = conflictingElements.map(element => `"${element.name}"`).join(', ');
+  const verb = conflictingElements.length === 1 ? 'is' : 'are';
+  return ` (Note: ${names} would auto-approve this but ${verb} overridden by the confirm policy.)`;
+}
+
+function createConfirmationDecision(
+  operation: string,
+  result: ElementPolicyResult,
+): GatekeeperDecision {
+  const levelLabel = result.permissionLevel === PermissionLevel.CONFIRM_SINGLE_USE
+    ? 'requires confirmation each time'
+    : 'requires confirmation once per session';
+  const rationale = confirmationRationale(operation, result);
+
+  return {
+    allowed: false,
+    permissionLevel: result.permissionLevel,
+    errorCode: GatekeeperErrorCode.CONFIRMATION_REQUIRED,
+    reason: `Operation "${operation}" ${levelLabel}. ${rationale}${conflictNote(result.conflictingElements)}`,
+    suggestion: 'Use the confirmation dialog to approve this operation',
+    confirmationPending: true,
+    policySource: result.sourceElement ? 'element_policy' : 'operation_default',
+    sourceIdentity: result.sourceIdentity,
   };
 }
 
@@ -196,80 +297,119 @@ export function createDecisionFromPolicy(
   result: ElementPolicyResult,
   targetElementType?: string
 ): GatekeeperDecision {
-  const { permissionLevel, sourceElement, scopeBlocked, conflictingElements } = result;
-
-  // Handle DENY
-  if (permissionLevel === PermissionLevel.DENY) {
-    if (scopeBlocked) {
-      return {
-        allowed: false,
-        permissionLevel,
-        errorCode: GatekeeperErrorCode.SCOPE_RESTRICTION,
-        reason: `Operation "${operation}" is not allowed on element type "${targetElementType}" due to scope restrictions in active element "${sourceElement}"`,
-        suggestion: `Deactivate the element "${sourceElement}" or use a different element type`,
-        policySource: 'element_policy',
-      };
-    }
-
-    return {
-      allowed: false,
-      permissionLevel,
-      errorCode: GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION,
-      reason: `Operation "${operation}" is blocked by active element "${sourceElement}"'s deny policy`,
-      suggestion: `Deactivate the element "${sourceElement}" to proceed with this operation`,
-      policySource: 'element_policy',
-    };
+  if (result.permissionLevel === PermissionLevel.DENY) {
+    return createDenyDecision(operation, result, targetElementType);
   }
 
-  // Handle confirmation required
-  if (
-    permissionLevel === PermissionLevel.CONFIRM_SESSION ||
-    permissionLevel === PermissionLevel.CONFIRM_SINGLE_USE
-  ) {
-    // Build human-readable rationale explaining WHY confirmation is needed
-    const policy = getOperationPolicy(operation);
-    const levelLabel = permissionLevel === PermissionLevel.CONFIRM_SINGLE_USE
-      ? 'requires confirmation each time'
-      : 'requires confirmation once per session';
-
-    let rationale: string;
-    if (sourceElement && result.matchedPolicy === 'confirm') {
-      // Element policy elevated this operation's confirmation requirement
-      const policyDetail = policy?.rationale ? ` ${policy.rationale}` : '';
-      rationale = `Active element "${sourceElement}" policy requires confirmation for this operation.${policyDetail}`;
-    } else if (policy?.rationale) {
-      // Route-level default with documented rationale
-      rationale = policy.rationale;
-    } else {
-      // Endpoint-level default, no specific rationale
-      rationale = 'This operation modifies data and requires human approval before proceeding';
-    }
-
-    // Issue #674: Surface elements that wanted to auto-approve but were overridden
-    const conflictNote = conflictingElements && conflictingElements.length > 0
-      ? ` (Note: ${conflictingElements.map(e => `"${e.name}"`).join(', ')} would auto-approve this but ${conflictingElements.length === 1 ? 'is' : 'are'} overridden by the confirm policy.)`
-      : '';
-
-    return {
-      allowed: false,
-      permissionLevel,
-      errorCode: GatekeeperErrorCode.CONFIRMATION_REQUIRED,
-      reason: `Operation "${operation}" ${levelLabel}. ${rationale}${conflictNote}`,
-      suggestion: 'Use the confirmation dialog to approve this operation',
-      confirmationPending: true,
-      policySource: sourceElement ? 'element_policy' : 'operation_default',
-    };
+  if (result.permissionLevel === PermissionLevel.CONFIRM_SESSION ||
+      result.permissionLevel === PermissionLevel.CONFIRM_SINGLE_USE) {
+    return createConfirmationDecision(operation, result);
   }
 
-  // Handle AUTO_APPROVE
   return {
     allowed: true,
-    permissionLevel,
-    reason: sourceElement
-      ? `Operation "${operation}" auto-approved by element "${sourceElement}"`
+    permissionLevel: result.permissionLevel,
+    reason: result.sourceElement
+      ? `Operation "${operation}" auto-approved by element "${result.sourceElement}"`
       : `Operation "${operation}" auto-approved by default policy`,
-    policySource: sourceElement ? 'element_policy' : 'operation_default',
+    policySource: result.sourceElement ? 'element_policy' : 'operation_default',
+    sourceIdentity: result.sourceIdentity,
   };
+}
+
+function parseScopeRestrictions(value: unknown): ElementGatekeeperPolicy['scopeRestrictions'] {
+  if (!value) return undefined;
+  if (typeof value !== 'object') {
+    throw new TypeError('Invalid gatekeeper policy: scopeRestrictions must be an object');
+  }
+
+  const restrictions = value as Record<string, unknown>;
+  return {
+    allowedTypes: validateStringArray(restrictions.allowedTypes, 'scopeRestrictions.allowedTypes'),
+    blockedTypes: validateStringArray(restrictions.blockedTypes, 'scopeRestrictions.blockedTypes'),
+  };
+}
+
+function parseRequiredApproval(value: unknown): ('moderate' | 'dangerous')[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError('Invalid gatekeeper policy: externalRestrictions.approvalPolicy.requireApproval must be an array');
+  }
+
+  const validLevels = new Set(['moderate', 'dangerous']);
+  for (const level of value) {
+    if (typeof level !== 'string' || !validLevels.has(level)) {
+      throw new Error(`Invalid gatekeeper policy: externalRestrictions.approvalPolicy.requireApproval contains invalid value "${level}". Must be "moderate" or "dangerous".`);
+    }
+  }
+  return value as ('moderate' | 'dangerous')[];
+}
+
+function parseDefaultApprovalScope(value: unknown): 'single' | 'tool_session' | undefined {
+  if (value === undefined) return undefined;
+  if (value !== 'single' && value !== 'tool_session') {
+    throw new Error(
+      'Invalid gatekeeper policy: externalRestrictions.approvalPolicy.defaultScope must be ' +
+      `"single" or "tool_session", got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+function parseApprovalTtl(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError('Invalid gatekeeper policy: externalRestrictions.approvalPolicy.ttlSeconds must be a number');
+  }
+  if (value < 30 || value > 3600) {
+    throw new Error(`Invalid gatekeeper policy: externalRestrictions.approvalPolicy.ttlSeconds must be between 30 and 3600, got ${value}`);
+  }
+  return value;
+}
+
+function parseApprovalPolicy(value: unknown): CliApprovalPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Invalid gatekeeper policy: externalRestrictions.approvalPolicy must be an object');
+  }
+
+  const policy = value as Record<string, unknown>;
+  return {
+    requireApproval: parseRequiredApproval(policy.requireApproval),
+    defaultScope: parseDefaultApprovalScope(policy.defaultScope),
+    ttlSeconds: parseApprovalTtl(policy.ttlSeconds),
+  };
+}
+
+function parseExternalRestrictions(value: unknown): ElementGatekeeperPolicy['externalRestrictions'] {
+  if (!value) return undefined;
+  if (typeof value !== 'object') {
+    throw new TypeError('Invalid gatekeeper policy: externalRestrictions must be an object');
+  }
+
+  const restrictions = value as Record<string, unknown>;
+  if (!restrictions.description || typeof restrictions.description !== 'string') {
+    throw new TypeError('Invalid gatekeeper policy: externalRestrictions.description is required and must be a non-empty string');
+  }
+
+  const denyPatterns = validateStringArray(restrictions.denyPatterns, 'externalRestrictions.denyPatterns');
+  const confirmPatterns = validateStringArray(restrictions.confirmPatterns, 'externalRestrictions.confirmPatterns');
+  const allowPatterns = validateStringArray(restrictions.allowPatterns, 'externalRestrictions.allowPatterns');
+  validateOptionalPatternStrings(denyPatterns, 'externalRestrictions.denyPatterns');
+  validateOptionalPatternStrings(confirmPatterns, 'externalRestrictions.confirmPatterns');
+  validateOptionalPatternStrings(allowPatterns, 'externalRestrictions.allowPatterns');
+
+  return {
+    description: restrictions.description,
+    denyPatterns,
+    confirmPatterns,
+    allowPatterns,
+    approvalPolicy: parseApprovalPolicy(restrictions.approvalPolicy),
+  };
+}
+
+function validateOptionalPatternStrings(patterns: string[] | undefined, fieldName: string): void {
+  if (patterns) validatePatternStrings(patterns, fieldName);
 }
 
 /**
@@ -294,7 +434,7 @@ export function parseElementPolicy(
   }
 
   if (typeof gatekeeper !== 'object' || gatekeeper === null) {
-    throw new Error('Invalid gatekeeper policy: must be an object');
+    throw new TypeError('Invalid gatekeeper policy: must be an object');
   }
 
   const policy = gatekeeper as Record<string, unknown>;
@@ -304,97 +444,12 @@ export function parseElementPolicy(
   const confirm = validateStringArray(policy.confirm, 'confirm');
   const deny = validateStringArray(policy.deny, 'deny');
 
-  // Validate scope restrictions
-  let scopeRestrictions: ElementGatekeeperPolicy['scopeRestrictions'];
-  if (policy.scopeRestrictions) {
-    if (typeof policy.scopeRestrictions !== 'object' || policy.scopeRestrictions === null) {
-      throw new Error('Invalid gatekeeper policy: scopeRestrictions must be an object');
-    }
-    const sr = policy.scopeRestrictions as Record<string, unknown>;
-    scopeRestrictions = {
-      allowedTypes: validateStringArray(sr.allowedTypes, 'scopeRestrictions.allowedTypes'),
-      blockedTypes: validateStringArray(sr.blockedTypes, 'scopeRestrictions.blockedTypes'),
-    };
-  }
-
-  // Validate external restrictions (Issue #625 Phase 2)
-  let externalRestrictions: ElementGatekeeperPolicy['externalRestrictions'];
-  if (policy.externalRestrictions) {
-    if (typeof policy.externalRestrictions !== 'object' || policy.externalRestrictions === null) {
-      throw new Error('Invalid gatekeeper policy: externalRestrictions must be an object');
-    }
-    const er = policy.externalRestrictions as Record<string, unknown>;
-    if (!er.description || typeof er.description !== 'string') {
-      throw new Error('Invalid gatekeeper policy: externalRestrictions.description is required and must be a non-empty string');
-    }
-    const denyPatterns = validateStringArray(er.denyPatterns, 'externalRestrictions.denyPatterns');
-    const confirmPatterns = validateStringArray(er.confirmPatterns, 'externalRestrictions.confirmPatterns');
-    const allowPatterns = validateStringArray(er.allowPatterns, 'externalRestrictions.allowPatterns');
-    if (denyPatterns) validatePatternStrings(denyPatterns, 'externalRestrictions.denyPatterns');
-    if (confirmPatterns) validatePatternStrings(confirmPatterns, 'externalRestrictions.confirmPatterns');
-    if (allowPatterns) validatePatternStrings(allowPatterns, 'externalRestrictions.allowPatterns');
-    // Validate approvalPolicy (Issue #625 Phase 3)
-    let approvalPolicy: CliApprovalPolicy | undefined = undefined;
-    if (er.approvalPolicy !== undefined) {
-      if (typeof er.approvalPolicy !== 'object' || er.approvalPolicy === null) {
-        throw new Error('Invalid gatekeeper policy: externalRestrictions.approvalPolicy must be an object');
-      }
-      const ap = er.approvalPolicy as Record<string, unknown>;
-
-      // Validate requireApproval
-      let requireApproval: ('moderate' | 'dangerous')[] | undefined;
-      if (ap.requireApproval !== undefined) {
-        if (!Array.isArray(ap.requireApproval)) {
-          throw new Error('Invalid gatekeeper policy: externalRestrictions.approvalPolicy.requireApproval must be an array');
-        }
-        const validLevels = new Set(['moderate', 'dangerous']);
-        for (const level of ap.requireApproval) {
-          if (typeof level !== 'string' || !validLevels.has(level)) {
-            throw new Error(`Invalid gatekeeper policy: externalRestrictions.approvalPolicy.requireApproval contains invalid value "${level}". Must be "moderate" or "dangerous".`);
-          }
-        }
-        requireApproval = ap.requireApproval as ('moderate' | 'dangerous')[];
-      }
-
-      // Validate defaultScope
-      let defaultScope: 'single' | 'tool_session' | undefined;
-      if (ap.defaultScope !== undefined) {
-        if (ap.defaultScope !== 'single' && ap.defaultScope !== 'tool_session') {
-          throw new Error(`Invalid gatekeeper policy: externalRestrictions.approvalPolicy.defaultScope must be "single" or "tool_session", got "${ap.defaultScope}"`);
-        }
-        defaultScope = ap.defaultScope;
-      }
-
-      // Validate ttlSeconds
-      let ttlSeconds: number | undefined;
-      if (ap.ttlSeconds !== undefined) {
-        if (typeof ap.ttlSeconds !== 'number' || !Number.isFinite(ap.ttlSeconds)) {
-          throw new Error('Invalid gatekeeper policy: externalRestrictions.approvalPolicy.ttlSeconds must be a number');
-        }
-        if (ap.ttlSeconds < 30 || ap.ttlSeconds > 3600) {
-          throw new Error(`Invalid gatekeeper policy: externalRestrictions.approvalPolicy.ttlSeconds must be between 30 and 3600, got ${ap.ttlSeconds}`);
-        }
-        ttlSeconds = ap.ttlSeconds;
-      }
-
-      approvalPolicy = { requireApproval, defaultScope, ttlSeconds };
-    }
-
-    externalRestrictions = {
-      description: er.description as string,
-      denyPatterns,
-      confirmPatterns,
-      allowPatterns,
-      approvalPolicy,
-    };
-  }
-
   return {
     allow,
     confirm,
     deny,
-    scopeRestrictions,
-    externalRestrictions,
+    scopeRestrictions: parseScopeRestrictions(policy.scopeRestrictions),
+    externalRestrictions: parseExternalRestrictions(policy.externalRestrictions),
   };
 }
 
@@ -447,11 +502,11 @@ function validateStringArray(
   }
 
   if (!Array.isArray(value)) {
-    throw new Error(`Invalid gatekeeper policy: ${fieldName} must be an array`);
+    throw new TypeError(`Invalid gatekeeper policy: ${fieldName} must be an array`);
   }
 
   if (!value.every((item): item is string => typeof item === 'string')) {
-    throw new Error(`Invalid gatekeeper policy: ${fieldName} must contain only strings`);
+    throw new TypeError(`Invalid gatekeeper policy: ${fieldName} must contain only strings`);
   }
 
   return value;
@@ -619,8 +674,9 @@ function checkToolPrefix(
  * Gatekeeper infrastructure operations — two related sets with distinct purposes.
  *
  * UNGATABLE_OPERATIONS: Operations that must NEVER appear in element policy lists.
- * These are pure internal plumbing — gating them serves no security purpose and
- * breaks critical flows (verification, CLI approval, permission evaluation).
+ * These are internal plumbing or critical lifecycle/recovery operations — gating
+ * them breaks verification, deadlock recovery, execution abort, CLI approval, or
+ * permission evaluation flows.
  * Stripped from ALL policy lists (allow, confirm, deny) during sanitization.
  *
  * GATEKEEPER_INFRA_OPERATIONS: Operations that skip Layer 2 (element policy
@@ -636,6 +692,7 @@ function checkToolPrefix(
 const UNGATABLE_OPERATIONS = new Set([
   'verify_challenge',
   'release_deadlock',
+  'abort_execution',
   'approve_cli_permission',
   'permission_prompt',
 ]);

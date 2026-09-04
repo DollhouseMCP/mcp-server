@@ -26,10 +26,28 @@ export interface ElementCacheHost {
 }
 
 export class ElementCache<T extends IElement> {
-  /** Primary cache: ID → Element */
+  /** Primary cache: namespace + runtime ID + storage path → Element. */
   readonly elements: LRUCache<T>;
-  /** Reverse index: Absolute FilePath → Element ID */
+  /**
+   * Storage-identity index: Absolute FilePath → primary-cache key.
+   *
+   * Runtime IDs are derived from a name slug and timestamp, so distinct
+   * elements can collide when they are constructed in the same millisecond.
+   * Including the storage path in the primary key keeps those entries distinct.
+   * Path lookups always dereference the primary cache so its TTL and eviction
+   * policy remain authoritative.
+   */
   private readonly filePathToId: LRUCache<string>;
+  /** Durable reverse metadata for rebuilding an independently-expired path index. */
+  private readonly elementKeyToPaths = new Map<string, Set<string>>();
+  /** O(1) durable path lookup used to rebuild an expired LRU path entry. */
+  private readonly pathToElementKey = new Map<string, string>();
+  /** O(1) object-identity lookup when one parsed element is bound to another path. */
+  private readonly elementToKey = new WeakMap<T, string>();
+  /** Scoped runtime ID → primary keys; normally one entry, collision-safe by design. */
+  private readonly elementIdToKeys = new Map<string, Set<string>>();
+  /** Primary key → scoped runtime ID, used for O(1) eviction cleanup. */
+  private readonly elementKeyToId = new Map<string, string>();
   private readonly elementGenerations = new Map<string, number>();
   private cacheGenerationCounter = 0;
   private readonly memoryBudget?: CacheMemoryBudget;
@@ -58,6 +76,7 @@ export class ElementCache<T extends IElement> {
       maxMemoryMB: 50,
       ttlMs: options.elementCacheTTL,
       onSet: onSetCallback,
+      onEviction: (elementKey, element) => this.removeElementKeyMetadata(elementKey, element),
     });
 
     this.filePathToId = new LRUCache<string>({
@@ -82,30 +101,44 @@ export class ElementCache<T extends IElement> {
     return `${this.host.getCacheNamespace()}:`;
   }
 
-  /**
-   * Adds an element to both caches (bidirectional mapping).
-   * Also stamps `filename` and `filePath` onto the element object.
-   */
-  cacheElement(element: T, filePath: string): void {
-    const absolutePath = this.host.resolveAbsolutePath(filePath);
+  private elementKey(elementId: string, absolutePath: string): string {
+    return this.key(`${elementId}:${absolutePath}`);
+  }
 
-    const pathKey = this.key(absolutePath);
-    const elementKey = this.key(element.id);
-    const existingId = this.filePathToId.get(pathKey);
-    if (existingId && existingId !== elementKey) {
-      this.elements.delete(existingId);
-      this.elementGenerations.delete(existingId);
+  private removeElementKeyMetadata(elementKey: string, element: T): void {
+    const pathKeys = this.elementKeyToPaths.get(elementKey);
+    this.elementKeyToPaths.delete(elementKey);
+    this.elementGenerations.delete(elementKey);
+    if (this.elementToKey.get(element) === elementKey) {
+      this.elementToKey.delete(element);
     }
+    const elementIdKey = this.elementKeyToId.get(elementKey);
+    this.elementKeyToId.delete(elementKey);
+    if (elementIdKey) {
+      const elementKeys = this.elementIdToKeys.get(elementIdKey);
+      elementKeys?.delete(elementKey);
+      if (elementKeys?.size === 0) this.elementIdToKeys.delete(elementIdKey);
+    }
+    for (const pathKey of pathKeys ?? []) {
+      if (this.pathToElementKey.get(pathKey) === elementKey) {
+        this.pathToElementKey.delete(pathKey);
+      }
+      if (this.filePathToId.get(pathKey) === elementKey) {
+        this.filePathToId.delete(pathKey);
+      }
+    }
+  }
 
-    this.elements.set(elementKey, element);
+  private findElementKeyByPath(pathKey: string): string | undefined {
+    const elementKey = this.pathToElementKey.get(pathKey);
+    if (!elementKey) return undefined;
+    const element = this.elements.get(elementKey);
+    if (!element) return undefined;
     this.filePathToId.set(pathKey, elementKey);
-    const generation = ++this.cacheGenerationCounter;
-    this.elementGenerations.set(elementKey, generation);
+    return elementKey;
+  }
 
-    const relativePath = path.isAbsolute(filePath)
-      ? path.relative(this.host.elementDir, filePath)
-      : filePath;
-
+  private attachPathMetadata(element: T, relativePath: string): void {
     try {
       Object.defineProperty(element, 'filename', {
         value: path.basename(relativePath),
@@ -128,20 +161,101 @@ export class ElementCache<T extends IElement> {
     }
   }
 
+  private retireConflictingEntries(element: T, pathKey: string, elementKey: string): void {
+    const existingElementKey = this.filePathToId.get(pathKey)
+      ?? this.findElementKeyByPath(pathKey);
+    if (existingElementKey && existingElementKey !== elementKey) {
+      this.elements.delete(existingElementKey);
+    }
+
+    // LRUCache.set() replaces an existing value in place and therefore does
+    // not invoke onEviction. Retire the displaced object's reverse identity
+    // explicitly before overwriting the shared primary key.
+    const displacedElement = this.elements.get(elementKey);
+    if (
+      displacedElement
+      && displacedElement !== element
+      && this.elementToKey.get(displacedElement) === elementKey
+    ) {
+      this.elementToKey.delete(displacedElement);
+    }
+  }
+
+  private bindElementPath(elementKey: string, pathKey: string): void {
+    const pathKeys = this.elementKeyToPaths.get(elementKey) ?? new Set<string>();
+    // One parsed element represents one durable storage path at a time. When
+    // it is rebound, discard obsolete path aliases so secondary metadata stays
+    // bounded and cannot resolve the element through a stale location.
+    for (const oldPathKey of pathKeys) {
+      if (oldPathKey === pathKey) continue;
+      if (this.pathToElementKey.get(oldPathKey) === elementKey) {
+        this.pathToElementKey.delete(oldPathKey);
+      }
+      if (this.filePathToId.get(oldPathKey) === elementKey) {
+        this.filePathToId.delete(oldPathKey);
+      }
+      pathKeys.delete(oldPathKey);
+    }
+    pathKeys.add(pathKey);
+    this.elementKeyToPaths.set(elementKey, pathKeys);
+    this.pathToElementKey.set(pathKey, elementKey);
+  }
+
+  private bindElementId(element: T, elementKey: string): void {
+    this.elementToKey.set(element, elementKey);
+    const elementIdKey = this.key(element.id);
+    const elementKeys = this.elementIdToKeys.get(elementIdKey) ?? new Set<string>();
+    elementKeys.add(elementKey);
+    this.elementIdToKeys.set(elementIdKey, elementKeys);
+    this.elementKeyToId.set(elementKey, elementIdKey);
+  }
+
+  /**
+   * Adds an element to both caches (bidirectional mapping).
+   * Also stamps `filename` and `filePath` onto the element object.
+   */
+  cacheElement(element: T, filePath: string): void {
+    const absolutePath = this.host.resolveAbsolutePath(filePath);
+
+    const relativePath = path.isAbsolute(filePath)
+      ? path.relative(this.host.elementDir, filePath)
+      : filePath;
+    this.attachPathMetadata(element, relativePath);
+
+    const pathKey = this.key(absolutePath);
+    const indexedElementKey = this.elementToKey.get(element);
+    const existingKeyForElement = indexedElementKey?.startsWith(this.keyPrefix())
+      ? indexedElementKey
+      : undefined;
+    const elementKey = existingKeyForElement ?? this.elementKey(element.id, absolutePath);
+    this.retireConflictingEntries(element, pathKey, elementKey);
+    this.bindElementPath(elementKey, pathKey);
+    this.bindElementId(element, elementKey);
+    this.elements.set(elementKey, element);
+    if (!this.elements.has(elementKey)) return;
+    this.filePathToId.set(pathKey, elementKey);
+    if (!this.elements.has(elementKey)) {
+      this.filePathToId.delete(pathKey);
+      return;
+    }
+    const generation = ++this.cacheGenerationCounter;
+    this.elementGenerations.set(elementKey, generation);
+  }
+
   /**
    * Removes an element from both caches by file path.
    */
   uncacheByPath(filePath: string): void {
     const absolutePath = this.host.resolveAbsolutePath(filePath);
     const pathKey = this.key(absolutePath);
-    const elementId = this.filePathToId.get(pathKey);
+    const elementKey = this.filePathToId.get(pathKey)
+      ?? this.findElementKeyByPath(pathKey);
 
-    if (elementId !== undefined) {
-      this.elements.delete(elementId);
-      this.filePathToId.delete(pathKey);
-      this.elementGenerations.delete(elementId);
-      logger.debug(`Uncached element ${elementId} from ${absolutePath}`);
+    if (elementKey !== undefined) {
+      this.elements.delete(elementKey);
+      logger.debug(`Uncached element ${elementKey} from ${absolutePath}`);
     }
+    this.filePathToId.delete(pathKey);
   }
 
   /**
@@ -149,9 +263,14 @@ export class ElementCache<T extends IElement> {
    */
   getCachedByAbsolutePath(absolutePath: string): T | undefined {
     const resolvedPath = this.host.resolveAbsolutePath(absolutePath);
-    const elementId = this.filePathToId.get(this.key(resolvedPath));
-    if (!elementId) return undefined;
-    return this.elements.get(elementId);
+    const pathKey = this.key(resolvedPath);
+    const elementKey = this.filePathToId.get(pathKey)
+      ?? this.findElementKeyByPath(pathKey);
+    if (!elementKey) return undefined;
+
+    const element = this.elements.get(elementKey);
+    if (!element) this.filePathToId.delete(pathKey);
+    return element;
   }
 
   getCachedByPath(filePath: string): T | undefined {
@@ -166,7 +285,11 @@ export class ElementCache<T extends IElement> {
    * see the access.
    */
   touchById(id: string): T | undefined {
-    return this.elements.get(this.key(id));
+    for (const elementKey of this.elementIdToKeys.get(this.key(id)) ?? []) {
+      const liveElement = this.elements.get(elementKey);
+      if (liveElement) return liveElement;
+    }
+    return undefined;
   }
 
   getScopedValues(): T[] {
@@ -181,7 +304,15 @@ export class ElementCache<T extends IElement> {
    * Return the generation number for an element ID (used in event payloads).
    */
   getGeneration(elementId: string): number | undefined {
-    return this.elementGenerations.get(this.key(elementId));
+    let latest: number | undefined;
+    for (const elementKey of this.elementIdToKeys.get(this.key(elementId)) ?? []) {
+      if (!this.elements.get(elementKey)) continue;
+      const generation = this.elementGenerations.get(elementKey);
+      if (generation !== undefined && (latest === undefined || generation > latest)) {
+        latest = generation;
+      }
+    }
+    return latest;
   }
 
   /**
@@ -190,6 +321,10 @@ export class ElementCache<T extends IElement> {
   clear(): void {
     this.elements.clear();
     this.filePathToId.clear();
+    this.elementKeyToPaths.clear();
+    this.pathToElementKey.clear();
+    this.elementIdToKeys.clear();
+    this.elementKeyToId.clear();
     this.elementGenerations.clear();
   }
 

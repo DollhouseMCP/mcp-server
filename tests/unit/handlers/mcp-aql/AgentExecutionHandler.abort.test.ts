@@ -5,6 +5,7 @@ import { generateHandoffBlock, prepareHandoffState } from '../../../../src/eleme
 import { AgentExecutionHandler } from '../../../../src/handlers/mcp-aql/AgentExecutionHandler.js';
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import type { ExecutingAgentEntry } from '../../../../src/handlers/mcp-aql/shared.js';
+import { ElementNotFoundError } from '../../../../src/utils/ErrorHandler.js';
 
 interface ManagerMocks {
   manager: AgentManager;
@@ -25,12 +26,26 @@ interface ManagerMocks {
 function policy(name = 'test-agent', goalId = 'goal-1'): ExecutingAgentEntry {
   return {
     name,
+    identity: fileIdentity(name),
     goalIds: [goalId],
     metadata: { gatekeeper: { default: 'ask' } },
     startedAt: Date.now(),
     continuationCount: 0,
     retryCount: 0,
     recentBlocks: [],
+  };
+}
+
+function fileIdentity(name: string) {
+  const knownAliases: Record<string, string> = {
+    MyAgent: 'my-agent.md',
+    'my-agent': 'my-agent.md',
+    Case_Sensitive_Agent: 'Case_Sensitive_Agent.md',
+    'case-sensitive-agent': 'case-sensitive-agent.md',
+  };
+  return {
+    kind: 'file' as const,
+    value: knownAliases[name] ?? `${name}.md`,
   };
 }
 
@@ -121,14 +136,7 @@ function createManager(): ManagerMocks {
     completeAgentGoalForRecovery,
     hasExecutionGenerationChanged,
     observeExecutionGeneration: jest.fn().mockReturnValue({ token: {}, release }),
-    canonicalizeExecutionName: jest.fn((name: string) => name
-      .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
-      .replaceAll(/[\s_]+/g, '-')
-      .toLowerCase()
-      .replaceAll(/[^a-z0-9-]/g, '-')
-      .replaceAll(/-+/g, '-')
-      .replaceAll(/^-/g, '')
-      .replaceAll(/-$/g, '')),
+    resolveExecutionIdentity: jest.fn((name: string) => Promise.resolve(fileIdentity(name))),
   } as unknown as AgentManager;
 
   return {
@@ -167,6 +175,68 @@ function createHandler(
 }
 
 describe('AgentExecutionHandler abort recovery', () => {
+  it('cleans up a uniquely tracked execution after its definition is deleted', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockRejectedValue(
+      new ElementNotFoundError('Agent', 'test-agent'),
+    );
+    const executingAgents = new Map([
+      ['session-a:file:test-agent.md', policy()],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await expect(handler.dispatch('abort', { element_name: 'test-agent' }))
+      .resolves.toMatchObject({ success: true, recoveredStalePolicy: true });
+
+    expect(mocks.manager.resolveExecutionIdentity).not.toHaveBeenCalled();
+    expect(executingAgents.size).toBe(0);
+  });
+
+  it('does not retarget a tracked execution when the display name is recreated', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockRejectedValue(
+      new ElementNotFoundError('Agent', 'test-agent'),
+    );
+    const oldEntry = policy();
+    const executingAgents = new Map([
+      ['session-a:file:test-agent.md', oldEntry],
+    ]);
+    (mocks.manager.resolveExecutionIdentity as jest.Mock).mockResolvedValue({
+      kind: 'file',
+      value: 'replacement.md',
+    });
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await expect(handler.dispatch('abort', { element_name: 'test-agent' }))
+      .resolves.toMatchObject({ success: true, recoveredStalePolicy: true });
+
+    expect(mocks.manager.resolveExecutionIdentity).not.toHaveBeenCalled();
+    expect(executingAgents.has('session-a:file:replacement.md')).toBe(false);
+  });
+
+  it('rejects a handoff from a canonically-colliding distinct agent identity', async () => {
+    const mocks = createManager();
+    const firstName = 'Case_Sensitive_Agent';
+    const secondName = 'case-sensitive-agent';
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-handoff', status: 'in_progress' }]),
+    );
+    (mocks.manager.resolveExecutionIdentity as jest.Mock).mockImplementation((name: unknown) =>
+      Promise.resolve(fileIdentity(String(name))));
+    const executingAgents = new Map([
+      ['session-a:file:case-sensitive-agent.md', policy(secondName, 'goal-handoff')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await expect(handler.dispatch('resumeFromHandoff', {
+      element_name: secondName,
+      handoffBlock: handoffBlock(firstName, 'goal-handoff'),
+      parameters: {},
+    })).rejects.toThrow('Handoff agent mismatch');
+
+    expect(mocks.continueAgentExecution).not.toHaveBeenCalled();
+  });
+
   it('tracks goal ownership even when the agent has no optional execution policies', async () => {
     const mocks = createManager();
     const executingAgents = new Map<string, ExecutingAgentEntry>();
@@ -174,7 +244,7 @@ describe('AgentExecutionHandler abort recovery', () => {
 
     await handler.dispatch('execute', { element_name: 'test-agent', parameters: {} });
 
-    expect(executingAgents.get('session-a:test-agent')).toEqual(expect.objectContaining({
+    expect(executingAgents.get('session-a:file:test-agent.md')).toEqual(expect.objectContaining({
       name: 'test-agent',
       goalIds: ['goal-1'],
       metadata: {},
@@ -192,7 +262,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     await handler.dispatch('execute', { element_name: 'test-agent', parameters: {} });
     await handler.dispatch('execute', { element_name: 'test-agent', parameters: {} });
 
-    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+    expect(executingAgents.get('session-a:file:test-agent.md')?.goalIds).toEqual(['goal-1', 'goal-2']);
   });
 
   it('tracks a continuation goal without resetting the existing execution state', async () => {
@@ -203,7 +273,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     const executionEntry = policy('test-agent', 'goal-1');
     executionEntry.continuationCount = 2;
     const executingAgents = new Map([
-      ['session-a:test-agent', executionEntry],
+      ['session-a:file:test-agent.md', executionEntry],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
@@ -213,7 +283,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       parameters: { task: 'Resume review' },
     });
 
-    expect(executingAgents.get('session-a:test-agent')).toBe(executionEntry);
+    expect(executingAgents.get('session-a:file:test-agent.md')).toBe(executionEntry);
     expect(executionEntry.goalIds).toEqual(['goal-1', 'goal-2']);
     expect(executionEntry.continuationCount).toBe(2);
     expect(mocks.continueAgentExecution).toHaveBeenCalledWith(expect.objectContaining({
@@ -248,7 +318,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       agentName: 'my-agent',
       goalId: 'goal-1',
     }));
-    expect(executingAgents.has('session-a:my-agent')).toBe(false);
+    expect(executingAgents.has('session-a:file:my-agent.md')).toBe(false);
   });
 
   it('uses the canonical agent identity when aborting through an alias', async () => {
@@ -267,7 +337,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       agentName: 'my-agent',
       goalId: 'goal-1',
     }));
-    expect(executingAgents.has('session-a:my-agent')).toBe(false);
+    expect(executingAgents.has('session-a:file:my-agent.md')).toBe(false);
   });
 
   it('completes the newest session-owned goal and retains older ownership', async () => {
@@ -275,7 +345,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     const executionEntry = policy('test-agent', 'goal-1');
     executionEntry.goalIds = ['goal-1', 'goal-2'];
     const executingAgents = new Map([
-      ['session-a:test-agent', executionEntry],
+      ['session-a:file:test-agent.md', executionEntry],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
@@ -288,14 +358,14 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.completeAgentGoal).toHaveBeenCalledWith(expect.objectContaining({
       goalId: 'goal-2',
     }));
-    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-1']);
+    expect(executingAgents.get('session-a:file:test-agent.md')?.goalIds).toEqual(['goal-1']);
   });
 
   it('rejects completion of a goal owned by another session', async () => {
     const mocks = createManager();
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-a')],
-      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-a')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-b')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
@@ -312,7 +382,7 @@ describe('AgentExecutionHandler abort recovery', () => {
   it('rejects completion when the calling session owns no goal', async () => {
     const mocks = createManager();
     const executingAgents = new Map([
-      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-b')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
@@ -329,7 +399,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
 
     expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
-    expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-b']);
+    expect(executingAgents.get('session-b:file:test-agent.md')?.goalIds).toEqual(['goal-b']);
   });
 
   it('reclaims an orphaned durable goal after HTTP session cleanup', async () => {
@@ -349,7 +419,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.completeAgentGoal).toHaveBeenCalledWith(expect.objectContaining({
       goalId: 'goal-1',
     }));
-    expect(executingAgents.has('session-b:test-agent')).toBe(false);
+    expect(executingAgents.has('session-b:file:test-agent.md')).toBe(false);
   });
 
   it('serializes a same-session execution behind pending orphan reclaim', async () => {
@@ -389,7 +459,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     await update;
     await execute;
 
-    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual([
+    expect(executingAgents.get('session-a:file:test-agent.md')?.goalIds).toEqual([
       'goal-orphan',
       'goal-new',
     ]);
@@ -405,7 +475,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     );
     const liveEntry = policy('test-agent', 'goal-a');
     const executingAgents = new Map([
-      ['session-a:test-agent', liveEntry],
+      ['session-a:file:test-agent.md', liveEntry],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -417,7 +487,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
 
     expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
-    expect(executingAgents.get('session-a:test-agent')).toBe(liveEntry);
+    expect(executingAgents.get('session-a:file:test-agent.md')).toBe(liveEntry);
   });
 
   it('allows only one replacement session to claim the same orphaned goal', async () => {
@@ -468,7 +538,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       parameters: {},
     });
 
-    expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+    expect(executingAgents.get('session-b:file:test-agent.md')?.goalIds).toEqual(['goal-1', 'goal-2']);
     expect(mocks.continueAgentExecution).toHaveBeenCalledWith(expect.objectContaining({
       goalId: 'goal-1',
     }));
@@ -480,7 +550,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
     );
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-live')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -500,8 +570,8 @@ describe('AgentExecutionHandler abort recovery', () => {
       { id: 'goal-owned', status: 'in_progress' },
     ]));
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-live')],
-      ['session-b:test-agent', policy('test-agent', 'goal-owned')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-live')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-owned')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -522,8 +592,8 @@ describe('AgentExecutionHandler abort recovery', () => {
       stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
     );
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-stale')],
-      ['session-b:test-agent', policy('test-agent', 'goal-live')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-stale')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-live')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-a');
 
@@ -542,7 +612,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
     );
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-live')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -561,7 +631,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
     );
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-live')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -580,8 +650,8 @@ describe('AgentExecutionHandler abort recovery', () => {
       { id: 'goal-owned', status: 'in_progress' },
     ]));
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-other')],
-      ['session-b:test-agent', policy('test-agent', 'goal-owned')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-other')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-owned')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -593,6 +663,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.getGatheredData).toHaveBeenCalledWith({
       agentName: 'test-agent',
       goalId: 'goal-owned',
+      executionIdentity: fileIdentity('test-agent'),
     });
   });
 
@@ -603,8 +674,8 @@ describe('AgentExecutionHandler abort recovery', () => {
       { id: 'goal-handoff', status: 'in_progress' },
     ]));
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-other')],
-      ['session-b:test-agent', policy('test-agent', 'goal-handoff')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-other')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-handoff')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -626,7 +697,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       { id: 'goal-handoff', status: 'in_progress' },
     ]));
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-owned')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-owned')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
@@ -648,7 +719,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     mocks.getAgentState.mockResolvedValue(durableState);
     mocks.getAgentStateForRecovery.mockResolvedValue(durableState);
     const executingAgents = new Map([
-      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+      ['session-a:file:test-agent.md', policy('test-agent', 'goal-live')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
 
@@ -662,6 +733,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.reclaimOrphanedAgentState).toHaveBeenCalledWith({
       agentName: 'test-agent',
       excludedGoalIds: ['goal-live'],
+      executionIdentity: { kind: 'file', value: 'test-agent.md' },
     });
     expect(mocks.recordAgentStep).toHaveBeenCalledWith(expect.objectContaining({
       agentName: 'test-agent',
@@ -682,7 +754,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     }));
     const originalEntry = policy('test-agent', 'goal-1');
     const executingAgents = new Map([
-      ['session-a:test-agent', originalEntry],
+      ['session-a:file:test-agent.md', originalEntry],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
@@ -695,12 +767,12 @@ describe('AgentExecutionHandler abort recovery', () => {
 
     const newerEntry = policy('test-agent', 'goal-2');
     newerEntry.goalIds = ['goal-1', 'goal-2'];
-    executingAgents.set('session-a:test-agent', newerEntry);
+    executingAgents.set('session-a:file:test-agent.md', newerEntry);
     resolveCompletion?.({ success: true, goal: { id: 'goal-1' } });
 
     await completion;
 
-    expect(executingAgents.get('session-a:test-agent')).toBe(newerEntry);
+    expect(executingAgents.get('session-a:file:test-agent.md')).toBe(newerEntry);
     expect(newerEntry.goalIds).toEqual(['goal-2']);
   });
 
@@ -722,7 +794,7 @@ describe('AgentExecutionHandler abort recovery', () => {
   it('removes a stale policy only after two strict durable-state reads', async () => {
     const mocks = createManager();
     mocks.getAgentStateForRecovery.mockResolvedValue(stateWithGoals([]));
-    const executingAgents = new Map([['session-a:test-agent', policy()]]);
+    const executingAgents = new Map([['session-a:file:test-agent.md', policy()]]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
     const result = await handler.dispatch('abort', { element_name: 'test-agent' });
@@ -733,7 +805,34 @@ describe('AgentExecutionHandler abort recovery', () => {
       abortedGoalIds: [],
     }));
     expect(mocks.getAgentStateForRecovery).toHaveBeenCalledTimes(2);
-    expect(executingAgents.has('session-a:test-agent')).toBe(false);
+    expect(executingAgents.has('session-a:file:test-agent.md')).toBe(false);
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the execution-generation observation through stale revalidation', async () => {
+    const mocks = createManager();
+    let markRevalidationStarted: (() => void) | undefined;
+    const revalidationStarted = new Promise<void>((resolve) => {
+      markRevalidationStarted = resolve;
+    });
+    let resolveRevalidation: ((value: ReturnType<typeof stateWithGoals>) => void) | undefined;
+    mocks.getAgentStateForRecovery
+      .mockResolvedValueOnce(stateWithGoals([]))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRevalidation = resolve;
+        markRevalidationStarted?.();
+      }));
+    const executingAgents = new Map([['session-a:file:test-agent.md', policy()]]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    const abort = handler.dispatch('abort', { element_name: 'test-agent' });
+    await revalidationStarted;
+    expect(mocks.release).not.toHaveBeenCalled();
+
+    resolveRevalidation?.(stateWithGoals([]));
+    await expect(abort).resolves.toEqual(expect.objectContaining({
+      recoveredStalePolicy: true,
+    }));
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
 
@@ -741,13 +840,13 @@ describe('AgentExecutionHandler abort recovery', () => {
     const mocks = createManager();
     mocks.getAgentStateForRecovery.mockRejectedValue(new Error('state store unavailable'));
     const originalPolicy = policy();
-    const executingAgents = new Map([['session-a:test-agent', originalPolicy]]);
+    const executingAgents = new Map([['session-a:file:test-agent.md', originalPolicy]]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
     await expect(handler.dispatch('abort', { element_name: 'test-agent' }))
       .rejects.toThrow('state store unavailable');
 
-    expect(executingAgents.get('session-a:test-agent')).toBe(originalPolicy);
+    expect(executingAgents.get('session-a:file:test-agent.md')).toBe(originalPolicy);
     expect(mocks.completeAgentGoalForRecovery).not.toHaveBeenCalled();
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
@@ -759,13 +858,13 @@ describe('AgentExecutionHandler abort recovery', () => {
     );
     mocks.completeAgentGoalForRecovery.mockRejectedValue(new Error('version conflict'));
     const originalPolicy = policy();
-    const executingAgents = new Map([['session-a:test-agent', originalPolicy]]);
+    const executingAgents = new Map([['session-a:file:test-agent.md', originalPolicy]]);
     const { handler, abortedGoals } = createHandler(mocks.manager, executingAgents);
 
     await expect(handler.dispatch('abort', { element_name: 'test-agent' }))
       .rejects.toThrow('version conflict');
 
-    expect(executingAgents.get('session-a:test-agent')).toBe(originalPolicy);
+    expect(executingAgents.get('session-a:file:test-agent.md')).toBe(originalPolicy);
     expect(abortedGoals).not.toContain('session-a:goal-1');
   });
 
@@ -783,17 +882,17 @@ describe('AgentExecutionHandler abort recovery', () => {
     const originalPolicy = policy();
     const newerPolicy = policy();
     newerPolicy.startedAt += 1;
-    const executingAgents = new Map([['session-a:test-agent', originalPolicy]]);
+    const executingAgents = new Map([['session-a:file:test-agent.md', originalPolicy]]);
     const { handler } = createHandler(mocks.manager, executingAgents);
 
     const abortPromise = handler.dispatch('abort', { element_name: 'test-agent' });
     await lookupStarted;
-    executingAgents.set('session-a:test-agent', newerPolicy);
+    executingAgents.set('session-a:file:test-agent.md', newerPolicy);
     mocks.hasExecutionGenerationChanged.mockReturnValue(true);
     resolveLookup?.(stateWithGoals([{ id: 'new-goal', status: 'in_progress' }]));
 
     await expect(abortPromise).rejects.toThrow('newer execution policy was preserved');
-    expect(executingAgents.get('session-a:test-agent')).toBe(newerPolicy);
+    expect(executingAgents.get('session-a:file:test-agent.md')).toBe(newerPolicy);
     expect(mocks.completeAgentGoalForRecovery).not.toHaveBeenCalled();
   });
 
@@ -803,15 +902,15 @@ describe('AgentExecutionHandler abort recovery', () => {
     const sessionAPolicy = policy();
     const sessionBPolicy = policy();
     const executingAgents = new Map([
-      ['session-a:test-agent', sessionAPolicy],
-      ['session-b:test-agent', sessionBPolicy],
+      ['session-a:file:test-agent.md', sessionAPolicy],
+      ['session-b:file:test-agent.md', sessionBPolicy],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-a');
 
     await handler.dispatch('abort', { element_name: 'test-agent' });
 
-    expect(executingAgents.has('session-a:test-agent')).toBe(false);
-    expect(executingAgents.get('session-b:test-agent')).toBe(sessionBPolicy);
+    expect(executingAgents.has('session-a:file:test-agent.md')).toBe(false);
+    expect(executingAgents.get('session-b:file:test-agent.md')).toBe(sessionBPolicy);
   });
 
   it('aborts only the goal owned by the calling session', async () => {
@@ -828,8 +927,8 @@ describe('AgentExecutionHandler abort recovery', () => {
     const sessionAPolicy = policy('test-agent', 'goal-a');
     const sessionBPolicy = policy('test-agent', 'goal-b');
     const executingAgents = new Map([
-      ['session-a:test-agent', sessionAPolicy],
-      ['session-b:test-agent', sessionBPolicy],
+      ['session-a:file:test-agent.md', sessionAPolicy],
+      ['session-b:file:test-agent.md', sessionBPolicy],
     ]);
     const { handler, abortedGoals } = createHandler(
       mocks.manager,
@@ -847,7 +946,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(result).toEqual(expect.objectContaining({ abortedGoalIds: ['goal-a'] }));
     expect(abortedGoals).toContain('session-a:goal-a');
     expect(abortedGoals).not.toContain('session-a:goal-b');
-    expect(executingAgents.get('session-b:test-agent')).toBe(sessionBPolicy);
+    expect(executingAgents.get('session-b:file:test-agent.md')).toBe(sessionBPolicy);
   });
 
   it('aborts every active goal owned by the same session', async () => {
@@ -866,8 +965,8 @@ describe('AgentExecutionHandler abort recovery', () => {
     const sessionAEntry = policy('test-agent', 'goal-1');
     sessionAEntry.goalIds = ['goal-1', 'goal-2'];
     const executingAgents = new Map([
-      ['session-a:test-agent', sessionAEntry],
-      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+      ['session-a:file:test-agent.md', sessionAEntry],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-b')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-a');
 
@@ -893,7 +992,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       stateWithGoals([{ id: 'goal-b', status: 'in_progress' }]),
     );
     const executingAgents = new Map([
-      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+      ['session-b:file:test-agent.md', policy('test-agent', 'goal-b')],
     ]);
     const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-a');
 
@@ -901,7 +1000,7 @@ describe('AgentExecutionHandler abort recovery', () => {
       .rejects.toThrow("No active execution found for agent 'test-agent'");
 
     expect(mocks.completeAgentGoalForRecovery).not.toHaveBeenCalled();
-    expect(executingAgents.has('session-b:test-agent')).toBe(true);
+    expect(executingAgents.has('session-b:file:test-agent.md')).toBe(true);
   });
 
   it('aborts an orphaned durable goal after HTTP session cleanup', async () => {
@@ -922,6 +1021,6 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.completeAgentGoalForRecovery).toHaveBeenCalledWith(expect.objectContaining({
       goalId: 'goal-1',
     }));
-    expect(executingAgents.has('session-b:test-agent')).toBe(false);
+    expect(executingAgents.has('session-b:file:test-agent.md')).toBe(false);
   });
 });

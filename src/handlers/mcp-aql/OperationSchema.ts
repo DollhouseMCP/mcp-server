@@ -1353,7 +1353,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name to abort' },
       reason: { type: 'string', description: 'Reason for aborting the execution' },
     },
-    returns: { name: 'AbortResult', kind: 'object', description: 'Abort confirmation: { _type, success, agentName, abortedGoalIds, reason, message }' },
+    returns: { name: 'AbortResult', kind: 'object', description: 'Abort confirmation: { _type, success, agentName, abortedGoalIds, recoveredStalePolicy?, reason, message }' },
     examples: [
       '{ operation: "abort_execution", params: { element_name: "code-reviewer", reason: "User requested cancellation" } }',
       // Response: { _type: "AbortResult", success: true, agentName: "code-reviewer", abortedGoalIds: ["goal_abc123"], reason: "User requested cancellation" }

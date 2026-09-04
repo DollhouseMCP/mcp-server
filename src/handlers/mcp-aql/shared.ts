@@ -1,6 +1,7 @@
 import { logger } from '../../utils/logger.js';
 import { GatekeeperErrorCode } from './GatekeeperTypes.js';
 import type { ElementType, OperationInput } from './types.js';
+import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 
 /**
  * Resolve the element type from an operation input, accepting both the
@@ -174,6 +175,8 @@ export interface RecentGatekeeperBlock {
 
 export interface ExecutingAgentEntry {
   name: string;
+  /** Backend-owned durable identity; display-name canonicalization is not identity. */
+  identity: PersistedActivationIdentity;
   /** Persisted goals owned by this MCP session's active executions. */
   goalIds?: string[];
   metadata: Record<string, unknown>;

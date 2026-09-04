@@ -24,11 +24,17 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import type { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ElementTransactionScope } from './ElementTransactionScope.js';
-import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import {
+  type ElementSaveOptions,
+  type IStorageLayer,
+  isWritableStorageLayer,
+} from '../../storage/IStorageLayer.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { ElementCache } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import type { ElementLoader, ElementTypeToContext } from './ElementLoader.js';
+
+const DATABASE_STORAGE_IDENTITY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 /**
  * Host interface: the persister calls back into BaseElementManager for
@@ -93,7 +99,7 @@ export class ElementPersister<T extends IElement> {
    * Save an element to file or database.
    * Identical to the former BaseElementManager.save() body.
    */
-  async save(element: T, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -169,6 +175,7 @@ export class ElementPersister<T extends IElement> {
             {
               exclusive: options?.exclusive ?? false,
               elementLabel: this.host.getElementLabelCapitalized(),
+              expectedIdentity: options?.expectedIdentity,
             },
           );
           savedRelativePath = elementId;
@@ -219,9 +226,13 @@ export class ElementPersister<T extends IElement> {
       );
 
       const isDbMode = isWritableStorageLayer(this.storageLayer);
+      let deletedStorageIdentity: string | undefined;
 
       transaction.addCommit(() => {
-        this.cache.uncacheByPath(relativePath);
+        this.cache.uncacheByPath(deletedStorageIdentity ?? relativePath);
+        if (deletedStorageIdentity && deletedStorageIdentity !== relativePath) {
+          this.cache.uncacheByPath(relativePath);
+        }
         if (!isDbMode) {
           this.storageLayer.notifyDeleted(relativePath);
         }
@@ -239,39 +250,13 @@ export class ElementPersister<T extends IElement> {
       });
 
       await transaction.run(async () => {
-        // In DB mode the storage layer is keyed by element id, but the inbound
-        // relativePath may be an id OR a filename (the web-console portfolio
-        // bridge passes "<name>.<ext>"). Resolve the canonical name and id once
-        // so BOTH the canDelete pre-check snapshot load and the deletion target
-        // the same element — previously the pre-check loaded by filename-as-id
-        // (`readContent(relativePath)` → `WHERE id = '<name>.md'`) and 500'd.
-        const probeName = isDbMode
-          ? (this.storageLayer.getNameById?.(relativePath) ?? this.host.extractNameFromPath(relativePath))
-          : undefined;
-        const dbId = isDbMode
-          ? (this.storageLayer.getPathByName(probeName as string) ?? relativePath)
-          : relativePath;
-        // deleteContent() matches on the raw stored name, and the inbound path is
-        // often a lowercased filename stem ("meeting-notes") rather than the raw
-        // name ("Meeting-Notes"). Prefer the canonical name the index holds for the
-        // resolved id, so the snapshot load and the delete target the same row.
-        const dbName = isDbMode
-          ? (this.storageLayer.getNameById?.(dbId) ?? probeName)
-          : undefined;
-
-        if (this.host.canDelete) {
-          const elementForValidation = isDbMode
-            ? await this.loader.loadElementSnapshotFromDb(dbId)
-            : await this.loader.loadElementSnapshot(absolutePath, relativePath);
-          const decision = await this.host.canDelete(elementForValidation);
-          if (!decision.allowed) {
-            throw new Error(decision.reason ?? `Deletion not permitted for ${this.host.getElementLabel()}`);
-          }
-        }
-
         if (isDbMode) {
-          await this.storageLayer.deleteContent(this.host.elementType, dbName as string);
+          deletedStorageIdentity = await this.deleteFromDatabase(relativePath);
         } else {
+          if (this.host.canDelete) {
+            const elementForValidation = await this.loader.loadElementSnapshot(absolutePath, relativePath);
+            await this.assertDeleteAllowed(elementForValidation);
+          }
           const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath);
           if (!movedToBackup) {
             await this.fileOperations.deleteFile(absolutePath, this.host.elementType, {
@@ -287,6 +272,48 @@ export class ElementPersister<T extends IElement> {
 
       logger.info(`${this.host.getElementLabelCapitalized()} deleted: ${filePath}`);
     });
+  }
+
+  private async deleteFromDatabase(relativePath: string): Promise<string> {
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      throw new Error('Database deletion requires a writable storage layer');
+    }
+    const storage = this.storageLayer;
+    const dbIdentifier = DATABASE_STORAGE_IDENTITY_PATTERN.test(relativePath)
+      ? relativePath
+      : this.host.extractNameFromPath(relativePath);
+    const resolvedIdentity = await storage.resolveContentIdentity(
+      this.host.elementType,
+      dbIdentifier,
+    );
+    if (!resolvedIdentity) throw this.createNotFoundError(relativePath);
+    const dbId = resolvedIdentity.id;
+
+    if (this.host.canDelete) {
+      const elementForValidation = await this.loader.loadElementSnapshotFromDb(dbId);
+      await this.assertDeleteAllowed(elementForValidation);
+    }
+
+    const deleted = await storage.deleteContentByIdentity(
+      this.host.elementType,
+      dbIdentifier,
+      resolvedIdentity,
+    );
+    return deleted.id;
+  }
+
+  private async assertDeleteAllowed(element: T): Promise<void> {
+    if (!this.host.canDelete) return;
+    const decision = await this.host.canDelete(element);
+    if (!decision.allowed) {
+      throw new Error(decision.reason ?? `Deletion not permitted for ${this.host.getElementLabel()}`);
+    }
+  }
+
+  private createNotFoundError(relativePath: string): NodeJS.ErrnoException {
+    const error = new Error(`Element not found: ${relativePath}`) as NodeJS.ErrnoException;
+    error.code = 'ENOENT';
+    return error;
   }
 
   /**
