@@ -35,9 +35,6 @@ jest.mock('../../../src/utils/logger.js');
 import { logger as _logger } from '../../../src/utils/logger.js';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
-const cacheKeyFor = (manager: unknown, elementId: string): string =>
-  `${(manager as { getCacheNamespace: () => string }).getCacheNamespace()}:${elementId}`;
-
 // Test element for concrete implementation
 interface TestElementMetadata {
   name: string;
@@ -639,7 +636,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, testPath);
 
       // Cache should contain the saved element
-      expect((manager as any).elements.has(cacheKeyFor(manager, element.id))).toBe(true);
+      expect((manager as any).getCachedElementByStorageIdentity(testPath)).toBe(element);
     });
 
     it('removes an element from the cache when deleting', async () => {
@@ -742,9 +739,9 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, 'path2.md');
 
       const stats = (manager as any).getCacheStats();
-      // Should have 1 element but 2 filepath mappings (latest wins)
+      // Rebinding one object prunes the obsolete path metadata.
       expect(stats.elementCount).toBe(1);
-      expect(stats.pathMappings).toBe(2);
+      expect(stats.pathMappings).toBe(1);
     });
 
     it('clearCache removes both element and filepath mappings', async () => {

@@ -7,6 +7,7 @@
  */
 
 import type { CRUDEndpoint } from './OperationRouter.js';
+import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 
 /**
  * Permission levels for operation access control.
@@ -86,6 +87,8 @@ export interface GatekeeperDecision {
   confirmationPending?: boolean;
   /** The policy source that determined this decision */
   policySource?: 'operation_default' | 'element_policy' | 'safety_tier' | 'session_confirmation';
+  /** Durable identity of the active agent whose policy produced the decision. */
+  sourceIdentity?: PersistedActivationIdentity;
 }
 
 /**

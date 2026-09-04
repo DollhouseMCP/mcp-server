@@ -216,22 +216,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
   }
 
   async deleteContent(_elementType: string, name: string): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
-      await tx
-        .delete(elements)
-        .where(and(
-          eq(elements.userId, this.userId),
-          eq(elements.elementType, 'memories'),
-          eq(elements.name, name),
-        ));
-      // Cascade handles memory_entries deletion
-    });
-
-    this.removeIndex(name);
-
-    this.logPersistEvent('ELEMENT_DELETED', 'MEDIUM', `${STORE_NAME}.deleteContent`,
-      `Memory deleted from database: ${name}`,
-      { name });
+    await this.deleteContentByIdentity('memories', name);
   }
 
   // ── Entry-Level Operations ────────────────────────────────────────

@@ -4,7 +4,56 @@
  */
 
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
-import { buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+import type { DrizzleTx } from '../../../src/database/db-utils.js';
+import type { DatabaseStorageIdentity } from '../../../src/storage/IStorageLayer.js';
+import { buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+
+class CleanupUserSwitchingStorageLayer extends DatabaseStorageLayer {
+  beforeCleanup?: () => void;
+
+  protected override removeIndexById(id: string, userId?: string): void {
+    this.beforeCleanup?.();
+    super.removeIndexById(id, userId);
+  }
+}
+
+class SerializationConflictStorageLayer extends DatabaseStorageLayer {
+  readonly firstResolution: Promise<void>;
+  resolveAttempts = 0;
+  private signalFirstResolution!: () => void;
+  private releaseFirstResolution!: () => void;
+  private readonly firstResolutionReleased: Promise<void>;
+
+  constructor(...args: ConstructorParameters<typeof DatabaseStorageLayer>) {
+    super(...args);
+    this.firstResolution = new Promise(resolve => { this.signalFirstResolution = resolve; });
+    this.firstResolutionReleased = new Promise(resolve => { this.releaseFirstResolution = resolve; });
+  }
+
+  release(): void {
+    this.releaseFirstResolution();
+  }
+
+  protected override async resolveIdentityInTransaction(
+    tx: DrizzleTx,
+    userId: string,
+    elementType: string,
+    identifier: string,
+  ): Promise<DatabaseStorageIdentity | undefined> {
+    const identity = await super.resolveIdentityInTransaction(
+      tx,
+      userId,
+      elementType,
+      identifier,
+    );
+    this.resolveAttempts += 1;
+    if (this.resolveAttempts === 1) {
+      this.signalFirstResolution();
+      await this.firstResolutionReleased;
+    }
+    return identity;
+  }
+}
 
 let dbAvailable = false;
 
@@ -88,6 +137,69 @@ describe('DatabaseStorageLayer', () => {
   });
 
   // ── deleteContent ─────────────────────────────────────────────────
+
+  it('keeps delete cleanup pinned when the ambient user changes after commit', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    let currentUserId = userIdA;
+    const layer = new CleanupUserSwitchingStorageLayer(
+      getTestDb(),
+      () => currentUserId,
+      'skills',
+    );
+    const content = buildSkillContent('shared-delete-name');
+
+    const idA = await layer.writeContent('skills', 'shared-delete-name', content, {
+      author: '', version: '', description: '', tags: [],
+    });
+    currentUserId = userIdB;
+    const idB = await layer.writeContent('skills', 'shared-delete-name', content, {
+      author: '', version: '', description: '', tags: [],
+    });
+
+    currentUserId = userIdA;
+    layer.beforeCleanup = () => { currentUserId = userIdB; };
+    await layer.deleteContentByIdentity('skills', 'shared-delete-name');
+
+    currentUserId = userIdA;
+    expect(layer.getPathByName('shared-delete-name')).toBeUndefined();
+    currentUserId = userIdB;
+    expect(layer.getPathByName('shared-delete-name')).toBe(idB);
+    expect(idA).not.toBe(idB);
+  });
+
+  it('retries a real PostgreSQL serialization conflict through Drizzle', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const userResolver = fixedUserId(userId);
+    const deletingLayer = new SerializationConflictStorageLayer(
+      getTestDb(),
+      userResolver,
+      'skills',
+    );
+    const updatingLayer = new DatabaseStorageLayer(getTestDb(), userResolver, 'skills');
+    const original = buildSkillContent('serialization-target', { description: 'original' });
+    await updatingLayer.writeContent('skills', 'serialization-target', original, {
+      author: '', version: '1.0.0', description: 'original', tags: [],
+    });
+
+    const deletion = deletingLayer.deleteContentByIdentity('skills', 'serialization-target');
+    await deletingLayer.firstResolution;
+    const updated = buildSkillContent('serialization-target', { description: 'concurrent' });
+    try {
+      await updatingLayer.writeContent('skills', 'serialization-target', updated, {
+        author: '', version: '1.0.1', description: 'concurrent', tags: [],
+      });
+    } finally {
+      deletingLayer.release();
+    }
+
+    await expect(deletion).resolves.toMatchObject({ name: 'serialization-target' });
+    expect(deletingLayer.resolveAttempts).toBeGreaterThanOrEqual(2);
+    await expect(deletingLayer.resolveContentIdentity('skills', 'serialization-target'))
+      .resolves.toBeUndefined();
+  });
 
   it('should delete an element by name', async () => {
     if (!dbAvailable) return;
@@ -247,6 +359,70 @@ describe('DatabaseStorageLayer', () => {
     expect(layer.getPathByName(firstName)).toBe(firstId);
     expect(layer.getPathByName(secondName)).toBe(secondId);
     expect(layer.getPathByName('Case-Sensitive-Skill')).toBeUndefined();
+  });
+
+  it('keeps scan state and name indexes isolated when one layer serves multiple users', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    let currentUserId = userIdA;
+    const layer = new DatabaseStorageLayer(getTestDb(), () => currentUserId, 'skills');
+    const metadata = { author: '', version: '', description: '', tags: [] };
+
+    const sharedA = await layer.writeContent(
+      'skills', 'shared-name', buildSkillContent('shared-name'),
+      { ...metadata, visibility: 'public' },
+    );
+    const canonicalA = await layer.writeContent(
+      'skills', 'Canonical_Sibling', buildSkillContent('Canonical_Sibling'),
+      { ...metadata, visibility: 'public' },
+    );
+    await layer.scan();
+    expect(layer.hasCompletedScan()).toBe(true);
+
+    currentUserId = userIdB;
+    expect(layer.hasCompletedScan()).toBe(false);
+    expect(layer.getPathByName('shared-name')).toBeUndefined();
+    const sharedB = await layer.writeContent(
+      'skills', 'shared-name', buildSkillContent('shared-name'), metadata,
+    );
+    const canonicalB = await layer.writeContent(
+      'skills', 'canonical-sibling', buildSkillContent('canonical-sibling'), metadata,
+    );
+    expect(layer.getPathByName('shared-name')).toBe(sharedB);
+    expect(layer.getPathByName('Canonical_Sibling')).toBe(canonicalB);
+
+    currentUserId = userIdA;
+    expect(layer.getPathByName('shared-name')).toBe(sharedA);
+    expect(layer.getPathByName('canonical-sibling')).toBe(canonicalA);
+  });
+
+  it('keeps canonical identity resolution selective with unrelated persisted rows', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+    const skillsA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const agentsA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'agents');
+    const skillsB = new DatabaseStorageLayer(db, fixedUserId(userIdB), 'skills');
+    const metadata = { author: '', version: '', description: '', tags: [] };
+
+    const intendedId = await skillsA.writeContent(
+      'skills', 'Target_Name', buildSkillContent('Target_Name'), metadata,
+    );
+    await skillsA.writeContent(
+      'skills', 'target-names', buildSkillContent('target-names'), metadata,
+    );
+    await agentsA.writeContent(
+      'agents', 'Target_Name', buildSkillContent('Target_Name'), metadata,
+    );
+    await skillsB.writeContent(
+      'skills', 'Target_Name', buildSkillContent('Target_Name'),
+      { ...metadata, visibility: 'public' },
+    );
+
+    await expect(skillsA.resolveContentIdentity('skills', 'target-name'))
+      .resolves.toEqual({ id: intendedId, name: 'Target_Name' });
   });
 
   // ── clear / invalidate ────────────────────────────────────────────

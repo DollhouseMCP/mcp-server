@@ -80,6 +80,7 @@ export interface IStorageLayer {
   /**
    * Reset all state (index, manifest, cooldown).
    */
+  /** Clear all cached/indexed state owned by this storage-layer instance. */
   clear(): void;
 
   /**
@@ -125,6 +126,24 @@ export interface WriteContentOptions {
    * when omitted, which is acceptable for internal callers.
    */
   elementLabel?: string;
+  /**
+   * Optional optimistic identity guard for lifecycle writes. When present,
+   * update only this exact database row and fail with ESTALE if it was
+   * deleted, renamed, or replaced after the caller validated it.
+   */
+  expectedIdentity?: DatabaseStorageIdentity;
+}
+
+/** Options shared by manager and persister save paths. */
+export interface ElementSaveOptions {
+  exclusive?: boolean;
+  expectedIdentity?: DatabaseStorageIdentity;
+}
+
+/** Authoritative database identity for a persisted element row. */
+export interface DatabaseStorageIdentity {
+  id: string;
+  name: string;
 }
 
 /**
@@ -159,6 +178,28 @@ export interface IWritableStorageLayer extends IStorageLayer {
    * Cascading deletes handle tags, relationships, and child records.
    */
   deleteContent(elementType: string, name: string): Promise<void>;
+
+  /**
+   * Resolve a UUID, exact raw name, or unambiguous canonical name against the
+   * current database contents. Unlike the in-memory scan index, this is safe
+   * for authorization and other freshness-critical identity decisions.
+   */
+  resolveContentIdentity(
+    elementType: string,
+    identifier: string,
+  ): Promise<DatabaseStorageIdentity | undefined>;
+
+  /**
+   * Re-resolve an identity and delete the resulting UUID in one transaction.
+   * `expectedIdentity` binds the mutation to the same row ID and raw name that
+   * passed the caller's authorization check. Content changes are outside this
+   * identity guard and remain governed by the caller's authorization policy.
+   */
+  deleteContentByIdentity(
+    elementType: string,
+    identifier: string,
+    expectedIdentity?: DatabaseStorageIdentity,
+  ): Promise<DatabaseStorageIdentity>;
 
   /**
    * Read raw element content by storage identifier.

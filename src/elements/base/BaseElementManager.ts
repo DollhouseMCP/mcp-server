@@ -40,6 +40,7 @@ import type { ValidationRegistry } from '../../services/validation/ValidationReg
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
 import {
   type IStorageLayer,
+  type ElementSaveOptions,
   type StorageScanOptions,
   isWritableStorageLayer,
 } from '../../storage/IStorageLayer.js';
@@ -471,7 +472,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._loader.loadDefinition(filePath);
   }
 
-  async save(element: T, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
     return this._persister.save(element, filePath, options);
   }
 

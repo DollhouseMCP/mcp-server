@@ -16,6 +16,7 @@ jest.mock('../../../../src/utils/logger.js');
 jest.mock('../../../../src/services/FileOperationsService.js');
 
 import { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
+import type { Agent } from '../../../../src/elements/agents/Agent.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
@@ -30,6 +31,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
+import { logger } from '../../../../src/utils/logger.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -61,6 +63,23 @@ specializations:
 
 Post things`;
 
+const AGENT_CONTENT_LEGACY_V2 = `---
+name: legacy-poster
+type: agent
+version: 2.0.0
+description: Legacy filename with v2 metadata
+goal:
+  template: "Handle {objective}"
+  parameters:
+    - name: objective
+      type: string
+      required: true
+---
+
+# Legacy Poster
+
+Handle the objective`;
+
 const AGENT_CONTENT_WRONG_DIRECT_IDENTITY = AGENT_CONTENT_STANDARD.replace(
   'name: my-agent',
   'name: different-agent',
@@ -79,6 +98,16 @@ const AGENT_CONTENT_STORAGE_FALLBACK_IDENTITY = AGENT_CONTENT_STANDARD.replace(
 const AGENT_CONTENT_SHARED_NAME = AGENT_CONTENT_STANDARD.replace(
   'name: my-agent',
   'name: shared-agent',
+);
+
+const AGENT_CONTENT_CASED_IDENTITY = AGENT_CONTENT_STANDARD.replace(
+  'name: my-agent',
+  'name: Case_Sensitive-Agent',
+);
+
+const AGENT_CONTENT_LOWER_IDENTITY = AGENT_CONTENT_STANDARD.replace(
+  'name: my-agent',
+  'name: case-sensitive-agent',
 );
 
 const ACTIVE_REQUESTED_STATE = `---
@@ -175,6 +204,37 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
   });
 
   describe('direct lookup succeeds', () => {
+    it('translates ambiguous database identity resolution into a typed user error', async () => {
+      const ambiguous = Object.assign(new Error('ambiguous'), { code: 'EAMBIGUOUS' });
+      (agentManager as unknown as { storageLayer: unknown }).storageLayer = {
+        writeContent: jest.fn(),
+        resolveContentIdentity: jest.fn().mockRejectedValue(ambiguous),
+      };
+
+      await expect(agentManager.resolveExecutionIdentity('ambiguous-agent'))
+        .rejects.toMatchObject({ code: 'ELEMENT_IDENTITY_AMBIGUOUS' });
+    });
+
+    it('resolves canonical-colliding file agents to their real distinct storage paths', async () => {
+      mockPortfolioManager.listElements.mockResolvedValue([
+        'Case_Sensitive-Agent.md',
+        'case-sensitive-agent.md',
+      ]);
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'Case_Sensitive-Agent.md') return AGENT_CONTENT_CASED_IDENTITY;
+        if (filename === 'case-sensitive-agent.md') return AGENT_CONTENT_LOWER_IDENTITY;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      const first = await agentManager.resolveExecutionIdentity('Case_Sensitive-Agent');
+      const second = await agentManager.resolveExecutionIdentity('case-sensitive-agent');
+
+      expect(first).toEqual({ kind: 'file', value: 'Case_Sensitive-Agent.md' });
+      expect(second).toEqual({ kind: 'file', value: 'case-sensitive-agent.md' });
+      expect(first).not.toEqual(second);
+    });
+
     it('should return the agent without fallback', async () => {
       fileOperationsService.readFile.mockResolvedValue(AGENT_CONTENT_STANDARD);
 
@@ -514,6 +574,196 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(intendedInstance?.getState().goals).toEqual([
         expect.objectContaining({ id: 'goal_requested_active', status: 'completed' }),
       ]);
+    });
+
+    it('should synchronize a strict flexible recovery into the matched storage path', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-shared-agent.md') return AGENT_CONTENT_SHARED_NAME;
+        if (filename === 'shared-agent.state.yaml') return ACTIVE_REQUESTED_STATE;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['legacy-shared-agent.md']);
+
+      const matchedInstance = await agentManager.load('legacy-shared-agent.md');
+      expect(matchedInstance.getState().goals).toEqual([]);
+
+      const result = await agentManager.completeAgentGoalForRecovery({
+        agentName: 'shared-agent',
+        goalId: 'goal_requested_active',
+        outcome: 'success',
+        summary: 'Recovered through flexible identity',
+      });
+
+      expect(result.goal.status).toBe('completed');
+      expect(matchedInstance.getState().goals).toEqual([
+        expect.objectContaining({ id: 'goal_requested_active', status: 'completed' }),
+      ]);
+    });
+
+    it('should fail closed for strict flexible reads with colliding file identities', async () => {
+      const stateReads: string[] = [];
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-shared-one.md' || filename === 'legacy-shared-two.md') {
+          return AGENT_CONTENT_SHARED_NAME;
+        }
+        if (filename.endsWith('.state.yaml')) stateReads.push(filename);
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue([
+        'legacy-shared-one.md',
+        'legacy-shared-two.md',
+      ]);
+
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'shared-agent' }))
+        .rejects.toThrow("Agent 'shared-agent' not found");
+      expect(stateReads).toEqual([]);
+    });
+
+    it('prefers an exact storage-path stem during ordinary flexible reads', async () => {
+      let directRead = true;
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'shared-agent.md' && directRead) {
+          directRead = false;
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (filename === 'legacy-shared.md') {
+          return AGENT_CONTENT_SHARED_NAME.replace('Standard agent', 'Legacy duplicate');
+        }
+        if (filename === 'shared-agent.md') return AGENT_CONTENT_SHARED_NAME;
+        if (filename.endsWith('.state.yaml')) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue([
+        'legacy-shared.md',
+        'shared-agent.md',
+      ]);
+
+      const result = await agentManager.read('shared-agent');
+
+      expect(result?.metadata.description).toBe('Standard agent');
+    });
+
+    it('fails closed on genuine ordinary-read ambiguity and names both paths', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-shared-one.md' || filename === 'legacy-shared-two.md') {
+          return AGENT_CONTENT_SHARED_NAME;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue([
+        'legacy-shared-one.md',
+        'legacy-shared-two.md',
+      ]);
+
+      await expect(agentManager.read('shared-agent')).resolves.toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('legacy-shared-one.md'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('legacy-shared-two.md'),
+      );
+    });
+  });
+
+  describe('flexible storage-identity save targets', () => {
+    const originalDefinition = 'legacy-poster-agent.md';
+    const requestedDefinition = 'legacy-poster.md';
+    const originalState = 'legacy-poster-agent.state.yaml';
+    const requestedState = 'legacy-poster.state.yaml';
+
+    function arrangeFlexibleAgent(content: string, state?: string): void {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === originalDefinition) return content;
+        if (filename === originalState && state !== undefined) return state;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue([originalDefinition]);
+    }
+
+    function writtenBasenames(): string[] {
+      return fileOperationsService.writeFile.mock.calls
+        .map(([filePath]) => path.basename(filePath as string));
+    }
+
+    function expectOriginalDefinitionOnly(writes: string[]): void {
+      expect(writes).toContain(originalDefinition);
+      expect(writes).not.toContain(requestedDefinition);
+      expect(writes).not.toContain(requestedState);
+    }
+
+    it('updates a flexibly resolved agent in its original file', async () => {
+      arrangeFlexibleAgent(AGENT_CONTENT_LEGACY_V2);
+
+      await expect(agentManager.update('legacy-poster', { description: 'Updated' }))
+        .resolves.toBe(true);
+
+      expectOriginalDefinitionOnly(writtenBasenames());
+    });
+
+    it('converts a flexibly resolved v1 agent in its original file', async () => {
+      arrangeFlexibleAgent(AGENT_CONTENT_LEGACY);
+      const agent = await agentManager.read('legacy-poster');
+      expect(agent).not.toBeNull();
+      fileOperationsService.writeFile.mockClear();
+
+      await (agentManager as unknown as {
+        convertLegacyAgentForExecution: (
+          target: Agent,
+          name: string,
+          metadata: Agent['metadata'],
+        ) => Promise<void>;
+      }).convertLegacyAgentForExecution(agent!, 'legacy-poster', agent!.metadata);
+
+      expectOriginalDefinitionOnly(writtenBasenames());
+    });
+
+    it('starts execution for a flexibly resolved agent in its original files', async () => {
+      arrangeFlexibleAgent(AGENT_CONTENT_LEGACY_V2);
+
+      await expect(agentManager.executeAgent('legacy-poster', { objective: 'the objective' }))
+        .resolves.toMatchObject({ agentName: 'legacy-poster' });
+
+      const writes = writtenBasenames();
+      expectOriginalDefinitionOnly(writes);
+      expect(writes).toContain(originalState);
+    });
+
+    it('records a step for a flexibly resolved agent in its original files', async () => {
+      arrangeFlexibleAgent(AGENT_CONTENT_LEGACY_V2, ACTIVE_REQUESTED_STATE);
+
+      await expect(agentManager.recordAgentStep({
+        agentName: 'legacy-poster',
+        goalId: 'goal_requested_active',
+        stepDescription: 'Checked storage identity',
+        outcome: 'success',
+      })).resolves.toMatchObject({ success: true });
+
+      const writes = writtenBasenames();
+      expectOriginalDefinitionOnly(writes);
+      expect(writes).toContain(originalState);
+    });
+
+    it('completes a goal for a flexibly resolved agent in its original files', async () => {
+      arrangeFlexibleAgent(AGENT_CONTENT_LEGACY_V2, ACTIVE_REQUESTED_STATE);
+
+      await expect(agentManager.completeAgentGoal({
+        agentName: 'legacy-poster',
+        goalId: 'goal_requested_active',
+        outcome: 'success',
+        summary: 'Completed without forking storage',
+      })).resolves.toMatchObject({ success: true });
+
+      const writes = writtenBasenames();
+      expectOriginalDefinitionOnly(writes);
+      expect(writes).toContain(originalState);
     });
   });
 

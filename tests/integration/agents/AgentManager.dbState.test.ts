@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -19,7 +19,7 @@ import { TriggerValidationService } from '../../../src/services/validation/Trigg
 import { ValidationRegistry } from '../../../src/services/validation/ValidationRegistry.js';
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import { createSessionIdResolver, createUserIdResolver } from '../../../src/database/UserContext.js';
-import { withUserRead } from '../../../src/database/rls.js';
+import { withUserContext, withUserRead } from '../../../src/database/rls.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import { DatabaseStorageLayerFactory } from '../../../src/storage/DatabaseStorageLayerFactory.js';
@@ -183,6 +183,60 @@ describe('AgentManager DB-backed runtime state', () => {
     }
   });
 
+  it('keeps canonical-alias execution name-keyed to the same database row', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-save-identity-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-save-identity-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const manager = createDbAgentManager(tempDir, tracker);
+        const rawName = 'Database_Save-Agent';
+        expect((await manager.create(
+          rawName,
+          'Database identity remains name-keyed',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        )).success).toBe(true);
+
+        const before = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        expect(before).toHaveLength(1);
+
+        await manager.executeAgent('database-save-agent', { objective: 'preserve the row identity' });
+
+        const after = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const states = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(after).toEqual(before);
+        expect(after[0]?.name).toBe(rawName);
+        expect(states).toEqual([{ agentId: before[0]?.id }]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('deletes DB-backed agents and their UUID-keyed runtime state by canonical filename', async () => {
     if (!dbAvailable) return;
 
@@ -222,10 +276,18 @@ describe('AgentManager DB-backed runtime state', () => {
             .where(eq(agentStates.userId, userId))
         );
         expect(beforeDelete).toHaveLength(1);
+        const agentId = beforeDelete[0]?.agentId;
+        expect(agentId).toBeDefined();
+        if (!agentId) throw new Error('Expected the DB delete fixture UUID');
+        const cachedAgent = await manager.read('db-delete-agent');
+        expect(cachedAgent).not.toBeNull();
 
         await manager.delete('db-delete-agent.md');
 
         expect(await manager.read('db-delete-agent')).toBeNull();
+        expect(await manager.findByStorageIdentity(agentId)).toBeUndefined();
+        await expect(manager.activateAgentByStorageIdentity({ kind: 'database', value: agentId }))
+          .resolves.toMatchObject({ success: false });
         const afterDelete = await withUserRead(getTestDb(), userId, (tx) =>
           tx
             .select({ agentId: agentStates.agentId })
@@ -233,6 +295,417 @@ describe('AgentManager DB-backed runtime state', () => {
             .where(eq(agentStates.userId, userId))
         );
         expect(afterDelete).toEqual([]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a stale canonical delete alias becomes ambiguous externally', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-stale-delete-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-stale-delete-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+    const firstName = 'Stale_Alias-Agent';
+    const secondName = 'stale-alias-agent';
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const staleManager = createDbAgentManager(tempDir, tracker);
+        expect((await staleManager.create(
+          firstName,
+          'First externally-colliding agent',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        )).success).toBe(true);
+        await staleManager.executeAgent(firstName, { objective: 'preserve first state' });
+
+        const externalManager = createDbAgentManager(tempDir, tracker);
+        expect((await externalManager.create(
+          secondName,
+          'Second externally-colliding agent',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        )).success).toBe(true);
+        await externalManager.executeAgent(secondName, { objective: 'preserve second state' });
+
+        await expect(staleManager.delete('Stale Alias Agent.md')).rejects.toThrow(/not found|ambiguous/iu);
+
+        const remainingDefinitions = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const remainingStates = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(new Set(remainingDefinitions.map(row => row.name))).toEqual(new Set([firstName, secondName]));
+        expect(new Set(remainingStates.map(row => row.agentId))).toEqual(
+          new Set(remainingDefinitions.map(row => row.id)),
+        );
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for stale ordinary and strict reads after an external canonical insert', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-stale-read-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-stale-read-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+    const firstName = 'Stale_Read-Agent';
+    const secondName = 'stale-read-agent';
+    const ambiguousName = 'Stale Read Agent';
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const staleManager = createDbAgentManager(tempDir, tracker);
+        expect((await staleManager.create(
+          firstName,
+          'First stale-read agent',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        )).success).toBe(true);
+        await staleManager.executeAgent(firstName, { objective: 'first state only' });
+        await staleManager.refreshIndex();
+
+        const externalManager = createDbAgentManager(tempDir, tracker);
+        expect((await externalManager.create(
+          secondName,
+          'Second stale-read agent',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        )).success).toBe(true);
+        await externalManager.executeAgent(secondName, { objective: 'second state only' });
+
+        const [ordinaryRead, strictRead] = await Promise.allSettled([
+          staleManager.read(ambiguousName),
+          staleManager.getAgentStateForRecovery({ agentName: ambiguousName }),
+        ]);
+        expect({ ordinaryRead, strictRead }).toEqual({
+          ordinaryRead: { status: 'fulfilled', value: null },
+          strictRead: { status: 'rejected', reason: expect.objectContaining({ message: expect.stringMatching(/not found/iu) }) },
+        });
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a canonical sibling is inserted during delete authorization', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-delete-race-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-delete-race-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+    const firstName = 'Delete_Race-Agent';
+    const secondName = 'delete-race-agent';
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const manager = createDbAgentManager(tempDir, tracker);
+        const created = await manager.create(
+          firstName,
+          'First delete-race agent',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        );
+        expect(created.success).toBe(true);
+        if (!created.element) throw new Error('Expected delete-race fixture');
+        await manager.executeAgent(firstName, { objective: 'preserve state during ambiguous delete' });
+        const siblingContent = (await manager.exportElement(created.element))
+          .replace(/^name:.*$/mu, `name: ${secondName}`)
+          .replace('First delete-race agent', 'Second delete-race agent');
+        const externalLayer = new DatabaseStorageLayer(getTestDb(), createUserIdResolver(tracker), 'agents');
+
+        (manager as unknown as {
+          canDelete: () => Promise<{ allowed: boolean }>;
+        }).canDelete = async () => {
+          await externalLayer.writeContent('agents', secondName, siblingContent, {
+            author: '',
+            version: '1.0.0',
+            description: 'Second delete-race agent',
+            tags: [],
+          });
+          return { allowed: true };
+        };
+
+        let deletionError: unknown;
+        try {
+          await manager.delete('Delete Race Agent.md');
+        } catch (error) {
+          deletionError = error;
+        }
+        const remainingDefinitions = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const remainingStates = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+
+        expect({
+          deletionError: deletionError instanceof Error ? deletionError.message : deletionError,
+          names: remainingDefinitions.map(row => row.name).sort(),
+          stateIds: remainingStates.map(row => row.agentId),
+        }).toEqual({
+          deletionError: expect.stringMatching(/not found|ambiguous/iu),
+          names: [firstName, secondName].sort(),
+          stateIds: [expect.any(String)],
+        });
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails a lifecycle save when the validated database identity is replaced before write', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-write-race-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-write-race-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+    const agentName = 'Write_Race-Agent';
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const manager = createDbAgentManager(tempDir, tracker);
+        const created = await manager.create(
+          agentName,
+          'Original write-race agent',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        );
+        expect(created.success).toBe(true);
+        if (!created.element) throw new Error('Expected write-race fixture');
+
+        const execution = await manager.executeAgent(agentName, { objective: 'original goal' });
+        const originalIdentity = await manager.resolveExecutionIdentity(agentName);
+        expect(originalIdentity.kind).toBe('database');
+        const replacementContent = (await manager.exportElement(created.element))
+          .replace('Original write-race agent', 'Replacement write-race agent');
+        const storageLayer = (manager as unknown as {
+          storageLayer: DatabaseStorageLayer;
+        }).storageLayer;
+        const originalWrite = storageLayer.writeContent.bind(storageLayer);
+        let signalWriteReached!: () => void;
+        let releaseWrite!: () => void;
+        const writeReached = new Promise<void>(resolve => { signalWriteReached = resolve; });
+        const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve; });
+        let held = false;
+        const writeSpy = jest.spyOn(storageLayer, 'writeContent').mockImplementation(async (...args) => {
+          if (!held) {
+            held = true;
+            signalWriteReached();
+            await writeReleased;
+          }
+          return originalWrite(...args);
+        });
+
+        const stepSave = manager.recordAgentStep({
+          agentName,
+          goalId: execution.goalId,
+          stepDescription: 'Must remain attached to the original UUID',
+          outcome: 'success',
+          executionIdentity: originalIdentity,
+        });
+        await writeReached;
+
+        const externalLayer = new DatabaseStorageLayer(
+          getTestDb(),
+          createUserIdResolver(tracker),
+          'agents',
+        );
+        let replacementId: string;
+        try {
+          await externalLayer.deleteContentByIdentity('agents', agentName, {
+            id: originalIdentity.value,
+            name: agentName,
+          });
+          replacementId = await externalLayer.writeContent('agents', agentName, replacementContent, {
+            author: '',
+            version: '1.0.0',
+            description: 'Replacement write-race agent',
+            tags: [],
+          });
+        } finally {
+          releaseWrite();
+        }
+
+        await expect(stepSave).rejects.toMatchObject({ code: 'ESTALE' });
+        expect(replacementId).not.toBe(originalIdentity.value);
+        await expect(externalLayer.readContent(replacementId)).resolves.toBe(replacementContent);
+        const replacementStates = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.agentId, replacementId))
+        );
+        expect(replacementStates).toEqual([]);
+        writeSpy.mockRestore();
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('deletes an exact UUID and only its cascaded state on a cold manager', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-cold-uuid-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-cold-uuid-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const seedingManager = createDbAgentManager(tempDir, tracker);
+        for (const name of ['cold-uuid-target', 'cold-uuid-sibling']) {
+          expect((await seedingManager.create(
+            name,
+            `Definition for ${name}`,
+            'Use the objective.',
+            { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+          )).success).toBe(true);
+          await seedingManager.executeAgent(name, { objective: `${name} state` });
+        }
+
+        const beforeDefinitions = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const targetId = beforeDefinitions.find(row => row.name === 'cold-uuid-target')?.id;
+        const siblingId = beforeDefinitions.find(row => row.name === 'cold-uuid-sibling')?.id;
+        expect(targetId).toBeDefined();
+        expect(siblingId).toBeDefined();
+        if (!targetId || !siblingId) throw new Error('Expected both cold UUID fixtures');
+
+        const coldManager = createDbAgentManager(tempDir, tracker);
+        await coldManager.delete(targetId);
+
+        const remainingDefinitions = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const remainingStates = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(remainingDefinitions.map(row => row.id)).toEqual([siblingId]);
+        expect(remainingStates.map(row => row.agentId)).toEqual([siblingId]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves definition and state when a concurrent rename makes deletion affect zero rows', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-zero-delete-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-zero-delete-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const manager = createDbAgentManager(tempDir, tracker);
+        expect((await manager.create(
+          'rename-during-delete',
+          'Definition survives a zero-row delete',
+          'Use the objective.',
+          { goal: { template: '{objective}', parameters: [{ name: 'objective', type: 'string', required: true }] } },
+        )).success).toBe(true);
+        await manager.executeAgent('rename-during-delete', { objective: 'state must survive' });
+
+        const definitionRows = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id }).from(elements).where(eq(elements.userId, userId))
+        );
+        const targetId = definitionRows[0]?.id;
+        expect(targetId).toBeDefined();
+        if (!targetId) throw new Error('Expected rename-during-delete fixture');
+
+        (manager as unknown as {
+          canDelete: () => Promise<{ allowed: boolean }>;
+        }).canDelete = async () => {
+          await withUserContext(getTestDb(), userId, tx =>
+            tx.update(elements)
+              .set({ name: 'renamed-before-delete' })
+              .where(eq(elements.id, targetId))
+          );
+          return { allowed: true };
+        };
+
+        await expect(manager.delete(targetId)).rejects.toThrow(/not found/iu);
+
+        const remainingDefinitions = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ id: elements.id, name: elements.name })
+            .from(elements)
+            .where(eq(elements.userId, userId))
+        );
+        const remainingStates = await withUserRead(getTestDb(), userId, tx =>
+          tx.select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(remainingDefinitions).toEqual([{ id: targetId, name: 'renamed-before-delete' }]);
+        expect(remainingStates).toEqual([{ agentId: targetId }]);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -292,20 +765,6 @@ describe('AgentManager DB-backed runtime state', () => {
           tags: [],
         });
 
-        const manager = createDbAgentManager(tempDir, tracker);
-        await expect(manager.read(firstName)).resolves.toMatchObject({
-          metadata: expect.objectContaining({ name: firstName }),
-        });
-        await expect(manager.read(secondName)).resolves.toMatchObject({
-          metadata: expect.objectContaining({ name: secondName }),
-        });
-        await expect(manager.read(ambiguousName)).resolves.toBeNull();
-        await expect(manager.getAgentStateForRecovery({ agentName: ambiguousName }))
-          .rejects.toThrow(/not found/iu);
-
-        await manager.executeAgent(firstName, { objective: 'first identity goal' });
-        await manager.executeAgent(secondName, { objective: 'second identity goal' });
-
         const elementRows = await withUserRead(getTestDb(), userId, (tx) =>
           tx
             .select({ id: elements.id, name: elements.name })
@@ -317,6 +776,38 @@ describe('AgentManager DB-backed runtime state', () => {
         expect(firstId).toBeDefined();
         expect(secondId).toBeDefined();
         expect(firstId).not.toBe(secondId);
+
+        const manager = createDbAgentManager(tempDir, tracker);
+        await expect(manager.resolveExecutionIdentity(firstName)).resolves.toEqual({
+          kind: 'database',
+          value: firstId,
+        });
+        await expect(manager.resolveExecutionIdentity(secondName)).resolves.toEqual({
+          kind: 'database',
+          value: secondId,
+        });
+        let firstAgent: Awaited<ReturnType<AgentManager['read']>> = null;
+        let secondAgent: Awaited<ReturnType<AgentManager['read']>> = null;
+        const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+        try {
+          firstAgent = await manager.read(firstName);
+          secondAgent = await manager.read(secondName);
+          expect(firstAgent).toMatchObject({ metadata: expect.objectContaining({ name: firstName }) });
+          expect(secondAgent).toMatchObject({ metadata: expect.objectContaining({ name: secondName }) });
+          expect(firstAgent?.id).toBe(secondAgent?.id);
+          expect(await manager.findByStorageIdentity(firstId as string)).toBe(firstAgent);
+          expect(await manager.findByStorageIdentity(secondId as string)).toBe(secondAgent);
+          expect(await manager.read(firstName)).toBe(firstAgent);
+          expect(await manager.read(secondName)).toBe(secondAgent);
+          await expect(manager.read(ambiguousName)).resolves.toBeNull();
+          await expect(manager.getAgentStateForRecovery({ agentName: ambiguousName }))
+            .rejects.toThrow(/not found/iu);
+
+          await manager.executeAgent(firstName, { objective: 'first identity goal' });
+          await manager.executeAgent(secondName, { objective: 'second identity goal' });
+        } finally {
+          dateNowSpy.mockRestore();
+        }
 
         const reloadedManager = createDbAgentManager(tempDir, tracker);
         const firstState = await reloadedManager.getAgentState({ agentName: firstName });
@@ -339,18 +830,22 @@ describe('AgentManager DB-backed runtime state', () => {
           expect.arrayContaining([expect.objectContaining({ description: 'second identity goal' })]),
         );
 
-        const recoveryState = await reloadedManager.getAgentStateForRecovery({ agentName: firstName });
+        const recoveryState = await manager.getAgentStateForRecovery({ agentName: firstName });
         const activeGoal = recoveryState.state.goals.find((goal) => goal.status === 'in_progress');
         expect(activeGoal).toBeDefined();
-        if (!activeGoal) {
-          throw new Error('Expected an active goal for strict DB recovery');
-        }
-        await reloadedManager.completeAgentGoalForRecovery({
+        if (!activeGoal) throw new Error('Expected an active goal for strict DB recovery');
+        await manager.completeAgentGoalForRecovery({
           agentName: firstName,
           goalId: activeGoal.id,
           outcome: 'success',
           summary: 'Complete only the exact requested DB agent',
         });
+        expect(firstAgent?.getState().goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: activeGoal.id, status: 'completed' })]),
+        );
+        expect(secondAgent?.getState().goals).toEqual(
+          expect.arrayContaining([expect.objectContaining({ description: 'second identity goal', status: 'in_progress' })]),
+        );
 
         const stateRows = await withUserRead(getTestDb(), userId, (tx) =>
           tx
@@ -361,7 +856,7 @@ describe('AgentManager DB-backed runtime state', () => {
         const firstRow = stateRows.find((row) => row.agentId === firstId);
         const secondRow = stateRows.find((row) => row.agentId === secondId);
         expect(firstRow?.goals).toEqual(
-          expect.arrayContaining([expect.objectContaining({ id: activeGoal.id, status: 'completed' })]),
+          expect.arrayContaining([expect.objectContaining({ description: 'first identity goal', status: 'completed' })]),
         );
         expect(secondRow?.goals).toEqual(
           expect.arrayContaining([expect.objectContaining({ description: 'second identity goal', status: 'in_progress' })]),

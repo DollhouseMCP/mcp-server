@@ -308,6 +308,56 @@ describe('AgentManager', () => {
   });
 
   describe('Recovery state synchronization', () => {
+    beforeEach(() => {
+      jest.spyOn(agentManager, 'resolveExecutionIdentity').mockImplementation((name) =>
+        Promise.resolve({
+          kind: 'file',
+          value: `${name}.md`,
+        }));
+    });
+
+    it('rejects a step when the display name resolves to a replacement identity inside the lock', async () => {
+      const replacement = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const goal = replacement.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
+      goal.status = 'in_progress';
+      jest.spyOn(agentManager, 'read').mockResolvedValue(replacement);
+      jest.spyOn(agentManager, 'resolveExecutionIdentity').mockResolvedValue({
+        kind: 'file',
+        value: 'replacement-agent.md',
+      });
+
+      await expect(agentManager.recordAgentStep({
+        agentName: RECOVERY_AGENT_NAME,
+        goalId: goal.id,
+        stepDescription: 'Must not reach replacement',
+        outcome: 'success',
+        executionIdentity: { kind: 'file', value: 'original-agent.md' },
+      })).rejects.toMatchObject({ code: 'ESTALE' });
+
+      expect(replacement.getState().decisions).toEqual([]);
+    });
+
+    it('rejects completion when the display name resolves to a replacement identity inside the lock', async () => {
+      const replacement = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
+      const goal = replacement.addGoal({ description: ORIGINAL_EXECUTION_DESCRIPTION });
+      goal.status = 'in_progress';
+      jest.spyOn(agentManager, 'read').mockResolvedValue(replacement);
+      jest.spyOn(agentManager, 'resolveExecutionIdentity').mockResolvedValue({
+        kind: 'file',
+        value: 'replacement-agent.md',
+      });
+
+      await expect(agentManager.completeAgentGoal({
+        agentName: RECOVERY_AGENT_NAME,
+        goalId: goal.id,
+        outcome: 'success',
+        summary: 'Must not complete replacement',
+        executionIdentity: { kind: 'file', value: 'original-agent.md' },
+      })).rejects.toMatchObject({ code: 'ESTALE' });
+
+      expect(replacement.getState().goals[0]?.status).toBe('in_progress');
+    });
+
     it('allows normal completion to shrink legacy oversized state', async () => {
       const agent = new Agent({ name: RECOVERY_AGENT_NAME }, metadataService);
       const target = agent.addGoal({ description: 'Stuck execution' });
@@ -496,7 +546,12 @@ describe('AgentManager', () => {
       expect(executeSpy).toHaveBeenCalledWith(
         TEST_AGENT_NAME,
         {},
-        { operationName: 'continue_execution', resumedGoalId: ownedGoal.id },
+        {
+          operationName: 'continue_execution',
+          resumedGoalId: ownedGoal.id,
+          executionIdentity: { kind: 'file', value: 'test-agent.md' },
+        },
+        { kind: 'file', value: 'test-agent.md' },
       );
     });
 
@@ -673,7 +728,8 @@ Content`);
 
       const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: TEST_AGENT_NAME });
       await readStarted;
-      (agentManager as any).beginExecutionAttempt(TEST_AGENT_NAME);
+      const identity = { kind: 'file' as const, value: `${TEST_AGENT_NAME}.md` };
+      (agentManager as any).beginExecutionAttempt(identity);
       resolveState?.({
         goals: [{
           id: 'goal-orphan',
@@ -691,7 +747,7 @@ Content`);
         sessionCount: 1,
         stateVersion: 1,
       });
-      (agentManager as any).endExecutionAttempt(TEST_AGENT_NAME);
+      (agentManager as any).endExecutionAttempt(identity);
 
       await expect(reclaim).resolves.toBeNull();
       expect(agent?.getState().goals).toEqual([]);
@@ -1452,17 +1508,18 @@ This is the agent content.`;
   });
 
   describe('State Management', () => {
-    it('tracks execution generations across equivalent agent-name aliases', () => {
-      const observation = agentManager.observeExecutionGeneration('MyAgent');
+    it('tracks execution generation changes for one durable identity', () => {
+      const identity = { kind: 'file' as const, value: 'my-agent.md' };
+      const observation = agentManager.observeExecutionGeneration(identity);
       const internals = agentManager as unknown as {
-        beginExecutionAttempt(name: string): void;
-        endExecutionAttempt(name: string): void;
+        beginExecutionAttempt(identity: typeof identity): void;
+        endExecutionAttempt(identity: typeof identity): void;
       };
 
-      internals.beginExecutionAttempt('my-agent');
-      expect(agentManager.hasExecutionGenerationChanged('MyAgent', observation.token)).toBe(true);
+      internals.beginExecutionAttempt(identity);
+      expect(agentManager.hasExecutionGenerationChanged(identity, observation.token)).toBe(true);
 
-      internals.endExecutionAttempt('my-agent');
+      internals.endExecutionAttempt(identity);
       observation.release();
     });
 

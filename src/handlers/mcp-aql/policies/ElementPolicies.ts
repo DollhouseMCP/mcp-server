@@ -23,6 +23,7 @@ import { getDefaultPermissionLevel, canOperationBeElevated, getOperationPolicy }
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
 import { MAX_GLOB_PATTERN_LENGTH } from '../../../utils/patternMatcher.js';
+import type { PersistedActivationIdentity } from '../../../state/IActivationStateStore.js';
 
 /**
  * Metadata structure for elements with Gatekeeper policies.
@@ -43,6 +44,7 @@ export interface ActiveElement {
   type: string;
   name: string;
   metadata: ElementMetadataWithPolicy;
+  executionIdentity?: PersistedActivationIdentity;
 }
 
 export interface GatekeeperPolicyDiagnostics {
@@ -60,6 +62,8 @@ export interface ElementPolicyResult {
   permissionLevel: PermissionLevel;
   /** Which element's policy determined this result */
   sourceElement?: string;
+  /** Durable source identity when the policy belongs to an executing agent. */
+  sourceIdentity?: PersistedActivationIdentity;
   /** The specific policy field that matched (allow/confirm/deny) */
   matchedPolicy?: 'allow' | 'confirm' | 'deny' | 'scope_restriction';
   /** Whether the operation was blocked by scope restrictions */
@@ -77,6 +81,7 @@ type MatchedElementPolicy = NonNullable<ElementPolicyResult['matchedPolicy']>;
 interface ElementPolicyResolutionState {
   permissionLevel: PermissionLevel;
   sourceElement?: string;
+  sourceIdentity?: PersistedActivationIdentity;
   matchedPolicy?: MatchedElementPolicy;
   scopeBlocked: boolean;
   confirmedByElement: boolean;
@@ -98,6 +103,7 @@ function applyScopeRestriction(
 
   state.scopeBlocked = true;
   state.sourceElement = element.name;
+  state.sourceIdentity = element.executionIdentity;
   state.matchedPolicy = 'scope_restriction';
   return true;
 }
@@ -113,6 +119,7 @@ function applyConfirmPolicy(
   state.permissionLevel = PermissionLevel.CONFIRM_SESSION;
   state.confirmedByElement = true;
   state.sourceElement = element.name;
+  state.sourceIdentity = element.executionIdentity;
   state.matchedPolicy = 'confirm';
 }
 
@@ -134,6 +141,7 @@ function applyAllowPolicy(
 
   state.permissionLevel = PermissionLevel.AUTO_APPROVE;
   state.sourceElement = element.name;
+  state.sourceIdentity = element.executionIdentity;
   state.matchedPolicy = 'allow';
 }
 
@@ -172,6 +180,7 @@ export function resolveElementPolicy(
       return {
         permissionLevel: PermissionLevel.DENY,
         sourceElement: element.name,
+        sourceIdentity: element.executionIdentity,
         matchedPolicy: 'deny',
         conflictingElements: optionalConflicts(state.conflictingElements),
       };
@@ -186,6 +195,7 @@ export function resolveElementPolicy(
     return {
       permissionLevel: PermissionLevel.DENY,
       sourceElement: state.sourceElement,
+      sourceIdentity: state.sourceIdentity,
       matchedPolicy: 'scope_restriction',
       scopeBlocked: true,
     };
@@ -194,6 +204,7 @@ export function resolveElementPolicy(
   return {
     permissionLevel: state.permissionLevel,
     sourceElement: state.sourceElement,
+    sourceIdentity: state.sourceIdentity,
     matchedPolicy: state.matchedPolicy,
     conflictingElements: optionalConflicts(state.conflictingElements),
   };
@@ -213,6 +224,7 @@ function createDenyDecision(
       reason: `Operation "${operation}" is not allowed on element type "${targetElementType}" due to scope restrictions in active element "${sourceElement}"`,
       suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element or use a different element type`,
       policySource: 'element_policy',
+      sourceIdentity: result.sourceIdentity,
     };
   }
 
@@ -223,6 +235,7 @@ function createDenyDecision(
     reason: `Operation "${operation}" is blocked by active element "${sourceElement}"'s deny policy`,
     suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element to proceed`,
     policySource: 'element_policy',
+    sourceIdentity: result.sourceIdentity,
   };
 }
 
@@ -263,6 +276,7 @@ function createConfirmationDecision(
     suggestion: 'Use the confirmation dialog to approve this operation',
     confirmationPending: true,
     policySource: result.sourceElement ? 'element_policy' : 'operation_default',
+    sourceIdentity: result.sourceIdentity,
   };
 }
 
@@ -295,6 +309,7 @@ export function createDecisionFromPolicy(
       ? `Operation "${operation}" auto-approved by element "${result.sourceElement}"`
       : `Operation "${operation}" auto-approved by default policy`,
     policySource: result.sourceElement ? 'element_policy' : 'operation_default',
+    sourceIdentity: result.sourceIdentity,
   };
 }
 
