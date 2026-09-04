@@ -224,6 +224,14 @@ describe('GitHub Workflow Validation', () => {
       expect(serverJob.needs).toBe('publish-safety');
     });
 
+    it('should scope OIDC write permission to each publishing job', () => {
+      const expectedPermissions = { 'id-token': 'write', contents: 'read' };
+
+      expect(workflow.permissions).toBeUndefined();
+      expect(workflow.jobs['publish-safety'].permissions).toEqual(expectedPermissions);
+      expect(workflow.jobs['publish-npm'].permissions).toEqual(expectedPermissions);
+    });
+
     it('should publish safety only when its version is absent from npm', () => {
       const safetyJob = workflow.jobs['publish-safety'];
       const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');

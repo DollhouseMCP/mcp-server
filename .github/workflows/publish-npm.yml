@@ -32,10 +32,6 @@ concurrency:
   group: release-publish-${{ github.workflow }}
   cancel-in-progress: false
 
-permissions:
-  id-token: write   # Required for OIDC/Trusted Publishing
-  contents: read    # Required for checkout
-
 env:
   NODE_OPTIONS: '--max-old-space-size=4096'
   CI: true
@@ -44,6 +40,9 @@ jobs:
   publish-safety:
     name: Publish safety package
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -103,6 +102,9 @@ jobs:
     name: Publish to npm Registry
     needs: publish-safety
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout code
