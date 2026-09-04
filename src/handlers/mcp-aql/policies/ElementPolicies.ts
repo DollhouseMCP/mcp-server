@@ -114,7 +114,9 @@ function applyConfirmPolicy(
   policy: ElementGatekeeperPolicy,
   operation: string,
 ): void {
-  if (!policy.confirm?.includes(operation) || state.permissionLevel === PermissionLevel.DENY) return;
+  if (state.scopeBlocked
+      || !policy.confirm?.includes(operation)
+      || state.permissionLevel === PermissionLevel.DENY) return;
 
   state.permissionLevel = PermissionLevel.CONFIRM_SESSION;
   state.confirmedByElement = true;
@@ -129,7 +131,9 @@ function applyAllowPolicy(
   policy: ElementGatekeeperPolicy,
   operation: string,
 ): void {
-  if (!policy.allow?.includes(operation) || !canOperationBeElevated(operation)) return;
+  if (state.scopeBlocked
+      || !policy.allow?.includes(operation)
+      || !canOperationBeElevated(operation)) return;
 
   if (state.confirmedByElement) {
     state.conflictingElements.push({

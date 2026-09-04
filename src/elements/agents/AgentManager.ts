@@ -1011,10 +1011,12 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     const existing = await this.load(sanitizedPath).catch(() => null);
     const name = this.stripExtension(sanitizedPath);
-    const agentElementId = existing?.id ?? sanitizedPath;
+    const stateKey = existing
+      ? this.getAgentStateKey(existing, name)
+      : { name, agentElementId: sanitizedPath };
     await super.delete(sanitizedPath);
 
-    await this.stateStore.delete({ name, agentElementId });
+    await this.stateStore.delete(stateKey);
   }
 
   private normalizeAgentFilePath(filePath: string): string {
@@ -2514,9 +2516,8 @@ export class AgentManager extends BaseElementManager<Agent> {
    * IMPROVEMENT: Optimistic locking with version checking (Issue #24)
    * Prevents state corruption from concurrent updates by comparing versions
    *
-   * FIX: Uses normalizeFilename() for consistent state file naming
-   * This ensures state files use kebab-case (e.g., "crudv-agent-delta.state.yaml")
-   * regardless of input name format (e.g., "CRUDV-Agent-Delta")
+   * File-backed state follows the resolved definition's durable storage stem,
+   * then FileAgentStateStore normalizes it consistently for sidecar naming.
    *
    * FIX (Issue #107 - CRIT-2): Wrap read-compare-write sequence in file lock
    * to prevent TOCTOU race condition from concurrent agent executions
@@ -2539,8 +2540,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (!state) {
       throw new Error('Agent state is required when saving state for an agent instance');
     }
+    const key = agent
+      ? this.getAgentStateKey(agent, name)
+      : { name, agentElementId: name };
     return this.stateStore.save(
-      { name, agentElementId: agent ? this.getAgentElementId(agent, name) : name },
+      key,
       state,
       state.stateVersion ?? 0,
     );
@@ -2549,7 +2553,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async saveAgentStateForRecovery(agent: Agent, name: string): Promise<number> {
     const state = agent.getState();
     return this.stateStore.save(
-      { name, agentElementId: this.getAgentElementId(agent, name) },
+      this.getAgentStateKey(agent, name),
       state,
       state.stateVersion ?? 0,
       { requireExisting: true, allowOversizedReduction: true },
@@ -2566,10 +2570,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.stateStore.load({
-      name,
-      agentElementId: this.getAgentElementId(agent, name),
-    });
+    const state = await this.stateStore.load(this.getAgentStateKey(agent, name));
     if (!state) {
       if (isWritableStorageLayer(this.storageLayer)) {
         agent[COMMIT_PERSISTED_VERSION](0);
@@ -2597,13 +2598,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     storageIdentity: string,
   ): Promise<Agent> {
     this.bindAgentStorageIdentity(agent, storageIdentity);
-    const state = await this.stateStore.load({
-      name,
-      agentElementId: this.getAgentElementId(agent, name),
-    }, { strict: true, allowOversizedRecovery: true });
+    const state = await this.stateStore.load(
+      this.getAgentStateKey(agent, name),
+      { strict: true, allowOversizedRecovery: true },
+    );
     if (requireDurableState && !state) {
       throw new Error(
-        `Cannot verify durable state for flexibly matched agent "${name}" under its requested identity`
+        `Cannot verify durable state for flexibly matched agent "${name}" at storage identity "${storageIdentity}"`
       );
     }
     const recoveryAgent = new Agent(agent.metadata, this.metadataService);
@@ -2773,6 +2774,25 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
     this.bindAgentStorageIdentity(agent, resolvedIdentity);
     return resolvedIdentity;
+  }
+
+  /**
+   * Build the backend-specific durable state key for an already resolved agent.
+   * File state follows the definition's actual storage path, while database
+   * state is keyed by the authoritative element UUID.
+   */
+  private getAgentStateKey(agent: Agent, requestedName: string): {
+    name: string;
+    agentElementId: string;
+  } {
+    const storageIdentity = this.getAttachedAgentStorageIdentity(agent);
+    const name = !isWritableStorageLayer(this.storageLayer) && storageIdentity
+      ? this.stripExtension(storageIdentity)
+      : requestedName;
+    return {
+      name,
+      agentElementId: this.getAgentElementId(agent, requestedName),
+    };
   }
 
   private bindAgentStorageIdentity(agent: Agent, storageIdentity: string): void {
@@ -3976,12 +3996,12 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       const generation = this.observeExecutionGeneration(identity);
       try {
-        const state = await this.stateStore.reclaimOrphaned({
-          name: params.agentName,
-          agentElementId: this.getAgentElementId(agent, params.agentName),
-        }, {
-          excludedGoalIds: params.excludedGoalIds,
-        });
+        const state = await this.stateStore.reclaimOrphaned(
+          this.getAgentStateKey(agent, params.agentName),
+          {
+            excludedGoalIds: params.excludedGoalIds,
+          },
+        );
         if (!state || this.hasExecutionGenerationChanged(identity, generation.token)) {
           return null;
         }

@@ -1,8 +1,8 @@
 import type { AgentState } from '../elements/agents/types.js';
 
 /**
- * Identity for an agent's runtime state. File-backed stores use the logical
- * name; database-backed stores use the persisted element UUID.
+ * Identity for an agent's runtime state. File-backed stores use the durable
+ * definition-path stem; database-backed stores use the persisted element UUID.
  */
 export interface AgentStateKey {
   readonly name: string;

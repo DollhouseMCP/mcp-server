@@ -160,6 +160,43 @@ describe('AgentExecutionHandler durable execution identity', () => {
   });
 
   it.each([
+    { policyKind: 'allow', gatekeeper: { allow: ['create_element'] } },
+    { policyKind: 'confirm', gatekeeper: { confirm: ['create_element'] } },
+  ])('preserves scope-block attribution when a later policy would $policyKind', ({ gatekeeper }) => {
+    const blockingIdentity = { kind: 'database' as const, value: 'blocking-agent-id' };
+    const laterIdentity = { kind: 'database' as const, value: 'later-agent-id' };
+    const result = resolveElementPolicy('create_element', [
+      {
+        type: 'agent',
+        name: 'Scope Blocker',
+        executionIdentity: blockingIdentity,
+        metadata: {
+          name: 'Scope Blocker',
+          gatekeeper: { scopeRestrictions: { allowedTypes: ['skills'] } },
+        },
+      },
+      {
+        type: 'agent',
+        name: 'Later Policy Agent',
+        executionIdentity: laterIdentity,
+        metadata: { name: 'Later Policy Agent', gatekeeper },
+      },
+    ], 'personas');
+
+    expect(result).toMatchObject({
+      sourceElement: 'Scope Blocker',
+      sourceIdentity: blockingIdentity,
+      matchedPolicy: 'scope_restriction',
+      scopeBlocked: true,
+    });
+    const decision = createDecisionFromPolicy('create_element', result, 'personas');
+    expect(decision.allowed).toBe(false);
+    expect(decision.sourceIdentity).toEqual(blockingIdentity);
+    expect(decision.reason).toContain('Scope Blocker');
+    expect(decision.reason).not.toContain('Later Policy Agent');
+  });
+
+  it.each([
     {
       kind: 'database' as const,
       firstValue: '11111111-1111-4111-8111-111111111111',

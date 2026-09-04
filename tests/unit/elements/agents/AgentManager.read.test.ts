@@ -380,7 +380,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(stateReads).toEqual(['legacy-poster-agent.state.yaml']);
     });
 
-    it('should hydrate strict recovery from the requested state identity', async () => {
+    it('should hydrate strict recovery from the matched storage identity', async () => {
       const stateReads: string[] = [];
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
@@ -392,7 +392,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         }
         if (filename.endsWith('.state.yaml')) {
           stateReads.push(filename);
-          if (filename === 'legacy-poster.state.yaml') {
+          if (filename === 'legacy-poster-agent.state.yaml') {
             return ACTIVE_REQUESTED_STATE;
           }
           throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -406,7 +406,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(result.state.goals).toEqual([
         expect.objectContaining({ id: 'goal_requested_active', status: 'in_progress' })
       ]);
-      expect(stateReads).toEqual(['legacy-poster.state.yaml']);
+      expect(stateReads).toEqual(['legacy-poster-agent.state.yaml']);
     });
 
     it('should return empty state for an ordinary flexible read with no requested state identity', async () => {
@@ -580,13 +580,16 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
         if (filename === 'legacy-shared-agent.md') return AGENT_CONTENT_SHARED_NAME;
-        if (filename === 'shared-agent.state.yaml') return ACTIVE_REQUESTED_STATE;
+        if (filename === 'legacy-shared-agent.state.yaml') return ACTIVE_REQUESTED_STATE;
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       mockPortfolioManager.listElements.mockResolvedValue(['legacy-shared-agent.md']);
 
       const matchedInstance = await agentManager.load('legacy-shared-agent.md');
-      expect(matchedInstance.getState().goals).toEqual([]);
+      expect(matchedInstance.getState().goals).toEqual([
+        expect.objectContaining({ id: 'goal_requested_active', status: 'in_progress' }),
+      ]);
+      fileOperationsService.writeFile.mockClear();
 
       const result = await agentManager.completeAgentGoalForRecovery({
         agentName: 'shared-agent',
@@ -599,6 +602,10 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(matchedInstance.getState().goals).toEqual([
         expect.objectContaining({ id: 'goal_requested_active', status: 'completed' }),
       ]);
+      const stateWrites = fileOperationsService.writeFile.mock.calls
+        .map(([filePath]) => path.basename(filePath as string));
+      expect(stateWrites).toContain('legacy-shared-agent.state.yaml');
+      expect(stateWrites).not.toContain('shared-agent.state.yaml');
     });
 
     it('should fail closed for strict flexible reads with colliding file identities', async () => {
@@ -764,6 +771,21 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       const writes = writtenBasenames();
       expectOriginalDefinitionOnly(writes);
       expect(writes).toContain(originalState);
+    });
+
+    it('persists explicitly requested state to the matched storage sidecar', async () => {
+      arrangeFlexibleAgent(AGENT_CONTENT_LEGACY_V2, ACTIVE_REQUESTED_STATE);
+      const agent = await agentManager.read('legacy-poster');
+      expect(agent).not.toBeNull();
+      agent?.addGoal({ description: 'Persist through the public state API' });
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      fileOperationsService.writeFile.mockClear();
+
+      await expect(agentManager.persistState('legacy-poster')).resolves.toBe(true);
+
+      const writes = writtenBasenames();
+      expect(writes).toContain(originalState);
+      expect(writes).not.toContain(requestedState);
     });
   });
 
