@@ -407,7 +407,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   ): Promise<DatabaseStorageIdentity | undefined> {
     const identifierIsUuid = DATABASE_UUID_PATTERN.test(identifier);
     const exactPredicate = identifierIsUuid
-      ? eq(elements.id, identifier)
+      ? or(eq(elements.id, identifier), eq(elements.name, identifier))
       : eq(elements.name, identifier);
     const exactRows = await tx
       .select({ id: elements.id, name: elements.name })
@@ -417,7 +417,12 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
         eq(elements.elementType, elementType),
         exactPredicate,
       ))
-      .limit(1);
+      .limit(2);
+    if (exactRows.length > 1) {
+      const error = new Error(`Ambiguous element identity: ${identifier}`) as NodeJS.ErrnoException;
+      error.code = 'EAMBIGUOUS';
+      throw error;
+    }
     const exact = exactRows.at(0);
     if (exact) return exact;
     if (identifierIsUuid) return undefined;

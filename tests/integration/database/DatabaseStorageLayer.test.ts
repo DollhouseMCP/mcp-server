@@ -361,6 +361,38 @@ describe('DatabaseStorageLayer', () => {
     expect(layer.getPathByName('Case-Sensitive-Skill')).toBeUndefined();
   });
 
+  it('resolves a UUID-shaped exact name when no row has that ID', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const uuidName = '11111111-1111-4111-8111-111111111111';
+    const namedId = await layer.writeContent(
+      'skills', uuidName, buildSkillContent(uuidName),
+      { author: '', version: '', description: '', tags: [] },
+    );
+
+    await expect(layer.resolveContentIdentity('skills', uuidName))
+      .resolves.toEqual({ id: namedId, name: uuidName });
+  });
+
+  it('rejects an identifier that is both one row ID and another row exact name', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const idRow = await layer.writeContent(
+      'skills', 'uuid-owner', buildSkillContent('uuid-owner'), metadata,
+    );
+    const namedRow = await layer.writeContent(
+      'skills', idRow, buildSkillContent(idRow), metadata,
+    );
+
+    await expect(layer.deleteContentByIdentity('skills', idRow))
+      .rejects.toMatchObject({ code: 'EAMBIGUOUS' });
+    await expect(layer.readContent(idRow)).resolves.toContain('name: uuid-owner');
+    await expect(layer.readContent(namedRow)).resolves.toContain(`name: ${idRow}`);
+  });
+
   it('keeps scan state and name indexes isolated when one layer serves multiple users', async () => {
     if (!dbAvailable) return;
     const userIdA = await ensureTestUser();
