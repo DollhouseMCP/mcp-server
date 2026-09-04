@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.0-beta.2] - 2026-09-04
+
+- Deployment candidate following the main-to-beta reconciliation in PR #2653.
+- Includes the current hosted HTTP, PostgreSQL, OAuth, console, and agent-runtime updates.
+- Known AgentManager identity follow-ups remain tracked separately.
+
 ## [2.1.0-beta.1] - 2026-07-04
 
 First versioned build of the 2.1 beta line. Not published to npm; deployed to the hosted beta environment.
