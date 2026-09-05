@@ -3,14 +3,19 @@ name: Publish to npm
 # This workflow publishes the package to npm registry when a release is published.
 # Uses npm Trusted Publishing (OIDC) for secure, token-free authentication.
 #
-# Trusted Publishing Setup Required:
-# 1. Go to https://www.npmjs.com/package/@dollhousemcp/mcp-server/access
-# 2. Add Trusted Publisher:
+# Trusted Publishing Setup Required for both @dollhousemcp/mcp-server and
+# @dollhousemcp/safety:
+# 1. Open each package's settings on npmjs.com.
+# 2. Add the same Trusted Publisher to each package:
 #    - Provider: GitHub Actions
 #    - Organization: DollhouseMCP
 #    - Repository: mcp-server
 #    - Workflow: publish-npm.yml
 #    - Environment: (leave blank)
+#    - Allowed action: npm publish
+#
+# The safety package job completes before the server package job. Existing
+# safety versions are skipped so server-only releases remain idempotent.
 
 on:
   release:
@@ -27,18 +32,101 @@ concurrency:
   group: release-publish-${{ github.workflow }}
   cancel-in-progress: false
 
-permissions:
-  id-token: write   # Required for OIDC/Trusted Publishing
-  contents: read    # Required for checkout
-
 env:
   NODE_OPTIONS: '--max-old-space-size=4096'
   CI: true
 
 jobs:
+  publish-safety:
+    name: Publish safety package
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: packages/safety/package-lock.json
+        env:
+          NODE_AUTH_TOKEN: ''
+
+      - name: Install safety package dependencies
+        working-directory: packages/safety
+        run: npm ci --ignore-scripts --workspaces=false
+
+      - name: Build safety package
+        working-directory: packages/safety
+        run: npm run build
+
+      - name: Check safety package version
+        id: safety_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/safety/package.json').version")
+          REQUIRED_RANGE=$(node -p "require('./package.json').dependencies['@dollhousemcp/safety']")
+          EXPECTED_RANGE="^$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ "$REQUIRED_RANGE" != "$EXPECTED_RANGE" ]; then
+            echo "::error::Safety workspace version $VERSION does not match the server dependency floor ($REQUIRED_RANGE). Expected $EXPECTED_RANGE."
+            exit 1
+          fi
+
+          for ATTEMPT in 1 2 3; do
+            if LOOKUP_OUTPUT=$(npm view "@dollhousemcp/safety@$VERSION" version 2>&1); then
+              echo "needs_publish=false" >> "$GITHUB_OUTPUT"
+              echo "@dollhousemcp/safety@$VERSION is already published; skipping."
+              exit 0
+            fi
+
+            if printf '%s\n' "$LOOKUP_OUTPUT" | grep -Eq '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found|No match found for version'; then
+              echo "needs_publish=true" >> "$GITHUB_OUTPUT"
+              echo "@dollhousemcp/safety@$VERSION is not published yet."
+              exit 0
+            fi
+
+            if [ "$ATTEMPT" -lt 3 ]; then
+              sleep $((ATTEMPT * 2))
+            fi
+          done
+
+          echo "::error::Unable to verify @dollhousemcp/safety@$VERSION in the npm registry after 3 attempts."
+          exit 1
+
+      - name: Publish safety package (with provenance)
+        if: github.event.inputs.dry_run != 'true' && steps.safety_version.outputs.needs_publish == 'true'
+        working-directory: packages/safety
+        env:
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: npm publish --provenance --access public --loglevel verbose
+
+      - name: Dry run safety package
+        # Intentionally runs even when the version is already published so the
+        # complete package lifecycle is exercised on demand.
+        if: github.event.inputs.dry_run == 'true'
+        working-directory: packages/safety
+        shell: bash
+        run: |
+          # npm 11 rejects --dry-run for a version that already exists. Use a
+          # run-local version so the complete publish lifecycle remains testable.
+          npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"
+          npm publish --dry-run
+
   publish-npm:
     name: Publish to npm Registry
+    needs: publish-safety
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -78,7 +166,7 @@ jobs:
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing version: $VERSION"
 
       - name: Debug OIDC Environment
@@ -120,6 +208,9 @@ jobs:
         run: |
           echo "🧪 DRY RUN MODE - Skipping publication"
           echo "Package would be published: @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }}"
+          # npm 11 rejects --dry-run for a version that already exists. Use a
+          # run-local version so the complete publish lifecycle remains testable.
+          npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"
           npm publish --dry-run
 
       - name: Notify success
