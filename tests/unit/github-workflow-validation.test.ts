@@ -232,15 +232,27 @@ describe('GitHub Workflow Validation', () => {
       expect(workflow.jobs['publish-npm'].permissions).toEqual(expectedPermissions);
     });
 
-    it('should publish safety only when its version is absent from npm', () => {
+    it('should fail closed when the safety dependency floor is mismatched', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
+
+      expect(versionStep?.run).toContain("dependencies['@dollhousemcp/safety']");
+      expect(versionStep?.run).toContain('EXPECTED_RANGE="^$VERSION"');
+      expect(versionStep?.run).toContain('does not match the server dependency floor');
+      expect(versionStep?.run).toMatch(/if \[ "\$REQUIRED_RANGE" != "\$EXPECTED_RANGE" \]; then[\s\S]*exit 1/);
+    });
+
+    it('should publish safety only after a verified registry absence', () => {
       const safetyJob = workflow.jobs['publish-safety'];
       const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
       const publishStep = safetyJob.steps.find(step => step.name === 'Publish safety package (with provenance)');
 
       expect(versionStep?.run).toContain('@dollhousemcp/safety@$VERSION');
-      expect(versionStep?.run).toContain("dependencies['@dollhousemcp/safety']");
-      expect(versionStep?.run).toContain('REQUIRED_RANGE');
-      expect(versionStep?.run).toContain('EXPECTED_RANGE="^$VERSION"');
+      expect(versionStep?.run).toContain('for ATTEMPT in 1 2 3');
+      expect(versionStep?.run).toContain('E404');
+      expect(versionStep?.run).toContain('No match found for version');
+      expect(versionStep?.run).toContain('sleep $((ATTEMPT * 2))');
+      expect(versionStep?.run).toContain('after 3 attempts');
       expect(versionStep?.run).toContain('needs_publish=false');
       expect(versionStep?.run).toContain('needs_publish=true');
       expect(publishStep?.run).toBe('npm publish --provenance --access public --loglevel verbose');
