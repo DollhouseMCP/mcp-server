@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.42] - 2026-09-04
+
+- Harden macOS verification dialogs by keeping dynamic display values out of AppleScript source and passing them as direct process arguments.
+- Require `@dollhousemcp/safety` 1.0.2 or newer so MCP server installations cannot resolve to the vulnerable safety package release.
+
 ## [2.0.41] - 2026-08-26
 
 - **Important update — strongly recommended for all users**, especially installations that use the Permissions dashboard, active agents or ensembles, Gatekeeper policy enforcement, or persisted activation restore.

@@ -10,10 +10,11 @@
  */
 
 import { jest, describe, it, expect, beforeEach } from '@jest/globals';
-import type { ExecSyncOptions } from 'child_process';
+import type { ExecFileSyncOptions, ExecSyncOptions } from 'child_process';
 
 // Mock modules before importing the tested module
 jest.unstable_mockModule('child_process', () => ({
+  execFileSync: jest.fn(),
   execSync: jest.fn(),
 }));
 
@@ -22,7 +23,7 @@ jest.unstable_mockModule('os', () => ({
 }));
 
 // Import mocked modules
-const { execSync } = await import('child_process');
+const { execFileSync, execSync } = await import('child_process');
 const { platform } = await import('os');
 const { showVerificationDialog, isDialogAvailable } = await import(
   '../src/DisplayService.js'
@@ -31,6 +32,13 @@ const { showVerificationDialog, isDialogAvailable } = await import(
 // Type the mocks properly
 const mockExecSync = execSync as jest.Mock<
   (command: string, options?: ExecSyncOptions) => Buffer | string
+>;
+const mockExecFileSync = execFileSync as unknown as jest.Mock<
+  (
+    file: string,
+    args?: readonly string[],
+    options?: ExecFileSyncOptions
+  ) => Buffer | string
 >;
 const mockPlatform = platform as jest.Mock<() => NodeJS.Platform>;
 
@@ -113,14 +121,14 @@ describe('DisplayService', () => {
       });
 
       it('should return success when dialog is accepted', () => {
-        mockExecSync.mockReturnValue(Buffer.from('button returned:OK'));
+        mockExecFileSync.mockReturnValue(Buffer.from('button returned:OK'));
         const result = showVerificationDialog('TEST123', 'Test verification');
         expect(result.success).toBe(true);
         expect(result.buttonClicked).toBe('OK');
       });
 
       it('should return failure when dialog is cancelled', () => {
-        mockExecSync.mockImplementation(() => {
+        mockExecFileSync.mockImplementation(() => {
           throw new Error('User cancelled');
         });
         const result = showVerificationDialog('TEST123', 'Test verification');
@@ -128,24 +136,52 @@ describe('DisplayService', () => {
         expect(result.error).toBeDefined();
       });
 
-      it('should escape shell arguments in osascript command', () => {
-        mockExecSync.mockReturnValue(Buffer.from('button returned:OK'));
-        showVerificationDialog(
-          'CODE123',
-          "Test with 'quotes' and $(injection)"
+      it('passes display values as argv instead of AppleScript source', () => {
+        mockExecFileSync.mockReturnValue(Buffer.from('button returned:Proceed'));
+        const reason = 'Review \\"quoted" text\r\n$(marker) `marker`';
+        const title = '-Title \\"quoted"';
+        const buttons = ['Proceed \\"now"', '-Stop'];
+
+        showVerificationDialog('-CODE\\"123', reason, {
+          title,
+          buttons,
+          icon: 'error',
+        });
+
+        expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+        expect(mockExecSync).not.toHaveBeenCalled();
+
+        const [file, args] = mockExecFileSync.mock.calls[0];
+        expect(file).toBe('/usr/bin/osascript');
+        expect(args?.[0]).toBe('-e');
+        expect(args?.[2]).toBe('--');
+
+        const script = args?.[1] ?? '';
+        expect(script).toContain('on run argv');
+        expect(script).not.toContain(reason);
+        expect(script).not.toContain(title);
+        for (const button of buttons) {
+          expect(script).not.toContain(button);
+        }
+
+        expect(args?.[3]).toBe(title);
+        expect(args?.[4]).toBe(
+          `${reason}\n\nVerification Code: -CODE\\"123\n\nEnter this code when prompted.`
         );
+        expect(args?.[5]).toBe(buttons[1]);
+        expect(args?.[6]).toBe(buttons[0]);
+        expect(args?.[7]).toBe('stop');
+      });
 
-        // Verify execSync was called with escaped arguments
-        expect(mockExecSync).toHaveBeenCalled();
-        const command = mockExecSync.mock.calls[0][0] as string;
+      it('uses the same constant AppleScript for different input', () => {
+        mockExecFileSync.mockReturnValue(Buffer.from('button returned:OK'));
 
-        // The command should use proper escaping with single quotes
-        expect(command).toContain('osascript -e');
-        // The entire script should be wrapped in single quotes for shell safety
-        // escapeShellArg wraps content in single quotes: 'content'
-        expect(command).toMatch(/osascript -e '.*'/);
-        // The single quote escaping pattern should be present for the quotes in the message
-        expect(command).toContain("'\\''"); // This is how single quotes are escaped
+        showVerificationDialog('FIRST', 'First reason');
+        showVerificationDialog('SECOND', 'Second reason');
+
+        const firstScript = mockExecFileSync.mock.calls[0][1]?.[1];
+        const secondScript = mockExecFileSync.mock.calls[1][1]?.[1];
+        expect(firstScript).toBe(secondScript);
       });
     });
 
@@ -302,7 +338,7 @@ describe('DisplayService', () => {
     describe('Dialog options', () => {
       beforeEach(() => {
         mockPlatform.mockReturnValue('darwin');
-        mockExecSync.mockReturnValue(Buffer.from('button returned:OK'));
+        mockExecFileSync.mockReturnValue(Buffer.from('button returned:OK'));
       });
 
       it('should use custom title when provided', () => {
@@ -310,8 +346,8 @@ describe('DisplayService', () => {
           title: 'Custom Title',
         });
 
-        const command = mockExecSync.mock.calls[0][0] as string;
-        expect(command).toContain('Custom Title');
+        const args = mockExecFileSync.mock.calls[0][1];
+        expect(args?.[3]).toBe('Custom Title');
       });
 
       it('should use custom buttons when provided', () => {
@@ -319,16 +355,16 @@ describe('DisplayService', () => {
           buttons: ['Confirm', 'Abort'],
         });
 
-        const command = mockExecSync.mock.calls[0][0] as string;
-        expect(command).toContain('Confirm');
-        expect(command).toContain('Abort');
+        const args = mockExecFileSync.mock.calls[0][1];
+        expect(args?.[5]).toBe('Abort');
+        expect(args?.[6]).toBe('Confirm');
       });
 
       it('should support different icon types', () => {
         showVerificationDialog('CODE123', 'Reason', { icon: 'error' });
 
-        const command = mockExecSync.mock.calls[0][0] as string;
-        expect(command).toContain('stop'); // macOS icon mapping for 'error'
+        const args = mockExecFileSync.mock.calls[0][1];
+        expect(args?.[7]).toBe('stop');
       });
     });
   });
