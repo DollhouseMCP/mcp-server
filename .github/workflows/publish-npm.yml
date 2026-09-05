@@ -118,7 +118,7 @@ jobs:
           # npm 11 rejects --dry-run for a version that already exists. Use a
           # run-local version so the complete publish lifecycle remains testable.
           npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"
-          npm publish --dry-run
+          npm publish --dry-run --tag dry-run
 
   publish-npm:
     name: Publish to npm Registry
@@ -211,7 +211,7 @@ jobs:
           # npm 11 rejects --dry-run for a version that already exists. Use a
           # run-local version so the complete publish lifecycle remains testable.
           npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"
-          npm publish --dry-run
+          npm publish --dry-run --tag dry-run
 
       - name: Notify success
         if: success() && github.event.inputs.dry_run != 'true'

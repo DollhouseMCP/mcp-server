@@ -265,7 +265,7 @@ describe('GitHub Workflow Validation', () => {
 
       expect(dryRunStep?.shell).toBe('bash');
       expect(dryRunStep?.run).toContain('version=0.0.0-dry-run.${GITHUB_RUN_ID}');
-      expect(dryRunStep?.run).toContain('npm publish --dry-run');
+      expect(dryRunStep?.run).toContain('npm publish --dry-run --tag dry-run');
     });
 
     it('should avoid published-version conflicts in both dry-run paths', () => {
@@ -278,7 +278,7 @@ describe('GitHub Workflow Validation', () => {
 
       for (const step of [safetyDryRun, serverDryRun]) {
         expect(step?.run).toContain('npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"');
-        expect(step?.run).toContain('npm publish --dry-run');
+        expect(step?.run).toContain('npm publish --dry-run --tag dry-run');
       }
     });
   });
