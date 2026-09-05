@@ -251,7 +251,23 @@ describe('GitHub Workflow Validation', () => {
       const safetyJob = workflow.jobs['publish-safety'];
       const dryRunStep = safetyJob.steps.find(step => step.name === 'Dry run safety package');
 
-      expect(dryRunStep?.run).toBe('npm publish --dry-run');
+      expect(dryRunStep?.shell).toBe('bash');
+      expect(dryRunStep?.run).toContain('version=0.0.0-dry-run.${GITHUB_RUN_ID}');
+      expect(dryRunStep?.run).toContain('npm publish --dry-run');
+    });
+
+    it('should avoid published-version conflicts in both dry-run paths', () => {
+      const safetyDryRun = workflow.jobs['publish-safety'].steps.find(
+        step => step.name === 'Dry run safety package'
+      );
+      const serverDryRun = workflow.jobs['publish-npm'].steps.find(
+        step => step.name === 'Dry run (skip publish)'
+      );
+
+      for (const step of [safetyDryRun, serverDryRun]) {
+        expect(step?.run).toContain('npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"');
+        expect(step?.run).toContain('npm publish --dry-run');
+      }
     });
   });
 });
