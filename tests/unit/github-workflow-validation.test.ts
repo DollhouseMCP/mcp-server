@@ -26,6 +26,7 @@ interface WorkflowJob {
   steps: WorkflowStep[];
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
+  needs?: string | string[];
 }
 
 interface Workflow {
@@ -204,6 +205,81 @@ describe('GitHub Workflow Validation', () => {
       expect(downloadStep?.run).toContain('--certificate-oidc-issuer "$EXPECTED_ISSUER"');
       expect(downloadStep?.run).toContain('EXPECTED_ISSUER');
       expect(downloadStep?.run).toContain('https://token.actions.githubusercontent.com');
+    });
+  });
+
+  describe('Publish to npm Workflow', () => {
+    let workflow: Workflow;
+
+    beforeAll(() => {
+      const workflowPath = path.join(workflowDir, 'publish-npm.yml');
+      workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as Workflow;
+    });
+
+    it('should publish the safety package before the server package', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const serverJob = workflow.jobs['publish-npm'];
+
+      expect(safetyJob).toBeDefined();
+      expect(serverJob.needs).toBe('publish-safety');
+    });
+
+    it('should scope OIDC write permission to each publishing job', () => {
+      const expectedPermissions = { 'id-token': 'write', contents: 'read' };
+
+      expect(workflow.permissions).toBeUndefined();
+      expect(workflow.jobs['publish-safety'].permissions).toEqual(expectedPermissions);
+      expect(workflow.jobs['publish-npm'].permissions).toEqual(expectedPermissions);
+    });
+
+    it('should fail closed when the safety dependency floor is mismatched', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
+
+      expect(versionStep?.run).toContain("dependencies['@dollhousemcp/safety']");
+      expect(versionStep?.run).toContain('EXPECTED_RANGE="^$VERSION"');
+      expect(versionStep?.run).toContain('does not match the server dependency floor');
+      expect(versionStep?.run).toMatch(/if \[ "\$REQUIRED_RANGE" != "\$EXPECTED_RANGE" \]; then[\s\S]*exit 1/);
+    });
+
+    it('should publish safety only after a verified registry absence', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
+      const publishStep = safetyJob.steps.find(step => step.name === 'Publish safety package (with provenance)');
+
+      expect(versionStep?.run).toContain('@dollhousemcp/safety@$VERSION');
+      expect(versionStep?.run).toContain('for ATTEMPT in 1 2 3');
+      expect(versionStep?.run).toContain('E404');
+      expect(versionStep?.run).toContain('No match found for version');
+      expect(versionStep?.run).toContain('sleep $((ATTEMPT * 2))');
+      expect(versionStep?.run).toContain('after 3 attempts');
+      expect(versionStep?.run).toContain('needs_publish=false');
+      expect(versionStep?.run).toContain('needs_publish=true');
+      expect(publishStep?.run).toBe('npm publish --provenance --access public --loglevel verbose');
+      expect(publishStep?.env?.NPM_CONFIG_PROVENANCE).toBe('true');
+    });
+
+    it('should retain a safety-package dry run path', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const dryRunStep = safetyJob.steps.find(step => step.name === 'Dry run safety package');
+
+      expect(dryRunStep?.shell).toBe('bash');
+      expect(dryRunStep?.run).toContain('version=0.0.0-dry-run.${GITHUB_RUN_ID}');
+      expect(dryRunStep?.run).toContain('npm publish --dry-run');
+    });
+
+    it('should avoid published-version conflicts in both dry-run paths', () => {
+      const safetyDryRun = workflow.jobs['publish-safety'].steps.find(
+        step => step.name === 'Dry run safety package'
+      );
+      const serverDryRun = workflow.jobs['publish-npm'].steps.find(
+        step => step.name === 'Dry run (skip publish)'
+      );
+
+      for (const step of [safetyDryRun, serverDryRun]) {
+        expect(step?.run).toContain('npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"');
+        expect(step?.run).toContain('npm publish --dry-run');
+      }
     });
   });
 });
