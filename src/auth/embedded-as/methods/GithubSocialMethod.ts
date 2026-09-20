@@ -57,7 +57,10 @@ import {
   GITHUB_TOKEN_URL,
   MIN_AUTHCODE_SCOPES,
 } from './githubScopes.js';
-import { GitHubAuthenticatedUserClient } from '../../github/GitHubAuthenticatedUserClient.js';
+import {
+  GitHubAuthenticatedUserClient,
+  type GitHubAuthenticatedUser,
+} from '../../github/GitHubAuthenticatedUserClient.js';
 
 const GITHUB_PROVIDER = 'github';
 
@@ -520,7 +523,7 @@ export class GithubSocialMethod implements IAuthMethod {
   private async fetchProfile(
     accessToken: string,
   ): Promise<GithubProfile | { error: string }> {
-    let user: Awaited<ReturnType<GitHubAuthenticatedUserClient['fetchAuthenticatedUser']>>;
+    let user: GitHubAuthenticatedUser;
     try {
       user = await this.authenticatedUserClient.fetchAuthenticatedUser(accessToken);
     } catch {

@@ -212,6 +212,21 @@ describe('GitHubAuthenticatedUserClient', () => {
     expect(`${timeout.message} ${network.message}`).not.toContain('secret');
   });
 
+  it('classifies a timeout while reading a successful response body', async () => {
+    const fetchImpl = jest.fn<typeof fetch>().mockImplementation((_input, init) => {
+      const signal = init?.signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal?.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body));
+    });
+    const client = new GitHubAuthenticatedUserClient({ fetchImpl, timeoutMs: 1 });
+
+    await expectClientError(client.fetchAuthenticatedUser('token'), 'timeout', true);
+  });
+
   it('rejects malformed JSON with a fixed invalid-response error', async () => {
     const fetchImpl = jest.fn<typeof fetch>().mockResolvedValue(new Response('<html>failure</html>'));
     const client = new GitHubAuthenticatedUserClient({ fetchImpl });

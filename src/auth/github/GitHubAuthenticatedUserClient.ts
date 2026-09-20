@@ -112,6 +112,9 @@ export class GitHubAuthenticatedUserClient {
       if (error instanceof ResponseBodyTooLargeError) {
         throw new GitHubAuthenticatedUserError('response_too_large', false);
       }
+      if (isAbortError(error)) {
+        throw new GitHubAuthenticatedUserError('timeout', true);
+      }
       throw new GitHubAuthenticatedUserError('upstream_unavailable', true);
     }
 
