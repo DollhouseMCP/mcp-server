@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Incorporate the 2.0.42 macOS verification dialog security fix and prepare safety package 1.0.3, retaining beta’s timing-safe challenge comparison. (#2686)
+- Publish the safety package before the server and retain beta channel protection during version-safe release dry runs. (#2686)
+
 ## [2.1.0-beta.2] - 2026-09-04
 
 - Deployment candidate following the main-to-beta reconciliation in PR #2653.
@@ -19,6 +24,32 @@ First versioned build of the 2.1 beta line. Not published to npm; deployed to th
 ## [2.1.0-beta] - 2026-06-25
 
 Start beta line for 2.1 hosted HTTP and expanded description limits.
+
+## [2.0.42] - 2026-09-04
+
+- Harden macOS verification dialogs by keeping dynamic display values out of AppleScript source and passing them as direct process arguments.
+- Require `@dollhousemcp/safety` 1.0.2 or newer so MCP server installations cannot resolve to the vulnerable safety package release.
+
+## [2.0.41] - 2026-08-26
+
+- **Important update — strongly recommended for all users**, especially installations that use the Permissions dashboard, active agents or ensembles, Gatekeeper policy enforcement, or persisted activation restore.
+- Stop overlapping Permissions dashboard polls from expanding complete element catalogs and amplifying into sustained CPU, memory, parsing, activation, validation, and logging work. Active-policy reporting now uses lightweight indexed lookups, coalesces same-generation dashboard snapshots, deduplicates ensemble references, and bounds member resolution concurrency. (#2618, #2621)
+- Keep enforcement decisions fresh while safely merging invalidations from overlapping storage scans, so external policy edits are not hidden by dashboard snapshot reuse or stale in-flight scans. (#2618, #2621)
+- Preserve stable policy and agent identity across external metadata renames, filename collisions, deactivation, session-policy aggregation, deadlock relief, and server restart restoration; legacy name-only activation records are upgraded when they can be resolved safely. (#2618, #2621)
+- Serialize policy exports through their newest queued work and install OAuth helper shutdown handlers before readiness, eliminating the remaining export race and macOS/Node 22 compatibility failure found during hotfix validation. (#2618, #2621)
+
+## [2.0.40] - 2026-08-05
+
+- Recover stale agent execution policies through a narrow, durable-state-verified path while preserving active restarts, DangerZone requirements, read restrictions, and independent agent executions. This resolves the documented abort-path failure and mitigates the broader interrupted-execution incident while automatic cleanup remains tracked separately. (#2427, #2428, #2441)
+- Preserve append-only memory writes when historical entries trip newer content-scanner rules. Structural YAML protections and control-field validation remain enforced, while unsafe historical output is sanitized or redacted instead of permanently blocking future appends. (#2440, #2442)
+- Keep collection and collection-index caches under Dollhouse home by default, honor explicit cache and home overrides safely, and prevent cache files from appearing in the process working repository. (#2426, #2443)
+- Restore the SonarCloud security rating by hardening CI, container, and setup dependency installation; pinning external tooling; enforcing HTTPS-only downloads; removing on-demand package execution; and adding regression coverage without removing DollhouseMCP capabilities. (#2446, #2447)
+- Update the existing exact `giget` override to `tar` 7.5.22, removing the critical runtime archive-processing advisory without changing any other dependency. (#2449, #2450)
+
+## [2.0.39] - 2026-07-31
+
+- Fix agent sub-element activation: `activates:` references (canonical filename slugs like `security-analyst`) never resolved elements whose metadata carries display names (`Security Analyst`), so agents silently ran without their declared personas and skills — while their tool sandbox still fully applied. Lookup now matches exact names first, then falls back to the same filename normalization used when saving elements; degenerate references (empty or separator-only) warn instead of resolving. (#2432, #2433)
+- **Behavior change:** agents that previously ran bare will start loading their full declared context (personas and skills) after upgrading — expect richer agent behavior from the shipped defaults such as `code-reviewer`.
 
 ## [2.0.38] - 2026-07-04
 
