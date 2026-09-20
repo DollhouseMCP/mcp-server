@@ -238,4 +238,29 @@ describe('transactional invitation management', () => {
     await expect(revoke(view.id)).rejects.toMatchObject({ code: 'invitation_invalid' });
   });
 
+
+  it.each(['update', 'soft-delete'] as const)('does not deadlock with an existing row-lock-first account %s writer', async operation => {
+    const view = await issue();
+    let pending: Promise<unknown> | undefined;
+    await getTestAdminDb().transaction(async tx => {
+      // Existing account administration locks rows before its UPDATE/DELETE.
+      await tx.select().from(users).where(eq(users.id, view.userId)).for('update');
+      pending = regenerate(view.id).catch(error => error);
+      // Let regeneration attempt its table lock while this transaction owns ROW SHARE.
+      await tx.execute(sql`SELECT pg_sleep(0.1)`);
+      if (operation === 'update') {
+        await tx.update(users).set({ displayName: 'Changed by existing writer' }).where(eq(users.id, view.userId));
+      } else {
+        await tx.update(users).set({ deletedAt: new Date() }).where(eq(users.id, view.userId));
+      }
+    });
+    const result = await pending;
+    if (operation === 'update') {
+      expect(result).toMatchObject({ currentGeneration: { generation: 2 } });
+    } else {
+      expect(result).toMatchObject({ code: 'invitation_invalid' });
+      expect((await store().inspect(view.id))?.currentGeneration.generation).toBe(1);
+    }
+  });
+
 });

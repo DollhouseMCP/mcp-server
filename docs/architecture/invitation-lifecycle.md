@@ -48,10 +48,13 @@ accounts retaining an email) are conflicts; account identity is never merged by
 email. Existing email values use the same NFC, Unicode trim and lowercase rules as
 new invitations. Administrator issuer IDs must match the audit actor.
 
-All management mutations acquire `SHARE ROW EXCLUSIVE` on `users` before locking
+All management mutations acquire `EXCLUSIVE` on `users` before locking
 an invitation. This deliberately coarse beta safeguard blocks account inserts and
 updates from existing writers that do not share an invitation advisory lock, and
-closes the missing-row race around non-unique account email. The canonical email
+closes the missing-row race around non-unique account email. It also conflicts
+with the `ROW SHARE` table lock acquired by existing account writers' `SELECT FOR
+UPDATE`, avoiding a table-lock upgrade cycle when those writers subsequently
+update/delete the locked user. Plain reads remain compatible. The canonical email
 check currently scans account identifiers/emails under that lock. A later scaling
 change must introduce shared canonical uniqueness/locking across **all** account
 writers before narrowing it. Composing claim/activation code must preserve the

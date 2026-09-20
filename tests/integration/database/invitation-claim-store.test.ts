@@ -154,7 +154,7 @@ describe('durable invitation claims', () => {
     const fixture = await issue();
     let pending: Promise<unknown> | undefined;
     await getTestAdminDb().transaction(async tx => {
-      await tx.execute(sql`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`);
+      await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
       const times = await tx.execute(sql`SELECT date_trunc('milliseconds', clock_timestamp()) + INTERVAL '150 milliseconds' AS expires`);
       const expiresAt = new Date(times[0].expires as string | Date);
       await tx.update(generations).set({
