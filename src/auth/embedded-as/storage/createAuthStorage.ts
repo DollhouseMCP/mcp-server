@@ -96,16 +96,24 @@ export async function createAuthStorage(
     );
   }
 
+  // Account lifecycle belongs to the user database even when OAuth state is
+  // stored in files or memory. Database-free local deployments have no gate.
+  const database = options.database;
+  const accountAllowed = database && backend !== 'postgres'
+    ? await import('../../AccountAccess.js').then(({ isSubjectAccountAllowed }) =>
+      (sub: string) => isSubjectAccountAllowed(database, sub))
+    : undefined;
+
   switch (backend) {
     case 'memory':
       logger.info('[AuthStorage] backend=memory (in-process state, lost on restart)');
-      return new InMemoryAuthStorageLayer();
+      return new InMemoryAuthStorageLayer(accountAllowed);
 
     case 'filesystem': {
       const rootDir = options.rootDir
         ?? path.join(resolveDataDirectory('state', { legacyRoot: options.legacyRoot }), 'auth');
       logger.info('[AuthStorage] backend=filesystem', { rootDir });
-      return new FilesystemAuthStorageLayer({ rootDir });
+      return new FilesystemAuthStorageLayer({ rootDir, accountAllowed });
     }
 
     case 'postgres': {

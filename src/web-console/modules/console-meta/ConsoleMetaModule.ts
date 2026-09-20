@@ -20,6 +20,7 @@ import {
 } from '../../platform/ConsolePlatformTypes.js';
 import { CONSOLE_ADMIN_ROLES, type ConsoleAdminRole } from '../../stores/IConsoleAccountAdminStore.js';
 import { ROLE_GRANT_CAPABILITIES } from '../account-admin/AccountAdminRoleAuthority.js';
+import { ROLE_DESCRIPTIONS, ROLE_GUIDANCE, type ConsoleRoleDescription } from '../account-admin/AccountAdminRoleDescriptions.js';
 
 const SELF_CAPABILITY = 'console:self';
 
@@ -27,6 +28,8 @@ export interface RoleCatalogDto {
   readonly roles: readonly ConsoleAdminRole[];
   readonly capabilities: readonly ConsoleCapability[];
   readonly grants: Readonly<Record<ConsoleAdminRole, readonly ConsoleCapability[]>>;
+  readonly descriptions: Readonly<Record<ConsoleAdminRole, ConsoleRoleDescription>>;
+  readonly guidance: typeof ROLE_GUIDANCE;
 }
 
 export interface ConsoleMetaModuleOptions {
@@ -73,6 +76,8 @@ function buildRoleCatalog(): RoleCatalogDto {
     roles: [...CONSOLE_ADMIN_ROLES],
     capabilities: [...CONSOLE_CAPABILITIES],
     grants: ROLE_GRANT_CAPABILITIES,
+    descriptions: ROLE_DESCRIPTIONS,
+    guidance: ROLE_GUIDANCE,
   };
 }
 

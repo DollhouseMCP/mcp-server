@@ -21,7 +21,7 @@
  * should pin the rotation flow specifically.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { randomBytes } from 'node:crypto';
 import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalAccountMethod.js';
 import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
@@ -89,7 +89,7 @@ describe('Token reuse-detection — OAuth 2.1 §4.1.3', () => {
     if (harness) await harness.close();
   });
 
-  it('replaying a consumed authorization_code returns invalid_grant', async () => {
+  it.each([false, true])('rejects code reuse or a pending account before exchange (pending=%s)', async (pending) => {
     const invite = method.issueInvite('local_replay', 'replay@example.com', REDIRECT_URI);
     const inviteToken = new URL(invite).searchParams.get('invite')!;
 
@@ -135,7 +135,15 @@ describe('Token reuse-detection — OAuth 2.1 §4.1.3', () => {
         }),
       });
 
+    if (pending) jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(false);
     const first = await exchange();
+    if (pending) {
+      expect(first.status).toBe(400);
+      const body = await first.json() as { error?: string; access_token?: string };
+      expect(body.error).toBe('invalid_grant');
+      expect(body.access_token).toBeUndefined();
+      return;
+    }
     expect(first.status).toBe(200);
 
     // Replay must be rejected with invalid_grant. oidc-provider treats the
