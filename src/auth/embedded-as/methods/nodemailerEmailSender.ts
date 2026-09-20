@@ -18,6 +18,11 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { logger } from '../../../utils/logger.js';
 import type { EmailSender, SendMagicLinkInput } from './MagicLinkMethod.js';
+import { normalizeInvitationEmail } from '../../../invitations/InvitationEmail.js';
+import {
+  classifyEmailSubmissionFailure,
+  type EmailSubmissionResult, type TransactionalEmail, type TransactionalEmailSender,
+} from './TransactionalEmailSender.js';
 
 export interface NodemailerEmailSenderOptions {
   host: string;
@@ -31,7 +36,7 @@ export interface NodemailerEmailSenderOptions {
   connectionTimeoutMs?: number;
 }
 
-export class NodemailerEmailSender implements EmailSender {
+export class NodemailerEmailSender implements EmailSender, TransactionalEmailSender {
   private readonly transporter: Transporter;
   private readonly from: string;
   private readonly host: string;
@@ -119,6 +124,57 @@ export class NodemailerEmailSender implements EmailSender {
       text: `Click to sign in: ${input.url}\n\nThis link expires in 15 minutes.`,
       html: `<p>Click to sign in:</p><p><a href="${escapeHtmlAttr(input.url)}">${escapeHtmlAttr(input.url)}</a></p><p>This link expires in 15 minutes.</p>`,
     });
+  }
+
+  /**
+   * Sends already-rendered multipart content without imposing magic-link copy
+   * or lifetime. Callers must reserve a durable delivery attempt before calling
+   * once, then record this sanitized result. No messages are persisted here.
+   */
+  async sendTransactionalEmail(input: TransactionalEmail): Promise<EmailSubmissionResult> {
+    const message = { to: input.to, subject: input.subject, text: input.text, html: input.html };
+    validateTransactionalMessage(message);
+    message.to = message.to.normalize('NFC').trim();
+    try {
+      const info = await this.transporter.sendMail({
+        from: this.from,
+        // Structured single-recipient address prevents display-name/list parsing.
+        to: { name: '', address: message.to },
+        subject: message.subject,
+        text: message.text,
+        html: message.html,
+        disableFileAccess: true,
+        disableUrlAccess: true,
+      });
+      if (!Array.isArray(info.accepted) || info.accepted.length !== 1
+          || !Array.isArray(info.rejected) || info.rejected.length !== 0) {
+        return { state: 'unknown', failureClass: 'indeterminate' };
+      }
+      // Nodemailer's info.messageId is an RFC Message-ID generated locally,
+      // not a provider-assigned ID. Never label or persist it as one, and do not
+      // parse arbitrary SMTP response text for an undocumented provider ID.
+      return { state: 'submitted', providerMessageId: null };
+    } catch (error) {
+      return classifyEmailSubmissionFailure(error);
+    }
+  }
+}
+
+function validateTransactionalMessage(message: TransactionalEmail): void {
+  if (typeof message.to !== 'string' || /[\p{Cc}\p{Cf}]/u.test(message.to)) {
+    throw new Error('Invalid transactional email recipient');
+  }
+  try { normalizeInvitationEmail(message.to); } catch {
+    throw new Error('Invalid transactional email recipient');
+  }
+  if (typeof message.subject !== 'string' || message.subject.trim() === ''
+      || Buffer.byteLength(message.subject, 'utf8') > 200 || /[\p{Cc}\p{Cf}]/u.test(message.subject)) {
+    throw new Error('Invalid transactional email subject');
+  }
+  for (const body of [message.text, message.html]) {
+    if (typeof body !== 'string' || body.trim() === '' || Buffer.byteLength(body, 'utf8') > 65_536) {
+      throw new Error('Invalid transactional email body');
+    }
   }
 }
 
