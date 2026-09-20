@@ -16,9 +16,10 @@
  */
 
 import nodemailer, { type Transporter } from 'nodemailer';
+import { domainToASCII } from 'node:url';
 import { logger } from '../../../utils/logger.js';
 import type { EmailSender, SendMagicLinkInput } from './MagicLinkMethod.js';
-import { normalizeInvitationEmail } from '../../../invitations/InvitationEmail.js';
+import { isSupportedInvitationEmail } from '../../../invitations/InvitationEmail.js';
 import {
   classifyEmailSubmissionFailure,
   type EmailSubmissionResult, type TransactionalEmail, type TransactionalEmailSender,
@@ -129,8 +130,7 @@ export class NodemailerEmailSender implements EmailSender, TransactionalEmailSen
    */
   async sendTransactionalEmail(input: TransactionalEmail): Promise<EmailSubmissionResult> {
     const message = { to: input.to, subject: input.subject, text: input.text, html: input.html };
-    validateTransactionalMessage(message);
-    message.to = message.to.normalize('NFC').trim();
+    message.to = validateTransactionalMessage(message);
     try {
       const info = await this.transporter.sendMail({
         from: this.from,
@@ -205,21 +205,26 @@ function readinessErrorMessage(category: SmtpReadinessFailureCategory): string {
   }
 }
 
-function validateTransactionalMessage(message: TransactionalEmail): void {
+function validateTransactionalMessage(message: TransactionalEmail): string {
   if (typeof message.to !== 'string' || /[\p{Cc}\p{Cf}]/u.test(message.to)) {
     throw new Error('Invalid transactional email recipient');
   }
-  try { normalizeInvitationEmail(message.to); } catch {
+  const recipient = message.to.normalize('NFC').trim();
+  if (!isSupportedInvitationEmail(recipient)) {
     throw new Error('Invalid transactional email recipient');
   }
   // Identity comparison lowercases email; SMTP preserves the local-part case.
   // Unicode case folding can change byte lengths, so bound the actual address.
-  const recipient = message.to.normalize('NFC').trim();
   const [localPart, domain] = recipient.split('@');
+  const wireDomain = domainToASCII(domain);
+  const wireRecipient = `${localPart}@${wireDomain}`;
   if (Buffer.byteLength(recipient, 'utf8') > 254 || Buffer.byteLength(localPart, 'utf8') > 64
-      || domain.split('.').some(label => Buffer.byteLength(label, 'utf8') > 63)) {
+      || !wireDomain || Buffer.byteLength(wireRecipient, 'utf8') > 254
+      || wireDomain.split('.').some(label => label.length > 63)) {
     throw new Error('Invalid transactional email recipient');
   }
+  // Supply the validated ASCII domain explicitly so SMTP serialization cannot
+  // expand a Unicode domain beyond its label/mailbox limits after validation.
   if (typeof message.subject !== 'string' || message.subject.trim() === ''
       || Buffer.byteLength(message.subject, 'utf8') > 200 || /[\p{Cc}\p{Cf}]/u.test(message.subject)) {
     throw new Error('Invalid transactional email subject');
@@ -229,6 +234,7 @@ function validateTransactionalMessage(message: TransactionalEmail): void {
       throw new Error('Invalid transactional email body');
     }
   }
+  return wireRecipient;
 }
 
 function escapeHtmlAttr(value: string): string {
