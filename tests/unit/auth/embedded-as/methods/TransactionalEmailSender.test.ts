@@ -76,6 +76,14 @@ describe('transactional SMTP submission', () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
+  it('accepts an exact-boundary local part even when identity lowercasing expands it', async () => {
+    const { sender, sendMail } = fixture();
+    const to = `${'İ'.repeat(32)}@example.test`; // 64 bytes; lowercasing would produce 96.
+    await sender.sendTransactionalEmail({ ...message(), to });
+    const submitted = sendMail.mock.calls[0][0] as { to: { name: string; address: string } };
+    expect(new MailComposer(submitted).compile().getEnvelope().to).toEqual([to]);
+  });
+
   it('submits the validated ASCII domain while preserving local-part case', async () => {
     const { sender, sendMail } = fixture();
     await sender.sendTransactionalEmail({ ...message(), to: 'Person@café.test' });

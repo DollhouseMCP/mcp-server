@@ -19,7 +19,7 @@ import nodemailer, { type Transporter } from 'nodemailer';
 import { domainToASCII } from 'node:url';
 import { logger } from '../../../utils/logger.js';
 import type { EmailSender, SendMagicLinkInput } from './MagicLinkMethod.js';
-import { normalizeInvitationEmail } from '../../../invitations/InvitationEmail.js';
+import { isSupportedInvitationEmail } from '../../../invitations/InvitationEmail.js';
 import {
   classifyEmailSubmissionFailure,
   type EmailSubmissionResult, type TransactionalEmail, type TransactionalEmailSender,
@@ -164,12 +164,12 @@ function validateTransactionalMessage(message: TransactionalEmail): string {
   if (typeof message.to !== 'string' || /[\p{Cc}\p{Cf}]/u.test(message.to)) {
     throw new Error('Invalid transactional email recipient');
   }
-  try { normalizeInvitationEmail(message.to); } catch {
+  const recipient = message.to.normalize('NFC').trim();
+  if (!isSupportedInvitationEmail(recipient)) {
     throw new Error('Invalid transactional email recipient');
   }
   // Identity comparison lowercases email; SMTP preserves the local-part case.
   // Unicode case folding can change byte lengths, so bound the actual address.
-  const recipient = message.to.normalize('NFC').trim();
   const [localPart, domain] = recipient.split('@');
   const wireDomain = domainToASCII(domain);
   const wireRecipient = `${localPart}@${wireDomain}`;
