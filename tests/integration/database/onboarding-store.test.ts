@@ -3,7 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { withSystemContext } from '../../../src/database/admin.js';
 import { authKv } from '../../../src/database/schema/auth.js';
 import { users } from '../../../src/database/schema/users.js';
-import { accountInvitationClaimAssertions as claims } from '../../../src/database/schema/invitations.js';
+import { accountInvitationClaimAssertions as claims, accountInvitationGenerations as generations } from '../../../src/database/schema/invitations.js';
 import { PostgresInvitationManagementStore } from '../../../src/invitations/PostgresInvitationManagementStore.js';
 import { PostgresInvitationClaimStore } from '../../../src/invitations/PostgresInvitationClaimStore.js';
 import { PostgresOnboardingStore, ONBOARDING_OWNER_MODEL, ONBOARDING_SESSION_MODEL } from '../../../src/invitations/onboarding/PostgresOnboardingStore.js';
@@ -28,7 +28,7 @@ beforeAll(async () => {
 });
 afterAll(closeTestDb);
 
-async function fixture(existingOwner?: Buffer) {
+async function pendingFixture(existingOwner?: Buffer) {
   const ownerHash = existingOwner ?? hash('owner');
   if (!existingOwner) await store().createOwner(ownerHash, hash('csrf'));
   const invitationId = randomUUID();
@@ -40,6 +40,11 @@ async function fixture(existingOwner?: Buffer) {
     credentialSecret: secret, correlationId: randomUUID(),
   }));
   const claimInput = { invitationId, generation: 1, credentialSecret: secret, claimOwnerHash: ownerHash, correlationId: randomUUID() };
+  return { ownerHash, invitation, claimInput };
+}
+async function fixture(existingOwner?: Buffer) {
+  const { ownerHash, invitation, claimInput } = await pendingFixture(existingOwner);
+  const invitationId = invitation.id;
   const claim = await authority().runMutation(audit, mutation => mutation.beginClaim(claimInput));
   const input = { ownerHash, invitationId, generation: 1, claimAssertionId: claim.id, sessionHash: hash('session'), csrfTokenHash: hash('csrf') };
   return { ownerHash, invitation, claim, claimInput, input };
@@ -73,6 +78,52 @@ describe('PostgreSQL restricted onboarding owner/session persistence', () => {
     await store().endOwner(f.ownerHash);
     await expect(store().replaceSession(f.input)).rejects.toMatchObject({ code: 'unavailable' });
     expect(await db().select().from(authKv).where(slot(ONBOARDING_SESSION_MODEL, f.ownerHash))).toHaveLength(0);
+  });
+
+  it('atomically rolls back consumption, claim audit, owner extension and session on initial-exchange failure, then retries', async () => {
+    if (!available) return;
+    const f = await pendingFixture();
+    const ownerBefore = await store().findOwner(f.ownerHash);
+    const input = { invitationId: f.invitation.id, generation: 1, credentialSecret: f.claimInput.credentialSecret,
+      correlationId: randomUUID(), ownerHash: f.ownerHash, sessionHash: hash('session'), csrfTokenHash: hash('csrf') };
+    await db().execute(sql.raw(`CREATE OR REPLACE FUNCTION test_onboarding_initial_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.model = 'DollhouseOnboardingSessionV1' AND NEW.id = TG_ARGV[0] THEN RAISE EXCEPTION 'test initial session write failure'; END IF; RETURN NEW; END $$`));
+    try {
+      await db().execute(sql.raw(`CREATE TRIGGER test_onboarding_initial_failure BEFORE INSERT OR UPDATE ON auth_kv FOR EACH ROW EXECUTE FUNCTION test_onboarding_initial_failure('${f.ownerHash.toString('hex')}')`));
+      await expect(store().exchangeClaim(input, audit)).rejects.toBeInstanceOf(Error);
+      const [generation] = await db().select().from(generations).where(eq(generations.invitationId, f.invitation.id));
+      expect(generation.credentialConsumedAt).toBeNull();
+      expect(await db().select().from(claims).where(eq(claims.invitationId, f.invitation.id))).toHaveLength(0);
+      expect(await db().execute(sql`SELECT id FROM security_audit_events WHERE target_id = ${f.invitation.id} AND event_type = 'invitation.claimed'`)).toHaveLength(0);
+      expect(await store().findOwner(f.ownerHash)).toEqual(ownerBefore);
+      expect(await db().select().from(authKv).where(slot(ONBOARDING_SESSION_MODEL, f.ownerHash))).toHaveLength(0);
+    } finally {
+      await db().execute(sql`DROP TRIGGER IF EXISTS test_onboarding_initial_failure ON auth_kv`);
+      await db().execute(sql`DROP FUNCTION IF EXISTS test_onboarding_initial_failure()`);
+    }
+    const first = await store().exchangeClaim(input, audit);
+    const ownerAfter = await store().findOwner(f.ownerHash);
+    expect(ownerAfter!.expiresAt).toEqual(f.invitation.currentGeneration.expiresAt);
+    expect(ownerAfter!.expiresAt.getTime()).toBeGreaterThan(ownerBefore!.expiresAt.getTime());
+    expect(await db().execute(sql`SELECT id FROM security_audit_events WHERE target_id = ${f.invitation.id} AND event_type = 'invitation.claimed'`)).toHaveLength(1);
+    // A lost first response leaves only the pre-existing owner cookie and email
+    // credential. Re-exchanging them resumes the same claim with fresh session.
+    const recovered = await store().exchangeClaim({ ...input, correlationId: randomUUID(), sessionHash: hash('session'), csrfTokenHash: hash('csrf') }, audit);
+    expect(recovered.claimAssertionId).toBe(first.claimAssertionId);
+    expect(await store().findSession(f.ownerHash, first.idHash)).toBeNull();
+    expect(await store().findSession(f.ownerHash, recovered.idHash)).toEqual(recovered);
+  });
+
+  it('leaves an invitation unconsumed when its bootstrap owner expired before atomic exchange', async () => {
+    if (!available) return;
+    const f = await pendingFixture();
+    await patchSlot(ONBOARDING_OWNER_MODEL, f.ownerHash, { createdAt: new Date(0).toISOString(), refreshedAt: new Date(0).toISOString(), expiresAt: new Date(1000).toISOString() });
+    await expect(store().exchangeClaim({ invitationId: f.invitation.id, generation: 1,
+      credentialSecret: f.claimInput.credentialSecret, correlationId: randomUUID(), ownerHash: f.ownerHash,
+      sessionHash: hash('session'), csrfTokenHash: hash('csrf') }, audit)).rejects.toMatchObject({ code: 'unavailable' });
+    const [generation] = await db().select().from(generations).where(eq(generations.invitationId, f.invitation.id));
+    expect(generation.credentialConsumedAt).toBeNull();
+    expect(await db().select().from(claims).where(eq(claims.invitationId, f.invitation.id))).toHaveLength(0);
   });
 
   it('rotates credentials and CSRF atomically while retaining the stable owner', async () => {
@@ -218,14 +269,16 @@ describe('PostgreSQL restricted onboarding owner/session persistence', () => {
 
   it('uses the database clock after owner lock waits before issuing', async () => {
     if (!available) return;
-    const f = await fixture();
+    const f = await pendingFixture();
     const owner = await store().findOwner(f.ownerHash);
     const [clock] = await db().execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`);
     await patchSlot(ONBOARDING_OWNER_MODEL, f.ownerHash, { refreshedAt: owner!.createdAt.toISOString(), expiresAt: new Date(new Date(clock.now).getTime() + 150).toISOString() });
     let outcome: Promise<boolean> | undefined;
     await withSystemContext(db(), async tx => {
       await tx.select().from(authKv).where(slot(ONBOARDING_OWNER_MODEL, f.ownerHash)).for('update');
-      const pending = store().replaceSession(f.input);
+      const pending = store().exchangeClaim({ invitationId: f.invitation.id, generation: 1,
+        credentialSecret: f.claimInput.credentialSecret, correlationId: randomUUID(), ownerHash: f.ownerHash,
+        sessionHash: hash('session'), csrfTokenHash: hash('csrf') }, audit);
       // Capture rejection immediately, release the held owner lock after expiry.
       outcome = pending.then(() => false, () => true);
       await tx.execute(sql`SELECT pg_sleep(0.25)`);
@@ -236,6 +289,9 @@ describe('PostgreSQL restricted onboarding owner/session persistence', () => {
     // Synchronize with the waiting issuance by trying the same owner lock again.
     await withSystemContext(db(), tx => tx.select().from(authKv).where(slot(ONBOARDING_OWNER_MODEL, f.ownerHash)).for('update'));
     expect(await db().select().from(authKv).where(slot(ONBOARDING_SESSION_MODEL, f.ownerHash))).toHaveLength(0);
+    expect(await db().select().from(claims).where(eq(claims.invitationId, f.invitation.id))).toHaveLength(0);
+    const [generation] = await db().select().from(generations).where(eq(generations.invitationId, f.invitation.id));
+    expect(generation.credentialConsumedAt).toBeNull();
   });
 
   it('bootstraps fresh CSRF after reload without changing ownership or extending either lifetime', async () => {

@@ -6,6 +6,10 @@ import type { DrizzleTx } from '../../database/db-utils.js';
 import { authKv } from '../../database/schema/auth.js';
 import { assertHash } from '../../web-console/stores/ConsoleStoreValidation.js';
 import { InvitationError } from '../InvitationTypes.js';
+import type { InvitationClaimRecord } from '../IInvitationStore.js';
+import type { InvitationManagementAudit } from '../IInvitationManagementStore.js';
+import { createInvitationClaimMutation } from '../PostgresInvitationClaimStore.js';
+import { copyAudit } from '../InvitationTransactionSupport.js';
 import {
   ONBOARDING_OWNER_MAX_AGE_SECONDS, ONBOARDING_SCOPE, ONBOARDING_SESSION_TTL_SECONDS,
   restrictedSessionExpiresAt, validateOnboardingOwnerRecord, validateOnboardingSessionRecord,
@@ -24,6 +28,12 @@ export interface OnboardingSessionReplacement {
   readonly generation: number;
   readonly claimAssertionId: string;
 }
+
+export type OnboardingClaimExchange = Omit<InvitationClaimRecord, 'claimOwnerHash'> & {
+  readonly ownerHash: Buffer;
+  readonly sessionHash: Buffer;
+  readonly csrfTokenHash: Buffer;
+};
 
 export class OnboardingStoreError extends Error {
   constructor(readonly code: 'unavailable' | 'conflict') {
@@ -63,43 +73,67 @@ export class PostgresOnboardingStore {
     });
   }
 
-  /** Called after claim success; cookies may be emitted only after this commits. */
+  /**
+   * Initial exchange and credential-based resume: claim consumption/audit, owner
+   * extension, and restricted session replacement all commit or roll back together.
+   * Owner cookie must already exist with its original absolute 168-hour horizon.
+   */
+  async exchangeClaim(input: OnboardingClaimExchange, audit: InvitationManagementAudit): Promise<OnboardingSessionRecord> {
+    const ownedAudit = copyAudit(audit);
+    const owned = { ...input, ownerHash: copyHash(input.ownerHash), sessionHash: copyHash(input.sessionHash),
+      csrfTokenHash: copyHash(input.csrfTokenHash), credentialSecret: Buffer.from(input.credentialSecret) };
+    try {
+      return await withSystemContext(this.db, async tx => {
+        const claim = await createInvitationClaimMutation(tx, ownedAudit).beginClaim({
+          invitationId: owned.invitationId, generation: owned.generation, credentialSecret: owned.credentialSecret,
+          claimOwnerHash: owned.ownerHash, correlationId: owned.correlationId,
+        });
+        return this.replaceSessionWithTx(tx, { ownerHash: owned.ownerHash, sessionHash: owned.sessionHash,
+          csrfTokenHash: owned.csrfTokenHash, invitationId: claim.invitationId,
+          generation: claim.generation, claimAssertionId: claim.id });
+      });
+    } finally { owned.credentialSecret.fill(0); }
+  }
+
+  /** Already-committed claim resume only; initial consumption uses exchangeClaim. */
   async replaceSession(input: OnboardingSessionReplacement): Promise<OnboardingSessionRecord> {
     const owned = { ...input, ownerHash: copyHash(input.ownerHash), sessionHash: copyHash(input.sessionHash),
       csrfTokenHash: copyHash(input.csrfTokenHash) };
-    return withSystemContext(this.db, async tx => {
-      // The authority acquires users -> invitation -> claim, before auth KV locks.
-      const candidate = await this.authority.lockActivationCandidateWithTx(tx, {
-        invitationId: owned.invitationId, generation: owned.generation,
-        claimAssertionId: owned.claimAssertionId, claimOwnerHash: owned.ownerHash,
-      });
-      const owner = await readOwner(tx, owned.ownerHash);
-      const previous = await readSession(tx, owned.ownerHash);
-      const now = await databaseTime(tx);
-      if (!activeOwner(owner, now)) throw new OnboardingStoreError('unavailable');
-      if (previous && previous.expiresAt > now && previous.revokedAt === null &&
-          (previous.invitationId !== owned.invitationId || previous.generation !== owned.generation ||
-           previous.claimAssertionId !== owned.claimAssertionId)) throw new OnboardingStoreError('conflict');
-      if (previous && (equal(previous.idHash, owned.sessionHash) || equal(previous.csrfTokenHash, owned.csrfTokenHash))) {
-        throw new OnboardingStoreError('conflict');
-      }
-      const expiresAt = new Date(Math.min(owner.createdAt.getTime() + ONBOARDING_OWNER_MAX_AGE_SECONDS * 1000,
-        Math.max(owner.expiresAt.getTime(), candidate.invitation.currentGeneration.expiresAt.getTime())));
-      const refreshedOwner = { ...owner, refreshedAt: now, expiresAt };
-      const record: OnboardingSessionRecord = { idHash: owned.sessionHash, ownerHash: owned.ownerHash,
-        csrfTokenHash: owned.csrfTokenHash, userId: candidate.invitation.userId,
-        invitationId: candidate.invitation.id, generation: candidate.invitation.currentGeneration.generation,
-        claimAssertionId: candidate.claim.id, emailVerifiedAt: candidate.claim.emailVerifiedAt,
-        scope: ONBOARDING_SCOPE, createdAt: now,
-        expiresAt: restrictedSessionExpiresAt(now, expiresAt, candidate.claim.expiresAt, candidate.invitation.currentGeneration.expiresAt),
-        revokedAt: null };
-      validateOnboardingOwnerRecord(refreshedOwner);
-      validateOnboardingSessionRecord(record);
-      await tx.update(authKv).set(rowData(refreshedOwner)).where(key(ONBOARDING_OWNER_MODEL, owned.ownerHash));
-      await tx.insert(authKv).values(row(ONBOARDING_SESSION_MODEL, owned.ownerHash, record))
-        .onConflictDoUpdate({ target: [authKv.model, authKv.id], set: rowData(record) });
-      return record;
+    return withSystemContext(this.db, tx => this.replaceSessionWithTx(tx, owned));
+  }
+
+  private async replaceSessionWithTx(tx: DrizzleTx, owned: OnboardingSessionReplacement): Promise<OnboardingSessionRecord> {
+    // The authority acquires users -> invitation -> claim, before auth KV locks.
+    const candidate = await this.authority.lockActivationCandidateWithTx(tx, {
+      invitationId: owned.invitationId, generation: owned.generation,
+      claimAssertionId: owned.claimAssertionId, claimOwnerHash: owned.ownerHash,
     });
+    const owner = await readOwner(tx, owned.ownerHash);
+    const previous = await readSession(tx, owned.ownerHash);
+    const now = await databaseTime(tx);
+    if (!activeOwner(owner, now)) throw new OnboardingStoreError('unavailable');
+    if (previous && previous.expiresAt > now && previous.revokedAt === null &&
+        (previous.invitationId !== owned.invitationId || previous.generation !== owned.generation ||
+         previous.claimAssertionId !== owned.claimAssertionId)) throw new OnboardingStoreError('conflict');
+    if (previous && (equal(previous.idHash, owned.sessionHash) || equal(previous.csrfTokenHash, owned.csrfTokenHash))) {
+      throw new OnboardingStoreError('conflict');
+    }
+    const expiresAt = new Date(Math.min(owner.createdAt.getTime() + ONBOARDING_OWNER_MAX_AGE_SECONDS * 1000,
+      Math.max(owner.expiresAt.getTime(), candidate.invitation.currentGeneration.expiresAt.getTime())));
+    const refreshedOwner = { ...owner, refreshedAt: now, expiresAt };
+    const record: OnboardingSessionRecord = { idHash: owned.sessionHash, ownerHash: owned.ownerHash,
+      csrfTokenHash: owned.csrfTokenHash, userId: candidate.invitation.userId,
+      invitationId: candidate.invitation.id, generation: candidate.invitation.currentGeneration.generation,
+      claimAssertionId: candidate.claim.id, emailVerifiedAt: candidate.claim.emailVerifiedAt,
+      scope: ONBOARDING_SCOPE, createdAt: now,
+      expiresAt: restrictedSessionExpiresAt(now, expiresAt, candidate.claim.expiresAt, candidate.invitation.currentGeneration.expiresAt),
+      revokedAt: null };
+    validateOnboardingOwnerRecord(refreshedOwner);
+    validateOnboardingSessionRecord(record);
+    await tx.update(authKv).set(rowData(refreshedOwner)).where(key(ONBOARDING_OWNER_MODEL, owned.ownerHash));
+    await tx.insert(authKv).values(row(ONBOARDING_SESSION_MODEL, owned.ownerHash, record))
+      .onConflictDoUpdate({ target: [authKv.model, authKv.id], set: rowData(record) });
+    return record;
   }
 
   /** Bootstrap after reload: opaque owner cookie + trusted-origin orchestration. */
