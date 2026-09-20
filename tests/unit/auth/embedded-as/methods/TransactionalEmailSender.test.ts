@@ -49,6 +49,17 @@ describe('transactional SMTP submission', () => {
     expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: { name: '', address: 'José@example.test' } }));
   });
 
+  it('checks the octet limit of the case-preserved mailbox actually sent', async () => {
+    const { sender, sendMail } = fixture();
+    // Capital sharp S occupies three UTF-8 bytes; its lowercase occupies two.
+    await expect(sender.sendTransactionalEmail({ ...message(), to: `${'ẞ'.repeat(32)}@example.test` }))
+      .rejects.toThrow('Invalid transactional email recipient');
+    expect(sendMail).not.toHaveBeenCalled();
+    const to = `${'ẞ'.repeat(21)}x@example.test`; // Exactly 64 bytes before @.
+    await sender.sendTransactionalEmail({ ...message(), to });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: { name: '', address: to } }));
+  });
+
   it.each([
     { subject: 'Subject\r\nBcc: someone@example.test' }, { subject: 'x'.repeat(201) },
     { subject: 'hidden\u202esubject' }, { subject: '' }, { text: '' }, { html: 'x'.repeat(65_537) },

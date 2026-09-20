@@ -167,6 +167,14 @@ function validateTransactionalMessage(message: TransactionalEmail): void {
   try { normalizeInvitationEmail(message.to); } catch {
     throw new Error('Invalid transactional email recipient');
   }
+  // Identity comparison lowercases email; SMTP preserves the local-part case.
+  // Unicode case folding can change byte lengths, so bound the actual address.
+  const recipient = message.to.normalize('NFC').trim();
+  const [localPart, domain] = recipient.split('@');
+  if (Buffer.byteLength(recipient, 'utf8') > 254 || Buffer.byteLength(localPart, 'utf8') > 64
+      || domain.split('.').some(label => Buffer.byteLength(label, 'utf8') > 63)) {
+    throw new Error('Invalid transactional email recipient');
+  }
   if (typeof message.subject !== 'string' || message.subject.trim() === ''
       || Buffer.byteLength(message.subject, 'utf8') > 200 || /[\p{Cc}\p{Cf}]/u.test(message.subject)) {
     throw new Error('Invalid transactional email subject');
