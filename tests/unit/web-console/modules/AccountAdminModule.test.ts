@@ -1011,6 +1011,12 @@ describe('AccountAdminModule', () => {
     const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
 
     await expect(invite.handler(consoleRequest({
+      body: { email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request', detail: 'Either display_name or username is required.' },
+    });
+    await expect(invite.handler(consoleRequest({
       body: { username: 'bob', email: 'not-an-email' },
     }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
     await expect(invite.handler(consoleRequest({
@@ -1027,8 +1033,14 @@ describe('AccountAdminModule', () => {
     });
 
     expect(issueCalls).toBe(0);
-    expect(adminAuditWriter.getEvents()).toHaveLength(4);
+    expect(adminAuditWriter.getEvents()).toHaveLength(5);
     expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_INVITE,
+        result: 'rejected',
+        errorCode: 'invalid_request',
+        argsRedacted: { operation: 'invite', invalid_body: true },
+      }),
       expect.objectContaining({
         operation: AUDIT_USERS_INVITE,
         result: 'rejected',

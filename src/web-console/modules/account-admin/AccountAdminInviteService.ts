@@ -170,6 +170,9 @@ function parseInviteBody(body: unknown): { readonly kind: 'valid'; readonly valu
 } } | { readonly kind: 'invalid'; readonly detail: string } {
   try {
     if (!isRecord(body)) throw new ConsoleStoreValidationError('request body is required.');
+    if (body.display_name === undefined && body.username === undefined) {
+      throw new ConsoleStoreValidationError('Either display_name or username is required.');
+    }
     const suppliedDisplayName = body.display_name === undefined
       ? undefined
       : normalizeLocalDisplayName(body.display_name);

@@ -98,6 +98,19 @@ describe('LocalAccountMethod', () => {
     expect(result.kind).toBe('authenticated');
   });
 
+  it('uses the canonical NFC username for login and rate limiting', async () => {
+    const url = method.issueInvite('local_caf\u00e9', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
+    const inviteToken = new URL(url).searchParams.get('invite')!;
+    await method.completeInteraction(CTX, {
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
+    });
+
+    const result = await method.completeInteraction(CTX, {
+      formBody: { action: 'login', username: 'CAFE\u0301', password: VALID_PASSWORD }, ip: CLIENT_PRIMARY,
+    });
+    expect(result.kind).toBe('authenticated');
+  });
+
   it('rejects wrong password and notes the failure for rate limiting', async () => {
     const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;

@@ -407,10 +407,10 @@ export class LocalAccountMethod implements IAuthMethod {
     form: Partial<Record<string, string>>,
     ip: string,
   ): Promise<InteractionResult> {
-    // Lowercase + trim so 'Alice' and 'alice' don't get independent rate-limit
-    // buckets — otherwise an attacker can bypass the per-account threshold by
-    // varying case.
-    const username = String(form.username ?? '').trim().toLowerCase();
+    // Match the canonical local-account spelling used at creation time. Keeping
+    // the rate-limit key and account lookup on the same NFC + lowercase value
+    // also prevents equivalent Unicode spellings from creating extra buckets.
+    const username = String(form.username ?? '').normalize('NFC').trim().toLowerCase().normalize('NFC');
     const password = String(form.password ?? '');
 
     if (!username || !password) {
