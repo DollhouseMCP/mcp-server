@@ -63,7 +63,7 @@ first attempt without rewriting earlier ambiguous evidence.
 ## Metadata and audit
 
 Provider identifiers are bounded stable configuration names. Optional provider
-message IDs accept a bounded opaque ID/SMTP Message-ID alphabet, excluding URLs,
+message IDs accept a bounded opaque identifier alphabet, excluding URLs,
 query strings, whitespace and multiline responses. Provider IDs must come from
 the trusted adapter's ID field, not arbitrary error text.
 
@@ -79,3 +79,7 @@ Sanitized audit metadata contains invitation/user/attempt IDs, generation,
 attempt number, state and correlation only. Audit failure rolls back the row
 change. Exact idempotent repeats create neither duplicate evidence nor duplicate
 audit events.
+
+A Nodemailer `info.messageId` is an RFC Message-ID, not a provider delivery ID.
+Adapters must leave `providerMessageId` null unless the provider supplies an actual
+provider identifier; do not parse an opaque SMTP response to manufacture one.

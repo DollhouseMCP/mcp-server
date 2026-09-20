@@ -29,7 +29,8 @@ export function sanitizeDeliveryResult(update: InvitationDeliveryResultUpdate): 
   const failureClass = update.failureClass ?? null;
   const providerMessageId = update.providerMessageId ?? null;
   if (!['submitted', 'failed', 'unknown'].includes(state)) invalid();
-  // Preserve opaque provider IDs (including SMTP Message-ID), never URLs,
+  // Nodemailer RFC Message-ID is not a provider ID; adapters must leave this null
+  // unless an actual provider ID is available. Preserve opaque IDs, never URLs,
   // multiline provider responses, or arbitrary unbounded diagnostics.
   if (providerMessageId !== null && (typeof providerMessageId !== 'string' ||
     !/^[A-Za-z0-9<][A-Za-z0-9_.:@<>-]{0,254}$/.test(providerMessageId))) invalid();

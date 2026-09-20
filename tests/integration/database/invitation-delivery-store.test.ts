@@ -10,7 +10,7 @@ import { users } from '../../../src/database/schema/users.js';
 import { getErrorCode } from '../../../src/database/db-utils.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
 import { appendConsoleAdminAuditEventWithTx } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
-import { closeTestDb, getTestAdminDb } from './test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const inviterId = randomUUID();
 const key = randomBytes(32);
@@ -44,11 +44,18 @@ async function issue() {
     credentialSecret: randomBytes(32), ttlHours: 24, correlationId: randomUUID(),
   }));
 }
-beforeAll(async () => { await db().insert(users).values({ id: inviterId, username: `delivery-admin-${inviterId}` }); });
+let dbAvailable = false;
+beforeAll(async () => {
+  dbAvailable = await isDatabaseAvailable();
+  if (!dbAvailable && process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1') throw new Error('Required test database is unavailable');
+  if (!dbAvailable) return;
+  await db().insert(users).values({ id: inviterId, username: `delivery-admin-${inviterId}` });
+});
 afterAll(closeTestDb);
 
 describe('transactional invitation delivery state', () => {
   it('reserves explicitly submitting with timestamps and separate durable audit', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const attempt = await reserve(invitation.id, randomUUID(), 1, adminAudit);
     expect(attempt).toMatchObject({ generation: 1, attemptNumber: 1, state: 'submitting', completedAt: null, submissionAuthorized: true });
@@ -61,6 +68,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('allows only one submission authorization for concurrent same-correlation reservations', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const correlation = randomUUID();
     const result = await Promise.all([reserve(invitation.id, correlation), reserve(invitation.id, correlation)]);
@@ -70,9 +78,10 @@ describe('transactional invitation delivery state', () => {
   });
 
   it.each([
-    { state: 'submitted', providerMessageId: '<message@example.test>' },
+    { state: 'submitted', providerMessageId: 'provider-message-123' },
     { state: 'unknown', failureClass: 'timeout' },
   ] as const)('makes $state result idempotent without authorizing a retry', async result => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const first = await reserve(invitation.id);
     const recorded = await recordResult(first.id, result);
@@ -90,6 +99,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('allocates one next attempt after confirmed failure even with concurrent explicit retries', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const first = await reserve(invitation.id);
     await recordResult(first.id, { state: 'failed', failureClass: 'recipient_rejected', sanitizedDetail: { smtpStatus: 550 } });
@@ -102,6 +112,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('serializes competing provider outcomes without overwriting the winning result', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const attempt = await reserve(invitation.id);
     const result = await Promise.allSettled([
@@ -113,6 +124,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('binds reservations to current generations and records late results only on their original attempt', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const first = await reserve(invitation.id);
     const replacement = await regenerate(invitation.id);
@@ -127,6 +139,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('denies expired generations and unavailable accounts without inserting attempts', async () => {
+    if (!dbAvailable) return;
     const expired = await issue();
     await db().update(accountInvitationGenerations).set({ issuedAt: new Date(0), expiresAt: new Date(1000) }).where(eq(accountInvitationGenerations.invitationId, expired.id));
     await expect(reserve(expired.id)).rejects.toMatchObject({ code: 'invitation_expired' });
@@ -141,6 +154,7 @@ describe('transactional invitation delivery state', () => {
     { activationState: 'active' as const },
     { deletedAt: new Date() },
   ])('denies accounts that are no longer available for pending onboarding', async patch => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     await db().update(users).set(patch).where(eq(users.id, invitation.userId));
     await expect(reserve(invitation.id)).rejects.toBeInstanceOf(Error);
@@ -148,6 +162,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('retains late outcome evidence after revocation without reopening the invitation', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const attempt = await reserve(invitation.id);
     const revoked = await management().runMutation(audit, mutation => mutation.revoke(invitation.id, randomUUID()));
@@ -157,17 +172,19 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('cannot repopulate provider metadata after the account is deleted', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const attempt = await reserve(invitation.id);
     await db().update(users).set({ deletedAt: new Date(), disabledAt: new Date() }).where(eq(users.id, invitation.userId));
     await expect(recordResult(attempt.id, {
-      state: 'submitted', providerMessageId: '<recipient-correlated@example.test>', sanitizedDetail: { smtpStatus: 250 },
+      state: 'submitted', providerMessageId: 'provider-message-deleted-account', sanitizedDetail: { smtpStatus: 250 },
     })).rejects.toMatchObject({ code: 'invitation_invalid' });
     const [retained] = await deliveries().list(invitation.id);
     expect(retained).toMatchObject({ providerMessageId: null, sanitizedDetail: null, state: 'submitting' });
   });
 
   it('rolls back reservation and result mutations when transaction-scoped audit fails', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const failing: InvitationManagementAudit = { ...adminAudit, appendAdminEvent: async () => { throw new Error('audit unavailable'); } };
     await expect(reserve(invitation.id, randomUUID(), 1, failing)).rejects.toThrow('audit unavailable');
@@ -179,6 +196,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it.each([null, 'delivered', 'bogus'])('schema rejects omitted/invalid attempt state %s', async state => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     let error: unknown;
     try {
@@ -189,6 +207,7 @@ describe('transactional invitation delivery state', () => {
   });
 
   it('leaves pending invitation and account untouched after unsafe result metadata is rejected', async () => {
+    if (!dbAvailable) return;
     const invitation = await issue();
     const attempt = await reserve(invitation.id);
     await expect(recordResult(attempt.id, { state: 'failed', failureClass: 'not_sent', sanitizedDetail: { error: 'password=secret' } })).rejects.toMatchObject({ code: 'invitation_invalid' });
