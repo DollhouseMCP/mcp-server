@@ -24,6 +24,19 @@ export { userOauthTokens } from './userOauthTokens.js';
 export { rateLimitState } from './rateLimitState.js';
 export { securityAuditEvents } from './securityAuditEvents.js';
 export { auditHmacKeys } from './auditHmacKeys.js';
+export {
+  accountInvitations,
+  accountInvitationGenerations,
+  accountInvitationIntendedRoles,
+  accountInvitationClaimAssertions,
+  accountInvitationDeliveryAttempts,
+} from './invitations.js';
+export type {
+  InvitationState,
+  InvitationGenerationState,
+  InvitationClaimState,
+  InvitationDeliveryState,
+} from './invitations.js';
 // Sign-in allowlist:
 export { authAllowlist } from './authAllowlist.js';
 export type { AuthAllowlistKind, AuthAllowlistEntry } from './authAllowlist.js';

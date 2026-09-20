@@ -379,6 +379,13 @@
       "when": 1788069000000,
       "tag": "0053_integration_cleanup_descriptor_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1789948800000,
+      "tag": "0054_invitation_lifecycle",
+      "breakpoints": true
     }
   ]
 }

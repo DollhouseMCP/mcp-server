@@ -16,6 +16,7 @@ For a high-level overview, see the [Architecture Overview](overview.md).
 - [Unified Search Pipeline](unified-search-pipeline.md) - Aggregated search across local, GitHub, and collection sources
 - [Collection Index Cache](collection-index-cache.md) - Community collection snapshotting and fallback strategy
 - [Portfolio Sync Architecture](portfolio-sync-architecture.md) - Local ↔ GitHub synchronization flows
+- [Invitation Lifecycle Foundation](invitation-lifecycle.md) - Durable invitation, claim-owner, activation, and delivery boundaries
 
 ### Specialized Topics
 - [Version Storage](version-storage-approach.md) - How we handle element versions
