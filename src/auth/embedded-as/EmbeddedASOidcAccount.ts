@@ -11,6 +11,9 @@ export class EmbeddedASOidcAccount {
   async extraTokenClaims(_ctx: unknown, token: unknown): Promise<Record<string, unknown> | undefined> {
     const accountId = (token as { accountId?: string }).accountId;
     if (!accountId) return undefined;
+    if (!await this.storage.isAccountAllowed(accountId)) {
+      throw new Error('Account is not available for authentication');
+    }
     const account = await this.storage.getAccount(accountId);
     if (!account) return undefined;
     if (account.sub !== accountId) return undefined;
@@ -52,6 +55,7 @@ export class EmbeddedASOidcAccount {
       email_verified: boolean | undefined;
     }>;
   } | undefined> {
+    if (!await this.storage.isAccountAllowed(sub)) return undefined;
     for (const method of this.methods) {
       const identity = await method.findAccount(sub);
       if (!identity) continue;

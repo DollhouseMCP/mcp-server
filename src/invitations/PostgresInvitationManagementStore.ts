@@ -2,7 +2,7 @@ import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdenti
 import { and, eq, getTableColumns, sql } from 'drizzle-orm';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
-import { isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import {
   accountInvitations as invitations,
   accountInvitationGenerations as generations,
@@ -38,7 +38,7 @@ export class PostgresInvitationManagementStore implements IInvitationManagementS
       return await withSystemContext(this.db, tx => operation(createInvitationManagementMutation(tx, ownedAudit)));
     } catch (error) {
       if (isUniqueViolation(error)) throw new InvitationError('invitation_conflict', 'Invitation account or credential already exists');
-      if (isSerializationFailure(error)) throw new InvitationError('concurrent_update', 'Invitation transaction conflicted');
+      if (isSerializationFailure(error) || getErrorCode(error) === '55P03') throw new InvitationError('concurrent_update', 'Invitation transaction conflicted');
       throw error;
     }
   }
@@ -68,6 +68,7 @@ async function issue(tx: DrizzleTx, audit: InvitationManagementAudit, input: Inv
   try {
     validateIssue(owned);
     await lockAccounts(tx);
+    await lockAdminAudit(tx, audit);
     // Use the same NFC/trim/case rules as issuance, including older stored email
     // encodings. SQL lower/btrim alone diverges for Unicode case and whitespace.
     const accounts = await tx.select({ id: users.id, email: users.email, username: users.username }).from(users);
@@ -114,6 +115,7 @@ async function regenerate(tx: DrizzleTx, audit: InvitationManagementAudit, input
     assertUuid(owned.correlationId);
     validateCredential(owned.credentialSecret, owned.ttlHours);
     const view = await lockInvitation(tx, owned.invitationId);
+    await lockAdminAudit(tx, audit);
     assertMutable(view);
     if (view.currentGeneration.generation >= MAX_INVITATION_GENERATION) {
       throw new InvitationError('invitation_invalid', 'Invitation generation limit reached');
@@ -140,8 +142,9 @@ async function regenerate(tx: DrizzleTx, audit: InvitationManagementAudit, input
 async function revoke(tx: DrizzleTx, audit: InvitationManagementAudit, invitationId: string, correlationId: string): Promise<InvitationView> {
   assertUuid(invitationId);
   assertUuid(correlationId);
-  const view = await lockInvitation(tx, invitationId);
+  const view = await lockInvitation(tx, invitationId, true);
   if (view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
+  await lockAdminAudit(tx, audit);
   assertMutable(view);
   const now = await databaseTime(tx);
   await tx.update(generations).set({
@@ -157,6 +160,15 @@ async function revoke(tx: DrizzleTx, audit: InvitationManagementAudit, invitatio
   return result;
 }
 
+async function lockAdminAudit(tx: DrizzleTx, audit: InvitationManagementAudit): Promise<void> {
+  if (audit.kind !== 'admin') return;
+  // Ordinary audit writers own the chain head before checking users FKs. Never
+  // wait on them while holding users EXCLUSIVE. A table preflight also covers
+  // the initial INSERT/unique check when the chain head does not exist yet.
+  // NOWAIT failure aborts the DB transaction, including every previously held lock.
+  await tx.execute(sql`LOCK TABLE admin_audit_chain_heads IN EXCLUSIVE MODE NOWAIT`);
+}
+
 async function lockAccounts(tx: DrizzleTx): Promise<void> {
   // Existing account writers do not share an invitation advisory-lock namespace,
   // and users.email has no canonical unique constraint. This short, coarse lock
@@ -167,12 +179,14 @@ async function lockAccounts(tx: DrizzleTx): Promise<void> {
   await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
 }
 
-async function lockInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView> {
+async function lockInvitation(tx: DrizzleTx, invitationId: string, allowRevoked = false): Promise<InvitationView> {
   await lockAccounts(tx);
   const [row] = await tx.select({ id: invitations.id }).from(invitations)
     .where(eq(invitations.id, invitationId)).for('update');
   if (!row) throw new InvitationError('invitation_not_found', 'Invitation not found');
   const view = await requireInvitation(tx, invitationId);
+  // Revoke retries acknowledge terminal state without changing an unavailable account.
+  if (allowRevoked && view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
   const [user] = await tx.select().from(users).where(eq(users.id, view.userId)).for('update');
   if (!user || user.activationState !== 'pending_activation') {
     throw new InvitationError('account_not_pending', 'Invitation account is not pending');
