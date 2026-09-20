@@ -8,7 +8,7 @@
  * @since v2.2.0 — Phase 4, Step 4.1
  */
 
-import { pgTable, uuid, varchar, timestamp, jsonb, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, jsonb, bigint, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
@@ -17,6 +17,7 @@ export const users = pgTable('users', {
   username: varchar('username', { length: 255 }).notNull(),
   email: varchar('email', { length: 255 }),
   displayName: varchar('display_name', { length: 255 }),
+  activationState: text('activation_state').$type<'active' | 'pending_activation'>().notNull().default('active'),
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
   // Tombstone marker. Set when an account is deleted but its row must survive to
   // anchor the tamper-evident audit chain (the row is scrubbed of PII). NULL is
@@ -27,6 +28,7 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [
+  check('users_activation_state_check', sql`${table.activationState} IN ('active', 'pending_activation')`),
   uniqueIndex('idx_users_username').on(table.username),
   uniqueIndex('idx_users_account_correlation_id').on(table.accountCorrelationId),
   // Keyset pagination for the cross-tenant users directory (Family B): `(created_at, id)`
