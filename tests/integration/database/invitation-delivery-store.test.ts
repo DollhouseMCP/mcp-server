@@ -8,9 +8,11 @@ import type { InvitationDeliveryResultUpdate } from '../../../src/invitations/In
 import { accountInvitations, accountInvitationGenerations, accountInvitationDeliveryAttempts } from '../../../src/database/schema/invitations.js';
 import { users } from '../../../src/database/schema/users.js';
 import { getErrorCode } from '../../../src/database/db-utils.js';
+import { withSystemContext } from '../../../src/database/admin.js';
+import { deleteConsolePrincipalWithTx } from '../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
 import { appendConsoleAdminAuditEventWithTx } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
-import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const inviterId = randomUUID();
 const key = randomBytes(32);
@@ -44,6 +46,19 @@ async function issue() {
     credentialSecret: randomBytes(32), ttlHours: 24, correlationId: randomUUID(),
   }));
 }
+async function waitForBlockedUsers(mode: 'RowShareLock' | 'ExclusiveLock'): Promise<void> {
+  // Observe through the independent app pool: both admin connections are in
+  // the actual competing production transactions, one owning and one waiting.
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const rows = await getTestDb().execute(sql`SELECT EXISTS(
+      SELECT 1 FROM pg_locks WHERE relation = 'users'::regclass AND mode = ${mode} AND NOT granted
+    ) AS waiting`);
+    if (rows[0].waiting) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`Expected competing production writer to wait for users ${mode}`);
+}
+
 let dbAvailable = false;
 beforeAll(async () => {
   dbAvailable = await isDatabaseAvailable();
@@ -181,6 +196,48 @@ describe('transactional invitation delivery state', () => {
     })).rejects.toMatchObject({ code: 'invitation_invalid' });
     const [retained] = await deliveries().list(invitation.id);
     expect(retained).toMatchObject({ providerMessageId: null, sanitizedDetail: null, state: 'submitting' });
+  });
+
+  it.each(['result', 'deletion'] as const)('cannot rehydrate metadata when the real %s transaction commits first', async first => {
+    if (!dbAvailable) return;
+    const invitation = await issue();
+    const attempt = await reserve(invitation.id);
+    const update: InvitationDeliveryResultUpdate = { state: 'submitted', providerMessageId: 'provider-in-flight-123',
+      sanitizedDetail: { smtpStatus: 250, providerAccepted: true } };
+    const deletion = { userId: invitation.userId, deletedByUserId: inviterId, deletedAt: new Date() };
+    let competing: Promise<{ value?: unknown; error?: unknown }> | undefined;
+    if (first === 'result') {
+      await deliveries().runMutation(audit, async mutation => {
+        expect(await mutation.recordDeliveryResult(attempt.id, update)).toMatchObject(update);
+        competing = withSystemContext(db(), tx => deleteConsolePrincipalWithTx(tx, deletion))
+          .then(value => ({ value }), error => ({ error }));
+        await waitForBlockedUsers('RowShareLock');
+      });
+      expect(await competing).toMatchObject({ value: { outcome: 'anonymized' } });
+    } else {
+      await withSystemContext(db(), async tx => {
+        expect(await deleteConsolePrincipalWithTx(tx, deletion)).toMatchObject({ outcome: 'anonymized' });
+        competing = recordResult(attempt.id, update).then(value => ({ value }), error => ({ error }));
+        await waitForBlockedUsers('ExclusiveLock');
+      });
+      expect(await competing).toMatchObject({ error: { code: 'invitation_invalid' } });
+    }
+    const [retained] = await deliveries().list(invitation.id);
+    expect(retained).toMatchObject({ id: attempt.id, providerMessageId: null, failureClass: null, sanitizedDetail: null,
+      state: first === 'result' ? 'submitted' : 'submitting', version: first === 'result' ? 3 : 2 });
+    expect(await management().inspect(invitation.id)).toMatchObject({ state: 'revoked',
+      emailOriginal: `deleted-${invitation.id}@deleted.invalid`, emailNormalized: `deleted-${invitation.id}@deleted.invalid`,
+      intendedUsername: `deleted-${invitation.id}`, intendedDisplayName: null });
+    const [user] = await db().select().from(users).where(eq(users.id, invitation.userId));
+    expect(user).toMatchObject({ username: `deleted-${invitation.userId}`, email: null, displayName: null });
+    expect(user.deletedAt).not.toBeNull();
+    expect(user.disabledAt).not.toBeNull();
+    // Even replaying the formerly successful result must not repopulate scrubbed
+    // fields or append a new result audit after the account has been deleted.
+    const eventsBefore = await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${invitation.id} ORDER BY id`);
+    await expect(recordResult(attempt.id, update)).rejects.toMatchObject({ code: 'invitation_invalid' });
+    expect((await deliveries().list(invitation.id))[0]).toEqual(retained);
+    expect(await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${invitation.id} ORDER BY id`)).toEqual(eventsBefore);
   });
 
   it('rolls back reservation and result mutations when transaction-scoped audit fails', async () => {
