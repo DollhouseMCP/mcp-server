@@ -9,7 +9,7 @@ import { PostgresInvitationManagementStore } from '../../../src/invitations/Post
 import { PostgresInvitationClaimStore } from '../../../src/invitations/PostgresInvitationClaimStore.js';
 import { hashInvitationCredential } from '../../../src/invitations/InvitationToken.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
-import { closeTestDb, getTestAdminDb } from './test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const inviterId = randomUUID();
 const audit: InvitationManagementAudit = { kind: 'system', appendSecurityEvent: appendSecurityAuditEventWithTx };
@@ -37,11 +37,19 @@ const revoke = (fixture: Fixture) => management().runMutation(audit, mutation =>
 const candidateInput = (fixture: Fixture, claimAssertionId: string) => ({ invitationId: fixture.invitation.id, generation: 1, claimAssertionId, claimOwnerHash: fixture.ownerHash });
 const generationRow = async (fixture: Fixture) => (await getTestAdminDb().select().from(generations).where(and(eq(generations.invitationId, fixture.invitation.id), eq(generations.generation, 1))))[0];
 
-beforeAll(async () => { await getTestAdminDb().insert(users).values({ id: inviterId, username: `claim-admin-${inviterId}` }); });
+let databaseAvailable = false;
+beforeAll(async () => {
+  databaseAvailable = await isDatabaseAvailable();
+  if (!databaseAvailable && process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1') {
+    throw new Error('PostgreSQL is required for invitation integration tests');
+  }
+  if (!databaseAvailable) return;
+  await getTestAdminDb().insert(users).values({ id: inviterId, username: `claim-admin-${inviterId}` }); });
 afterAll(closeTestDb);
 
 describe('durable invitation claims', () => {
   it('consumes a credential for one owner without activation, identity, role or session grants', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const claimed = await claim(fixture);
     expect(claimed).not.toHaveProperty('claimOwnerHash');
@@ -67,6 +75,7 @@ describe('durable invitation claims', () => {
   });
 
   it('resumes the same durable claim across replicas and rejects a different owner', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const first = await claim(fixture);
     const resumed = await claim(fixture);
@@ -81,6 +90,7 @@ describe('durable invitation claims', () => {
   });
 
   it('allows only one browser in a concurrent first-claim race', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const results = await Promise.allSettled([claim(fixture), claim({ ...fixture, ownerHash: randomBytes(32) })]);
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
@@ -88,6 +98,7 @@ describe('durable invitation claims', () => {
   });
 
   it('serializes simultaneous same-owner claims as creation and resume', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const results = await Promise.all([claim(fixture), claim(fixture)]);
     expect(new Set(results.map(result => result.id)).size).toBe(1);
@@ -95,6 +106,7 @@ describe('durable invitation claims', () => {
   });
 
   it('rejects wrong credentials before binding an owner', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     await expect(store().runMutation(audit, mutation => mutation.beginClaim({ ...claimInput(fixture), credentialSecret: randomBytes(32) }))).rejects.toMatchObject({ code: 'invitation_invalid' });
     expect((await generationRow(fixture)).credentialConsumedAt).toBeNull();
@@ -102,6 +114,7 @@ describe('durable invitation claims', () => {
   });
 
   it.each(['claimOwnerHash', 'credentialSecret'] as const)('copies mutable %s before waiting', async field => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const input = claimInput(fixture);
     const savedOwner = Buffer.from(input.claimOwnerHash);
@@ -115,6 +128,7 @@ describe('durable invitation claims', () => {
   });
 
   it('rolls back consumed credential, claim and audit when the audit writer fails', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const failing: InvitationManagementAudit = { kind: 'system', appendSecurityEvent: async (tx, event) => {
       await appendSecurityAuditEventWithTx(tx, event);
@@ -128,6 +142,7 @@ describe('durable invitation claims', () => {
   });
 
   it.each(['regenerate', 'revoke'] as const)('a concurrent %s cannot leave a usable old claim', async operation => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     await Promise.allSettled([claim(fixture), operation === 'regenerate' ? regenerate(fixture) : revoke(fixture)]);
     await expect(claim(fixture)).rejects.toMatchObject({ code: operation === 'regenerate' ? 'invitation_superseded' : 'invitation_revoked' });
@@ -136,6 +151,7 @@ describe('durable invitation claims', () => {
   });
 
   it('uses database time to reject expired credentials and an expired same-owner claim', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const first = await claim(fixture);
     await getTestAdminDb().update(claims).set({ createdAt: new Date(0), expiresAt: new Date(3_600_000) }).where(eq(claims.id, first.id));
@@ -151,6 +167,7 @@ describe('durable invitation claims', () => {
   });
 
   it('checks server expiry after waiting for an account lock', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     let pending: Promise<unknown> | undefined;
     await getTestAdminDb().transaction(async tx => {
@@ -170,6 +187,7 @@ describe('durable invitation claims', () => {
   });
 
   it.each(['disabledAt', 'deletedAt', 'activationState', 'email', 'username'] as const)('rejects changed account %s', async field => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const changes = { disabledAt: new Date(), deletedAt: new Date(), activationState: 'active' as const, email: 'changed@example.com', username: `changed-${randomUUID()}` };
     await getTestAdminDb().update(users).set({ [field]: changes[field] }).where(eq(users.id, fixture.invitation.userId));
@@ -178,6 +196,7 @@ describe('durable invitation claims', () => {
   });
 
   it('fails closed for inconsistent consumption/claim records and accepted invitations', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     await getTestAdminDb().update(generations).set({ credentialConsumedAt: new Date() }).where(eq(generations.invitationId, fixture.invitation.id));
     await expect(claim(fixture)).rejects.toMatchObject({ code: 'invitation_invalid' });
@@ -189,6 +208,7 @@ describe('durable invitation claims', () => {
 
 describe('transaction-owned activation candidate', () => {
   it('locks the matching pending candidate without activating and allows the caller to roll back later writes', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const claimed = await claim(fixture);
     await expect(withSystemContext(getTestAdminDb(), async tx => {
@@ -205,6 +225,7 @@ describe('transaction-owned activation candidate', () => {
   });
 
   it('rejects another owner or another invitation claim and snapshots the owner buffer', async () => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const claimed = await claim(fixture);
     const other = await issue();
@@ -220,6 +241,7 @@ describe('transaction-owned activation candidate', () => {
   });
 
   it.each(['regenerate', 'revoke', 'expire', 'complete'] as const)('rejects a candidate after %s', async operation => {
+    if (!databaseAvailable) return;
     const fixture = await issue();
     const claimed = await claim(fixture);
     if (operation === 'regenerate') await regenerate(fixture);
