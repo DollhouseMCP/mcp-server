@@ -94,6 +94,12 @@ export interface InvitationDeliveryAttemptView {
   readonly version: number;
 }
 
+/** Transient authorization for the winning reservation call, never persist/replay it. */
+export interface InvitationDeliveryReservation extends InvitationDeliveryAttemptView {
+  /** Only the transaction that creates this reservation may submit after commit. */
+  readonly submissionAuthorized: boolean;
+}
+
 export interface IssueInvitationInput {
   readonly username: string;
   readonly displayName: string | null;
@@ -145,7 +151,7 @@ export interface IInvitationLifecycleService {
   regenerate(input: RegenerateInvitationInput): Promise<IssuedInvitation>;
   revoke(input: RevokeInvitationInput): Promise<InvitationView>;
   beginClaim(input: BeginInvitationClaimInput): Promise<ClaimAssertionView>;
-  reserveDeliveryAttempt(input: ReserveInvitationDeliveryInput): Promise<InvitationDeliveryAttemptView>;
+  reserveDeliveryAttempt(input: ReserveInvitationDeliveryInput): Promise<InvitationDeliveryReservation>;
   recordDeliveryResult(input: RecordInvitationDeliveryResultInput): Promise<InvitationDeliveryAttemptView>;
   expireStale(limit: number): Promise<number>;
   cleanupTerminal(before: Date, limit: number): Promise<number>;

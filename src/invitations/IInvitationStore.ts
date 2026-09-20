@@ -4,6 +4,7 @@ import type { ConsoleAdminAuditEvent } from '../web-console/audit/IAdminAuditWri
 import type {
   ClaimAssertionView,
   InvitationDeliveryAttemptView,
+  InvitationDeliveryReservation,
   InvitationDeliveryResultUpdate,
   InvitationView,
 } from './InvitationTypes.js';
@@ -71,7 +72,7 @@ export interface InvitationStoreMutation {
     generation: number,
     provider: string | null,
     correlationId: string,
-  ): Promise<InvitationDeliveryAttemptView>;
+  ): Promise<InvitationDeliveryReservation>;
   recordDeliveryResult(
     attemptId: string,
     update: InvitationDeliveryResultUpdate,
