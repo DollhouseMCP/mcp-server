@@ -25,6 +25,8 @@ describe('InvitationConfig', () => {
 
   it('enables terminal cleanup only when retention is explicitly valid', () => {
     expect(readInvitationConfig({ DOLLHOUSE_INVITE_RETENTION_DAYS: '90' }).terminalRetentionDays).toBe(90);
+    expect(() => readInvitationConfig({ DOLLHOUSE_INVITE_RETENTION_DAYS: '' }))
+      .toThrow(InvitationConfigError);
     expect(() => readInvitationConfig({ DOLLHOUSE_INVITE_RETENTION_DAYS: '0' }))
       .toThrow(InvitationConfigError);
     expect(() => readInvitationConfig({ DOLLHOUSE_INVITE_RETENTION_DAYS: '3651' }))

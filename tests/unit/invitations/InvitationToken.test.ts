@@ -63,8 +63,17 @@ describe('InvitationToken', () => {
     'dhi1.bad.1.bad',
     'dhi1.Ej5FZ-ibEtOkVkJmFBdAAA.0.q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s',
     'dhi1.Ej5FZ-ibEtOkVkJmFBdAAA.1.q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s.extra',
+    'dhi1.Ej5FZ-ibEtOkVkJmFBdAAA.01.q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s',
     'x'.repeat(161),
   ])('rejects malformed credential %s', value => {
+    expect(() => parseInvitationToken(value)).toThrow(InvitationTokenError);
+  });
+
+  it.each([
+    'dhi1.Ej5FZ-ibEtOkVkJmFBdAAB.1.q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s',
+    'dhi1.Ej5FZ-ibEtOkVkJmFBdAAA.1.q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6t',
+    'dhi1.Ej5FZ-ibEtOkVkJmFBdAAA=.1.q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s',
+  ])('rejects non-canonical base64url credential %s', value => {
     expect(() => parseInvitationToken(value)).toThrow(InvitationTokenError);
   });
 
@@ -72,6 +81,9 @@ describe('InvitationToken', () => {
     expect(() => generateInvitationToken(INVITATION_ID, 0)).toThrow(InvitationTokenError);
     expect(generateInvitationToken(INVITATION_ID, MAX_INVITATION_GENERATION, () => Buffer.alloc(32, 1)).generation)
       .toBe(MAX_INVITATION_GENERATION);
+    expect(parseInvitationToken(
+      generateInvitationToken(INVITATION_ID, MAX_INVITATION_GENERATION, () => Buffer.alloc(32, 1)).token,
+    ).generation).toBe(MAX_INVITATION_GENERATION);
     expect(() => generateInvitationToken(INVITATION_ID, MAX_INVITATION_GENERATION + 1))
       .toThrow(InvitationTokenError);
     const tooLarge = generateInvitationToken(INVITATION_ID, 1, () => Buffer.alloc(32, 1)).token
