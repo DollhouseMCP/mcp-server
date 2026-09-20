@@ -1,5 +1,10 @@
 import type { IAuthStorageLayer } from '../../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
+import {
+  deriveLocalUsername,
+  normalizeLocalDisplayName,
+  normalizeLocalUsername,
+} from '../../ui/account-username.js';
 import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
@@ -14,6 +19,7 @@ import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 
 export interface ConsoleAccountInviteIssueInput {
   readonly username: string;
+  readonly displayName: string;
   readonly email: string;
   readonly ttlMinutes: number;
   readonly roles: readonly ConsoleAdminRole[];
@@ -157,16 +163,20 @@ export class AccountAdminInviteService {
 
 function parseInviteBody(body: unknown): { readonly kind: 'valid'; readonly value: {
   readonly username: string;
+  readonly displayName: string;
   readonly email: string;
   readonly ttlMinutes: number;
   readonly roles: readonly ConsoleAdminRole[];
 } } | { readonly kind: 'invalid'; readonly detail: string } {
   try {
     if (!isRecord(body)) throw new ConsoleStoreValidationError('request body is required.');
-    const username = stringField(body, 'username');
-    if (!/^\w[A-Za-z0-9_-]{0,63}$/.test(username)) {
-      throw new ConsoleStoreValidationError('username must match /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/');
-    }
+    const suppliedDisplayName = body.display_name === undefined
+      ? undefined
+      : normalizeLocalDisplayName(body.display_name);
+    const username = body.username === undefined
+      ? deriveLocalUsername(suppliedDisplayName)
+      : normalizeLocalUsername(body.username);
+    const displayName = suppliedDisplayName ?? username;
     const email = stringField(body, 'email');
     if (!isLiteEmailAddress(email)) throw new ConsoleStoreValidationError('email must be a valid email address');
     const ttlMinutes = body.ttl_minutes === undefined ? 15 : integerField(body, 'ttl_minutes');
@@ -176,6 +186,7 @@ function parseInviteBody(body: unknown): { readonly kind: 'valid'; readonly valu
       kind: 'valid',
       value: {
         username,
+        displayName,
         email,
         ttlMinutes,
         roles,

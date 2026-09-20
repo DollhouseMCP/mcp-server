@@ -46,6 +46,7 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
 
     const result = await issuer.issueInvite({
       username: 'Alice',
+      displayName: 'Alice Example',
       email: EMAIL,
       ttlMinutes: 15,
       roles: [],
@@ -74,7 +75,7 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
       expect.objectContaining({
         username: 'alice',
         email: EMAIL,
-        displayName: EMAIL,
+        displayName: 'Alice Example',
       }),
       expect.objectContaining({
         provider: 'local',
@@ -82,6 +83,7 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
         sub: 'local_alice',
         userId: USER_ID,
         email: EMAIL,
+        displayName: 'Alice Example',
         passwordHash: null,
       }),
     ]);

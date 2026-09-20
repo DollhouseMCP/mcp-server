@@ -17,6 +17,7 @@ For a high-level overview, see the [Architecture Overview](overview.md).
 - [Collection Index Cache](collection-index-cache.md) - Community collection snapshotting and fallback strategy
 - [Portfolio Sync Architecture](portfolio-sync-architecture.md) - Local ↔ GitHub synchronization flows
 - [Invitation Lifecycle Foundation](invitation-lifecycle.md) - Durable invitation, claim-owner, activation, and delivery boundaries
+- [Local Account Identifiers](local-account-identifiers.md) - Shared display-name and canonical-username contract for account invites
 
 ### Specialized Topics
 - [Version Storage](version-storage-approach.md) - How we handle element versions
