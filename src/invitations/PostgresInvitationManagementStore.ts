@@ -160,9 +160,11 @@ async function revoke(tx: DrizzleTx, audit: InvitationManagementAudit, invitatio
 async function lockAccounts(tx: DrizzleTx): Promise<void> {
   // Existing account writers do not share an invitation advisory-lock namespace,
   // and users.email has no canonical unique constraint. This short, coarse lock
-  // closes insert/update phantom races with those writers. Narrow only once all
+  // closes insert/update phantom races with those writers. EXCLUSIVE also conflicts
+  // with SELECT FOR UPDATE's ROW SHARE, avoiding a row-lock/table-upgrade deadlock.
+  // Narrow only once all
   // account writers share a canonical uniqueness/locking protocol.
-  await tx.execute(sql`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`);
+  await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
 }
 
 async function lockInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView> {
