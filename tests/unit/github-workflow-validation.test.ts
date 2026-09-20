@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it, beforeAll } from '@jest/globals';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
@@ -26,6 +27,7 @@ interface WorkflowJob {
   steps: WorkflowStep[];
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
+  needs?: string | string[];
 }
 
 interface Workflow {
@@ -204,6 +206,106 @@ describe('GitHub Workflow Validation', () => {
       expect(downloadStep?.run).toContain('--certificate-oidc-issuer "$EXPECTED_ISSUER"');
       expect(downloadStep?.run).toContain('EXPECTED_ISSUER');
       expect(downloadStep?.run).toContain('https://token.actions.githubusercontent.com');
+    });
+  });
+
+  describe('Publish to npm Workflow', () => {
+    let workflow: Workflow;
+
+    beforeAll(() => {
+      const workflowPath = path.join(workflowDir, 'publish-npm.yml');
+      workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as Workflow;
+    });
+
+    it('should publish the safety package before the server package', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const serverJob = workflow.jobs['publish-npm'];
+
+      expect(safetyJob).toBeDefined();
+      expect(serverJob.needs).toBe('publish-safety');
+    });
+
+    it('should scope OIDC write permission to each publishing job', () => {
+      const expectedPermissions = { 'id-token': 'write', contents: 'read' };
+
+      expect(workflow.permissions).toBeUndefined();
+      expect(workflow.jobs['publish-safety'].permissions).toEqual(expectedPermissions);
+      expect(workflow.jobs['publish-npm'].permissions).toEqual(expectedPermissions);
+    });
+
+    it('should fail closed when the safety dependency floor is mismatched', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
+
+      expect(versionStep?.run).toContain("dependencies['@dollhousemcp/safety']");
+      expect(versionStep?.run).toContain('EXPECTED_RANGE="^$VERSION"');
+      expect(versionStep?.run).toContain('does not match the server dependency floor');
+      expect(versionStep?.run).toMatch(/if \[ "\$REQUIRED_RANGE" != "\$EXPECTED_RANGE" \]; then[\s\S]*exit 1/);
+    });
+
+    it('should publish safety only after a verified registry absence', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const versionStep = safetyJob.steps.find(step => step.name === 'Check safety package version');
+      const publishStep = safetyJob.steps.find(step => step.name === 'Publish safety package (with provenance)');
+
+      expect(versionStep?.run).toContain('@dollhousemcp/safety@$VERSION');
+      expect(versionStep?.run).toContain('for ATTEMPT in 1 2 3');
+      expect(versionStep?.run).toContain('E404');
+      expect(versionStep?.run).toContain('No match found for version');
+      expect(versionStep?.run).toContain('sleep $((ATTEMPT * 2))');
+      expect(versionStep?.run).toContain('after 3 attempts');
+      expect(versionStep?.run).toContain('needs_publish=false');
+      expect(versionStep?.run).toContain('needs_publish=true');
+      expect(publishStep?.run).toBe('npm publish --provenance --access public --loglevel verbose');
+      expect(publishStep?.env?.NPM_CONFIG_PROVENANCE).toBe('true');
+    });
+
+    it('should retain a safety-package dry run path', () => {
+      const safetyJob = workflow.jobs['publish-safety'];
+      const dryRunStep = safetyJob.steps.find(step => step.name === 'Dry run safety package');
+
+      expect(dryRunStep?.shell).toBe('bash');
+      expect(dryRunStep?.run).toContain('version=0.0.0-dry-run.${GITHUB_RUN_ID}');
+      expect(dryRunStep?.run).toContain('npm publish --dry-run --tag dry-run');
+    });
+
+    it('should avoid published-version conflicts in both dry-run paths', () => {
+      const safetyDryRun = workflow.jobs['publish-safety'].steps.find(
+        step => step.name === 'Dry run safety package'
+      );
+      const serverDryRun = workflow.jobs['publish-npm'].steps.find(
+        step => step.name === 'Dry run (skip publish)'
+      );
+
+      expect(safetyDryRun?.run).toContain('npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"');
+      expect(safetyDryRun?.run).toContain('npm publish --dry-run --tag dry-run');
+
+      expect(serverDryRun?.env?.DIST_TAG).toBe('${{ steps.npm_dist_tag.outputs.dist_tag }}');
+      expect(serverDryRun?.run).toContain('dry_run_version="0.0.${GITHUB_RUN_ID}"');
+      expect(serverDryRun?.run).toContain('dry_run_version="0.0.0-${DIST_TAG}.dry-run.${GITHUB_RUN_ID}"');
+      expect(serverDryRun?.run).toContain('dry_run_version="0.0.0-rc.dry-run.${GITHUB_RUN_ID}"');
+      expect(serverDryRun?.run).toContain('npm pkg set "version=${dry_run_version}"');
+      expect(serverDryRun?.run).toContain('npm publish --dry-run --tag "${DIST_TAG}"');
+    });
+
+    it.each([
+      ['0.0.12345', 'latest'],
+      ['0.0.0-alpha.dry-run.12345', 'alpha'],
+      ['0.0.0-beta.dry-run.12345', 'beta'],
+      ['0.0.0-rc.dry-run.12345', 'next'],
+    ])('should keep the %s dry-run version compatible with the %s channel guard', (version, tag) => {
+      const result = spawnSync(process.execPath, ['scripts/verify-publish-channel.mjs'], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          npm_package_version: version,
+          npm_config_tag: tag,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Publish channel OK: ${version}`);
     });
   });
 });
