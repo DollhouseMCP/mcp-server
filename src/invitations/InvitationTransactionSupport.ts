@@ -12,7 +12,9 @@ export async function lockAccounts(tx: DrizzleTx): Promise<void> {
   // and users.email has no canonical unique constraint. This short, coarse lock
   // closes insert/update phantom races with those writers. Narrow only once all
   // account writers share a canonical uniqueness/locking protocol.
-  await tx.execute(sql`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`);
+  // EXCLUSIVE also conflicts with SELECT FOR UPDATE's ROW SHARE table lock,
+  // preventing a row-lock holder from creating a table-lock upgrade cycle.
+  await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
 }
 
 export async function lockInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView> {
