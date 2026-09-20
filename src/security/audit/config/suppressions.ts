@@ -1099,22 +1099,22 @@ export const suppressions: Suppression[] = [
   {
     rule: RULE_OWASP_A03_002,
     file: 'packages/safety/src/DisplayService.ts',
-    reason: 'Intentional execSync for cross-platform OS dialogs. All user input is properly escaped using escapeShellArg (Unix) or Base64 encoding (PowerShell)'
+    reason: 'Intentional native dialog execution. macOS uses fixed /usr/bin/osascript with constant source and separate argv values; Linux shell arguments are POSIX-escaped; PowerShell values are escaped before Base64 encoding'
   },
   {
     rule: RULE_OWASP_A03_002,
     file: '**/packages/safety/src/DisplayService.ts',
-    reason: 'Intentional execSync for cross-platform OS dialogs. All user input is properly escaped using escapeShellArg (Unix) or Base64 encoding (PowerShell)'
+    reason: 'Intentional native dialog execution. macOS uses fixed /usr/bin/osascript with constant source and separate argv values; Linux shell arguments are POSIX-escaped; PowerShell values are escaped before Base64 encoding'
   },
   {
     rule: RULE_DMCP_SEC_004,
     file: 'packages/safety/src/DisplayService.ts',
-    reason: 'DisplayService receives sanitized input from TieredSafetyService. Unicode normalization happens at validation boundaries, not in display layer'
+    reason: 'DisplayService treats values as opaque UI text. macOS values are passed as process arguments rather than source; other platforms encode or escape values at their interpreter boundary'
   },
   {
     rule: RULE_DMCP_SEC_004,
     file: '**/packages/safety/src/DisplayService.ts',
-    reason: 'DisplayService receives sanitized input from TieredSafetyService. Unicode normalization happens at validation boundaries, not in display layer'
+    reason: 'DisplayService treats values as opaque UI text. macOS values are passed as process arguments rather than source; other platforms encode or escape values at their interpreter boundary'
   },
   {
     rule: RULE_DMCP_SEC_004,

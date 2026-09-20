@@ -8,8 +8,24 @@
  * @since v1.0.0
  */
 
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { platform } from 'os';
+
+const MACOS_DIALOG_SCRIPT = `on run argv
+  set dialogTitle to item 1 of argv
+  set dialogMessage to item 2 of argv
+  set cancelButton to item 3 of argv
+  set confirmButton to item 4 of argv
+  set dialogIcon to item 5 of argv
+
+  if dialogIcon is "note" then
+    display dialog dialogMessage with title dialogTitle with icon note buttons {cancelButton, confirmButton} default button confirmButton
+  else if dialogIcon is "stop" then
+    display dialog dialogMessage with title dialogTitle with icon stop buttons {cancelButton, confirmButton} default button confirmButton
+  else
+    display dialog dialogMessage with title dialogTitle with icon caution buttons {cancelButton, confirmButton} default button confirmButton
+  end if
+end run`;
 
 /**
  * Escape shell argument for Unix shells (bash, sh, zsh)
@@ -110,16 +126,18 @@ function showMacOSDialog(
     };
     const appleIcon = iconMap[icon] || 'caution';
 
-    // Escape message for AppleScript (escape quotes and newlines for AppleScript string)
-    const escapedMessage = message.replace(/"/g, '\\"').replace(/\n/g, '\\n');
-    const escapedTitle = title.replace(/"/g, '\\"');
-    const escapedButtons = buttons.map((b) => b.replace(/"/g, '\\"'));
-
-    const script = `display dialog "${escapedMessage}" with title "${escapedTitle}" with icon ${appleIcon} buttons {"${escapedButtons[1]}", "${escapedButtons[0]}"} default button "${escapedButtons[0]}"`;
-
-    // Execute osascript - will throw if Cancel is clicked
-    // SECURITY: Use escapeShellArg to prevent shell injection
-    execSync(`osascript -e ${escapeShellArg(script)}`, { // NOSONAR - Intentional: OS dialog via AppleScript, input escaped with escapeShellArg
+    // Keep untrusted display values out of AppleScript source. Passing them as
+    // argv also avoids invoking a shell, so neither language can reinterpret them.
+    execFileSync('/usr/bin/osascript', [
+      '-e',
+      MACOS_DIALOG_SCRIPT,
+      '--',
+      title,
+      message,
+      buttons[1],
+      buttons[0],
+      appleIcon,
+    ], {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'], // Don't inherit stdio
     });
