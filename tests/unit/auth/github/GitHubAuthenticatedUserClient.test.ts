@@ -91,23 +91,31 @@ describe('GitHubAuthenticatedUserClient', () => {
 
   it('treats empty optional profile strings as absent and trims display metadata', async () => {
     const fetchImpl = jest.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ id: 7, login: 'seven', name: '', email: '', avatar_url: null }))
+      .mockResolvedValueOnce(jsonResponse({ id: 7, login: 'seven', name: '', email: '', avatar_url: '' }))
+      .mockResolvedValueOnce(jsonResponse({ id: 7, login: 'seven', name: '  ', email: '\t', avatar_url: ' \n' }))
       .mockResolvedValueOnce(jsonResponse({
         id: 7,
         login: 'seven',
         name: '  Seven Example  ',
         email: '  seven@example.com  ',
-        avatar_url: null,
+        avatar_url: '  https://avatars.githubusercontent.com/u/7  ',
       }));
     const client = new GitHubAuthenticatedUserClient({ fetchImpl });
 
     await expect(client.fetchAuthenticatedUser('token')).resolves.toMatchObject({
       displayName: null,
       email: null,
+      avatarUrl: null,
+    });
+    await expect(client.fetchAuthenticatedUser('token')).resolves.toMatchObject({
+      displayName: null,
+      email: null,
+      avatarUrl: null,
     });
     await expect(client.fetchAuthenticatedUser('token')).resolves.toMatchObject({
       displayName: 'Seven Example',
       email: 'seven@example.com',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/7',
     });
   });
 
@@ -135,9 +143,14 @@ describe('GitHubAuthenticatedUserClient', () => {
   it.each([
     ['empty login', { id: 42, login: '' }],
     ['non-string login', { id: 42, login: 123 }],
+    ['non-string display name', { id: 42, login: 'octocat', name: 123 }],
+    ['non-string email', { id: 42, login: 'octocat', email: true }],
+    ['non-string avatar URL', { id: 42, login: 'octocat', avatar_url: 42 }],
     ['credentialed avatar URL', { id: 42, login: 'octocat', avatar_url: 'https://user:secret@example.com/avatar' }],
     ['non-HTTPS avatar URL', { id: 42, login: 'octocat', avatar_url: 'http://example.com/avatar' }],
+    ['oversized display name', { id: 42, login: 'octocat', name: 'n'.repeat(256) }],
     ['oversized email', { id: 42, login: 'octocat', email: `${'a'.repeat(250)}@x.io` }],
+    ['oversized avatar URL', { id: 42, login: 'octocat', avatar_url: `https://example.com/${'a'.repeat(2_048)}` }],
   ])('rejects invalid metadata: %s', async (_label, body) => {
     const fetchImpl = jest.fn<typeof fetch>().mockResolvedValue(jsonResponse(body));
     const client = new GitHubAuthenticatedUserClient({ fetchImpl });

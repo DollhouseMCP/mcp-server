@@ -154,14 +154,6 @@ function requiredString(value: unknown, maxLength: number): string {
   return value;
 }
 
-function optionalString(value: unknown, maxLength: number): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== 'string' || value.length === 0 || value.length > maxLength || value.trim() !== value) {
-    throw new GitHubAuthenticatedUserError('invalid_response', false);
-  }
-  return value;
-}
-
 function optionalMetadataString(value: unknown, maxLength: number): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'string') {
@@ -176,7 +168,7 @@ function optionalMetadataString(value: unknown, maxLength: number): string | nul
 }
 
 function optionalAvatarUrl(value: unknown): string | null {
-  const raw = optionalString(value, MAX_AVATAR_URL_LENGTH);
+  const raw = optionalMetadataString(value, MAX_AVATAR_URL_LENGTH);
   if (raw === null) return null;
   try {
     const url = new URL(raw);
