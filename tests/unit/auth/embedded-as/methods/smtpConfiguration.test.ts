@@ -106,7 +106,10 @@ describe('SMTP configuration', () => {
 
   it('preserves local-part case while Nodemailer renders a valid Unicode domain as IDNA', async () => {
     const config = resolveSmtpConfiguration({ ...complete(), from: 'Beta@bücher.example' });
-    expect(config.state).toBe('enabled');
+    expect(config).toMatchObject({
+      state: 'enabled',
+      options: { from: 'Beta@xn--bcher-kva.example' },
+    });
     if (config.state !== 'enabled') return;
     const transport = nodemailer.createTransport({ streamTransport: true, buffer: true });
     const info = await transport.sendMail({

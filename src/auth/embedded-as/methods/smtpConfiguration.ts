@@ -179,16 +179,16 @@ function validateSender(value: unknown): string {
   const localPart = sender.slice(0, at);
   const domain = sender.slice(at + 1);
   const wireDomain = domainToASCII(domain);
+  const wireSender = `${localPart}@${wireDomain}`;
   if (Buffer.byteLength(sender, 'utf8') > MAX_INVITATION_EMAIL_OCTETS
       || Buffer.byteLength(localPart, 'utf8') > MAX_INVITATION_EMAIL_LOCAL_PART_OCTETS
       || wireDomain === ''
-      || Buffer.byteLength(localPart, 'utf8') + 1 + Buffer.byteLength(wireDomain, 'ascii')
-        > MAX_INVITATION_EMAIL_OCTETS
+      || Buffer.byteLength(wireSender, 'utf8') > MAX_INVITATION_EMAIL_OCTETS
       || wireDomain.split('.').some(label =>
         Buffer.byteLength(label, 'utf8') > MAX_INVITATION_EMAIL_DOMAIN_LABEL_OCTETS)) {
     throw new SmtpConfigurationError('invalid_sender');
   }
-  return sender;
+  return wireSender;
 }
 
 function configurationErrorMessage(
