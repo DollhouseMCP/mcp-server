@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Incorporate the 2.0.42 macOS verification dialog security fix and require safety package 1.0.2. (#2686)
+- Incorporate the 2.0.42 macOS verification dialog security fix and prepare safety package 1.0.3, retaining beta’s timing-safe challenge comparison. (#2686)
 - Publish the safety package before the server and retain beta channel protection during version-safe release dry runs. (#2686)
 
 ## [2.1.0-beta.2] - 2026-09-04
