@@ -38,7 +38,13 @@ export function renderInvitationEmail(input: InvitationEmailTemplateInput): Invi
     name: safeText(role.name, 120), description: safeText(role.description, 500),
   }));
   let support: string;
-  try { support = normalizeInvitationEmail(input.supportEmail); } catch { return invalidTemplate(); }
+  try {
+    const normalized = normalizeInvitationEmail(input.supportEmail);
+    // Operator contact addresses are not recipient identity keys: local-part
+    // casing may identify a different mailbox and must survive validation.
+    const original = input.supportEmail.normalize('NFC').trim();
+    support = original.slice(0, original.indexOf('@')) + normalized.slice(normalized.indexOf('@'));
+  } catch { return invalidTemplate(); }
   // Preserve addr-spec's single @ delimiter while encoding local-part URI
   // metacharacters: ?/#/& must never become mailto query or fragment syntax.
   const separator = support.indexOf('@');

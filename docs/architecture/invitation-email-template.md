@@ -61,3 +61,6 @@ A lost response or crash requires explicit regeneration, not reconstruction of
 a raw token. New generations invalidate older links. SMTP acceptance remains
 `submitted`, not confirmed delivery. #2691 owns reservation/outcome bookkeeping,
 and #2680/#2681 own restricted claim and atomic activation.
+
+Support mailbox validation preserves local-part casing and normalizes only the
+domain casing; operator contact addresses are not recipient identity keys.

@@ -81,6 +81,7 @@ describe('private-beta invitation email', () => {
 
   it.each([
     ['help@example.test', 'mailto:help@example.test'],
+    ['SupportDesk@EXAMPLE.TEST', 'mailto:SupportDesk@example.test'],
     ['desk?case#tag&more@example.test', 'mailto:desk%3Fcase%23tag%26more@example.test'],
     ["desk'case@example.test", 'mailto:desk&#39;case@example.test'],
   ])('preserves mailto addr-spec without permitting header or fragment injection for %s', (supportEmail, expectedHref) => {
@@ -89,6 +90,12 @@ describe('private-beta invitation email', () => {
     expect(expectedHref.match(/@/g)).toHaveLength(1);
     expect(expectedHref).not.toContain('?');
     expect(expectedHref).not.toContain('#tag');
+  });
+
+  it('preserves the configured support mailbox local-part in both body formats', () => {
+    const email = renderInvitationEmail(fixture({ supportEmail: '  SupportDesk@EXAMPLE.TEST  ' }));
+    expect(email.text).toContain('Contact SupportDesk@example.test.');
+    expect(email.html).toContain('href="mailto:SupportDesk@example.test">SupportDesk@example.test</a>');
   });
 
   it('escapes recipient and role strings in HTML without changing their plain-text meaning', () => {
