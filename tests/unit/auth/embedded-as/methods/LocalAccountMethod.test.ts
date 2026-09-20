@@ -111,6 +111,30 @@ describe('LocalAccountMethod', () => {
     expect(result.kind).toBe('authenticated');
   });
 
+  it('returns the persisted human display name after invited password setup', async () => {
+    await storage.upsertAccount({
+      sub: 'local_ren\u00e9e',
+      provider: 'local',
+      externalSub: 'ren\u00e9e',
+      email: ALICE_EMAIL,
+      emailVerified: false,
+      displayName: 'Ren\u00e9e Example',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const url = method.issueInvite('local_ren\u00e9e', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
+    const inviteToken = new URL(url).searchParams.get('invite')!;
+
+    const result = await method.completeInteraction(CTX, {
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
+    });
+
+    expect(result).toMatchObject({
+      kind: 'authenticated',
+      identity: { sub: 'local_ren\u00e9e', displayName: 'Ren\u00e9e Example', email: ALICE_EMAIL },
+    });
+  });
+
   it('rejects wrong password and notes the failure for rate limiting', async () => {
     const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;

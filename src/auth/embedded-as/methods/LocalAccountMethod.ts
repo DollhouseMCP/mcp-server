@@ -191,7 +191,7 @@ export class LocalAccountMethod implements IAuthMethod {
    * out-of-band CLI-issued invite URL).
    */
   async consumeInvite(token: string, newPassword: string): Promise<
-    | { kind: 'ok'; sub: string; email: string }
+    | { kind: 'ok'; sub: string; email: string; displayName: string }
     | { kind: 'denied'; reason: string }
     | { kind: 'error'; reason: string }
   > {
@@ -301,7 +301,7 @@ export class LocalAccountMethod implements IAuthMethod {
     // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
     // (and linked on first login), NOT stamped onto the auth account — so this
     // path just records the credential/profile.
-    return { kind: 'ok', sub, email: consume.payload.email };
+    return { kind: 'ok', sub, email: consume.payload.email, displayName: account.displayName ?? consume.payload.email };
   }
 
   private async handleSetPassword(form: Partial<Record<string, string>>): Promise<InteractionResult> {
@@ -332,7 +332,7 @@ export class LocalAccountMethod implements IAuthMethod {
       kind: 'authenticated',
       identity: {
         sub: result.sub,
-        displayName: result.email,
+        displayName: result.displayName,
         email: result.email,
         emailVerified: false,
       },

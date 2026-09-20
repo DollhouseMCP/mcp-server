@@ -8,4 +8,4 @@ Derived usernames are lowercase NFC strings. Unicode letters and numbers are ret
 
 For example, `Todd Lewis` derives `todd-lewis`, `Renée O'Connor` derives `renée-o-connor`, and `李 小龙` derives `李-小龙`. The display name itself is stored unchanged after trim/NFC normalization.
 
-Derivation can expose a collision, such as `Todd Lewis` and `Todd-Lewis`. The UI shows the canonical username before submission and lets the administrator edit it. Persistence remains authoritative: a duplicate username or email returns HTTP 409 and never attaches the invite to an existing account or silently adds a suffix.
+Derivation can expose a collision, such as `Todd Lewis` and `Todd-Lewis`. The UI shows the canonical username before submission and lets the administrator edit it. Persistence remains authoritative: a duplicate canonical username returns HTTP 409 and never attaches the invite to an existing account or silently adds a suffix. Canonical email conflict enforcement belongs to the durable invitation-management flow rather than the legacy account-invite issuer.
