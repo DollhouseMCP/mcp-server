@@ -332,6 +332,7 @@ describe('transactional invitation management', () => {
     }
   });
 
+
   it('aborts before mutation callbacks when an ordinary audit owns the head before its users FK check', async () => {
     if (!databaseAvailable) return;
     const input = record();
@@ -361,4 +362,5 @@ describe('transactional invitation management', () => {
     expect(await getTestAdminDb().select().from(users).where(eq(users.id, input.userId))).toHaveLength(0);
     expect((await issue(input, adminAudit)).state).toBe('pending');
   });
+
 });
