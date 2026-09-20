@@ -83,7 +83,7 @@ describe('transactional SMTP submission', () => {
 
 describe('SMTP failure classification', () => {
   it.each([
-    ['EAUTH', 'authentication'], ['EDNS', 'connection'], ['ECONNECTION', 'connection'],
+    ['EAUTH', 'authentication'], ['EDNS', 'connection'],
     ['ETLS', 'tls'], ['EENVELOPE', 'rejected'],
   ])('classifies known pre-acceptance %s safely', (code, failureClass) => {
     expect(classifyEmailSubmissionFailure({ code, message: 'SECRET' })).toEqual({ state: 'failed', failureClass });
@@ -94,6 +94,8 @@ describe('SMTP failure classification', () => {
   });
   it.each([
     null, 'SECRET', { code: 'ESOCKET' }, { code: 'ETIMEDOUT' },
+    { code: 'ECONNECTION', command: 'DATA' }, { code: 'ECONNECTION', command: 'CONN' },
+    { code: 'ECONNECTION' },
     { command: 'DATA', responseCode: 250 }, { command: 'QUIT', responseCode: 550 },
   ])('preserves uncertainty for unproven outcomes', error => {
     expect(classifyEmailSubmissionFailure(error)).toEqual({ state: 'unknown', failureClass: 'indeterminate' });

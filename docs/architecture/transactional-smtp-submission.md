@@ -14,12 +14,16 @@ generation's expiry; they must not use `sendMagicLink`.
 
 - `submitted`: SMTP reports one accepted recipient and no rejected recipients.
   This is not confirmed delivery or account activation.
-- `failed`: a known pre-acceptance authentication, connection, TLS, envelope,
+- `failed`: a known pre-acceptance authentication, DNS, TLS, envelope,
   or explicit SMTP rejection occurred. A deliberate retry may be considered by
   the durable delivery service while it still has the raw credential in memory.
 - `unknown`: acceptance cannot be established. In particular, a timeout or lost
   connection during DATA may hide successful submission. Never automatically
   retry; preserve the attempt and offer explicit regeneration when appropriate.
+
+`ECONNECTION` remains unknown even when its command is `CONN`: the pinned
+Nodemailer transport uses that command for unexpected socket closure after DATA
+as well as for connection setup. It cannot prove that no message was accepted.
 
 Exceptions and SMTP response strings are never returned or logged by this
 method. The result contains only fixed states/categories. Nodemailer's
