@@ -51,3 +51,66 @@ All invitation foreign keys use `ON DELETE RESTRICT` to preserve security histor
 Account deletion redacts invitations only where the deleted user is the recipient. It replaces both email fields with the unique `deleted-<invitation-id>@deleted.invalid` tombstone, replaces the intended username with `deleted-<invitation-id>`, clears the intended display name, and clears delivery provider message IDs, failure classifications, and sanitized detail payloads. Invitation IDs, recipient tombstone links, inviter IDs, correlation IDs, roles, credential hashes, delivery enums/times, and terminal lifecycle states and timestamps remain as minimal audit history. Pending invitation aggregates and generations become revoked, and open claims become revoked, using one database timestamp. Accepted, expired, revoked, superseded, and completed history remains terminal. Invitations for which the deleted account was only the inviter retain their other recipient's data.
 
 Deletion first locks the `users` row and then recipient invitation aggregates in UUID order. Invitation management's coarse `users EXCLUSIVE` gate conflicts with that initial `FOR UPDATE` table lock before management can lock an invitation, so either transaction completes before the other enters the shared users-before-invitations sequence. Claim, delivery, activation, and future cleanup writers must use that same order. Deletion increments every delivery-attempt version, including attempts whose provider fields are already empty. A delivery worker must use that version for compare-and-swap, then lock and re-check the recipient before persisting a provider result; once the recipient is deleted or its invitation is redacted, a late result must leave provider metadata null. Transactions must not call providers while holding these locks.
+
+## Transactional management slice
+
+`PostgresInvitationManagementStore` implements the deliberately narrow
+`IInvitationManagementStore`: issue, inspect, regenerate and revoke. Its exported
+`createInvitationManagementMutation(tx, audit)` composes into a future lifecycle
+transaction without claiming to implement claim, delivery, activation or cleanup.
+There are no live route or dependency-container registrations in this slice.
+
+Issuance creates the pending user, invitation, intended-role references and first
+credential hash in one transaction. It creates no authentication identity, actual
+role assignment or normal session. Existing accounts (including disabled/deleted
+accounts retaining an email) are conflicts; account identity is never merged by
+email. Existing email values use the same NFC, Unicode trim and lowercase rules as
+new invitations. Administrator issuer IDs must match the audit actor.
+
+All management mutations acquire `EXCLUSIVE` on `users` before locking
+an invitation. This deliberately coarse beta safeguard blocks account inserts and
+updates from existing writers that do not share an invitation advisory lock, and
+closes the missing-row race around non-unique account email. It also conflicts
+with the `ROW SHARE` table lock acquired by existing account writers' `SELECT FOR
+UPDATE`, avoiding a table-lock upgrade cycle when those writers subsequently
+update/delete the locked user. Plain reads remain compatible. The canonical email
+check currently scans account identifiers/emails under that lock. A later scaling
+change must introduce shared canonical uniqueness/locking across **all** account
+writers before narrowing it. Composing claim/activation code must preserve the
+users-before-invitation lock order. Transactions must remain short and must not
+perform provider/network operations while holding these locks.
+
+Generation expiry uses millisecond-precision PostgreSQL `clock_timestamp()` read
+after locks, plus the validated TTL. Pending and explicitly expired invitations
+can regenerate; accepted and revoked invitations cannot. Regeneration supersedes
+the previous generation and revokes open claims atomically. Revocation is
+idempotent and also revokes open claims. Neither operation clears a user's
+disabled/deleted flag or activates an account. Inspection returns persisted state
+and expiry metadata and never writes an expiration transition or exposes hashes.
+
+The required transaction-scoped audit callbacks use the existing security/admin
+streams: `appendSecurityAuditEventWithTx` and
+`appendConsoleAdminAuditEventWithTx`. Audit failure rolls back the mutation and
+both audit streams. Production composition must supply durable implementations;
+there is no fallback/no-op writer. Admin context comes from authenticated server
+state. Audit metadata contains IDs/generation/correlation only, with no email,
+credential or invitation URL. No-op revocations do not duplicate transition audit.
+
+The transaction runner copies audit context before waiting for a connection;
+individual mutation methods copy secrets and role lists before their first await.
+A service that captures input before calling `runMutation` must copy it at its own
+async boundary as well. Credential copies are cleared when each mutation ends.
+
+This is partial progress on #2678/#2690. Claim-owner verification, activation,
+expiry jobs, delivery-attempt initialization (#2691), routes and pending-account
+authorization enforcement remain separate slices. No delivery records are created
+here, and migration 0054's explicit delivery-state requirement remains unchanged.
+
+Administrator management operations also acquire an `EXCLUSIVE NOWAIT` table lock
+on `admin_audit_chain_heads` before mutation writes. Ordinary audit writers lock
+that head before their user foreign-key checks, so waiting on the head while
+holding users could deadlock. The table preflight covers both first-head INSERT
+and existing-head row locking. Contention aborts the transaction and returns
+`concurrent_update`; callers may retry the whole operation with fresh validation.
+System/security-only operations do not acquire an administrator chain lock.
+

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
 
+import type { DrizzleTx } from '../database/db-utils.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withSystemContext } from '../database/admin.js';
 import { ensureDirectory } from '../paths/ensureDirectory.js';
@@ -23,21 +24,20 @@ export class DatabaseAuditSink implements AuditSink {
   constructor(private readonly db: DatabaseInstance) {}
 
   async write(event: DurableAuditEvent): Promise<void> {
-    // Raw `tx.execute(sql`...`)` over postgres-js does not serialize a JS Date
-    // param — pass an ISO string cast to timestamptz instead.
-    await withSystemContext(this.db, (tx) =>
-      tx.execute(sql`
-        INSERT INTO security_audit_events (event_type, actor_id, target_id, metadata, occurred_at)
-        VALUES (
-          ${event.eventType},
-          ${event.actorId ?? null},
-          ${event.targetId ?? null},
-          ${JSON.stringify(event.metadata)}::jsonb,
-          ${(event.occurredAt ? new Date(event.occurredAt) : new Date()).toISOString()}::timestamptz
-        )
-      `),
-    );
+    await withSystemContext(this.db, tx => appendSecurityAuditEventWithTx(tx, event));
   }
+}
+
+/** Append to the existing security stream inside the caller's mutation transaction. */
+export async function appendSecurityAuditEventWithTx(tx: DrizzleTx, event: DurableAuditEvent): Promise<void> {
+  await tx.execute(sql`
+    INSERT INTO security_audit_events (event_type, actor_id, target_id, metadata, occurred_at)
+    VALUES (
+      ${event.eventType}, ${event.actorId ?? null}, ${event.targetId ?? null},
+      ${JSON.stringify(event.metadata)}::jsonb,
+      ${new Date(event.occurredAt ?? Date.now()).toISOString()}::timestamptz
+    )
+  `);
 }
 
 export class FileAuditSink implements AuditSink {

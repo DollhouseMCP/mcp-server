@@ -31,7 +31,7 @@ export interface InvitationIssueRecord {
   readonly inviterUserId: string;
   readonly intendedRoles: InvitationView['intendedRoles'];
   readonly generation: number;
-  /** Raw random bytes are transaction-local and must never be inserted. */
+  /** Transient only: never persist/log or place in idempotency records or delivery outboxes. Copy before awaiting. */
   readonly credentialSecret: Buffer;
   readonly ttlHours: number;
   readonly correlationId: string;
@@ -39,6 +39,7 @@ export interface InvitationIssueRecord {
 
 export interface InvitationRegenerationRecord {
   readonly invitationId: string;
+  /** Transient only: never persist/log or place in idempotency records or delivery outboxes. Copy before awaiting. */
   readonly credentialSecret: Buffer;
   readonly ttlHours: number;
   readonly correlationId: string;
@@ -48,7 +49,9 @@ export interface InvitationClaimRecord {
   /** Resolve the pending user from this verified invitation, never from caller-supplied account data. */
   readonly invitationId: string;
   readonly generation: number;
+  /** Transient only: never persist/log or place in idempotency records or delivery outboxes. Copy before awaiting. */
   readonly credentialSecret: Buffer;
+  /** Derived server-side from the managed browser/restricted-session binding, never accepted from request data. Copy before awaiting. */
   readonly claimOwnerHash: Buffer;
   readonly correlationId: string;
 }
@@ -92,8 +95,10 @@ export interface IInvitationStore {
    * #2681 calls this inside its wider transaction, then performs identity,
    * role, account, invitation, claim, and audit writes before one commit.
    * Implementations must lock and validate the current pending generation,
-   * pending account, unexpired open claim, and matching owner binding. The
-   * caller must append transaction-scoped security/admin audit for its writes.
+   * pending account, unexpired open claim, and matching owner binding.
+   * Owner hashes must originate from the server-managed browser/restricted-session
+   * binding, not caller-supplied JSON/query parameters or a normal login assumption.
+   * The caller must append transaction-scoped security/admin audit for its writes.
    */
   lockActivationCandidateWithTx(
     tx: DrizzleTx,
@@ -101,6 +106,7 @@ export interface IInvitationStore {
       readonly invitationId: string;
       readonly generation: number;
       readonly claimAssertionId: string;
+      /** Derived server-side from the managed browser/restricted-session binding, never accepted from request data. Copy before awaiting. */
       readonly claimOwnerHash: Buffer;
     },
   ): Promise<LockedInvitationActivationCandidate>;
