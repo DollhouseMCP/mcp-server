@@ -180,6 +180,27 @@ describe('PostgreSQL restricted onboarding owner/session persistence', () => {
     expect(await store().findSession(f.ownerHash, first.idHash)).toEqual(first);
   });
 
+  it('snapshots both cookie hashes and holds live authority locks through its callers transaction', async () => {
+    if (!available) return;
+    const f = await fixture();
+    const current = await store().replaceSession(f.input);
+    let ending: Promise<boolean> | undefined;
+    let ended = false;
+    await withSystemContext(db(), async tx => {
+      const ownerHash = Buffer.from(f.ownerHash);
+      const sessionHash = Buffer.from(current.idHash);
+      const pending = store().lockSessionWithTx(tx, ownerHash, sessionHash);
+      ownerHash.fill(0);
+      sessionHash.fill(0);
+      expect(await pending).toEqual(current);
+      ending = store().endSession(f.ownerHash, current.idHash).then(result => { ended = true; return result; });
+      await tx.execute(sql`SELECT pg_sleep(0.1)`);
+      expect(ended).toBe(false);
+    });
+    expect(await ending).toBe(true);
+    expect(await withSystemContext(db(), tx => store().lockSessionWithTx(tx, f.ownerHash, current.idHash))).toBeNull();
+  });
+
   it('does not silently switch another live invitation context across tabs', async () => {
     if (!available) return;
     const first = await fixture();

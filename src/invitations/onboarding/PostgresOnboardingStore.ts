@@ -10,6 +10,7 @@ import type { InvitationClaimRecord } from '../IInvitationStore.js';
 import type { InvitationManagementAudit } from '../IInvitationManagementStore.js';
 import { createInvitationClaimMutation } from '../PostgresInvitationClaimStore.js';
 import { copyAudit } from '../InvitationTransactionSupport.js';
+import type { OnboardingSessionAuthority } from './IOnboardingSessionAuthority.js';
 import {
   ONBOARDING_OWNER_MAX_AGE_SECONDS, ONBOARDING_SCOPE, ONBOARDING_SESSION_TTL_SECONDS,
   restrictedSessionExpiresAt, validateOnboardingOwnerRecord, validateOnboardingSessionRecord,
@@ -47,7 +48,7 @@ export class OnboardingStoreError extends Error {
  * orchestration, never request JSON. One session slot per owner bounds all KV
  * reads/deletes by primary key; no scans or generic auth-adapter lookups occur.
  */
-export class PostgresOnboardingStore {
+export class PostgresOnboardingStore implements OnboardingSessionAuthority {
   constructor(private readonly db: DatabaseInstance, private readonly authority: OnboardingClaimAuthority) {}
 
   async createOwner(ownerHash: Buffer, csrfTokenHash: Buffer): Promise<OnboardingOwnerRecord> {
@@ -175,6 +176,15 @@ export class PostgresOnboardingStore {
       if (error instanceof InvitationError) return null;
       throw error; // Database/authority outages fail closed without masking availability errors.
     }
+  }
+
+  /**
+   * Compose activation in the same transaction as live session validation. Any
+   * broader auth resource preflight must precede this call. Locks remain held
+   * until the caller commits; this function performs no session/account writes.
+   */
+  lockSessionWithTx(tx: DrizzleTx, ownerHash: Buffer, sessionHash: Buffer): Promise<OnboardingSessionRecord | null> {
+    return this.lockSession(tx, copyHash(ownerHash), copyHash(sessionHash));
   }
 
   private async lockSession(tx: DrizzleTx, owner: Buffer, session: Buffer): Promise<OnboardingSessionRecord | null> {
