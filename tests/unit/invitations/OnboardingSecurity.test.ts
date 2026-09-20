@@ -95,7 +95,12 @@ describe('onboarding server record contracts', () => {
   it('accepts hash-only owner and restricted records without granting authorization', () => {
     expect(() => validateOnboardingOwnerRecord(owner())).not.toThrow();
     expect(() => validateOnboardingSessionRecord(session())).not.toThrow();
-    expect(() => validateOnboardingOwnerRecord({ ...owner(), refreshedAt: later(60), expiresAt: later(604860) })).not.toThrow();
+    expect(() => validateOnboardingOwnerRecord({ ...owner(), refreshedAt: later(60), expiresAt: later(604800) })).not.toThrow();
+  });
+  it('cannot renew the stable owner beyond 168 hours from its original creation', () => {
+    expect(() => validateOnboardingOwnerRecord({ ...owner(), refreshedAt: later(604799), expiresAt: later(604800) })).not.toThrow();
+    expect(() => validateOnboardingOwnerRecord({ ...owner(), refreshedAt: later(60), expiresAt: later(604801) })).toThrow();
+    expect(() => validateOnboardingOwnerRecord({ ...owner(), refreshedAt: later(86400), expiresAt: later(86400) })).toThrow();
   });
   it.each([
     { scope: 'console' }, { scope: 'mcp' }, { scope: 'admin' }, { roles: ['admin'] },
