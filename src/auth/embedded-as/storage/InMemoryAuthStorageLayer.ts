@@ -50,7 +50,13 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   private readonly genericLocks = new InProcessKeyedLock();
   private readonly auditEvents: IdentityAuditEvent[] = [];
 
+  constructor(private readonly accountAllowed?: (sub: string) => Promise<boolean>) {}
+
   // ---- Accounts (must-fix #18) ----
+
+  isAccountAllowed(sub: string): Promise<boolean> {
+    return this.accountAllowed ? this.accountAllowed(sub) : Promise.resolve(true);
+  }
 
   findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null> {
     return asAsyncResult(() => {

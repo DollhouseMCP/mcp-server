@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { EmbeddedASOidcAccount } from '../../../../src/auth/embedded-as/EmbeddedASOidcAccount.js';
 import { ADMIN_STEP_UP_CLAIMS_MODEL } from '../../../../src/auth/embedded-as/InteractionRouter.js';
@@ -88,3 +88,20 @@ async function storageWithAdmin(): Promise<InMemoryAuthStorageLayer> {
   });
   return storage;
 }
+
+
+it('rejects pending accounts at account lookup and again immediately before token issuance', async () => {
+  const storage = await storageWithAdmin();
+  const allowed = jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(true);
+  const findAccount = jest.fn<IAuthMethod['findAccount']>().mockResolvedValue({ sub: 'local_admin' });
+  const account = new EmbeddedASOidcAccount([{ findAccount } as unknown as IAuthMethod], storage);
+  expect(await account.findAccount({}, 'local_admin')).toBeDefined();
+  allowed.mockResolvedValue(false);
+  expect(await account.findAccount({}, 'local_admin')).toBeUndefined();
+  expect(findAccount).toHaveBeenCalledTimes(1);
+  await expect(account.extraTokenClaims({}, { accountId: 'local_admin' }))
+    .rejects.toThrow('Account is not available');
+  allowed.mockRejectedValue(new Error('database unavailable'));
+  await expect(account.findAccount({}, 'local_admin')).rejects.toThrow('database unavailable');
+  await expect(account.extraTokenClaims({}, { accountId: 'local_admin' })).rejects.toThrow('database unavailable');
+});

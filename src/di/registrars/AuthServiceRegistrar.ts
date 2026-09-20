@@ -12,6 +12,7 @@
  * @module di/registrars/AuthServiceRegistrar
  */
 
+import { isSubjectAccountAllowed } from '../../auth/AccountAccess.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
@@ -175,6 +176,7 @@ export class AuthServiceRegistrar {
 
     const middleware = createUnifiedAuthMiddleware({
       provider,
+      isAccountAllowed: database ? (sub) => isSubjectAccountAllowed(database, sub) : undefined,
       publicPaths: ['/healthz', '/readyz', '/version'],
       protectedResourceMetadataUrl: hasProtectedResourceMetadata(provider)
         ? provider.getProtectedResourceMetadataUrl()

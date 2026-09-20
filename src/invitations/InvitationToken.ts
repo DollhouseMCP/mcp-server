@@ -106,6 +106,8 @@ export function invitationCredentialMatches(expected: Buffer, actual: Buffer): b
 function decodeBase64Url(value: string): Buffer {
   try {
     const decoded = Buffer.from(value, 'base64url');
+    // Node accepts some non-canonical encodings with non-zero unused bits.
+    // Re-encoding pins one unambiguous, unpadded representation per byte string.
     if (decoded.toString('base64url') !== value) throw new InvitationTokenError();
     return decoded;
   } catch {

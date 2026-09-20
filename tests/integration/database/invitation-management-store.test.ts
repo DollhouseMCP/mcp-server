@@ -9,6 +9,8 @@ import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.
 import { appendConsoleAdminAuditEventWithTx } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
 import { accountInvitations, accountInvitationGenerations, accountInvitationClaimAssertions } from '../../../src/database/schema/invitations.js';
 import { users } from '../../../src/database/schema/users.js';
+import { withSystemContext } from '../../../src/database/admin.js';
+import { deleteConsolePrincipalWithTx } from '../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
 import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const inviterId = randomUUID();
@@ -190,6 +192,30 @@ describe('transactional invitation management', () => {
     expect(await store().inspect(view.id)).toEqual(view);
     await expect(revoke(view.id, fail)).rejects.toThrow('security audit failed');
     expect(await store().inspect(view.id)).toEqual(view);
+  });
+
+  it.each(['disabled', 'deleted'] as const)('acknowledges a revoked invitation after its recipient is %s without further writes', async state => {
+    if (!databaseAvailable) return;
+    const view = await issue(record(), adminAudit);
+    await revoke(view.id, adminAudit);
+    if (state === 'disabled') {
+      await getTestAdminDb().update(users).set({ disabledAt: new Date() }).where(eq(users.id, view.userId));
+    } else {
+      const deleted = await withSystemContext(getTestAdminDb(), tx => deleteConsolePrincipalWithTx(tx, {
+        userId: view.userId, deletedByUserId: inviterId, deletedAt: new Date(),
+      }));
+      expect(deleted?.outcome).toBe('anonymized');
+    }
+    const terminal = await store().inspect(view.id);
+    const [before] = await getTestAdminDb().select().from(users).where(eq(users.id, view.userId));
+    const securityBefore = await getTestAdminDb().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${view.id} ORDER BY id`);
+    const adminBefore = await getTestAdminDb().execute(sql`SELECT * FROM admin_audit_events WHERE resource_id = ${view.id} ORDER BY sequence_id`);
+    expect(await revoke(view.id, adminAudit)).toEqual(terminal);
+    expect((await getTestAdminDb().select().from(users).where(eq(users.id, view.userId)))[0]).toEqual(before);
+    expect(await store().inspect(view.id)).toEqual(terminal);
+    expect(await getTestAdminDb().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${view.id} ORDER BY id`)).toEqual(securityBefore);
+    expect(await getTestAdminDb().execute(sql`SELECT * FROM admin_audit_events WHERE resource_id = ${view.id} ORDER BY sequence_id`)).toEqual(adminBefore);
+    if (state === 'deleted') expect(before).toMatchObject({ username: `deleted-${view.userId}`, email: null, displayName: null });
   });
 
   it.each(['disabledAt', 'deletedAt'] as const)('preserves and denies the independent %s account state', async field => {
