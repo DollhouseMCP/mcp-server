@@ -53,6 +53,14 @@ export function normalizeLocalUsername(value) {
       'username must use Unicode letters, marks, numbers, hyphens, or underscores and cannot start with a hyphen.',
     );
   }
+  let markHasBase = false;
+  for (const character of normalized) {
+    if (USERNAME_MARK.test(character) && !markHasBase) {
+      throw new LocalAccountNameError('username combining marks must follow a Unicode letter or number.');
+    }
+    markHasBase = USERNAME_BASE_CHARACTER.test(character) ||
+      (markHasBase && USERNAME_MARK.test(character));
+  }
   return normalized;
 }
 
@@ -62,10 +70,12 @@ export function deriveLocalUsername(value) {
   let derived = '';
   let needsSeparator = false;
   for (const character of displayName) {
-    if (USERNAME_BASE_CHARACTER.test(character) || (derived !== '' && USERNAME_MARK.test(character))) {
+    if (USERNAME_BASE_CHARACTER.test(character)) {
       if (needsSeparator && derived !== '') derived += '-';
       derived += character;
       needsSeparator = false;
+    } else if (!needsSeparator && derived !== '' && USERNAME_MARK.test(character)) {
+      derived += character;
     } else if (derived !== '') {
       needsSeparator = true;
     }

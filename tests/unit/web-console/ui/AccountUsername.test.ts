@@ -33,6 +33,7 @@ describe('local account name contract', () => {
     ['overlong derived username', () => deriveLocalUsername('a'.repeat(65))],
     ['leading-hyphen username', () => normalizeLocalUsername('-alice')],
     ['username punctuation', () => normalizeLocalUsername('alice.smith')],
+    ['detached username combining mark', () => normalizeLocalUsername('alice-\u0301')],
     ['formatting control in display name', () => normalizeLocalDisplayName('Alice\u202E')],
   ])('rejects %s', (_description, action) => {
     expect(action).toThrow();
