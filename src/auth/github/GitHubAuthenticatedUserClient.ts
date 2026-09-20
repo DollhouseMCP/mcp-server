@@ -178,7 +178,11 @@ function optionalAvatarUrl(value: unknown): string | null {
     if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') {
       throw new GitHubAuthenticatedUserError('invalid_response', false);
     }
-    return url.href;
+    const normalized = url.href;
+    if (normalized.length > MAX_AVATAR_URL_LENGTH) {
+      throw new GitHubAuthenticatedUserError('invalid_response', false);
+    }
+    return normalized;
   } catch (error) {
     if (error instanceof GitHubAuthenticatedUserError) throw error;
     throw new GitHubAuthenticatedUserError('invalid_response', false);

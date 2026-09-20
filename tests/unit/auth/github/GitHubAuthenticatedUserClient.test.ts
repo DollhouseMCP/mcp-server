@@ -151,6 +151,11 @@ describe('GitHubAuthenticatedUserClient', () => {
     ['oversized display name', { id: 42, login: 'octocat', name: 'n'.repeat(256) }],
     ['oversized email', { id: 42, login: 'octocat', email: `${'a'.repeat(250)}@x.io` }],
     ['oversized avatar URL', { id: 42, login: 'octocat', avatar_url: `https://example.com/${'a'.repeat(2_048)}` }],
+    ['avatar URL oversized after normalization', {
+      id: 42,
+      login: 'octocat',
+      avatar_url: `https://example.com/${'é'.repeat(1_000)}`,
+    }],
   ])('rejects invalid metadata: %s', async (_label, body) => {
     const fetchImpl = jest.fn<typeof fetch>().mockResolvedValue(jsonResponse(body));
     const client = new GitHubAuthenticatedUserClient({ fetchImpl });
