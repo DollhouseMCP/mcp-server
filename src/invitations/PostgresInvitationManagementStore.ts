@@ -142,9 +142,9 @@ async function regenerate(tx: DrizzleTx, audit: InvitationManagementAudit, input
 async function revoke(tx: DrizzleTx, audit: InvitationManagementAudit, invitationId: string, correlationId: string): Promise<InvitationView> {
   assertUuid(invitationId);
   assertUuid(correlationId);
-  const view = await lockInvitation(tx, invitationId);
-  await lockAdminAudit(tx, audit);
+  const view = await lockInvitation(tx, invitationId, true);
   if (view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
+  await lockAdminAudit(tx, audit);
   assertMutable(view);
   const now = await databaseTime(tx);
   await tx.update(generations).set({
@@ -179,12 +179,14 @@ async function lockAccounts(tx: DrizzleTx): Promise<void> {
   await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
 }
 
-async function lockInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView> {
+async function lockInvitation(tx: DrizzleTx, invitationId: string, allowRevoked = false): Promise<InvitationView> {
   await lockAccounts(tx);
   const [row] = await tx.select({ id: invitations.id }).from(invitations)
     .where(eq(invitations.id, invitationId)).for('update');
   if (!row) throw new InvitationError('invitation_not_found', 'Invitation not found');
   const view = await requireInvitation(tx, invitationId);
+  // Revoke retries acknowledge terminal state without changing an unavailable account.
+  if (allowRevoked && view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
   const [user] = await tx.select().from(users).where(eq(users.id, view.userId)).for('update');
   if (!user || user.activationState !== 'pending_activation') {
     throw new InvitationError('account_not_pending', 'Invitation account is not pending');
