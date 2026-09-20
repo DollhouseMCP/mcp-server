@@ -1507,6 +1507,34 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   await page.locator('#ua-drawer-close').click();
   await expect(page.locator(USER_DRAWER)).toHaveCount(0);
 
+  // Human-readable names derive a visible Unicode username, remain editable,
+  // and persist separately. Duplicate canonical usernames fail explicitly.
+  await page.locator('#ua-invite').click();
+  const inviteModal = page.locator('#ua-invite-modal');
+  await inviteModal.locator('#ua-inv-display-name').fill('Élodie 李!');
+  await expect(inviteModal.locator('#ua-inv-username')).toHaveValue('élodie-李');
+  await expect(inviteModal.locator('#ua-inv-username-preview')).toContainText('élodie-李');
+  await inviteModal.locator('#ua-inv-display-name').fill('!!!');
+  await expect(inviteModal.locator('#ua-inv-username')).toHaveValue('');
+  await expect(inviteModal.locator('#ua-inv-username-preview')).toContainText('at least one Unicode letter or number');
+  await inviteModal.locator('#ua-inv-display-name').fill('E2E New Invitee');
+  await expect(inviteModal.locator('#ua-inv-username')).toHaveValue('e2e-new-invitee');
+  await inviteModal.locator('#ua-inv-username').fill('e2e_newinvitee');
+  await inviteModal.locator('#ua-inv-email').fill('e2e_newinvitee@example.test');
+  await inviteModal.locator('#ua-inv-send').click();
+  await expect(inviteModal.locator('#ua-inv-result')).toContainText('Invite created');
+  await inviteModal.locator('#ua-inv-cancel').click();
+  await expect(page.locator('#ua-list')).toContainText('E2E New Invitee');
+
+  await page.locator('#ua-invite').click();
+  const collisionModal = page.locator('#ua-invite-modal');
+  await collisionModal.locator('#ua-inv-display-name').fill('E2E-New Invitee');
+  await collisionModal.locator('#ua-inv-username').fill('e2e_newinvitee');
+  await collisionModal.locator('#ua-inv-email').fill('other-invitee@example.test');
+  await collisionModal.locator('#ua-inv-send').click();
+  await expect(page.locator('#toast-stack .toast--error')).toContainText('already exists');
+  await collisionModal.locator('#ua-inv-cancel').click();
+
   // The Operations workspace keeps configuration concurrency-safe, renders
   // only allowlisted telemetry, and follows async runtime termination to ack.
   await page.locator(OPERATIONS_TAB).click();

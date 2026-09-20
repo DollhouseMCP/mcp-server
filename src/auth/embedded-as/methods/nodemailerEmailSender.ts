@@ -16,8 +16,14 @@
  */
 
 import nodemailer, { type Transporter } from 'nodemailer';
+import { domainToASCII } from 'node:url';
 import { logger } from '../../../utils/logger.js';
 import type { EmailSender, SendMagicLinkInput } from './MagicLinkMethod.js';
+import { isSupportedInvitationEmail } from '../../../invitations/InvitationEmail.js';
+import {
+  classifyEmailSubmissionFailure,
+  type EmailSubmissionResult, type TransactionalEmail, type TransactionalEmailSender,
+} from './TransactionalEmailSender.js';
 
 export interface NodemailerEmailSenderOptions {
   host: string;
@@ -31,7 +37,7 @@ export interface NodemailerEmailSenderOptions {
   connectionTimeoutMs?: number;
 }
 
-export class NodemailerEmailSender implements EmailSender {
+export class NodemailerEmailSender implements EmailSender, TransactionalEmailSender {
   private readonly transporter: Transporter;
   private readonly from: string;
   private readonly host: string;
@@ -120,6 +126,70 @@ export class NodemailerEmailSender implements EmailSender {
       html: `<p>Click to sign in:</p><p><a href="${escapeHtmlAttr(input.url)}">${escapeHtmlAttr(input.url)}</a></p><p>This link expires in 15 minutes.</p>`,
     });
   }
+
+  /**
+   * Sends already-rendered multipart content without imposing magic-link copy
+   * or lifetime. Callers must reserve a durable delivery attempt before calling
+   * once, then record this sanitized result. No messages are persisted here.
+   */
+  async sendTransactionalEmail(input: TransactionalEmail): Promise<EmailSubmissionResult> {
+    const message = { to: input.to, subject: input.subject, text: input.text, html: input.html };
+    message.to = validateTransactionalMessage(message);
+    try {
+      const info = await this.transporter.sendMail({
+        from: this.from,
+        // Structured single-recipient address prevents display-name/list parsing.
+        to: { name: '', address: message.to },
+        subject: message.subject,
+        text: message.text,
+        html: message.html,
+        disableFileAccess: true,
+        disableUrlAccess: true,
+      });
+      if (!Array.isArray(info.accepted) || info.accepted.length !== 1
+          || !Array.isArray(info.rejected) || info.rejected.length !== 0) {
+        return { state: 'unknown', failureClass: 'indeterminate' };
+      }
+      // Nodemailer's info.messageId is an RFC Message-ID generated locally,
+      // not a provider-assigned ID. Never label or persist it as one, and do not
+      // parse arbitrary SMTP response text for an undocumented provider ID.
+      return { state: 'submitted', providerMessageId: null };
+    } catch (error) {
+      return classifyEmailSubmissionFailure(error);
+    }
+  }
+}
+
+function validateTransactionalMessage(message: TransactionalEmail): string {
+  if (typeof message.to !== 'string' || /[\p{Cc}\p{Cf}]/u.test(message.to)) {
+    throw new Error('Invalid transactional email recipient');
+  }
+  const recipient = message.to.normalize('NFC').trim();
+  if (!isSupportedInvitationEmail(recipient)) {
+    throw new Error('Invalid transactional email recipient');
+  }
+  // Identity comparison lowercases email; SMTP preserves the local-part case.
+  // Unicode case folding can change byte lengths, so bound the actual address.
+  const [localPart, domain] = recipient.split('@');
+  const wireDomain = domainToASCII(domain);
+  const wireRecipient = `${localPart}@${wireDomain}`;
+  if (Buffer.byteLength(recipient, 'utf8') > 254 || Buffer.byteLength(localPart, 'utf8') > 64
+      || !wireDomain || Buffer.byteLength(wireRecipient, 'utf8') > 254
+      || wireDomain.split('.').some(label => label.length > 63)) {
+    throw new Error('Invalid transactional email recipient');
+  }
+  // Supply the validated ASCII domain explicitly so SMTP serialization cannot
+  // expand a Unicode domain beyond its label/mailbox limits after validation.
+  if (typeof message.subject !== 'string' || message.subject.trim() === ''
+      || Buffer.byteLength(message.subject, 'utf8') > 200 || /[\p{Cc}\p{Cf}]/u.test(message.subject)) {
+    throw new Error('Invalid transactional email subject');
+  }
+  for (const body of [message.text, message.html]) {
+    if (typeof body !== 'string' || body.trim() === '' || Buffer.byteLength(body, 'utf8') > 65_536) {
+      throw new Error('Invalid transactional email body');
+    }
+  }
+  return wireRecipient;
 }
 
 function escapeHtmlAttr(value: string): string {

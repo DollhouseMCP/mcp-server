@@ -12,13 +12,14 @@ export function normalizeInvitationEmail(email: unknown): string {
     throw new Error('invitation email must be a valid email address');
   }
   const normalized = normalizeAuthAllowlistValue('email', email);
-  if (!isLiteEmailAddress(normalized)) {
+  if (!isSupportedInvitationEmail(normalized)) {
     throw new Error('invitation email must be a valid email address');
   }
   return normalized;
 }
 
-function isLiteEmailAddress(value: string): boolean {
+/** Validate the supplied spelling; identity normalization is a separate step. */
+export function isSupportedInvitationEmail(value: string): boolean {
   if (Buffer.byteLength(value, 'utf8') > MAX_INVITATION_EMAIL_OCTETS ||
       /\s/u.test(value) || containsAsciiControl(value)) return false;
   const at = value.indexOf('@');
