@@ -25,6 +25,10 @@ function outputSummary(result) {
     .slice(0, 1000);
 }
 
+function withDetails(message, details) {
+  return details ? `${message}: ${details}` : message;
+}
+
 function parseRegistryPayload(result) {
   const candidates = [result.stdout, result.stderr]
     .map(value => value?.trim())
@@ -39,9 +43,8 @@ function parseRegistryPayload(result) {
     }
   }
 
-  throw new Error(
-    `npm registry returned invalid JSON${candidates.length ? `: ${candidates.join('\n').slice(0, 1000)}` : ''}`
-  );
+  const details = candidates.join('\n').slice(0, 1000);
+  throw new Error(withDetails('npm registry returned invalid JSON', details));
 }
 
 function assertGitSuccess(result, description) {
@@ -49,8 +52,44 @@ function assertGitSuccess(result, description) {
     throw new Error(`${description} failed: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(`${description} failed${outputSummary(result) ? `: ${outputSummary(result)}` : ''}`);
+    const details = outputSummary(result);
+    throw new Error(withDetails(`${description} failed`, details));
   }
+}
+
+function validateRegistryResult(result, localVersion, log) {
+  if (result.error) {
+    throw new Error(`npm registry lookup failed: ${result.error.message}`);
+  }
+
+  const payload = parseRegistryPayload(result);
+
+  if (result.status !== 0) {
+    if (payload?.error?.code === 'E404') {
+      log(`Safety package ${localVersion} is not published yet; a new version is ready to publish.`);
+      return { status: 'new-version', version: localVersion };
+    }
+
+    const details = outputSummary(result);
+    throw new Error(withDetails('npm registry lookup failed closed', details));
+  }
+
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('npm registry response must be an object containing version and gitHead');
+  }
+
+  if (payload.version !== localVersion) {
+    throw new Error(
+      `npm registry returned version ${String(payload.version)} for requested version ${localVersion}`
+    );
+  }
+
+  const publishedGitHead = payload.gitHead;
+  if (typeof publishedGitHead !== 'string' || !/^[0-9a-f]{40}$/i.test(publishedGitHead)) {
+    throw new Error(`Published ${PACKAGE_NAME}@${localVersion} has an invalid or missing gitHead`);
+  }
+
+  return { status: 'published-version', version: localVersion, gitHead: publishedGitHead };
 }
 
 export function checkSafetyPackageVersion({
@@ -83,42 +122,11 @@ export function checkSafetyPackageVersion({
     '--silent',
   ]);
 
-  if (registryResult.error) {
-    throw new Error(`npm registry lookup failed: ${registryResult.error.message}`);
+  const registryState = validateRegistryResult(registryResult, localVersion, log);
+  if (registryState.status === 'new-version') {
+    return registryState;
   }
-
-  const registryPayload = parseRegistryPayload(registryResult);
-
-  if (registryResult.status !== 0) {
-    if (
-      registryPayload
-      && typeof registryPayload === 'object'
-      && registryPayload.error
-      && registryPayload.error.code === 'E404'
-    ) {
-      log(`Safety package ${localVersion} is not published yet; a new version is ready to publish.`);
-      return { status: 'new-version', version: localVersion };
-    }
-
-    throw new Error(
-      `npm registry lookup failed closed${outputSummary(registryResult) ? `: ${outputSummary(registryResult)}` : ''}`
-    );
-  }
-
-  if (!registryPayload || typeof registryPayload !== 'object' || Array.isArray(registryPayload)) {
-    throw new Error('npm registry response must be an object containing version and gitHead');
-  }
-
-  if (registryPayload.version !== localVersion) {
-    throw new Error(
-      `npm registry returned version ${String(registryPayload.version)} for requested version ${localVersion}`
-    );
-  }
-
-  const publishedGitHead = registryPayload.gitHead;
-  if (typeof publishedGitHead !== 'string' || !/^[0-9a-f]{40}$/i.test(publishedGitHead)) {
-    throw new Error(`Published ${PACKAGE_NAME}@${localVersion} has an invalid or missing gitHead`);
-  }
+  const publishedGitHead = registryState.gitHead;
 
   const trustedMainResult = run(
     'git',
