@@ -48,7 +48,8 @@ export function validateOnboardingOwnerRecord(record: OnboardingOwnerRecord): vo
   assertHash(record.csrfTokenHash, 'csrfTokenHash');
   assertDate(record.createdAt);
   assertDate(record.refreshedAt);
-  assertWindow(record.refreshedAt, record.expiresAt, ONBOARDING_OWNER_MAX_AGE_SECONDS);
+  assertWindow(record.createdAt, record.expiresAt, ONBOARDING_OWNER_MAX_AGE_SECONDS);
+  if (record.expiresAt <= record.refreshedAt) invalid();
   if (record.refreshedAt < record.createdAt) invalid();
   assertRevocation(record.revokedAt, record.createdAt);
 }
