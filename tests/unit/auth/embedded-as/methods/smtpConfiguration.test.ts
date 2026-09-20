@@ -92,6 +92,10 @@ describe('SMTP configuration', () => {
     const expandedByLowercase = `${'ẞ'.repeat(32)}@example.test`;
     expect(() => resolveSmtpConfiguration({ ...complete(), from: expandedByLowercase }))
       .toThrow(/DOLLHOUSE_SMTP_FROM/);
+
+    const exactBeforeLowercase = `${'İ'.repeat(32)}@example.test`; // 64 bytes; lowercasing would produce 96.
+    expect(resolveSmtpConfiguration({ ...complete(), from: exactBeforeLowercase }))
+      .toMatchObject({ state: 'enabled', options: { from: exactBeforeLowercase } });
   });
 
   it('rejects a Unicode sender domain whose IDNA wire label exceeds 63 bytes', () => {

@@ -4,7 +4,7 @@ import {
   MAX_INVITATION_EMAIL_DOMAIN_LABEL_OCTETS,
   MAX_INVITATION_EMAIL_LOCAL_PART_OCTETS,
   MAX_INVITATION_EMAIL_OCTETS,
-  normalizeInvitationEmail,
+  isSupportedInvitationEmail,
 } from '../../../invitations/InvitationEmail.js';
 
 const DEFAULT_SMTP_PORT = 587;
@@ -169,12 +169,10 @@ function validateSender(value: unknown): string {
   if (typeof value !== 'string' || FORBIDDEN_CONFIGURATION_CHARACTER.test(value)) {
     throw new SmtpConfigurationError('invalid_sender');
   }
-  // Preserve the exact NFC local-part case used on the SMTP envelope. The
-  // shared identity helper lowercases email, so use it only as a syntax check.
+  // Validate the exact NFC spelling used on the SMTP envelope. Identity
+  // normalization is deliberately separate because it lowercases local parts.
   const sender = value.normalize('NFC').trim();
-  try {
-    normalizeInvitationEmail(sender);
-  } catch {
+  if (!isSupportedInvitationEmail(sender)) {
     throw new SmtpConfigurationError('invalid_sender');
   }
   const at = sender.indexOf('@');
