@@ -79,6 +79,18 @@ describe('private-beta invitation email', () => {
     expect(email.html).not.toMatch(/<img|<script|<iframe|<link|\bsrc=|url\(/i);
   });
 
+  it.each([
+    ['help@example.test', 'mailto:help@example.test'],
+    ['desk?case#tag&more@example.test', 'mailto:desk%3Fcase%23tag%26more@example.test'],
+    ["desk'case@example.test", 'mailto:desk&#39;case@example.test'],
+  ])('preserves mailto addr-spec without permitting header or fragment injection for %s', (supportEmail, expectedHref) => {
+    const email = renderInvitationEmail(fixture({ supportEmail }));
+    expect(email.html).toContain(`href="${expectedHref}"`);
+    expect(expectedHref.match(/@/g)).toHaveLength(1);
+    expect(expectedHref).not.toContain('?');
+    expect(expectedHref).not.toContain('#tag');
+  });
+
   it('escapes recipient and role strings in HTML without changing their plain-text meaning', () => {
     const name = 'Morgan <img src=x onerror="alert(1)"> & Co';
     const email = renderInvitationEmail(fixture({

@@ -39,6 +39,10 @@ export function renderInvitationEmail(input: InvitationEmailTemplateInput): Invi
   }));
   let support: string;
   try { support = normalizeInvitationEmail(input.supportEmail); } catch { return invalidTemplate(); }
+  // Preserve addr-spec's single @ delimiter while encoding local-part URI
+  // metacharacters: ?/#/& must never become mailto query or fragment syntax.
+  const separator = support.indexOf('@');
+  const supportHref = `mailto:${encodeURIComponent(support.slice(0, separator))}@${encodeURIComponent(support.slice(separator + 1))}`;
   const hours = lifetimeHours(input.issuedAt, input.expiresAt);
   const duration = `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
   const expiry = input.expiresAt.toISOString().replace('T', ' ').replace('.000Z', ' UTC').replace('Z', ' UTC');
@@ -73,7 +77,7 @@ export function renderInvitationEmail(input: InvitationEmailTemplateInput): Invi
 <p>${escapeHtml(expiration)}</p>
 <p>${escapeHtml(singleUse)}</p>
 <p>${escapeHtml(unexpected)}</p>
-<p>Questions or need a new invitation? Contact <a href="mailto:${encodeURIComponent(support)}">${escapeHtml(support)}</a>.</p>
+<p>Questions or need a new invitation? Contact <a href="${escapeHtml(supportHref)}">${escapeHtml(support)}</a>.</p>
 </main></body></html>`;
   return { subject: INVITATION_EMAIL_SUBJECT, text, html };
 }
