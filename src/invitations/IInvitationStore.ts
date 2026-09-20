@@ -22,6 +22,7 @@ export type InvitationTransactionAudit =
 
 export interface InvitationIssueRecord {
   readonly invitationId: string;
+  /** Reserved ID; issue creates the pending user before its invitation in the same transaction. */
   readonly userId: string;
   readonly username: string;
   readonly displayName: string | null;
@@ -44,6 +45,7 @@ export interface InvitationRegenerationRecord {
 }
 
 export interface InvitationClaimRecord {
+  /** Resolve the pending user from this verified invitation, never from caller-supplied account data. */
   readonly invitationId: string;
   readonly generation: number;
   readonly credentialSecret: Buffer;
@@ -89,6 +91,9 @@ export interface IInvitationStore {
   /**
    * #2681 calls this inside its wider transaction, then performs identity,
    * role, account, invitation, claim, and audit writes before one commit.
+   * Implementations must lock and validate the current pending generation,
+   * pending account, unexpired open claim, and matching owner binding. The
+   * caller must append transaction-scoped security/admin audit for its writes.
    */
   lockActivationCandidateWithTx(
     tx: DrizzleTx,

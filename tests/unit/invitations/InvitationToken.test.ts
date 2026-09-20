@@ -37,6 +37,10 @@ describe('InvitationToken', () => {
     expect(invitationCredentialMatches(digest, hashInvitationCredential(token, EMAIL, EXPIRES_AT))).toBe(true);
     expect(invitationCredentialMatches(
       digest,
+      hashInvitationCredential({ ...token, invitationId: '123e4567-e89b-12d3-a456-426614174001' }, EMAIL, EXPIRES_AT),
+    )).toBe(false);
+    expect(invitationCredentialMatches(
+      digest,
       hashInvitationCredential({ ...token, generation: 2 }, EMAIL, EXPIRES_AT),
     )).toBe(false);
     expect(invitationCredentialMatches(
