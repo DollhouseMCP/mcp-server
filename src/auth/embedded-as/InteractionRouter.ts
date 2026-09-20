@@ -527,6 +527,10 @@ export async function finishInteractionWithIdentity(
 ): Promise<void> {
   try {
     const { storage, defaultResource, adminClaims } = options;
+    if (!await storage.isAccountAllowed(accountId)) {
+      sendError(res, req, 403, 'access_denied', 'Account is not available for authentication');
+      return;
+    }
     // Consent (if any) is complete by the time we finish; clear the pending record.
     await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
     const grantId = await resolveAndSaveGrant(provider, details, accountId, defaultResource);

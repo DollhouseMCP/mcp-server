@@ -51,6 +51,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
   const RESOURCE = 'http://127.0.0.1:65530/mcp';
   let tmpDir: string;
   let as: EmbeddedAuthorizationServer;
+  const storage = new InMemoryAuthStorageLayer();
   let signKey: CryptoKey;
   let kid: string;
 
@@ -72,7 +73,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       mcpPath: '/mcp',
       keyFilePath,
       methods: [new TrivialConsentMethod({ defaultSubject: 'validate-test' })],
-      storage: new InMemoryAuthStorageLayer(),
+      storage,
     });
 
     // Prime the AS so subsequent validate() calls don't need to do init.
@@ -114,6 +115,21 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       .setExpirationTime(opts.exp ?? now + 3600);
     return jwt.sign(signKey);
   }
+
+  it('rejects direct issuance and existing tokens when the account becomes pending', async () => {
+    const token = await as.issue(LOCAL_USER_SUB);
+    expect((await as.validate(token)).ok).toBe(true);
+    const allowed = jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(false);
+    try {
+      await expect(as.issue(LOCAL_USER_SUB)).rejects.toThrow('Account is not available');
+      expect(await as.validate(token)).toEqual({ ok: false, reason: 'Account is not available for authentication' });
+      allowed.mockRejectedValue(new Error('database unavailable'));
+      await expect(as.issue(LOCAL_USER_SUB)).rejects.toThrow('database unavailable');
+      await expect(as.validate(token)).rejects.toThrow('database unavailable');
+    } finally {
+      allowed.mockRestore();
+    }
+  });
 
   it('positive control: a properly-signed at+jwt token is accepted', async () => {
     const token = await mintToken();

@@ -21,7 +21,12 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
       })
         .from(authAccounts)
         .innerJoin(users, eq(authAccounts.userId, users.id))
-        .where(and(eq(authAccounts.sub, sub), isNull(users.disabledAt)))
+        .where(and(
+          eq(authAccounts.sub, sub),
+          eq(users.activationState, 'active'),
+          isNull(users.disabledAt),
+          isNull(users.deletedAt),
+        ))
         .limit(1);
       if (rows.length === 0) return null;
       const principal = rows[0];
