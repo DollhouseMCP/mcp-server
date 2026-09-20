@@ -56,6 +56,23 @@ describe('invitation management service', () => {
     expect(inspected).not.toHaveProperty('credential');
   });
 
+  it('persists canonical Unicode account names from service input', async () => {
+    if (!databaseAvailable) return;
+    const suffix = randomUUID();
+    const issued = await service().issue({
+      ...input(),
+      username: ` \u00a0CAFÉ-${suffix.normalize('NFD')}\u00a0 `,
+      displayName: ' \u00a0Rene\u0301e Example\u00a0 ',
+    });
+    const expectedUsername = `café-${suffix}`;
+    expect(issued.invitation).toMatchObject({
+      intendedUsername: expectedUsername,
+      intendedDisplayName: 'Renée Example',
+    });
+    const [user] = await getTestAdminDb().select().from(users).where(eq(users.id, issued.invitation.userId));
+    expect(user).toMatchObject({ username: expectedUsername, displayName: 'Renée Example' });
+  });
+
   it('uses the transaction-returned generation for concurrent regeneration credentials', async () => {
     if (!databaseAvailable) return;
     const issued = await service().issue(input());

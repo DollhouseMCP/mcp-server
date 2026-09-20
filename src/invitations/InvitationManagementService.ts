@@ -1,6 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
 import type { IInvitationManagementStore, InvitationManagementAudit } from './IInvitationManagementStore.js';
+import {
+  normalizeLocalDisplayName,
+  normalizeLocalUsername,
+} from '../web-console/ui/account-username.js';
 import { MAX_INVITATION_TTL_HOURS, MIN_INVITATION_TTL_HOURS, readInvitationConfig } from './InvitationConfig.js';
 import { normalizeInvitationEmail } from './InvitationEmail.js';
 import { generateInvitationToken, INVITATION_SECRET_BYTES } from './InvitationToken.js';
@@ -32,15 +36,21 @@ export class InvitationManagementService implements Pick<IInvitationLifecycleSer
     const owned = { ...input, intendedRoles: [...input.intendedRoles] };
     const ttlHours = validateTtl(owned.ttlHours ?? this.defaultTtlHours);
     let emailNormalized: string;
-    try { emailNormalized = normalizeInvitationEmail(owned.email); } catch {
-      throw new InvitationError('invitation_invalid', 'Invalid invitation email');
+    let username: string;
+    let displayName: string | null;
+    try {
+      emailNormalized = normalizeInvitationEmail(owned.email);
+      username = normalizeLocalUsername(owned.username);
+      displayName = owned.displayName === null ? null : normalizeLocalDisplayName(owned.displayName);
+    } catch {
+      throw new InvitationError('invitation_invalid', 'Invalid invitation account context');
     }
     const invitationId = randomUUID();
     const userId = randomUUID();
     const secret = randomBytes(INVITATION_SECRET_BYTES);
     try {
       const invitation = await this.store.runMutation(this.audit, mutation => mutation.issue({
-        invitationId, userId, username: owned.username, displayName: owned.displayName,
+        invitationId, userId, username, displayName,
         emailOriginal: owned.email, emailNormalized, inviterUserId: owned.inviterUserId,
         intendedRoles: owned.intendedRoles, generation: 1, credentialSecret: secret,
         ttlHours, correlationId: owned.correlationId,

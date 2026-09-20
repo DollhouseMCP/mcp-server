@@ -133,6 +133,25 @@ describe('transactional invitation management', () => {
     await expect(issue(record({ emailOriginal: email, emailNormalized: normalizeInvitationEmail(email) }))).rejects.toMatchObject({ code: 'invitation_conflict' });
   });
 
+  it('rejects a canonical username collision with a legacy padded, cased and decomposed value', async () => {
+    if (!databaseAvailable) return;
+    const canonicalUsername = `café-${randomUUID()}`;
+    const legacyUsername = `\u00a0${canonicalUsername.normalize('NFD').toUpperCase()}\u00a0`;
+    await getTestAdminDb().insert(users).values({ username: legacyUsername });
+    await expect(issue(record({ username: canonicalUsername }))).rejects.toMatchObject({ code: 'invitation_conflict' });
+  });
+
+  it.each([
+    { username: ' MixedCase ', displayName: 'Pending User' },
+    { username: `valid-${randomUUID()}`, displayName: ' Padded Name ' },
+    { username: '\u0301detached-mark', displayName: 'Pending User' },
+  ])('rejects noncanonical or invalid direct-store account names', async account => {
+    if (!databaseAvailable) return;
+    const input = record(account);
+    await expect(issue(input)).rejects.toMatchObject({ code: 'invitation_invalid' });
+    expect(await store().inspect(input.invitationId)).toBeNull();
+  });
+
   it.each([0, 169, 1.5])('rejects invalid TTL %s without creating records', async ttlHours => {
     if (!databaseAvailable) return;
     const input = record({ ttlHours });
