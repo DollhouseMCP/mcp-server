@@ -53,7 +53,7 @@ export function parseInvitationToken(token: string): ParsedInvitationToken {
   const [version, encodedId, rawGeneration, encodedSecret, extra] = token.split('.');
   if (extra !== undefined || version !== INVITATION_TOKEN_VERSION ||
       !encodedId || !encodedSecret || !BASE64URL_PATTERN.test(encodedId) ||
-      !BASE64URL_PATTERN.test(encodedSecret) || !/^[1-9][0-9]*$/.test(rawGeneration ?? '')) {
+      !BASE64URL_PATTERN.test(encodedSecret) || !/^[1-9]\d*$/.test(rawGeneration ?? '')) {
     throw new InvitationTokenError();
   }
   const idBytes = decodeBase64Url(encodedId);

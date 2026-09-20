@@ -50,7 +50,7 @@ function parseBoundedInteger(
     if (fallback === null) throw new InvitationConfigError(`${name} is required`);
     return fallback;
   }
-  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+  if (!/^(0|[1-9]\d*)$/.test(raw)) {
     throw new InvitationConfigError(`${name} must be a base-10 integer`);
   }
   const parsed = Number(raw);
