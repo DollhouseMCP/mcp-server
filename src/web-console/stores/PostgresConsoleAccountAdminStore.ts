@@ -3,6 +3,7 @@ import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
+import { purgeInvitationRecipientData } from '../../database/invitationDataPurge.js';
 import { accountFactors, authAccounts, userAdminRoles, users } from '../../database/schema/index.js';
 import {
   collectDeletionIdentity,
@@ -485,6 +486,7 @@ export async function deleteConsolePrincipalWithTx(
     // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires. Replay the
     // cascade explicitly so no personal data survives under the tombstone; only the retained
     // RESTRICT-anchored audit chain (and this user's actions on others) remain.
+    await purgeInvitationRecipientData(tx, input.userId);
     await purgeUserScopedData(tx, input.userId);
     const rows = await tx.update(users).set({
       // Username is NOT NULL + unique; the id guarantees a unique tombstone.
