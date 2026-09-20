@@ -3,7 +3,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
-import { isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import {
   accountInvitations as invitations,
   accountInvitationDeliveryAttempts as attempts,
@@ -14,7 +14,7 @@ import type { InvitationManagementAudit } from './IInvitationManagementStore.js'
 import type { IInvitationDeliveryStore, InvitationDeliveryMutation, InvitationDeliveryReservation } from './IInvitationDeliveryStore.js';
 import { sanitizeDeliveryResult, validateDeliveryProvider } from './InvitationDeliveryMetadata.js';
 import {
-  assertUuid, copyAudit, databaseTime, lockAccounts, lockInvitation, requireInvitation,
+  assertUuid, copyAudit, databaseTime, lockAccounts, lockInvitation, lockAdminAudit, requireInvitation,
 } from './InvitationTransactionSupport.js';
 import {
   InvitationError, type InvitationDeliveryAttemptView, type InvitationDeliveryResultUpdate, type InvitationView,
@@ -41,7 +41,7 @@ export class PostgresInvitationDeliveryStore implements IInvitationDeliveryStore
     try {
       return await withSystemContext(this.db, tx => operation(createInvitationDeliveryMutation(tx, ownedAudit)));
     } catch (error) {
-      if (isSerializationFailure(error) || isUniqueViolation(error)) {
+      if (isSerializationFailure(error) || isUniqueViolation(error) || getErrorCode(error) === '55P03') {
         throw new InvitationError('concurrent_update', 'Invitation delivery transaction conflicted');
       }
       throw error;
@@ -68,6 +68,7 @@ async function reserve(
   if (!Number.isInteger(generation) || generation < 1 || generation > 2_147_483_647) invalid('Invalid invitation generation');
   // Same lock order as issue/regenerate/revoke, including their users table lock.
   const invitation = await lockInvitation(tx, invitationId);
+  await lockAdminAudit(tx, audit);
   if (invitation.currentGeneration.generation !== generation) {
     throw new InvitationError('invitation_superseded', 'Invitation generation is no longer current');
   }
@@ -107,6 +108,7 @@ async function recordResult(
   const [location] = await tx.select({ invitationId: attempts.invitationId }).from(attempts).where(eq(attempts.id, attemptId));
   if (!location) throw new InvitationError('invitation_not_found', 'Invitation delivery attempt not found');
   await lockAccounts(tx);
+  await lockAdminAudit(tx, audit);
   await tx.select({ id: invitations.id }).from(invitations).where(eq(invitations.id, location.invitationId)).for('update');
   const invitation = await requireInvitation(tx, location.invitationId);
   // Deletion scrubs retained invitation/delivery metadata. The users table lock

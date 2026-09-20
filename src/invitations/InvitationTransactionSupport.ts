@@ -10,10 +10,10 @@ import { InvitationError, type InvitationView } from './InvitationTypes.js';
 export async function lockAccounts(tx: DrizzleTx): Promise<void> {
   // Existing account writers do not share an invitation advisory-lock namespace,
   // and users.email has no canonical unique constraint. This short, coarse lock
-  // closes insert/update phantom races with those writers. Narrow only once all
+  // closes insert/update phantom races with those writers. EXCLUSIVE also conflicts
+  // with SELECT FOR UPDATE's ROW SHARE, avoiding a row-lock/table-upgrade deadlock.
+  // Narrow only once all
   // account writers share a canonical uniqueness/locking protocol.
-  // EXCLUSIVE also conflicts with SELECT FOR UPDATE's ROW SHARE table lock,
-  // preventing a row-lock holder from creating a table-lock upgrade cycle.
   await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
 }
 
@@ -98,4 +98,13 @@ export function assertUuid(value: string): void {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
     throw new InvitationError('invitation_invalid', 'Invitation identifiers must be UUIDs');
   }
+}
+
+export async function lockAdminAudit(tx: DrizzleTx, audit: InvitationManagementAudit): Promise<void> {
+  if (audit.kind !== 'admin') return;
+  // Ordinary audit writers own the chain head before checking users FKs. Never
+  // wait on them while holding users EXCLUSIVE. A table preflight also covers
+  // the initial INSERT/unique check when the chain head does not exist yet.
+  // NOWAIT failure aborts the DB transaction, including every previously held lock.
+  await tx.execute(sql`LOCK TABLE admin_audit_chain_heads IN EXCLUSIVE MODE NOWAIT`);
 }

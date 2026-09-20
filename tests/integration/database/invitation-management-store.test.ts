@@ -263,4 +263,34 @@ describe('transactional invitation management', () => {
     }
   });
 
+
+  it('aborts before mutation callbacks when an ordinary audit owns the head before its users FK check', async () => {
+    const input = record();
+    let managementResult: Promise<unknown> | undefined;
+    let mutationAuditCalls = 0;
+    const contenderAudit = { ...adminAudit, appendAdminEvent: async (tx, event) => {
+      mutationAuditCalls += 1;
+      if (adminAudit.kind === 'admin') await adminAudit.appendAdminEvent(tx, event);
+    } } as InvitationManagementAudit;
+    await getTestAdminDb().transaction(async writer => {
+      // Match the ordinary writer's actual INSERT then FOR UPDATE order. It has
+      // not touched users yet; its later audit INSERT performs those FK checks.
+      await writer.execute(sql`INSERT INTO admin_audit_chain_heads (stream_id) VALUES ('admin') ON CONFLICT DO NOTHING`);
+      await writer.execute(sql`SELECT * FROM admin_audit_chain_heads WHERE stream_id = 'admin' FOR UPDATE`);
+      managementResult = issue(input, contenderAudit).catch(error => error);
+      await writer.execute(sql`SELECT pg_sleep(0.1)`);
+      if (adminAudit.kind !== 'admin') throw new Error('admin audit required');
+      await adminAudit.appendAdminEvent(writer, {
+        ...adminAudit.adminContext, occurredAt: new Date(), correlationId: randomUUID(),
+        operation: 'test.concurrent_audit', resourceKind: null, resourceId: null, targetUserId: inviterId,
+        argsRedacted: {}, result: 'approved', errorCode: null, resultDetailRedacted: null,
+      });
+    });
+    expect(await managementResult).toMatchObject({ code: 'concurrent_update' });
+    expect(mutationAuditCalls).toBe(0);
+    expect(await store().inspect(input.invitationId)).toBeNull();
+    expect(await getTestAdminDb().select().from(users).where(eq(users.id, input.userId))).toHaveLength(0);
+    expect((await issue(input, adminAudit)).state).toBe('pending');
+  });
+
 });
