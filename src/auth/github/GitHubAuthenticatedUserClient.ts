@@ -99,8 +99,11 @@ export class GitHubAuthenticatedUserClient {
       if (response.status === 401) {
         throw new GitHubAuthenticatedUserError('unauthorized', false);
       }
-      if (response.status === 403 || response.status === 429) {
+      if (isRateLimited(response)) {
         throw new GitHubAuthenticatedUserError('rate_limited', true);
+      }
+      if (response.status === 403) {
+        throw new GitHubAuthenticatedUserError('unauthorized', false);
       }
       throw new GitHubAuthenticatedUserError('upstream_unavailable', response.status >= 500);
     }
@@ -198,6 +201,13 @@ function isAbortError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('name' in error)) return false;
   const name = (error as { name?: unknown }).name;
   return name === 'AbortError' || name === 'TimeoutError';
+}
+
+function isRateLimited(response: Response): boolean {
+  if (response.status === 429) return true;
+  if (response.status !== 403) return false;
+  return response.headers.get('x-ratelimit-remaining')?.trim() === '0' ||
+    response.headers.has('retry-after');
 }
 
 function errorMessage(code: GitHubAuthenticatedUserErrorCode): string {

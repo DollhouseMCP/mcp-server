@@ -160,7 +160,7 @@ describe('GitHubAuthenticatedUserClient', () => {
 
   it.each([
     [401, 'unauthorized', false],
-    [403, 'rate_limited', true],
+    [403, 'unauthorized', false],
     [429, 'rate_limited', true],
     [500, 'upstream_unavailable', true],
     [404, 'upstream_unavailable', false],
@@ -175,6 +175,16 @@ describe('GitHubAuthenticatedUserClient', () => {
     expect(error.message).not.toContain(secret);
     expect(error.message).not.toContain(upstreamBody);
     expect(error).not.toHaveProperty('cause');
+  });
+
+  it.each([
+    [{ 'X-RateLimit-Remaining': '0' }],
+    [{ 'Retry-After': '60' }],
+  ])('classifies a forbidden response as rate limited only with supporting headers', async headers => {
+    const fetchImpl = jest.fn<typeof fetch>().mockResolvedValue(jsonResponse({}, 403, headers));
+    const client = new GitHubAuthenticatedUserClient({ fetchImpl });
+
+    await expectClientError(client.fetchAuthenticatedUser('token'), 'rate_limited', true);
   });
 
   it('rejects a declared oversized response before parsing it', async () => {
