@@ -6,6 +6,7 @@ import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import { authAccounts, users } from '../../../database/schema/index.js';
 import type { ISigningKeyStore } from '../../../storage/signingKeys/ISigningKeyStore.js';
+import { normalizeLocalUsername } from '../../ui/account-username.js';
 import type { ConsoleAdminRole } from '../../stores/IConsoleAccountAdminStore.js';
 import { grantConsoleAdminRoleWithTx } from '../../stores/PostgresConsoleAccountAdminStore.js';
 import { ConsoleStoreConflictError, isUniqueViolation } from '../../stores/ConsoleStoreValidation.js';
@@ -44,6 +45,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
 
     const userId = await this.createPrincipalAndAuthAccount({
       username,
+      displayName: input.displayName,
       email: input.email,
       primarySub,
       actorUserId: input.actorUserId,
@@ -67,6 +69,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
 
   private async createPrincipalAndAuthAccount(input: {
     readonly username: string;
+    readonly displayName: string;
     readonly email: string;
     readonly primarySub: string;
     readonly actorUserId: string;
@@ -78,7 +81,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
       const insertedUsers = await tx.insert(users).values({
         username: input.username,
         email: input.email,
-        displayName: input.email,
+        displayName: input.displayName,
         createdAt: input.issuedAt,
         updatedAt: input.issuedAt,
       }).returning({ id: users.id });
@@ -92,7 +95,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
         userId,
         email: input.email,
         emailVerified: false,
-        displayName: input.email,
+        displayName: input.displayName,
         rawProfile: null,
         passwordHash: null,
         lastAuthAt: null,
@@ -125,8 +128,4 @@ function buildInviteUrl(publicBaseUrl: string, token: string): string {
   const url = new URL(LOCAL_INVITE_PATH, publicBaseUrl);
   url.searchParams.set('invite', token);
   return url.toString();
-}
-
-function normalizeLocalUsername(username: string): string {
-  return username.toLowerCase();
 }
