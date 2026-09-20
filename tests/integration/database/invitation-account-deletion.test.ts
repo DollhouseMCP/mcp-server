@@ -1,30 +1,40 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import { afterAll, describe, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../src/database/admin.js';
 import { deleteConsolePrincipalWithTx } from '../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
-import { closeTestDb, getTestAdminDb } from './test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const TERMINAL_AT = new Date('2026-09-01T10:00:00.000Z');
 const TERMINAL_AT_SQL = TERMINAL_AT.toISOString();
 const EXPIRES_1H_SQL = new Date(TERMINAL_AT.getTime() + 3_600_000).toISOString();
 const EXPIRES_2H_SQL = new Date(TERMINAL_AT.getTime() + 7_200_000).toISOString();
 const DELETED_AT = new Date('2026-09-20T10:00:00.000Z');
+let databaseAvailable = false;
+
+beforeAll(async () => {
+  databaseAvailable = await isDatabaseAvailable();
+  if (!databaseAvailable && process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1') {
+    throw new Error('PostgreSQL invitation account-deletion proof is required but the test database is unavailable.');
+  }
+});
 
 afterAll(async () => {
-  await closeTestDb();
+  if (databaseAvailable) await closeTestDb();
 });
 
 describe('invitation recipient account deletion', () => {
   it('redacts recipient PII, revokes pending/open state, and preserves terminal history', async () => {
+    if (!databaseAvailable) return;
     const db = getTestAdminDb();
     const adminId = randomUUID();
     const inviterId = randomUUID();
     const recipientId = randomUUID();
     const pendingInvitationId = randomUUID();
     const acceptedInvitationId = randomUUID();
+    const inFlightDeliveryId = randomUUID();
     const pendingCorrelationId = randomUUID();
     const acceptedCorrelationId = randomUUID();
 
@@ -94,6 +104,17 @@ describe('invitation recipient account deletion', () => {
           ${TERMINAL_AT_SQL}::timestamptz, ${TERMINAL_AT_SQL}::timestamptz, ${EXPIRES_1H_SQL}::timestamptz,
           ${TERMINAL_AT_SQL}::timestamptz, ${TERMINAL_AT_SQL}::timestamptz
         )
+    `);
+    await db.execute(sql`
+      INSERT INTO account_invitation_delivery_attempts (
+        id, invitation_id, generation, attempt_number, state, provider,
+        provider_message_id, failure_class, sanitized_detail, correlation_id,
+        requested_at, started_at, completed_at
+      ) VALUES (
+        ${inFlightDeliveryId}::uuid, ${pendingInvitationId}::uuid, 2, 2, 'submitting', 'test-mail',
+        NULL, NULL, NULL, ${randomUUID()}::uuid,
+        ${TERMINAL_AT_SQL}::timestamptz, ${TERMINAL_AT_SQL}::timestamptz, NULL
+      )
     `);
     await db.execute(sql`
       INSERT INTO account_invitation_delivery_attempts (
@@ -206,7 +227,7 @@ describe('invitation recipient account deletion', () => {
       WHERE invitation_id IN (${pendingInvitationId}::uuid, ${acceptedInvitationId}::uuid)
       ORDER BY invitation_id, generation, attempt_number
     `) as unknown as Array<Record<string, unknown>>;
-    expect(deliveries.map(row => row.state).sort()).toEqual(['failed', 'submitted', 'submitted']);
+    expect(deliveries.map(row => row.state).sort()).toEqual(['failed', 'submitted', 'submitted', 'submitting']);
     for (const delivery of deliveries) {
       expect(delivery.provider).toBe('test-mail');
       expect(delivery.provider_message_id).toBeNull();
@@ -214,12 +235,21 @@ describe('invitation recipient account deletion', () => {
       expect(delivery.sanitized_detail).toBeNull();
       expect(new Date(delivery.requested_at as string | Date)).toEqual(TERMINAL_AT);
       expect(new Date(delivery.started_at as string | Date)).toEqual(TERMINAL_AT);
-      expect(new Date(delivery.completed_at as string | Date)).toEqual(TERMINAL_AT);
+      if (delivery.state === 'submitting') expect(delivery.completed_at).toBeNull();
+      else expect(new Date(delivery.completed_at as string | Date)).toEqual(TERMINAL_AT);
       expect(Number(delivery.version)).toBe(2);
     }
+    const staleProviderResult = await db.execute(sql`
+      UPDATE account_invitation_delivery_attempts
+      SET provider_message_id = 'late-provider-result', version = version + 1
+      WHERE id = ${inFlightDeliveryId}::uuid AND version = 1
+      RETURNING id
+    `);
+    expect(staleProviderResult).toHaveLength(0);
   });
 
   it('does not redact another recipient when the deleted user is only the inviter', async () => {
+    if (!databaseAvailable) return;
     const db = getTestAdminDb();
     const adminId = randomUUID();
     const issuerId = randomUUID();
@@ -269,7 +299,86 @@ describe('invitation recipient account deletion', () => {
     expect(Number(rows[0]?.version)).toBe(1);
   });
 
+  it('makes invitation management wait outside the users-before-invitations lock sequence', async () => {
+    if (!databaseAvailable) return;
+    const db = getTestAdminDb();
+    const adminId = randomUUID();
+    const inviterId = randomUUID();
+    const recipientId = randomUUID();
+    const invitationId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO users (id, username, activation_state) VALUES
+        (${adminId}::uuid, ${`admin-${adminId}`}, 'active'),
+        (${inviterId}::uuid, ${`inviter-${inviterId}`}, 'active'),
+        (${recipientId}::uuid, ${`recipient-${recipientId}`}, 'pending_activation')
+    `);
+    await db.execute(sql`
+      INSERT INTO account_invitations (
+        id, user_id, email_original, email_normalized, inviter_user_id,
+        intended_display_name, intended_username, correlation_id
+      ) VALUES (
+        ${invitationId}::uuid, ${recipientId}::uuid, 'Race Recipient', 'race@example.test',
+        ${inviterId}::uuid, 'Race Recipient', 'race-recipient', ${randomUUID()}::uuid
+      )
+    `);
+    await db.execute(sql`
+      INSERT INTO account_invitation_generations (
+        invitation_id, generation, credential_hash, issued_at, expires_at
+      ) VALUES (
+        ${invitationId}::uuid, 1, ${randomBytes(32)}, ${TERMINAL_AT_SQL}::timestamptz,
+        ${EXPIRES_1H_SQL}::timestamptz
+      )
+    `);
+
+    let deletionLockedResolve!: () => void;
+    let releaseDeletion!: () => void;
+    const deletionLocked = new Promise<void>(resolve => { deletionLockedResolve = resolve; });
+    const deletionMayProceed = new Promise<void>(resolve => { releaseDeletion = resolve; });
+    const deletion = withSystemContext(db, async tx => {
+      await tx.execute(sql`SELECT id FROM users WHERE id = ${recipientId}::uuid FOR UPDATE`);
+      deletionLockedResolve();
+      await deletionMayProceed;
+      return deleteConsolePrincipalWithTx(tx, {
+        userId: recipientId,
+        deletedByUserId: adminId,
+        deletedAt: DELETED_AT,
+      });
+    });
+    await deletionLocked;
+
+    let managementStartedResolve!: () => void;
+    const managementStarted = new Promise<void>(resolve => { managementStartedResolve = resolve; });
+    let managementSettled = false;
+    const management = db.transaction(async tx => {
+      managementStartedResolve();
+      await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
+      const rows = await tx.execute(sql`SELECT deleted_at FROM users WHERE id = ${recipientId}::uuid`);
+      return rows as unknown as Array<{ deleted_at: Date | string | null }>;
+    });
+    void management.then(
+      () => { managementSettled = true; },
+      () => { managementSettled = true; },
+    );
+    await managementStarted;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(managementSettled).toBe(false);
+
+    releaseDeletion();
+    await expect(deletion).resolves.toMatchObject({ outcome: 'anonymized' });
+    const observedAfterDeletion = await management;
+    expect(observedAfterDeletion[0]?.deleted_at).not.toBeNull();
+    const invitation = await db.execute(sql`
+      SELECT email_normalized, state
+      FROM account_invitations WHERE id = ${invitationId}::uuid
+    `) as unknown as Array<Record<string, unknown>>;
+    expect(invitation[0]).toMatchObject({
+      email_normalized: `deleted-${invitationId}@deleted.invalid`,
+      state: 'revoked',
+    });
+  });
+
   it('rolls back invitation redaction and account tombstoning when the outer transaction fails', async () => {
+    if (!databaseAvailable) return;
     const db = getTestAdminDb();
     const adminId = randomUUID();
     const inviterId = randomUUID();

@@ -39,7 +39,8 @@ export async function purgeInvitationRecipientData(tx: DrizzleTx, userId: string
 
   // Provider result fields may contain addresses or provider-side identifiers.
   // Keep delivery state and timing history, but remove those payloads from every
-  // attempt for this recipient.
+  // attempt for this recipient. Bump even an already-empty attempt so a provider
+  // result that was in flight before deletion loses its optimistic-version race.
   await tx.execute(sql`
     UPDATE account_invitation_delivery_attempts AS delivery
     SET provider_message_id = NULL,
@@ -51,11 +52,6 @@ export async function purgeInvitationRecipientData(tx: DrizzleTx, userId: string
       FROM account_invitations AS invitation
       WHERE invitation.user_id = ${userId}::uuid
     )
-      AND (
-        delivery.provider_message_id IS NOT NULL
-        OR delivery.failure_class IS NOT NULL
-        OR delivery.sanitized_detail IS NOT NULL
-      )
   `);
 
   await tx.execute(sql`
