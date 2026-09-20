@@ -9,7 +9,7 @@ import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.
 import { appendConsoleAdminAuditEventWithTx } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
 import { accountInvitations, accountInvitationGenerations, accountInvitationClaimAssertions } from '../../../src/database/schema/invitations.js';
 import { users } from '../../../src/database/schema/users.js';
-import { closeTestDb, getTestAdminDb } from './test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const inviterId = randomUUID();
 const key = randomBytes(32);
@@ -42,11 +42,19 @@ const regenerate = (invitationId: string, audit = systemAudit) => store().runMut
 }));
 const revoke = (invitationId: string, audit = systemAudit) => store().runMutation(audit, mutation => mutation.revoke(invitationId, randomUUID()));
 
-beforeAll(async () => { await getTestAdminDb().insert(users).values({ id: inviterId, username: `admin-${inviterId}` }); });
+let databaseAvailable = false;
+beforeAll(async () => {
+  databaseAvailable = await isDatabaseAvailable();
+  if (!databaseAvailable && process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1') {
+    throw new Error('PostgreSQL is required for invitation integration tests');
+  }
+  if (!databaseAvailable) return;
+  await getTestAdminDb().insert(users).values({ id: inviterId, username: `admin-${inviterId}` }); });
 afterAll(closeTestDb);
 
 describe('transactional invitation management', () => {
   it('atomically creates a pending user and hashed generation without identities, roles or sessions', async () => {
+    if (!databaseAvailable) return;
     const input = record();
     const view = await issue(input, adminAudit);
     expect(await store().inspect(view.id)).toEqual(view);
@@ -77,6 +85,7 @@ describe('transactional invitation management', () => {
   });
 
   it('rolls back user, invitation and both audits when administrator audit fails', async () => {
+    if (!databaseAvailable) return;
     const input = record();
     const failAudit: InvitationManagementAudit = { ...adminAudit, appendAdminEvent: async (tx, event) => {
       if (adminAudit.kind === 'admin') await adminAudit.appendAdminEvent(tx, event);
@@ -90,6 +99,7 @@ describe('transactional invitation management', () => {
   });
 
   it('copies caller-owned secret and intended roles before awaiting the mutation', async () => {
+    if (!databaseAvailable) return;
     const input = record();
     const saved = Buffer.from(input.credentialSecret);
     const view = await store().runMutation(systemAudit, async mutation => {
@@ -104,6 +114,7 @@ describe('transactional invitation management', () => {
   });
 
   it('serializes competing replica issuance for the same normalized email', async () => {
+    if (!databaseAvailable) return;
     const first = record();
     const second = record({ emailOriginal: first.emailOriginal.toUpperCase(), emailNormalized: first.emailNormalized });
     const results = await Promise.allSettled([issue(first), issue(second)]);
@@ -114,23 +125,27 @@ describe('transactional invitation management', () => {
   });
 
   it('rejects existing active accounts using the same NFC/case/whitespace email normalization', async () => {
+    if (!databaseAvailable) return;
     const email = `Usér-${randomUUID()}@Example.com`;
     await getTestAdminDb().insert(users).values({ username: `existing-${randomUUID()}`, email: `\u00a0${email.normalize('NFD')}\u00a0` });
     await expect(issue(record({ emailOriginal: email, emailNormalized: normalizeInvitationEmail(email) }))).rejects.toMatchObject({ code: 'invitation_conflict' });
   });
 
   it.each([0, 169, 1.5])('rejects invalid TTL %s without creating records', async ttlHours => {
+    if (!databaseAvailable) return;
     const input = record({ ttlHours });
     await expect(issue(input)).rejects.toMatchObject({ code: 'configuration_invalid' });
     expect(await store().inspect(input.invitationId)).toBeNull();
   });
 
   it('rejects mismatched normalized email and administrator issuer', async () => {
+    if (!databaseAvailable) return;
     await expect(issue(record({ emailNormalized: 'other@example.com' }))).rejects.toMatchObject({ code: 'invitation_invalid' });
     await expect(issue(record({ inviterUserId: randomUUID() }), adminAudit)).rejects.toMatchObject({ code: 'invitation_invalid' });
   });
 
   it('supersedes an expired generation and revokes its open claim in the replacement transaction', async () => {
+    if (!databaseAvailable) return;
     const view = await issue();
     const db = getTestAdminDb();
     await db.update(accountInvitationGenerations).set({ state: 'expired', expiredAt: new Date(), issuedAt: new Date(0), expiresAt: new Date(3_600_000) }).where(eq(accountInvitationGenerations.invitationId, view.id));
@@ -148,6 +163,7 @@ describe('transactional invitation management', () => {
   });
 
   it('serializes simultaneous regeneration into successive valid generations', async () => {
+    if (!databaseAvailable) return;
     const view = await issue();
     const results = await Promise.all([regenerate(view.id), regenerate(view.id)]);
     expect(results.map(result => result.currentGeneration.generation).sort()).toEqual([2, 3]);
@@ -157,6 +173,7 @@ describe('transactional invitation management', () => {
   });
 
   it('makes revoke idempotent and a regeneration race cannot resurrect a revoked invitation', async () => {
+    if (!databaseAvailable) return;
     const view = await issue();
     await Promise.allSettled([regenerate(view.id), revoke(view.id)]);
     const final = await store().inspect(view.id);
@@ -166,6 +183,7 @@ describe('transactional invitation management', () => {
   });
 
   it('rolls back generation replacement and revocation when security audit fails', async () => {
+    if (!databaseAvailable) return;
     const view = await issue();
     const fail: InvitationManagementAudit = { kind: 'system', appendSecurityEvent: async () => { throw new Error('security audit failed'); } };
     await expect(regenerate(view.id, fail)).rejects.toThrow('security audit failed');
@@ -175,6 +193,7 @@ describe('transactional invitation management', () => {
   });
 
   it.each(['disabledAt', 'deletedAt'] as const)('preserves and denies the independent %s account state', async field => {
+    if (!databaseAvailable) return;
     const view = await issue();
     await getTestAdminDb().update(users).set({ [field]: new Date() }).where(eq(users.id, view.userId));
     await expect(regenerate(view.id)).rejects.toMatchObject({ code: 'invitation_invalid' });
@@ -185,6 +204,7 @@ describe('transactional invitation management', () => {
   });
 
   it('rejects accepted invitations and accounts already activated', async () => {
+    if (!databaseAvailable) return;
     const view = await issue();
     await getTestAdminDb().update(accountInvitations).set({ state: 'accepted', acceptedAt: new Date() }).where(eq(accountInvitations.id, view.id));
     await getTestAdminDb().update(accountInvitationGenerations).set({ state: 'accepted', acceptedAt: new Date() }).where(eq(accountInvitationGenerations.invitationId, view.id));
@@ -195,6 +215,7 @@ describe('transactional invitation management', () => {
   });
 
   it('copies regeneration secrets and audit actor buffers at their async boundaries', async () => {
+    if (!databaseAvailable) return;
     const view = await issue();
     const secret = randomBytes(32);
     const saved = Buffer.from(secret);
@@ -218,6 +239,7 @@ describe('transactional invitation management', () => {
   });
 
   it('waits for an existing account writer and rejects its committed duplicate', async () => {
+    if (!databaseAvailable) return;
     const input = record();
     let pending: Promise<unknown> | undefined;
     await getTestAdminDb().transaction(async tx => {
@@ -231,6 +253,7 @@ describe('transactional invitation management', () => {
   });
 
   it('rejects inconsistent generation state and missing invitations without writes', async () => {
+    if (!databaseAvailable) return;
     await expect(regenerate(randomUUID())).rejects.toMatchObject({ code: 'invitation_not_found' });
     const view = await issue();
     await getTestAdminDb().update(accountInvitationGenerations).set({ state: 'expired', expiredAt: new Date() }).where(eq(accountInvitationGenerations.invitationId, view.id));
@@ -240,6 +263,7 @@ describe('transactional invitation management', () => {
 
 
   it.each(['update', 'soft-delete'] as const)('does not deadlock with an existing row-lock-first account %s writer', async operation => {
+    if (!databaseAvailable) return;
     const view = await issue();
     let pending: Promise<unknown> | undefined;
     await getTestAdminDb().transaction(async tx => {
@@ -265,6 +289,7 @@ describe('transactional invitation management', () => {
 
 
   it('aborts before mutation callbacks when an ordinary audit owns the head before its users FK check', async () => {
+    if (!databaseAvailable) return;
     const input = record();
     let managementResult: Promise<unknown> | undefined;
     let mutationAuditCalls = 0;
