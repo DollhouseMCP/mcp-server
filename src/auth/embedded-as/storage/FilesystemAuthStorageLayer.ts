@@ -81,6 +81,7 @@ export interface FilesystemAuthStorageLayerOptions {
    * (typically yielding `<state>/auth/`); tests pass a tmpdir.
    */
   rootDir: string;
+  accountAllowed?: (sub: string) => Promise<boolean>;
 }
 
 export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
@@ -94,7 +95,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private readonly genericLocks = new InProcessKeyedLock();
   private initialized = false;
 
-  constructor(options: FilesystemAuthStorageLayerOptions) {
+  constructor(private readonly options: FilesystemAuthStorageLayerOptions) {
     if (!path.isAbsolute(options.rootDir)) {
       throw new Error(
         `FilesystemAuthStorageLayer rootDir must be absolute, got: ${options.rootDir}`,
@@ -109,6 +110,10 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   }
 
   // ---- Accounts (must-fix #18) ----
+
+  isAccountAllowed(sub: string): Promise<boolean> {
+    return this.options.accountAllowed ? this.options.accountAllowed(sub) : Promise.resolve(true);
+  }
 
   async findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null> {
     const accounts = await this.readAccounts();
