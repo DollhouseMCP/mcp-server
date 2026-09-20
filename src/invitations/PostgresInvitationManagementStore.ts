@@ -2,7 +2,7 @@ import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdenti
 import { and, eq, sql } from 'drizzle-orm';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
-import { isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import {
   accountInvitations as invitations,
   accountInvitationGenerations as generations,
@@ -19,7 +19,7 @@ import { MAX_INVITATION_TTL_HOURS, MIN_INVITATION_TTL_HOURS } from './Invitation
 import { normalizeInvitationEmail } from './InvitationEmail.js';
 import { hashInvitationCredential, INVITATION_SECRET_BYTES, MAX_INVITATION_GENERATION } from './InvitationToken.js';
 import { InvitationError, type InvitationView } from './InvitationTypes.js';
-import { lockAccounts, lockInvitation, databaseTime, readInvitation, requireInvitation, appendAudit, copyAudit, assertUuid } from './InvitationTransactionSupport.js';
+import { lockAdminAudit, lockAccounts, lockInvitation, databaseTime, readInvitation, requireInvitation, appendAudit, copyAudit, assertUuid } from './InvitationTransactionSupport.js';
 
 /** Internal, privileged storage only. Live routes must enforce pending-account denial first. */
 export class PostgresInvitationManagementStore implements IInvitationManagementStore {
@@ -39,7 +39,7 @@ export class PostgresInvitationManagementStore implements IInvitationManagementS
       return await withSystemContext(this.db, tx => operation(createInvitationManagementMutation(tx, ownedAudit)));
     } catch (error) {
       if (isUniqueViolation(error)) throw new InvitationError('invitation_conflict', 'Invitation account or credential already exists');
-      if (isSerializationFailure(error)) throw new InvitationError('concurrent_update', 'Invitation transaction conflicted');
+      if (isSerializationFailure(error) || getErrorCode(error) === '55P03') throw new InvitationError('concurrent_update', 'Invitation transaction conflicted');
       throw error;
     }
   }
@@ -69,6 +69,7 @@ async function issue(tx: DrizzleTx, audit: InvitationManagementAudit, input: Inv
   try {
     validateIssue(owned);
     await lockAccounts(tx);
+    await lockAdminAudit(tx, audit);
     // Use the same NFC/trim/case rules as issuance, including older stored email
     // encodings. SQL lower/btrim alone diverges for Unicode case and whitespace.
     const accounts = await tx.select({ id: users.id, email: users.email, username: users.username }).from(users);
@@ -115,6 +116,7 @@ async function regenerate(tx: DrizzleTx, audit: InvitationManagementAudit, input
     assertUuid(owned.correlationId);
     validateCredential(owned.credentialSecret, owned.ttlHours);
     const view = await lockInvitation(tx, owned.invitationId);
+    await lockAdminAudit(tx, audit);
     assertMutable(view);
     if (view.currentGeneration.generation >= MAX_INVITATION_GENERATION) {
       throw new InvitationError('invitation_invalid', 'Invitation generation limit reached');
@@ -142,6 +144,7 @@ async function revoke(tx: DrizzleTx, audit: InvitationManagementAudit, invitatio
   assertUuid(invitationId);
   assertUuid(correlationId);
   const view = await lockInvitation(tx, invitationId);
+  await lockAdminAudit(tx, audit);
   if (view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
   assertMutable(view);
   const now = await databaseTime(tx);

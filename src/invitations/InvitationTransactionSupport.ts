@@ -99,3 +99,12 @@ export function assertUuid(value: string): void {
     throw new InvitationError('invitation_invalid', 'Invitation identifiers must be UUIDs');
   }
 }
+
+export async function lockAdminAudit(tx: DrizzleTx, audit: InvitationManagementAudit): Promise<void> {
+  if (audit.kind !== 'admin') return;
+  // Ordinary audit writers own the chain head before checking users FKs. Never
+  // wait on them while holding users EXCLUSIVE. A table preflight also covers
+  // the initial INSERT/unique check when the chain head does not exist yet.
+  // NOWAIT failure aborts the DB transaction, including every previously held lock.
+  await tx.execute(sql`LOCK TABLE admin_audit_chain_heads IN EXCLUSIVE MODE NOWAIT`);
+}

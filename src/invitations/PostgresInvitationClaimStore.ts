@@ -3,14 +3,14 @@ import { and, eq, sql } from 'drizzle-orm';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
-import { isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import { accountInvitationClaimAssertions as claims, accountInvitationGenerations as generations } from '../database/schema/invitations.js';
 import { users } from '../database/schema/users.js';
 import type { InvitationClaimRecord, LockedInvitationActivationCandidate } from './IInvitationStore.js';
 import type { IInvitationClaimStore, InvitationActivationCandidateInput, InvitationClaimMutation } from './IInvitationClaimStore.js';
 import type { InvitationManagementAudit } from './IInvitationManagementStore.js';
 import { hashInvitationCredential, invitationCredentialMatches, INVITATION_DIGEST_BYTES, INVITATION_SECRET_BYTES, MAX_INVITATION_GENERATION } from './InvitationToken.js';
-import { appendAudit, assertUuid, copyAudit, databaseTime, lockInvitation } from './InvitationTransactionSupport.js';
+import { appendAudit, assertUuid, copyAudit, databaseTime, lockAdminAudit, lockInvitation } from './InvitationTransactionSupport.js';
 import { InvitationError, type ClaimAssertionView, type InvitationView } from './InvitationTypes.js';
 
 /** Internal store. A server-established browser binding is required at the caller boundary. */
@@ -22,7 +22,7 @@ export class PostgresInvitationClaimStore implements IInvitationClaimStore {
     try {
       return await withSystemContext(this.db, tx => operation(createInvitationClaimMutation(tx, ownedAudit)));
     } catch (error) {
-      if (isSerializationFailure(error) || isUniqueViolation(error)) {
+      if (isSerializationFailure(error) || isUniqueViolation(error) || getErrorCode(error) === '55P03') {
         throw new InvitationError('concurrent_update', 'Invitation claim transaction conflicted');
       }
       throw error;
@@ -47,6 +47,7 @@ async function beginClaim(tx: DrizzleTx, audit: InvitationManagementAudit, input
     assertUuid(owned.correlationId);
     if (owned.credentialSecret.length !== INVITATION_SECRET_BYTES) throw new InvitationError('invitation_invalid', 'Invalid invitation credential');
     const invitation = await lockClaimableInvitation(tx, owned.invitationId, owned.generation);
+    await lockAdminAudit(tx, audit);
     const [generation] = await tx.select().from(generations).where(and(
       eq(generations.invitationId, invitation.id), eq(generations.generation, owned.generation),
     )).for('update');

@@ -126,3 +126,11 @@ these locks during GitHub/provider network calls.
 This slice does not close #2690: route/session tests for caller-supplied binding
 rejection still belong to #2680 integration. Claiming alone grants no normal
 console/MCP access, identity, actual role or normal session.
+
+Administrator management/claim operations also acquire an `EXCLUSIVE NOWAIT`
+table lock on `admin_audit_chain_heads` before mutation writes. Ordinary audit
+writers lock that head before their user foreign-key checks, so waiting on the
+head while holding users could deadlock. The table preflight covers both first-head
+INSERT and existing-head row locking. Contention aborts the transaction and returns
+`concurrent_update`; callers may retry the whole operation with fresh validation.
+System/security-only operations do not acquire an administrator chain lock.
