@@ -21,7 +21,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import type { IAuthProvider, AuthClaims } from './IAuthProvider.js';
+import type { IAuthProvider, AuthClaims, AuthResult } from './IAuthProvider.js';
 
 export interface AuthMiddlewareOptions {
   /** The auth provider to validate tokens against. */
@@ -78,7 +78,15 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
       return;
     }
 
-    const result = await provider.validate(token);
+    let result: AuthResult;
+    try {
+      result = await provider.validate(token);
+    } catch {
+      // Embedded validation also reads live account state. Provider/storage
+      // failures must remain unavailable, never reach downstream auth paths.
+      res.status(503).json({ error: 'Account validation is temporarily unavailable' });
+      return;
+    }
 
     if (!result.ok) {
       SecurityMonitor.logSecurityEvent({

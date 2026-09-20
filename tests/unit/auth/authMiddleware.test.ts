@@ -236,3 +236,16 @@ describe('live account eligibility', () => {
     expect(isAccountAllowed).toHaveBeenLastCalledWith('alice');
   });
 });
+
+
+it('returns sanitized 503 when embedded-style token validation fails on its account-state read', async () => {
+  const provider = createMockProvider(async () => { throw new Error('private database connection details'); });
+  const downstream = jest.fn();
+  const app = express();
+  app.use(createUnifiedAuthMiddleware({ provider }));
+  app.get('/mcp', (_req, res) => { downstream(); res.json({ ok: true }); });
+  const response = await request(app).get('/mcp').set('Authorization', 'Bearer valid-token');
+  expect(response.status).toBe(503);
+  expect(response.body).toEqual({ error: 'Account validation is temporarily unavailable' });
+  expect(downstream).not.toHaveBeenCalled();
+});
