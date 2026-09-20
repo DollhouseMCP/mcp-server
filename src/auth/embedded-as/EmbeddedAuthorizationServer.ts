@@ -382,7 +382,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    *     header rather than silently ignoring it.
    */
   async validate(token: string): Promise<AuthResult> {
-    return await this.tokens.validate(token);
+    const result = await this.tokens.validate(token);
+    if (result.ok && !await this.storage.isAccountAllowed(result.claims.sub)) {
+      return { ok: false, reason: 'Account is not available for authentication' };
+    }
+    return result;
   }
 
   /**
@@ -397,6 +401,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * production code paths must use the OAuth flow.
    */
   async issue(sub: string, options?: IssueOptions): Promise<string> {
+    if (!await this.storage.isAccountAllowed(sub)) {
+      throw new Error('Account is not available for authentication');
+    }
     return await this.tokens.issue(sub, options);
   }
 

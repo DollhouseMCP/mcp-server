@@ -27,6 +27,11 @@
 import { get, post, del } from './api.js';
 import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 import { createAllowlistView, createIdentityTriageView, createBootstrapView } from './accounts-admin.js';
+import {
+  deriveLocalUsername,
+  normalizeLocalDisplayName,
+  normalizeLocalUsername,
+} from './account-username.js';
 import { renderRoleOptions, renderRoleGuidance, roleDisplayName } from './role-options.js';
 
 const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
@@ -654,7 +659,8 @@ function openInvite() {
     <div class="confirm-backdrop"></div>
     <div class="confirm-card ua-invite-card" role="dialog" aria-modal="true" aria-label="Invite user">
       <h3 class="ua-invite-title">Invite a new user</h3>
-      <label class="ua-field"><span>Username</span><input id="ua-inv-username" type="text" autocomplete="off" placeholder="alice" maxlength="64"></label>
+      <label class="ua-field"><span>Display name</span><input id="ua-inv-display-name" type="text" autocomplete="name" placeholder="Todd Lewis"><small class="ua-muted">Preserved for display; up to 255 Unicode characters.</small></label>
+      <label class="ua-field"><span>Username</span><input id="ua-inv-username" type="text" autocomplete="off" placeholder="todd-lewis" aria-describedby="ua-inv-username-preview"><small class="ua-muted" id="ua-inv-username-preview">Enter a display name to derive the account username.</small></label>
       <label class="ua-field"><span>Email</span><input id="ua-inv-email" type="email" autocomplete="off" placeholder="alice@example.com"></label>
       <fieldset class="ua-field"><legend>Roles (optional)</legend><div class="ua-roles-grid">${roleOpts || '<span class="ua-muted">No roles you can assign.</span>'}</div></fieldset>
       ${renderRoleGuidance(state.roleCatalog)}
@@ -669,16 +675,25 @@ function openInvite() {
   modal.querySelector('.confirm-backdrop').addEventListener('click', close);
   modal.querySelector('#ua-inv-cancel').addEventListener('click', close);
   modal.querySelector('#ua-inv-send').addEventListener('click', () => submitInvite(modal));
+  bindInviteNamePreview(modal);
 }
 
 async function submitInvite(modal) {
-  const username = modal.querySelector('#ua-inv-username').value.trim();
+  let displayName;
+  let username;
+  try {
+    displayName = normalizeLocalDisplayName(modal.querySelector('#ua-inv-display-name').value);
+    username = normalizeLocalUsername(modal.querySelector('#ua-inv-username').value);
+  } catch (error) {
+    notify(error instanceof Error ? error.message : 'Enter a valid name and username.', 'warn');
+    return;
+  }
   const email = modal.querySelector('#ua-inv-email').value.trim();
   const roles = [...modal.querySelectorAll('[data-invite-role]:checked')].map(c => c.dataset.inviteRole);
-  if (!username || !email) { notify('Username and email are required.', 'warn'); return; }
+  if (!email) { notify('Display name, username, and email are required.', 'warn'); return; }
   const sendBtn = modal.querySelector('#ua-inv-send');
   sendBtn.disabled = true;
-  const body = { username, email, ...(roles.length ? { roles } : {}) };
+  const body = { display_name: displayName, username, email, ...(roles.length ? { roles } : {}) };
   const res = await post('/admin/accounts/users/invite', { body }).catch(() => null);
   sendBtn.disabled = false;
   if (res?.status !== 201) {
@@ -697,6 +712,39 @@ async function submitInvite(modal) {
   });
   notify('Invite created.', 'success');
   load();
+}
+
+function bindInviteNamePreview(modal) {
+  const displayName = modal.querySelector('#ua-inv-display-name');
+  const username = modal.querySelector('#ua-inv-username');
+  const preview = modal.querySelector('#ua-inv-username-preview');
+  let usernameEdited = false;
+
+  const showPreview = value => {
+    try {
+      const normalized = normalizeLocalUsername(value);
+      preview.textContent = `Account username: ${normalized}`;
+    } catch (error) {
+      preview.textContent = error instanceof Error ? error.message : 'Username is invalid.';
+    }
+  };
+  const derive = () => {
+    if (usernameEdited) return showPreview(username.value);
+    try {
+      username.value = deriveLocalUsername(displayName.value);
+      showPreview(username.value);
+    } catch (error) {
+      username.value = '';
+      preview.textContent = error instanceof Error ? error.message : 'Display name cannot form a username.';
+    }
+  };
+
+  displayName.addEventListener('input', derive);
+  username.addEventListener('input', () => {
+    usernameEdited = username.value.trim() !== '';
+    if (usernameEdited) showPreview(username.value);
+    else derive();
+  });
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */

@@ -12,6 +12,7 @@ import type { AddressInfo } from 'node:net';
 import {
   ADMIN_STEP_UP_CLAIMS_MODEL,
   createInteractionRouter,
+  finishInteractionWithIdentity,
   renderClientConsentForIdentity,
   type AdminStepUpInteractionDeps,
   type OidcProviderForInteractions,
@@ -968,4 +969,24 @@ describe('InteractionRouter — multi-method dispatch', () => {
       }
     });
   });
+});
+
+
+it('refuses pending login before saving grants, stamping authentication, or completing the interaction', async () => {
+  const storage = new InMemoryAuthStorageLayer();
+  jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(false);
+  const stamp = jest.spyOn(storage, 'updateAccountLastAuth');
+  const finished = jest.fn<OidcProviderForInteractions['interactionFinished']>();
+  const details: OidcInteractionDetails = { uid: 'pending', params: {}, prompt: { name: 'login', details: {} } };
+  const provider = fakeProvider({ details, interactionFinished: finished });
+  const save = jest.spyOn(provider.Grant.prototype, 'save');
+  const app = express();
+  app.post('/finish', (req, res) => finishInteractionWithIdentity(req, res, provider, details, 'pending_user', {
+    storage, defaultResource: 'https://example.test/mcp',
+  }));
+  const { default: request } = await import('supertest');
+  expect((await request(app).post('/finish')).status).toBe(403);
+  expect(finished).not.toHaveBeenCalled();
+  expect(stamp).not.toHaveBeenCalled();
+  expect(save).not.toHaveBeenCalled();
 });

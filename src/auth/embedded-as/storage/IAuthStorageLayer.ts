@@ -173,6 +173,14 @@ export const DEFAULT_IDENTITY_EVENTS_LIMIT = 1000;
  * owned by OidcProviderAdapter (the only caller).
  */
 export interface IAuthStorageLayer {
+  /**
+   * Authoritative eligibility for normal login/token issuance. Postgres checks
+   * canonical users for active, non-disabled, non-deleted state on every call.
+   * Backends without user lifecycle records retain their existing behavior.
+   * Dependency failures MUST reject rather than grant access.
+   */
+  isAccountAllowed(sub: string): Promise<boolean>;
+
   // --- Accounts (must-fix #18) ---
 
   findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null>;
