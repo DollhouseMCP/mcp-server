@@ -10,6 +10,7 @@ import {
 } from '../../../../src/web-console/modules/console-meta/ConsoleMetaModule.js';
 import { CONSOLE_ADMIN_ROLES } from '../../../../src/web-console/stores/IConsoleAccountAdminStore.js';
 import { ROLE_GRANT_CAPABILITIES } from '../../../../src/web-console/modules/account-admin/AccountAdminRoleAuthority.js';
+import { ROLE_DESCRIPTIONS, ROLE_GUIDANCE } from '../../../../src/web-console/modules/account-admin/AccountAdminRoleDescriptions.js';
 
 const EMPTY_MANIFEST: ConsoleRouteManifest = { apiVersion: 'v1', routes: [] };
 const FAKE_REQUEST = {} as ConsoleRequest;
@@ -49,6 +50,8 @@ describe('ConsoleMetaModule', () => {
       roles: [...CONSOLE_ADMIN_ROLES],
       capabilities: [...CONSOLE_CAPABILITIES],
       grants: ROLE_GRANT_CAPABILITIES,
+      descriptions: ROLE_DESCRIPTIONS,
+      guidance: ROLE_GUIDANCE,
     });
   });
 
@@ -77,5 +80,12 @@ describe('ConsoleMetaModule', () => {
     expect(catalog.roles).toEqual([...CONSOLE_ADMIN_ROLES]);
     expect(catalog.capabilities).toEqual([...CONSOLE_CAPABILITIES]);
     expect(catalog.grants.admin).toEqual([...ROLE_GRANT_CAPABILITIES.admin]);
+    expect(catalog.descriptions).toEqual(ROLE_DESCRIPTIONS);
+    expect(Object.keys(catalog.descriptions).sort()).toEqual([...CONSOLE_ADMIN_ROLES].sort());
+    for (const description of Object.values(catalog.descriptions)) {
+      expect(description.name).toBeTruthy();
+      expect(description.summary).toBeTruthy();
+      expect(description.sensitivePowers).toBeTruthy();
+    }
   });
 });
