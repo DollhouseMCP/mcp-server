@@ -89,6 +89,36 @@ describe('GitHubAuthenticatedUserClient', () => {
     });
   });
 
+  it('treats empty optional profile strings as absent and trims display metadata', async () => {
+    const fetchImpl = jest.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ id: 7, login: 'seven', name: '', email: '', avatar_url: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 7,
+        login: 'seven',
+        name: '  Seven Example  ',
+        email: '  seven@example.com  ',
+        avatar_url: null,
+      }));
+    const client = new GitHubAuthenticatedUserClient({ fetchImpl });
+
+    await expect(client.fetchAuthenticatedUser('token')).resolves.toMatchObject({
+      displayName: null,
+      email: null,
+    });
+    await expect(client.fetchAuthenticatedUser('token')).resolves.toMatchObject({
+      displayName: 'Seven Example',
+      email: 'seven@example.com',
+    });
+  });
+
+  it('rejects a whitespace-only access token before making a request', async () => {
+    const fetchImpl = jest.fn<typeof fetch>();
+    const client = new GitHubAuthenticatedUserClient({ fetchImpl });
+
+    await expectClientError(client.fetchAuthenticatedUser('   '), 'unauthorized', false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['zero', 0],
     ['negative', -1],

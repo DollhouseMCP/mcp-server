@@ -72,7 +72,7 @@ export class GitHubAuthenticatedUserClient {
   }
 
   async fetchAuthenticatedUser(accessToken: string): Promise<GitHubAuthenticatedUser> {
-    if (typeof accessToken !== 'string' || accessToken.length === 0) {
+    if (typeof accessToken !== 'string' || accessToken.trim().length === 0) {
       throw new GitHubAuthenticatedUserError('unauthorized', false);
     }
 
@@ -131,8 +131,8 @@ function parseAuthenticatedUser(value: unknown): GitHubAuthenticatedUser {
   }
   const id = value.id as number;
   const login = requiredString(value.login, MAX_LOGIN_LENGTH);
-  const displayName = optionalString(value.name, MAX_DISPLAY_NAME_LENGTH);
-  const email = optionalString(value.email, MAX_EMAIL_LENGTH);
+  const displayName = optionalMetadataString(value.name, MAX_DISPLAY_NAME_LENGTH);
+  const email = optionalMetadataString(value.email, MAX_EMAIL_LENGTH);
   const avatarUrl = optionalAvatarUrl(value.avatar_url);
   return {
     id,
@@ -157,6 +157,19 @@ function optionalString(value: unknown, maxLength: number): string | null {
     throw new GitHubAuthenticatedUserError('invalid_response', false);
   }
   return value;
+}
+
+function optionalMetadataString(value: unknown, maxLength: number): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw new GitHubAuthenticatedUserError('invalid_response', false);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > maxLength) {
+    throw new GitHubAuthenticatedUserError('invalid_response', false);
+  }
+  return trimmed;
 }
 
 function optionalAvatarUrl(value: unknown): string | null {
