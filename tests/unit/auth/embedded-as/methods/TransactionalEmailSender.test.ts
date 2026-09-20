@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { NodemailerEmailSender } from '../../../../../src/auth/embedded-as/methods/nodemailerEmailSender.js';
 import { classifyEmailSubmissionFailure } from '../../../../../src/auth/embedded-as/methods/TransactionalEmailSender.js';
 
@@ -58,6 +59,29 @@ describe('transactional SMTP submission', () => {
     const to = `${'ẞ'.repeat(21)}x@example.test`; // Exactly 64 bytes before @.
     await sender.sendTransactionalEmail({ ...message(), to });
     expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: { name: '', address: to } }));
+  });
+
+  it('rejects Unicode domains whose SMTP encoding exceeds label or mailbox limits', async () => {
+    const { sender, sendMail } = fixture();
+    const longLabel = `${'a'.repeat(59)}é`;
+    const longMailbox = `${'P'.repeat(64)}@${Array(3).fill(`${'a'.repeat(55)}é`).join('.')}`;
+    for (const to of [`Person@${longLabel}.test`, longMailbox]) {
+      // Exercise the installed SMTP serializer, not merely a mocked transport.
+      const wireAddress = new MailComposer({ to: { name: '', address: to } }).compile().getEnvelope().to[0];
+      expect(Buffer.byteLength(wireAddress) > 254 || wireAddress.split('@')[1].split('.').some(label => label.length > 63))
+        .toBe(true);
+      await expect(sender.sendTransactionalEmail({ ...message(), to }))
+        .rejects.toThrow('Invalid transactional email recipient');
+    }
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it('submits the validated ASCII domain while preserving local-part case', async () => {
+    const { sender, sendMail } = fixture();
+    await sender.sendTransactionalEmail({ ...message(), to: 'Person@café.test' });
+    const submitted = sendMail.mock.calls[0][0] as { to: { name: string; address: string } };
+    expect(submitted.to.address).toBe('Person@xn--caf-dma.test');
+    expect(new MailComposer(submitted).compile().getEnvelope().to).toEqual(['Person@xn--caf-dma.test']);
   });
 
   it.each([
