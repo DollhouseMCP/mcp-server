@@ -191,7 +191,7 @@ export class LocalAccountMethod implements IAuthMethod {
    * out-of-band CLI-issued invite URL).
    */
   async consumeInvite(token: string, newPassword: string): Promise<
-    | { kind: 'ok'; sub: string; email: string }
+    | { kind: 'ok'; sub: string; email: string; displayName: string }
     | { kind: 'denied'; reason: string }
     | { kind: 'error'; reason: string }
   > {
@@ -301,7 +301,7 @@ export class LocalAccountMethod implements IAuthMethod {
     // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
     // (and linked on first login), NOT stamped onto the auth account — so this
     // path just records the credential/profile.
-    return { kind: 'ok', sub, email: consume.payload.email };
+    return { kind: 'ok', sub, email: consume.payload.email, displayName: account.displayName ?? consume.payload.email };
   }
 
   private async handleSetPassword(form: Partial<Record<string, string>>): Promise<InteractionResult> {
@@ -332,7 +332,7 @@ export class LocalAccountMethod implements IAuthMethod {
       kind: 'authenticated',
       identity: {
         sub: result.sub,
-        displayName: result.email,
+        displayName: result.displayName,
         email: result.email,
         emailVerified: false,
       },
@@ -407,10 +407,10 @@ export class LocalAccountMethod implements IAuthMethod {
     form: Partial<Record<string, string>>,
     ip: string,
   ): Promise<InteractionResult> {
-    // Lowercase + trim so 'Alice' and 'alice' don't get independent rate-limit
-    // buckets — otherwise an attacker can bypass the per-account threshold by
-    // varying case.
-    const username = String(form.username ?? '').trim().toLowerCase();
+    // Match the canonical local-account spelling used at creation time. Keeping
+    // the rate-limit key and account lookup on the same NFC + lowercase value
+    // also prevents equivalent Unicode spellings from creating extra buckets.
+    const username = String(form.username ?? '').normalize('NFC').trim().toLowerCase().normalize('NFC');
     const password = String(form.password ?? '');
 
     if (!username || !password) {
