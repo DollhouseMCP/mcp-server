@@ -541,26 +541,27 @@ async function buildAuthMethod(
     case 'magic-link': {
       const { MagicLinkMethod } = await import('./embedded-as/methods/MagicLinkMethod.js');
       const { NodemailerEmailSender } = await import('./embedded-as/methods/nodemailerEmailSender.js');
+      const { resolveSmtpConfiguration } = await import('./embedded-as/methods/smtpConfiguration.js');
       if (!config.rateLimitStore) {
         throw new Error(
           'magic-link method requires AuthConfig.rateLimitStore. ' +
           'AuthServiceRegistrar constructs one from DOLLHOUSE_RATE_LIMIT_BACKEND (memory|postgres) — verify the registrar ran before createAuthProvider().',
         );
       }
-      if (!env.DOLLHOUSE_SMTP_HOST || !env.DOLLHOUSE_SMTP_USER
-        || !env.DOLLHOUSE_SMTP_PASSWORD || !env.DOLLHOUSE_SMTP_FROM) {
-        throw new Error(
-          'Magic link requires DOLLHOUSE_SMTP_HOST/USER/PASSWORD/FROM. ' +
-          'Configure SMTP or pick a different method via DOLLHOUSE_AUTH_METHODS.',
-        );
-      }
-      const emailSender = new NodemailerEmailSender({
+      const smtp = resolveSmtpConfiguration({
         host: env.DOLLHOUSE_SMTP_HOST,
         port: env.DOLLHOUSE_SMTP_PORT,
         user: env.DOLLHOUSE_SMTP_USER,
         password: env.DOLLHOUSE_SMTP_PASSWORD,
         from: env.DOLLHOUSE_SMTP_FROM,
       });
+      if (smtp.state === 'disabled') {
+        throw new Error(
+          'Magic link requires DOLLHOUSE_SMTP_HOST/USER/PASSWORD/FROM. ' +
+          'Configure SMTP or pick a different method via DOLLHOUSE_AUTH_METHODS.',
+        );
+      }
+      const emailSender = new NodemailerEmailSender(smtp.options);
       // must-fix #10: confirm the transporter can connect + STARTTLS-
       // upgrade + authenticate before the AS finishes starting. Failing
       // late (on first user request) leaves operators chasing magic-link

@@ -40,9 +40,28 @@ or result persistence failure follows SMTP submission, preserve uncertainty;
 do not reconstruct the credential or resend from a durable queue.
 
 No route, production sender configuration, or live invitation delivery is
-enabled by this adapter. Resend SMTP configuration/readiness, sanitized startup
-verification, provider tracking settings, real fake-server TLS/failure tests,
-and hosted validation remain under #2314. No new email provider is introduced.
+enabled by this adapter. Deployment provisioning, health/readiness routes,
+provider tracking settings, real fake-server TLS/failure tests, and hosted
+validation remain under #2314. No new email provider is introduced.
+
+## Configuration and startup readiness
+
+SMTP remains optional unless `magic-link` is selected. When every credential
+setting is absent, `resolveSmtpConfiguration` reports `disabled` so a future
+self-hosted invitation flow can offer manual delivery. A partial configuration
+fails validation; it never silently downgrades to disabled email. Enabled SMTP
+accepts port 587 with mandatory STARTTLS or port 465 with implicit TLS, bounded
+authentication values and timeouts, a hostname or IP address, and one plain
+sender address. The sender address is NFC-normalized while preserving the SMTP
+local-part's case. Octet limits apply both to that exact value and to the IDNA
+ASCII domain that Nodemailer places on the SMTP envelope.
+
+Startup verification throws a `SmtpReadinessError` with a fixed category and
+remediation message. Authentication, DNS, connection, timeout, TLS, protocol,
+and unknown failures can therefore be reported without retaining or returning
+the upstream exception, response, host, credentials, or error cause. Selecting
+the `magic-link` method continues to require a complete configuration and a
+successful startup verification.
 
 References: [Nodemailer SMTP](https://nodemailer.com/smtp),
 [message security options](https://nodemailer.com/message), and

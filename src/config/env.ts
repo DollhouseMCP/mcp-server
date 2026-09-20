@@ -197,7 +197,10 @@ const envSchema = z.object({
     .transform(v => (v && v.length > 0) ? v : undefined),
   // SMTP for the magic-link auth method (must-fix #10 STARTTLS-mandatory).
   DOLLHOUSE_SMTP_HOST: z.string().trim().optional().transform(v => v || undefined),
-  DOLLHOUSE_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  // The SMTP resolver applies the effective 587 default only after detecting
+  // whether email is configured. Keeping this optional distinguishes a fully
+  // disabled setup from a partial setup that specifies only a port.
+  DOLLHOUSE_SMTP_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   DOLLHOUSE_SMTP_USER: z.string().trim().optional().transform(v => v || undefined),
   DOLLHOUSE_SMTP_PASSWORD: z.string().optional().transform(v => v || undefined),
   DOLLHOUSE_SMTP_FROM: z.string().trim().optional().transform(v => v || undefined),
