@@ -21,7 +21,7 @@ interface CheckResult {
 interface SafetyVersionModule {
   checkSafetyPackageVersion(options: {
     cwd: string;
-    runNpm: () => CommandResult;
+    runNpm: (args: string[]) => CommandResult;
     log: () => void;
   }): CheckResult;
 }
