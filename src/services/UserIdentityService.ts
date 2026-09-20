@@ -10,10 +10,11 @@
  * per create operation, keeping admin credentials out of the runtime
  * connection pool.
  *
- * Resolved UUIDs are cached in memory — user rows are immutable once
- * created, so the cache never goes stale within a process lifetime.
+ * Local username mappings are cached; authenticated subjects are resolved live
+ * so canonical identity links and account eligibility cannot become stale.
  */
 
+import { assertUserAccountAllowed } from '../auth/AccountAccess.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -36,7 +37,7 @@ export class UserIdentityService {
   private readonly adminConnectionUrl: string;
   private readonly ssl: 'disable' | 'prefer' | 'require';
 
-  /** username → UUID cache. User rows don't change, so this never goes stale. */
+  /** Local username → UUID cache, separate from authenticated subject lookup. */
   private readonly cache = new Map<string, string>();
 
   constructor(options: UserIdentityServiceOptions) {
@@ -61,9 +62,6 @@ export class UserIdentityService {
    * human label); see resolveOrCreateUser for the stdio username-keyed path.
    */
   async resolveUserForSub(sub: string, displayName?: string): Promise<string> {
-    const cached = this.cache.get(sub);
-    if (cached) return cached;
-
     const adminConn = createDatabaseConnection({
       connectionUrl: this.adminConnectionUrl,
       poolSize: 2,
@@ -79,7 +77,7 @@ export class UserIdentityService {
         .where(eq(authAccounts.sub, sub))
         .limit(1);
       if (account[0]?.userId) {
-        this.cache.set(sub, account[0].userId);
+        await assertUserAccountAllowed(adminDb, account[0].userId);
         return account[0].userId;
       }
 
@@ -100,6 +98,8 @@ export class UserIdentityService {
       }
       if (!userId) throw new Error(`Failed to resolve user row for sub '${sub}'`);
 
+      await assertUserAccountAllowed(adminDb, userId);
+
       // 3. Link the auth_account if it exists and is still unlinked. The
       //    `IS NULL` guard makes the link atomic — a concurrent linker can't be
       //    clobbered; re-read to honor whichever writer won.
@@ -118,7 +118,7 @@ export class UserIdentityService {
         logger.warn(`[UserIdentityService] No auth_accounts row for sub '${sub}'; resolved an unlinked user row`, { userId });
       }
 
-      this.cache.set(sub, userId);
+      await assertUserAccountAllowed(adminDb, userId);
       SecurityMonitor.logSecurityEvent({
         type: 'IDENTITY_CHANGED',
         severity: 'LOW',
