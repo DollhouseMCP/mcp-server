@@ -55,7 +55,9 @@ provider-event reconciliation needs a separate evidence-backed operation.
 `submitted` means provider acceptance only. It does not mean delivered, accepted
 invitation, or activated account. Results arriving after regeneration/revocation
 remain evidence for their original generation and never mutate the invitation,
-current generation, or account. A regenerated invitation can reserve its own
+current generation, or account. Deleted accounts reject late results entirely:
+the authoritative deletion check runs under the users lock, preventing provider
+IDs/details from being restored after recipient metadata is scrubbed (#2699). A regenerated invitation can reserve its own
 first attempt without rewriting earlier ambiguous evidence.
 
 ## Metadata and audit

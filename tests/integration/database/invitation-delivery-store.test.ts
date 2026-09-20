@@ -156,6 +156,17 @@ describe('transactional invitation delivery state', () => {
     await expect(reserve(invitation.id)).rejects.toMatchObject({ code: 'invitation_invalid' });
   });
 
+  it('cannot repopulate provider metadata after the account is deleted', async () => {
+    const invitation = await issue();
+    const attempt = await reserve(invitation.id);
+    await db().update(users).set({ deletedAt: new Date(), disabledAt: new Date() }).where(eq(users.id, invitation.userId));
+    await expect(recordResult(attempt.id, {
+      state: 'submitted', providerMessageId: '<recipient-correlated@example.test>', sanitizedDetail: { smtpStatus: 250 },
+    })).rejects.toMatchObject({ code: 'invitation_invalid' });
+    const [retained] = await deliveries().list(invitation.id);
+    expect(retained).toMatchObject({ providerMessageId: null, sanitizedDetail: null, state: 'submitting' });
+  });
+
   it('rolls back reservation and result mutations when transaction-scoped audit fails', async () => {
     const invitation = await issue();
     const failing: InvitationManagementAudit = { ...adminAudit, appendAdminEvent: async () => { throw new Error('audit unavailable'); } };

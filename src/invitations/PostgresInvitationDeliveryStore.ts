@@ -8,6 +8,7 @@ import {
   accountInvitations as invitations,
   accountInvitationDeliveryAttempts as attempts,
 } from '../database/schema/invitations.js';
+import { users } from '../database/schema/users.js';
 import { validateConsoleAdminAuditEvent } from '../web-console/audit/IAdminAuditWriter.js';
 import type { InvitationManagementAudit } from './IInvitationManagementStore.js';
 import type { IInvitationDeliveryStore, InvitationDeliveryMutation, InvitationDeliveryReservation } from './IInvitationDeliveryStore.js';
@@ -108,6 +109,10 @@ async function recordResult(
   await lockAccounts(tx);
   await tx.select({ id: invitations.id }).from(invitations).where(eq(invitations.id, location.invitationId)).for('update');
   const invitation = await requireInvitation(tx, location.invitationId);
+  // Deletion scrubs retained invitation/delivery metadata. The users table lock
+  // serializes this read with deletion so late provider results cannot restore it.
+  const [user] = await tx.select({ deletedAt: users.deletedAt }).from(users).where(eq(users.id, invitation.userId));
+  if (!user || user.deletedAt) invalid('Invitation account is unavailable');
   const [current] = await tx.select().from(attempts).where(eq(attempts.id, attemptId)).for('update');
   if (!current) throw new InvitationError('invitation_not_found', 'Invitation delivery attempt not found');
   if (current.state !== 'submitting') {
