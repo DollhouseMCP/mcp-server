@@ -27,6 +27,7 @@
 import { get, post, del } from './api.js';
 import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 import { createAllowlistView, createIdentityTriageView, createBootstrapView } from './accounts-admin.js';
+import { renderRoleOptions, renderRoleGuidance, roleDisplayName } from './role-options.js';
 
 const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
 const USER_ROUTES = {
@@ -116,12 +117,6 @@ async function load() {
   renderList();
 }
 
-function canManageRole(role) {
-  const capabilities = roleCapabilities(role);
-  return Object.hasOwn(state.roleCatalog.grants, role)
-    && capabilities.every(cap => state.actorCaps.includes(cap));
-}
-
 function hasUserRoute(name) {
   const route = USER_ROUTES[name];
   return !!route && state.hasRoute(route[0], route[1]);
@@ -131,16 +126,11 @@ function normalizeRoleCatalog(catalog) {
   if (!catalog || !Array.isArray(catalog.roles) || !catalog.grants || typeof catalog.grants !== 'object') {
     return { roles: [], grants: {} };
   }
-  return { roles: catalog.roles, grants: catalog.grants };
-}
-
-function roleCapabilities(role) {
-  const capabilities = state.roleCatalog.grants[role];
-  return Array.isArray(capabilities) ? capabilities : [];
+  return { roles: catalog.roles, grants: catalog.grants, descriptions: catalog.descriptions, guidance: catalog.guidance };
 }
 
 function roleLabel(role) {
-  return String(role).split('_').map(word => word ? word[0].toUpperCase() + word.slice(1) : '').join(' ');
+  return roleDisplayName(state.roleCatalog, role);
 }
 
 // Resetting a factor is a security operation — gated on console:admin:security
@@ -392,19 +382,13 @@ function identityLinkForm(u) {
 }
 
 function panelRoles(u) {
-  const checks = state.roleCatalog.roles.map(role => {
-    const on = (u.roles || []).includes(role);
-    const mutationRoute = on ? 'revokeRole' : 'grantRole';
-    const manageable = canManageRole(role) && hasUserRoute(mutationRoute);
-    return `<label class="ua-role-opt${manageable ? '' : ' ua-role-opt--locked'}">
-      <input type="checkbox" data-role-toggle="${role}" ${on ? 'checked' : ''} ${manageable ? '' : 'disabled'}>
-      <span class="ua-role-opt-label">${escapeHtml(roleLabel(role))}</span>
-      <span class="ua-role-opt-caps">${roleCapabilities(role).map(c => c.replace('console:', '')).join(' · ')}</span>
-    </label>`;
-  }).join('');
+  const checks = renderRoleOptions(state.roleCatalog, {
+    mode: 'edit', selectedRoles: u.roles || [], actorCapabilities: state.actorCaps,
+    routeAvailable: (_role, selected) => hasUserRoute(selected ? 'revokeRole' : 'grantRole'),
+  });
   return panelSection('Roles',
-    `<div class="ua-roles-grid">${checks}</div>`,
-    'You can only assign roles whose powers you hold. Granting an admin role requires the user to enroll TOTP before they can elevate.');
+    `<div class="ua-roles-grid">${checks}</div>${renderRoleGuidance(state.roleCatalog)}`,
+    'Choose the minimum administrative access this person needs.');
 }
 
 function panelMfa(u) {
@@ -660,8 +644,9 @@ async function disconnectUserSession(userId, sessionId) {
 /* ── Invite ─────────────────────────────────────────────────────────────── */
 
 function openInvite() {
-  const roleOpts = state.roleCatalog.roles.filter(canManageRole).map(role =>
-    `<label class="ua-role-opt"><input type="checkbox" data-invite-role="${role}"><span class="ua-role-opt-label">${escapeHtml(roleLabel(role))}</span></label>`).join('');
+  const roleOpts = renderRoleOptions(state.roleCatalog, {
+    mode: 'invite', actorCapabilities: state.actorCaps, routeAvailable: () => hasUserRoute('invite'),
+  });
   const modal = document.createElement('div');
   modal.className = 'confirm-modal';
   modal.id = 'ua-invite-modal';
@@ -672,6 +657,7 @@ function openInvite() {
       <label class="ua-field"><span>Username</span><input id="ua-inv-username" type="text" autocomplete="off" placeholder="alice" maxlength="64"></label>
       <label class="ua-field"><span>Email</span><input id="ua-inv-email" type="email" autocomplete="off" placeholder="alice@example.com"></label>
       <fieldset class="ua-field"><legend>Roles (optional)</legend><div class="ua-roles-grid">${roleOpts || '<span class="ua-muted">No roles you can assign.</span>'}</div></fieldset>
+      ${renderRoleGuidance(state.roleCatalog)}
       <div id="ua-inv-result" class="ua-invite-result" hidden></div>
       <div class="confirm-actions">
         <button class="btn btn-ghost" id="ua-inv-cancel" type="button">Cancel</button>
