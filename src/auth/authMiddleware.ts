@@ -26,6 +26,8 @@ import type { IAuthProvider, AuthClaims } from './IAuthProvider.js';
 export interface AuthMiddlewareOptions {
   /** The auth provider to validate tokens against. */
   provider: IAuthProvider;
+  /** Live database account gate, also checked on requests to existing sessions. */
+  isAccountAllowed?: (sub: string) => Promise<boolean>;
   /** Paths that bypass authentication (e.g. health checks). */
   publicPaths?: string[];
   /** RFC 9728 protected resource metadata URL for WWW-Authenticate discovery. */
@@ -93,6 +95,19 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
       setAuthenticateHeader(res, protectedResourceMetadataUrl);
       res.status(401).json({ error: `Authentication failed: ${result.reason}` });
       return;
+    }
+
+    if (options.isAccountAllowed) {
+      try {
+        if (!await options.isAccountAllowed(result.claims.sub)) {
+          setAuthenticateHeader(res, protectedResourceMetadataUrl);
+          res.status(401).json({ error: 'Account is not available for authentication' });
+          return;
+        }
+      } catch {
+        res.status(503).json({ error: 'Account validation is temporarily unavailable' });
+        return;
+      }
     }
 
     // Attach claims for downstream handlers

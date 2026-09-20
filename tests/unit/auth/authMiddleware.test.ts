@@ -214,3 +214,25 @@ describe('withJwtFallthrough', () => {
     expect(res.headers['x-fallback-reached']).toBeUndefined();
   });
 });
+
+
+describe('live account eligibility', () => {
+  it('rechecks the same token and MCP session on every request and fails closed on outages', async () => {
+    const isAccountAllowed = jest.fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error('database unavailable'));
+    const app = express();
+    app.use('/mcp', createUnifiedAuthMiddleware({
+      provider: createMockProvider(async () => ({ ok: true, claims: { sub: 'alice' } })),
+      isAccountAllowed,
+    }));
+    app.post('/mcp', (_req, res) => res.json({ ok: true }));
+    for (const status of [200, 401, 503]) {
+      const response = await request(app).post('/mcp')
+        .set('Authorization', 'Bearer same-token').set('Mcp-Session-Id', 'existing-session');
+      expect(response.status).toBe(status);
+    }
+    expect(isAccountAllowed).toHaveBeenCalledTimes(3);
+    expect(isAccountAllowed).toHaveBeenLastCalledWith('alice');
+  });
+});

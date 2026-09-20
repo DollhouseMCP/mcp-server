@@ -10,7 +10,7 @@
  *   - `auth_accounts(provider, external_sub, sub, user_id)` is the
  *     OAuth identity mapping. `user_id` is an optional FK to `users.id`;
  *     null when the OAuth identity exists without a Phase 4 user record.
- *   - This layer never reads or writes the `users` table directly —
+ *   - This layer reads `users` for authentication eligibility;
  *     creating a Phase 4 user is a higher-level concern (Phase 4 path).
  *
  * **RLS:** auth tables are AS-internal infrastructure, not per-user
@@ -50,6 +50,7 @@ import type {
   StoredAccount,
 } from './IAuthStorageLayer.js';
 import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
+import { isSubjectAccountAllowed } from '../../AccountAccess.js';
 import { InProcessKeyedLock } from './InProcessKeyedLock.js';
 
 // Shared across storage instances and lock names. A lock owner may need one
@@ -100,6 +101,10 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
 
   constructor(options: PostgresAuthStorageLayerOptions) {
     this.db = options.db;
+  }
+
+  isAccountAllowed(sub: string): Promise<boolean> {
+    return isSubjectAccountAllowed(this.db, sub);
   }
 
   // ---- Accounts (must-fix #18) ----
