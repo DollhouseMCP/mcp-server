@@ -65,14 +65,18 @@ new invitations. Administrator issuer IDs must match the audit actor.
 
 All management mutations acquire `EXCLUSIVE` on `users` before locking
 an invitation. This deliberately coarse beta safeguard blocks account inserts and
-updates from existing writers that do not share an invitation advisory lock, and
-closes the missing-row race around non-unique account email. It also conflicts
+updates while issuance checks the account set, including existing writers that
+do not share an invitation advisory lock. It also conflicts
 with the `ROW SHARE` table lock acquired by existing account writers' `SELECT FOR
 UPDATE`, avoiding a table-lock upgrade cycle when those writers subsequently
 update/delete the locked user. Plain reads remain compatible. The canonical email
 check currently scans account identifiers/emails under that lock. A later scaling
 change must introduce shared canonical uniqueness/locking across **all** account
-writers before narrowing it. Composing claim/activation code must preserve the
+writers before narrowing it. Serialization alone does not enforce email conflicts
+in a legacy writer that inserts after issuance commits: that writer must share
+the canonical policy or be disabled before live durable/legacy issuance coexist.
+This correctness gate and both writer orderings are tracked in #2697, separately
+from the later lock-scaling work. Composing claim/activation code must preserve the
 users-before-invitation lock order. Transactions must remain short and must not
 perform provider/network operations while holding these locks.
 
