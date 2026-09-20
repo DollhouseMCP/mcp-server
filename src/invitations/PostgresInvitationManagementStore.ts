@@ -73,7 +73,7 @@ async function issue(tx: DrizzleTx, audit: InvitationManagementAudit, input: Inv
     // encodings. SQL lower/btrim alone diverges for Unicode case and whitespace.
     const accounts = await tx.select({ id: users.id, email: users.email, username: users.username }).from(users);
     if (accounts.some(account => account.id === owned.userId ||
-        account.username.toLowerCase() === owned.username.toLowerCase() ||
+        normalizeLegacyUsernameForComparison(account.username) === normalizeLegacyUsernameForComparison(owned.username) ||
         (account.email !== null && normalizeAuthAllowlistValue('email', account.email) === owned.emailNormalized))) {
       throw new InvitationError('invitation_conflict', 'Invitation account already exists');
     }
@@ -309,4 +309,9 @@ function validateIssue(input: InvitationIssueRecord): void {
       new Set(input.intendedRoles).size !== input.intendedRoles.length) {
     throw new InvitationError('invitation_invalid', 'Invalid invitation account context');
   }
+}
+
+/** Preserve compatibility with stored usernames that predate the current syntax. */
+function normalizeLegacyUsernameForComparison(value: string): string {
+  return value.normalize('NFC').trim().toLowerCase().normalize('NFC');
 }

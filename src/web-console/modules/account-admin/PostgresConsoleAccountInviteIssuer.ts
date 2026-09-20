@@ -2,6 +2,9 @@ import {
   InviteTokenStore,
   loadOrGenerateInviteSecretViaStore,
 } from '../../../auth/embedded-as/inviteTokens.js';
+import { normalizeAuthAllowlistValue } from '../../../auth/embedded-as/allowlistIdentity.js';
+import { lockAuthMutationResourcesWithTx } from '../../../database/authMutationPreflight.js';
+import { getErrorCode } from '../../../database/db-utils.js';
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import { authAccounts, users } from '../../../database/schema/index.js';
@@ -78,6 +81,17 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
   }): Promise<string> {
     try {
       return await withSystemContext(this.options.db, async tx => {
+      // Match durable issuance's users-first conflict protocol. Downstream
+      // resources use NOWAIT so an auth/role writer awaiting a users FK cannot
+      // form a blocking cycle with this transaction.
+      await lockAuthMutationResourcesWithTx(tx);
+      const emailNormalized = normalizeAuthAllowlistValue('email', input.email);
+      const accounts = await tx.select({ username: users.username, email: users.email }).from(users);
+      if (accounts.some(account =>
+        normalizeAuthAllowlistValue('github_username', account.username).normalize('NFC') === input.username ||
+        (account.email !== null && normalizeAuthAllowlistValue('email', account.email) === emailNormalized))) {
+        throw new ConsoleStoreConflictError('An account with this username or email already exists.');
+      }
       const insertedUsers = await tx.insert(users).values({
         username: input.username,
         email: input.email,
@@ -115,7 +129,10 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
       return userId;
       });
     } catch (error) {
-      // Duplicate username/email/sub -> a client conflict, not a server outage.
+      if (getErrorCode(error) === '55P03') {
+        throw new ConsoleStoreConflictError('Account creation conflicted with another operation. Please retry.');
+      }
+      // Duplicate username/sub -> a client conflict, not a server outage.
       if (isUniqueViolation(error)) {
         throw new ConsoleStoreConflictError('An account with this username or email already exists.');
       }
