@@ -1,5 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import nodemailer from 'nodemailer';
+import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import type StreamTransport from 'nodemailer/lib/stream-transport/index.js';
 import { NodemailerEmailSender } from '../../../../../src/auth/embedded-as/methods/nodemailerEmailSender.js';
 
@@ -30,7 +33,15 @@ describe('transactional email with real Nodemailer serialization', () => {
       expect(message).toContain('Content-Type: text/html; charset=utf-8');
       expect(message).toContain('No Dollhouse password.');
 
-      for (const to of ['user@example.com(x)evil.com', 'user@example.com,other@example.com']) {
+      // Published upstream parser advisories remain in 9.1.1. Prove the
+      // invitation boundary rejects their input classes before serialization.
+      const nestedRecipient = Array.from({ length: 100 }, () => 0)
+        .reduce<unknown>(value => [value], 'user@example.com');
+      for (const to of [
+        'user@example.com(x)evil.com', 'user@example.com,other@example.com',
+        '"user"@example.com(x)evil.com', 'a' + '@b(c)'.repeat(100),
+        '[x]'.repeat(100) + '@', nestedRecipient as string,
+      ]) {
         await expect(sender.sendTransactionalEmail({ to, subject: 'Invitation', text: 'Body', html: '<p>Body</p>' }))
           .rejects.toThrow('Invalid transactional email recipient');
       }
@@ -38,6 +49,35 @@ describe('transactional email with real Nodemailer serialization', () => {
     } finally {
       serialize.mockRestore();
       transport.close();
+    }
+  });
+
+  it.each([
+    ['file', { path: '/nonexistent/nodemailer-sandbox-fixture' }, /File access rejected/],
+    ['URL', { href: 'https://nodemailer-sandbox.invalid/fixture' }, /Url access rejected/],
+  ] as const)('keeps the message sandbox in legacy %s content resolution', async (_kind, content, rejection) => {
+    // Exercise the actual API fixed in 9.1.1. Tripwires make even a regressed
+    // dependency incapable of reading a file or opening a network connection.
+    const file = jest.spyOn(fs, 'createReadStream').mockImplementation(() => { throw new Error('file tripwire'); });
+    const plain = jest.spyOn(http, 'request').mockImplementation(() => { throw new Error('HTTP tripwire'); });
+    const secure = jest.spyOn(https, 'request').mockImplementation(() => { throw new Error('HTTPS tripwire'); });
+    const transport = nodemailer.createTransport({ streamTransport: true, buffer: true });
+    transport.use('compile', (mail, done) => {
+      mail.resolveContent({ text: content }, 'text', error => {
+        done(error ?? new Error('Sandbox unexpectedly allowed content resolution'));
+      });
+    });
+    try {
+      await expect(transport.sendMail({
+        from: 'sender@example.test', to: 'recipient@example.test', text: 'Inline fixture',
+        disableFileAccess: true, disableUrlAccess: true,
+      })).rejects.toThrow(rejection);
+      expect(file).not.toHaveBeenCalled();
+      expect(plain).not.toHaveBeenCalled();
+      expect(secure).not.toHaveBeenCalled();
+    } finally {
+      transport.close();
+      file.mockRestore(); plain.mockRestore(); secure.mockRestore();
     }
   });
 });
