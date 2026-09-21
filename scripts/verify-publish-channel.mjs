@@ -16,7 +16,7 @@
  *   stable X.Y.Z      → must publish to `latest` (the default)
  *   X.Y.Z-alpha.N     → must publish with --tag alpha
  *   X.Y.Z-beta[.N]    → must publish with --tag beta
- *   X.Y.Z-rc.N        → must publish with --tag next
+ *   X.Y.Z-rc.N        → must publish with --tag rc
  *   anything else     → refused (unknown channel)
  *
  * npm exposes the --tag flag to lifecycle scripts as npm_config_tag; when the
@@ -30,7 +30,7 @@ const version = process.env.npm_package_version
 function expectedTagFor(v) {
   if (/-alpha\./.test(v)) return 'alpha';
   if (/-beta(\.|$)/.test(v)) return 'beta';
-  if (/-rc\./.test(v)) return 'next';
+  if (/-rc\./.test(v)) return 'rc';
   if (v.includes('-')) return null; // unrecognized prerelease channel
   return 'latest';
 }
@@ -40,7 +40,7 @@ const actual = process.env.npm_config_tag || 'latest';
 
 if (expected === null) {
   console.error(`✖ Version ${version} has an unsupported prerelease suffix.`);
-  console.error('  Supported channels: -alpha.N (alpha), -beta[.N] (beta), -rc.N (next).');
+  console.error('  Supported channels: -alpha.N (alpha), -beta[.N] (beta), -rc.N (rc).');
   process.exit(1);
 }
 
