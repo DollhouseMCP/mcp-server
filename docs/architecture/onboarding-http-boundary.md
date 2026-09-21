@@ -1,11 +1,13 @@
 # Restricted onboarding HTTP boundary
 
-`createOnboardingRouter` is an unregistered Express factory intended for a later `/auth/onboarding` mount. It requires the dedicated onboarding store, purpose-separated opaque credentials, a shared `IRateLimitStore`, one canonical configured HTTPS origin, and a security-audit-only writer. It creates no ordinary console/MCP session, GitHub flow, browser page, or runtime registration.
+`createOnboardingRouter` is an unregistered Express factory intended for a later `/auth/onboarding` mount. It requires the dedicated onboarding store, purpose-separated opaque credentials, a shared `IRateLimitStore`, one canonical configured HTTPS origin, and a security-audit-only writer. It creates no ordinary console/MCP session, browser script, or runtime registration.
 
 | Endpoint | Request | Response |
 | --- | --- | --- |
 | `POST /bootstrap` | Exact Origin, JSON `{}`; existing HttpOnly onboarding cookies when present | `ready` or `claimed`, expiry, fresh memory-only CSRF |
 | `POST /exchange` | Exact Origin, `X-Onboarding-CSRF`, owner/session cookies, JSON `{ "credential": "dhi1.…" }` | `claimed`, expiry, fresh CSRF and restricted session cookie |
+| `POST /github/start` | Exact Origin, `X-Onboarding-CSRF`, current owner/session cookies, JSON `{}` | GitHub authorization URL and five-minute expiry |
+| `GET /github/callback` | Current owner/session cookies and exactly `state` plus one of `code` or `error` | Fixed retry page, or cleared onboarding cookies and a 303 to the ordinary console login |
 | `GET /status` | Onboarding cookies | `unavailable`, or `ready`/`claimed` with expiry; no CSRF, identity or invitation references |
 | `POST /logout` | Exact Origin, CSRF, onboarding cookies, JSON `{}` | 204, restricted session ended and its cookie cleared |
 
@@ -15,11 +17,19 @@ The first bootstrap persists a 15-minute unclaimed owner record before setting i
 
 Bootstrap and exchange share an atomic admission budget of 30 attempts per minute per normalized Express `req.ip`, in the dedicated `onboarding:admission:v1` rate-limit namespace. They never key a limiter by raw invitation, owner, session, or CSRF values. Denial returns 429; missing runtime dependencies, storage errors and limiter outages fail closed with sanitized 503. Admission precedes JSON parsing and any onboarding writes. The supplied production limiter must be shared across replicas; the factory has no optional or in-memory fallback. The test-only in-memory implementation is injected explicitly.
 
-The router rejects query strings, extra JSON keys, malformed/oversized JSON (1 KiB limit), compressed/non-JSON bodies, and ambiguous security headers/cookie names. All responses, including parser errors and unmatched paths, use the embedded-AS no-store/no-referrer/no-script security policy. Errors contain only fixed identifiers; raw tokens, parsed secrets, caller bodies and upstream error messages are never logged or returned. The one-time CSRF values returned by bootstrap/exchange are intentionally not persisted in plaintext. There is no generic durable idempotency cache: it must not replay session/CSRF credentials or cookies.
+Except for the strict GitHub callback described below, the router rejects query strings. It also rejects extra JSON keys, malformed/oversized JSON (1 KiB limit), compressed/non-JSON bodies, and ambiguous security headers/cookie names. All responses, including parser errors and unmatched paths, use the embedded-AS no-store/no-referrer/no-script security policy. Errors contain only fixed identifiers; raw tokens, parsed secrets, caller bodies and upstream error messages are never logged or returned. The one-time CSRF values returned by bootstrap/exchange are intentionally not persisted in plaintext. There is no generic durable idempotency cache: it must not replay session/CSRF credentials or cookies.
 
 Future mounting must use TLS and an explicitly reviewed Express trusted-proxy policy; do not derive identity from arbitrary forwarding headers. Mount before generic body parsing and before any middleware that logs or persists request bodies or caches auth responses. Keep this router outside ordinary session authentication, which rejects pending accounts. Its factory remains unregistered until the pending-account gates and all invitation prerequisites are deployed together.
 
 The embedded-AS `securityHeaders()` middleware wraps `res.send` and enforces `script-src 'none'`. This JSON API retains that policy. A future claim shell must separately arrange a narrowly scoped nonce/hash script policy and middleware order that survives that wrapper; do not broaden global auth-page CSP to enable the shell. The email fragment (`/auth/onboarding/invitation#token=…`) is for that future shell, not an API GET. The shell must promptly remove the fragment from history, keep the token in memory, and exchange only after explicit user action. This slice does not implement the shell or consume credentials on GET.
+
+## GitHub enrollment routes
+
+The unregistered GitHub connection delegates to the session-bound enrollment orchestration service. Start uses the same strict Origin, CSRF and shared admission controls as other mutations, requires a current restricted session, and returns only the authorization URL and expiry. The callback is the sole query-string exception: it accepts exactly one state and exactly one code or provider error, rejects duplicates, extras, bodies and code-plus-error ambiguity, and derives both binding hashes from the managed cookies. State is consumed and the live restricted session revalidated before any provider request.
+
+Cancellation and every contained callback failure preserve both onboarding cookies and render the same fixed no-store/no-referrer/script-none retry page. A successful atomic activation clears both cookies and redirects with 303 to the existing `/api/v1/auth/login` route so the user performs a fresh ordinary sign-in. No callback input, provider result or untrusted redirect target is rendered. The eventual live mount must also precede or configure access logging so the entire callback query is redacted; application code must never log the raw query, state or authorization code.
+
+These routes remain unmounted. They do not issue a normal session, retry an authorization code, register a provider callback, or change ordinary GitHub sign-in policy.
 
 Boundary tests cover malformed/duplicate inputs, CSRF/origin failures, privacy-preserving admission and outages, response sanitation and cookie expiry. Real PostgreSQL HTTP journeys cover lost-response same-owner recovery, session/nonce rotation without TTL extension, logout/resume binding, hash-only durable data, and atomic rollback when claim audit fails.
 

@@ -8,6 +8,10 @@ import { InvitationError } from '../InvitationTypes.js';
 import { InvitationTokenError, MAX_INVITATION_TOKEN_LENGTH, parseInvitationToken } from '../InvitationToken.js';
 import type { PostgresOnboardingMetadataStore, OnboardingInvitationMetadata } from './PostgresOnboardingMetadataStore.js';
 import { OnboardingCredentials } from './OnboardingCredentials.js';
+import {
+  GitHubEnrollmentFlowError,
+  type GitHubEnrollmentOrchestrationService,
+} from './GitHubEnrollmentOrchestrationService.js';
 import { onboardingOwnerCookieMaxAgeSeconds } from './OnboardingOwnerCookie.js';
 import { ONBOARDING_SESSION_TTL_SECONDS } from './OnboardingRecords.js';
 import { OnboardingStoreError, type PostgresOnboardingStore } from './PostgresOnboardingStore.js';
@@ -18,6 +22,7 @@ export interface OnboardingRouterOptions {
   readonly store: Pick<PostgresOnboardingStore, 'createOwner' | 'findOwner' | 'findSession' | 'exchangeClaim' |
     'rotateOwnerCsrf' | 'rotateSessionCsrf' | 'endSession'>;
   readonly metadataReader: Pick<PostgresOnboardingMetadataStore, 'read'>;
+  readonly githubEnrollment: Pick<GitHubEnrollmentOrchestrationService, 'start' | 'complete'>;
   readonly credentials: OnboardingCredentials;
   readonly rateLimits: IRateLimitStore;
   readonly trustedOrigin: string;
@@ -30,25 +35,31 @@ class BoundaryError extends Error {
 
 /** Unregistered API only. Future mounting owns TLS, trusted proxy and logging policy. */
 export function createOnboardingRouter(options: OnboardingRouterOptions): Router {
-  const { store, metadataReader, credentials, rateLimits, trustedOrigin, audit } = options;
+  const { store, metadataReader, githubEnrollment, credentials, rateLimits, trustedOrigin, audit } = options;
   const origin = new URL(trustedOrigin);
-  if (origin.protocol !== 'https:' || origin.origin !== trustedOrigin || !rateLimits || typeof metadataReader?.read !== 'function' || audit.kind !== 'system') {
+  if (origin.protocol !== 'https:' || origin.origin !== trustedOrigin || !rateLimits ||
+      typeof metadataReader?.read !== 'function' || typeof githubEnrollment?.start !== 'function' ||
+      typeof githubEnrollment?.complete !== 'function' || audit.kind !== 'system') {
     throw new Error('Invalid onboarding router configuration');
   }
   const now = options.now ?? (() => new Date());
   const router = express.Router();
   router.use(securityHeaders());
-  router.use((req, _res, next) => {
+  router.use((req, res, next) => {
+    const githubCallback = req.method === 'GET' && req.path === '/github/callback';
     try {
       // No credentials in URLs, ambiguous cookie bindings, or merged headers.
-      if (req.url.includes('?') || duplicateHeaders(req)) throw new BoundaryError(400);
+      if ((!githubCallback && req.url.includes('?')) || duplicateHeaders(req)) throw new BoundaryError(400);
       for (const name of [ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE] as const) {
         const count = (req.headers.cookie?.split(';') ?? []).filter(part => part.trim().split('=')[0] === name).length;
         if (count > 1 || (count === 1 && !readOnboardingCookie(req.headers.cookie, name))) throw new BoundaryError(400);
       }
       if (req.method === 'POST' && req.headers.origin !== trustedOrigin) throw new BoundaryError(403);
       next();
-    } catch (error) { next(error); }
+    } catch (error) {
+      if (githubCallback) sendGitHubHelp(res, error instanceof BoundaryError ? error.status : 503);
+      else next(error);
+    }
   });
   const json = express.json({ limit: '1kb', strict: true, inflate: false, type: 'application/json' });
   const post = (path: string, action: (req: Request, res: Response) => Promise<void>) => {
@@ -129,10 +140,41 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
       res.json({ ...metadata({ owner: ctx.owner, session: record }), csrfToken: csrf.value });
     } finally { parsed.secret.fill(0); }
   });
+  post('/github/start', async (req, res) => {
+    exactBody(req.body, []);
+    const ctx = await context(req);
+    authorize(req, ctx);
+    if (!ctx.session || !ctx.ownerHash || !ctx.sessionHash) throw new BoundaryError(409);
+    const started = await githubEnrollment.start({ ownerHash: ctx.ownerHash, sessionHash: ctx.sessionHash });
+    res.json({ authorizationUrl: started.authorizationUrl, expiresAt: started.expiresAt.toISOString() });
+  });
+  router.get('/github/callback', (req, res) => {
+    void (async () => {
+      let ownerHash: Buffer | undefined;
+      let sessionHash: Buffer | undefined;
+      try {
+        rejectGetBody(req);
+        const callback = parseGitHubCallback(req.originalUrl, trustedOrigin);
+        const rawOwner = readOnboardingCookie(req.headers.cookie, ONBOARDING_OWNER_COOKIE);
+        const rawSession = readOnboardingCookie(req.headers.cookie, ONBOARDING_SESSION_COOKIE);
+        if (!rawOwner || !rawSession) throw new BoundaryError(400);
+        ownerHash = credentials.hash('owner', rawOwner);
+        sessionHash = credentials.hash('session', rawSession);
+        const result = await githubEnrollment.complete({ ownerHash, sessionHash, callback });
+        if (result.status === 'cancelled') return sendGitHubHelp(res, 400);
+        res.append('Set-Cookie', clearOnboardingCookie(ONBOARDING_OWNER_COOKIE));
+        res.append('Set-Cookie', clearOnboardingCookie(ONBOARDING_SESSION_COOKIE));
+        res.status(303).location('/api/v1/auth/login').end();
+      } catch (error) {
+        sendGitHubHelp(res, githubCallbackStatus(error));
+      } finally {
+        ownerHash?.fill(0);
+        sessionHash?.fill(0);
+      }
+    })();
+  });
   router.get('/context', (req, res, next) => { void (async () => {
-    if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] ?? 0) !== 0 || req.body !== undefined) {
-      throw new BoundaryError(400);
-    }
+    rejectGetBody(req);
     const rawOwner = readOnboardingCookie(req.headers.cookie, ONBOARDING_OWNER_COOKIE);
     const rawSession = readOnboardingCookie(req.headers.cookie, ONBOARDING_SESSION_COOKIE);
     if (!rawOwner || !rawSession) throw new BoundaryError(409);
@@ -190,4 +232,50 @@ function duplicateHeaders(req: Request): boolean {
     seen.add(name);
   }
   return false;
+}
+
+function rejectGetBody(req: Request): void {
+  if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] ?? 0) !== 0 || req.body !== undefined) {
+    throw new BoundaryError(400);
+  }
+}
+
+function parseGitHubCallback(originalUrl: string, trustedOrigin: string) {
+  const url = new URL(originalUrl, trustedOrigin);
+  const entries = [...url.searchParams.entries()];
+  if (url.origin !== trustedOrigin || url.pathname !== '/auth/onboarding/github/callback' || entries.length !== 2) {
+    throw new BoundaryError(400);
+  }
+  const stateValues = url.searchParams.getAll('state');
+  const codeValues = url.searchParams.getAll('code');
+  const errorValues = url.searchParams.getAll('error');
+  if (stateValues.length !== 1 || stateValues[0].length === 0 ||
+      (codeValues.length === 1) === (errorValues.length === 1) ||
+      codeValues.length > 1 || errorValues.length > 1) throw new BoundaryError(400);
+  if (codeValues.length === 1 && (codeValues[0].length === 0 || codeValues[0].length > 2_048 ||
+      /[\s\p{Cc}\p{Cf}]/u.test(codeValues[0]))) throw new BoundaryError(400);
+  if (errorValues.length === 1 && (errorValues[0].length === 0 || errorValues[0].length > 256 ||
+      /[\s\p{Cc}\p{Cf}]/u.test(errorValues[0]))) {
+    throw new BoundaryError(400);
+  }
+  return codeValues.length === 1
+    ? { kind: 'code' as const, state: stateValues[0], code: codeValues[0] }
+    : { kind: 'provider_error' as const, state: stateValues[0],
+      error: errorValues[0] === 'access_denied' ? 'access_denied' as const : 'other' as const };
+}
+
+function githubCallbackStatus(error: unknown): number {
+  if (!(error instanceof GitHubEnrollmentFlowError)) return error instanceof BoundaryError ? error.status : 503;
+  return ['provider_unavailable', 'activation_unavailable', 'audit_unavailable'].includes(error.code) ? 503 : 400;
+}
+
+function sendGitHubHelp(res: Response, status: number): void {
+  res.status(status).type('html').send(
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1"><title>GitHub enrollment</title></head>' +
+    '<body><main><h1>GitHub enrollment was not completed</h1>' +
+    '<p>Return to the enrollment page and start GitHub enrollment again.</p>' +
+    '<p><a href="/auth/onboarding/invitation">Return to enrollment</a></p>' +
+    '<p>If enrollment already completed, <a href="/api/v1/auth/login">continue to sign in</a>.</p></main></body></html>',
+  );
 }
