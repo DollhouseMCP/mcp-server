@@ -143,9 +143,9 @@ async function regenerate(tx: DrizzleTx, audit: InvitationManagementAudit, input
 async function revoke(tx: DrizzleTx, audit: InvitationManagementAudit, invitationId: string, correlationId: string): Promise<InvitationView> {
   assertUuid(invitationId);
   assertUuid(correlationId);
-  const view = await lockInvitation(tx, invitationId);
-  await lockAdminAudit(tx, audit);
+  const view = await lockInvitation(tx, invitationId, true);
   if (view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
+  await lockAdminAudit(tx, audit);
   assertMutable(view);
   const now = await databaseTime(tx);
   await tx.update(generations).set({

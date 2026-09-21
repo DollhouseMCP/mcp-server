@@ -17,12 +17,14 @@ export async function lockAccounts(tx: DrizzleTx): Promise<void> {
   await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
 }
 
-export async function lockInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView> {
+export async function lockInvitation(tx: DrizzleTx, invitationId: string, allowRevoked = false): Promise<InvitationView> {
   await lockAccounts(tx);
   const [row] = await tx.select({ id: invitations.id }).from(invitations)
     .where(eq(invitations.id, invitationId)).for('update');
   if (!row) throw new InvitationError('invitation_not_found', 'Invitation not found');
   const view = await requireInvitation(tx, invitationId);
+  // Revoke retries acknowledge terminal state without changing an unavailable account.
+  if (allowRevoked && view.state === 'revoked' && view.currentGeneration.state === 'revoked') return view;
   const [user] = await tx.select().from(users).where(eq(users.id, view.userId)).for('update');
   if (!user || user.activationState !== 'pending_activation') {
     throw new InvitationError('account_not_pending', 'Invitation account is not pending');

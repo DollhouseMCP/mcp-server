@@ -46,7 +46,11 @@ The future Postgres implementation must make the database the cross-replica auth
 
 Every mutation runs through `IInvitationStore.runMutation` with a required transaction-scoped security-audit writer. Administrator issue, regenerate, and revoke calls additionally require the existing `appendConsoleAdminAuditEventWithTx` callback. There is no production no-op audit path. Issue #2681 uses `lockActivationCandidateWithTx` inside its wider activation transaction rather than calling a separately committing activation service.
 
-All invitation foreign keys use `ON DELETE RESTRICT` to preserve security history. This means account deletion may need the existing anonymized-tombstone fallback. No live route uses these records in this foundation slice; purge behavior must receive focused integration coverage before invitation issuance is enabled.
+All invitation foreign keys use `ON DELETE RESTRICT` to preserve security history. A user referenced as either recipient or inviter therefore takes the existing anonymized-tombstone deletion path. No live route uses these records in this foundation slice.
+
+Account deletion redacts invitations only where the deleted user is the recipient. It replaces both email fields with the unique `deleted-<invitation-id>@deleted.invalid` tombstone, replaces the intended username with `deleted-<invitation-id>`, clears the intended display name, and clears delivery provider message IDs, failure classifications, and sanitized detail payloads. Invitation IDs, recipient tombstone links, inviter IDs, correlation IDs, roles, credential hashes, delivery enums/times, and terminal lifecycle states and timestamps remain as minimal audit history. Pending invitation aggregates and generations become revoked, and open claims become revoked, using one database timestamp. Accepted, expired, revoked, superseded, and completed history remains terminal. Invitations for which the deleted account was only the inviter retain their other recipient's data.
+
+Deletion first locks the `users` row and then recipient invitation aggregates in UUID order. Invitation management's coarse `users EXCLUSIVE` gate conflicts with that initial `FOR UPDATE` table lock before management can lock an invitation, so either transaction completes before the other enters the shared users-before-invitations sequence. Claim, delivery, activation, and future cleanup writers must use that same order. Deletion increments every delivery-attempt version, including attempts whose provider fields are already empty. A delivery worker must use that version for compare-and-swap, then lock and re-check the recipient before persisting a provider result; once the recipient is deleted or its invitation is redacted, a late result must leave provider metadata null. Transactions must not call providers while holding these locks.
 
 ## Transactional management slice
 
@@ -110,6 +114,11 @@ composes with the other lifecycle modules inside one system transaction.
 Transaction helpers live in `InvitationTransactionSupport` so management, claim
 and later delivery code use the same lock order and audit streams.
 
+Invalid credentials are rejected with a uniform error by a preliminary unlocked
+lookup/comparison before taking global account or audit locks. That comparison
+is not authoritative: the credential and all lifecycle state are checked again
+under the existing locks before any write.
+
 A valid current, pending, unexpired credential can create one claim assertion for
 its pending account. The transaction atomically sets `credentialConsumedAt` and
 stores a 32-byte browser-owner hash. A later exchange with the same valid
@@ -149,3 +158,4 @@ head while holding users could deadlock. The table preflight covers both first-h
 INSERT and existing-head row locking. Contention aborts the transaction and returns
 `concurrent_update`; callers may retry the whole operation with fresh validation.
 System/security-only operations do not acquire an administrator chain lock.
+

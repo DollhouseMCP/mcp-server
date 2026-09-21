@@ -53,11 +53,14 @@ import {
 } from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
-  GITHUB_API_USER_URL,
   GITHUB_AUTHORIZE_URL,
   GITHUB_TOKEN_URL,
   MIN_AUTHCODE_SCOPES,
 } from './githubScopes.js';
+import {
+  GitHubAuthenticatedUserClient,
+  type GitHubAuthenticatedUser,
+} from '../../github/GitHubAuthenticatedUserClient.js';
 
 const GITHUB_PROVIDER = 'github';
 
@@ -127,9 +130,11 @@ export class GithubSocialMethod implements IAuthMethod {
   readonly displayName = 'GitHub';
 
   private readonly fetchImpl: typeof fetch;
+  private readonly authenticatedUserClient: GitHubAuthenticatedUserClient;
 
   constructor(private readonly options: GithubSocialMethodOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.authenticatedUserClient = new GitHubAuthenticatedUserClient({ fetchImpl: this.fetchImpl });
   }
 
   beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
@@ -518,26 +523,9 @@ export class GithubSocialMethod implements IAuthMethod {
   private async fetchProfile(
     accessToken: string,
   ): Promise<GithubProfile | { error: string }> {
-    let userResp: globalThis.Response;
+    let user: GitHubAuthenticatedUser;
     try {
-      userResp = await this.fetchImpl(GITHUB_API_USER_URL, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${accessToken}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] /user network error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return { error: 'github user fetch failed' };
-    }
-    if (!userResp.ok) return { error: 'github user fetch failed' };
-    let user: { id: number; login: string; name: string | null };
-    try {
-      user = (await userResp.json()) as { id: number; login: string; name: string | null };
+      user = await this.authenticatedUserClient.fetchAuthenticatedUser(accessToken);
     } catch {
       return { error: 'github user fetch failed' };
     }
@@ -577,7 +565,7 @@ export class GithubSocialMethod implements IAuthMethod {
     return {
       id: user.id,
       login: user.login,
-      name: user.name,
+      name: user.displayName,
       verifiedPrimaryEmail: verifiedPrimary.email,
       // Cycle 19 / security-#3: explicit projection of /user payload
       // into rawProfile. The TypeScript cast at line ~433 narrows the
@@ -590,7 +578,7 @@ export class GithubSocialMethod implements IAuthMethod {
       // trim — fix shape is identical: project explicitly rather than
       // trust the cast.
       raw: {
-        user: { id: user.id, login: user.login, name: user.name },
+        user: { id: user.id, login: user.login, name: user.displayName },
         verifiedPrimaryEmail: verifiedPrimary.email,
       },
     };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import type { IAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
+import { ConsoleStoreConflictError } from '../../../../src/web-console/stores/ConsoleStoreValidation.js';
 import {
   ConsoleModuleRegistry,
   InMemoryAccountAdminMutationTransactionRunner,
@@ -90,6 +91,7 @@ async function principalFixture(
 function mutationFixture(
   principals = store(),
   integrationStore?: IUserIntegrationStore,
+  inviteIssuer: IConsoleAccountInviteIssuer = accountInviteIssuer(),
 ): {
   readonly accountAdminStore: InMemoryConsoleAccountAdminStore;
   readonly sessionStore: InMemoryConsoleSessionStore;
@@ -106,7 +108,7 @@ function mutationFixture(
     accountAllowlistStore,
     sessionStore,
     authStorage: authStorageFixture({ adminSub: PRIMARY_SUB }),
-    accountInviteIssuer: accountInviteIssuer(),
+    accountInviteIssuer: inviteIssuer,
     oauthGrantRevocationService: oauthGrantRevocationService(),
     integrationStore,
     enableAccountAllowlistRoutes: true,
@@ -766,6 +768,55 @@ describe('AccountAdminModule', () => {
     })]);
   });
 
+  it('derives a canonical username while preserving display names and legacy username-only requests', async () => {
+    const issued: Array<Parameters<IConsoleAccountInviteIssuer['issueInvite']>[0]> = [];
+    const issuer: IConsoleAccountInviteIssuer = {
+      async issueInvite(input) {
+        issued.push(input);
+        return accountInviteIssuer().issueInvite(input);
+      },
+    };
+    const { module } = mutationFixture(store(), undefined, issuer);
+    const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(invite.handler(consoleRequest({
+      body: { display_name: '  Todd Lewis  ', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({ status: 201 });
+    await expect(invite.handler(consoleRequest({
+      body: { username: 'already_normalized', email: 'legacy@example.test' },
+    }))).resolves.toMatchObject({ status: 201 });
+
+    expect(issued).toEqual([
+      expect.objectContaining({ username: 'todd-lewis', displayName: 'Todd Lewis' }),
+      expect.objectContaining({ username: 'already_normalized', displayName: 'already_normalized' }),
+    ]);
+  });
+
+  it('returns an explicit conflict when a canonical username already exists', async () => {
+    const issuer: IConsoleAccountInviteIssuer = {
+      issueInvite() {
+        return Promise.reject(new ConsoleStoreConflictError('canonical username collision'));
+      },
+    };
+    const { module, adminAuditWriter } = mutationFixture(store(), undefined, issuer);
+    const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(invite.handler(consoleRequest({
+      body: { display_name: 'Todd-Lewis', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: {
+        code: 'conflict',
+        detail: 'An account with this username or email already exists.',
+      },
+    });
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      result: 'conflict',
+      errorCode: 'conflict',
+    })]);
+  });
+
   it('requires matching higher-tier capability before inviting higher-tier roles', async () => {
     const { module, adminAuditWriter } = mutationFixture();
     const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
@@ -960,6 +1011,12 @@ describe('AccountAdminModule', () => {
     const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
 
     await expect(invite.handler(consoleRequest({
+      body: { email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request', detail: 'Either display_name or username is required.' },
+    });
+    await expect(invite.handler(consoleRequest({
       body: { username: 'bob', email: 'not-an-email' },
     }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
     await expect(invite.handler(consoleRequest({
@@ -968,10 +1025,28 @@ describe('AccountAdminModule', () => {
     await expect(invite.handler(consoleRequest({
       body: { username: 'bob', email: INVITE_EMAIL, roles: ['definitely_not_a_role'] },
     }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+    await expect(invite.handler(consoleRequest({
+      body: { display_name: '!!!', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request', detail: 'display_name must contain at least one Unicode letter or number.' },
+    });
 
     expect(issueCalls).toBe(0);
-    expect(adminAuditWriter.getEvents()).toHaveLength(3);
+    expect(adminAuditWriter.getEvents()).toHaveLength(5);
     expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_INVITE,
+        result: 'rejected',
+        errorCode: 'invalid_request',
+        argsRedacted: { operation: 'invite', invalid_body: true },
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_INVITE,
+        result: 'rejected',
+        errorCode: 'invalid_request',
+        argsRedacted: { operation: 'invite', invalid_body: true },
+      }),
       expect.objectContaining({
         operation: AUDIT_USERS_INVITE,
         result: 'rejected',
