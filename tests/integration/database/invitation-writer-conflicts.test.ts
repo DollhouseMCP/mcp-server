@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { jest } from '@jest/globals';
+import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { eq, sql } from 'drizzle-orm';
 import { createDatabaseConnection, type DatabaseInstance } from '../../../src/database/connection.js';
 import type { DrizzleTx } from '../../../src/database/db-utils.js';
@@ -37,8 +39,8 @@ function fixture() {
 function issueDurable(db: DatabaseInstance, input: ReturnType<typeof fixture>['durable']) {
   return new PostgresInvitationManagementStore(db).runMutation(audit, mutation => mutation.issue(input));
 }
-function issueLegacy(db: DatabaseInstance, input: ReturnType<typeof fixture>['legacy']) {
-  return new PostgresConsoleAccountInviteIssuer({ db, signingKeyStore: new InMemorySigningKeyStore(),
+function issueLegacy(db: DatabaseInstance, input: ReturnType<typeof fixture>['legacy'], signingKeyStore = new InMemorySigningKeyStore()) {
+  return new PostgresConsoleAccountInviteIssuer({ db, signingKeyStore,
     publicBaseUrl: 'https://console.example.test' }).issueInvite(input);
 }
 function deferred<T = void>() {
@@ -128,4 +130,32 @@ it.each(['durable', 'legacy'] as const)('compares older stored username encoding
   if (kind === 'durable') await expect(pending).rejects.toMatchObject({ code: 'invitation_conflict' });
   else await expect(pending).rejects.toBeInstanceOf(ConsoleStoreConflictError);
   expect(await connection.db.select().from(users).where(eq(users.username, username))).toHaveLength(0);
+});
+
+
+it('starts the legacy credential lifetime after a users lock wait longer than its requested TTL', async () => {
+  if (!available) return;
+  const f = fixture();
+  const signingKeyStore = new InMemorySigningKeyStore();
+  const startedAt = Date.now();
+  const afterWait = startedAt + 16 * 60_000;
+  const clock = jest.spyOn(Date, 'now').mockReturnValue(startedAt);
+  const pid = deferred<number>();
+  let pending: ReturnType<typeof issueLegacy> | undefined;
+  try {
+    await connection.db.transaction(async blocker => {
+      await blocker.select().from(users).where(eq(users.id, actorUserId)).for('update');
+      pending = issueLegacy(observedDb(value => pid.resolve(value)), f.legacy, signingKeyStore);
+      await expectBlockedOnUsers(await pid.promise);
+      // Model elapsed wall time while the actual writer is blocked in PostgreSQL.
+      // The old implementation minted at startedAt and returned an expired token.
+      clock.mockReturnValue(afterWait);
+    });
+    const result = await pending!;
+    expect(result.expiresAt.getTime()).toBe(afterWait + f.legacy.ttlMinutes * 60_000);
+    const key = await signingKeyStore.getActive('invite');
+    const verifier = new InviteTokenStore(Buffer.from(String(key!.payload.secret), 'base64'));
+    const token = new URL(result.inviteUrl).searchParams.get('invite')!;
+    expect(verifier.verify(token)).toMatchObject({ ok: true, payload: { sub: result.primarySub } });
+  } finally { clock.mockRestore(); }
 });

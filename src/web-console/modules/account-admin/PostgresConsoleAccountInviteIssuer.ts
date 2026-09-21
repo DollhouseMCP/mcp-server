@@ -36,17 +36,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
     const username = normalizeLocalUsername(input.username);
     const primarySub = `${LOCAL_AUTH_METHOD_SUB_PREFIX}${username}`;
     const tokenStore = await this.createInviteTokenStore();
-    const token = tokenStore.issue({
-      sub: primarySub,
-      email: input.email,
-      purpose: 'invite',
-      ttlMs: input.ttlMinutes * 60 * 1000,
-    });
-    const verified = tokenStore.verify(token);
-    if (!verified.ok) throw new Error('issued invite token could not be verified');
-    const expiresAt = new Date(verified.payload.exp);
-
-    const userId = await this.createPrincipalAndAuthAccount({
+    return this.createPrincipalAndAuthAccount({
       username,
       displayName: input.displayName,
       email: input.email,
@@ -54,14 +44,8 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
       actorUserId: input.actorUserId,
       roles: input.roles,
       issuedAt: input.issuedAt,
-    });
-
-    return {
-      inviteUrl: buildInviteUrl(this.options.publicBaseUrl, token),
-      expiresAt,
-      userId,
-      primarySub,
-    };
+      ttlMinutes: input.ttlMinutes,
+    }, tokenStore);
   }
 
   private async createInviteTokenStore(): Promise<InviteTokenStore> {
@@ -78,7 +62,8 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
     readonly actorUserId: string;
     readonly roles: readonly ConsoleAdminRole[];
     readonly issuedAt: Date;
-  }): Promise<string> {
+    readonly ttlMinutes: number;
+  }, tokenStore: InviteTokenStore): Promise<ConsoleAccountInviteIssueResult> {
     try {
       return await withSystemContext(this.options.db, async tx => {
       // Match durable issuance's users-first conflict protocol. Downstream
@@ -126,7 +111,14 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
         });
       }
 
-      return userId;
+      // Mint only after lock waits and writes, immediately before commit. The
+      // requested lifetime must not elapse while issuance waits for users.
+      const token = tokenStore.issue({ sub: input.primarySub, email: input.email,
+        purpose: 'invite', ttlMs: input.ttlMinutes * 60 * 1000 });
+      const verified = tokenStore.verify(token);
+      if (!verified.ok) throw new Error('issued invite token could not be verified');
+      return { userId, primarySub: input.primarySub, expiresAt: new Date(verified.payload.exp),
+        inviteUrl: buildInviteUrl(this.options.publicBaseUrl, token) };
       });
     } catch (error) {
       if (getErrorCode(error) === '55P03') {
