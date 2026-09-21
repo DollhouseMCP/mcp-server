@@ -203,6 +203,7 @@ caddy_access_log_block() {
 			}
 			request>headers>Authorization delete
 			request>headers>Cookie delete
+			request>headers>X-Onboarding-Csrf delete
 			wrap json
 		}
 	}

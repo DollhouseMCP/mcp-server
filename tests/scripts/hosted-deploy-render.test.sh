@@ -100,6 +100,15 @@ assert_compose_config_logging() {
   done
 }
 
+assert_onboarding_log_redaction() {
+  local file="$1"
+  # GitHub's callback credentials are the exact `code` and `state` query keys.
+  assert_occurrences "${file}" 'replace code REDACTED' "1"
+  assert_occurrences "${file}" 'replace state REDACTED' "1"
+  # Go canonicalizes the request header name before Caddy serializes it.
+  assert_occurrences "${file}" 'request>headers>X-Onboarding-Csrf delete' "1"
+}
+
 expect_log_rotation_render_failure() {
   local output_name="$1"
   local expected="$2"
@@ -244,6 +253,7 @@ assert_contains "${CADDY_FILE}" 'replace state REDACTED'
 assert_contains "${CADDY_FILE}" 'replace ticket REDACTED'
 assert_contains "${CADDY_FILE}" 'replace token REDACTED'
 assert_contains "${CADDY_FILE}" 'request>headers>Authorization delete'
+assert_onboarding_log_redaction "${CADDY_FILE}"
 assert_contains "${CADDY_FILE}" 'header_up X-Forwarded-For {client_ip}'
 assert_contains "${CADDY_FILE}" 'header_up X-Real-IP {client_ip}'
 assert_not_contains "${CADDY_FILE}" 'trusted_proxies static'
@@ -364,6 +374,7 @@ assert_contains "${CLOUDFLARE_CADDY_FILE}" '{'
 assert_contains "${CLOUDFLARE_CADDY_FILE}" 'trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
 assert_contains "${CLOUDFLARE_CADDY_FILE}" 'trusted_proxies_strict'
 assert_contains "${CLOUDFLARE_CADDY_FILE}" 'log {'
+assert_onboarding_log_redaction "${CLOUDFLARE_CADDY_FILE}"
 assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
 assert_contains "${CLOUDFLARE_ENV_FILE}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${CLOUDFLARE_SAMPLE_CIDRS}"
 
