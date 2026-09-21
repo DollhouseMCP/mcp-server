@@ -276,10 +276,11 @@ describe('GitHub Workflow Validation', () => {
         step => step.name === 'Dry run (skip publish)'
       );
 
-      for (const step of [safetyDryRun, serverDryRun]) {
-        expect(step?.run).toContain('npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"');
-        expect(step?.run).toContain('npm publish --dry-run --tag dry-run');
-      }
+      expect(safetyDryRun?.run).toContain('npm pkg set "version=0.0.0-dry-run.${GITHUB_RUN_ID}"');
+      expect(safetyDryRun?.run).toContain('npm publish --dry-run --tag dry-run');
+      expect(serverDryRun?.env?.DIST_TAG).toBe('${{ steps.npm_dist_tag.outputs.dist_tag }}');
+      expect(serverDryRun?.run).toContain('npm pkg set "version=${dry_run_version}"');
+      expect(serverDryRun?.run).toContain('npm publish --dry-run --tag "${DIST_TAG}"');
     });
   });
 });
