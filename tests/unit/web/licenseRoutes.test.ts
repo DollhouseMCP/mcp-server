@@ -17,6 +17,37 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+interface MockPostHogClient {
+  capture: jest.Mock;
+  shutdown: jest.Mock;
+  shutdownCalled: Promise<void>;
+}
+
+let postHogClients: MockPostHogClient[] = [];
+let nextPostHogShutdownError: Error | null = null;
+const postHogConstructorMock = jest.fn().mockImplementation(() => {
+  let markShutdownCalled!: () => void;
+  const shutdownCalled = new Promise<void>(resolve => {
+    markShutdownCalled = resolve;
+  });
+  const client: MockPostHogClient = {
+    capture: jest.fn(),
+    shutdown: jest.fn().mockImplementation(async () => {
+      markShutdownCalled();
+      if (nextPostHogShutdownError) throw nextPostHogShutdownError;
+    }),
+    shutdownCalled,
+  };
+  postHogClients.push(client);
+  return client;
+});
+
+// setupRoutes starts license analytics without awaiting it. Mock the SDK itself
+// so that delayed work cannot outlive this file's fetch mock and reach PostHog.
+jest.unstable_mockModule('posthog-node', () => ({
+  PostHog: postHogConstructorMock,
+}));
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LICENSE_PATH = join(homedir(), '.dollhouse', 'license.json');
 const DIRECT_WORKER_PATH_SUFFIX = 'workers.dev/direct-verification';
@@ -65,6 +96,21 @@ function getFetchInputUrl(input: unknown): string {
 let savedLicense: string | null = null;
 const originalFetch = globalThis.fetch;
 
+async function drainPostHogClients(): Promise<void> {
+  if (postHogClients.length === 0) return;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(postHogClients.map(client => client.shutdownCalled)),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Timed out waiting for mocked PostHog shutdown')), 2_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 beforeAll(async () => {
   try {
     savedLicense = await readFile(LICENSE_PATH, 'utf-8');
@@ -85,8 +131,18 @@ afterAll(async () => {
   }
 });
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
+afterEach(async () => {
+  try {
+    await drainPostHogClients();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+beforeEach(() => {
+  postHogClients = [];
+  nextPostHogShutdownError = null;
+  postHogConstructorMock.mockClear();
 });
 
 // ── API Endpoint Tests ───────────────────────────────────────────────────
@@ -897,16 +953,14 @@ describe('License Routes — Email Verification', () => {
       expect(res.body.error).toMatch(/could not send the verification email/i);
     });
 
-    it('keeps the setup flow successful when PostHog capture fails after worker success', async () => {
+    it('keeps the setup flow successful and network-isolated when PostHog capture fails', async () => {
+      nextPostHogShutdownError = new Error('posthog unavailable');
       globalThis.fetch = jest.fn().mockImplementation((input: string | URL) => {
         const url = typeof input === 'string' ? input : input.toString();
         if (url.includes('workers.dev/direct-verification')) {
           return mockFetchResponse(true, 200, { success: true });
         }
-        if (url.includes('app.posthog.com/batch')) {
-          return Promise.reject(new Error('posthog unavailable'));
-        }
-        return mockFetchResponse(true, 200, { success: true });
+        throw new Error(`Unexpected network request in unit test: ${new URL(url).origin}`);
       });
 
       const res = await request(app)
@@ -916,6 +970,19 @@ describe('License Routes — Email Verification', () => {
 
       expect(res.body.success).toBe(true);
       expect(res.body.verificationRequired).toBe(true);
+      expect(postHogClients).toHaveLength(1);
+      const [postHogClient] = postHogClients;
+      await postHogClient.shutdownCalled;
+
+      expect(postHogClient.capture).toHaveBeenCalledWith(expect.objectContaining({
+        event: 'license_activation',
+        properties: expect.objectContaining({
+          email: 'verify@example.com',
+          event_type: 'verification',
+        }),
+      }));
+      expect(postHogClient.shutdown).toHaveBeenCalledTimes(1);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     });
   });
 });
