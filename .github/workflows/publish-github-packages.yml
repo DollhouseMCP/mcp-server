@@ -90,17 +90,17 @@ jobs:
           # Capture both stdout and exit code to distinguish between errors
           if npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>&1 | grep -q "$PACKAGE_VERSION"; then
             echo "✓ Version $PACKAGE_VERSION already exists on GitHub Packages"
-            echo "already_published=true" >> $GITHUB_OUTPUT
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
           else
             # Check if it was an authentication error vs package not found
             CHECK_OUTPUT=$(npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>&1 || true)
             if echo "$CHECK_OUTPUT" | grep -qi "unauthorized\|forbidden\|authentication"; then
               echo "⚠️ Warning: Authentication issue checking package existence"
               echo "Proceeding with publication attempt (will fail safely if already exists)"
-              echo "already_published=false" >> $GITHUB_OUTPUT
+              echo "already_published=false" >> "$GITHUB_OUTPUT"
             else
               echo "✓ Version $PACKAGE_VERSION not found, proceeding with publication"
-              echo "already_published=false" >> $GITHUB_OUTPUT
+              echo "already_published=false" >> "$GITHUB_OUTPUT"
             fi
           fi
         env:
@@ -120,7 +120,7 @@ jobs:
               dist_tag="beta"
               ;;
             *-rc.*)
-              dist_tag="next"
+              dist_tag="rc"
               ;;
             *-*)
               echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta, -beta., or -rc."
@@ -134,6 +134,7 @@ jobs:
           echo "dist_tag=${dist_tag}" >> "$GITHUB_OUTPUT"
           echo "GitHub Packages dist-tag: ${dist_tag}"
 
+      # Manual dispatch has no release flag; its version-derived dist-tag above is authoritative.
       - name: Guard GitHub Packages release channel
         if: ${{ github.event_name == 'release' }}
         shell: bash
@@ -163,19 +164,28 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Dry run (skip GitHub Packages publish)
-        if: ${{ steps.check_version.outputs.already_published == 'false' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
         shell: bash
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           echo "DRY RUN MODE - Skipping GitHub Packages publication"
           echo "Package would be published: @DollhouseMCP/mcp-server@${PACKAGE_VERSION}"
           echo "GitHub Packages dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
-          npm publish --dry-run --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
+          # npm may reject an existing version even during dry-run. Exercise
+          # the lifecycle on the resolved channel without a registry write.
+          case "${DIST_TAG}" in
+            latest) dry_run_version="0.0.${GITHUB_RUN_ID}" ;;
+            alpha|beta|rc) dry_run_version="0.0.0-${DIST_TAG}.dry-run.${GITHUB_RUN_ID}" ;;
+            *) echo "::error::Unsupported dry-run channel: ${DIST_TAG}"; exit 1 ;;
+          esac
+          npm pkg set "version=${dry_run_version}"
+          npm publish --dry-run --tag "${DIST_TAG}"
         env:
+          DIST_TAG: ${{ steps.package_dist_tag.outputs.dist_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Skip publication (already exists)
-        if: steps.check_version.outputs.already_published == 'true'
+        if: ${{ steps.check_version.outputs.already_published == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           echo "⏭️ Skipping publication - version already exists on GitHub Packages"

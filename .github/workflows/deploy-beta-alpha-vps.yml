@@ -21,7 +21,7 @@ on:
         description: 'Preview the deployment without opening SSH or changing the VPS'
         required: true
         type: boolean
-        default: false
+        default: true
       skip_backup:
         description: 'Skip remote backup before update/rollback only when another backup exists'
         required: true
@@ -59,22 +59,29 @@ jobs:
       DOLLHOUSE_HOSTED_MODE: cloud
       DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES: ${{ vars.DOLLHOUSE_ALPHA_CADDY_TRUSTED_PROXIES || '' }}
       DOLLHOUSE_REMOTE_SSH_TARGET: ${{ secrets.DOLLHOUSE_ALPHA_SSH_TARGET }}
-      DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}
-      DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
 
     steps:
       - name: Checkout workflow source
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Validate deployment request
+        id: request
         shell: bash
         env:
+          HAS_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY != '' }}
+          DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
           INPUT_ACTION: ${{ inputs.action }}
           INPUT_GIT_REF: ${{ inputs.git_ref }}
           INPUT_LOG_LEVEL: ${{ inputs.log_level }}
         run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/beta" ]]; then
+            echo "::error::Run this workflow from the beta branch so hosted scripts and dependencies come from beta"
+            exit 1
+          fi
+
           case "${INPUT_ACTION}" in
             update|verify|rollback)
               ;;
@@ -84,12 +91,22 @@ jobs:
               ;;
           esac
 
-          if [[ "${INPUT_GIT_REF}" != "beta" \
-              && "${INPUT_GIT_REF}" != "refs/heads/beta" \
-              && ! "${INPUT_GIT_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+          valid_beta_tag() {
+            local version="${1#v}"
+            local core='(0|[1-9][0-9]*)'
+            local identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+            local LC_ALL=C
+            [[ "$1" == v* && ${#version} -le 256 && "$version" =~ ^${core}\.${core}\.${core}-beta(\.${identifier})*$ ]]
+          }
+          if [[ "${INPUT_GIT_REF}" != "beta" && "${INPUT_GIT_REF}" != "refs/heads/beta" ]] \
+              && ! valid_beta_tag "${INPUT_GIT_REF}"; then
             echo "::error::Deployments from this workflow are limited to beta, refs/heads/beta, or SemVer v*-beta / v*-beta.* tags; got ${INPUT_GIT_REF}"
             exit 1
           fi
+
+          # git clone --branch expects a branch name, not refs/heads/beta.
+          deploy_ref="${INPUT_GIT_REF#refs/heads/}"
+          echo "git_ref=${deploy_ref}" >> "$GITHUB_OUTPUT"
 
           case "${INPUT_LOG_LEVEL}" in
             info|debug|quiet)
@@ -104,7 +121,7 @@ jobs:
             echo "::error::Missing environment secret DOLLHOUSE_ALPHA_SSH_TARGET"
             exit 1
           fi
-          if [[ -z "${DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY}" ]]; then
+          if [[ "${HAS_SSH_PRIVATE_KEY}" != "true" ]]; then
             echo "::error::Missing environment secret DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY"
             exit 1
           fi
@@ -113,8 +130,20 @@ jobs:
             exit 1
           fi
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
       - name: Prepare SSH material
         shell: bash
+        env:
+          DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}
+          DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
         run: |
           key_file="${RUNNER_TEMP}/dollhouse_alpha_key"
           known_hosts_file="${RUNNER_TEMP}/dollhouse_alpha_known_hosts"
@@ -127,20 +156,11 @@ jobs:
           echo "DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE=${key_file}" >> "$GITHUB_ENV"
           echo "DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=${known_hosts_file}" >> "$GITHUB_ENV"
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
       - name: Run hosted remote deploy
         shell: bash
         env:
           INPUT_ACTION: ${{ inputs.action }}
-          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_GIT_REF: ${{ steps.request.outputs.git_ref }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           INPUT_SKIP_BACKUP: ${{ inputs.skip_backup }}
           INPUT_LOG_LEVEL: ${{ inputs.log_level }}
@@ -167,6 +187,12 @@ jobs:
           DOLLHOUSE_HOSTED_LOG_LEVEL="${INPUT_LOG_LEVEL}" \
             npm run hosted:remote -- "${args[@]}"
 
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f -- "${RUNNER_TEMP}/dollhouse_alpha_key" "${RUNNER_TEMP}/dollhouse_alpha_known_hosts"
+
       - name: Verify public alpha endpoint
         if: ${{ inputs.dry_run != true }}
         shell: bash
@@ -178,13 +204,14 @@ jobs:
         shell: bash
         env:
           INPUT_ACTION: ${{ inputs.action }}
-          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_GIT_REF: ${{ steps.request.outputs.git_ref }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           {
             echo "## Beta Alpha VPS Deployment"
             echo ""
             echo "- Action: \`${INPUT_ACTION}\`"
+            echo "- Workflow source: \`${GITHUB_SHA}\`"
             echo "- Ref: \`${INPUT_GIT_REF}\`"
             echo "- Dry run: \`${INPUT_DRY_RUN}\`"
             echo "- Public URL: ${DOLLHOUSE_PUBLIC_BASE_URL}"
