@@ -9,7 +9,8 @@ import { PostgresInvitationManagementStore } from '../../../src/invitations/Post
 import { PostgresInvitationClaimStore } from '../../../src/invitations/PostgresInvitationClaimStore.js';
 import { hashInvitationCredential } from '../../../src/invitations/InvitationToken.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
-import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
+import { appendConsoleAdminAuditEventWithTx } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
+import { closeTestDb, getTestAdminDb, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 const inviterId = randomUUID();
 const audit: InvitationManagementAudit = { kind: 'system', appendSecurityEvent: appendSecurityAuditEventWithTx };
@@ -109,6 +110,55 @@ describe('durable invitation claims', () => {
     if (!databaseAvailable) return;
     const fixture = await issue();
     await expect(store().runMutation(audit, mutation => mutation.beginClaim({ ...claimInput(fixture), credentialSecret: randomBytes(32) }))).rejects.toMatchObject({ code: 'invitation_invalid' });
+    expect((await generationRow(fixture)).credentialConsumedAt).toBeNull();
+    expect(await getTestAdminDb().select().from(claims).where(eq(claims.invitationId, fixture.invitation.id))).toHaveLength(0);
+  });
+
+  it('rejects invalid and absent credentials without waiting for users or acquiring the audit-head lock', async () => {
+    if (!databaseAvailable) return;
+    const fixture = await issue();
+    const key = randomBytes(32);
+    const admin: InvitationManagementAudit = { kind: 'admin', appendSecurityEvent: appendSecurityAuditEventWithTx,
+      appendAdminEvent: (tx, event) => appendConsoleAdminAuditEventWithTx(tx, event, { resolve: async () => ({ keyId: 'claim-test', key }) }),
+      adminContext: { actorUserId: inviterId, actorSub: `test:${inviterId}`, actorRole: 'admin', actorCapabilityRole: 'admin',
+        actorConsoleSessionHash: randomBytes(32), capability: 'console:admin:accounts', elevationAcr: null, elevationAmr: [],
+        elevationAuthTime: null, endpoint: '/internal/claims', clientIp: null, userAgent: null },
+    };
+    await getTestAdminDb().transaction(async tx => {
+      await tx.execute(sql`LOCK TABLE users, admin_audit_chain_heads IN EXCLUSIVE MODE`);
+      for (const invitationId of [fixture.invitation.id, randomUUID()]) {
+        const rejected = store().runMutation(admin, mutation => mutation.beginClaim({
+          ...claimInput(fixture), invitationId, credentialSecret: randomBytes(32),
+        })).then(() => 'unexpected success', error => ({ code: error.code, message: error.message }));
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const blocked = new Promise<string>(resolve => { timer = setTimeout(() => resolve('blocked on global lock'), 1000); });
+          expect(await Promise.race([rejected, blocked])).toEqual({ code: 'invitation_invalid', message: 'Invalid invitation credential' });
+        } finally { clearTimeout(timer); }
+      }
+    });
+    expect((await generationRow(fixture)).credentialConsumedAt).toBeNull();
+    expect(await getTestAdminDb().select().from(claims).where(eq(claims.invitationId, fixture.invitation.id))).toHaveLength(0);
+  });
+
+  it('rechecks the credential after locking when its preliminary valid snapshot becomes stale', async () => {
+    if (!databaseAvailable) return;
+    const fixture = await issue();
+    let outcome: Promise<unknown> | undefined;
+    await getTestAdminDb().transaction(async tx => {
+      await tx.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
+      outcome = claim(fixture).then(() => 'unexpected success', error => ({ code: error.code }));
+      let waiting = false;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const rows = await getTestDb().execute(sql`SELECT EXISTS(SELECT 1 FROM pg_locks
+          WHERE relation = 'users'::regclass AND mode = 'ExclusiveLock' AND NOT granted) AS waiting`);
+        if (rows[0].waiting) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true); // The preliminary comparison succeeded; claim is waiting for its authoritative lock.
+      await tx.update(generations).set({ credentialHash: randomBytes(32) }).where(eq(generations.invitationId, fixture.invitation.id));
+    });
+    expect(await outcome).toEqual({ code: 'invitation_invalid' });
     expect((await generationRow(fixture)).credentialConsumedAt).toBeNull();
     expect(await getTestAdminDb().select().from(claims).where(eq(claims.invitationId, fixture.invitation.id))).toHaveLength(0);
   });

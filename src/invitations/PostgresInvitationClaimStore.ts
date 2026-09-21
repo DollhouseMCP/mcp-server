@@ -4,7 +4,7 @@ import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdenti
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
-import { accountInvitationClaimAssertions as claims, accountInvitationGenerations as generations } from '../database/schema/invitations.js';
+import { accountInvitationClaimAssertions as claims, accountInvitationGenerations as generations, accountInvitations as invitations } from '../database/schema/invitations.js';
 import { users } from '../database/schema/users.js';
 import type { InvitationClaimRecord, LockedInvitationActivationCandidate } from './IInvitationStore.js';
 import type { IInvitationClaimStore, InvitationActivationCandidateInput, InvitationClaimMutation } from './IInvitationClaimStore.js';
@@ -46,6 +46,7 @@ async function beginClaim(tx: DrizzleTx, audit: InvitationManagementAudit, input
     validateBinding(owned.invitationId, owned.generation, owned.claimOwnerHash);
     assertUuid(owned.correlationId);
     if (owned.credentialSecret.length !== INVITATION_SECRET_BYTES) throw new InvitationError('invitation_invalid', 'Invalid invitation credential');
+    await rejectInvalidCredentialBeforeLock(tx, owned);
     const invitation = await lockClaimableInvitation(tx, owned.invitationId, owned.generation);
     await lockAdminAudit(tx, audit);
     const [generation] = await tx.select().from(generations).where(and(
@@ -84,6 +85,18 @@ async function beginClaim(tx: DrizzleTx, audit: InvitationManagementAudit, input
   } finally {
     owned.credentialSecret.fill(0);
     owned.claimOwnerHash.fill(0);
+  }
+}
+
+/** Cheap rejection only; the existing locked path revalidates every fact before mutation. */
+async function rejectInvalidCredentialBeforeLock(tx: DrizzleTx, input: InvitationClaimRecord): Promise<void> {
+  const [credential] = await tx.select({ email: invitations.emailNormalized, expiresAt: generations.expiresAt, hash: generations.credentialHash })
+    .from(generations).innerJoin(invitations, eq(invitations.id, generations.invitationId))
+    .where(and(eq(generations.invitationId, input.invitationId), eq(generations.generation, input.generation))).limit(1);
+  if (!credential || !invitationCredentialMatches(credential.hash, hashInvitationCredential({
+    invitationId: input.invitationId, generation: input.generation, secret: input.credentialSecret,
+  }, credential.email, credential.expiresAt))) {
+    throw new InvitationError('invitation_invalid', 'Invalid invitation credential');
   }
 }
 

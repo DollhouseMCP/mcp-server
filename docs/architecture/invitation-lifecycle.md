@@ -114,6 +114,11 @@ composes with the other lifecycle modules inside one system transaction.
 Transaction helpers live in `InvitationTransactionSupport` so management, claim
 and later delivery code use the same lock order and audit streams.
 
+Invalid credentials are rejected with a uniform error by a preliminary unlocked
+lookup/comparison before taking global account or audit locks. That comparison
+is not authoritative: the credential and all lifecycle state are checked again
+under the existing locks before any write.
+
 A valid current, pending, unexpired credential can create one claim assertion for
 its pending account. The transaction atomically sets `credentialConsumedAt` and
 stores a 32-byte browser-owner hash. A later exchange with the same valid
