@@ -115,6 +115,8 @@ export type ASHarnessOptions = Omit<EmbeddedAuthorizationServerOptions, 'publicB
    * pre-bootstrap traffic.
    */
   skipAutoBootstrap?: boolean;
+  /** Test-only composition hook for BFF routes before the AS catch-all. */
+  configureApp?: (app: Express) => void;
 };
 
 /**
@@ -150,6 +152,7 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
 
   const app = express();
   app.disable('x-powered-by');
+  opts.configureApp?.(app);
   app.use(as.createRouter());
   const server = app.listen(port, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
