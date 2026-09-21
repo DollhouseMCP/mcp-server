@@ -9,5 +9,8 @@ import type { OnboardingSessionRecord } from './OnboardingRecords.js';
  * locks through the caller's commit, rejecting stale/revoked/expired context.
  */
 export interface OnboardingSessionAuthority {
+  /** After successful same-transaction lockSessionWithTx, delete that exact live
+   * owner/session after activation writes. False must abort the outer transaction. */
+  completeEnrollmentWithTx(tx: DrizzleTx, ownerHash: Buffer, sessionHash: Buffer): Promise<boolean>;
   lockSessionWithTx(tx: DrizzleTx, ownerHash: Buffer, sessionHash: Buffer): Promise<OnboardingSessionRecord | null>;
 }
