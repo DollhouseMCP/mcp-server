@@ -195,6 +195,10 @@ const envSchema = z.object({
    */
   DOLLHOUSE_INVITE_TOKEN_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Explicit opt-in for the private beta invitation flow; off until qualified. */
+  DOLLHOUSE_BETA_ONBOARDING_ENABLED: envBool(false),
+  /** Public support mailbox displayed by the private beta claim page and email. */
+  DOLLHOUSE_ONBOARDING_SUPPORT_EMAIL: z.string().trim().optional().transform(v => v || undefined),
   // SMTP for the magic-link auth method (must-fix #10 STARTTLS-mandatory).
   DOLLHOUSE_SMTP_HOST: z.string().trim().optional().transform(v => v || undefined),
   // The SMTP resolver applies the effective 587 default only after detecting
