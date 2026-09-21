@@ -7,8 +7,23 @@ import { InvitationError } from '../../../../src/invitations/InvitationTypes.js'
 import { generateInvitationToken } from '../../../../src/invitations/InvitationToken.js';
 import { createOnboardingRouter, type OnboardingRouterOptions } from '../../../../src/invitations/onboarding/OnboardingRouter.js';
 import { OnboardingCredentials } from '../../../../src/invitations/onboarding/OnboardingCredentials.js';
+import { GitHubEnrollmentFlowError } from '../../../../src/invitations/onboarding/GitHubEnrollmentOrchestrationService.js';
 import type { OnboardingOwnerRecord, OnboardingSessionRecord } from '../../../../src/invitations/onboarding/OnboardingRecords.js';
 import { ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE } from '../../../../src/invitations/onboarding/OnboardingBrowserPolicy.js';
+import {
+  AeadSecretEncryptionService,
+  assembleSecuredConsoleRouter,
+  ConsoleModuleRegistry,
+  createConsoleBffAuthModule,
+  InMemoryAdminAuditWriter,
+  InMemoryConsoleAccountAdminStore,
+  InMemoryConsoleIdentityResolver,
+  InMemoryConsoleSessionStore,
+  InMemoryIdempotencyStore,
+  InMemoryLoginTransactionStore,
+  InMemoryRuntimeSessionControlStore,
+  type IConsoleOAuthClient,
+} from '../../../../src/web-console/index.js';
 import { HmacConsoleOpaqueValueService } from '../../../../src/web-console/security/ConsoleOpaqueValues.js';
 
 const origin = 'https://console.example.test';
@@ -36,18 +51,59 @@ function fixture() {
   };
   const rateLimits = new InMemoryRateLimitStore();
   const metadataReader = { read: jest.fn<OnboardingRouterOptions['metadataReader']['read']>(async () => null) };
-  const options: OnboardingRouterOptions = { store, metadataReader, credentials, rateLimits, trustedOrigin: origin,
+  const githubEnrollment = {
+    start: jest.fn<OnboardingRouterOptions['githubEnrollment']['start']>(async () => ({
+      authorizationUrl: 'https://github.com/login/oauth/authorize?fixed=test',
+      expiresAt: new Date(now.getTime() + 300000),
+    })),
+    complete: jest.fn<OnboardingRouterOptions['githubEnrollment']['complete']>(async () => ({
+      status: 'activated',
+      userId: randomUUID(),
+      invitationId: randomUUID(),
+    })),
+  };
+  const options: OnboardingRouterOptions = { store, metadataReader, githubEnrollment, credentials, rateLimits, trustedOrigin: origin,
     audit: { kind: 'system', appendSecurityEvent: async () => {} }, now: () => now };
   const app = express().use('/auth/onboarding', createOnboardingRouter(options));
   const cookie = `${ONBOARDING_OWNER_COOKIE}=${ownerCredential.value}`;
   const post = (path: string) => request(app).post(`/auth/onboarding/${path}`).set('Origin', origin).set('Cookie', cookie).set('X-Onboarding-CSRF', csrf.value);
-  return { app, store, metadataReader, rateLimits, token, owner, csrf, cookie, post, options, credentials };
+  return { app, store, metadataReader, githubEnrollment, rateLimits, token, owner, csrf, cookie, post, options, credentials };
 }
 function safe(response: request.Response, forbidden: string[] = []) {
   expect(response.headers['cache-control']).toBe('no-store');
   expect(response.headers['referrer-policy']).toBe('no-referrer');
   expect(response.headers['content-security-policy']).toContain("script-src 'none'");
   for (const secret of forbidden) expect(response.text).not.toContain(secret);
+}
+function mountOrdinaryLogin(app: express.Express): void {
+  const opaqueValues = new HmacConsoleOpaqueValueService(randomBytes(32));
+  const sessionStore = new InMemoryConsoleSessionStore();
+  const identityResolver = new InMemoryConsoleIdentityResolver([]);
+  const oauthClient: IConsoleOAuthClient = {
+    createAuthorizationUrl: () => 'https://github.example/login',
+    exchangeAuthorizationCode: async () => { throw new Error('not used'); },
+  };
+  const registry = new ConsoleModuleRegistry();
+  registry.register(createConsoleBffAuthModule({
+    oauthClient,
+    loginTransactions: new InMemoryLoginTransactionStore(),
+    sessionStore,
+    identityResolver,
+    accountAdminStore: new InMemoryConsoleAccountAdminStore(),
+    opaqueValues,
+    secretEncryption: new AeadSecretEncryptionService({ keyId: 'test-key', key: randomBytes(32) }),
+    publicBaseUrl: origin,
+  }));
+  app.use(assembleSecuredConsoleRouter(registry, {
+    sessionStore,
+    identityResolver,
+    opaqueValues,
+    consoleOrigin: origin,
+    adminAuditWriter: new InMemoryAdminAuditWriter(),
+    idempotencyStore: new InMemoryIdempotencyStore(),
+    runtimeStore: new InMemoryRuntimeSessionControlStore(),
+    idleTimeoutMs: 60 * 60 * 1000,
+  }));
 }
 
 it('sets the original 168h owner horizon before exchange, while retaining a 15min server record', async () => {
@@ -109,7 +165,9 @@ it('rejects missing/wrong CSRF and never consumes a token on GET or query parame
 });
 it('rejects duplicate cookies and security headers before selecting a binding', async () => {
   const f = fixture();
-  expect((await f.post('bootstrap').set('Cookie', `${f.cookie}; ${f.cookie}`).send({})).status).toBe(400);
+  const duplicateCookie = await f.post('bootstrap').set('Cookie', `${f.cookie}; ${f.cookie}`).send({});
+  expect(duplicateCookie.status).toBe(400);
+  expect(duplicateCookie.body).toEqual({ error: 'onboarding_request_rejected' });
   expect((await f.post('bootstrap').set('Origin', [origin, origin] as unknown as string).send({})).status).toBe(400);
   expect((await f.post('exchange').set('X-Onboarding-CSRF', [f.csrf.value, f.csrf.value] as unknown as string).send({ credential: f.token.token })).status).toBe(400);
   expect(f.store.exchangeClaim).not.toHaveBeenCalled();
@@ -146,11 +204,11 @@ it('limits admission using Express IP rather than a credential or arbitrary forw
   const f = fixture();
   const update = jest.spyOn(f.rateLimits, 'update');
   for (let index = 0; index < 30; index++) expect((await f.post('bootstrap').set('X-Forwarded-For', `spoof-${index}`).send({})).status).toBe(200);
-  const blocked = await f.post('exchange').send({ credential: f.token.token });
+  const blocked = await f.post('github/start').send({});
   expect(blocked.status).toBe(429);
   expect(new Set(update.mock.calls.map(call => call[1])).size).toBe(1);
   expect(JSON.stringify(update.mock.calls)).not.toContain(f.token.token);
-  expect(f.store.exchangeClaim).not.toHaveBeenCalled();
+  expect(f.githubEnrollment.start).not.toHaveBeenCalled();
   safe(blocked);
 });
 it('returns only sanitized read-only status and logs out a session while retaining its owner', async () => {
@@ -250,4 +308,191 @@ it.each(['configuration_invalid', 'concurrent_update'] as const)('returns saniti
   expect(result.status).toBe(503); expect(result.body).toEqual({ error: 'onboarding_unavailable' });
   safe(result, [f.token.token]); expect(result.headers['set-cookie']).toBeUndefined();
   expect(f.metadataReader.read).toHaveBeenCalledTimes(1); expect(f.store.findSession).not.toHaveBeenCalled();
+});
+
+it('starts GitHub enrollment only for the current session through the existing POST guards', async () => {
+  const f = fixture();
+  const sessionCredential = f.credentials.issue('session');
+  const session: OnboardingSessionRecord = {
+    ownerHash: f.owner.ownerHash,
+    idHash: sessionCredential.hash,
+    csrfTokenHash: f.csrf.hash,
+    userId: randomUUID(),
+    invitationId: randomUUID(),
+    generation: 1,
+    claimAssertionId: randomUUID(),
+    emailVerifiedAt: f.options.now!(),
+    scope: 'onboarding:github-enrollment',
+    createdAt: f.options.now!(),
+    expiresAt: new Date(f.options.now!().getTime() + 120000),
+    revokedAt: null,
+  };
+  f.store.findSession.mockResolvedValue(session);
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${sessionCredential.value}`;
+  const response = await f.post('github/start').set('Cookie', cookies).send({});
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual({
+    authorizationUrl: 'https://github.com/login/oauth/authorize?fixed=test',
+    expiresAt: new Date(f.options.now!().getTime() + 300000).toISOString(),
+  });
+  expect(f.githubEnrollment.start).toHaveBeenCalledWith({
+    ownerHash: f.owner.ownerHash,
+    sessionHash: sessionCredential.hash,
+  });
+  safe(response, [f.cookie, sessionCredential.value]);
+
+  f.githubEnrollment.start.mockClear();
+  expect((await f.post('github/start').unset('X-Onboarding-CSRF').set('Cookie', cookies).send({})).status).toBe(403);
+  expect((await f.post('github/start').set('Origin', 'https://evil.example').set('Cookie', cookies).send({})).status).toBe(403);
+  f.store.findSession.mockResolvedValue(null);
+  expect((await f.post('github/start').send({})).status).toBe(409);
+  expect((await f.post('github/start').set('Cookie', cookies).send({ extra: true })).status).toBe(400);
+  expect(f.githubEnrollment.start).not.toHaveBeenCalled();
+});
+
+it('consumes a strict callback before provider work and clears both restricted cookies on success', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const state = 's'.repeat(43);
+  const code = 'github-code';
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  let received: Parameters<OnboardingRouterOptions['githubEnrollment']['complete']>[0] | undefined;
+  f.githubEnrollment.complete.mockImplementationOnce(async input => {
+    received = {
+      ownerHash: Buffer.from(input.ownerHash),
+      sessionHash: Buffer.from(input.sessionHash),
+      callback: input.callback,
+    };
+    return { status: 'activated', userId: randomUUID(), invitationId: randomUUID() };
+  });
+  const response = await request(f.app).get('/auth/onboarding/github/callback')
+    .query({ state, code }).set('Cookie', cookies);
+  expect(response.status).toBe(303);
+  expect(response.headers.location).toBe('/api/v1/auth/login');
+  expect(response.headers['set-cookie']).toEqual(expect.arrayContaining([
+    expect.stringContaining(`${ONBOARDING_OWNER_COOKIE}=; Path=/; Max-Age=0`),
+    expect.stringContaining(`${ONBOARDING_SESSION_COOKIE}=; Path=/; Max-Age=0`),
+  ]));
+  expect(received).toEqual({
+    ownerHash: f.owner.ownerHash,
+    sessionHash: session.hash,
+    callback: { kind: 'code', state, code },
+  });
+  expect(f.githubEnrollment.complete.mock.calls[0][0].ownerHash).toEqual(Buffer.alloc(32));
+  expect(f.githubEnrollment.complete.mock.calls[0][0].sessionHash).toEqual(Buffer.alloc(32));
+  expect(f.store.findOwner).not.toHaveBeenCalled();
+  expect(f.store.findSession).not.toHaveBeenCalled();
+  safe(response, [state, code, f.cookie, session.value]);
+});
+
+it.each([
+  '?state=x&code=y&extra=z',
+  '?state=x&state=y&code=z',
+  '?state=x&code=y&error=access_denied',
+  '?state=x',
+  '?code=y',
+  '?state=x&code=',
+  '?state=x&code=%20',
+])('rejects malformed GitHub callback query %s without consuming state', async query => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const response = await request(f.app)
+    .get(`/auth/onboarding/github/callback${query}`)
+    .set('Cookie', `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`);
+  expect(response.status).toBe(400);
+  expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
+  expect(response.headers['set-cookie']).toBeUndefined();
+  expect(response.text).toContain('start GitHub enrollment again');
+  expect(response.text).toContain('href="/auth/onboarding/invitation"');
+  safe(response, [query, f.cookie, session.value]);
+});
+
+it('maps cancellation and contained failures to one fixed help page without clearing the session', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  const state = 's'.repeat(43);
+  f.githubEnrollment.complete.mockResolvedValueOnce({ status: 'cancelled' });
+  const cancelled = await request(f.app).get('/auth/onboarding/github/callback')
+    .query({ state, error: 'access_denied' }).set('Cookie', cookies);
+  expect(cancelled.status).toBe(400);
+  expect(cancelled.headers['set-cookie']).toBeUndefined();
+  expect(cancelled.text).toContain('<html lang="en">');
+  expect(cancelled.text).toContain('name="viewport"');
+  expect(cancelled.text).toContain('href="/auth/onboarding/invitation"');
+  expect(f.githubEnrollment.complete.mock.calls[0][0].callback).toEqual({
+    kind: 'provider_error', state, error: 'access_denied',
+  });
+
+  f.githubEnrollment.complete.mockRejectedValueOnce(new GitHubEnrollmentFlowError('provider_unavailable'));
+  const failed = await request(f.app).get('/auth/onboarding/github/callback')
+    .query({ state, error: 'provider_secret' }).set('Cookie', cookies);
+  expect(failed.status).toBe(503);
+  expect(failed.text).toBe(cancelled.text);
+  expect(failed.headers['set-cookie']).toBeUndefined();
+  expect(f.githubEnrollment.complete.mock.calls[1][0].callback).toEqual({
+    kind: 'provider_error', state, error: 'other',
+  });
+  safe(cancelled, [state, 'access_denied', f.cookie, session.value]);
+  safe(failed, [state, 'provider_secret', f.cookie, session.value]);
+});
+
+it('rejects callback bodies and missing managed cookies with the same fixed page', async () => {
+  const f = fixture();
+  const state = 's'.repeat(43);
+  const query = { state, code: 'github-code' };
+  const missing = await request(f.app).get('/auth/onboarding/github/callback').query(query);
+  const body = await request(f.app).get('/auth/onboarding/github/callback').query(query)
+    .set('Cookie', f.cookie).set('Content-Type', 'application/json').send({ hidden: true });
+  expect(missing.status).toBe(400);
+  expect(body.status).toBe(400);
+  expect(missing.text).toBe(body.text);
+  expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
+  safe(body, [state, 'github-code', f.cookie]);
+});
+
+it('offers ordinary sign-in recovery after a committed callback response is lost', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  const query = { state: 's'.repeat(43), code: 'github-code' };
+  const committed = await request(f.app).get('/auth/onboarding/github/callback').query(query).set('Cookie', cookies);
+  expect(committed.status).toBe(303);
+
+  f.githubEnrollment.complete.mockRejectedValueOnce(new GitHubEnrollmentFlowError('state_invalid'));
+  const recovered = await request(f.app).get('/auth/onboarding/github/callback').query(query).set('Cookie', cookies);
+  expect(recovered.status).toBe(400);
+  const signInTarget = /<a href="([^"]+)">continue to sign in<\/a>/.exec(recovered.text)?.[1];
+  expect(signInTarget).toBeDefined();
+
+  mountOrdinaryLogin(f.app);
+  const signIn = await request(f.app).get(signInTarget!).set('Cookie', cookies);
+  expect(signIn.status).toBe(302);
+  expect(signIn.headers.location).toBe('https://github.example/login');
+  expect(f.githubEnrollment.complete).toHaveBeenCalledTimes(2);
+  safe(recovered, [...Object.values(query), f.cookie, session.value]);
+});
+
+it('renders shared callback guard failures as the same fixed help page', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const state = 's'.repeat(43);
+  const path = `/auth/onboarding/github/callback?state=${state}&code=github-code`;
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  const reference = await request(f.app).get(path);
+  const guarded = await Promise.all([
+    request(f.app).get(path).set('Origin', [origin, origin] as unknown as string).set('Cookie', cookies),
+    request(f.app).get(path).set('X-Onboarding-CSRF', ['one', 'two'] as unknown as string).set('Cookie', cookies),
+    request(f.app).get(path).set('Cookie', `${cookies}; ${f.cookie}`),
+    request(f.app).get(path).set('Cookie', `${ONBOARDING_OWNER_COOKIE}=malformed; ${ONBOARDING_SESSION_COOKIE}=${session.value}`),
+  ]);
+  expect(reference.status).toBe(400);
+  expect(guarded.map(response => response.status)).toEqual([400, 400, 400, 400]);
+  for (const response of guarded) {
+    expect(response.type).toBe('text/html');
+    expect(response.text).toBe(reference.text);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    safe(response, [state, 'github-code', f.cookie, session.value]);
+  }
+  expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
 });

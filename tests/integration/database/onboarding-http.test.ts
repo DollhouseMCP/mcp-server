@@ -43,7 +43,9 @@ async function fixture(failAudit = false) {
   }));
   const credentials = new OnboardingCredentials(new HmacConsoleOpaqueValueService(randomBytes(32)));
   const store = new PostgresOnboardingStore(db, new PostgresInvitationClaimStore(db));
-  const app = express().use('/auth/onboarding', createOnboardingRouter({ store, metadataReader: new PostgresOnboardingMetadataStore(db, store), credentials,
+  const githubEnrollment = { start: async () => { throw new Error('not exercised'); },
+    complete: async () => { throw new Error('not exercised'); } };
+  const app = express().use('/auth/onboarding', createOnboardingRouter({ store, metadataReader: new PostgresOnboardingMetadataStore(db, store), githubEnrollment, credentials,
     rateLimits: new InMemoryRateLimitStore(), trustedOrigin: origin,
     audit: failAudit ? { kind: 'system', appendSecurityEvent: async () => { throw new Error(token.token); } } : audit,
   }));
