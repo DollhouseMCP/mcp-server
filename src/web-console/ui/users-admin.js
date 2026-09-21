@@ -32,6 +32,13 @@ import {
   normalizeLocalDisplayName,
   normalizeLocalUsername,
 } from './account-username.js';
+import {
+  DURABLE_INVITATION_ROUTE,
+  INVITATION_TTL_HOURS,
+  invitationDeliveryPresentation,
+  invitationExpiryPresentation,
+  invitationTtlHours,
+} from './durable-invitation-ui.js';
 import { renderRoleOptions, renderRoleGuidance, roleDisplayName } from './role-options.js';
 
 const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
@@ -59,6 +66,7 @@ const state = {
 };
 let globalListenersBound = false;
 let governanceSections = [];
+let activeInvite = null;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
@@ -87,6 +95,7 @@ function bindGlobalListeners() {
   globalThis.addEventListener('dh:tab-activated', onTabActivated);
   // Never retain privileged drawer content after elevation ends.
   globalThis.addEventListener('dh:elevation-changed', onElevationChanged);
+  globalThis.addEventListener('pagehide', () => closeInvite(true));
   globalListenersBound = true;
 }
 
@@ -95,7 +104,10 @@ function onTabActivated(event) {
 }
 
 function onElevationChanged(event) {
-  if (event.detail?.active === false) closeDrawer();
+  if (event.detail?.active === false) {
+    closeDrawer();
+    closeInvite(true);
+  }
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
@@ -125,6 +137,14 @@ async function load() {
 function hasUserRoute(name) {
   const route = USER_ROUTES[name];
   return !!route && state.hasRoute(route[0], route[1]);
+}
+
+function durableInviteAvailable() {
+  return state.hasRoute('POST', DURABLE_INVITATION_ROUTE);
+}
+
+function canInvite() {
+  return durableInviteAvailable() || hasUserRoute('invite');
 }
 
 function normalizeRoleCatalog(catalog) {
@@ -171,7 +191,7 @@ function shell() {
     <span class="ua-title">Users</span>
     <div class="ua-bar-actions">
       <button class="btn btn-ghost" id="ua-refresh" type="button">&#x21bb; Refresh</button>
-      ${hasUserRoute('invite') ? '<button class="btn btn-primary" id="ua-invite" type="button">+ Invite user</button>' : ''}
+      ${canInvite() ? '<button class="btn btn-primary" id="ua-invite" type="button">+ Invite user</button>' : ''}
     </div>
   </div>
   ${navMarkup()}
@@ -649,9 +669,12 @@ async function disconnectUserSession(userId, sessionId) {
 /* ── Invite ─────────────────────────────────────────────────────────────── */
 
 function openInvite() {
+  if (activeInvite) return;
+  const durable = durableInviteAvailable();
   const roleOpts = renderRoleOptions(state.roleCatalog, {
-    mode: 'invite', actorCapabilities: state.actorCaps, routeAvailable: () => hasUserRoute('invite'),
+    mode: 'invite', actorCapabilities: state.actorCaps, routeAvailable: () => canInvite(),
   });
+  const previousFocus = document.activeElement;
   const modal = document.createElement('div');
   modal.className = 'confirm-modal';
   modal.id = 'ua-invite-modal';
@@ -662,6 +685,10 @@ function openInvite() {
       <label class="ua-field"><span>Display name</span><input id="ua-inv-display-name" type="text" autocomplete="name" placeholder="Todd Lewis"><small class="ua-muted">Preserved for display; up to 255 Unicode characters.</small></label>
       <label class="ua-field"><span>Username</span><input id="ua-inv-username" type="text" autocomplete="off" placeholder="todd-lewis" aria-describedby="ua-inv-username-preview"><small class="ua-muted" id="ua-inv-username-preview">Enter a display name to derive the account username.</small></label>
       <label class="ua-field"><span>Email</span><input id="ua-inv-email" type="email" autocomplete="off" placeholder="alice@example.com"></label>
+      ${durable ? `<label class="ua-field"><span>Invitation lifetime (hours)</span>
+        <input id="ua-inv-ttl" type="number" inputmode="numeric" min="${INVITATION_TTL_HOURS.minimum}"
+          max="${INVITATION_TTL_HOURS.maximum}" step="1" value="${INVITATION_TTL_HOURS.default}">
+        <small class="ua-muted">Between ${INVITATION_TTL_HOURS.minimum} and ${INVITATION_TTL_HOURS.maximum} hours.</small></label>` : ''}
       <fieldset class="ua-field"><legend>Roles (optional)</legend><div class="ua-roles-grid">${roleOpts || '<span class="ua-muted">No roles you can assign.</span>'}</div></fieldset>
       ${renderRoleGuidance(state.roleCatalog)}
       <div id="ua-inv-result" class="ua-invite-result" hidden></div>
@@ -671,47 +698,149 @@ function openInvite() {
       </div>
     </div>`;
   document.body.appendChild(modal);
-  const close = () => modal.remove();
-  modal.querySelector('.confirm-backdrop').addEventListener('click', close);
-  modal.querySelector('#ua-inv-cancel').addEventListener('click', close);
-  modal.querySelector('#ua-inv-send').addEventListener('click', () => submitInvite(modal));
+  const onKey = event => {
+    if (event.key === 'Escape') return closeInvite();
+    if (event.key !== 'Tab') return;
+    const controls = [...modal.querySelectorAll('input:not(:disabled), button:not(:disabled)')];
+    if (controls.length === 0) return;
+    const current = controls.indexOf(document.activeElement);
+    let next = 0;
+    if (current === -1 && event.shiftKey) next = controls.length - 1;
+    else if (current !== -1 && event.shiftKey) next = (current - 1 + controls.length) % controls.length;
+    else if (current !== -1) next = (current + 1) % controls.length;
+    event.preventDefault();
+    controls[next].focus();
+  };
+  activeInvite = { modal, previousFocus, onKey, sequence: 0, durable, pending: false };
+  document.addEventListener('keydown', onKey);
+  modal.querySelector('.confirm-backdrop').addEventListener('click', () => closeInvite());
+  modal.querySelector('#ua-inv-cancel').addEventListener('click', () => closeInvite());
+  modal.querySelector('#ua-inv-send').addEventListener('click', () => submitInvite(modal, durable));
   bindInviteNamePreview(modal);
+  modal.querySelector('#ua-inv-display-name').focus();
 }
 
-async function submitInvite(modal) {
-  let displayName;
-  let username;
+function closeInvite(force = false) {
+  if (!activeInvite) return;
+  if (activeInvite.durable && activeInvite.pending && !force) return;
+  const { modal, previousFocus, onKey } = activeInvite;
+  activeInvite = null;
+  document.removeEventListener('keydown', onKey);
+  modal.remove();
+  if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+}
+
+async function submitInvite(modal, durable) {
+  let body;
   try {
-    displayName = normalizeLocalDisplayName(modal.querySelector('#ua-inv-display-name').value);
-    username = normalizeLocalUsername(modal.querySelector('#ua-inv-username').value);
+    body = invitationRequestBody(modal, durable);
   } catch (error) {
-    notify(error instanceof Error ? error.message : 'Enter a valid name and username.', 'warn');
+    notify(error instanceof Error ? error.message : 'Enter valid invitation details.', 'warn');
     return;
   }
-  const email = modal.querySelector('#ua-inv-email').value.trim();
-  const roles = [...modal.querySelectorAll('[data-invite-role]:checked')].map(c => c.dataset.inviteRole);
-  if (!email) { notify('Display name, username, and email are required.', 'warn'); return; }
   const sendBtn = modal.querySelector('#ua-inv-send');
   sendBtn.disabled = true;
-  const body = { display_name: displayName, username, email, ...(roles.length ? { roles } : {}) };
-  const res = await post('/admin/accounts/users/invite', { body }).catch(() => null);
-  sendBtn.disabled = false;
+  activeInvite.pending = true;
+  if (durable) modal.querySelector('#ua-inv-cancel').disabled = true;
+  const sequence = ++activeInvite.sequence;
+  const res = await post(durable ? DURABLE_INVITATION_ROUTE : '/admin/accounts/users/invite', { body }).catch(() => null);
+  if (!activeInvite || activeInvite.modal !== modal || activeInvite.sequence !== sequence) return;
+  activeInvite.pending = false;
+  modal.querySelector('#ua-inv-cancel').disabled = false;
   if (res?.status !== 201) {
+    sendBtn.disabled = false;
     const detail = res?.body?.detail || (res?.status === 409 ? 'That username or email already exists.' : 'Invite failed.');
     notify(detail, 'error');
     return;
   }
+  if (durable) renderCommittedInvite(modal, res.body);
+  else renderLegacyInvite(modal, res.body);
+}
+
+function invitationRequestBody(modal, durable) {
+  const displayName = normalizeLocalDisplayName(modal.querySelector('#ua-inv-display-name').value);
+  const username = normalizeLocalUsername(modal.querySelector('#ua-inv-username').value);
+  const email = modal.querySelector('#ua-inv-email').value.trim();
+  if (!email) throw new Error('Display name, username, and email are required.');
+  const roles = [...modal.querySelectorAll('[data-invite-role]:checked')].map(c => c.dataset.inviteRole);
+  if (!durable) return { display_name: displayName, username, email, ...(roles.length ? { roles } : {}) };
+  const ttlHours = invitationTtlHours(modal.querySelector('#ua-inv-ttl').value);
+  return { display_name: displayName, username, email, intended_roles: roles, ttl_hours: ttlHours };
+}
+
+function renderCommittedInvite(modal, response) {
   const result = modal.querySelector('#ua-inv-result');
-  const url = res.body?.invite_url || '';
+  lockCommittedInvite(modal);
+  let expiry;
+  try {
+    expiry = invitationExpiryPresentation(response?.invitation?.expires_at);
+  } catch {
+    showCommittedInviteProblem(result, 'Invite created, but its expiry details are unavailable. Inspect or regenerate the invitation before sending it.');
+    load();
+    return;
+  }
+  const url = response?.claim_url;
+  if (typeof url !== 'string' || url === '') {
+    showCommittedInviteProblem(result, 'Invite created, but its claim link is unavailable. Regenerate the invitation before sending it.');
+    load();
+    return;
+  }
+  const delivery = invitationDeliveryPresentation(response?.delivery);
   result.hidden = false;
   result.innerHTML = `
-    <p class="ua-invite-ok">Invite created. Send this link to the user (expires ${escapeHtml(relAgo(res.body?.expires_at) === 'unknown' ? '' : 'soon')}):</p>
-    <button class="ua-invite-link" id="ua-inv-copy" type="button" title="Click to copy">${escapeHtml(url)}</button>`;
-  result.querySelector('#ua-inv-copy').addEventListener('click', () => {
-    navigator.clipboard?.writeText(url).then(() => notify('Invite link copied.', 'success')).catch(() => {});
-  });
+    <p class="ua-invite-ok">Invite created. <strong>${escapeHtml(delivery.label)}.</strong> ${escapeHtml(delivery.message)}</p>
+    <p>Expires at <time datetime="${expiry.exact}">${expiry.exact}</time> (${escapeHtml(expiry.remaining)}).</p>
+    <input class="ua-invite-link" id="ua-inv-copy" type="text" readonly autocomplete="off"
+      aria-label="Invitation claim link" title="Select or click to copy" value="${escapeHtml(url)}">`;
+  const copy = result.querySelector('#ua-inv-copy');
+  bindClaimCopy(copy, url);
+  copy.focus();
   notify('Invite created.', 'success');
   load();
+}
+
+function renderLegacyInvite(modal, response) {
+  modal.querySelector('#ua-inv-send').disabled = false;
+  const url = response?.invite_url;
+  if (typeof url !== 'string' || url === '') {
+    notify('Invite was created, but its claim link is unavailable.', 'error');
+    return;
+  }
+  const expiryLabel = relAgo(response?.expires_at) === 'unknown' ? '' : 'soon';
+  const result = modal.querySelector('#ua-inv-result');
+  result.hidden = false;
+  result.innerHTML = `
+    <p class="ua-invite-ok">Invite created. Send this link to the user (expires ${escapeHtml(expiryLabel)}):</p>
+    <input class="ua-invite-link" id="ua-inv-copy" type="text" readonly autocomplete="off"
+      aria-label="Invitation claim link" title="Select or click to copy" value="${escapeHtml(url)}">`;
+  bindClaimCopy(result.querySelector('#ua-inv-copy'), url);
+  notify('Invite created.', 'success');
+  load();
+}
+
+function bindClaimCopy(field, url) {
+  field.addEventListener('focus', () => field.select());
+  field.addEventListener('click', () => {
+    field.select();
+    if (!navigator.clipboard) { notify('Copy the claim link manually.', 'info'); return; }
+    navigator.clipboard.writeText(url)
+      .then(() => notify('Invite link copied.', 'success'))
+      .catch(() => notify('Copy the claim link manually.', 'info'));
+  });
+}
+
+function lockCommittedInvite(modal) {
+  modal.querySelector('#ua-inv-send').disabled = true;
+  modal.querySelectorAll('input').forEach(input => { input.disabled = true; });
+  modal.querySelector('#ua-inv-cancel').textContent = 'Close';
+}
+
+function showCommittedInviteProblem(result, message) {
+  result.hidden = false;
+  result.tabIndex = -1;
+  result.textContent = message;
+  result.focus();
+  notify(message, 'error');
 }
 
 function bindInviteNamePreview(modal) {
