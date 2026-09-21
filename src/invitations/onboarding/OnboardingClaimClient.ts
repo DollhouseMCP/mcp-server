@@ -13,7 +13,7 @@ interface ClaimMetadata {
 export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): void {
   const fragment = new URLSearchParams(location.hash.slice(1));
   history.replaceState(null, '', config.claimPath); // Before fetch, listeners, or reading account data.
-  let credential = fragment.size === 1 ? fragment.get('token') : null;
+  let credential = Array.from(fragment).length === 1 ? fragment.get('token') : null;
   if (!credential || credential.length > config.maxTokenLength) credential = null;
   fragment.delete('token');
   let csrf: string | null = null;

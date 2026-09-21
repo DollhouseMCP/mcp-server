@@ -21,10 +21,11 @@ async function until(predicate: () => boolean) {
 }
 interface Call { path: string; body?: string; headers: Record<string, string>; hash: string }
 interface Reply { status: number; body: unknown; bodyError?: Error }
-async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>) {
+async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>, withoutSize = false) {
   const html = (await request(app()).get(path)).text;
   const calls: Call[] = [];
   dom = new JSDOM(html, { url: `https://console.example.test${path}${fragment}`, runScripts: 'dangerously', beforeParse(window) {
+    if (withoutSize) Object.defineProperty(window.URLSearchParams.prototype, 'size', { value: undefined });
     window.fetch = (async (url: string, init: RequestInit) => {
       calls.push({ path: url, body: init.body as string | undefined, headers: init.headers as Record<string, string>, hash: window.location.hash });
       const result: Reply = reply ? await reply(url) : { status: 200, body: url.endsWith('/context') ? metadata :
@@ -164,4 +165,15 @@ it('keeps malformed JSON neutral without exposing parser details or automaticall
   expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');
   expect(b.document.body.textContent).not.toContain('JSON secret'); expect(b.document.body.textContent).not.toContain(token);
   expect(b.calls).toHaveLength(1); expect(b.calls[0].path).toBe('/auth/onboarding/bootstrap');
+});
+
+it('accepts only a single token entry when URLSearchParams.size is unavailable', async () => {
+  const valid = await browser(`#token=${token}`, undefined, true);
+  expect(valid.button('claim-continue').disabled).toBe(false);
+  expect(valid.window.location.hash).toBe(''); valid.window.close();
+  for (const fragment of [`#token=${token}&token=${token}`, `#token=${token}&extra=value`]) {
+    const invalid = await browser(fragment, undefined, true);
+    expect(invalid.button('claim-continue').disabled).toBe(true);
+    expect(invalid.window.location.hash).toBe(''); invalid.window.close();
+  }
 });
