@@ -165,7 +165,8 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
     let status = 503;
     if (error instanceof BoundaryError) status = error.status;
     else if (error instanceof InvitationTokenError) status = 400;
-    else if (error instanceof OnboardingStoreError || error instanceof InvitationError) status = 409;
+    else if (error instanceof InvitationError) status = ['configuration_invalid', 'concurrent_update'].includes(error.code) ? 503 : 409;
+    else if (error instanceof OnboardingStoreError) status = 409;
     else if (error && typeof error === 'object' && 'type' in error) {
       if (error.type === 'entity.too.large') status = 413;
       else if (error.type === 'entity.parse.failed') status = 400;

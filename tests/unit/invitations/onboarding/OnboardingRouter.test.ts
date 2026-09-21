@@ -3,6 +3,7 @@ import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
+import { InvitationError } from '../../../../src/invitations/InvitationTypes.js';
 import { generateInvitationToken } from '../../../../src/invitations/InvitationToken.js';
 import { createOnboardingRouter, type OnboardingRouterOptions } from '../../../../src/invitations/onboarding/OnboardingRouter.js';
 import { OnboardingCredentials } from '../../../../src/invitations/onboarding/OnboardingCredentials.js';
@@ -239,4 +240,14 @@ it('rejects any unauthenticated presented session without downgrading or clearin
   expect((await request(f.app).get('/auth/onboarding/status').set('Cookie', cookies)).status).toBe(409);
   for (const operation of [f.store.createOwner, f.store.rotateOwnerCsrf, f.store.rotateSessionCsrf,
     f.store.exchangeClaim, f.store.endSession]) expect(operation).not.toHaveBeenCalled();
+});
+
+it.each(['configuration_invalid', 'concurrent_update'] as const)('returns sanitized503 for metadata %s failures', async code => {
+  const f = fixture(), session = f.credentials.issue('session');
+  f.metadataReader.read.mockRejectedValueOnce(new InvitationError(code, f.token.token));
+  const result = await request(f.app).get('/auth/onboarding/context')
+    .set('Cookie', `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`);
+  expect(result.status).toBe(503); expect(result.body).toEqual({ error: 'onboarding_unavailable' });
+  safe(result, [f.token.token]); expect(result.headers['set-cookie']).toBeUndefined();
+  expect(f.metadataReader.read).toHaveBeenCalledTimes(1); expect(f.store.findSession).not.toHaveBeenCalled();
 });
