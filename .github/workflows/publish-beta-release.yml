@@ -38,6 +38,7 @@ jobs:
       - name: Checkout beta branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Validate beta release inputs
@@ -47,8 +48,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "${GITHUB_REF_NAME}" != "beta" ]]; then
-            echo "::error::Run this workflow from the beta branch, not ${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF}" != "refs/heads/beta" ]]; then
+            echo "::error::Run this workflow from the beta branch, not ${GITHUB_REF}"
             exit 1
           fi
 
@@ -65,7 +66,13 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "${package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+          valid_beta_version() {
+            local core='(0|[1-9][0-9]*)'
+            local identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+            local LC_ALL=C
+            [[ ${#1} -le 256 && "$1" =~ ^${core}\.${core}\.${core}-beta(\.${identifier})*$ ]]
+          }
+          if ! valid_beta_version "${package_version}"; then
             echo "::error::Beta publish requires a SemVer prerelease like 2.1.0-beta or 2.1.0-beta.1; got ${package_version}"
             exit 1
           fi
@@ -84,13 +91,23 @@ jobs:
           fi
 
           release_exists=false
-          if release_json=$(gh release view "${tag_name}" \
-            --json tagName,isPrerelease,isDraft,targetCommitish 2>/dev/null); then
+          release_lookup_ok=false
+          if release_response=$(gh api --include \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${tag_name}" 2>/dev/null); then
+            release_lookup_ok=true
+          fi
+          release_status=$(awk 'NR == 1 { print $2 }' <<<"${release_response}")
+          if [[ "${release_lookup_ok}" == "true" && "${release_status}" == "200" ]]; then
+            release_json=$(awk 'body { print } /^\r?$/ { body=1 }' <<<"${release_response}")
+            if ! jq -e 'type == "object" and (.tag_name | type == "string") and (.prerelease | type == "boolean") and (.draft | type == "boolean") and (.target_commitish | type == "string")' <<<"${release_json}" >/dev/null 2>&1; then
+              echo "::error::GitHub returned invalid release metadata; refusing to infer release state"
+              exit 1
+            fi
             release_exists=true
-            release_tag=$(jq -r '.tagName' <<<"${release_json}")
-            release_prerelease=$(jq -r '.isPrerelease' <<<"${release_json}")
-            release_draft=$(jq -r '.isDraft' <<<"${release_json}")
-            release_target=$(jq -r '.targetCommitish' <<<"${release_json}")
+            release_tag=$(jq -r '.tag_name' <<<"${release_json}")
+            release_prerelease=$(jq -r '.prerelease' <<<"${release_json}")
+            release_draft=$(jq -r '.draft' <<<"${release_json}")
+            release_target=$(jq -r '.target_commitish' <<<"${release_json}")
 
             if [[ "${tag_exists}" != "true" ]]; then
               echo "::error::Release ${tag_name} exists without its expected Git tag"
@@ -110,16 +127,31 @@ jobs:
             if [[ "${release_target}" != "${GITHUB_SHA}" ]]; then
               echo "::warning::Release ${tag_name} records a different targetCommitish; verified tag ${tag_name} resolves to ${GITHUB_SHA}"
             fi
+          elif [[ "${release_lookup_ok}" == "true" || "${release_status}" != "404" ]]; then
+            echo "::error::GitHub release lookup failed; retry validation when the API is available"
+            exit 1
           fi
 
           npm_publish_complete=false
-          if npm view "@dollhousemcp/mcp-server@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+          npm_version_exists=false
+          # npm writes human diagnostics to stderr even when stdout is valid JSON.
+          if npm_lookup=$(npm view "@dollhousemcp/mcp-server@${package_version}" version --json --registry=https://registry.npmjs.org 2>/dev/null); then
+            if ! jq -e --arg version "${package_version}" 'type == "string" and . == $version' <<<"${npm_lookup}" >/dev/null; then
+              echo "::error::npm returned an unexpected exact-version response; refusing to infer release state"
+              exit 1
+            fi
+            npm_version_exists=true
+          elif ! jq -e '.error.code == "E404"' <<<"${npm_lookup}" >/dev/null 2>&1; then
+            echo "::error::npm exact-version lookup failed; retry validation when the registry is available"
+            exit 1
+          fi
+          if [[ "${npm_version_exists}" == "true" ]]; then
             if [[ "${release_exists}" != "true" ]]; then
               echo "::error::npm version ${package_version} exists without a matching reusable GitHub prerelease"
               exit 1
             fi
             npm_beta_version=$(npm view "@dollhousemcp/mcp-server" dist-tags.beta --registry=https://registry.npmjs.org 2>/dev/null || true)
-            if [[ ! "${npm_beta_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+            if ! valid_beta_version "${npm_beta_version}"; then
               echo "::error::npm version ${package_version} exists, but dist-tags.beta is invalid or unset (${npm_beta_version:-<unset>})"
               exit 1
             fi
@@ -196,27 +228,32 @@ jobs:
             echo "npm_publish_complete=${npm_publish_complete}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Verify default-branch release workflows are prerelease-safe
+      - name: Verify selected and default-branch publisher safety
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git fetch origin main:refs/remotes/origin/main --depth=1
 
-          if ! git show origin/main:.github/workflows/publish-npm.yml | grep -F -- '--tag "${DIST_TAG}"' >/dev/null; then
-            echo "::error::Default branch publish-npm.yml is not prerelease-safe yet. Merge the dist-tag guard before creating a public beta prerelease."
-            exit 1
-          fi
+          # Dispatch uses the tagged checkout, while release events use main.
+          # Both sources must contain the reviewed prerelease guards before any
+          # tag/release mutation; documentation alone cannot enforce the sync.
+          for source in "${GITHUB_SHA}" origin/main; do
+            if ! git show "${source}:.github/workflows/publish-npm.yml" | grep -F -- '--tag "${DIST_TAG}"' >/dev/null; then
+              echo "::error::${source} publish-npm.yml is not prerelease-safe; synchronize the reviewed publisher guards before creating a beta release"
+              exit 1
+            fi
 
-          if ! git show origin/main:.github/workflows/publish-github-packages.yml | grep -F -- 'steps.package_dist_tag.outputs.dist_tag' >/dev/null; then
-            echo "::error::Default branch publish-github-packages.yml is not prerelease-safe yet. Merge the dist-tag guard before creating a public beta prerelease."
-            exit 1
-          fi
+            if ! git show "${source}:.github/workflows/publish-github-packages.yml" | grep -F -- 'steps.package_dist_tag.outputs.dist_tag' >/dev/null; then
+              echo "::error::${source} publish-github-packages.yml is not prerelease-safe; synchronize the reviewed publisher guards before creating a beta release"
+              exit 1
+            fi
 
-          if ! git show origin/main:.github/workflows/publish-mcp-registry.yml | grep -F -- "github.event.release.prerelease != true" >/dev/null; then
-            echo "::error::Default branch publish-mcp-registry.yml does not skip prereleases yet."
-            exit 1
-          fi
+            if ! git show "${source}:.github/workflows/publish-mcp-registry.yml" | grep -F -- "github.event.release.prerelease != true" >/dev/null; then
+              echo "::error::${source} publish-mcp-registry.yml does not skip prereleases"
+              exit 1
+            fi
+          done
 
       - name: Prepare beta release notes
         shell: bash
@@ -311,51 +348,32 @@ jobs:
           dispatch_and_capture() {
             local workflow="$1"
             shift
-            local previous_run_id
-            previous_run_id=$(latest_run_id "${workflow}")
-
-            gh workflow run "${workflow}" --ref "${TAG_NAME}" "$@" >&2
-
-            local run_id=""
-            for _ in {1..30}; do
-              run_id=$(latest_run_id "${workflow}")
-              if [[ -n "${run_id}" && "${run_id}" != "${previous_run_id}" ]]; then
-                printf '%s\n' "${run_id}"
-                return 0
-              fi
-              sleep 2
-            done
-
-            echo "::error::Timed out locating the dispatched ${workflow} run for ${GITHUB_SHA}" >&2
-            return 1
+            # API 2026-03-10 returns the run created by this request. Never infer
+            # it from the newest run: another dispatch may use the same tag/SHA.
+            local run_id
+            run_id=$(gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+              --raw-field "ref=${TAG_NAME}" "$@" --jq '.workflow_run_id // empty') || return 1
+            if [[ ! "${run_id}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Dispatch returned no valid run ID for ${workflow}; inspect Actions before retrying" >&2
+              return 1
+            fi
+            printf '%s\n' "${run_id}"
           }
 
-          latest_run_id() {
-            local workflow="$1"
-            gh run list \
-              --workflow "${workflow}" \
-              --event workflow_dispatch \
-              --limit 20 \
-              --json databaseId,headSha \
-              --jq ".[] | select(.headSha == \"${GITHUB_SHA}\") | .databaseId" \
-              | head -n 1
-          }
-
-          publisher_run_ids=()
           if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]; then
-            npm_run_id=$(dispatch_and_capture publish-npm.yml --field dry_run=false)
-            publisher_run_ids+=("${npm_run_id}")
+            npm_run_id=$(dispatch_and_capture publish-npm.yml --raw-field 'inputs[dry_run]=false')
+            gh run watch "${npm_run_id}" --exit-status
           else
             echo "Skipping npm publisher: ${TAG_NAME} is already published with the beta dist-tag"
           fi
 
-          packages_run_id=$(dispatch_and_capture publish-github-packages.yml --field dry_run=false)
-          mcpb_run_id=$(dispatch_and_capture publish-mcpb.yml --field tag_name="${TAG_NAME}")
-
-          publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")
-          for run_id in "${publisher_run_ids[@]}"; do
-            gh run watch "${run_id}" --exit-status
-          done
+          packages_run_id=$(dispatch_and_capture publish-github-packages.yml --raw-field 'inputs[dry_run]=false')
+          gh run watch "${packages_run_id}" --exit-status
+          mcpb_run_id=$(dispatch_and_capture publish-mcpb.yml --raw-field "inputs[tag_name]=${TAG_NAME}")
+          gh run watch "${mcpb_run_id}" --exit-status
 
       - name: Publish summary
         if: always()

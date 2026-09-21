@@ -48,13 +48,24 @@ describe('npm workflow dry-run and lifecycle channel contract', () => {
     ['latest', '0.0.123456789'],
     ['alpha', '0.0.0-alpha.dry-run.123456789'],
     ['beta', '0.0.0-beta.dry-run.123456789'],
-    ['next', '0.0.0-rc.dry-run.123456789']
+    ['rc', '0.0.0-rc.dry-run.123456789']
   ])('keeps the %s channel valid with an unpublished temporary version', (tag, version) => {
     const result = runDryRun(tag);
     expect(result.error).toBeUndefined();
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`DRY_RUN_RESULT=${version}:${tag}`);
+  });
+
+  it.each([['rc', 0], ['next', 1], ['latest', 1], ['beta', 1]])('enforces the real RC prepublish guard for tag %s', (tag, status) => {
+    const result = spawnSync(process.execPath, [resolve('scripts/verify-publish-channel.mjs')], {
+      encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, npm_package_version: '2.1.0-rc.1', npm_config_tag: String(tag) }
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(status);
+    if (status === 0) expect(result.stdout).toContain('Publish channel OK');
+    else expect(result.stderr).toContain('npm publish --tag rc');
   });
 
   it('rejects unsupported channels before invoking npm', () => {
