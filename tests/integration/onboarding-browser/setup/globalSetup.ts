@@ -34,22 +34,26 @@ export default async function globalSetup(): Promise<void> {
       ONBOARDING_BROWSER_GITHUB_SECRET: randomBytes(32).toString('base64url'),
       ONBOARDING_BROWSER_OPAQUE_KEY: randomBytes(32).toString('base64url') };
     const forcedFailure = process.env.ONBOARDING_BROWSER_FORCE_STARTUP_FAILURE;
-    children.push(await boot('replica-a', firstPort, { ...common,
+    const bootAndTrack = async (label: string, port: number, env: NodeJS.ProcessEnv) => {
+      const child = await boot(label, port, env);
+      children.push(child);
+    };
+    await bootAndTrack('replica-a', firstPort, { ...common,
       ONBOARDING_BROWSER_FIXTURE_MODE: forcedFailure === 'replica-a' ? 'forced-failure' : 'replica',
       ONBOARDING_BROWSER_FAILURE_MARKER: process.env.ONBOARDING_BROWSER_FAILURE_MARKER,
-      ONBOARDING_BROWSER_REPLICA: 'a' }));
-    children.push(await boot('replica-b', secondPort, { ...common, ONBOARDING_BROWSER_FIXTURE_MODE: 'replica', ONBOARDING_BROWSER_REPLICA: 'b' }));
-    children.push(await boot('proxy', proxyPort, { ...common, ONBOARDING_BROWSER_FIXTURE_MODE: 'proxy',
+      ONBOARDING_BROWSER_REPLICA: 'a' });
+    await bootAndTrack('replica-b', secondPort, { ...common, ONBOARDING_BROWSER_FIXTURE_MODE: 'replica', ONBOARDING_BROWSER_REPLICA: 'b' });
+    await bootAndTrack('proxy', proxyPort, { ...common, ONBOARDING_BROWSER_FIXTURE_MODE: 'proxy',
       ONBOARDING_BROWSER_REPLICA_A: `http://127.0.0.1:${firstPort}`, ONBOARDING_BROWSER_REPLICA_B: `http://127.0.0.1:${secondPort}`,
       ONBOARDING_BROWSER_TLS_KEY: path.join(process.cwd(), 'tests/fixtures/tls/pinned-outbound/address-key.pem'),
-      ONBOARDING_BROWSER_TLS_CERT: path.join(process.cwd(), 'tests/fixtures/tls/pinned-outbound/address-cert.pem') }));
+      ONBOARDING_BROWSER_TLS_CERT: path.join(process.cwd(), 'tests/fixtures/tls/pinned-outbound/address-cert.pem') });
     process.env.ONBOARDING_BROWSER_ORIGIN = origin;
     process.env.ONBOARDING_BROWSER_REPLICA_A = `http://127.0.0.1:${firstPort}`;
     process.env.ONBOARDING_BROWSER_CONTROL_SECRET = controlSecret;
     process.env.ONBOARDING_BROWSER_OAUTH_CODE = common.ONBOARDING_BROWSER_OAUTH_CODE;
     process.env.ONBOARDING_BROWSER_PROVIDER_EMAIL = common.ONBOARDING_BROWSER_PROVIDER_EMAIL;
     const pids = children.map(child => child.pid);
-    if (pids.some(pid => pid === undefined)) throw new Error('Browser fixture process has no pid');
+    if (pids.includes(undefined)) throw new Error('Browser fixture process has no pid');
     writeFileSync(statePath, JSON.stringify({ databaseName, pids }));
   } catch (error) {
     await Promise.all(children.map(stopChild));
@@ -67,12 +71,17 @@ async function boot(label: string, port: number, env: NodeJS.ProcessEnv): Promis
   try {
     await new Promise<void>((resolve, reject) => {
       let timer: NodeJS.Timeout;
+      let output = '';
       const finish = (result: () => void) => {
         clearTimeout(timer); child.off('error', failed); child.off('exit', failed); child.stdout?.off('data', ready);
         child.stdout?.resume(); result();
       };
       const failed = () => finish(() => reject(new Error('startup')));
-      const ready = (data: Buffer) => { if (String(data).includes('READY')) finish(resolve); };
+      const ready = (data: Buffer) => {
+        output += data.toString('utf8');
+        if (output.length > 8_192) { failed(); return; }
+        if (output.split('\n').slice(0, -1).includes(`READY ${label}`)) finish(resolve);
+      };
       timer = setTimeout(failed, 30_000);
       child.once('error', failed); child.once('exit', failed); child.stdout?.on('data', ready);
     });

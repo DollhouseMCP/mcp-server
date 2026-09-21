@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createServer as createHttpServer, request as httpRequest } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest,
+  type IncomingHttpHeaders, type OutgoingHttpHeaders } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { readFileSync } from 'node:fs';
 import express from 'express';
@@ -56,7 +57,8 @@ async function runReplica(): Promise<void> {
   let authorization: URL | undefined;
   const provider: typeof fetch = async (url, init) => {
     providerCalls++;
-    if (String(url) === 'https://github.com/login/oauth/access_token') {
+    const requestUrl = fetchRequestUrl(url);
+    if (requestUrl === 'https://github.com/login/oauth/access_token') {
       const body = init?.body as URLSearchParams;
       if (body.get('code') !== oauthCode || body.get('redirect_uri') !== `${origin}/auth/onboarding/github/callback` ||
           !authorization || createHash('sha256').update(body.get('code_verifier') ?? '').digest('base64url') !== authorization.searchParams.get('code_challenge')) {
@@ -64,7 +66,7 @@ async function runReplica(): Promise<void> {
       }
       return jsonResponse({ access_token: oauthToken, token_type: 'bearer' });
     }
-    if (String(url) !== 'https://api.github.com/user' || new Headers(init?.headers).get('Authorization') !== `Bearer ${oauthToken}`) {
+    if (requestUrl !== 'https://api.github.com/user' || new Headers(init?.headers).get('Authorization') !== `Bearer ${oauthToken}`) {
       return jsonResponse({ message: 'unavailable' }, 500);
     }
     return jsonResponse({ id: Number(githubId), login: 'browser-github-user', name: 'Browser GitHub User', email: providerEmail });
@@ -125,21 +127,33 @@ async function runReplica(): Promise<void> {
 
 async function runProxy(): Promise<void> {
   const port = numberEnv('ONBOARDING_BROWSER_PORT');
-  const first = new URL(required('ONBOARDING_BROWSER_REPLICA_A'));
-  const second = new URL(required('ONBOARDING_BROWSER_REPLICA_B'));
+  const origin = new URL(required('ONBOARDING_BROWSER_ORIGIN'));
+  const first = loopbackEndpoint('ONBOARDING_BROWSER_REPLICA_A');
+  const second = loopbackEndpoint('ONBOARDING_BROWSER_REPLICA_B');
   const server = createHttpsServer({ key: readFileSync(required('ONBOARDING_BROWSER_TLS_KEY')),
     cert: readFileSync(required('ONBOARDING_BROWSER_TLS_CERT')) }, (req, res) => {
-    if (req.url?.startsWith('/__fixture')) { res.writeHead(404).end(); return; }
-    if (req.url === '/api/v1/auth/login') {
+    const destination = proxyDestination(req.method, req.url);
+    if (!destination) { res.writeHead(404).end(); return; }
+    if (destination.kind === 'login') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end('<!doctype html><html lang="en"><title>Sign in</title><body><h1>Account activated</h1></body></html>'); return;
     }
-    const target = route(req.url ?? '/') ? second : first;
-    const forwarded = httpRequest({ protocol: target.protocol, hostname: target.hostname, port: target.port,
-      method: req.method, path: req.url, headers: req.headers }, upstream => {
-      res.writeHead(upstream.statusCode ?? 502, upstream.headers); upstream.pipe(res);
+    const target = destination.replica === 'second' ? second : first;
+    const forwarded = httpRequest({ protocol: 'http:', hostname: '127.0.0.1', port: target.port,
+      method: destination.method, path: destination.path, headers: proxyRequestHeaders(req.headers, origin) }, upstream => {
+      const status = safeUpstreamStatus(upstream.statusCode, upstream.headers.location);
+      if (status === 502) {
+        upstream.resume();
+        res.writeHead(502).end();
+        return;
+      }
+      res.writeHead(status, proxyResponseHeaders(upstream.headers, status));
+      upstream.pipe(res);
     });
-    forwarded.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    forwarded.on('error', () => {
+      if (!res.headersSent) res.writeHead(502);
+      res.end();
+    });
     req.pipe(forwarded);
   });
   await listen(server, port);
@@ -147,17 +161,116 @@ async function runProxy(): Promise<void> {
   process.stdout.write('READY proxy\n');
 }
 
-function route(path: string): boolean {
-  return path === '/auth/onboarding/exchange' || path === '/auth/onboarding/github/start';
+type ProxyDestination = { kind: 'login' } | {
+  kind: 'upstream'; replica: 'first' | 'second'; method: 'GET' | 'POST'; path: string;
+};
+function proxyDestination(method: string | undefined, rawPath: string | undefined): ProxyDestination | null {
+  if (!rawPath || rawPath.length > 4_096 || !rawPath.startsWith('/')) return null;
+  let url: URL;
+  try { url = new URL(rawPath, 'https://onboarding.fixture.invalid'); } catch { return null; }
+  if (url.origin !== 'https://onboarding.fixture.invalid' || url.hash || url.username || url.password) return null;
+  if (method === 'GET' && url.search === '' && url.pathname === '/api/v1/auth/login') return { kind: 'login' };
+  if (method === 'GET' && url.search === '' && [
+    '/auth/onboarding/invitation', '/auth/onboarding/context', '/auth/onboarding/status',
+  ].includes(url.pathname)) return { kind: 'upstream', replica: 'first', method, path: url.pathname };
+  if (method === 'POST' && url.search === '' && [
+    '/auth/onboarding/bootstrap', '/auth/onboarding/logout',
+  ].includes(url.pathname)) return { kind: 'upstream', replica: 'first', method, path: url.pathname };
+  if (method === 'POST' && url.search === '' && [
+    '/auth/onboarding/exchange', '/auth/onboarding/github/start',
+  ].includes(url.pathname)) return { kind: 'upstream', replica: 'second', method, path: url.pathname };
+  if (method !== 'GET' || url.pathname !== '/auth/onboarding/github/callback') return null;
+  const states = url.searchParams.getAll('state');
+  const codes = url.searchParams.getAll('code');
+  const errors = url.searchParams.getAll('error');
+  if ([...url.searchParams].length !== 2 || states.length !== 1 || states[0].length === 0 || states[0].length > 512 ||
+      (codes.length === 1) === (errors.length === 1) || codes.length > 1 || errors.length > 1) return null;
+  const parameter = codes.length === 1 ? 'code' : 'error';
+  const value = codes[0] ?? errors[0];
+  const maximum = parameter === 'code' ? 2_048 : 256;
+  if (!value || value.length > maximum || /[\s\p{Cc}\p{Cf}]/u.test(value)) return null;
+  const path = `/auth/onboarding/github/callback?state=${encodeURIComponent(states[0])}&${parameter}=${encodeURIComponent(value)}`;
+  return { kind: 'upstream', replica: 'first', method, path };
 }
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 }
-function required(name: string): string { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; }
-function numberEnv(name: string): number { const value = Number(required(name)); if (!Number.isInteger(value) || value < 1) throw new Error(`Invalid ${name}`); return value; }
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
+}
+function numberEnv(name: string): number {
+  const value = Number(required(name));
+  if (!Number.isInteger(value) || value < 1) throw new Error(`Invalid ${name}`);
+  return value;
+}
 function authorized(presented: string | undefined, expected: string): boolean {
-  if (!presented) return false; const left = Buffer.from(presented), right = Buffer.from(expected);
+  if (!presented) return false;
+  const left = Buffer.from(presented), right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+function fetchRequestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+function loopbackEndpoint(name: string): URL {
+  const endpoint = new URL(required(name));
+  if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !endpoint.port ||
+      endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return endpoint;
+}
+function proxyRequestHeaders(source: IncomingHttpHeaders, origin: URL): OutgoingHttpHeaders {
+  const headers: OutgoingHttpHeaders = { host: origin.host };
+  const accept = boundedHeader(source.accept, 512);
+  const contentType = boundedHeader(source['content-type'], 128);
+  const cookie = boundedHeader(source.cookie, 8_192);
+  const csrf = boundedHeader(source['x-onboarding-csrf'], 256);
+  const contentLength = boundedHeader(source['content-length'], 16);
+  if (accept) headers.accept = accept;
+  if (contentType) headers['content-type'] = contentType;
+  if (cookie) headers.cookie = cookie;
+  if (csrf) headers['x-onboarding-csrf'] = csrf;
+  if (source.origin === origin.origin) headers.origin = origin.origin;
+  if (contentLength && /^\d{1,4}$/.test(contentLength) && Number(contentLength) <= 2_048) {
+    headers['content-length'] = contentLength;
+  }
+  return headers;
+}
+function proxyResponseHeaders(source: IncomingHttpHeaders, status: number): OutgoingHttpHeaders {
+  const headers: OutgoingHttpHeaders = {};
+  const contentType = boundedHeader(source['content-type'], 256);
+  const cacheControl = boundedHeader(source['cache-control'], 256);
+  const contentSecurityPolicy = boundedHeader(source['content-security-policy'], 8_192);
+  const referrerPolicy = boundedHeader(source['referrer-policy'], 256);
+  const contentTypeOptions = boundedHeader(source['x-content-type-options'], 64);
+  const frameOptions = boundedHeader(source['x-frame-options'], 64);
+  const permissionsPolicy = boundedHeader(source['permissions-policy'], 2_048);
+  if (contentType) headers['content-type'] = contentType;
+  if (cacheControl) headers['cache-control'] = cacheControl;
+  if (contentSecurityPolicy) headers['content-security-policy'] = contentSecurityPolicy;
+  if (referrerPolicy) headers['referrer-policy'] = referrerPolicy;
+  if (contentTypeOptions) headers['x-content-type-options'] = contentTypeOptions;
+  if (frameOptions) headers['x-frame-options'] = frameOptions;
+  if (permissionsPolicy) headers['permissions-policy'] = permissionsPolicy;
+  const cookies = source['set-cookie']?.filter(value => boundedHeader(value, 4_096) !== undefined).slice(0, 8);
+  if (cookies?.length) headers['set-cookie'] = cookies;
+  if (status === 303) headers.location = '/api/v1/auth/login';
+  return headers;
+}
+function boundedHeader(value: string | string[] | undefined, maximum: number): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\r\n]/.test(value)) return undefined;
+  return value;
+}
+function safeUpstreamStatus(status: number | undefined, location: string | undefined): number {
+  if (!status || status < 200 || status > 599) return 502;
+  if ([301, 302, 303, 307, 308].includes(status)) {
+    return status === 303 && location === '/api/v1/auth/login' ? 303 : 502;
+  }
+  return location === undefined ? status : 502;
 }
 function listen(server: ReturnType<typeof createHttpServer> | ReturnType<typeof createHttpsServer>, port: number): Promise<void> {
   return new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });

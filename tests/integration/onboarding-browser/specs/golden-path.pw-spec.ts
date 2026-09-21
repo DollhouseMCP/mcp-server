@@ -34,9 +34,8 @@ test('activates an invitation through explicit browser and GitHub consent across
     })));
   });
   await page.goto(issued.claim_url);
-  await page.waitForTimeout(250);
-  expect(pageErrors).toEqual([]);
   await expect(page.locator('#claim-status')).toContainText('Continue to verify');
+  expect(pageErrors).toEqual([]);
   expect(exchangeRequests).toBe(0);
   expect(page.url()).toBe(`${origin}/auth/onboarding/invitation`);
   await expectCredentialAbsentFromBrowser(page, credential!);
@@ -65,6 +64,10 @@ test('activates an invitation through explicit browser and GitHub consent across
   await page.locator('#claim-github').click();
   await expect(page.locator('#authorize')).toBeVisible();
   expect(page.url()).toContain('https://github.com/login/oauth/authorize');
+  const replayCookies = (await page.context().cookies(origin))
+    .filter(cookie => [ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].includes(cookie.name));
+  expect(replayCookies.map(cookie => cookie.name).sort()).toEqual([ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].sort());
+  const replayCookieHeader = replayCookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
   await page.locator('#authorize').click();
   await page.waitForURL(`${origin}/api/v1/auth/login`);
   await expect(page.locator('h1')).toHaveText('Account activated');
@@ -89,9 +92,10 @@ test('activates an invitation through explicit browser and GitHub consent across
     activation_state: 'active', matching_email_users: 1 });
   expect(resolved.unrelatedUserId).not.toBe(issued.invitation.user_id);
 
-  const replay = await request.newContext({ ignoreHTTPSErrors: true });
+  const replay = await request.newContext({ ignoreHTTPSErrors: true, extraHTTPHeaders: { Cookie: replayCookieHeader } });
   try {
     expect((await replay.get(`${origin}/__fixture/stats`)).status()).toBe(404);
+    expect((await replay.get(`${origin}/auth/onboarding/invitation?unexpected=1`)).status()).toBe(404);
     const response = await replay.get(callbackUrl, { maxRedirects: 0 });
     expect(response.status()).toBe(400);
   } finally { await replay.dispose(); }
@@ -104,7 +108,11 @@ async function controlJson(replica: string, secret: string, path: string, body?:
     ...(body ? { body: JSON.stringify(body) } : {}) });
   expect(response.ok).toBe(true); return response.json();
 }
-function required(name: string): string { const value = process.env[name]; if (!value) throw new Error(`Missing ${name}`); return value; }
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
+}
 function escapeHtml(value: string): string { return value.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]!); }
 function exactCredentialBody(data: string, credential: string): boolean {
   try { const value = JSON.parse(data) as Record<string, unknown>; return Object.keys(value).length === 1 && value.credential === credential; }
