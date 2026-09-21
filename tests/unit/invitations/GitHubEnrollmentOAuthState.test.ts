@@ -71,6 +71,10 @@ describe('GitHub enrollment OAuth state', () => {
     const result = await service.consume(STATE, ownerHash, sessionHash);
     expect(result).toMatchObject({ purpose: 'link_login_identity', generation: 3, correlationId: CORRELATION,
       codeVerifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+    expect(Object.keys(result).sort()).toEqual([
+      'callbackUri', 'claimAssertionId', 'codeVerifier', 'correlationId', 'generation',
+      'invitationId', 'purpose', 'userId',
+    ]);
     await expect(service.consume(STATE, ownerHash, sessionHash)).rejects.toBeInstanceOf(GitHubEnrollmentStateError);
   });
 

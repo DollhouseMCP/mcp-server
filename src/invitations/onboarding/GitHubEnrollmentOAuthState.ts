@@ -23,6 +23,11 @@ export interface GitHubEnrollmentStateRecord {
 export type GitHubEnrollmentStateContext = Pick<GitHubEnrollmentStateRecord,
   'userId' | 'invitationId' | 'generation' | 'claimAssertionId' | 'correlationId'>;
 
+export type GitHubEnrollmentConsumedState = GitHubEnrollmentStateContext &
+  Pick<GitHubEnrollmentStateRecord, 'purpose' | 'callbackUri'> & {
+    readonly codeVerifier: string;
+  };
+
 export interface GitHubEnrollmentAuthorization {
   readonly authorizationUrl: string;
   readonly expiresAt: Date;
@@ -78,14 +83,19 @@ export class GitHubEnrollmentOAuthStateService {
     return { authorizationUrl: url.toString(), expiresAt: record.expiresAt, context: context(record) };
   }
 
-  async consume(state: string, ownerHash: Buffer, sessionHash: Buffer): Promise<GitHubEnrollmentStateRecord & { readonly codeVerifier: string }> {
+  async consume(state: string, ownerHash: Buffer, sessionHash: Buffer): Promise<GitHubEnrollmentConsumedState> {
     if (!isOpaqueState(state)) throw new GitHubEnrollmentStateError();
     let record: GitHubEnrollmentStateRecord | null;
     try {
       record = await this.store.consume({ stateHash: this.hashState(state), ownerHash, sessionHash, callbackUri: this.callbackUri });
     } catch { throw new GitHubEnrollmentStateError(); }
     if (!record) throw new GitHubEnrollmentStateError();
-    return { ...record, codeVerifier: this.codeVerifier(state) };
+    return {
+      ...context(record),
+      purpose: record.purpose,
+      callbackUri: record.callbackUri,
+      codeVerifier: this.codeVerifier(state),
+    };
   }
 
   private hashState(state: string): Buffer {

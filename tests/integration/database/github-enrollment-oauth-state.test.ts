@@ -82,6 +82,10 @@ describe('PostgreSQL GitHub enrollment OAuth state', () => {
     const consumed = await f.service.consume(state, f.owner.hash, f.session.hash);
     expect(consumed).toMatchObject({ userId: f.record.userId, invitationId: f.invitation.id,
       correlationId, codeVerifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+    expect(Object.keys(consumed).sort()).toEqual([
+      'callbackUri', 'claimAssertionId', 'codeVerifier', 'correlationId', 'generation',
+      'invitationId', 'purpose', 'userId',
+    ]);
     expect(await stored(f.owner.hash)).toBeUndefined();
     await expect(f.service.consume(state, f.owner.hash, f.session.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
   });
@@ -123,7 +127,10 @@ describe('PostgreSQL GitHub enrollment OAuth state', () => {
     await expect(f.service.consume(state, f.owner.hash, replacementSession.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
     expect(await stored(f.owner.hash)).toBeDefined();
     const next = new URL((await f.service.begin(f.owner.hash, replacementSession.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
-    await expect(f.service.consume(next, f.owner.hash, replacementSession.hash)).resolves.toMatchObject({ sessionHash: replacementSession.hash });
+    await expect(f.service.consume(next, f.owner.hash, replacementSession.hash)).resolves.toMatchObject({
+      userId: f.record.userId,
+      invitationId: f.invitation.id,
+    });
   });
 
   it('rolls back consumption when the state delete fails and permits one later retry', async () => {
