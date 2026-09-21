@@ -89,6 +89,7 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
   parsed.secret.fill(0);
   expect(restricted.scope).toBe('onboarding:github-enrollment');
   expect(await onboarding.findSession(owner.hash, session.hash)).toEqual(restricted);
+  const restrictedRecords = await db.select().from(authKv).where(eq(authKv.id, owner.hash.toString('hex')));
 
   const githubAccessToken = `transient-${randomUUID()}`;
   const fetchImpl = jest.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
@@ -160,11 +161,25 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
   });
   expect(kv).toHaveLength(0);
   expect(await onboarding.findOwner(owner.hash)).toBeNull();
-  const serialized = JSON.stringify({ durable, kv, delivered });
-  for (const secret of [issued.credential, issued.credential.split('.')[3], owner.value, session.value, csrf.value, bootstrapCsrf.value, githubAccessToken]) {
-    expect(serialized).not.toContain(secret);
-  }
-  const secretBytes = Buffer.from(issued.credential.split('.')[3], 'base64url');
-  expect(serialized).not.toContain(secretBytes.toString('hex'));
-  expect(serialized).not.toContain(JSON.stringify([...secretBytes]));
+  expectNoDurableCredentials({ durable, kv, restrictedRecords, delivered },
+    [issued.credential, githubAccessToken],
+    [issued.credential.split('.')[3], owner.value, session.value, csrf.value, bootstrapCsrf.value]);
 });
+
+/** Scan text and decoded opaque bytes, including JSON Buffer and PostgreSQL bytea encodings. */
+function expectNoDurableCredentials(snapshot: unknown, textSecrets: readonly string[], opaqueSecrets: readonly string[]) {
+  const serialized = JSON.stringify(snapshot);
+  for (const [values, encodings] of [[textSecrets, ['utf8']], [opaqueSecrets, ['utf8', 'base64url']]] as const) {
+    for (const value of values) {
+      expect(serialized).not.toContain(value);
+      for (const encoding of encodings) {
+        const bytes = Buffer.from(value, encoding);
+        try {
+          for (const representation of [bytes.toString('hex'), bytes.toString('base64'), bytes.toString('base64url'), JSON.stringify([...bytes])]) {
+            expect(serialized).not.toContain(representation);
+          }
+        } finally { bytes.fill(0); }
+      }
+    }
+  }
+}
