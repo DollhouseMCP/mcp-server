@@ -53,7 +53,7 @@ describe('ordinary GitHub callback credential redaction', () => {
     assertPrivate([response.text, logged.mock.calls]);
   });
 
-  it('ends an already-started response without forwarding the credential-bearing exception', async () => {
+  it('aborts an already-started response without forwarding the credential-bearing exception', async () => {
     const { storage, method, fetchImpl } = fixture();
     const logged = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const key = 'test-cookie-signing-key';
@@ -64,9 +64,14 @@ describe('ordinary GitHub callback credential redaction', () => {
     const app = express(); const router = express.Router();
     method.contributeRoutes(router, { storage, ensureInitialized: async () => ({ provider, cookieKeys: [key] }) });
     app.use(router);
-    const response = await request(app).get(callback).set('Cookie', `_interaction=${secrets[1]}; _interaction.sig=${sig}`);
-    expect(response.text).toBe('safe prefix'); expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(logged).toHaveBeenCalledTimes(1); assertPrivate([response.text, logged.mock.calls]);
+    const downstream = jest.fn();
+    app.use((failure: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      downstream(failure); res.status(500).end();
+    });
+    await expect(request(app).get(callback).set('Cookie', `_interaction=${secrets[1]}; _interaction.sig=${sig}`))
+      .rejects.toMatchObject({ code: 'ECONNRESET' });
+    expect(downstream).not.toHaveBeenCalled(); expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(logged).toHaveBeenCalledTimes(1); assertPrivate(logged.mock.calls);
   });
 
   it('logs only a fixed category for an email-provider transport exception', async () => {

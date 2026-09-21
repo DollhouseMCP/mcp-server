@@ -246,7 +246,7 @@ export class GithubSocialMethod implements IAuthMethod {
         } catch {
           // Callback URLs and upstream exceptions can contain one-time credentials.
           logger.error('[GithubSocialMethod] callback unavailable', { category: 'callback_unavailable' });
-          if (res.headersSent) res.end();
+          if (res.headersSent) res.destroy();
           else sendAuthError(res, req, 503, 'github_callback_failed', 'GitHub sign-in is temporarily unavailable. Start sign-in again.');
         }
       })();
