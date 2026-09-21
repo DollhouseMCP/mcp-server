@@ -16,7 +16,8 @@ export const GITHUB_ENROLLMENT_STATE_MODEL = 'DollhouseGithubEnrollmentStateV1';
 
 /** One hash-only OAuth state slot per restricted onboarding owner. */
 export class PostgresGitHubEnrollmentOAuthStateStore implements GitHubEnrollmentStateStore {
-  constructor(private readonly db: DatabaseInstance, private readonly authority: OnboardingSessionAuthority) {}
+  constructor(private readonly db: DatabaseInstance,
+    private readonly authority: Pick<OnboardingSessionAuthority, 'lockSessionWithTx'>) {}
 
   async replace(input: Pick<GitHubEnrollmentStateRecord,
     'stateHash' | 'ownerHash' | 'sessionHash' | 'callbackUri' | 'correlationId'>): Promise<GitHubEnrollmentStateRecord> {
