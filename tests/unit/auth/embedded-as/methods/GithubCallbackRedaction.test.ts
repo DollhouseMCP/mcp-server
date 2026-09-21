@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { createHmac } from 'node:crypto';
 import express from 'express';
 import request from 'supertest';
 import type { ContributeRoutesDeps } from '../../../../../src/auth/embedded-as/IAuthMethod.js';
@@ -57,7 +56,9 @@ describe('ordinary GitHub callback credential redaction', () => {
     const { storage, method, fetchImpl } = fixture();
     const logged = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const key = 'test-cookie-signing-key';
-    const sig = createHmac('sha1', key).update(`_interaction=${secrets[1]}`).digest('base64url');
+    // Fixed Keygrip fixture: _interaction=private-state under test-cookie-signing-key.
+    // Real verification below must pass before the three provider calls and late failure.
+    const sig = 'L1NnG9ncVXl7lII8E6UR7DZi3oc';
     const provider = { interactionDetails: async (_req: express.Request, res: express.Response) => {
       res.write('safe prefix'); throw error();
     } } as unknown as Awaited<ReturnType<ContributeRoutesDeps['ensureInitialized']>>['provider'];
