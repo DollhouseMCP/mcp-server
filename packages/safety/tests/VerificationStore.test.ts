@@ -88,6 +88,29 @@ describe('VerificationStore', () => {
       expect(result).toBe(false);
     });
 
+    it.each([
+      ['same byte length', 'ABC123', 'ABC124'],
+      ['shorter byte length', 'ABC123', 'ABC12'],
+      ['longer byte length', 'ABC123', 'ABC1234'],
+      ['empty input', 'ABC123', ''],
+      ['equal character counts but different UTF-8 byte lengths', 'é', 'e'],
+    ])('rejects %s without throwing and consumes the attempt', (_case, expected, supplied) => {
+      store.set('challenge1', { code: expected, expiresAt: Date.now() + 60000, reason: 'Test' });
+
+      expect(store.verify('challenge1', supplied)).toBe(false);
+      expect(store.verify('challenge1', expected)).toBe(false);
+      expect(store.size()).toBe(0);
+    });
+
+    it('matches identical multibyte codes without normalizing distinct input', () => {
+      store.set('match', { code: 'é', expiresAt: Date.now() + 60000, reason: 'Test' });
+      store.set('distinct', { code: 'é', expiresAt: Date.now() + 60000, reason: 'Test' });
+
+      expect(store.verify('match', 'é')).toBe(true);
+      expect(store.verify('distinct', 'e\u0301')).toBe(false);
+      expect(store.size()).toBe(0);
+    });
+
     it('should reject non-existent challenge', () => {
       const result = store.verify('nonexistent', 'ABC123');
       expect(result).toBe(false);

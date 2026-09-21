@@ -175,7 +175,7 @@
     "url": "https://github.com/sponsors/mickdarling"
   },
   "dependencies": {
-    "@dollhousemcp/safety": "^1.0.2",
+    "@dollhousemcp/safety": "^1.0.3",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "chalk": "^5.6.2",
     "dompurify": "^3.4.11",
