@@ -7,6 +7,7 @@ import {
   InvitationTokenError,
   MAX_INVITATION_GENERATION,
   parseInvitationToken,
+  serializeInvitationToken,
 } from '../../../src/invitations/InvitationToken.js';
 
 const INVITATION_ID = '123e4567-e89b-12d3-a456-426614174000';
@@ -27,6 +28,14 @@ describe('InvitationToken', () => {
     });
     expect(generated.token).not.toContain(EMAIL);
     expect(generated.token).not.toContain('2026');
+  });
+
+  it('serializes a caller-owned secret without copying or mutating it', () => {
+    const secret = Buffer.alloc(32, 0x5a);
+    const token = serializeInvitationToken(INVITATION_ID, 4, secret);
+
+    expect(parseInvitationToken(token)).toEqual({ invitationId: INVITATION_ID, generation: 4, secret });
+    expect(secret).toEqual(Buffer.alloc(32, 0x5a));
   });
 
   it('binds the stored digest to purpose, id, generation, address, expiry, and secret', () => {
