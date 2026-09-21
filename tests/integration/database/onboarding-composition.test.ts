@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
-import express from 'express';
+import { createStreamableHttpApp } from '../../../src/server/createStreamableHttpApp.js';
 import request, { type Response as HttpResponse } from 'supertest';
 import { jest } from '@jest/globals';
 import { eq, sql } from 'drizzle-orm';
@@ -64,10 +64,16 @@ it('composes admin issuance and delivery through cross-instance claim, OAuth, ac
   const first = createOnboardingComposition(options), second = createOnboardingComposition({ ...options, rateLimits: new PostgresRateLimitStore(db) });
   expect(provider).not.toHaveBeenCalled(); expect(sent).toHaveLength(0);
   const admin = await invitationAdminHarness({ store: new PostgresInvitationManagementStore(db) }, 'admin', true, inviterId, undefined, first.adminModule);
-  const firstApp = express().use(first.claimPageRouter).use('/auth/onboarding', first.apiRouter).use(admin.app);
-  const secondApp = express().use(second.claimPageRouter).use('/auth/onboarding', second.apiRouter);
+  const firstApp = createStreamableHttpApp({ host: '127.0.0.1', onboarding: first }).use(admin.app);
+  const secondApp = createStreamableHttpApp({ host: '127.0.0.1', onboarding: second });
+  const adminSend: typeof admin.send = (method, suffix = '', body, headers = {}) =>
+    request(firstApp)[method]('/api/v1/admin/accounts/invitations' + suffix).set('Origin', origin)
+      .set('X-Console-Request', '1').set('X-CSRF-Token', 'csrf').set('Cookie', ['dh_session=session', 'dh_csrf=csrf'])
+      .set(headers).send(body);
+  expect((await adminSend('post', '', { display_name: 'x'.repeat(2100) })).status).toBe(413);
+  expect(sent).toHaveLength(0);
   const id = randomUUID();
-  const issued = await admin.send('post', '', { username: ` Tester-${id} `, display_name: ' Renée 李 ', email: `${id}@Invite.test`, intended_roles: ['operator'], ttl_hours: 24 });
+  const issued = await adminSend('post', '', { username: ` Tester-${id} `, display_name: ' Renée 李 ', email: `${id}@Invite.test`, intended_roles: ['operator'], ttl_hours: 24 });
   expect(issued.status).toBe(201); expect(issued.body.delivery).toEqual({ status: 'recorded', state: 'submitted' });
   const invitation = issued.body.invitation, claimUrl = new URL(issued.body.claim_url);
   const credential = new URLSearchParams(claimUrl.hash.slice(1)).get('token')!;
@@ -114,7 +120,7 @@ it('composes admin issuance and delivery through cross-instance claim, OAuth, ac
   await resolver.linkAccount(sub, 'GitHub display');
   expect(await resolver.resolveEnabledPrincipal(sub)).toMatchObject({ userId: invitation.user_id, roles: ['operator'] });
   expect((await db.select().from(authAccounts).where(eq(authAccounts.sub, otherSub)))[0].userId).toBe(otherId);
-  const inspect = await admin.send('get', `/${invitation.id}`);
+  const inspect = await adminSend('get', `/${invitation.id}`);
   expect(inspect.status).toBe(200); expect(inspect.body.invitation.state).toBe('accepted');
   expect(inspect.body.claim_url).toBeUndefined(); expect(inspect.body.delivery).toBeUndefined();
   const records = await db.execute(sql`SELECT jsonb_build_object(
