@@ -2,6 +2,7 @@ import express, { type Express, type Router } from 'express';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { hostHeaderValidation, localhostHostValidation } from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js';
 import { logger } from '../utils/logger.js';
+import { invitationAdminBodyBoundary } from './invitationAdminBodyBoundary.js';
 
 /** Internal mount seam only; bootstrap must validate the complete deployment first. */
 export interface OnboardingHttpRouters {
@@ -26,6 +27,7 @@ export function createStreamableHttpApp(options: {
   }
   app.get('/auth/onboarding/invitation', options.onboarding.claimPageRouter);
   app.use('/auth/onboarding', options.onboarding.apiRouter);
+  app.use('/api/v1/admin/accounts/invitations', ...invitationAdminBodyBoundary());
   app.use(express.json());
   return app;
 }
