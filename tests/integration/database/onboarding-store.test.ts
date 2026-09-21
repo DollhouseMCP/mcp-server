@@ -9,6 +9,8 @@ import { PostgresInvitationClaimStore } from '../../../src/invitations/PostgresI
 import { PostgresOnboardingStore, ONBOARDING_OWNER_MODEL, ONBOARDING_SESSION_MODEL } from '../../../src/invitations/onboarding/PostgresOnboardingStore.js';
 import { OnboardingCredentials } from '../../../src/invitations/onboarding/OnboardingCredentials.js';
 import { HmacConsoleOpaqueValueService } from '../../../src/web-console/security/ConsoleOpaqueValues.js';
+import type { InvitationManagementAudit } from '../../../src/invitations/IInvitationManagementStore.js';
+import { appendConsoleAdminAuditEventWithTx } from '../../../src/web-console/audit/PostgresAdminAuditWriter.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
 import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from './test-db-helpers.js';
 
@@ -78,6 +80,42 @@ describe('PostgreSQL restricted onboarding owner/session persistence', () => {
     await store().endOwner(f.ownerHash);
     await expect(store().replaceSession(f.input)).rejects.toMatchObject({ code: 'unavailable' });
     expect(await db().select().from(authKv).where(slot(ONBOARDING_SESSION_MODEL, f.ownerHash))).toHaveLength(0);
+  });
+
+  it('normalizes audit lock contention after rolling back the entire exchange, without automatic retry', async () => {
+    if (!available) return;
+    const f = await pendingFixture();
+    const ownerBefore = await store().findOwner(f.ownerHash);
+    const securityBefore = await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${f.invitation.id} ORDER BY id`);
+    const input = { invitationId: f.invitation.id, generation: 1, credentialSecret: f.claimInput.credentialSecret,
+      correlationId: randomUUID(), ownerHash: f.ownerHash, sessionHash: hash('session'), csrfTokenHash: hash('csrf') };
+    const auditKey = randomBytes(32);
+    const adminAudit: InvitationManagementAudit = {
+      kind: 'admin', appendSecurityEvent: appendSecurityAuditEventWithTx,
+      appendAdminEvent: (tx, event) => appendConsoleAdminAuditEventWithTx(tx, event, {
+        resolve: async () => ({ keyId: 'onboarding-test', key: auditKey }),
+      }),
+      adminContext: {
+        actorUserId: inviterId, actorSub: `test:${inviterId}`, actorRole: 'admin', actorCapabilityRole: 'admin',
+        actorConsoleSessionHash: Buffer.alloc(32, 7), capability: 'console:admin:accounts',
+        elevationAcr: null, elevationAmr: [], elevationAuthTime: null,
+        endpoint: '/internal/onboarding', clientIp: null, userAgent: null,
+      },
+    };
+    await withSystemContext(db(), async tx => {
+      await tx.execute(sql`LOCK TABLE admin_audit_chain_heads IN EXCLUSIVE MODE`);
+      await expect(store().exchangeClaim(input, adminAudit)).rejects.toMatchObject({
+        name: 'InvitationError', code: 'concurrent_update', message: 'Invitation claim transaction conflicted',
+      });
+    });
+    expect(await store().findOwner(f.ownerHash)).toEqual(ownerBefore);
+    expect(await db().select().from(authKv).where(slot(ONBOARDING_SESSION_MODEL, f.ownerHash))).toHaveLength(0);
+    expect(await db().select().from(claims).where(eq(claims.invitationId, f.invitation.id))).toHaveLength(0);
+    const [generation] = await db().select().from(generations).where(eq(generations.invitationId, f.invitation.id));
+    expect(generation.credentialConsumedAt).toBeNull();
+    expect(await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${f.invitation.id} ORDER BY id`)).toEqual(securityBefore);
+    expect(await db().execute(sql`SELECT sequence_id FROM admin_audit_events WHERE resource_id = ${f.invitation.id}`)).toHaveLength(0);
+    expect(await store().exchangeClaim(input, adminAudit)).toMatchObject({ invitationId: f.invitation.id });
   });
 
   it('atomically rolls back consumption, claim audit, owner extension and session on initial-exchange failure, then retries', async () => {
