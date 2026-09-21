@@ -104,6 +104,9 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     this.db = options.db;
   }
 
+  /** Bootstrap identity check; does not expose the database handle. */
+  usesDatabase(database: DatabaseInstance): boolean { return this.db === database; }
+
   isAccountAllowed(sub: string): Promise<boolean> {
     return isSubjectAccountAllowed(this.db, sub);
   }

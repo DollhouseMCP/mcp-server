@@ -1,3 +1,4 @@
+import { resolvePrivateBetaOnboardingConfiguration, type PrivateBetaOnboardingEnv } from '../invitations/onboarding/PrivateBetaOnboardingConfiguration.js';
 import { readFile } from 'node:fs/promises';
 
 import { env, type Env } from '../config/env.js';
@@ -43,7 +44,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID'
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET'
   | 'DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR'
->;
+> & Partial<PrivateBetaOnboardingEnv>;
 
 export async function bootstrapWebConsoleHttpApiV1(
   container: DiContainerFacade,
@@ -62,6 +63,7 @@ export async function bootstrapWebConsoleHttpApiV1(
 export function resolveWebConsoleHttpBootstrapOptions(
   sourceEnv: WebConsoleHttpBootstrapEnv,
 ): WebConsoleRegistrarOptions | null {
+  const onboardingConfiguration = resolvePrivateBetaOnboardingConfiguration(sourceEnv as PrivateBetaOnboardingEnv);
   if (!sourceEnv.DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED) return null;
   if (sourceEnv.DOLLHOUSE_HTTP_WEB_CONSOLE) {
     throw new Error(API_V1_REPLACEMENT_REFUSES_LEGACY_WEB_CONSOLE);
@@ -81,6 +83,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
       }
     : undefined;
   return {
+    onboardingConfiguration,
     activationProfile: 'shared-hosted',
     deploymentSignal: {
       sharedHosted: true,

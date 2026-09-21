@@ -24,6 +24,9 @@ const DEFAULT_MAX_RETRIES = 5;
 export class PostgresRateLimitStore implements IRateLimitStore {
   constructor(private readonly db: DatabaseInstance) {}
 
+  /** Bootstrap identity check; does not expose the database handle. */
+  usesDatabase(database: DatabaseInstance): boolean { return this.db === database; }
+
   async get<TState>(scope: string, key: string): Promise<RateLimitEntry<TState> | null> {
     // Drizzle's raw-SQL return type is RowList<Record<string, unknown>[]>,
     // which is structurally assignable to RateLimitRow[] because the row

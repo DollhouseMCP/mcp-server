@@ -1214,7 +1214,7 @@ async function startStreamableHttpServer(
     performanceMonitor: container.hasRegistration('PerformanceMonitor')
       ? container.resolve<PerformanceMonitor>('PerformanceMonitor')
       : undefined,
-    webConsoleApiV1: resolveWebConsoleApiV1Mount(container),
+    ...resolveWebConsoleHttpMounts(container),
     runtimeSessionControl: runtimeSessionControl?.service,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
@@ -1226,15 +1226,18 @@ async function startStreamableHttpServer(
   });
 }
 
-function resolveWebConsoleApiV1Mount(
+function resolveWebConsoleHttpMounts(
   container: DollhouseContainer,
-): StreamableHttpRuntimeOptions['webConsoleApiV1'] {
-  if (!container.hasRegistration('WebConsoleComposition')) return undefined;
+): Pick<StreamableHttpRuntimeOptions, 'webConsoleApiV1' | 'onboarding'> {
+  if (!container.hasRegistration('WebConsoleComposition')) return {};
   const composition = container.resolve<WebConsoleComposition>('WebConsoleComposition');
-  if (!composition.apiV1Mount) return undefined;
+  if (!composition.apiV1Mount) {
+    if (composition.onboarding) throw new Error('Onboarding requires an activated console API mount.');
+    return {};
+  }
   return {
-    router: composition.apiV1Mount.router,
-    markMounted: composition.apiV1Mount.markMounted,
+    webConsoleApiV1: { router: composition.apiV1Mount.router, markMounted: composition.apiV1Mount.markMounted },
+    onboarding: composition.onboarding,
   };
 }
 
