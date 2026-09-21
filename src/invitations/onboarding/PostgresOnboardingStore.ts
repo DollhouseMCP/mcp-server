@@ -2,7 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { timingSafeEqual } from 'node:crypto';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import type { DrizzleTx } from '../../database/db-utils.js';
+import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../../database/db-utils.js';
 import { authKv } from '../../database/schema/auth.js';
 import { assertHash } from '../../web-console/stores/ConsoleStoreValidation.js';
 import { InvitationError } from '../InvitationTypes.js';
@@ -93,6 +93,13 @@ export class PostgresOnboardingStore implements OnboardingSessionAuthority {
           csrfTokenHash: owned.csrfTokenHash, invitationId: claim.invitationId,
           generation: claim.generation, claimAssertionId: claim.id });
       });
+    } catch (error) {
+      // Normalize only after the composed transaction has rolled back. A caller
+      // may explicitly retry; this store never repeats a credential exchange.
+      if (isSerializationFailure(error) || isUniqueViolation(error) || getErrorCode(error) === '55P03') {
+        throw new InvitationError('concurrent_update', 'Invitation claim transaction conflicted');
+      }
+      throw error;
     } finally { owned.credentialSecret.fill(0); }
   }
 
