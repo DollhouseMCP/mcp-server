@@ -7,6 +7,7 @@
  * @since v1.0.0
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { StoredChallenge } from './types.js';
 
 /**
@@ -66,7 +67,11 @@ export class VerificationStore {
       return false;
     }
 
-    const matches = challenge.code === code;
+    // Timing-safe comparison to prevent side-channel attacks
+    const expected = Buffer.from(challenge.code, 'utf8');
+    const actual = Buffer.from(code, 'utf8');
+    const matches = expected.length === actual.length
+      && timingSafeEqual(expected, actual);
 
     // Delete challenge after verification attempt (one-time use)
     this.challenges.delete(challengeId);
