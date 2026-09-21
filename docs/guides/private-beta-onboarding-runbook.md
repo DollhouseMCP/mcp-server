@@ -12,7 +12,9 @@ Before any live provider call, qualify on a disposable database with synthetic s
 - Actual transport ordering: Host validation, exact claim-page CSP, 1 KB/no-inflate onboarding JSON and 2 KB/no-inflate administrator mutations before general JSON parsing.
 - Invitation lifecycle, pending-account denial, GitHub-only cohort policy, restricted sessions, replay/expiry/concurrency, activation rollback and independent-instance HTTP journeys.
 - Secret projections over responses, durable state and audits. Fake SMTP acceptance and fake GitHub responses are deterministic adapter evidence only.
-- Built-browser claim-page behavior and the real BFF ordinary-login round trip when those qualification suites are available; record their exact results and remaining gaps rather than assuming the service journey covers them.
+- Built-browser claim-page behavior and the real BFF ordinary-login round trip; record their exact results and remaining gaps rather than assuming the service journey covers them.
+
+Recorded local qualification: combined candidate `87d0447f52569c64b898df452f88c45da7f8c258` passed 488 unit tests across 31 suites, full build/lint, and two PostgreSQL composition/ordinary-login tests. Browser candidate `033193d1a4a9df425aa3fea7b8ecff83fbbf1fab` (combined candidate plus browser qualification changes `9cce80ec`) built successfully and passed one real-Chrome journey across two replicas using a dedicated PostgreSQL database, followed by teardown. These are candidate-specific results with fake SMTP and GitHub providers; they do not prove live mail receipt, provider configuration, real GitHub authentication, or deployment readiness. Requalify the final runtime candidate and preserve its exact evidence.
 
 ## Configuration inventory
 
@@ -55,7 +57,7 @@ Existing console readiness and replacement-evidence checks remain mandatory. The
 
 ## Provider and log prerequisites
 
-Register both exact authentication OAuth-app callbacks at the configured origin:
+Register both exact authentication OAuth-app callbacks at the configured origin. [GitHub’s OAuth-app registration documentation](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) supports up to ten callback URLs; verify the actual app configuration:
 
 - `/auth/onboarding/github/callback` for invitation enrollment.
 - `/auth/social/github/callback` for ordinary GitHub sign-in.
