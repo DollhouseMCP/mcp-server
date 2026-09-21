@@ -39,6 +39,7 @@ import {
   invitationExpiryPresentation,
   invitationTtlHours,
 } from './durable-invitation-ui.js';
+import { ACCOUNT_INVITATION_ROUTE, openInvitationLifecycle } from './invitation-lifecycle-ui.js';
 import { renderRoleOptions, renderRoleGuidance, roleDisplayName } from './role-options.js';
 
 const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
@@ -353,12 +354,16 @@ function renderDrawer() {
         ${panelRoles(u)}
         ${panelMfa(u)}
         ${panelSessions(u)}
+        ${state.hasRoute('GET', ACCOUNT_INVITATION_ROUTE) ? panelSection('Invitation',
+          '<button class="btn btn-ghost" id="ua-manage-invitation" type="button">Manage invitation</button>',
+          'Inspect, regenerate or revoke the invitation for this account.') : ''}
         ${panelLifecycle(u)}
       </div>
     </aside>`;
 
   root.querySelector('#ua-drawer-close').addEventListener('click', closeDrawer);
   root.querySelector('#ua-drawer-backdrop').addEventListener('click', closeDrawer);
+  root.querySelector('#ua-manage-invitation')?.addEventListener('click', () => openInvitationLifecycle(u.user_id, state.hasRoute));
   wireRoleToggles(u);
   wireMfa(u);
   wireIdentity(u);
