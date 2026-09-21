@@ -102,7 +102,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     if (!credential || !csrf) throw new Error('unavailable');
     announce('Verifying your invitation…');
     const result = await api('/exchange', { credential });
-    credential = null; readCsrf(result.csrfToken); sessionContextAllowed = true; await context();
+    credential = null; sessionContextAllowed = true; readCsrf(result.csrfToken); await context();
   }); });
   retry.addEventListener('click', () => { void run(bootstrap); }); // Refresh CSRF only; never replay an exchange automatically.
   logout.addEventListener('click', () => { void run(async () => {

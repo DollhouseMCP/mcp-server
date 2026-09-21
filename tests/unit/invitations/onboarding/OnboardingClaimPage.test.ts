@@ -187,3 +187,16 @@ it.each([['empty', '#'], ['empty token', '#token='], ['oversized', '#token=' + '
     expect(b.document.body.textContent).not.toContain(metadata.account.verifiedEmail);
     expect(b.button('claim-continue').disabled).toBe(true); expect(b.window.location.hash).toBe('');
   });
+
+it.each([['missing', undefined], ['oversized', 'x'.repeat(161)]])('recovers metadata after a successful exchange with %s CSRF without replay', async (_label, csrfToken) => {
+  let exchanged = false;
+  const b = await browser(`#token=${token}`, url => {
+    if (url.endsWith('/exchange')) { exchanged = true; return { status: 200, body: { state: 'claimed', csrfToken } }; }
+    return { status: 200, body: url.endsWith('/context') ? metadata : { state: exchanged ? 'claimed' : 'ready', csrfToken: 'fresh-csrf' } };
+  });
+  b.button('claim-continue').click(); await until(() => !b.button('claim-retry').hidden);
+  expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(1);
+  b.button('claim-retry').click(); await until(() => !b.document.getElementById('claim-details')!.hidden);
+  expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(1);
+  expect(b.document.getElementById('claim-email')!.textContent).toBe(metadata.account.verifiedEmail);
+});
