@@ -37,9 +37,9 @@ export function openInvitationLifecycle(userId, hasRoute) {
     for (const button of modal.querySelectorAll('button')) button.disabled = pending;
     for (const action of ['regenerate', 'revoke']) {
       const button = el(action); button.hidden = !hasRoute('POST', `${DURABLE_INVITATION_ROUTE}/:invitation_id/${action}`);
-      button.disabled = pending || !!intent || view?.state !== 'pending';
+      button.disabled = pending || !!intent || !['pending', 'expired'].includes(view?.state);
     }
-    ttl.disabled = pending || !!intent || view?.state !== 'pending';
+    ttl.disabled = pending || !!intent || !['pending', 'expired'].includes(view?.state);
     el('inspect').disabled = pending || !!intent;
     el('confirm').hidden = !intent;
   }
@@ -89,7 +89,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
     pending = false; controls();
   }
   function prepare(action) {
-    if (pending || intent || view?.state !== 'pending') return;
+    if (pending || intent || !['pending', 'expired'].includes(view?.state)) return;
     try { intent = { action, id: view.id, body: action === 'regenerate' ? { ttl_hours: invitationTtlHours(ttl.value) } : {} }; }
     catch { status('Enter a whole-number lifetime between 1 and 168 hours.'); return; }
     el('question').textContent = action === 'regenerate'

@@ -95,3 +95,17 @@ it('keeps absent and denied lookup metadata unavailable and cannot mutate a mism
   }
   expect(post).not.toHaveBeenCalled();
 });
+
+it.each(['regenerate', 'revoke'])('permits explicit %s of an expired invitation, matching server authority', async action => {
+  get.mockResolvedValue(reply('expired')); open(userId, () => true); await tick();
+  expect(button(action).disabled).toBe(false);
+  expect(document.querySelector<HTMLInputElement>('#ua-il-ttl')!.disabled).toBe(false);
+  click(action); expect(post).not.toHaveBeenCalled();
+  post.mockResolvedValue(action === 'revoke' ? reply('revoked') : { status: 200, body: { ...reply().body,
+    claim_url: 'https://console.example.test/auth/onboarding/invitation#token=renewed',
+    delivery: { status: 'manual_fallback', reason: 'not_configured' } } });
+  click('apply'); await tick();
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(post).toHaveBeenCalledWith(`/admin/accounts/invitations/${id}/${action}`, { body: action === 'regenerate' ? { ttl_hours: 24 } : {} });
+  expect(status()).toContain(action === 'regenerate' ? 'Invitation regenerated.' : 'Invitation revoked.');
+});
