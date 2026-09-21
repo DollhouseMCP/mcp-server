@@ -26,7 +26,11 @@ function fixture(allowedHosts?: string[], host = '127.0.0.1') {
   };
   const rateLimits = new InMemoryRateLimitStore();
   const admission = jest.spyOn(rateLimits, 'update');
-  const apiRouter = createOnboardingRouter({ store, rateLimits, trustedOrigin: origin,
+  const futureDependencies = {
+    metadataReader: { read: async () => null },
+    githubEnrollment: { start: async () => { throw new Error('unused'); }, complete: async () => { throw new Error('unused'); } },
+  };
+  const apiRouter = createOnboardingRouter({ store, rateLimits, trustedOrigin: origin, ...futureDependencies,
     credentials: new OnboardingCredentials(new HmacConsoleOpaqueValueService(randomBytes(32))),
     audit: { kind: 'system', appendSecurityEvent: async () => { throw new Error('No credential mutation expected'); } },
   });
