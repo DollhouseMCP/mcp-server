@@ -71,7 +71,7 @@ describe('Publish Beta Release state validation', () => {
 
   it.each(['0.0.0-beta', '2.1.0-beta.0', '2.1.0-beta.1.alpha-2', '2.1.0-beta.999999999999999999999999999999'])('accepts valid beta version %s', version => {
     const result = runScenario({ version });
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs.version).toBe(version);
   });
 
@@ -121,7 +121,7 @@ describe('Publish Beta Release state validation', () => {
   it('accepts explicit npm E404 JSON despite human stderr diagnostics for a fresh version', () => {
     const result = runScenario({});
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs).toMatchObject({
       tag_exists: 'false',
       release_exists: 'false',
@@ -135,7 +135,7 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease(),
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs).toMatchObject({
       tag_exists: 'true',
       release_exists: 'true',
@@ -146,7 +146,7 @@ describe('Publish Beta Release state validation', () => {
   it('accepts a matching tag when release creation has not completed yet', () => {
     const result = runScenario({ tagTarget: expectedSha });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs).toMatchObject({
       tag_exists: 'true',
       release_exists: 'false',
@@ -183,7 +183,7 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease({ targetCommitish: 'beta' }),
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.stdout).toContain('records a different targetCommitish');
     expect(result.outputs.release_exists).toBe('true');
   });
@@ -195,7 +195,7 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease({ targetCommitish: 'beta' }),
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.stdout).toContain(
       `verified tag v${packageVersion} resolves to ${expectedSha}`,
     );
@@ -208,7 +208,7 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease({ targetCommitish: 'f'.repeat(40) }),
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.stdout).toContain('records a different targetCommitish');
     expect(result.stdout).not.toContain('f'.repeat(40));
   });
@@ -238,7 +238,7 @@ describe('Publish Beta Release state validation', () => {
       npmLatestVersion: '2.0.40',
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs.npm_publish_complete).toBe('true');
   });
 
@@ -251,7 +251,7 @@ describe('Publish Beta Release state validation', () => {
       npmLatestVersion: '2.0.40',
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs.npm_publish_complete).toBe('true');
     expect(result.stdout).toContain('leaving that channel unchanged');
   });
@@ -265,7 +265,7 @@ describe('Publish Beta Release state validation', () => {
       npmLatestVersion: '2.0.40',
     });
 
-    expect(result.status).toBe(0);
+    expectSuccessfulScenario(result);
     expect(result.outputs.npm_publish_complete).toBe('true');
     expect(result.stdout).toContain('leaving that channel unchanged');
   });
@@ -396,6 +396,15 @@ function runScenario(scenario: Scenario): {
     outputs: readOutputs(outputPath),
     commands: readLines(commandLogPath),
   };
+}
+
+// These are closed fake clients: captured output contains fixture data, never credentials.
+function expectSuccessfulScenario(result: ReturnType<typeof runScenario>): void {
+  if (result.status !== 0) {
+    throw new Error(`Expected successful workflow validation, received exit ${result.status}.\n${JSON.stringify({
+      stdout: result.stdout, stderr: result.stderr, commands: result.commands,
+    }, null, 2)}`);
+  }
 }
 
 function writeExecutable(filePath: string, contents: string): void {
