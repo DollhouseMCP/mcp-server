@@ -128,7 +128,13 @@ export function securityHeaders(): RequestHandler {
 
     res.send = ((body?: unknown): Response => {
       setContentSecurityPolicy();
-      return send(addStyleNonce(body, styleNonce));
+      const contentType = res.getHeader('Content-Type');
+      // Express treats a string without an explicit type as HTML. JSON sends
+      // also pass through this wrapper, but their serialized payload is data.
+      const isHtml = contentType === undefined ||
+        (typeof contentType === 'string' &&
+          contentType.split(';', 1)[0].trim().toLowerCase() === 'text/html');
+      return send(isHtml ? addStyleNonce(body, styleNonce) : body);
     }) as Response['send'];
 
     setContentSecurityPolicy();
