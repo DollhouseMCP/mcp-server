@@ -37,7 +37,7 @@ export function createOnboardingClaimPageRouter(supportEmail: string): Router {
 <dt>Name</dt><dd id="claim-name"></dd><dt>Username</dt><dd id="claim-username"></dd><dt>Verified email</dt><dd id="claim-email"></dd>
 <dt>Invitation expires</dt><dd><span id="claim-expiry"></span><br><span id="claim-relative"></span></dd></dl><h2>Intended access</h2><ul id="claim-roles"></ul>
 <p>Your GitHub account ID and public profile identify your login. Connecting a GitHub portfolio or integration is a separate, optional step.</p>
-<p class="notice">GitHub connection is currently unavailable. Your account has not been activated.</p><button type="button" disabled>Continue with GitHub</button></section>
+<p class="notice">Continue to GitHub to connect your login and activate this invited account. Your GitHub email may differ from your invitation email.</p><button id="claim-github" type="button" disabled>Continue with GitHub</button></section>
 <p><button id="claim-logout" type="button" hidden>Sign out of onboarding</button></p>
 <noscript><p>JavaScript is required to read your private invitation link. Enable it and reopen the link from your email. No invitation has been consumed.</p></noscript>
 <footer>Need help or a new invitation? <a href="${escapeHtml(href)}">Contact ${escapeHtml(support)}</a>.</footer>

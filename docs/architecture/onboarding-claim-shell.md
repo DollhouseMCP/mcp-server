@@ -15,3 +15,9 @@ The shell cannot yet distinguish expired, revoked, superseded, accepted or confl
 The exact shell response has a random per-response nonce for its own style/script, strict CSP, no-store, no-referrer, framing denial and nosniff headers. It ends via `res.end` because the embedded-AS `securityHeaders()` middleware wraps `res.send` and would otherwise reset script policy. Tests compose that real parent middleware and verify unrelated API responses still enforce `script-src 'none'`. Do not broaden global authentication CSP. The serialized browser function must stay self-contained; browser tests execute its actual compiled source, not a separate mock controller.
 
 Validation covers nonce composition, explicit-click exchange, refresh, double-click prevention, text-only rendering, CSRF rotation/logout, neutral errors, late-response suppression and memory-only credentials. A real Chrome render check exercises the compiled shell with fake API responses, keyboard-only continuation, and desktop/mobile layouts. No real credentials or live email are used.
+
+## GitHub connection
+
+After a current proof-bound context read, the explicit GitHub button posts an empty body to `/auth/onboarding/github/start` with the rotated CSRF token. It never starts OAuth automatically. Only an HTTPS `github.com/login/oauth/authorize` response destination without userinfo or fragment can be followed. Before leaving, the controller clears its transient credential/CSRF values and visible account details. Pagehide aborts pending starts; late responses cannot navigate a restored page.
+
+A failed start offers a fresh bootstrap; it does not replay claim exchange or OAuth start. The existing server-side GitHub state/session boundary remains authoritative. This slice does not register the page or routes.
