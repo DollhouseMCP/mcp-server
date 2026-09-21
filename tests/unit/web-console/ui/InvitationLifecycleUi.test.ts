@@ -48,7 +48,13 @@ it.each(['close', 'Escape', 'backdrop'])('permits %s during a slow inspection an
   let finish!: (value: unknown) => void;
   get.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   open(userId, () => true);
+  expect(document.activeElement).toBe(document.querySelector('#ua-il-status'));
+  expect(status()).toBe('Loading invitation…');
   expect(button('close').disabled).toBe(false); expect(button('regenerate').disabled).toBe(true);
+  for (const shiftKey of [false, false, true]) {
+    document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey }));
+    expect(document.activeElement).toBe(button('close'));
+  }
   if (dismissal === 'close') click('close');
   else if (dismissal === 'Escape') document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
   else document.querySelector<HTMLElement>('.confirm-backdrop')!.click();

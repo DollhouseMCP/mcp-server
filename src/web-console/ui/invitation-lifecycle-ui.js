@@ -81,6 +81,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
   async function inspect() {
     if (pending || closed) return;
     pending = true; view = null; el('result').replaceChildren(); el('details').replaceChildren(); controls();
+    status('Loading invitation…');
     const response = await get(`/admin/accounts/users/${encodeURIComponent(userId)}/invitation`).catch(() => null);
     if (closed) return;
     try {
