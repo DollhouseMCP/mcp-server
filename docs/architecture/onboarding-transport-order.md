@@ -1,0 +1,9 @@
+# Optional onboarding HTTP transport seam
+
+The runtime accepts an optional pair of preconstructed onboarding routers. This does not enable onboarding through configuration or register its administrator module. With the option omitted, app construction still calls the MCP SDK's original `createMcpExpressApp` unchanged.
+
+The installed SDK 1.27 factory mounts its general JSON parser before its host middleware. Onboarding requires its own 1KB, no-inflate parser after admission, so the opt-in app uses Express directly and the SDK's exported host validators. It preserves the SDK selection rules: an explicit allowed-host list wins (including an empty list), loopback binds automatically permit localhost/127.0.0.1/[::1], and other binds receive no implicit restriction. All-interface binds retain a warning. Host validation precedes both onboarding routers and all body parsing in the opt-in branch.
+
+The exact GET/HEAD `/auth/onboarding/invitation` page runs first, then `/auth/onboarding` API, then the ordinary JSON parser. Remaining health, console, MCP and final embedded-AS catch-all mounts keep their runtime order. The page owns its nonce CSP; the API retains script-none and no-store responses. The runtime's existing trust-proxy setting is applied before listening, without deriving trust from request headers. Bootstrap remains responsible for complete dependency, private-beta, public-origin, TLS, proxy and logging checks before supplying either router.
+
+HTTP tests use the real onboarding router to verify host rejection before admission, unparsed request bodies, 1KB/no-inflate rejection, and generic MCP JSON compatibility. A listening-runtime test verifies the option reaches the actual transport ahead of the OAuth catch-all. No Express middleware stack inspection or mutation is used.
