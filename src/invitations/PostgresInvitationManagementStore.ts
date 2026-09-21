@@ -21,7 +21,7 @@ import { MAX_INVITATION_TTL_HOURS, MIN_INVITATION_TTL_HOURS } from './Invitation
 import { normalizeInvitationEmail } from './InvitationEmail.js';
 import { hashInvitationCredential, INVITATION_SECRET_BYTES, MAX_INVITATION_GENERATION } from './InvitationToken.js';
 import { InvitationError, type InvitationView } from './InvitationTypes.js';
-import { lockAdminAudit, lockAccounts, lockInvitation, databaseTime, readInvitation, requireInvitation, appendAudit, copyAudit, assertUuid } from './InvitationTransactionSupport.js';
+import { lockAdminAudit, lockAccounts, lockInvitation, databaseTime, readInvitation, readInvitationForUser, requireInvitation, appendAudit, copyAudit, assertUuid } from './InvitationTransactionSupport.js';
 
 /** Internal, privileged storage only. Live routes must enforce pending-account denial first. */
 export class PostgresInvitationManagementStore implements IInvitationManagementStore {
@@ -30,6 +30,12 @@ export class PostgresInvitationManagementStore implements IInvitationManagementS
   async inspect(invitationId: string): Promise<InvitationView | null> {
     assertUuid(invitationId);
     return withSystemContext(this.db, tx => readInvitation(tx, invitationId));
+  }
+
+  /** Bounded account lookup; terminal history is ordered deterministically. */
+  async inspectForUser(userId: string): Promise<InvitationView | null> {
+    assertUuid(userId);
+    return withSystemContext(this.db, tx => readInvitationForUser(tx, userId));
   }
 
   async runMutation<T>(

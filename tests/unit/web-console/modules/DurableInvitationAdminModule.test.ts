@@ -32,7 +32,8 @@ function memoryStore() {
     }),
     revoke: jest.fn<InvitationManagementMutation['revoke']>(async id => { const old = views.get(id)!; const view = { ...old, state: 'revoked' as const }; views.set(id, view); return view; }),
   };
-  const store: IInvitationManagementStore = { inspect: jest.fn<IInvitationManagementStore['inspect']>(async id => views.get(id) ?? null),
+  const store: IInvitationManagementStore = { inspectForUser: async userId => [...views.values()].find(view => view.userId === userId) ?? null,
+    inspect: jest.fn<IInvitationManagementStore['inspect']>(async id => views.get(id) ?? null),
     runMutation: async (_audit, operation) => operation(mutation) };
   return { store, mutation };
 }
