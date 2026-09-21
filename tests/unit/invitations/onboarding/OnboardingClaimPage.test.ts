@@ -21,10 +21,11 @@ async function until(predicate: () => boolean) {
 }
 interface Call { path: string; body?: string; headers: Record<string, string>; hash: string }
 interface Reply { status: number; body: unknown; bodyError?: Error }
-async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>, withoutSize = false) {
+async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>, withoutSize = false, setup?: (window: JSDOM['window']) => void) {
   const html = (await request(app()).get(path)).text;
   const calls: Call[] = [];
   dom = new JSDOM(html, { url: `https://console.example.test${path}${fragment}`, runScripts: 'dangerously', beforeParse(window) {
+    setup?.(window);
     if (withoutSize) Object.defineProperty(window.URLSearchParams.prototype, 'size', { value: undefined });
     window.fetch = (async (url: string, init: RequestInit) => {
       calls.push({ path: url, body: init.body as string | undefined, headers: init.headers as Record<string, string>, hash: window.location.hash });
@@ -66,7 +67,8 @@ it('clears history before network and consumes a credential only on explicit cli
   expect(b.document.getElementById('claim-roles')!.textContent).toContain('Operator: Monitor server health');
   expect(b.document.documentElement.outerHTML).not.toContain(token); expect(b.window.localStorage.length).toBe(0); expect(b.window.sessionStorage.length).toBe(0);
   expect(b.document.activeElement?.id).toBe('claim-status'); expect(b.document.getElementById('claim-status')!.getAttribute('aria-live')).toBe('polite');
-  expect(b.document.querySelector<HTMLButtonElement>('#claim-details button')!.disabled).toBe(true);
+  expect(b.button('claim-github').disabled).toBe(false);
+  expect(b.calls.some(call => call.path.endsWith('/github/start'))).toBe(false);
 });
 
 it('reloads a proven session without replay and does not silently replace a different fragment with existing session metadata', async () => {
@@ -199,4 +201,97 @@ it.each([['missing', undefined], ['oversized', 'x'.repeat(161)]])('recovers meta
   b.button('claim-retry').click(); await until(() => !b.document.getElementById('claim-details')!.hidden);
   expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(1);
   expect(b.document.getElementById('claim-email')!.textContent).toBe(metadata.account.verifiedEmail);
+});
+
+
+it('starts GitHub only on explicit click with rotated CSRF and does not retry a failed start automatically', async () => {
+  let finish: ((value: { status: number; body: unknown }) => void) | undefined;
+  const pending = new Promise<{ status: number; body: unknown }>(resolve => { finish = resolve; });
+  const b = await browser(`#token=${token}`, url => url.endsWith('/github/start') ? pending :
+    { status: 200, body: url.endsWith('/context') ? metadata : { state: url.endsWith('/bootstrap') ? 'ready' : 'claimed', csrfToken: 'rotated-csrf' } });
+  expect(b.button('claim-github').disabled).toBe(true);
+  b.button('claim-continue').click(); await until(() => !b.button('claim-github').disabled);
+  b.button('claim-github').click(); b.button('claim-github').click();
+  expect(b.calls.filter(call => call.path.endsWith('/github/start'))).toHaveLength(1);
+  expect(b.calls.at(-1)).toMatchObject({ path: '/auth/onboarding/github/start', body: '{}', headers: { 'X-Onboarding-CSRF': 'rotated-csrf' } });
+  expect(b.button('claim-github').disabled).toBe(true);
+  finish!({ status: 503, body: { error: token } }); await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.body.textContent).not.toContain(token); expect(b.document.body.textContent).not.toContain('rene@example.test');
+  expect(b.button('claim-github').disabled).toBe(true);
+  b.button('claim-retry').click(); await until(() => b.calls.filter(call => call.path.endsWith('/bootstrap')).length === 2);
+  expect(b.calls.filter(call => call.path.endsWith('/github/start'))).toHaveLength(1);
+  expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(1);
+});
+
+it.each(['https://attacker.example/login/oauth/authorize', 'http://github.com/login/oauth/authorize',
+  'https://github.com/elsewhere', 'https://name:password@github.com/login/oauth/authorize',
+  'https://github.com/login/oauth/authorize#secret', 'javascript:alert(1)'])('rejects an unsafe authorization destination', async authorizationUrl => {
+  const b = await browser('', url => ({ status: 200, body: url.endsWith('/context') ? metadata :
+    url.endsWith('/github/start') ? { authorizationUrl, expiresAt: '2026-10-01T12:05:00Z' } : { state: 'claimed', csrfToken: 'csrf' } }));
+  await until(() => !b.button('claim-github').disabled); b.button('claim-github').click();
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.window.location.href).toBe(`https://console.example.test${path}`);
+  expect(b.document.body.textContent).not.toContain(authorizationUrl);
+  expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+});
+
+it('ignores a GitHub start response after pagehide', async () => {
+  let finish: ((value: { status: number; body: unknown }) => void) | undefined;
+  const pending = new Promise<{ status: number; body: unknown }>(resolve => { finish = resolve; });
+  const b = await browser('', url => url.endsWith('/github/start') ? pending :
+    { status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } });
+  await until(() => !b.button('claim-github').disabled); b.button('claim-github').click();
+  b.window.dispatchEvent(new b.window.PageTransitionEvent('pagehide'));
+  finish!({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt: '2026-10-01T12:05:00Z' } });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(b.window.location.href).toBe(`https://console.example.test${path}`);
+  expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+  expect(b.button('claim-github').disabled).toBe(true);
+});
+
+
+it.each([
+  ['OAuth state', 5 * 60000 + 1, 0, '2026-10-01T12:05:00Z'],
+  ['claim with a suspended timer', 15 * 60000 + 1, 0, '2026-10-01T12:20:00Z'],
+  ['OAuth state during system sleep', 0, 5 * 60000 + 1, '2026-10-01T12:05:00Z'],
+  ['claim during system sleep', 0, 15 * 60000 + 1, '2026-10-01T12:20:00Z'],
+  ['backward wall-clock adjustment', 0, -1, '2026-10-01T12:05:00Z'],
+])('rejects a delayed GitHub response after %s expiry or clock discontinuity', async (_label, elapsed, wallElapsed, expiresAt) => {
+  let now = 0, wall = Date.parse('2030-01-01T00:00:00Z');
+  let finish!: (value: Reply) => void;
+  const pending = new Promise<Reply>(resolve => { finish = resolve; });
+  const b = await browser('', url => url.endsWith('/github/start') ? pending :
+    { status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } }, false,
+  window => {
+    Object.defineProperty(window.performance, 'now', { value: () => now });
+    Object.defineProperty(window.Date, 'now', { value: () => wall });
+  });
+  await until(() => !b.button('claim-github').disabled); b.button('claim-github').click();
+  now = Number(elapsed); wall += Number(wallElapsed);
+  finish({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt } });
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');
+  expect(b.window.location.href).toBe(`https://console.example.test${path}`);
+  expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+  expect(b.button('claim-github').disabled).toBe(true);
+  expect(b.document.body.textContent).not.toContain('rene@example.test');
+  b.button('claim-retry').click(); await until(() => b.calls.filter(call => call.path.endsWith('/bootstrap')).length === 2);
+  expect(b.calls.filter(call => call.path.endsWith('/github/start'))).toHaveLength(1);
+});
+
+it('rejects a late start after the claim expiry timer clears the session', async () => {
+  let expire!: () => void;
+  let finish!: (value: Reply) => void;
+  const pending = new Promise<Reply>(resolve => { finish = resolve; });
+  const b = await browser('', url => url.endsWith('/github/start') ? pending :
+    { status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } }, false,
+  window => { window.setTimeout = ((callback: () => void) => { expire = callback; return 1; }) as typeof window.setTimeout; });
+  await until(() => !b.button('claim-github').disabled); b.button('claim-github').click(); expire();
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('no longer available');
+  finish({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt: '2026-10-01T12:05:00Z' } });
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');
+  expect(b.window.location.href).toBe(`https://console.example.test${path}`);
+  expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+  expect(b.button('claim-github').disabled).toBe(true);
 });
