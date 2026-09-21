@@ -183,7 +183,7 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
   expect(await onboarding.findOwner(owner.hash)).toBeNull();
   expectNoDurableCredentials({ durable, kv, restrictedRecords, delivered },
     [issued.credential, githubAccessToken],
-    [issued.credential.split('.')[3], owner.value, session.value, csrf.value, bootstrapCsrf.value]);
+    [issued.credential.split('.')[3], githubAccessToken, owner.value, session.value, csrf.value, bootstrapCsrf.value]);
 });
 
 /** Scan text and decoded opaque bytes, including JSON Buffer and PostgreSQL bytea encodings. */
