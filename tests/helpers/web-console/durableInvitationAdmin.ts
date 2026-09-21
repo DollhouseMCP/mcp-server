@@ -20,7 +20,8 @@ export const invitationAdminBody = () => ({ username: `admin-invite-${randomUUID
 export const invitationAuditKey = { keyId: 'invitation-admin-test', key: Buffer.alloc(32, 7) };
 
 export async function invitationAdminHarness(options: Partial<DurableInvitationAdminOptions> & Pick<DurableInvitationAdminOptions, 'store'>,
-  role: ConsoleAdminRole = 'admin', elevated = true, userId = randomUUID(), idempotency: IIdempotencyStore = new InMemoryIdempotencyStore()) {
+  role: ConsoleAdminRole = 'admin', elevated = true, userId = randomUUID(), idempotency: IIdempotencyStore = new InMemoryIdempotencyStore(),
+  module?: ReturnType<typeof createDurableInvitationAdminModule>) {
   const now = new Date();
   const origin = 'https://console.example.test';
   const opaque = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 1));
@@ -37,7 +38,7 @@ export async function invitationAdminHarness(options: Partial<DurableInvitationA
   const configured = { auditWriter, rateLimits: new InMemoryRateLimitStore(), publicBaseUrl: origin,
     auditFactory: createDurableInvitationAdminAuditFactory({ resolve: async () => invitationAuditKey }), ...options };
   const registry = new ConsoleModuleRegistry();
-  registry.register(createDurableInvitationAdminModule(configured));
+  registry.register(module ?? createDurableInvitationAdminModule(configured));
   const app = express().use(express.json({ limit: '2kb' })).use(assembleSecuredConsoleRouter(registry, {
     sessionStore: sessions, identityResolver: new InMemoryConsoleIdentityResolver([{ sub: 'github_123', userId, disabledAt: null,
       authzVersion: 1, roles: [role] }]), opaqueValues: opaque, consoleOrigin: origin,
