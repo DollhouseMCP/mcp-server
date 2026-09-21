@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,8 +7,8 @@ import { load } from 'js-yaml';
 
 interface Workflow {
   on: { workflow_dispatch: { inputs: Record<string, { default?: unknown }> } };
-  jobs: Record<string, { environment: { name: string }; steps: {
-    name?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string>;
+  jobs: Record<string, { env?: Record<string, string>; environment: { name: string }; steps: {
+    name?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, string>;
   }[] }>;
 }
 const workflow = load(readFileSync('.github/workflows/deploy-beta-alpha-vps.yml', 'utf8')) as Workflow;
@@ -33,7 +33,7 @@ function run(name: string, overrides: Record<string, string> = {}) {
     env: { ...process.env, GITHUB_REF: 'refs/heads/beta', GITHUB_OUTPUT: output,
       INPUT_ACTION: 'update', INPUT_GIT_REF: 'beta', INPUT_LOG_LEVEL: 'info',
       INPUT_DRY_RUN: 'true', INPUT_SKIP_BACKUP: 'false', DOLLHOUSE_REMOTE_SSH_TARGET: 'fixture@example.invalid',
-      DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: 'fixture', DOLLHOUSE_ALPHA_KNOWN_HOSTS: 'fixture',
+      HAS_SSH_PRIVATE_KEY: 'true', DOLLHOUSE_ALPHA_KNOWN_HOSTS: 'fixture',
       DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE: '/fixture/key', DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE: '/fixture/hosts',
       DOLLHOUSE_HOSTED_HOSTNAME: 'mcp.example.invalid', ...overrides }
   });
@@ -47,6 +47,43 @@ describe('manual beta deployment dispatch', () => {
     expect(workflow.on.workflow_dispatch.inputs.skip_backup.default).toBe(false);
     expect(step('Checkout workflow source').with?.ref).toBe('${{ github.sha }}');
     expect(step('Run hosted remote deploy').env?.INPUT_GIT_REF).toBe('${{ steps.request.outputs.git_ref }}');
+  });
+
+  it('exposes the raw key only during preparation, after install, and always removes both files before verification', () => {
+    expect(workflow.jobs.deploy.env).not.toHaveProperty('DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY');
+    expect(step('Validate deployment request').env?.HAS_SSH_PRIVATE_KEY).toBe("${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY != '' }}");
+    expect(step('Prepare SSH material').env?.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY).toBe('${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}');
+    expect(steps.filter(value => Object.values(value.env ?? {}).includes('${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}')).map(value => value.name)).toEqual(['Prepare SSH material']);
+    const names = steps.map(value => value.name);
+    expect(names.indexOf('Install dependencies')).toBeLessThan(names.indexOf('Prepare SSH material'));
+    expect(names.slice(names.indexOf('Prepare SSH material'), names.indexOf('Verify public alpha endpoint') + 1)).toEqual([
+      'Prepare SSH material', 'Run hosted remote deploy', 'Remove SSH material', 'Verify public alpha endpoint'
+    ]);
+    expect(step('Remove SSH material').if).toBe('always()');
+    expect(step('Remove SSH material').run?.trim()).toBe('rm -f -- "${RUNNER_TEMP}/dollhouse_alpha_key" "${RUNNER_TEMP}/dollhouse_alpha_known_hosts"');
+  });
+
+  it('prepares fixture files and cleanup removes only those files, including after partial preparation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'beta-ssh-'));
+    directories.push(directory);
+    const key = join(directory, 'dollhouse_alpha_key');
+    const hosts = join(directory, 'dollhouse_alpha_known_hosts');
+    const sentinel = join(directory, 'unrelated');
+    writeFileSync(sentinel, 'retain');
+    const env = { ...process.env, RUNNER_TEMP: directory.replaceAll('\\', '/'),
+      GITHUB_ENV: join(directory, 'environment').replaceAll('\\', '/'),
+      DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: 'fixture-only-key', DOLLHOUSE_ALPHA_KNOWN_HOSTS: 'fixture-only-hosts' };
+    const execute = (name: string) => spawnSync('bash', ['-euo', 'pipefail', '-c', step(name).run ?? 'exit 99'], { env, encoding: 'utf8' });
+    expect(execute('Prepare SSH material').status).toBe(0);
+    expect(readFileSync(key, 'utf8')).toBe('fixture-only-key\n');
+    expect(readFileSync(hosts, 'utf8')).toBe('fixture-only-hosts\n');
+    expect(execute('Remove SSH material').status).toBe(0);
+    expect(existsSync(key)).toBe(false);
+    expect(existsSync(hosts)).toBe(false);
+    writeFileSync(key, 'partial-preparation');
+    expect(execute('Remove SSH material').status).toBe(0);
+    expect(existsSync(key)).toBe(false);
+    expect(readFileSync(sentinel, 'utf8')).toBe('retain');
   });
 
   it.each(['refs/heads/main', 'refs/heads/develop', 'refs/tags/v2.1.0-beta.2'])('rejects workflow source %s', ref => {
@@ -64,7 +101,7 @@ describe('manual beta deployment dispatch', () => {
     expect(run('Validate deployment request', { INPUT_GIT_REF: ref }).status).toBe(1);
   });
 
-  it.each(['DOLLHOUSE_REMOTE_SSH_TARGET', 'DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY', 'DOLLHOUSE_ALPHA_KNOWN_HOSTS'])('requires %s even for a dry run', field => {
+  it.each(['DOLLHOUSE_REMOTE_SSH_TARGET', 'HAS_SSH_PRIVATE_KEY', 'DOLLHOUSE_ALPHA_KNOWN_HOSTS'])('requires %s even for a dry run', field => {
       expect(run('Validate deployment request', { [field]: '' }).status).toBe(1);
     });
 

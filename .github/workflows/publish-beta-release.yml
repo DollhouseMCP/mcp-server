@@ -358,21 +358,17 @@ jobs:
             printf '%s\n' "${run_id}"
           }
 
-          publisher_run_ids=()
           if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]; then
             npm_run_id=$(dispatch_and_capture publish-npm.yml --raw-field 'inputs[dry_run]=false')
-            publisher_run_ids+=("${npm_run_id}")
+            gh run watch "${npm_run_id}" --exit-status
           else
             echo "Skipping npm publisher: ${TAG_NAME} is already published with the beta dist-tag"
           fi
 
           packages_run_id=$(dispatch_and_capture publish-github-packages.yml --raw-field 'inputs[dry_run]=false')
+          gh run watch "${packages_run_id}" --exit-status
           mcpb_run_id=$(dispatch_and_capture publish-mcpb.yml --raw-field "inputs[tag_name]=${TAG_NAME}")
-
-          publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")
-          for run_id in "${publisher_run_ids[@]}"; do
-            gh run watch "${run_id}" --exit-status
-          done
+          gh run watch "${mcpb_run_id}" --exit-status
 
       - name: Publish summary
         if: always()

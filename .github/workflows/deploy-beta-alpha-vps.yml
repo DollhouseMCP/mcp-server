@@ -59,8 +59,6 @@ jobs:
       DOLLHOUSE_HOSTED_MODE: cloud
       DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES: ${{ vars.DOLLHOUSE_ALPHA_CADDY_TRUSTED_PROXIES || '' }}
       DOLLHOUSE_REMOTE_SSH_TARGET: ${{ secrets.DOLLHOUSE_ALPHA_SSH_TARGET }}
-      DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}
-      DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
 
     steps:
       - name: Checkout workflow source
@@ -73,6 +71,8 @@ jobs:
         id: request
         shell: bash
         env:
+          HAS_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY != '' }}
+          DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
           INPUT_ACTION: ${{ inputs.action }}
           INPUT_GIT_REF: ${{ inputs.git_ref }}
           INPUT_LOG_LEVEL: ${{ inputs.log_level }}
@@ -115,7 +115,7 @@ jobs:
             echo "::error::Missing environment secret DOLLHOUSE_ALPHA_SSH_TARGET"
             exit 1
           fi
-          if [[ -z "${DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY}" ]]; then
+          if [[ "${HAS_SSH_PRIVATE_KEY}" != "true" ]]; then
             echo "::error::Missing environment secret DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY"
             exit 1
           fi
@@ -124,8 +124,20 @@ jobs:
             exit 1
           fi
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
       - name: Prepare SSH material
         shell: bash
+        env:
+          DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}
+          DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
         run: |
           key_file="${RUNNER_TEMP}/dollhouse_alpha_key"
           known_hosts_file="${RUNNER_TEMP}/dollhouse_alpha_known_hosts"
@@ -137,15 +149,6 @@ jobs:
 
           echo "DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE=${key_file}" >> "$GITHUB_ENV"
           echo "DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=${known_hosts_file}" >> "$GITHUB_ENV"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
 
       - name: Run hosted remote deploy
         shell: bash
@@ -177,6 +180,12 @@ jobs:
           DOLLHOUSE_HOSTED_GIT_REF="${INPUT_GIT_REF}" \
           DOLLHOUSE_HOSTED_LOG_LEVEL="${INPUT_LOG_LEVEL}" \
             npm run hosted:remote -- "${args[@]}"
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f -- "${RUNNER_TEMP}/dollhouse_alpha_key" "${RUNNER_TEMP}/dollhouse_alpha_known_hosts"
 
       - name: Verify public alpha endpoint
         if: ${{ inputs.dry_run != true }}
