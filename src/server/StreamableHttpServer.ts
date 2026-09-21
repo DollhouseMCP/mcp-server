@@ -3,7 +3,7 @@ import type { Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { createStreamableHttpApp, type OnboardingHttpRouters } from './createStreamableHttpApp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { json, static as expressStatic } from 'express';
@@ -41,6 +41,8 @@ export interface StreamableHttpRuntimeOptions {
   port?: number;
   mcpPath?: string;
   allowedHosts?: string[];
+  /** Internal, explicitly supplied routers; no environment or registrar enables them here. */
+  onboarding?: OnboardingHttpRouters;
   registerSignalHandlers?: boolean;
   rateLimitWindowMs?: number;
   rateLimitMaxRequests?: number;
@@ -523,7 +525,7 @@ export async function createStreamableHttpRuntime(
   if (publicBaseUrl) {
     assertSafePublicBaseUrl(publicBaseUrl);
   }
-  const app = createMcpExpressApp({ host, allowedHosts });
+  const app = createStreamableHttpApp({ host, allowedHosts, onboarding: options.onboarding });
   // Defense-in-depth: suppress Express's default `X-Powered-By` header on
   // every response. Doesn't change auth posture but avoids version-disclosing
   // fingerprinting via response headers.

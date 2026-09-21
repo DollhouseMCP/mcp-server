@@ -14,6 +14,9 @@ import { describe, it, expect, beforeAll } from '@jest/globals';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import express from 'express';
+import request from 'supertest';
+import { createStreamableHttpApp } from '../../src/server/createStreamableHttpApp.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,15 +122,11 @@ describe('MCP SDK Security', () => {
       expect(indexContent).toMatch(/new\s+StdioServerTransport\s*\(/);
     });
 
-    it('should use createMcpExpressApp for HTTP transport DNS rebinding protection', async () => {
-      const projectRoot = path.resolve(__dirname, '../..');
-      const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
-      const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
-
-      // StreamableHttpServer.ts must use createMcpExpressApp() from the SDK,
-      // which enables DNS rebinding protection by default (CVE-2025-66414)
-      expect(httpServerContent).toContain('createMcpExpressApp');
-      expect(httpServerContent).toContain("from '@modelcontextprotocol/sdk/server/express.js'");
+    it('rejects untrusted hosts through the default HTTP app', async () => {
+      const app = createStreamableHttpApp({ host: '127.0.0.1' });
+      app.get('/probe', (_req, res) => res.sendStatus(204));
+      expect((await request(app).get('/probe').set('Host', 'attacker.example')).status).toBe(403);
+      expect((await request(app).get('/probe').set('Host', 'localhost')).status).toBe(204);
     });
   });
 
@@ -197,13 +196,13 @@ describe('HTTP Transport Security (Phase 2)', () => {
    * 4. Default binding to 127.0.0.1 (localhost only)
    */
 
-  it('should use createMcpExpressApp for DNS rebinding protection', async () => {
-    const projectRoot = path.resolve(__dirname, '../..');
-    const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
-    const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
-
-    // createMcpExpressApp() enables DNS rebinding protection by default
-    expect(httpServerContent).toContain('createMcpExpressApp');
+  it('enforces explicit host policy before optional onboarding routes', async () => {
+    const app = createStreamableHttpApp({ host: '0.0.0.0', allowedHosts: ['console.example.test'],
+      onboarding: { claimPageRouter: express.Router(),
+        apiRouter: express.Router().get('/probe', (_req, res) => res.sendStatus(204)) },
+    });
+    expect((await request(app).get('/auth/onboarding/probe').set('Host', 'attacker.example')).status).toBe(403);
+    expect((await request(app).get('/auth/onboarding/probe').set('Host', 'console.example.test')).status).toBe(204);
   });
 
   it('should have hostHeaderValidation middleware available', async () => {
