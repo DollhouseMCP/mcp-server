@@ -60,7 +60,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
     if (event.key !== 'Tab') return;
     const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')]
       .filter(control => !control.hidden && !control.closest('[hidden]'));
-    if (!controls.length) return;
+    if (!controls.length) { event.preventDefault(); el('status').focus(); return; }
     const current = controls.indexOf(document.activeElement);
     const next = current < 0 ? (event.shiftKey ? controls.length - 1 : 0) : (current + (event.shiftKey ? controls.length - 1 : 1)) % controls.length;
     event.preventDefault(); controls[next].focus();
@@ -102,6 +102,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
   async function apply() {
     if (pending || !intent || closed) return;
     const request = intent; intent = null; pending = true; mutationPending = true; view = null; el('result').replaceChildren(); controls();
+    status(request.action === 'regenerate' ? 'Regenerating invitation…' : 'Revoking invitation…');
     const response = await post(`${DURABLE_INVITATION_ROUTE}/${request.id}/${request.action}`, { body: request.body }).catch(() => null);
     if (closed) return;
     try {

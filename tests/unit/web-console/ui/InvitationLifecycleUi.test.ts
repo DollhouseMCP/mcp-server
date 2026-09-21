@@ -15,6 +15,15 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const button = (name: string) => document.querySelector<HTMLButtonElement>(`#ua-il-${name}`)!;
 const click = (name: string) => button(name).click();
 const status = () => document.querySelector('#ua-il-status')!.textContent;
+function tabTo(target: Element, shiftKey = false) {
+  const event = new dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey, cancelable: true });
+  document.dispatchEvent(event); expect(event.defaultPrevented).toBe(true); expect(document.activeElement).toBe(target);
+}
+function expectClosed(opener: Element) {
+  expect(document.getElementById('ua-inv-lifecycle')).toBeNull(); expect(document.activeElement).toBe(opener);
+  const event = new dom.window.KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+  document.dispatchEvent(event); expect(event.defaultPrevented).toBe(false);
+}
 beforeAll(async () => {
   dom = new JSDOM('<!doctype html><body></body>', { url: 'https://console.example.test', pretendToBeVisual: true });
   Object.defineProperties(globalThis, {
@@ -52,15 +61,36 @@ it.each(['close', 'Escape', 'backdrop'])('permits %s during a slow inspection an
   expect(status()).toBe('Loading invitation…');
   expect(button('close').disabled).toBe(false); expect(button('regenerate').disabled).toBe(true);
   for (const shiftKey of [false, false, true]) {
-    document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey }));
-    expect(document.activeElement).toBe(button('close'));
+    tabTo(button('close'), shiftKey);
   }
   if (dismissal === 'close') click('close');
   else if (dismissal === 'Escape') document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
   else document.querySelector<HTMLElement>('.confirm-backdrop')!.click();
-  expect(document.getElementById('ua-inv-lifecycle')).toBeNull(); expect(document.activeElement).toBe(opener);
+  expectClosed(opener);
   finish(reply()); await tick();
   expect(document.body.textContent).not.toContain(metadata().email); expect(post).not.toHaveBeenCalled();
+});
+
+it.each(['regenerate', 'revoke'])('keeps keyboard focus inside each %s state, including pending mutation', async action => {
+  const opener = document.createElement('button'); document.body.appendChild(opener); opener.focus();
+  open(userId, () => true); await tick();
+  tabTo(document.querySelector('#ua-il-ttl')!); tabTo(button('regenerate'), true);
+  click(action); expect(document.activeElement).toBe(button('back'));
+  for (const name of ['apply', 'close', 'back']) tabTo(button(name));
+  for (const name of ['close', 'apply', 'back']) tabTo(button(name), true);
+  let finish!: (value: unknown) => void; post.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  button('apply').focus(); click('apply');
+  const liveStatus = document.querySelector('#ua-il-status')!;
+  expect(document.activeElement).toBe(liveStatus); expect(status()).toContain(action === 'revoke' ? 'Revoking' : 'Regenerating');
+  for (const shiftKey of [false, true, false]) tabTo(liveStatus, shiftKey);
+  click('close'); document.querySelector<HTMLElement>('.confirm-backdrop')!.click();
+  document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+  expect(document.getElementById('ua-inv-lifecycle')).not.toBeNull(); expect(post).toHaveBeenCalledTimes(1);
+  finish(action === 'revoke' ? reply('revoked') : { status: 503 }); await tick();
+  expect(document.activeElement).toBe(liveStatus);
+  expect(status()).toContain(action === 'revoke' ? 'Invitation revoked.' : 'Action outcome');
+  tabTo(button('close')); tabTo(button('inspect'), true); tabTo(button('close'));
+  click('close'); expectClosed(opener);
 });
 
 it('requires explicit regeneration confirmation, bounds TTL and shows only its immediate manual link', async () => {
@@ -77,6 +107,7 @@ it('requires explicit regeneration confirmation, bounds TTL and shows only its i
   const field = document.querySelector<HTMLInputElement>('input[aria-label="Invitation claim link"]')!;
   expect(field.readOnly).toBe(true); expect(field.value).toBe(url); expect(document.activeElement).toBe(field);
   expect([field.selectionStart, field.selectionEnd]).toEqual([0, url.length]);
+  tabTo(button('regenerate'), true); tabTo(field);
   expect(document.body.textContent).toContain('Unknown'); expect(document.body.textContent).not.toContain('private provider diagnostic');
   expect(document.body.textContent).toContain(metadata().expires_at);
   expect(dom.window.localStorage.length).toBe(0); expect(dom.window.sessionStorage.length).toBe(0);
@@ -96,13 +127,14 @@ it('confirms successful revocation separately from an uncertain outcome and neve
 });
 
 it.each(['pagehide', 'elevation'])('blocks close while mutation is pending but force-clears on %s and ignores its late secret', async event => {
+  const opener = document.createElement('button'); document.body.appendChild(opener); opener.focus();
   open(userId, () => true); await tick(); click('regenerate');
   let finish!: (value: unknown) => void; post.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   click('apply'); document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
   expect(document.getElementById('ua-inv-lifecycle')).not.toBeNull();
   dom.window.dispatchEvent(event === 'pagehide' ? new dom.window.PageTransitionEvent('pagehide') :
     new dom.window.CustomEvent('dh:elevation-changed', { detail: { active: false } }));
-  expect(document.getElementById('ua-inv-lifecycle')).toBeNull();
+  expectClosed(opener);
   finish({ status: 200, body: { ...reply().body, claim_url: 'private-late-link' } }); await tick();
   expect(document.body.innerHTML).not.toContain('private-late-link'); expect(post).toHaveBeenCalledTimes(1);
 });
@@ -111,6 +143,8 @@ it('keeps absent and denied lookup metadata unavailable and cannot mutate a mism
   for (const response of [{ status: 404 }, { status: 403 }, { status: 200, body: { invitation: { ...metadata(), user_id: randomUUID() } } }]) {
     get.mockResolvedValue(response); open(userId, () => true); await tick();
     expect(button('regenerate').disabled).toBe(true); expect(document.querySelector('#ua-il-details')!.textContent).toBe('');
+    expect(document.activeElement).toBe(document.querySelector('#ua-il-status'));
+    tabTo(button('close')); tabTo(button('inspect'), true);
     click('close');
   }
   expect(post).not.toHaveBeenCalled();
