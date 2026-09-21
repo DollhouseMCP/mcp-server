@@ -388,6 +388,38 @@ describe('atomic invitation GitHub activation', () => {
     await expectPending(f);
   });
 
+  it('cannot override a GitHub username deny with a newer grant for unverified email metadata', async () => {
+    if (!databaseAvailable) return;
+    const f = await fixture();
+    const login = `u-${randomUUID()}`;
+    const email = `${randomUUID()}@example.org`;
+    await withSystemContext(getTestAdminDb(), async tx => {
+      const grant = await addAccountAllowlistEntryWithTx(tx, { kind: 'github_username', value: login,
+        createdByUserId: f.inviterId, createdAt: new Date(0) });
+      await removeAccountAllowlistEntryWithTx(tx, { id: grant.id, revokedByUserId: f.inviterId, revokedAt: new Date(1000) });
+      await addAccountAllowlistEntryWithTx(tx, { kind: 'email', value: email, createdByUserId: f.inviterId, createdAt: new Date(2000) });
+    });
+    const before = await restrictedRecords(f);
+    await expect(activate({ ...f.input, githubLogin: login, providerEmail: email, providerEmailVerified: false }))
+      .rejects.toMatchObject({ code: 'invitation_invalid' });
+    await expectPending(f);
+    expect(await restrictedRecords(f)).toEqual(before);
+  });
+
+  it('does not apply an unrelated unverified email tombstone to the authenticated GitHub identity', async () => {
+    if (!databaseAvailable) return;
+    const f = await fixture();
+    const email = `${randomUUID()}@example.org`;
+    await withSystemContext(getTestAdminDb(), async tx => {
+      const grant = await addAccountAllowlistEntryWithTx(tx, { kind: 'email', value: email,
+        createdByUserId: f.inviterId, createdAt: new Date(0) });
+      await removeAccountAllowlistEntryWithTx(tx, { id: grant.id, revokedByUserId: f.inviterId, revokedAt: new Date(1000) });
+    });
+    expect((await activate({ ...f.input, providerEmail: email, providerEmailVerified: false })).status).toBe('activated');
+    const [identity] = await getTestAdminDb().select().from(authAccounts).where(eq(authAccounts.userId, f.invitation.userId));
+    expect(identity).toMatchObject({ email, emailVerified: false });
+  });
+
   it.each(['revoke', 'regenerate', 'owner'] as const)('rejects %s before activation', async change => {
     if (!databaseAvailable) return;
     const f = await fixture();

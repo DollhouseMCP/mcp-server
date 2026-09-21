@@ -13,6 +13,8 @@ and user. Ended, replaced or expired sessions cannot activate a pending account.
 The immutable decimal GitHub ID selects the identity. Email and login are profile
 metadata, may differ from the invited account, and never select or merge users.
 Missing provider email is supported; an absent email is never marked verified.
+Unverified provider email is retained only as unverified profile metadata and
+never participates in allowlist or deny-policy matching.
 The invited email was proved by the consumed invitation credential/claim.
 
 The transaction first uses the resource preflight from #2705 and the nonblocking

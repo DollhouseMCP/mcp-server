@@ -59,7 +59,7 @@ export class PostgresInvitationActivationStore {
         const sub = `github_${owned.githubId}`;
         const identities = [{ kind: 'github_id', normalizedValue: owned.githubId }];
         if (owned.githubLogin) identities.push({ kind: 'github_username', normalizedValue: normalizeAuthAllowlistValue('github_username', owned.githubLogin) });
-        if (owned.providerEmail) identities.push({ kind: 'email', normalizedValue: normalizeAuthAllowlistValue('email', owned.providerEmail) });
+        if (owned.providerEmail && owned.providerEmailVerified) identities.push({ kind: 'email', normalizedValue: normalizeAuthAllowlistValue('email', owned.providerEmail) });
         await tryLockAuthMutationIdentitiesWithTx(tx, [sub], identities);
         const invitation = await requireInvitation(tx, owned.invitationId);
         if (invitation.state === 'accepted') return completedRetry(tx, owned, invitation, sub);
@@ -77,7 +77,7 @@ export class PostgresInvitationActivationStore {
         const candidate = await lockInvitationActivationCandidateWithTx(tx, owned);
         if (session.emailVerifiedAt.getTime() !== candidate.claim.emailVerifiedAt.getTime()) throw new InvitationError('invitation_invalid', 'Restricted session claim changed');
         await assertIssuerAuthority(tx, candidate.invitation);
-        const values = { githubId: owned.githubId, githubUsername: owned.githubLogin ?? undefined, email: owned.providerEmail ?? undefined };
+        const values = { githubId: owned.githubId, githubUsername: owned.githubLogin ?? undefined, email: owned.providerEmailVerified ? owned.providerEmail ?? undefined : undefined };
         if (await accountAllowlistDeniesIdentityWithTx(tx, { githubId: owned.githubId }) || await accountAllowlistDeniesIdentityWithTx(tx, values)) {
           throw new InvitationError('invitation_invalid', 'GitHub identity is denied by current sign-in policy');
         }
