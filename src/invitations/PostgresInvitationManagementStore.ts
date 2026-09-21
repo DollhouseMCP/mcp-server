@@ -11,6 +11,7 @@ import {
 } from '../database/schema/invitations.js';
 import { users } from '../database/schema/users.js';
 import { CONSOLE_ADMIN_AUDIT_ROLES } from '../web-console/audit/IAdminAuditWriter.js';
+import { normalizeLocalDisplayName, normalizeLocalUsername } from '../web-console/ui/account-username.js';
 import type { InvitationIssueRecord, InvitationRegenerationRecord } from './IInvitationStore.js';
 import type {
   IInvitationManagementStore, InvitationManagementAudit, InvitationManagementMutation,
@@ -74,7 +75,7 @@ async function issue(tx: DrizzleTx, audit: InvitationManagementAudit, input: Inv
     // encodings. SQL lower/btrim alone diverges for Unicode case and whitespace.
     const accounts = await tx.select({ id: users.id, email: users.email, username: users.username }).from(users);
     if (accounts.some(account => account.id === owned.userId ||
-        account.username.toLowerCase() === owned.username.toLowerCase() ||
+        normalizeLegacyUsernameForComparison(account.username) === owned.username ||
         (account.email !== null && normalizeAuthAllowlistValue('email', account.email) === owned.emailNormalized))) {
       throw new InvitationError('invitation_conflict', 'Invitation account already exists');
     }
@@ -199,11 +200,23 @@ function validateIssue(input: InvitationIssueRecord): void {
   try { email = normalizeInvitationEmail(input.emailOriginal); } catch {
     throw new InvitationError('invitation_invalid', 'Invalid invitation email');
   }
+  let username: string;
+  let displayName: string | null;
+  try {
+    username = normalizeLocalUsername(input.username);
+    displayName = input.displayName === null ? null : normalizeLocalDisplayName(input.displayName);
+  } catch {
+    throw new InvitationError('invitation_invalid', 'Invalid invitation account context');
+  }
   if (email !== input.emailNormalized || input.generation !== 1 ||
-      !/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(input.username) ||
-      (input.displayName !== null && (input.displayName.trim() === '' || input.displayName.length > 255)) ||
+      username !== input.username || displayName !== input.displayName ||
       input.intendedRoles.some(role => !(CONSOLE_ADMIN_AUDIT_ROLES as readonly string[]).includes(role)) ||
       new Set(input.intendedRoles).size !== input.intendedRoles.length) {
     throw new InvitationError('invitation_invalid', 'Invalid invitation account context');
   }
+}
+
+/** Preserve compatibility with stored usernames that predate the current syntax. */
+function normalizeLegacyUsernameForComparison(value: string): string {
+  return value.normalize('NFC').trim().toLowerCase().normalize('NFC');
 }
