@@ -376,7 +376,6 @@ it('maps cancellation and contained failures to one fixed help page without clea
   expect(cancelled.text).toContain('<html lang="en">');
   expect(cancelled.text).toContain('name="viewport"');
   expect(cancelled.text).toContain('href="/auth/onboarding/invitation"');
-  expect(cancelled.text).toContain('href="/api/v1/auth/login"');
   expect(f.githubEnrollment.complete.mock.calls[0][0].callback).toEqual({
     kind: 'provider_error', state, error: 'access_denied',
   });
@@ -406,6 +405,28 @@ it('rejects callback bodies and missing managed cookies with the same fixed page
   expect(missing.text).toBe(body.text);
   expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
   safe(body, [state, 'github-code', f.cookie]);
+});
+
+it('offers ordinary sign-in recovery after a committed callback response is lost', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  const query = { state: 's'.repeat(43), code: 'github-code' };
+  const committed = await request(f.app).get('/auth/onboarding/github/callback').query(query).set('Cookie', cookies);
+  expect(committed.status).toBe(303);
+
+  f.githubEnrollment.complete.mockRejectedValueOnce(new GitHubEnrollmentFlowError('state_invalid'));
+  const recovered = await request(f.app).get('/auth/onboarding/github/callback').query(query).set('Cookie', cookies);
+  expect(recovered.status).toBe(400);
+  const signInTarget = /<a href="([^"]+)">continue to sign in<\/a>/.exec(recovered.text)?.[1];
+  expect(signInTarget).toBeDefined();
+
+  f.app.get(signInTarget!, (_req, res) => { res.status(302).location('https://github.example/login').end(); });
+  const signIn = await request(f.app).get(signInTarget!).set('Cookie', cookies);
+  expect(signIn.status).toBe(302);
+  expect(signIn.headers.location).toBe('https://github.example/login');
+  expect(f.githubEnrollment.complete).toHaveBeenCalledTimes(2);
+  safe(recovered, [...Object.values(query), f.cookie, session.value]);
 });
 
 it('renders shared callback guard failures as the same fixed help page', async () => {
