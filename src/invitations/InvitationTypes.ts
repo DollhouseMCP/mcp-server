@@ -117,7 +117,7 @@ export interface RevokeInvitationInput {
 
 export interface BeginInvitationClaimInput {
   readonly credential: string;
-  /** SHA-256 hash of #2680's random browser binding; raw binding stays in a secure cookie. */
+  /** Server-derived SHA-256 of #2680's managed browser binding; never trust a hash from request JSON/query. Raw binding stays in a secure cookie. Copy before awaiting. */
   readonly claimOwnerHash: Buffer;
   readonly correlationId: string;
 }
