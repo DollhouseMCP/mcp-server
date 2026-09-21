@@ -103,7 +103,9 @@ A non-dry-run publish creates:
 - GitHub prerelease for that tag
 
 The orchestrator explicitly dispatches the existing publishers at the immutable
-release tag and waits for their run results. A release created with `GITHUB_TOKEN`
+release tag and waits for their run results. It uses the run ID returned by the
+versioned GitHub dispatch API, never a search for a recent run at the same SHA.
+An ambiguous dispatch response fails closed; inspect Actions before retrying. A release created with `GITHUB_TOKEN`
 does not trigger ordinary downstream event workflows by itself. They publish:
 
 - npm package with the `beta` dist-tag

@@ -20,6 +20,9 @@ interface BetaWorkflow {
 
 interface Scenario {
   readonly sourceRef?: string;
+  readonly version?: string;
+  readonly npmError?: string;
+  readonly npmResponse?: string;
   readonly tagTarget?: string;
   readonly branchTarget?: string;
   readonly release?: {
@@ -54,6 +57,32 @@ describe('Publish Beta Release state validation', () => {
     const result = runScenario({ sourceRef });
     expect(result.status).toBe(1);
     expect(result.commands).toEqual([]);
+  });
+
+  it.each(['01.2.3-beta', '2.01.3-beta', '2.1.03-beta', '2.1.0-beta.01', '2.1.0-beta..1', '2.1.0-beta.', '2.1.0-beta.+foo', `2.1.0-beta.${'a'.repeat(256)}`])('rejects malformed beta version %s before external commands', version => {
+    const result = runScenario({ version });
+    expect(result.status).toBe(1);
+    expect(result.commands).toEqual([]);
+  });
+
+  it.each(['0.0.0-beta', '2.1.0-beta.0', '2.1.0-beta.1.alpha-2', '2.1.0-beta.999999999999999999999999999999'])('accepts valid beta version %s', version => {
+    const result = runScenario({ version });
+    expect(result.status).toBe(0);
+    expect(result.outputs.version).toBe(version);
+  });
+
+  it.each(['E429', 'E401', 'E500', 'ETIMEDOUT', ''])('does not treat npm lookup failure %s as absence', npmError => {
+    const result = runScenario({ npmError });
+    expect(result.status).toBe(1);
+    expect(result.outputs).toEqual({});
+    expect(result.stdout).toContain('npm exact-version lookup failed');
+    expect(result.commands.some(command => /push|create|publish/.test(command))).toBe(false);
+  });
+
+  it.each(['null', '{}', '"2.1.0-beta.999"', 'not-json'])('rejects unexpected successful npm response %s', npmResponse => {
+    const result = runScenario({ npmExists: true, npmResponse });
+    expect(result.status).toBe(1);
+    expect(result.outputs).toEqual({});
   });
 
   it('accepts a fresh beta version with no tag, release, or npm publication', () => {
@@ -284,7 +313,7 @@ function runScenario(scenario: Scenario): {
   const commandLogPath = path.join(directory, 'commands.log');
   fs.mkdirSync(binDirectory);
   for (const file of ['package.json', 'manifest.json']) {
-    fs.writeFileSync(path.join(directory, file), JSON.stringify({ version: packageVersion }));
+    fs.writeFileSync(path.join(directory, file), JSON.stringify({ version: scenario.version ?? packageVersion }));
   }
   writeExecutable(path.join(binDirectory, 'git'), fakeGitScript);
   writeExecutable(path.join(binDirectory, 'gh'), fakeGhScript);
@@ -307,7 +336,9 @@ function runScenario(scenario: Scenario): {
       GITHUB_REF: scenario.sourceRef ?? 'refs/heads/beta',
       GITHUB_SHA: expectedSha,
       GITHUB_OUTPUT: outputPath,
-      INPUT_VERSION: packageVersion,
+      INPUT_VERSION: scenario.version ?? packageVersion,
+      FAKE_NPM_ERROR: scenario.npmError ?? 'E404',
+      FAKE_NPM_RESPONSE: scenario.npmResponse ?? JSON.stringify(scenario.version ?? packageVersion),
       FAKE_TAG_OBJECT: scenario.tagTarget ? 'a'.repeat(40) : '',
       FAKE_TAG_TARGET: scenario.tagTarget ?? '',
       FAKE_BRANCH_TARGET: scenario.branchTarget ?? '',
@@ -394,8 +425,9 @@ if [[ "$*" == *'dist-tags.latest'* ]]; then
   exit 0
 fi
 if [[ "\${FAKE_NPM_EXISTS:-false}" == 'true' ]]; then
-  printf '%s\n' "\${INPUT_VERSION}"
+  printf '%s\n' "\${FAKE_NPM_RESPONSE}"
   exit 0
 fi
+printf '{"error":{"code":"%s"}}\\n' "\${FAKE_NPM_ERROR}"
 exit 1
 `;
