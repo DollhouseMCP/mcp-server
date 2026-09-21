@@ -38,13 +38,6 @@ function currentTotpCode(base32Secret: string): string {
   return totp.generate();
 }
 
-/** Enroll TOTP on a store and return the secret for code generation. */
-async function enrollTotp(store: ConsoleTokenStore): Promise<string> {
-  const begin = store.beginTotpEnrollment();
-  await store.confirmTotpEnrollment(begin.pendingId, currentTotpCode(begin.secret));
-  return begin.secret;
-}
-
 /**
  * Build an Express app that mirrors the route-mounting logic from
  * `startWebServer()` in `src/web/server.ts`. When `tokenStore` is
