@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { InvitationDeliveryService, InvitationDeliveryOutcome } from '../../../../src/invitations/InvitationDeliveryService.js';
 import { jest } from '@jest/globals';
 import request from 'supertest';
 import { invitationAdminBody, invitationAdminHarness, invitationAdminPath } from '../../../helpers/web-console/durableInvitationAdmin.js';
@@ -110,4 +111,48 @@ it('sanitizes mutation errors and audits failures without reflecting request dat
   const conflict = await h.send('post', '', invitationAdminBody());
   expect(conflict.status).toBe(409); expect(conflict.text).not.toContain('sensitive');
   expect(h.auditWriter.getEvents().map(event => event.result)).toEqual(['failed', 'rejected']);
+});
+
+it.each(['submitted', 'failed', 'unknown', 'submitting', 'uncertain', 'throw', 'empty'])('preserves committed issue/regenerate links with safe %s delivery metadata and no response cache', async behavior => {
+  const { store } = memoryStore();
+  const deliver = jest.fn<InvitationDeliveryService['deliver']>(async issued => {
+    if (behavior === 'throw') throw new Error(issued.credential);
+    if (behavior === 'empty') return undefined as unknown as InvitationDeliveryOutcome;
+    const attempt = { id: randomUUID(), invitationId: issued.invitation.id, generation: issued.invitation.currentGeneration.generation,
+      version: 1, state: behavior === 'uncertain' ? 'submitting' : behavior, credential: issued.credential, providerDetail: 'private' };
+    return (behavior === 'uncertain' ? { status: 'uncertain', lastKnownAttempt: attempt } :
+      { status: behavior === 'submitting' ? 'existing_attempt' : 'recorded', attempt }) as InvitationDeliveryOutcome;
+  });
+  const h = await invitationAdminHarness({ store, delivery: { deliver } });
+  const claim = jest.spyOn(h.idempotency, 'claim');
+  const issued = await h.send('post', '', invitationAdminBody(), { 'Idempotency-Key': randomUUID() });
+  expect(issued.status).toBe(201);
+  const regenerated = await h.send('post', `/${issued.body.invitation.id}/regenerate`, {});
+  expect(regenerated.status).toBe(200);
+  expect(regenerated.body.claim_url).not.toBe(issued.body.claim_url);
+  const expected = behavior === 'throw' || behavior === 'empty' ? { status: 'unavailable', state: 'unknown' } :
+    behavior === 'uncertain' ? { status: 'uncertain', state: 'unknown', last_known_state: 'submitting' } :
+      { status: behavior === 'submitting' ? 'existing_attempt' : 'recorded', state: behavior };
+  for (const response of [issued, regenerated]) {
+    expect(response.body.delivery).toEqual(expected);
+    expect(response.headers['cache-control']).toBe('no-store');
+    const token = new URLSearchParams(new URL(response.body.claim_url).hash.slice(1)).get('token')!;
+    expect(JSON.stringify(response.body.delivery)).not.toContain(token);
+    expect(JSON.stringify(h.auditWriter.getEvents())).not.toContain(token);
+  }
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect((await h.send('get', `/${issued.body.invitation.id}`)).body).not.toHaveProperty('delivery');
+  expect((await h.send('post', `/${issued.body.invitation.id}/revoke`, {})).body).not.toHaveProperty('delivery');
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect(claim).not.toHaveBeenCalled();
+});
+
+it('defaults to manual fallback and never admits or submits delivery for a rejected admin operation', async () => {
+  const { store } = memoryStore();
+  const manual = await (await invitationAdminHarness({ store })).send('post', '', invitationAdminBody());
+  expect(manual.body.delivery).toEqual({ status: 'manual_fallback', state: 'not_attempted', reason: 'not_configured' });
+  const deliver = jest.fn<InvitationDeliveryService['deliver']>();
+  const denied = await invitationAdminHarness({ store, delivery: { deliver } }, 'account_admin');
+  expect((await denied.send('post', '', invitationAdminBody())).status).toBe(403);
+  expect(deliver).not.toHaveBeenCalled();
 });
