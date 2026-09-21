@@ -40,7 +40,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
         ...(csrf && path !== '/bootstrap' ? { 'X-Onboarding-CSRF': csrf } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}) }).catch(() => { throw new Error('temporary'); });
     if (!response.ok) throw new Error(response.status === 429 || response.status >= 500 ? 'temporary' : 'unavailable');
-    const result = response.status === 204 ? {} : await response.json() as Record<string, unknown>;
+    const result = response.status === 204 ? {} : await response.json().catch(error => { throw new Error(error?.name === 'SyntaxError' ? 'unavailable' : 'temporary'); }) as Record<string, unknown>;
     if (signal.aborted) throw new Error('unavailable');
     return result;
   }

@@ -20,15 +20,16 @@ async function until(predicate: () => boolean) {
   expect(predicate()).toBe(true);
 }
 interface Call { path: string; body?: string; headers: Record<string, string>; hash: string }
-async function browser(fragment = `#token=${token}`, reply?: (path: string) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>) {
+interface Reply { status: number; body: unknown; bodyError?: Error }
+async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>) {
   const html = (await request(app()).get(path)).text;
   const calls: Call[] = [];
   dom = new JSDOM(html, { url: `https://console.example.test${path}${fragment}`, runScripts: 'dangerously', beforeParse(window) {
     window.fetch = (async (url: string, init: RequestInit) => {
       calls.push({ path: url, body: init.body as string | undefined, headers: init.headers as Record<string, string>, hash: window.location.hash });
-      const result = reply ? await reply(url) : { status: 200, body: url.endsWith('/context') ? metadata :
+      const result: Reply = reply ? await reply(url) : { status: 200, body: url.endsWith('/context') ? metadata :
         { state: url.endsWith('/exchange') ? 'claimed' : 'ready', csrfToken: url.endsWith('/exchange') ? 'new-csrf' : 'csrf' } };
-      return { ok: result.status >= 200 && result.status < 300, status: result.status, json: async () => result.body } as Response;
+      return { ok: result.status >= 200 && result.status < 300, status: result.status, json: async () => { if (result.bodyError) throw result.bodyError; return result.body; } } as Response;
     }) as typeof fetch;
   } });
   const document = dom.window.document;
@@ -130,4 +131,37 @@ it.each(['bootstrap', 'exchange'])('treats rejected %s transport as temporary an
   b.button('claim-continue').click();
   await until(() => !b.document.getElementById('claim-details')!.hidden);
   expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(exchanges + 1);
+});
+
+it.each(['bootstrap', 'exchange', 'context'])('treats interrupted %s response bodies as temporary without replaying an exchange', async failedPath => {
+  let failed = false, exchanged = false;
+  const b = await browser(`#token=${token}`, url => {
+    if (url.endsWith('/exchange')) exchanged = true;
+    const result: Reply = { status: 200, body: url.endsWith('/context') ? metadata :
+      { state: exchanged ? 'claimed' : 'ready', csrfToken: 'csrf' } };
+    if (url.endsWith('/' + failedPath) && !failed) {
+      failed = true; result.bodyError = new TypeError('Body secret ' + token);
+    }
+    return result;
+  });
+  if (failedPath !== 'bootstrap') b.button('claim-continue').click();
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Temporarily unavailable');
+  expect(b.document.body.textContent).not.toContain('Body secret'); expect(b.document.body.textContent).not.toContain(token);
+  const exchanges = b.calls.filter(call => call.path.endsWith('/exchange')).length;
+  b.button('claim-retry').click();
+  await until(() => !b.button('claim-continue').disabled || !b.document.getElementById('claim-details')!.hidden);
+  expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(exchanges);
+  if (failedPath !== 'context') {
+    b.button('claim-continue').click();
+    await until(() => !b.document.getElementById('claim-details')!.hidden);
+    expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(exchanges + 1);
+  }
+});
+
+it('keeps malformed JSON neutral without exposing parser details or automatically retrying', async () => {
+  const b = await browser(`#token=${token}`, () => ({ status: 200, body: null, bodyError: new SyntaxError('JSON secret ' + token) }));
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');
+  expect(b.document.body.textContent).not.toContain('JSON secret'); expect(b.document.body.textContent).not.toContain(token);
+  expect(b.calls).toHaveLength(1); expect(b.calls[0].path).toBe('/auth/onboarding/bootstrap');
 });
