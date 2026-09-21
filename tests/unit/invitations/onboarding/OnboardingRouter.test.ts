@@ -3,6 +3,7 @@ import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
+import { InvitationError } from '../../../../src/invitations/InvitationTypes.js';
 import { generateInvitationToken } from '../../../../src/invitations/InvitationToken.js';
 import { createOnboardingRouter, type OnboardingRouterOptions } from '../../../../src/invitations/onboarding/OnboardingRouter.js';
 import { OnboardingCredentials } from '../../../../src/invitations/onboarding/OnboardingCredentials.js';
@@ -34,12 +35,13 @@ function fixture() {
     endSession: jest.fn(async () => true),
   };
   const rateLimits = new InMemoryRateLimitStore();
-  const options: OnboardingRouterOptions = { store, credentials, rateLimits, trustedOrigin: origin,
+  const metadataReader = { read: jest.fn<OnboardingRouterOptions['metadataReader']['read']>(async () => null) };
+  const options: OnboardingRouterOptions = { store, metadataReader, credentials, rateLimits, trustedOrigin: origin,
     audit: { kind: 'system', appendSecurityEvent: async () => {} }, now: () => now };
   const app = express().use('/auth/onboarding', createOnboardingRouter(options));
   const cookie = `${ONBOARDING_OWNER_COOKIE}=${ownerCredential.value}`;
   const post = (path: string) => request(app).post(`/auth/onboarding/${path}`).set('Origin', origin).set('Cookie', cookie).set('X-Onboarding-CSRF', csrf.value);
-  return { app, store, rateLimits, token, owner, csrf, cookie, post, options, credentials };
+  return { app, store, metadataReader, rateLimits, token, owner, csrf, cookie, post, options, credentials };
 }
 function safe(response: request.Response, forbidden: string[] = []) {
   expect(response.headers['cache-control']).toBe('no-store');
@@ -184,6 +186,48 @@ it('returns neutral409 without a session cookie when persisted session life is e
   expect(f.store.exchangeClaim.mock.calls[1][0].ownerHash).toEqual(f.owner.ownerHash);
 });
 
+it('requires a metadata authority and performs no lookup for a missing owner or restricted session cookie', async () => {
+  const f = fixture();
+  expect(() => createOnboardingRouter({ ...f.options, metadataReader: undefined as never })).toThrow('configuration');
+  for (const cookie of ['', f.cookie, `${ONBOARDING_SESSION_COOKIE}=${f.credentials.issue('session').value}`]) {
+    const res = await request(f.app).get('/auth/onboarding/context').set('Cookie', cookie);
+    expect(res.status).toBe(409); safe(res);
+  }
+  expect(f.metadataReader.read).not.toHaveBeenCalled(); expect(f.store.findOwner).not.toHaveBeenCalled(); expect(f.store.findSession).not.toHaveBeenCalled();
+});
+
+it('reads metadata once from cookie-derived hashes and explicitly excludes extra private properties', async () => {
+  const f = fixture(); const session = f.credentials.issue('session');
+  const value = { state: 'claimed' as const, account: { username: 'invited', displayName: 'Invited', verifiedEmail: 'invited@example.test', secret: 'private-account' },
+    intendedRoles: ['operator' as const], emailVerifiedAt: '2026-09-21T01:00:00Z', invitationExpiresAt: '2026-09-22T01:00:00Z',
+    sessionExpiresAt: '2026-09-21T01:15:00Z', serverTime: '2026-09-21T01:01:00Z', credentialHash: 'private-hash', invitationId: 'private-id' };
+  let hashes: Buffer[] = [];
+  f.metadataReader.read.mockImplementationOnce(async (ownerHash, sessionHash) => { hashes = [Buffer.from(ownerHash), Buffer.from(sessionHash)]; return value; });
+  const result = await request(f.app).get('/auth/onboarding/context').set('Cookie', `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`);
+  expect(result.status).toBe(200); expect(result.body.account.verifiedEmail).toBe('invited@example.test');
+  expect(Object.keys(result.body).sort()).toEqual(['account', 'emailVerifiedAt', 'intendedRoles', 'invitationExpiresAt', 'serverTime', 'sessionExpiresAt', 'state']);
+  expect(Object.keys(result.body.account).sort()).toEqual(['displayName', 'username', 'verifiedEmail']);
+  safe(result, [session.value, f.cookie, 'private-account', 'private-id', 'private-hash']);
+  expect(hashes).toEqual([f.owner.ownerHash, session.hash]); expect(f.metadataReader.read).toHaveBeenCalledTimes(1);
+  expect(f.store.findOwner).not.toHaveBeenCalled(); expect(f.store.findSession).not.toHaveBeenCalled();
+  expect(f.store.exchangeClaim).not.toHaveBeenCalled(); expect(f.store.rotateOwnerCsrf).not.toHaveBeenCalled();
+});
+
+it('keeps invalid bindings neutral, contains dependency errors, and rejects context lookup inputs', async () => {
+  const f = fixture(); const session = f.credentials.issue('session');
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  const get = () => request(f.app).get('/auth/onboarding/context').set('Cookie', cookies);
+  const absent = await get(); expect(absent.status).toBe(409); safe(absent);
+  f.metadataReader.read.mockRejectedValueOnce(new Error(f.token.token));
+  const outage = await get(); expect(outage.status).toBe(503); safe(outage, [f.token.token]);
+  f.metadataReader.read.mockClear();
+  for (const name of ['invitationId', 'email', 'token']) {
+    expect((await get().query({ [name]: 'private' })).status).toBe(400);
+    expect((await get().send({ [name]: 'private' })).status).toBe(400);
+  }
+  expect(f.metadataReader.read).not.toHaveBeenCalled();
+});
+
 it('rejects any unauthenticated presented session without downgrading or clearing its cookie', async () => {
   const f = fixture();
   const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${f.credentials.issue('session').value}`;
@@ -196,4 +240,14 @@ it('rejects any unauthenticated presented session without downgrading or clearin
   expect((await request(f.app).get('/auth/onboarding/status').set('Cookie', cookies)).status).toBe(409);
   for (const operation of [f.store.createOwner, f.store.rotateOwnerCsrf, f.store.rotateSessionCsrf,
     f.store.exchangeClaim, f.store.endSession]) expect(operation).not.toHaveBeenCalled();
+});
+
+it.each(['configuration_invalid', 'concurrent_update'] as const)('returns sanitized503 for metadata %s failures', async code => {
+  const f = fixture(), session = f.credentials.issue('session');
+  f.metadataReader.read.mockRejectedValueOnce(new InvitationError(code, f.token.token));
+  const result = await request(f.app).get('/auth/onboarding/context')
+    .set('Cookie', `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`);
+  expect(result.status).toBe(503); expect(result.body).toEqual({ error: 'onboarding_unavailable' });
+  safe(result, [f.token.token]); expect(result.headers['set-cookie']).toBeUndefined();
+  expect(f.metadataReader.read).toHaveBeenCalledTimes(1); expect(f.store.findSession).not.toHaveBeenCalled();
 });
