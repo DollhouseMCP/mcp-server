@@ -74,8 +74,10 @@ export class GitHubEnrollmentOrchestrationService {
       } catch {
         throw new GitHubEnrollmentFlowError('state_unavailable');
       }
-      await this.writeAudit('invitation.github_enrollment_started', started.context);
-      return { authorizationUrl: started.authorizationUrl, expiresAt: new Date(started.expiresAt) };
+      const context = contextFrom(started.context);
+      const result = { authorizationUrl: started.authorizationUrl, expiresAt: new Date(started.expiresAt) };
+      await this.writeAudit('invitation.github_enrollment_started', context);
+      return result;
     } finally {
       owned.ownerHash.fill(0);
       owned.sessionHash.fill(0);
@@ -87,7 +89,8 @@ export class GitHubEnrollmentOrchestrationService {
     readonly sessionHash: Buffer;
     readonly callback: GitHubEnrollmentCallback;
   }): Promise<GitHubEnrollmentCompletion> {
-    const owned = { ...copyBinding(input), callback: copyCallback(input.callback) };
+    const callback = copyCallback(input.callback);
+    const owned = { ...copyBinding(input), callback };
     try {
       let state: Awaited<ReturnType<GitHubEnrollmentOrchestrationOptions['state']['consume']>>;
       try {
@@ -99,7 +102,8 @@ export class GitHubEnrollmentOrchestrationService {
       } catch {
         throw new GitHubEnrollmentFlowError('state_unavailable');
       }
-      const context = contextFrom(state);
+      const snapshot = stateSnapshot(state);
+      const context = contextFrom(snapshot);
       if (owned.callback.kind === 'provider_error') {
         if (owned.callback.error === 'access_denied') {
           await this.writeAudit('invitation.github_enrollment_cancelled', context, 'callback', 'user_cancelled');
@@ -108,20 +112,20 @@ export class GitHubEnrollmentOrchestrationService {
         return this.fail(context, 'provider_rejected', 'callback', 'provider_error');
       }
 
-      const identity = await this.exchangeIdentity(owned.callback.code, state.codeVerifier, context);
+      const identity = await this.exchangeIdentity(owned.callback.code, snapshot.codeVerifier, context);
       let result: InvitationActivationResult;
       try {
         const activation: InvitationActivationInput = {
-          invitationId: state.invitationId,
-          generation: state.generation,
-          claimAssertionId: state.claimAssertionId,
+          invitationId: snapshot.invitationId,
+          generation: snapshot.generation,
+          claimAssertionId: snapshot.claimAssertionId,
           claimOwnerHash: owned.ownerHash,
           sessionHash: owned.sessionHash,
           githubId: identity.externalSub,
           githubLogin: identity.login,
           providerEmail: identity.email,
           providerEmailVerified: false,
-          correlationId: state.correlationId,
+          correlationId: snapshot.correlationId,
         };
         result = await this.options.activation.activate(activation, this.options.activationAudit);
       } catch (error) {
@@ -130,7 +134,7 @@ export class GitHubEnrollmentOrchestrationService {
       }
       // Success audit is part of the activation transaction. Do not add a
       // non-atomic duplicate after the account and restricted-session commit.
-      return { ...result };
+      return { status: result.status, userId: result.userId, invitationId: result.invitationId };
     } finally {
       owned.ownerHash.fill(0);
       owned.sessionHash.fill(0);
@@ -227,6 +231,19 @@ function contextFrom(value: GitHubEnrollmentStateContext): GitHubEnrollmentState
     generation: value.generation,
     claimAssertionId: value.claimAssertionId,
     correlationId: value.correlationId,
+  };
+}
+
+function stateSnapshot(value: Awaited<ReturnType<GitHubEnrollmentOrchestrationOptions['state']['consume']>>) {
+  return {
+    userId: value.userId,
+    invitationId: value.invitationId,
+    generation: value.generation,
+    claimAssertionId: value.claimAssertionId,
+    correlationId: value.correlationId,
+    purpose: value.purpose,
+    callbackUri: value.callbackUri,
+    codeVerifier: value.codeVerifier,
   };
 }
 

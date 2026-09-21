@@ -122,6 +122,31 @@ describe('GitHubEnrollmentOrchestrationService', () => {
     }));
   });
 
+  it('owns consumed state scalars before provider code can mutate its result object', async () => {
+    const f = fixture();
+    const changed = {
+      userId: '55555555-5555-4555-8555-555555555555',
+      invitationId: '66666666-6666-4666-8666-666666666666',
+      generation: 4,
+      claimAssertionId: '77777777-7777-4777-8777-777777777777',
+      correlationId: '88888888-8888-4888-8888-888888888888',
+      codeVerifier: 'x'.repeat(43),
+    };
+    f.tokens.exchangeCode.mockImplementationOnce(async () => {
+      Object.assign(f.record, changed);
+      return TOKEN;
+    });
+    await expect(f.service.complete({ ownerHash: OWNER, sessionHash: SESSION, callback: codeCallback() }))
+      .resolves.toEqual({ status: 'activated', userId: USER_ID, invitationId: INVITATION_ID });
+    expect(f.tokens.exchangeCode).toHaveBeenCalledWith({ code: CODE, codeVerifier: VERIFIER });
+    expect(f.activationInput()).toEqual(expect.objectContaining({
+      invitationId: INVITATION_ID,
+      generation: 3,
+      claimAssertionId: CLAIM_ID,
+      correlationId: CORRELATION_ID,
+    }));
+  });
+
   it('consumes a bound cancellation, audits a fixed reason, and never contacts provider or activation', async () => {
     const f = fixture();
     await expect(f.service.complete({ ownerHash: OWNER, sessionHash: SESSION,
