@@ -66,7 +66,17 @@ async function reserve(
   assertUuid(correlationId);
   validateDeliveryProvider(provider);
   if (!Number.isInteger(generation) || generation < 1 || generation > 2_147_483_647) invalid('Invalid invitation generation');
-  // Same lock order as issue/regenerate/revoke, including their users table lock.
+  // Serialize with every attempt writer and deletion before reading retained
+  // evidence. A replay acknowledges history; it never authorizes another send.
+  await lockAccounts(tx);
+  const [replay] = await tx.select().from(attempts).where(and(
+    eq(attempts.invitationId, invitationId), eq(attempts.generation, generation), eq(attempts.correlationId, correlationId),
+  ));
+  if (replay) {
+    if (replay.provider !== provider) conflict();
+    return { ...deliveryView(replay), submissionAuthorized: false };
+  }
+  // New attempts require the current eligible invitation and mandatory audit.
   const invitation = await lockInvitation(tx, invitationId);
   await lockAdminAudit(tx, audit);
   if (invitation.currentGeneration.generation !== generation) {
@@ -79,11 +89,6 @@ async function reserve(
   const previous = await tx.select().from(attempts).where(and(
     eq(attempts.invitationId, invitationId), eq(attempts.generation, generation),
   )).orderBy(desc(attempts.attemptNumber));
-  const replay = previous.find(attempt => attempt.correlationId === correlationId);
-  if (replay) {
-    if (replay.provider !== provider) conflict();
-    return { ...deliveryView(replay), submissionAuthorized: false };
-  }
   const latest = previous[0];
   // A reservation whose outcome is not known must never result in another send.
   // Successful submission also needs an explicit regeneration for a new send.

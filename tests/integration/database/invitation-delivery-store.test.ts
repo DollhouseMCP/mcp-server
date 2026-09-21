@@ -113,6 +113,40 @@ describe('transactional invitation delivery state', () => {
     expect(user.activationState).toBe('pending_activation');
   });
 
+  it.each(['expired', 'regenerated', 'revoked', 'active', 'disabled', 'deleted'] as const)(
+    'acknowledges an existing reservation after the recipient or invitation becomes %s', async state => {
+      if (!dbAvailable) return;
+      const invitation = await issue();
+      const attempt = await reserve(invitation.id, randomUUID(), 1, adminAudit);
+      await recordResult(attempt.id, { state: 'submitted', providerMessageId: 'provider-retained-123',
+        sanitizedDetail: { smtpStatus: 250 } });
+      if (state === 'expired') {
+        await db().update(accountInvitationGenerations).set({ issuedAt: new Date(0), expiresAt: new Date(1000) })
+          .where(eq(accountInvitationGenerations.invitationId, invitation.id));
+      } else if (state === 'regenerated') await regenerate(invitation.id);
+      else if (state === 'revoked') await management().runMutation(audit, mutation => mutation.revoke(invitation.id, randomUUID()));
+      else if (state === 'deleted') await withSystemContext(db(), tx => deleteConsolePrincipalWithTx(tx, {
+        userId: invitation.userId, deletedByUserId: inviterId, deletedAt: new Date(),
+      }));
+      else await db().update(users).set(state === 'active' ? { activationState: 'active' } : { disabledAt: new Date() })
+        .where(eq(users.id, invitation.userId));
+      const retained = await deliveries().list(invitation.id);
+      const invitationBefore = await management().inspect(invitation.id);
+      const securityBefore = await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${invitation.id} ORDER BY id`);
+      const adminBefore = await db().execute(sql`SELECT * FROM admin_audit_events WHERE resource_id = ${invitation.id} ORDER BY sequence_id`);
+      expect(await reserve(invitation.id, attempt.correlationId, 1, adminAudit))
+        .toEqual({ ...retained[0], submissionAuthorized: false });
+      await expect(deliveries().runMutation(audit, mutation => mutation.reserveDeliveryAttempt(
+        invitation.id, 1, 'different-provider', attempt.correlationId,
+      ))).rejects.toMatchObject({ code: 'invitation_conflict' });
+      await expect(reserve(invitation.id)).rejects.toBeInstanceOf(Error);
+      expect(await deliveries().list(invitation.id)).toEqual(retained);
+      expect(await management().inspect(invitation.id)).toEqual(invitationBefore);
+      expect(await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${invitation.id} ORDER BY id`)).toEqual(securityBefore);
+      expect(await db().execute(sql`SELECT * FROM admin_audit_events WHERE resource_id = ${invitation.id} ORDER BY sequence_id`)).toEqual(adminBefore);
+      if (state === 'deleted') expect(retained[0]).toMatchObject({ providerMessageId: null, sanitizedDetail: null });
+    });
+
   it('allocates one next attempt after confirmed failure even with concurrent explicit retries', async () => {
     if (!dbAvailable) return;
     const invitation = await issue();

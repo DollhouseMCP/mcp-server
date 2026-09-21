@@ -46,6 +46,10 @@ submission contract; this store cannot prove that an external send happened.
 | Latest attempt `submitting`, `submitted`, or `unknown` | Fresh reservation | Conflict; no blind retry |
 
 A repeated correlation never authorizes another send, including after failure.
+An exact reservation replay returns retained evidence even after expiry,
+regeneration, revocation, activation or account disablement/deletion; deletion
+redaction remains intact. This read does not write or append audit. Provider
+mismatches remain conflicts. Only a new reservation requires current eligibility.
 A known failure can be retried only by explicitly choosing a new correlation.
 `failed` supports `configuration`, `authentication`, `recipient_rejected`,
 `rate_limited`, and `not_sent` classifications. Timeout or connection loss is
