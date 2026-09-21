@@ -725,6 +725,8 @@
 
 /* Invite modal extras (reuses .confirm-* shell) */
 .ua-invite-card { width: min(600px, 94vw); max-height: 90vh; overflow-y: auto; }
+#ua-inv-lifecycle .confirm-actions { flex-wrap: wrap; }
+#ua-inv-lifecycle .confirm-card { overflow-wrap: anywhere; }
 .ua-invite-title { font-family: var(--font-heading); font-size: var(--step-2); color: var(--ink-950); margin: 0 0 0.9rem; }
 .ua-field { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.9rem; color: var(--ink-700); font-size: var(--step--1); }
 .ua-field > span, .ua-field > legend { font-weight: 600; }

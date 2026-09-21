@@ -1,0 +1,7 @@
+# Selected-account invitation lifecycle
+
+The User Admin drawer advertises “Manage invitation” only when the secured account-to-invitation GET route is present. It uses the selected account's user ID; operators do not enter invitation identifiers. The dialog holds the returned invitation ID only in memory, checks its account binding, and renders metadata as text. Backend capability, elevation and stored-role checks remain authoritative.
+
+Inspection retrieves only current metadata and clears any previously displayed link. Regeneration and revocation each require a separate explicit confirmation; regeneration accepts the shared 1–168 hour TTL contract. Only a successful immediate regeneration response displays its readonly selectable claim link, server expiry and fixed delivery status. Unknown delivery never triggers another submission. A missing/ambiguous mutation response disables further mutations until the operator explicitly inspects and decides what to do next. Successful revocation has distinct confirmed copy.
+
+The dialog blocks voluntary dismissal while a mutation is pending. Elevation loss or pagehide forcibly clears it, including any manual link; late responses are ignored. It uses no browser storage, durable response cache, background retry or invitation history list. Route discovery preserves the legacy UI when this resource is absent. This slice changes no server mounting or runtime enablement.
