@@ -35,9 +35,9 @@ The deployment's `.env.production` is loaded by generated Compose. Preserve its 
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID`, `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | Explicit authentication-app credentials; no portfolio/device-flow fallback. |
 | `DOLLHOUSE_DATABASE_URL`, `DOLLHOUSE_DATABASE_ADMIN_URL` | Approved application and system/migration connections to the intended database. |
 | `DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME`, `DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER` | Expected production identity; the user check targets the application connection. |
-| `DOLLHOUSE_MASTER_ENCRYPTION_KEY` | Existing database token-encryption key, preserved across replicas and restarts. |
+| `DOLLHOUSE_MASTER_ENCRYPTION_KEY` | Existing base64-encoded 32-byte database token-encryption key, preserved across replicas and restarts. |
 | `DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY` | Shared base64-encoded 32-byte key; preserve to keep browser/owner bindings valid. |
-| `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY`, `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID` | Existing 32-byte encryption key and stable key ID; preserve any retired decryption keys. |
+| `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY`, `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID` | Existing base64-encoded 32-byte encryption key and stable key ID; preserve any retired decryption keys. |
 | `DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY` | Shared base64-encoded 32-byte selector key. |
 | `DOLLHOUSE_AUDIT_HMAC_SECRET` | If explicitly configured, preserve the shared hex key; otherwise verify the existing database-managed audit resolver/key material is shared. |
 | `DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE` | Path to genuine, complete replacement evidence; never generate placeholder successes. |
@@ -64,7 +64,7 @@ Register both exact authentication OAuth-app callbacks at the configured origin.
 
 Local configuration cannot inspect the provider dashboard. Confirm exact matching and do not widen wildcards or substitute portfolio callbacks/scopes. Record provider configuration evidence without credentials, authorization codes, state or tokens.
 
-For email, supply a complete validated `DOLLHOUSE_SMTP_HOST`, `DOLLHOUSE_SMTP_PORT`, `DOLLHOUSE_SMTP_USER`, `DOLLHOUSE_SMTP_PASSWORD`, `DOLLHOUSE_SMTP_FROM` configuration. The port may use the resolver's default. Enabled startup verifies SMTP TLS/auth before registration; verify real sender authorization and controlled-mailbox receipt separately. Provider acceptance means submitted, not delivered. Entirely absent SMTP selects manual-copy fallback; partial configuration fails, and `magic-link` authentication requires complete SMTP. Manual fallback does not qualify the emailed MVP.
+For email, supply a complete validated `DOLLHOUSE_SMTP_HOST`, `DOLLHOUSE_SMTP_PORT`, `DOLLHOUSE_SMTP_USER`, `DOLLHOUSE_SMTP_PASSWORD`, `DOLLHOUSE_SMTP_FROM` configuration. The port may use the resolver's default. Enabled startup verifies SMTP TLS/auth before registration; verify real sender authorization and controlled-mailbox receipt separately. Provider acceptance means submitted, not delivered. Entirely absent SMTP selects manual-copy fallback; partial configuration fails startup, and `magic-link` authentication requires complete SMTP. Manual fallback does not qualify the emailed MVP.
 
 Before enablement, require the Caddy custom-CSRF redaction fix from [#2739](https://github.com/DollhouseMCP/mcp-server/pull/2739) and the callback-error log-redaction fix from [#2741](https://github.com/DollhouseMCP/mcp-server/pull/2741). Broader sanitized operator telemetry remains a separate follow-up in [#2719](https://github.com/DollhouseMCP/mcp-server/issues/2719). Inspect the generated ingress configuration and any extra proxy/APM layer. Never log request bodies, cookies, `X-Onboarding-Csrf`, raw exceptions, OAuth code/state/query strings, claim credentials or tokens. The initial claim fragment is absent from HTTP requests but must also be removed from browser history. Verify captured logs using synthetic sentinels, not live secrets.
 

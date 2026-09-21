@@ -498,6 +498,8 @@ For GitHub sign-in, register an OAuth app with:
 - Homepage URL: `https://mcp.example.com`
 - Callback URL: `https://mcp.example.com/auth/social/github/callback`
 
+For private-beta invitation onboarding, also register the exact enrollment callback and complete the [onboarding runbook’s provider prerequisites](private-beta-onboarding-runbook.md#provider-and-log-prerequisites) before enablement. The ordinary sign-in callback above remains required.
+
 Then either export the credentials before install:
 
 ```bash
