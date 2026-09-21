@@ -1,5 +1,5 @@
 import { sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import type { DrizzleTx } from '../database/db-utils.js';
+import { getErrorCode, type DrizzleTx } from '../database/db-utils.js';
 
 type IdentityValue = string | SQLWrapper | null;
 interface PolicyIdentity { readonly provider: IdentityValue; readonly sub: IdentityValue; readonly externalSub: IdentityValue }
@@ -23,6 +23,13 @@ export function canonicalSubjectUserSql(sub: string): SQL {
 export async function assertInvitationIdentityWriteAllowed(tx: DrizzleTx, identity: {
   readonly provider: string; readonly sub: string; readonly externalSub: string;
 }): Promise<void> {
+  // Issuance holds users EXCLUSIVE before creating the cohort marker. Never
+  // wait here: a caller may already own principal/allowlist locks.
+  try { await tx.execute(sql`LOCK TABLE users IN ROW SHARE MODE NOWAIT`); }
+  catch (error) {
+    if (getErrorCode(error) !== '55P03') throw error;
+    throw Object.assign(new Error('Authentication method is temporarily unavailable'), { code: '55P03' });
+  }
   const [row] = await tx.execute(sql`SELECT ${invitationIdentityAllowedSql(canonicalSubjectUserSql(identity.sub), identity)} AS allowed`);
   if (row.allowed !== true) throw new Error('Authentication method is not available for this account');
 }

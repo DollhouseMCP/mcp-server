@@ -15,6 +15,7 @@ import { PostgresConsoleIdentityResolver } from '../../../src/web-console/identi
 import { linkConsoleIdentityWithTx, PostgresConsoleAccountAdminStore } from '../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
 import { PostgresInvitationManagementStore } from '../../../src/invitations/PostgresInvitationManagementStore.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
+import { getErrorCode } from '../../../src/database/db-utils.js';
 import { withSystemContext } from '../../../src/database/admin.js';
 import { authAccounts } from '../../../src/database/schema/auth.js';
 import { accountInvitations } from '../../../src/database/schema/invitations.js';
@@ -159,6 +160,47 @@ describe('durable invitation authentication policy', () => {
     await db.update(authAccounts).set({ userId: user.id }).where(eq(authAccounts.sub, sub));
     expect(await storage.isAccountAllowed(linked.sub)).toBe(false);
     await db.delete(authAccounts).where(eq(authAccounts.sub, sub));
+  });
+
+  it('preserves an existing unlinked legacy credential when issuance loses the creation order', async () => {
+    if (!available) return;
+    const id = randomUUID();
+    const sub = `local_${id}`;
+    await storage.upsertAccount({ sub, provider: 'local', externalSub: id, emailVerified: true, createdAt: 1, updatedAt: 1 });
+    await expect(fixture(true, true, sub)).rejects.toMatchObject({ code: 'invitation_conflict' });
+    expect(await storage.isAccountAllowed(sub)).toBe(true);
+    expect(await db.select().from(users).where(eq(users.username, sub))).toHaveLength(0);
+  });
+
+  it('aborts credential insertion while issuance owns the cohort creation gate', async () => {
+    if (!available) return;
+    const id = randomUUID();
+    const sub = `local_${id}`;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const issuing = new PostgresInvitationManagementStore(db).runMutation({
+      kind: 'system', appendSecurityEvent: appendSecurityAuditEventWithTx,
+    }, async tx => {
+      const invitation = await tx.issue({ invitationId: id, userId: id, username: sub, displayName: null,
+        emailOriginal: `${id}@example.com`, emailNormalized: `${id}@example.com`, inviterUserId: inviterId,
+        intendedRoles: ['operator'], generation: 1, credentialSecret: randomBytes(32), ttlHours: 24, correlationId: randomUUID() });
+      entered();
+      await gate;
+      return invitation;
+    });
+    const input = { sub, provider: 'local', externalSub: id, emailVerified: true, createdAt: 1, updatedAt: 1 };
+    try {
+      await Promise.race([ready, issuing]);
+      const result = await storage.upsertAccount(input).then(() => null, error => error);
+      expect(getErrorCode(result)).toBe('55P03');
+      expect(result.message).toBe('Authentication method is temporarily unavailable');
+      expect(result).not.toHaveProperty('query');
+      expect(await storage.getAccount(sub)).toBeNull();
+    } finally { release(); await issuing; }
+    await expect(storage.upsertAccount(input)).rejects.toThrow('Authentication method is not available');
+    expect(await storage.getAccount(sub)).toBeNull();
   });
 
   it('owns mutable credential and link inputs before opening a transaction or waiting for user locks', async () => {

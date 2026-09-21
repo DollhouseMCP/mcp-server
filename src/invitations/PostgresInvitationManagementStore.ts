@@ -9,6 +9,7 @@ import {
   accountInvitationIntendedRoles as roles,
   accountInvitationClaimAssertions as claims,
 } from '../database/schema/invitations.js';
+import { authAccounts } from '../database/schema/auth.js';
 import { users } from '../database/schema/users.js';
 import { CONSOLE_ADMIN_AUDIT_ROLES } from '../web-console/audit/IAdminAuditWriter.js';
 import { normalizeLocalDisplayName, normalizeLocalUsername } from '../web-console/ui/account-username.js';
@@ -73,6 +74,11 @@ async function issue(tx: DrizzleTx, audit: InvitationManagementAudit, input: Inv
     await lockAdminAudit(tx, audit);
     // Use the same NFC/trim/case rules as issuance, including older stored email
     // encodings. SQL lower/btrim alone diverges for Unicode case and whitespace.
+    // Credential provisioning participates in the users gate. An unlinked
+    // legacy subject must not become a cohort user through username fallback.
+    const identities = await tx.select({ sub: authAccounts.sub }).from(authAccounts)
+      .where(eq(authAccounts.sub, owned.username)).limit(1);
+    if (identities.length) throw new InvitationError('invitation_conflict', 'Invitation account already exists');
     const accounts = await tx.select({ id: users.id, email: users.email, username: users.username }).from(users);
     if (accounts.some(account => account.id === owned.userId ||
         normalizeLegacyUsernameForComparison(account.username) === owned.username ||

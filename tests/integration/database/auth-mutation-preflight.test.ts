@@ -74,13 +74,27 @@ describe('activation resource preflight', () => {
     await contendWith('user_admin_roles', tx => grantConsoleAdminRoleWithTx(tx, { userId, role: 'operator', grantedByUserId: actorId, grantedAt: new Date() }));
   });
 
-  it('fails without a FK upgrade cycle against the actual identity linker', async () => {
+  it('completes preflight while the actual identity linker waits at users before touching auth rows', async () => {
     if (!databaseAvailable) return;
     const userId = await user();
     const externalSub = randomUUID();
     const sub = `github_${externalSub}`;
     await db.insert(authAccounts).values({ provider: 'github', externalSub, sub });
-    await contendWith('auth_accounts', tx => linkConsoleIdentityWithTx(tx, { userId, sub, linkedAt: new Date() }));
+    let linking: Promise<unknown> | undefined;
+    await db.transaction(async contender => {
+      await contender.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
+      linking = db.transaction(tx => linkConsoleIdentityWithTx(tx, { userId, sub, linkedAt: new Date() }));
+      let waiting = false;
+      for (let attempt = 0; attempt < 200 && !waiting; attempt++) {
+        const rows = await db.execute(sql`SELECT EXISTS(SELECT 1 FROM pg_locks
+          WHERE relation = 'users'::regclass AND mode = 'RowShareLock' AND NOT granted) AS waiting`);
+        waiting = rows[0].waiting === true;
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(waiting).toBe(true);
+      await lockAuthMutationResourcesWithTx(contender);
+    });
+    expect(await linking).toMatchObject({ linkedUserId: userId });
     const [linked] = await db.select().from(authAccounts).where(eq(authAccounts.sub, sub));
     expect(linked.userId).toBe(userId);
   });
@@ -115,28 +129,25 @@ describe('activation resource preflight', () => {
     }));
   });
 
-  it('does not wait behind actual sign-in provisioning that is updating an identity row', async () => {
+  it('aborts actual sign-in provisioning before a users/resource lock inversion', async () => {
     if (!databaseAvailable) return;
     const externalSub = randomUUID();
     const sub = `github_${externalSub}`;
     await db.insert(authAccounts).values({ provider: 'github', externalSub, sub });
     await db.insert(accountAllowlistEntries).values({ kind: 'github_id', normalizedValue: externalSub, displayValue: externalSub, createdByUserId: actorId });
-    let pending: Promise<unknown> | undefined;
-    let failure: unknown;
-    try {
-      await db.transaction(async contender => {
-        await contender.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
-        await contender.select().from(authAccounts).where(eq(authAccounts.sub, sub)).for('update');
-        pending = new PostgresConsoleAccountAllowlistStore(db).provisionAccountIfAllowed({
-          identity: { sub, method: 'github', provider: 'github', externalSub, githubId: externalSub },
-          account: { sub, provider: 'github', externalSub, emailVerified: false, createdAt: Date.now(), updatedAt: Date.now() }, required: true,
-        }).catch(error => ({ writerFailure: error }));
-        await waitForWriter('auth_accounts');
-        await lockAuthMutationResourcesWithTx(contender);
-      });
-    } catch (error) { failure = error; }
-    expect(getErrorCode(failure)).toBe('55P03');
-    expect(await pending).toEqual({ allowed: true });
+    const provision = () => new PostgresConsoleAccountAllowlistStore(db).provisionAccountIfAllowed({
+      identity: { sub, method: 'github', provider: 'github', externalSub, githubId: externalSub },
+      account: { sub, provider: 'github', externalSub, emailVerified: false, createdAt: Date.now(), updatedAt: Date.now() }, required: true,
+    });
+    await db.transaction(async contender => {
+      await contender.execute(sql`LOCK TABLE users IN EXCLUSIVE MODE`);
+      await contender.select().from(authAccounts).where(eq(authAccounts.sub, sub)).for('update');
+      const failure = await provision().then(() => null, error => error);
+      expect(getErrorCode(failure)).toBe('55P03');
+      // Failed provisioning released its principal/allowlist locks on rollback.
+      await lockAuthMutationResourcesWithTx(contender);
+    });
+    expect(await provision()).toEqual({ allowed: true });
   });
 
   it('serializes the real deletion writer before preflight and observes its committed account removal', async () => {

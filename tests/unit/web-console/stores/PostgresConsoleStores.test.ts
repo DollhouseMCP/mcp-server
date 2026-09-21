@@ -2990,8 +2990,8 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     })).resolves.toEqual({ allowed: true });
 
     expect(withSystemContextMock).toHaveBeenCalledTimes(1);
-    // One subject lock, email and GitHub locks, and the invitation policy read.
-    expect(transaction.execute).toHaveBeenCalledTimes(4);
+    // Principal/email/GitHub locks, the issuance gate, and the policy read.
+    expect(transaction.execute).toHaveBeenCalledTimes(5);
     expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
     expect(allowlistSelect.for).toHaveBeenCalledWith('update');
     expect(tombstoneSelect.for).toHaveBeenCalledWith('update');
