@@ -121,7 +121,9 @@ it('rejects missing/wrong CSRF and never consumes a token on GET or query parame
 });
 it('rejects duplicate cookies and security headers before selecting a binding', async () => {
   const f = fixture();
-  expect((await f.post('bootstrap').set('Cookie', `${f.cookie}; ${f.cookie}`).send({})).status).toBe(400);
+  const duplicateCookie = await f.post('bootstrap').set('Cookie', `${f.cookie}; ${f.cookie}`).send({});
+  expect(duplicateCookie.status).toBe(400);
+  expect(duplicateCookie.body).toEqual({ error: 'onboarding_request_rejected' });
   expect((await f.post('bootstrap').set('Origin', [origin, origin] as unknown as string).send({})).status).toBe(400);
   expect((await f.post('exchange').set('X-Onboarding-CSRF', [f.csrf.value, f.csrf.value] as unknown as string).send({ credential: f.token.token })).status).toBe(400);
   expect(f.store.exchangeClaim).not.toHaveBeenCalled();
@@ -403,4 +405,28 @@ it('rejects callback bodies and missing managed cookies with the same fixed page
   expect(missing.text).toBe(body.text);
   expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
   safe(body, [state, 'github-code', f.cookie]);
+});
+
+it('renders shared callback guard failures as the same fixed help page', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const state = 's'.repeat(43);
+  const path = `/auth/onboarding/github/callback?state=${state}&code=github-code`;
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
+  const reference = await request(f.app).get(path);
+  const guarded = await Promise.all([
+    request(f.app).get(path).set('Origin', [origin, origin] as unknown as string).set('Cookie', cookies),
+    request(f.app).get(path).set('X-Onboarding-CSRF', ['one', 'two'] as unknown as string).set('Cookie', cookies),
+    request(f.app).get(path).set('Cookie', `${cookies}; ${f.cookie}`),
+    request(f.app).get(path).set('Cookie', `${ONBOARDING_OWNER_COOKIE}=malformed; ${ONBOARDING_SESSION_COOKIE}=${session.value}`),
+  ]);
+  expect(reference.status).toBe(400);
+  expect(guarded.map(response => response.status)).toEqual([400, 400, 400, 400]);
+  for (const response of guarded) {
+    expect(response.type).toBe('text/html');
+    expect(response.text).toBe(reference.text);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    safe(response, [state, 'github-code', f.cookie, session.value]);
+  }
+  expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
 });

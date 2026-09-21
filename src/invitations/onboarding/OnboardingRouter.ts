@@ -45,10 +45,10 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
   const now = options.now ?? (() => new Date());
   const router = express.Router();
   router.use(securityHeaders());
-  router.use((req, _res, next) => {
+  router.use((req, res, next) => {
+    const githubCallback = req.method === 'GET' && req.path === '/github/callback';
     try {
       // No credentials in URLs, ambiguous cookie bindings, or merged headers.
-      const githubCallback = req.method === 'GET' && req.path === '/github/callback';
       if ((!githubCallback && req.url.includes('?')) || duplicateHeaders(req)) throw new BoundaryError(400);
       for (const name of [ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE] as const) {
         const count = (req.headers.cookie?.split(';') ?? []).filter(part => part.trim().split('=')[0] === name).length;
@@ -56,7 +56,10 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
       }
       if (req.method === 'POST' && req.headers.origin !== trustedOrigin) throw new BoundaryError(403);
       next();
-    } catch (error) { next(error); }
+    } catch (error) {
+      if (githubCallback) sendGitHubHelp(res, error instanceof BoundaryError ? error.status : 503);
+      else next(error);
+    }
   });
   const json = express.json({ limit: '1kb', strict: true, inflate: false, type: 'application/json' });
   const post = (path: string, action: (req: Request, res: Response) => Promise<void>) => {
