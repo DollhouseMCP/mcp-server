@@ -23,11 +23,66 @@ permissions:
 jobs:
   publish-mcpb:
     name: Build and upload .mcpb
+    # Channel consistency (not stable-only): stable versions attach to normal
+    # releases; prerelease versions attach ONLY to releases explicitly flagged
+    # prerelease — their bundle lands on that prerelease page, an opt-in
+    # surface used by the Publish Beta Release flow. Mismatches are refused.
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Guard release channel consistency
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name || inputs.tag_name || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease || false }}
+        run: |
+          # The channel is derived from the VERSION STRING (which nobody can
+          # mislabel by accident), then required to agree with the release's
+          # prerelease flag and the tag. A beta accidentally released without
+          # the prerelease checkbox, or a stable release mislabeled as a
+          # prerelease, is refused — but a properly-flagged beta prerelease
+          # still gets its .mcpb (the Publish Beta Release contract).
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          case "${PACKAGE_VERSION}" in
+            *-alpha.*|*-beta|*-beta.*|*-rc.*) VERSION_IS_PRERELEASE=true ;;
+            *-*)
+              echo "::error::Unsupported prerelease suffix in ${PACKAGE_VERSION}; expected -alpha.N, -beta[.N], or -rc.N."
+              exit 1
+              ;;
+            *) VERSION_IS_PRERELEASE=false ;;
+          esac
+
+          TAG_IS_PRERELEASE=false
+          if [[ -n "${EVENT_TAG}" && "${EVENT_TAG#v}" == *-* ]]; then
+            TAG_IS_PRERELEASE=true
+          fi
+          if [[ -n "${EVENT_TAG}" && "${TAG_IS_PRERELEASE}" != "${VERSION_IS_PRERELEASE}" ]]; then
+            echo "::error::Tag ${EVENT_TAG} and package.json version ${PACKAGE_VERSION} disagree about prerelease status."
+            exit 1
+          fi
+
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            FLAG_IS_PRERELEASE="${RELEASE_PRERELEASE}"
+          else
+            # Manual dispatch: look up the target release's actual flag.
+            FLAG_IS_PRERELEASE=$(gh release view "${EVENT_TAG}" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo "unknown")
+          fi
+          if [[ "${FLAG_IS_PRERELEASE}" == "unknown" ]]; then
+            echo "::error::Could not resolve the release for tag '${EVENT_TAG}' to verify its prerelease flag."
+            exit 1
+          fi
+          if [[ "${VERSION_IS_PRERELEASE}" != "${FLAG_IS_PRERELEASE}" ]]; then
+            echo "::error::Version ${PACKAGE_VERSION} (prerelease=${VERSION_IS_PRERELEASE}) does not match the release's prerelease flag (${FLAG_IS_PRERELEASE}). Refusing to attach the bundle to a mislabeled release."
+            exit 1
+          fi
+
+          echo "✅ Channel consistency OK (version ${PACKAGE_VERSION}, tag ${EVENT_TAG:-<none>}, prerelease=${VERSION_IS_PRERELEASE})"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
