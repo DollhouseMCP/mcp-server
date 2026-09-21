@@ -1,5 +1,5 @@
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
@@ -20,7 +20,7 @@ import { MAX_INVITATION_TTL_HOURS, MIN_INVITATION_TTL_HOURS } from './Invitation
 import { normalizeInvitationEmail } from './InvitationEmail.js';
 import { hashInvitationCredential, INVITATION_SECRET_BYTES, MAX_INVITATION_GENERATION } from './InvitationToken.js';
 import { InvitationError, type InvitationView } from './InvitationTypes.js';
-import { lockAdminAudit, lockAccounts, lockInvitation, databaseTime, readInvitation, requireInvitation, appendAudit, copyAudit, assertUuid } from './InvitationTransactionSupport.js';
+import { lockAdminAudit, lockAccounts, lockInvitation, databaseTime, readInvitation, readInvitationForUser, requireInvitation, appendAudit, copyAudit, assertUuid } from './InvitationTransactionSupport.js';
 
 /** Internal, privileged storage only. Live routes must enforce pending-account denial first. */
 export class PostgresInvitationManagementStore implements IInvitationManagementStore {
@@ -34,12 +34,7 @@ export class PostgresInvitationManagementStore implements IInvitationManagementS
   /** Bounded account lookup; terminal history is ordered deterministically. */
   async inspectForUser(userId: string): Promise<InvitationView | null> {
     assertUuid(userId);
-    return withSystemContext(this.db, async tx => {
-      const [latest] = await tx.select({ id: invitations.id }).from(invitations)
-        .innerJoin(users, eq(users.id, invitations.userId))
-        .where(and(eq(invitations.userId, userId), isNull(users.deletedAt))).orderBy(desc(invitations.createdAt), desc(invitations.id)).limit(1);
-      return latest ? readInvitation(tx, latest.id) : null;
-    });
+    return withSystemContext(this.db, tx => readInvitationForUser(tx, userId));
   }
 
   async runMutation<T>(

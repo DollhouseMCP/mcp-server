@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
+import type { DatabaseInstance } from '../../../src/database/connection.js';
+import type { DrizzleTx } from '../../../src/database/db-utils.js';
 import { eq } from 'drizzle-orm';
 import { withSystemContext } from '../../../src/database/admin.js';
 import { deleteConsolePrincipalWithTx } from '../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
@@ -100,3 +102,44 @@ it('keeps deleted account tombstones unavailable through the actual deletion pat
   expect(response.body).not.toHaveProperty('invitation');
   expect(await options().store.inspectForUser(userId)).toBeNull();
 });
+
+it('returns one coherent pre-deletion snapshot when real deletion commits after its read', async () => {
+  if (!available) return;
+  const db = getTestAdminDb(), h = await invitationAdminHarness(options(), 'admin', true, actorId);
+  const issued = await h.send('post', '', invitationAdminBody()); expect(issued.status).toBe(201);
+  const expected = await options().store.inspect(issued.body.invitation.id);
+  let reads = 0;
+  // Interpose only after actual SQL completion, before its caller continues.
+  // The former two-query implementation returned redacted metadata here.
+  const observed = observeReads(db, async () => {
+    if (++reads !== 1) return;
+    expect(await withSystemContext(db, tx => deleteConsolePrincipalWithTx(tx, {
+      userId: issued.body.invitation.user_id, deletedByUserId: actorId, deletedAt: new Date(),
+    }))).toMatchObject({ outcome: 'anonymized' });
+  });
+  const snapshot = await new PostgresInvitationManagementStore(observed).inspectForUser(issued.body.invitation.user_id);
+  expect(snapshot).toEqual(expected); expect(reads).toBe(1);
+  expect(await options().store.inspectForUser(issued.body.invitation.user_id)).toBeNull();
+});
+
+/** Preserve real PostgreSQL execution while controlling the statement-return boundary. */
+function observeReads(db: DatabaseInstance, afterRead: () => Promise<void>): DatabaseInstance {
+  const query = (value: any): any => new Proxy(value, { get(target, key) {
+    const member = Reflect.get(target, key);
+    if (key === 'then') return (resolve: any, reject: any) => member.call(target,
+      async (rows: unknown) => { await afterRead(); return rows; }).then(resolve, reject);
+    return typeof member !== 'function' ? member : (...args: unknown[]) => {
+      const result = Reflect.apply(member, target, args);
+      return result && typeof result.then === 'function' ? query(result) : result;
+    };
+  } });
+  return new Proxy(db, { get(target, key) {
+    if (key !== 'transaction') return Reflect.get(target, key);
+    return (operation: (tx: DrizzleTx) => Promise<unknown>) => db.transaction(tx => operation(new Proxy(tx, {
+      get(transaction, property) {
+        if (property !== 'select') return Reflect.get(transaction, property);
+        return (...args: unknown[]) => query(Reflect.apply(transaction.select, transaction, args));
+      },
+    })));
+  } });
+}

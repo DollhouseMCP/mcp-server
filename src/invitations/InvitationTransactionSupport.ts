@@ -1,4 +1,4 @@
-import { and, eq, getTableColumns, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, isNull, sql, type SQL } from 'drizzle-orm';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { accountInvitations as invitations, accountInvitationGenerations as generations } from '../database/schema/invitations.js';
 import { users } from '../database/schema/users.js';
@@ -39,7 +39,20 @@ export async function databaseTime(tx: DrizzleTx): Promise<Date> {
   return new Date(rows[0].now as string | Date);
 }
 
-export async function readInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView | null> {
+export function readInvitation(tx: DrizzleTx, invitationId: string): Promise<InvitationView | null> {
+  return readInvitationWhere(tx, eq(invitations.id, invitationId));
+}
+
+/** Eligibility, latest selection and projection share one statement snapshot. */
+export function readInvitationForUser(tx: DrizzleTx, userId: string): Promise<InvitationView | null> {
+  const latest = tx.select({ id: invitations.id }).from(invitations)
+    .innerJoin(users, eq(users.id, invitations.userId))
+    .where(and(eq(invitations.userId, userId), isNull(users.deletedAt)))
+    .orderBy(desc(invitations.createdAt), desc(invitations.id)).limit(1);
+  return readInvitationWhere(tx, eq(invitations.id, latest));
+}
+
+async function readInvitationWhere(tx: DrizzleTx, condition: SQL): Promise<InvitationView | null> {
   const { credentialHash: _hash, invitationId: _id, ...generationColumns } = getTableColumns(generations);
   const [row] = await tx.select({
     invitation: invitations, generation: generationColumns,
@@ -49,7 +62,7 @@ export async function readInvitation(tx: DrizzleTx, invitationId: string): Promi
     ), '[]'::jsonb)`,
   }).from(invitations).innerJoin(generations, and(
     eq(generations.invitationId, invitations.id), eq(generations.generation, invitations.currentGeneration),
-  )).where(eq(invitations.id, invitationId));
+  )).where(condition);
   if (!row) return null;
   return { ...row.invitation, currentGeneration: row.generation, intendedRoles: row.intendedRoles };
 }
