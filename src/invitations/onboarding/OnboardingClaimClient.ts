@@ -76,7 +76,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     if (!value.intendedRoles.length) list.textContent = 'Access to your own permitted console and MCP features after activation; no server administration.';
     claimed = true;
     details.hidden = false; logout.hidden = false; accept.hidden = true; retry.hidden = true;
-    announce('Email verified. Review your invitation. A GitHub account is required before activation.');
+    announce('Email verified. Review your invitation. Use a GitHub account with a verified primary email.');
     expiryTimer = setTimeout(() => { clearDetails(); csrf = null; announce('This onboarding session is no longer available. Reopen your invitation email to continue.'); },
       remaining);
   }
