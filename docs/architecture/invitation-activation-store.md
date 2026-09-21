@@ -31,8 +31,11 @@ the account, accepts the invitation/generation, completes the claim, appends an
 authorization invalidation and writes the mandatory security events. A real admin
 audit is additionally written only when the caller supplies actual authorized
 admin context. Self-service activation does not impersonate the inviter. Audit
-HMAC material must already be loaded before opening this transaction. Callback
-failure rolls back every effect. Contention aborts the transaction and returns
+HMAC material must already be loaded before opening this transaction. After all
+writes and audit, the same transaction deletes the exact locked restricted owner
+and session through `completeEnrollmentWithTx`, checking both cookie hashes and
+live expiry again after locks. A mismatch or failed cleanup aborts activation;
+audit or cleanup failure rolls back every effect and retains the original records. Contention aborts the transaction and returns
 `concurrent_update`; there is no automatic OAuth retry.
 
 `already_activated` is a historical acknowledgement for the same browser owner,

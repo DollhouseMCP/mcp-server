@@ -214,6 +214,23 @@ export class PostgresOnboardingStore implements OnboardingSessionAuthority {
     return record;
   }
 
+  /** Caller already validated this session before activating its pending account. */
+  async completeEnrollmentWithTx(tx: DrizzleTx, ownerHash: Buffer, sessionHash: Buffer): Promise<boolean> {
+    const owner = copyHash(ownerHash);
+    const session = copyHash(sessionHash);
+    const ownerRecord = await readOwner(tx, owner);
+    const record = await readSession(tx, owner);
+    const now = await databaseTime(tx);
+    // Pending-claim authority no longer applies after the caller's activation
+    // writes; retain exact cookie proof and post-lock live-record checks here.
+    if (!activeOwner(ownerRecord, now) || !record || !equal(record.idHash, session) ||
+        record.revokedAt !== null || record.createdAt > now || record.expiresAt <= now ||
+        record.expiresAt > ownerRecord.expiresAt) return false;
+    await tx.delete(authKv).where(key(ONBOARDING_SESSION_MODEL, owner));
+    await tx.delete(authKv).where(key(ONBOARDING_OWNER_MODEL, owner));
+    return true;
+  }
+
   /** Does not touch users or claim locks after acquiring the owner lock. */
   async endSession(ownerHash: Buffer, sessionHash: Buffer): Promise<boolean> {
     const owner = copyHash(ownerHash);

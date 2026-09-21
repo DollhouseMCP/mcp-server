@@ -68,6 +68,10 @@ async function state(f: Fixture) {
   `);
   return rows[0];
 }
+async function restrictedRecords(f: Fixture) {
+  return getTestAdminDb().select().from(authKv).where(sql`${authKv.id} = ${f.input.claimOwnerHash.toString('hex')}
+    AND ${authKv.model} IN (${ONBOARDING_OWNER_MODEL}, ${ONBOARDING_SESSION_MODEL})`).orderBy(authKv.model);
+}
 async function expectPending(f: Fixture) {
   expect(await state(f)).toEqual({ activation_state: 'pending_activation', invitation_state: 'pending', claim_state: 'open', identities: 0, roles: 0, grants: 0, invalidations: 0, audits: 0, sessions: 0 });
 }
@@ -83,6 +87,7 @@ describe('atomic invitation GitHub activation', () => {
     const [generation] = await getTestAdminDb().select().from(generations).where(eq(generations.invitationId, f.invitation.id));
     expect(generation.state).toBe('accepted');
     expect(generation.credentialConsumedAt).not.toBeNull();
+    expect(await restrictedRecords(f)).toHaveLength(0);
     const events = await getTestAdminDb().execute(sql`SELECT * FROM security_audit_events WHERE event_type IN ('invitation.activated', 'invitation.github_identity_linked') AND (target_id = ${f.invitation.id} OR target_id = ${f.invitation.userId})`);
     expect(events).toHaveLength(2);
     expect(JSON.stringify(events)).not.toContain(f.input.claimOwnerHash.toString('hex'));
@@ -173,7 +178,8 @@ describe('atomic invitation GitHub activation', () => {
       expect(ended).toBe(false);
     } finally { release(); }
     expect((await pending).status).toBe('activated');
-    expect(await ending).toBe(true);
+    expect(await ending).toBe(false); // Activation already removed the exact session and owner.
+    expect(await restrictedRecords(f)).toHaveLength(0);
     expect((await state(f)).audits).toBe(1);
   });
 
@@ -218,6 +224,7 @@ describe('atomic invitation GitHub activation', () => {
     const before = await state(f);
     expect((await activate({ ...f.input, githubLogin: 'new-login', providerEmail: 'changed@example.org' })).status).toBe('already_activated');
     expect(await state(f)).toEqual(before);
+    expect(await restrictedRecords(f)).toHaveLength(0);
     await expect(activate({ ...f.input, claimOwnerHash: randomBytes(32) })).rejects.toMatchObject({ code: 'claim_owner_mismatch' });
     await expect(activate({ ...f.input, githubId: '111' })).rejects.toMatchObject({ code: 'invitation_invalid' });
   });
@@ -233,12 +240,67 @@ describe('atomic invitation GitHub activation', () => {
   it('rolls back every activation effect if mandatory security audit fails after its insert', async () => {
     if (!databaseAvailable) return;
     const f = await fixture();
+    const recordsBefore = await restrictedRecords(f);
     await expect(activate(f.input, { kind: 'system', appendSecurityEvent: async (tx, event) => {
       await appendSecurityAuditEventWithTx(tx, event);
       if (event.eventType === 'invitation.activated') throw new Error('security audit failed');
     } })).rejects.toThrow('security audit failed');
     await expectPending(f);
+    expect(await restrictedRecords(f)).toEqual(recordsBefore);
     expect((await activate(f.input)).status).toBe('activated');
+  });
+
+  it('rolls back activation and deleted restricted records when completion reports failure', async () => {
+    if (!databaseAvailable) return;
+    const f = await fixture();
+    const sessions = sessionStore();
+    const recordsBefore = await restrictedRecords(f);
+    const store = new PostgresInvitationActivationStore(getTestAdminDb(), {
+      lockSessionWithTx: (tx, owner, session) => sessions.lockSessionWithTx(tx, owner, session),
+      completeEnrollmentWithTx: async (tx, owner, session) => {
+        expect(await sessions.completeEnrollmentWithTx(tx, owner, session)).toBe(true);
+        return false;
+      },
+    });
+    await expect(store.activate(f.input, audit)).rejects.toMatchObject({ code: 'invitation_invalid' });
+    await expectPending(f);
+    expect(await restrictedRecords(f)).toEqual(recordsBefore);
+  });
+
+  it('cannot delete mismatched restricted records and snapshots cleanup hashes before awaiting', async () => {
+    if (!databaseAvailable) return;
+    const f = await fixture();
+    const before = await restrictedRecords(f);
+    await withSystemContext(getTestAdminDb(), async tx => {
+      await expect(sessionStore().completeEnrollmentWithTx(tx, f.input.claimOwnerHash, randomBytes(32))).resolves.toBe(false);
+      await expect(sessionStore().completeEnrollmentWithTx(tx, randomBytes(32), f.input.sessionHash)).resolves.toBe(false);
+    });
+    expect(await restrictedRecords(f)).toEqual(before);
+    await withSystemContext(getTestAdminDb(), async tx => {
+      const owner = Buffer.from(f.input.claimOwnerHash);
+      const session = Buffer.from(f.input.sessionHash);
+      const pending = sessionStore().completeEnrollmentWithTx(tx, owner, session);
+      owner.fill(0); session.fill(0);
+      await expect(pending).resolves.toBe(true);
+    });
+    expect(await restrictedRecords(f)).toHaveLength(0);
+  });
+
+  it('rolls back all activation writes when the restricted session expires before final cleanup', async () => {
+    if (!databaseAvailable) return;
+    const f = await fixture();
+    const recordsBefore = await restrictedRecords(f);
+    await expect(activate(f.input, { kind: 'system', appendSecurityEvent: async (tx, event) => {
+      await appendSecurityAuditEventWithTx(tx, event);
+      if (event.eventType === 'invitation.activated') {
+        await tx.execute(sql`WITH expiry AS (SELECT date_trunc('milliseconds', clock_timestamp()) + INTERVAL '50 milliseconds' AS at)
+          UPDATE auth_kv SET expires_at = expiry.at, payload = jsonb_set(payload, '{expiresAt}', to_jsonb(expiry.at))
+          FROM expiry WHERE model = ${ONBOARDING_SESSION_MODEL} AND id = ${f.input.claimOwnerHash.toString('hex')}`);
+        await tx.execute(sql`SELECT pg_sleep(0.1)`);
+      }
+    } })).rejects.toMatchObject({ code: 'invitation_invalid' });
+    await expectPending(f);
+    expect(await restrictedRecords(f)).toEqual(recordsBefore);
   });
 
   it('appends real admin audit only for supplied admin context and rolls back its writer failure', async () => {
@@ -250,8 +312,10 @@ describe('atomic invitation GitHub activation', () => {
       appendAdminEvent: async (tx, event) => { await appendConsoleAdminAuditEventWithTx(tx, event, { resolve: async () => material }); if (fail) throw new Error('admin audit failed'); },
       adminContext: { actorUserId: f.inviterId, actorSub: `github_issuer-${f.inviterId}`, actorRole: 'admin', actorCapabilityRole: 'admin', actorConsoleSessionHash: randomBytes(32), capability: 'console:admin:accounts', elevationAcr: null, elevationAmr: [], elevationAuthTime: null, endpoint: '/internal/activation', clientIp: null, userAgent: null },
     };
+    const recordsBefore = await restrictedRecords(f);
     await expect(activate(f.input, admin)).rejects.toThrow('admin audit failed');
     await expectPending(f);
+    expect(await restrictedRecords(f)).toEqual(recordsBefore);
     fail = false;
     await activate(f.input, admin);
     expect(await getTestAdminDb().execute(sql`SELECT sequence_id FROM admin_audit_events WHERE resource_id = ${f.invitation.id}`)).toHaveLength(1);

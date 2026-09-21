@@ -53,7 +53,7 @@ export class PostgresInvitationActivationStore {
     try {
       const ownedAudit = copyAudit(audit);
       validateInput(owned);
-      if (typeof this.sessions?.lockSessionWithTx !== 'function') throw new InvitationError('configuration_invalid', 'Transactional onboarding session authority is required');
+      if (typeof this.sessions?.lockSessionWithTx !== 'function' || typeof this.sessions.completeEnrollmentWithTx !== 'function') throw new InvitationError('configuration_invalid', 'Transactional onboarding session authority is required');
       return await withSystemContext(this.db, async tx => {
         await lockAuthMutationResourcesWithTx(tx);
         const sub = `github_${owned.githubId}`;
@@ -116,6 +116,9 @@ export class PostgresInvitationActivationStore {
         } else {
           await ownedAudit.appendSecurityEvent(tx, { eventType: 'invitation.activated', actorId: invitation.userId, targetId: invitation.id, occurredAt: now.getTime(),
             metadata: { invitationId: invitation.id, generation: owned.generation, userId: invitation.userId, correlationId: owned.correlationId } });
+        }
+        if (!await this.sessions.completeEnrollmentWithTx(tx, owned.claimOwnerHash, owned.sessionHash)) {
+          throw new InvitationError('invitation_invalid', 'Restricted onboarding session changed before completion');
         }
         return { status: 'activated', userId: invitation.userId, invitationId: invitation.id };
       });
