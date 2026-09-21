@@ -239,17 +239,15 @@ export class GithubSocialMethod implements IAuthMethod {
    * longer needs to know GitHub-specific routes exist.
    */
   contributeRoutes(router: Router, deps: ContributeRoutesDeps): void {
-    router.get('/auth/social/github/callback', (req, res, next) => {
+    router.get('/auth/social/github/callback', (req, res) => {
       void (async () => {
         try {
           await this.handleCallbackRequest(req, res, deps);
-        } catch (err) {
-          logger.error('[GithubSocialMethod] /auth/social/github/callback failed', {
-            url: req.url,
-            error: err instanceof Error ? err.message : String(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
-          next(err);
+        } catch {
+          // Callback URLs and upstream exceptions can contain one-time credentials.
+          logger.error('[GithubSocialMethod] callback unavailable', { category: 'callback_unavailable' });
+          if (res.headersSent) res.end();
+          else sendAuthError(res, req, 503, 'github_callback_failed', 'GitHub sign-in is temporarily unavailable. Start sign-in again.');
         }
       })();
     });
@@ -501,10 +499,8 @@ export class GithubSocialMethod implements IAuthMethod {
         },
         signal: AbortSignal.timeout(15_000),
       });
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] /user/emails network error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+    } catch {
+      logger.warn('[GithubSocialMethod] email lookup unavailable', { category: 'github_emails_unavailable' });
       return { error: 'github emails fetch failed' };
     }
     if (!emailsResp.ok) return { error: 'github emails fetch failed' };
