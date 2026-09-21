@@ -54,7 +54,7 @@ describe('release workflow channel boundaries', () => {
   it.each([
     ['2.0.42', 'latest', 'false'], ['2.1.0-alpha.1', 'alpha', 'true'],
     ['2.1.0-beta', 'beta', 'true'], ['2.1.0-beta.2', 'beta', 'true'],
-    ['2.1.0-rc.1', 'next', 'true']
+    ['2.1.0-rc.1', 'rc', 'true']
   ])('keeps %s on its intended %s channel', (version, tag, prerelease) => {
     for (const source of [npmChannel, packageChannel]) {
       const result = run(source, { PACKAGE_VERSION: version, RELEASE_PRERELEASE: prerelease });
@@ -63,6 +63,19 @@ describe('release workflow channel boundaries', () => {
       expect(result.githubOutput).toContain(`dist_tag=${tag}`);
     }
     expect(run(packageGuard, { DIST_TAG: tag, RELEASE_PRERELEASE: prerelease }).status).toBe(0);
+  });
+
+  it('publishes release candidates to the channel consumed by setup', () => {
+    const setup = readFileSync('src/web/public/setup.js', 'utf8');
+    const channel = setup.match(/RC:\s*'([^']+)'/)?.[1];
+    expect(channel).toBe('rc');
+    const routes = readFileSync('src/web/routes/setupRoutes.ts', 'utf8');
+    expect(routes.match(/ALLOWED_INSTALL_CHANNELS[^\n]+/)?.[0]).toContain(`'${channel}'`);
+    for (const source of [npmChannel, packageChannel]) {
+      const result = run(source, { PACKAGE_VERSION: '2.1.0-rc.1', RELEASE_PRERELEASE: 'true' });
+      expect(result.status).toBe(0);
+      expect(result.githubOutput.trim()).toBe(`dist_tag=${channel}`);
+    }
   });
 
   it.each([
@@ -120,7 +133,7 @@ describe('release workflow channel boundaries', () => {
     expect(run(registryGuard, { SOURCE_REF: ref }).status).toBe(0);
   });
 
-  it.each(['latest', 'beta'])('passes the resolved %s tag to both actual publish commands', tag => {
+  it.each(['latest', 'beta', 'rc'])('passes the resolved %s tag to both actual publish commands', tag => {
     const npm = run(script('publish-npm', 'publish-npm', 'Publish to npm (with provenance)'), { DIST_TAG: tag });
     expect(npm.status).toBe(0);
     expect(npm.stdout).toContain(`PUBLISH_COMMAND=publish --provenance --access public --tag ${tag} --loglevel verbose`);
@@ -133,7 +146,7 @@ describe('release workflow channel boundaries', () => {
 
   it.each([
     ['latest', '0.0.123'], ['alpha', '0.0.0-alpha.dry-run.123'],
-    ['beta', '0.0.0-beta.dry-run.123'], ['next', '0.0.0-rc.dry-run.123']
+    ['beta', '0.0.0-beta.dry-run.123'], ['rc', '0.0.0-rc.dry-run.123']
   ])('dry-runs %s without issuing a publishing command', (tag, version) => {
     const source = script('publish-npm', 'publish-npm', 'Dry run (skip publish)')
       .replaceAll('${{ steps.package_version.outputs.version }}', '2.1.0-beta.2');

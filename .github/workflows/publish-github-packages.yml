@@ -120,7 +120,7 @@ jobs:
               dist_tag="beta"
               ;;
             *-rc.*)
-              dist_tag="next"
+              dist_tag="rc"
               ;;
             *-*)
               echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta, -beta., or -rc."

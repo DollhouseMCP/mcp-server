@@ -185,7 +185,7 @@ jobs:
               dist_tag="beta"
               ;;
             *-rc.*)
-              dist_tag="next"
+              dist_tag="rc"
               ;;
             *-*)
               echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta, -beta., or -rc."
@@ -257,7 +257,7 @@ jobs:
           case "${DIST_TAG}" in
             latest) dry_run_version="0.0.${GITHUB_RUN_ID}" ;;
             alpha|beta) dry_run_version="0.0.0-${DIST_TAG}.dry-run.${GITHUB_RUN_ID}" ;;
-            next) dry_run_version="0.0.0-rc.dry-run.${GITHUB_RUN_ID}" ;;
+            rc) dry_run_version="0.0.0-rc.dry-run.${GITHUB_RUN_ID}" ;;
             *) echo "::error::Unsupported dry-run channel: ${DIST_TAG}"; exit 1 ;;
           esac
           npm pkg set "version=${dry_run_version}"
