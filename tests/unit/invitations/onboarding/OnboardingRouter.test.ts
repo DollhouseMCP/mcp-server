@@ -158,6 +158,9 @@ it('returns only sanitized read-only status and logs out a session while retaini
   expect(f.store.rotateOwnerCsrf).not.toHaveBeenCalled();
   safe(status);
   const session = f.credentials.issue('session');
+  f.store.findSession.mockResolvedValue({ ...f.owner, idHash: session.hash, userId: randomUUID(),
+    invitationId: f.token.invitationId, generation: 1, claimAssertionId: randomUUID(),
+    emailVerifiedAt: f.owner.createdAt, scope: 'onboarding:github-enrollment' });
   const logout = await f.post('logout').set('Cookie', `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`).send({});
   expect(logout.status).toBe(204);
   expect(f.store.endSession).toHaveBeenCalledWith(f.owner.ownerHash, session.hash);
@@ -179,4 +182,18 @@ it('returns neutral409 without a session cookie when persisted session life is e
   const retry = await f.post('exchange').send({ credential: f.token.token });
   expect(retry.status).toBe(200);
   expect(f.store.exchangeClaim.mock.calls[1][0].ownerHash).toEqual(f.owner.ownerHash);
+});
+
+it('rejects any unauthenticated presented session without downgrading or clearing its cookie', async () => {
+  const f = fixture();
+  const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${f.credentials.issue('session').value}`;
+  for (const path of ['bootstrap', 'exchange', 'logout']) {
+    const response = await f.post(path).set('Cookie', cookies).send(path === 'exchange' ? { credential: f.token.token } : {});
+    expect(response.status).toBe(409);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    safe(response, [f.token.token, f.csrf.value]);
+  }
+  expect((await request(f.app).get('/auth/onboarding/status').set('Cookie', cookies)).status).toBe(409);
+  for (const operation of [f.store.createOwner, f.store.rotateOwnerCsrf, f.store.rotateSessionCsrf,
+    f.store.exchangeClaim, f.store.endSession]) expect(operation).not.toHaveBeenCalled();
 });

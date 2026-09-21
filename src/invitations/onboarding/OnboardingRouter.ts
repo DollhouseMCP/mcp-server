@@ -78,6 +78,7 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
     const owner = ownerHash ? await store.findOwner(ownerHash) : null;
     const sessionHash = rawSession ? credentials.hash('session', rawSession) : undefined;
     const session = owner && ownerHash && sessionHash ? await store.findSession(ownerHash, sessionHash) : null;
+    if (rawSession !== undefined && !session) throw new BoundaryError(409);
     return { owner, ownerHash, session, sessionHash };
   }
   type Context = Awaited<ReturnType<typeof context>>;
@@ -119,7 +120,7 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
       const csrf = credentials.issue('csrf');
       const record = await store.exchangeClaim({ invitationId: parsed.invitationId, generation: parsed.generation,
         credentialSecret: parsed.secret, ownerHash: ctx.ownerHash!, sessionHash: session.hash,
-        csrfTokenHash: csrf.hash, correlationId: randomUUID() }, audit);
+        csrfTokenHash: csrf.hash, correlationId: randomUUID(), expectedSessionHash: ctx.sessionHash }, audit);
       const remaining = Math.min(ONBOARDING_SESSION_TTL_SECONDS, Math.floor((record.expiresAt.getTime() - now().getTime()) / 1000));
       if (remaining <= 0) throw new BoundaryError(409);
       res.append('Set-Cookie', serializeOnboardingCookie(ONBOARDING_SESSION_COOKIE, session.value, remaining));
