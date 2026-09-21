@@ -4,6 +4,7 @@ import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStor
 import { PostgresAuthStorageLayer } from '../auth/embedded-as/storage/PostgresAuthStorageLayer.js';
 import { PostgresRateLimitStore } from '../auth/embedded-as/storage/PostgresRateLimitStore.js';
 import { NodemailerEmailSender } from '../auth/embedded-as/methods/nodemailerEmailSender.js';
+import { assertOnboardingSchemaReady } from '../invitations/onboarding/OnboardingSchemaPreflight.js';
 import { invitationPublicOrigin } from '../invitations/InvitationClaimLink.js';
 import type { PrivateBetaOnboardingConfiguration } from '../invitations/onboarding/PrivateBetaOnboardingConfiguration.js';
 import type { OnboardingComposition } from '../invitations/onboarding/createOnboardingComposition.js';
@@ -37,6 +38,7 @@ export async function bootstrapWebConsoleOnboarding(
       !opaqueValues?.hashOpaqueValue || !adminAuditKeys?.resolve) {
     throw new Error('Private beta onboarding requires the activated console API and shared PostgreSQL authentication, rate limiting, and audit dependencies.');
   }
+  await assertOnboardingSchemaReady(database);
   let sender: NodemailerEmailSender | null = null;
   if (configuration.smtp.state === 'enabled') {
     sender = new NodemailerEmailSender(configuration.smtp.options);

@@ -9,7 +9,7 @@ import { resolveSmtpConfiguration } from '../../../src/auth/embedded-as/methods/
 import { HmacConsoleOpaqueValueService } from '../../../src/web-console/security/ConsoleOpaqueValues.js';
 
 function fixture(): WebConsoleOnboardingBootstrapOptions {
-  const database = { transaction: jest.fn() } as unknown as DatabaseInstance;
+  const database = { transaction: jest.fn(), execute: jest.fn(async () => []) } as unknown as DatabaseInstance;
   return { database, configuration: { publicBaseUrl: 'https://console.example.test', supportEmail: 'help@example.test',
     github: { clientId: 'auth-client', clientSecret: 'secret-sentinel' }, smtp: { state: 'disabled' } },
   authStorage: new PostgresAuthStorageLayer({ db: database }), rateLimits: new PostgresRateLimitStore(database),
@@ -21,7 +21,10 @@ afterEach(() => jest.restoreAllMocks());
 
 it('is inert when disabled, even with missing production dependencies', async () => {
   const verify = jest.spyOn(NodemailerEmailSender.prototype, 'verify');
-  expect(await bootstrapWebConsoleOnboarding({ ...fixture(), configuration: null, database: undefined })).toBeNull();
+  const options = fixture();
+  expect(await bootstrapWebConsoleOnboarding({ ...options, configuration: null })).toBeNull();
+  expect(options.database?.execute).not.toHaveBeenCalled();
+  expect(await bootstrapWebConsoleOnboarding({ ...options, configuration: null, database: undefined })).toBeNull();
   expect(verify).not.toHaveBeenCalled();
 });
 
@@ -76,6 +79,7 @@ it('owns validated configuration before asynchronous SMTP verification', async (
   const pending = bootstrapWebConsoleOnboarding({ ...options, configuration });
   configuration.github.clientId = 'invalid client';
   configuration.supportEmail = 'invalid';
+  await new Promise(resolve => setImmediate(resolve));
   verified();
   expect((await pending)?.adminModule.id).toBe('durable_invitation_admin');
 });
@@ -83,4 +87,14 @@ it('owns validated configuration before asynchronous SMTP verification', async (
 it.each(['https://console.example.test/', 'https://CONSOLE.EXAMPLE.TEST/', 'https://console.example.test:443'])('accepts the canonical equivalent configured origin %s', async publicBaseUrl => {
   expect((await bootstrapWebConsoleOnboarding({ ...fixture(), publicBaseUrl }))?.adminModule.id)
     .toBe('durable_invitation_admin');
+});
+
+it('fails schema readiness before SMTP verification or exposing either router', async () => {
+  const options = fixture();
+  jest.spyOn(options.database!, 'execute').mockRejectedValue(new Error('secret SQL query failure'));
+  const verify = jest.spyOn(NodemailerEmailSender.prototype, 'verify');
+  await expect(bootstrapWebConsoleOnboarding({ ...options, configuration: { ...options.configuration!,
+    smtp: resolveSmtpConfiguration({ host: 'smtp.example.test', user: 'user', password: 'password', from: 'sender@example.test' }),
+  } })).rejects.toThrow('Private beta onboarding database schema is unavailable.');
+  expect(verify).not.toHaveBeenCalled();
 });

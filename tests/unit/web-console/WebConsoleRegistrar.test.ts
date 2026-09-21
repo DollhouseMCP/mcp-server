@@ -904,7 +904,7 @@ describe('WebConsoleRegistrar', () => {
     const container = new TestContainer();
     const { PostgresAuthStorageLayer } = await import('../../../src/auth/embedded-as/storage/PostgresAuthStorageLayer.js');
     const { PostgresRateLimitStore } = await import('../../../src/auth/embedded-as/storage/PostgresRateLimitStore.js');
-    const database = { transaction: jest.fn() } as unknown as import('../../../src/database/connection.js').DatabaseInstance;
+    const database = { transaction: jest.fn(), execute: jest.fn(async () => []) } as unknown as import('../../../src/database/connection.js').DatabaseInstance;
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
