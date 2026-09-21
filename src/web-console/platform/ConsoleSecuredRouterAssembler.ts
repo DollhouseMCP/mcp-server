@@ -87,6 +87,14 @@ export function assembleSecuredConsoleRouter(
     const correlationId = requireConsoleRequestContext(request as ConsoleRequest).correlationId;
     const knownProblem = problemForConsoleError(error);
     if (knownProblem) {
+      if (error instanceof ConsoleAdminAuditExecutionError) {
+        // The retryable operation rolled back, but its mandatory failure audit
+        // also failed. Report that outage without raw database/adapter messages.
+        const diagnostic = new Error('Mandatory administrative audit failed during invitation contention');
+        logger.error(`[ConsoleSecuredRouter] ${diagnostic.message} corr=${correlationId}`);
+        try { options.reportInternalError?.(diagnostic, correlationId); }
+        catch { /* Diagnostics cannot replace the sanitized retryable response. */ }
+      }
       sendProblemResponse(response, knownProblem, correlationId);
       return;
     }

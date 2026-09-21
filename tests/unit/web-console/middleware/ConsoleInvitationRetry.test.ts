@@ -1,3 +1,4 @@
+import { logger } from '../../../../src/utils/logger.js';
 import { randomUUID } from 'node:crypto';
 import { jest } from '@jest/globals';
 import express from 'express';
@@ -30,7 +31,7 @@ it.each([false, true])('permits same-key retry through the secured invite servic
     createdAt: now, lastUsedAt: now, idleExpiresAt: new Date(now.getTime() + 3600000),
     absoluteExpiresAt: new Date(now.getTime() + 3600000), revokedAt: null, lastIp: null, userAgent: null });
   const audit = new InMemoryAdminAuditWriter();
-  if (failAudit) jest.spyOn(audit, 'write').mockRejectedValueOnce(new Error('audit unavailable'));
+  if (failAudit) jest.spyOn(audit, 'write').mockRejectedValueOnce(new Error('audit failed with sensitive database detail'));
   const issuer = { issueInvite: jest.fn(async () => ({ userId: randomUUID(), primarySub: 'local_invited',
     inviteUrl: 'https://console.example.test/manual-link', expiresAt: new Date(now.getTime() + 900000) })) };
   issuer.issueInvite.mockRejectedValueOnce(new ConsoleInvitationContentionError());
@@ -48,8 +49,10 @@ it.each([false, true])('permits same-key retry through the secured invite servic
   registry.register({ id: 'invite_retry', apiVersion: 'v1', capabilities: [capability],
     auditOperations: [{ id: 'accounts.users.invite' }], routes: [route] });
   const idempotency = new InMemoryIdempotencyStore();
+  const reportInternalError = jest.fn((_error: unknown, _correlationId: string) => { throw new Error('diagnostic sink unavailable'); });
+  const logError = jest.spyOn(logger, 'error').mockImplementation(() => {});
   const app = express().use(express.json()).use(assembleSecuredConsoleRouter(registry, {
-    sessionStore: sessions, identityResolver: new InMemoryConsoleIdentityResolver([{ sub, userId, disabledAt: null,
+    reportInternalError, sessionStore: sessions, identityResolver: new InMemoryConsoleIdentityResolver([{ sub, userId, disabledAt: null,
       authzVersion: 1, roles: ['admin'] }]), opaqueValues: opaque, consoleOrigin: origin, adminAuditWriter: audit,
     idempotencyStore: idempotency, runtimeStore: new InMemoryRuntimeSessionControlStore(), idleTimeoutMs: 3600000, now: () => now,
   }));
@@ -62,6 +65,16 @@ it.each([false, true])('permits same-key retry through the secured invite servic
   expect(failed.body.code).toBe('invitation_busy');
   expect(failed.text).not.toContain('duplicate');
   expect(failed.text).not.toContain('55P03');
+  expect(reportInternalError).toHaveBeenCalledTimes(failAudit ? 1 : 0);
+  if (failAudit) {
+    expect(reportInternalError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Mandatory administrative audit failed during invitation contention' }), expect.any(String));
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Mandatory administrative audit failed'));
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('sensitive database detail');
+    expect(reportInternalError.mock.calls[0][0]).not.toHaveProperty('cause');
+    expect(failed.text).not.toContain('sensitive database detail');
+  }
+  logError.mockRestore();
   expect(await idempotency.find(sessionHash, key, now)).toBeNull();
   expect((await send()).status).toBe(201);
   expect((await send()).status).toBe(201);
