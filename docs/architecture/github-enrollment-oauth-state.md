@@ -4,7 +4,7 @@ This slice prepares a one-time GitHub OAuth authorization request for an already
 
 GitHub's [OAuth web application flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#web-application-flow) strongly recommends an unguessable `state` and PKCE with an `S256` challenge. The enrollment service follows that contract with a dedicated callback path and only the `read:user` scope. It does not request repository or email scopes.
 
-The browser receives a random 32-byte state in the GitHub authorization URL. Persistence contains only a server-keyed state hash and the server-derived restricted-session context. A separate server-keyed HMAC purpose derives the PKCE verifier directly from the raw state; the verifier cannot be recovered from the stored state hash. Neither raw value is persisted.
+The browser receives a random 32-byte state in the GitHub authorization URL. Persistence contains only a server-keyed state hash, a server-generated correlation UUID, and the server-derived restricted-session context. A separate server-keyed HMAC purpose derives the PKCE verifier directly from the raw state; the verifier cannot be recovered from the stored state hash. Neither raw value is persisted. The state service returns the scalar account, invitation, claim, generation, and correlation context only to the internal orchestration layer; the browser response projects only the authorization URL and expiry.
 
 The configured callback must be a canonical HTTPS URL with the exact `/auth/onboarding/github/callback` path and no user information, query, or fragment. The ordinary GitHub sign-in callback and interaction state are separate flows.
 

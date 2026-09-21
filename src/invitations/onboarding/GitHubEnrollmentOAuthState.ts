@@ -13,14 +13,26 @@ export interface GitHubEnrollmentStateRecord {
   readonly invitationId: string;
   readonly generation: number;
   readonly claimAssertionId: string;
+  readonly correlationId: string;
   readonly purpose: typeof GITHUB_ENROLLMENT_PURPOSE;
   readonly callbackUri: string;
   readonly createdAt: Date;
   readonly expiresAt: Date;
 }
 
+export type GitHubEnrollmentStateContext = Pick<GitHubEnrollmentStateRecord,
+  'userId' | 'invitationId' | 'generation' | 'claimAssertionId' | 'correlationId'>;
+
+export interface GitHubEnrollmentAuthorization {
+  readonly authorizationUrl: string;
+  readonly expiresAt: Date;
+  /** Server-only audit/activation context. Never serialize this into the browser response. */
+  readonly context: GitHubEnrollmentStateContext;
+}
+
 export interface GitHubEnrollmentStateStore {
-  replace(input: Pick<GitHubEnrollmentStateRecord, 'stateHash' | 'ownerHash' | 'sessionHash' | 'callbackUri'>): Promise<GitHubEnrollmentStateRecord>;
+  replace(input: Pick<GitHubEnrollmentStateRecord,
+    'stateHash' | 'ownerHash' | 'sessionHash' | 'callbackUri' | 'correlationId'>): Promise<GitHubEnrollmentStateRecord>;
   consume(input: Pick<GitHubEnrollmentStateRecord, 'stateHash' | 'ownerHash' | 'sessionHash' | 'callbackUri'>): Promise<GitHubEnrollmentStateRecord | null>;
 }
 
@@ -44,14 +56,15 @@ export class GitHubEnrollmentOAuthStateService {
     this.callbackUri = validateCallbackUri(options.callbackUri);
   }
 
-  async begin(ownerHash: Buffer, sessionHash: Buffer): Promise<{ readonly authorizationUrl: string; readonly expiresAt: Date }> {
+  async begin(ownerHash: Buffer, sessionHash: Buffer, correlationId: string): Promise<GitHubEnrollmentAuthorization> {
+    if (!isUuid(correlationId)) throw new GitHubEnrollmentStateError();
     const state = this.opaqueValues.createOpaqueValue();
     if (!isOpaqueState(state)) throw new GitHubEnrollmentStateError();
     const stateHash = this.hashState(state);
     const verifier = this.codeVerifier(state);
     let record: GitHubEnrollmentStateRecord;
     try {
-      record = await this.store.replace({ stateHash, ownerHash, sessionHash, callbackUri: this.callbackUri });
+      record = await this.store.replace({ stateHash, ownerHash, sessionHash, callbackUri: this.callbackUri, correlationId });
     } catch { throw new GitHubEnrollmentStateError(); }
     const url = new URL('https://github.com/login/oauth/authorize');
     url.search = new URLSearchParams({
@@ -62,7 +75,7 @@ export class GitHubEnrollmentOAuthStateService {
       code_challenge: createHash('sha256').update(verifier, 'ascii').digest('base64url'),
       code_challenge_method: 'S256',
     }).toString();
-    return { authorizationUrl: url.toString(), expiresAt: record.expiresAt };
+    return { authorizationUrl: url.toString(), expiresAt: record.expiresAt, context: context(record) };
   }
 
   async consume(state: string, ownerHash: Buffer, sessionHash: Buffer): Promise<GitHubEnrollmentStateRecord & { readonly codeVerifier: string }> {
@@ -82,6 +95,16 @@ export class GitHubEnrollmentOAuthStateService {
   private codeVerifier(state: string): string {
     return this.opaqueValues.hashOpaqueValue(`dollhouse/onboarding/github-pkce/v1\0${state}`).toString('base64url');
   }
+}
+
+function context(record: GitHubEnrollmentStateRecord): GitHubEnrollmentStateContext {
+  return {
+    userId: record.userId,
+    invitationId: record.invitationId,
+    generation: record.generation,
+    claimAssertionId: record.claimAssertionId,
+    correlationId: record.correlationId,
+  };
 }
 
 export function validateGitHubEnrollmentCallbackUri(value: string): string {
@@ -110,4 +133,8 @@ function validateClientId(value: string): string {
 function isOpaqueState(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
     && Buffer.from(value, 'base64url').toString('base64url') === value;
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }

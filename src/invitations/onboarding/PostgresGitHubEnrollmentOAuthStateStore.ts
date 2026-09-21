@@ -18,8 +18,10 @@ export const GITHUB_ENROLLMENT_STATE_MODEL = 'DollhouseGithubEnrollmentStateV1';
 export class PostgresGitHubEnrollmentOAuthStateStore implements GitHubEnrollmentStateStore {
   constructor(private readonly db: DatabaseInstance, private readonly authority: OnboardingSessionAuthority) {}
 
-  async replace(input: Pick<GitHubEnrollmentStateRecord, 'stateHash' | 'ownerHash' | 'sessionHash' | 'callbackUri'>): Promise<GitHubEnrollmentStateRecord> {
-    const owned = copyInput(input);
+  async replace(input: Pick<GitHubEnrollmentStateRecord,
+    'stateHash' | 'ownerHash' | 'sessionHash' | 'callbackUri' | 'correlationId'>): Promise<GitHubEnrollmentStateRecord> {
+    assertUuid(input.correlationId, 'correlationId');
+    const owned = { ...copyInput(input), correlationId: input.correlationId };
     return withSystemContext(this.db, async tx => {
       const session = await this.authority.lockSessionWithTx(tx, owned.ownerHash, owned.sessionHash);
       if (!session) throw new Error('GitHub enrollment state is unavailable');
@@ -77,6 +79,7 @@ function rowData(record: GitHubEnrollmentStateRecord) {
     stateHash: record.stateHash.toString('hex'), ownerHash: record.ownerHash.toString('hex'),
     sessionHash: record.sessionHash.toString('hex'), userId: record.userId, invitationId: record.invitationId,
     generation: record.generation, claimAssertionId: record.claimAssertionId, purpose: record.purpose,
+    correlationId: record.correlationId,
     callbackUri: record.callbackUri, createdAt: record.createdAt.toISOString(), expiresAt: record.expiresAt.toISOString(),
   }, expiresAt: record.expiresAt };
 }
@@ -88,12 +91,13 @@ async function readRecord(tx: DrizzleTx, ownerHash: Buffer): Promise<GitHubEnrol
   const value = stored.payload as Record<string, unknown>;
   try {
     const keys = ['stateHash', 'ownerHash', 'sessionHash', 'userId', 'invitationId', 'generation',
-      'claimAssertionId', 'purpose', 'callbackUri', 'createdAt', 'expiresAt'];
+      'claimAssertionId', 'correlationId', 'purpose', 'callbackUri', 'createdAt', 'expiresAt'];
     if (Object.keys(value).length !== keys.length || Object.keys(value).some(name => !keys.includes(name))) return null;
     const record: GitHubEnrollmentStateRecord = {
       stateHash: decodeHash(value.stateHash), ownerHash: decodeHash(value.ownerHash), sessionHash: decodeHash(value.sessionHash),
       userId: value.userId as string, invitationId: value.invitationId as string, generation: value.generation as number,
       claimAssertionId: value.claimAssertionId as string, purpose: value.purpose as typeof GITHUB_ENROLLMENT_PURPOSE,
+      correlationId: value.correlationId as string,
       callbackUri: value.callbackUri as string, createdAt: decodeDate(value.createdAt), expiresAt: decodeDate(value.expiresAt),
     };
     validateRecord(record);
@@ -108,7 +112,7 @@ function validateRecord(record: GitHubEnrollmentStateRecord): void {
     throw new Error('Invalid GitHub enrollment state');
   }
   for (const hash of [record.stateHash, record.ownerHash, record.sessionHash]) assertHash(hash, 'OAuth state hash');
-  for (const id of [record.userId, record.invitationId, record.claimAssertionId]) assertUuid(id, 'OAuth state id');
+  for (const id of [record.userId, record.invitationId, record.claimAssertionId, record.correlationId]) assertUuid(id, 'OAuth state id');
   if (!Number.isFinite(record.createdAt.getTime()) || !Number.isFinite(record.expiresAt.getTime())
       || record.expiresAt <= record.createdAt
       || record.expiresAt.getTime() - record.createdAt.getTime() > GITHUB_ENROLLMENT_STATE_TTL_SECONDS * 1000) {

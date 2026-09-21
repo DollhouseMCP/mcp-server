@@ -64,20 +64,24 @@ describe('PostgreSQL GitHub enrollment OAuth state', () => {
   it('persists hashes and server-held authority only, then consumes exactly once', async () => {
     if (!available) return;
     const f = await fixture();
-    const started = await f.service.begin(f.owner.hash, f.session.hash);
+    const correlationId = randomUUID();
+    const started = await f.service.begin(f.owner.hash, f.session.hash, correlationId);
     const state = new URL(started.authorizationUrl).searchParams.get('state')!;
     const row = await stored(f.owner.hash);
     const serialized = JSON.stringify(row);
     expect(serialized).not.toContain(state);
     expect(serialized).not.toContain('codeVerifier');
     expect(row.payload).toMatchObject({ userId: f.record.userId, invitationId: f.invitation.id,
-      generation: 1, claimAssertionId: f.record.claimAssertionId, purpose: 'link_login_identity', callbackUri: CALLBACK });
+      generation: 1, claimAssertionId: f.record.claimAssertionId, correlationId,
+      purpose: 'link_login_identity', callbackUri: CALLBACK });
     const payload = row.payload as { createdAt: string; expiresAt: string };
     expect(new Date(payload.expiresAt).getTime() - new Date(payload.createdAt).getTime()).toBe(300_000);
     expect(started.expiresAt.toISOString()).toBe(payload.expiresAt);
+    expect(started.context).toEqual({ userId: f.record.userId, invitationId: f.invitation.id,
+      generation: 1, claimAssertionId: f.record.claimAssertionId, correlationId });
     const consumed = await f.service.consume(state, f.owner.hash, f.session.hash);
     expect(consumed).toMatchObject({ userId: f.record.userId, invitationId: f.invitation.id,
-      codeVerifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+      correlationId, codeVerifier: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
     expect(await stored(f.owner.hash)).toBeUndefined();
     await expect(f.service.consume(state, f.owner.hash, f.session.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
   });
@@ -85,8 +89,8 @@ describe('PostgreSQL GitHub enrollment OAuth state', () => {
   it('replaces the owner slot and does not consume it for state, owner, or session swaps', async () => {
     if (!available) return;
     const f = await fixture();
-    const first = new URL((await f.service.begin(f.owner.hash, f.session.hash)).authorizationUrl).searchParams.get('state')!;
-    const second = new URL((await f.service.begin(f.owner.hash, f.session.hash)).authorizationUrl).searchParams.get('state')!;
+    const first = new URL((await f.service.begin(f.owner.hash, f.session.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
+    const second = new URL((await f.service.begin(f.owner.hash, f.session.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
     await expect(f.service.consume(first, f.owner.hash, f.session.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
     await expect(f.service.consume(second, randomBytes(32), f.session.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
     await expect(f.service.consume(second, f.owner.hash, randomBytes(32))).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
@@ -97,20 +101,20 @@ describe('PostgreSQL GitHub enrollment OAuth state', () => {
   it('rejects expired state using database time without deleting a different future retry', async () => {
     if (!available) return;
     const f = await fixture();
-    const state = new URL((await f.service.begin(f.owner.hash, f.session.hash)).authorizationUrl).searchParams.get('state')!;
+    const state = new URL((await f.service.begin(f.owner.hash, f.session.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
     const row = await stored(f.owner.hash);
     await db().update(authKv).set({ payload: { ...(row.payload as object), expiresAt: new Date(0).toISOString() }, expiresAt: new Date(0) })
       .where(slot(f.owner.hash));
     await expect(f.service.consume(state, f.owner.hash, f.session.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
     expect(await stored(f.owner.hash)).toBeDefined();
-    const replacement = new URL((await f.service.begin(f.owner.hash, f.session.hash)).authorizationUrl).searchParams.get('state')!;
+    const replacement = new URL((await f.service.begin(f.owner.hash, f.session.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
     await expect(f.service.consume(replacement, f.owner.hash, f.session.hash)).resolves.toMatchObject({ userId: f.record.userId });
   });
 
   it('revalidates the live restricted session and rejects a superseded binding', async () => {
     if (!available) return;
     const f = await fixture();
-    const state = new URL((await f.service.begin(f.owner.hash, f.session.hash)).authorizationUrl).searchParams.get('state')!;
+    const state = new URL((await f.service.begin(f.owner.hash, f.session.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
     const replacementSession = credentials.issue('session');
     await onboardingStore().replaceSession({ ownerHash: f.owner.hash, sessionHash: replacementSession.hash,
       csrfTokenHash: credentials.issue('csrf').hash, invitationId: f.record.invitationId,
@@ -118,14 +122,14 @@ describe('PostgreSQL GitHub enrollment OAuth state', () => {
     await expect(f.service.consume(state, f.owner.hash, f.session.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
     await expect(f.service.consume(state, f.owner.hash, replacementSession.hash)).rejects.toMatchObject({ name: 'GitHubEnrollmentStateError' });
     expect(await stored(f.owner.hash)).toBeDefined();
-    const next = new URL((await f.service.begin(f.owner.hash, replacementSession.hash)).authorizationUrl).searchParams.get('state')!;
+    const next = new URL((await f.service.begin(f.owner.hash, replacementSession.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
     await expect(f.service.consume(next, f.owner.hash, replacementSession.hash)).resolves.toMatchObject({ sessionHash: replacementSession.hash });
   });
 
   it('rolls back consumption when the state delete fails and permits one later retry', async () => {
     if (!available) return;
     const f = await fixture();
-    const state = new URL((await f.service.begin(f.owner.hash, f.session.hash)).authorizationUrl).searchParams.get('state')!;
+    const state = new URL((await f.service.begin(f.owner.hash, f.session.hash, randomUUID())).authorizationUrl).searchParams.get('state')!;
     await db().execute(sql.raw(`CREATE OR REPLACE FUNCTION test_github_state_delete_failure() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN IF OLD.model = '${GITHUB_ENROLLMENT_STATE_MODEL}' AND OLD.id = '${f.owner.hash.toString('hex')}' THEN RAISE EXCEPTION 'test delete failure'; END IF; RETURN OLD; END $$`));
     try {
