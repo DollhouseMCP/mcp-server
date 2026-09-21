@@ -7,7 +7,7 @@ import {
 } from '../web-console/ui/account-username.js';
 import { MAX_INVITATION_TTL_HOURS, MIN_INVITATION_TTL_HOURS, readInvitationConfig } from './InvitationConfig.js';
 import { normalizeInvitationEmail } from './InvitationEmail.js';
-import { generateInvitationToken, INVITATION_SECRET_BYTES } from './InvitationToken.js';
+import { INVITATION_SECRET_BYTES, serializeInvitationToken } from './InvitationToken.js';
 import {
   InvitationError, type IInvitationLifecycleService, type IssuedInvitation,
   type IssueInvitationInput, type RegenerateInvitationInput, type RevokeInvitationInput,
@@ -55,7 +55,7 @@ export class InvitationManagementService implements Pick<IInvitationLifecycleSer
         intendedRoles: owned.intendedRoles, generation: 1, credentialSecret: secret,
         ttlHours, correlationId: owned.correlationId,
       }));
-      return { invitation, credential: generateInvitationToken(invitation.id, 1, () => secret).token };
+      return { invitation, credential: serializeInvitationToken(invitation.id, 1, secret) };
     } finally {
       secret.fill(0);
     }
@@ -78,7 +78,7 @@ export class InvitationManagementService implements Pick<IInvitationLifecycleSer
       }));
       return {
         invitation,
-        credential: generateInvitationToken(invitation.id, invitation.currentGeneration.generation, () => secret).token,
+        credential: serializeInvitationToken(invitation.id, invitation.currentGeneration.generation, secret),
       };
     } finally {
       secret.fill(0);
