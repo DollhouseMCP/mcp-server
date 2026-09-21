@@ -124,7 +124,8 @@ it.each(['auth_accounts', 'user_admin_roles', 'admin_audit_chain_heads'] as cons
 it.each(['durable', 'legacy'] as const)('compares older stored username encodings canonically in the %s writer', async kind => {
   if (!available) return;
   const f = fixture();
-  const username = `${kind === 'durable' ? 'CAFE' : 'café'}-${randomUUID()}`;
+  // The durable store requires canonical input; vary the older stored encoding.
+  const username = `café-${randomUUID()}`;
   await connection.db.insert(users).values({ username: ` ${username.normalize('NFD').toUpperCase()} ` });
   const pending = kind === 'durable'
     ? issueDurable(connection.db, { ...f.durable, username })
