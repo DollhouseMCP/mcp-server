@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { eq } from 'drizzle-orm';
+import { withSystemContext } from '../../../src/database/admin.js';
+import { deleteConsolePrincipalWithTx } from '../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
 import { users } from '../../../src/database/schema/users.js';
 import { accountInvitations, accountInvitationGenerations } from '../../../src/database/schema/invitations.js';
 import { PostgresInvitationManagementStore } from '../../../src/invitations/PostgresInvitationManagementStore.js';
@@ -80,4 +82,21 @@ it('selects the newest invitation deterministically when an account has terminal
   expect(response.status).toBe(200);
   expect(response.body.invitation.id).toBe(ids[1]); expect(response.body.invitation.state).toBe('revoked');
   expect(Object.keys(response.body)).toEqual(['invitation']);
+});
+
+it('keeps deleted account tombstones unavailable through the actual deletion path', async () => {
+  if (!available) return;
+  const db = getTestAdminDb(), h = await invitationAdminHarness(options(), 'admin', true, actorId);
+  const issued = await h.send('post', '', invitationAdminBody());
+  expect(issued.status).toBe(201);
+  const userId = issued.body.invitation.user_id;
+  expect((await lookup(h, userId)).status).toBe(200);
+  const deleted = await withSystemContext(db, tx => deleteConsolePrincipalWithTx(tx, { userId, deletedByUserId: actorId, deletedAt: new Date() }));
+  expect(deleted).toMatchObject({ outcome: 'anonymized' });
+  const retained = await db.select().from(accountInvitations).where(eq(accountInvitations.userId, userId));
+  expect(retained).toHaveLength(1);
+  const response = await lookup(h, userId), absent = await lookup(h, randomUUID());
+  expect(response.status).toBe(404); expect(response.body).toEqual(absent.body);
+  expect(response.body).not.toHaveProperty('invitation');
+  expect(await options().store.inspectForUser(userId)).toBeNull();
 });
