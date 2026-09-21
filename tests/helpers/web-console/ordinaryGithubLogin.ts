@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { TEST_CREDENTIALS } from '../../fixtures/testCredentials.js';
 import type { DatabaseInstance } from '../../../src/database/connection.js';
 import { GithubSocialMethod } from '../../../src/auth/embedded-as/methods/GithubSocialMethod.js';
 import { PostgresAuthStorageLayer } from '../../../src/auth/embedded-as/storage/PostgresAuthStorageLayer.js';
@@ -21,13 +22,13 @@ export async function ordinaryGithubConsole(db: DatabaseInstance, githubId: numb
   const resolver = new PostgresConsoleIdentityResolver(db), opaque = new HmacConsoleOpaqueValueService(randomBytes(32));
   let verifiedPrimary = true;
   const providerCalls: string[] = [];
-  const method = new GithubSocialMethod({ storage, clientId: 'ordinary-test-client', clientSecret: 'ordinary-test-secret',
+  const method = new GithubSocialMethod({ storage, clientId: 'ordinary-test-client', clientSecret: TEST_CREDENTIALS.MOCK_SECRET,
     callbackUrl: `${origin}/auth/social/github/callback`, allowlistRequired: true,
     signInAllowlistAuthority: new PostgresConsoleAccountAllowlistStore(db),
     fetchImpl: async input => {
       const url = String(input); providerCalls.push(url);
       let body;
-      if (url === 'https://github.com/login/oauth/access_token') body = { access_token: 'ordinary-test-provider-token' };
+      if (url === 'https://github.com/login/oauth/access_token') body = { access_token: TEST_CREDENTIALS.MOCK_GITHUB_OAUTH };
       else if (url === 'https://api.github.com/user') body = { id: githubId, login: 'ordinary-invited-user', name: 'GitHub display' };
       else if (url === 'https://api.github.com/user/emails') body = [{ email: providerEmail, primary: true, verified: verifiedPrimary }];
       else throw new Error('Unexpected upstream route');
