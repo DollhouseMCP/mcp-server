@@ -37,6 +37,22 @@ describe('invitation delivery metadata boundary', () => {
     expect(sanitizeDeliveryResult({ state: 'failed', failureClass: 'not_sent' }).state).toBe('failed');
   });
 
+  it.each([
+    { state: 'submitted', smtpStatus: 550 }, { state: 'submitted', smtpStatus: 421 }, { state: 'submitted', smtpStatus: 354 },
+    { state: 'failed', failureClass: 'not_sent', smtpStatus: 250 }, { state: 'failed', failureClass: 'not_sent', smtpStatus: 354 },
+    { state: 'unknown', failureClass: 'timeout', smtpStatus: 250 }, { state: 'unknown', failureClass: 'timeout', smtpStatus: 550 },
+    { state: 'unknown', failureClass: 'timeout', smtpStatus: 354 },
+  ] as const)('rejects contradictory final SMTP status $smtpStatus for $state', ({ smtpStatus, ...outcome }) => {
+    expect(() => sanitizeDeliveryResult({ ...outcome, sanitizedDetail: { smtpStatus } })).toThrow('Invalid invitation delivery metadata');
+  });
+
+  it.each([
+    { state: 'submitted', smtpStatus: 200 }, { state: 'submitted', smtpStatus: 299 },
+    { state: 'failed', failureClass: 'not_sent', smtpStatus: 400 }, { state: 'failed', failureClass: 'not_sent', smtpStatus: 599 },
+  ] as const)('preserves a consistent final SMTP status $smtpStatus for $state', ({ smtpStatus, ...outcome }) => {
+    expect(sanitizeDeliveryResult({ ...outcome, sanitizedDetail: { smtpStatus } })).toMatchObject({ ...outcome, sanitizedDetail: { smtpStatus } });
+  });
+
   it.each(['smtp\nsecret', 'https://smtp.example.test', 'x'.repeat(33)])('rejects invalid provider identifiers', provider => {
     expect(() => validateDeliveryProvider(provider)).toThrow();
   });

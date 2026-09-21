@@ -263,6 +263,21 @@ describe('transactional invitation delivery state', () => {
     expect(getErrorCode(error)).toBe(state === null ? '23502' : '23514');
   });
 
+  it.each([
+    { state: 'submitted', sanitizedDetail: { smtpStatus: 550 } },
+    { state: 'failed', failureClass: 'recipient_rejected', sanitizedDetail: { smtpStatus: 250 } },
+    { state: 'unknown', failureClass: 'timeout', sanitizedDetail: { smtpStatus: 250 } },
+  ] as const)('rejects contradictory $state SMTP evidence without changing the attempt or audit', async update => {
+    if (!dbAvailable) return;
+    const invitation = await issue();
+    const attempt = await reserve(invitation.id);
+    const before = await deliveries().list(invitation.id);
+    const events = await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${invitation.id} ORDER BY id`);
+    await expect(recordResult(attempt.id, update)).rejects.toMatchObject({ code: 'invitation_invalid' });
+    expect(await deliveries().list(invitation.id)).toEqual(before);
+    expect(await db().execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${invitation.id} ORDER BY id`)).toEqual(events);
+  });
+
   it('leaves pending invitation and account untouched after unsafe result metadata is rejected', async () => {
     if (!dbAvailable) return;
     const invitation = await issue();

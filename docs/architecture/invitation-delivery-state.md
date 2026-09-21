@@ -68,7 +68,10 @@ query strings, whitespace and multiline responses. Provider IDs must come from
 the trusted adapter's ID field, not arbitrary error text.
 
 Diagnostic metadata is restricted to integer `durationMs` (0–86,400,000), integer
-`smtpStatus` (100–599), and boolean `providerAccepted`. Unknown keys, strings,
+`smtpStatus` (100–599), and boolean `providerAccepted`. A supplied SMTP status
+represents the final submission outcome: `submitted` requires 2xx and `failed`
+requires 4xx/5xx. `unknown` must omit it because no final outcome is established;
+intermediate greeting/AUTH/envelope/DATA-ready replies are not final evidence. Unknown keys, strings,
 nested payloads, unbounded numbers, and contradictions with the recorded state
 are rejected. Raw errors, credentials, invitation URLs and SMTP/API secrets must
 never enter these fields. Unknown outcomes cannot assert `providerAccepted`.

@@ -40,6 +40,10 @@ export function sanitizeDeliveryResult(update: InvitationDeliveryResultUpdate): 
   const sanitizedDetail = sanitizeDeliveryDetail(update.sanitizedDetail);
   if (sanitizedDetail?.providerAccepted !== undefined &&
     (state === 'unknown' || (state === 'submitted' ? sanitizedDetail.providerAccepted !== true : sanitizedDetail.providerAccepted !== false))) invalid();
+  // smtpStatus describes the final submission outcome, never an earlier SMTP command.
+  const smtpStatus = sanitizedDetail?.smtpStatus;
+  if (typeof smtpStatus === 'number' && (state === 'unknown' ||
+    (state === 'submitted' ? smtpStatus < 200 || smtpStatus >= 300 : smtpStatus < 400 || smtpStatus >= 600))) invalid();
   return { state, failureClass, providerMessageId, sanitizedDetail };
 }
 
