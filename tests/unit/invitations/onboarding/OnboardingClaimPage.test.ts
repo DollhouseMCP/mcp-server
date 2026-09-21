@@ -251,17 +251,23 @@ it('ignores a GitHub start response after pagehide', async () => {
 
 
 it.each([
-  ['OAuth state', 5 * 60000 + 1, '2026-10-01T12:05:00Z'],
-  ['claim with a suspended timer', 15 * 60000 + 1, '2026-10-01T12:20:00Z'],
-])('rejects a delayed GitHub response after %s expiry using server-adjusted monotonic time', async (_label, elapsed, expiresAt) => {
-  let now = 0;
+  ['OAuth state', 5 * 60000 + 1, 0, '2026-10-01T12:05:00Z'],
+  ['claim with a suspended timer', 15 * 60000 + 1, 0, '2026-10-01T12:20:00Z'],
+  ['OAuth state during system sleep', 0, 5 * 60000 + 1, '2026-10-01T12:05:00Z'],
+  ['claim during system sleep', 0, 15 * 60000 + 1, '2026-10-01T12:20:00Z'],
+  ['backward wall-clock adjustment', 0, -1, '2026-10-01T12:05:00Z'],
+])('rejects a delayed GitHub response after %s expiry or clock discontinuity', async (_label, elapsed, wallElapsed, expiresAt) => {
+  let now = 0, wall = Date.parse('2030-01-01T00:00:00Z');
   let finish!: (value: Reply) => void;
   const pending = new Promise<Reply>(resolve => { finish = resolve; });
   const b = await browser('', url => url.endsWith('/github/start') ? pending :
     { status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } }, false,
-  window => { Object.defineProperty(window.performance, 'now', { value: () => now }); });
+  window => {
+    Object.defineProperty(window.performance, 'now', { value: () => now });
+    Object.defineProperty(window.Date, 'now', { value: () => wall });
+  });
   await until(() => !b.button('claim-github').disabled); b.button('claim-github').click();
-  now = Number(elapsed);
+  now = Number(elapsed); wall += Number(wallElapsed);
   finish({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt } });
   await until(() => !b.button('claim-retry').hidden);
   expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');

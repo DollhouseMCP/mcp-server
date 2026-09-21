@@ -22,7 +22,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
   let claimed = false;
   let lifecycle = 0;
   let transport = new AbortController();
-  let serverClock: { time: number; started: number; deadline: number } | null = null;
+  let serverClock: { time: number; started: number; wallStarted: number; deadline: number } | null = null;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const status = document.getElementById('claim-status')!;
   const details = document.getElementById('claim-details')!;
@@ -53,8 +53,13 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     if (typeof value !== 'string' || !value || value.length > 160) throw new Error('unavailable');
     csrf = value;
   }
+  function elapsed(started: number, wallStarted: number): number {
+    const wall = Date.now() - wallStarted;
+    // Some browsers pause their monotonic clock during sleep; reject backward wall-clock changes.
+    return wall < 0 ? Infinity : Math.max(performance.now() - started, wall);
+  }
   async function context() {
-    const started = performance.now();
+    const started = performance.now(), wallStarted = Date.now();
     const value = await api('/context') as unknown as ClaimMetadata;
     const account = value.account;
     const server = Date.parse(value.serverTime), invitationExpiry = Date.parse(value.invitationExpiresAt), sessionExpiry = Date.parse(value.sessionExpiresAt);
@@ -63,7 +68,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
       value.intendedRoles.some(role => !Object.hasOwn(config.roles, role)) ||
       !Number.isFinite(server) || !Number.isFinite(invitationExpiry) || !Number.isFinite(sessionExpiry) ||
       invitationExpiry <= server || sessionExpiry <= server) throw new Error('unavailable');
-    const remaining = Math.min(sessionExpiry, invitationExpiry) - server - (performance.now() - started);
+    const remaining = Math.min(sessionExpiry, invitationExpiry) - server - elapsed(started, wallStarted);
     if (remaining <= 0) throw new Error('unavailable');
     text('claim-name', account.displayName ?? account.username); text('claim-username', account.username); text('claim-email', account.verifiedEmail);
     text('claim-expiry', new Date(invitationExpiry).toUTCString());
@@ -75,7 +80,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
       const item = document.createElement('li'); item.textContent = config.roles[role].name + ': ' + config.roles[role].summary; list.append(item);
     }
     if (!value.intendedRoles.length) list.textContent = 'Access to your own permitted console and MCP features after activation; no server administration.';
-    serverClock = { time: server, started, deadline: Math.min(sessionExpiry, invitationExpiry) };
+    serverClock = { time: server, started, wallStarted, deadline: Math.min(sessionExpiry, invitationExpiry) };
     claimed = true;
     details.hidden = false; logout.hidden = false; accept.hidden = true; retry.hidden = true;
     announce('Email verified. Review your invitation. Use a GitHub account with a verified primary email.');
@@ -116,10 +121,10 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     const result = await api('/github/start', {});
     if (typeof result.authorizationUrl !== 'string' || result.authorizationUrl.length > 4096 ||
       typeof result.expiresAt !== 'string' || !Number.isFinite(Date.parse(result.expiresAt))) throw new Error('unavailable');
-    // Use the context server clock plus monotonic elapsed time, including response latency.
+    // Use server time plus the greater elapsed clock, including response latency and system sleep.
     // Recheck the claim because its expiry timer may have fired while start was pending.
     if (!claimed || !csrf || !serverClock ||
-      Math.min(Date.parse(result.expiresAt), serverClock.deadline) <= serverClock.time + performance.now() - serverClock.started) throw new Error('unavailable');
+      Math.min(Date.parse(result.expiresAt), serverClock.deadline) <= serverClock.time + elapsed(serverClock.started, serverClock.wallStarted)) throw new Error('unavailable');
     const destination = new URL(result.authorizationUrl);
     if (destination.origin !== 'https://github.com' || destination.pathname !== '/login/oauth/authorize' ||
       destination.username || destination.password || destination.hash) throw new Error('unavailable');
