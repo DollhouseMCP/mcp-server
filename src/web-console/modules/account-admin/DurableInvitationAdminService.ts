@@ -1,3 +1,5 @@
+import type { InvitationDeliveryService } from '../../../invitations/InvitationDeliveryService.js';
+import { deliverAdminInvitation } from './DurableInvitationAdminDelivery.js';
 import type { IRateLimitStore } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { IInvitationManagementStore } from '../../../invitations/IInvitationManagementStore.js';
 import { InvitationManagementService } from '../../../invitations/InvitationManagementService.js';
@@ -22,10 +24,11 @@ export interface DurableInvitationAdminOptions {
   readonly auditWriter: IAdminAuditWriter;
   readonly rateLimits: IRateLimitStore;
   readonly publicBaseUrl: string;
+  readonly delivery?: Pick<InvitationDeliveryService, 'deliver'> | null;
 }
 class RequestFailure extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
 
-/** Request-scoped authorization and DTO boundary; no email submission or ordinary session issuance. */
+/** Request-scoped authorization and immediate delivery composition; no ordinary session issuance. */
 export class DurableInvitationAdminService {
   private readonly origin: string;
   constructor(private readonly options: DurableInvitationAdminOptions) {
@@ -80,14 +83,17 @@ export class DurableInvitationAdminService {
     }
     if (rolesActorMayNotManage(req, roles).length) throw new RequestFailure(403, 'insufficient_role_authority');
     if (action === 'inspect') return { status: 200, body: invitationAdminDto(existing!) };
-    const service = new InvitationManagementService(this.options.store, await this.options.auditFactory(req, route));
+    const audit = await this.options.auditFactory(req, route);
+    const service = new InvitationManagementService(this.options.store, audit);
     if (action === 'revoke') return { status: 200, body: invitationAdminDto(await service.revoke({ invitationId: id as string, correlationId })) };
     const issued = action === 'issue' ? await service.issue({ username: body.username as string,
       displayName: body.display_name as string | null, email: body.email as string, intendedRoles: roles,
       inviterUserId: actor.userId, correlationId, ttlHours }) : await service.regenerate({ invitationId: id as string, correlationId, ttlHours });
-    // Only pure serialization follows commit; there is no second audit/network call to lose the link.
-    return { status: action === 'issue' ? 201 : 200, body: invitationAdminDto(issued.invitation,
-      buildInvitationClaimLink(this.origin, issued.credential)) };
+    // Snapshot the committed manual-copy response before immediate delivery. A
+    // submission/reservation failure must never discard it or trigger a resend.
+    const bodyResult = invitationAdminDto(issued.invitation, buildInvitationClaimLink(this.origin, issued.credential));
+    const delivery = await deliverAdminInvitation(this.options.delivery, issued, correlationId, audit);
+    return { status: action === 'issue' ? 201 : 200, body: { ...bodyResult, delivery } };
   }
 
   private async admit(userId: string): Promise<void> {

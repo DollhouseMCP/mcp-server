@@ -1,3 +1,4 @@
+import { projectAdminDelivery, type DurableInvitationDeliveryDto } from './DurableInvitationAdminDelivery.js';
 import type { InvitationView } from '../../../invitations/InvitationTypes.js';
 
 export interface DurableInvitationAdminDto {
@@ -9,6 +10,7 @@ export interface DurableInvitationAdminDto {
     readonly issued_at: string; readonly expires_at: string;
   };
   readonly claim_url?: string;
+  readonly delivery?: DurableInvitationDeliveryDto;
 }
 
 /** Domain objects never go directly to JSON, even on the immediate secret-bearing response. */
@@ -26,5 +28,6 @@ export function projectInvitationAdminDto(value: unknown, includeClaimUrl: boole
   return { invitation: { id: v.id, user_id: v.user_id, email: v.email, username: v.username,
     display_name: v.display_name, intended_roles: [...v.intended_roles], state: v.state,
     generation: v.generation, generation_state: v.generation_state, issued_at: v.issued_at, expires_at: v.expires_at },
-  ...(includeClaimUrl && dto.claim_url !== undefined ? { claim_url: dto.claim_url } : {}) };
+  ...(includeClaimUrl && dto.claim_url !== undefined ? { claim_url: dto.claim_url } : {}),
+  ...(includeClaimUrl && dto.delivery !== undefined ? { delivery: projectAdminDelivery(dto.delivery) } : {}) };
 }
