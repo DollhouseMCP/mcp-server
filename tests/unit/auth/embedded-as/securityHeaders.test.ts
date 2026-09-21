@@ -40,6 +40,9 @@ async function bootApp(): Promise<{ url: string; close: () => Promise<void> }> {
     allowCspFormActionOrigin(res, 'https://claude.ai');
     res.type('html').send('<!doctype html><html><head><style>body{color:#181816}</style></head><body>ok</body></html>');
   });
+  app.get('/json', (_req, res) => res.json({ display_name: '<style>literal name</style>' }));
+  app.get('/text', (_req, res) => res.type('text').send('<style>literal text</style>'));
+  app.get('/implicit-html', (_req, res) => res.send('<style>body{color:red}</style>'));
   app.get('/invalid-form-action', (_req, res) => {
     allowCspFormActionOrigin(res, 'javascript:alert(1)');
     res.type('html').send('<!doctype html><html><body>ok</body></html>');
@@ -93,6 +96,19 @@ describe('securityHeaders middleware', () => {
     } finally {
       await close();
     }
+  });
+
+  it('preserves JSON and explicit plain text while noncing implicit HTML', async () => {
+    const { url, close } = await bootApp();
+    try {
+      const json = await fetch(`${url}/json`);
+      expect(json.headers.get('cache-control')).toBe('no-store');
+      expect(await json.json()).toEqual({ display_name: '<style>literal name</style>' });
+      expect(await (await fetch(`${url}/text`)).text()).toBe('<style>literal text</style>');
+      const html = await fetch(`${url}/implicit-html`);
+      const nonce = extractStyleNonce(html.headers.get('content-security-policy') ?? '');
+      expect(await html.text()).toBe(`<style nonce="${nonce}">body{color:red}</style>`);
+    } finally { await close(); }
   });
 
   it('also sets Pragma: no-cache for HTTP/1.0 proxies', async () => {

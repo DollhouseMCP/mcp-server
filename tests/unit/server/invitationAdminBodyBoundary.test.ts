@@ -35,6 +35,9 @@ it.each(paths)('bounds %s before any console handler or generic parser', async p
   expect(handler).not.toHaveBeenCalled();
   expect((await request(app).post(path).send({ ttl_hours: 24 })).body).toEqual({ received: { ttl_hours: 24 } });
   expect(handler).toHaveBeenCalledTimes(1);
+  const displayName = '<style data-theme="test">Literal display name</style>';
+  expect((await request(app).post(path).send({ display_name: displayName })).body)
+    .toEqual({ received: { display_name: displayName } });
 });
 
 it('preserves ordinary console body limits and rejects invalid hosts before parsing', async () => {
