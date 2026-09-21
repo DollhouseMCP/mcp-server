@@ -45,6 +45,7 @@ beforeAll(async () => {
   });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: dom.window.document },
+    CSS: { configurable: true, value: { escape: (value: string) => value } }, // Fixtures use selector-safe UUIDs.
     navigator: { configurable: true, value: dom.window.navigator },
     HTMLElement: { configurable: true, value: dom.window.HTMLElement },
     CustomEvent: { configurable: true, value: dom.window.CustomEvent },
@@ -73,7 +74,7 @@ afterEach(() => {
 afterAll(() => {
   dom.window.close();
   for (const key of [
-    'document', 'navigator', 'HTMLElement', 'CustomEvent',
+    'document', 'navigator', 'HTMLElement', 'CustomEvent', 'CSS',
     'addEventListener', 'removeEventListener', 'dispatchEvent',
   ]) Reflect.deleteProperty(globalThis, key);
 });
@@ -200,4 +201,23 @@ describe('users admin durable invitation dialog', () => {
     expect(document.body.textContent).not.toContain('late-secret');
     expect(toast).not.toHaveBeenCalledWith('Invite created.', 'success');
   });
+});
+
+it('opens management from the selected account only when lookup is advertised', async () => {
+  const userId = '11111111-1111-4111-8111-111111111111';
+  get.mockImplementation(async path => {
+    if (path === '/auth/me') return apiResponse(200, { available_admin_capabilities: ['console:admin:accounts'] });
+    if (path.endsWith('/invitation')) return apiResponse(404, {});
+    return apiResponse(200, { items: [{ user_id: userId, username: 'selected-user', roles: [], auth_methods: [] }] });
+  });
+  const panel = await mount((method, path) => method === 'GET' && path === '/admin/accounts/users/:user_id/invitation');
+  (panel.querySelector('[data-user-row]') as HTMLElement).click();
+  (panel.querySelector('#ua-manage-invitation') as HTMLButtonElement).click(); await nextTurn();
+  expect(get).toHaveBeenCalledWith(`/admin/accounts/users/${userId}/invitation`);
+  expect(document.querySelector('#ua-il-status')?.textContent).toContain('No durable invitation');
+  globalThis.dispatchEvent(new dom.window.CustomEvent('dh:elevation-changed', { detail: { active: false } }));
+  expect(document.getElementById('ua-inv-lifecycle')).toBeNull();
+  const legacy = await mount(() => false);
+  (legacy.querySelector('[data-user-row]') as HTMLElement).click();
+  expect(legacy.querySelector('#ua-manage-invitation')).toBeNull();
 });
