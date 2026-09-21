@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { ConsoleStoreValidationError } from '../stores/ConsoleStoreValidation.js';
+import { ConsoleStoreValidationError, isRetryableInvitationContention } from '../stores/ConsoleStoreValidation.js';
 
 const PROBLEM_TYPE_BASE_URI = 'https://dollhousemcp.com/errors/';
 const RESERVED_PROBLEM_MEMBERS = new Set([
@@ -118,6 +118,10 @@ export function problemInputFromHandlerBody(body: unknown, status: number): Cons
 }
 
 export function problemForConsoleError(error: unknown): ConsoleProblemInput | null {
+  if (isRetryableInvitationContention(error)) {
+    return { status: 503, code: 'invitation_busy', title: 'Service unavailable',
+      detail: 'Invitation creation is temporarily busy. Retry this request.' };
+  }
   if (error instanceof ConsoleStoreValidationError) {
     return {
       status: 400,

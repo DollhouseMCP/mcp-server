@@ -11,7 +11,7 @@ import type {
 } from '../platform/ConsolePlatformTypes.js';
 import type { ConsoleProblemInput } from '../platform/ProblemResponses.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
-import { ConsoleStoreValidationError, assertUuid } from '../stores/ConsoleStoreValidation.js';
+import { ConsoleStoreValidationError, assertUuid, isRetryableInvitationContention } from '../stores/ConsoleStoreValidation.js';
 
 const RETENTION_MS = 24 * 60 * 60 * 1000;
 export const MAX_IDEMPOTENCY_BODY_DEPTH = 64;
@@ -103,7 +103,14 @@ export async function executeWithConsoleIdempotency(
         interceptedAuditResult: 'conflict',
       };
     case 'claimed': {
-      const result = await execute();
+      let result: ConsoleHandlerResult;
+      try { result = await execute(); }
+      catch (error) {
+        // Only the explicit, confirmed-rollback invitation outcome is releasable.
+        // Ambiguous failures and ordinary 503 responses retain existing semantics.
+        if (isRetryableInvitationContention(error)) await store.release(claimed.claim);
+        throw error;
+      }
       await store.complete(claimed.claim, {
         responseStatus: result.status,
         responseBodyPresent: result.body !== undefined,

@@ -49,6 +49,8 @@ export type IdempotencyClaimResult =
 export interface IIdempotencyStore {
   claim(identity: IdempotencyRequestIdentity): Promise<IdempotencyClaimResult>;
   complete(claim: IdempotencyClaim, completion: IdempotencyCompletion): Promise<IdempotencyRecord>;
+  /** Release only this still-pending claim after a confirmed rolled-back operation. */
+  release(claim: IdempotencyClaim): Promise<void>;
   find(consoleSessionIdHash: Buffer, idempotencyKey: string, at?: Date): Promise<IdempotencyRecord | null>;
   sweepExpired(before?: Date): Promise<number>;
 }

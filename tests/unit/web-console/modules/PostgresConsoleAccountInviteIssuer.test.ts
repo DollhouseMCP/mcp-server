@@ -2,6 +2,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 let transaction: {
   readonly insert: jest.Mock;
+  readonly execute: jest.Mock;
+  readonly select: jest.Mock;
 };
 const withSystemContextMock = jest.fn((
   _db: unknown,
@@ -27,6 +29,8 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
   it('creates a canonical principal, pre-links the local auth account, and returns a signed invite URL', async () => {
     const insertedValues: unknown[] = [];
     transaction = {
+      execute: jest.fn<() => Promise<unknown>>().mockResolvedValue([]),
+      select: jest.fn(() => ({ from: jest.fn<() => Promise<unknown>>().mockResolvedValue([]) })),
       insert: jest.fn(() => ({
         values: jest.fn((value: unknown) => {
           insertedValues.push(value);

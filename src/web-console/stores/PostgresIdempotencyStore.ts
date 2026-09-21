@@ -85,6 +85,16 @@ export class PostgresIdempotencyStore implements IIdempotencyStore {
     return completedFromRow(rows[0]);
   }
 
+  async release(claim: IdempotencyClaim): Promise<void> {
+    validateIdempotencyClaim(claim);
+    await withSystemContext(this.db, tx => tx.delete(idempotencyRecords).where(and(
+      eq(idempotencyRecords.consoleSessionIdHash, claim.consoleSessionIdHash),
+      eq(idempotencyRecords.idempotencyKey, claim.idempotencyKey),
+      eq(idempotencyRecords.claimId, claim.claimId),
+      eq(idempotencyRecords.state, 'pending'),
+    )));
+  }
+
   async find(
     consoleSessionIdHash: Buffer,
     idempotencyKey: string,

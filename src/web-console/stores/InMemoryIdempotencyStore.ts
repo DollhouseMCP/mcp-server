@@ -58,6 +58,14 @@ export class InMemoryIdempotencyStore implements IIdempotencyStore {
     return cloneIdempotencyRecord(completed);
   }
 
+  async release(claim: IdempotencyClaim): Promise<void> {
+    await Promise.resolve();
+    validateIdempotencyClaim(claim);
+    const key = makeKey(claim.consoleSessionIdHash, claim.idempotencyKey);
+    const existing = this.claims.get(key);
+    if (existing && !('state' in existing) && existing.claimId === claim.claimId) this.claims.delete(key);
+  }
+
   async find(
     consoleSessionIdHash: Buffer,
     idempotencyKey: string,
