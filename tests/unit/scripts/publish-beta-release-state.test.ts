@@ -85,7 +85,7 @@ describe('Publish Beta Release state validation', () => {
     expect(result.outputs).toEqual({});
   });
 
-  it('accepts a fresh beta version with no tag, release, or npm publication', () => {
+  it('accepts explicit npm E404 JSON despite human stderr diagnostics for a fresh version', () => {
     const result = runScenario({});
 
     expect(result.status).toBe(0);
@@ -428,6 +428,7 @@ if [[ "\${FAKE_NPM_EXISTS:-false}" == 'true' ]]; then
   printf '%s\n' "\${FAKE_NPM_RESPONSE}"
   exit 0
 fi
+printf 'npm error code %s\\n' "\${FAKE_NPM_ERROR}" >&2
 printf '{"error":{"code":"%s"}}\\n' "\${FAKE_NPM_ERROR}"
 exit 1
 `;

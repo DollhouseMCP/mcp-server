@@ -121,7 +121,8 @@ jobs:
 
           npm_publish_complete=false
           npm_version_exists=false
-          if npm_lookup=$(npm view "@dollhousemcp/mcp-server@${package_version}" version --json --registry=https://registry.npmjs.org 2>&1); then
+          # npm writes human diagnostics to stderr even when stdout is valid JSON.
+          if npm_lookup=$(npm view "@dollhousemcp/mcp-server@${package_version}" version --json --registry=https://registry.npmjs.org 2>/dev/null); then
             if ! jq -e --arg version "${package_version}" 'type == "string" and . == $version' <<<"${npm_lookup}" >/dev/null; then
               echo "::error::npm returned an unexpected exact-version response; refusing to infer release state"
               exit 1
