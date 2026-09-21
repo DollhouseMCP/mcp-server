@@ -10,6 +10,20 @@ import { OnboardingCredentials } from '../../../../src/invitations/onboarding/On
 import { GitHubEnrollmentFlowError } from '../../../../src/invitations/onboarding/GitHubEnrollmentOrchestrationService.js';
 import type { OnboardingOwnerRecord, OnboardingSessionRecord } from '../../../../src/invitations/onboarding/OnboardingRecords.js';
 import { ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE } from '../../../../src/invitations/onboarding/OnboardingBrowserPolicy.js';
+import {
+  AeadSecretEncryptionService,
+  assembleSecuredConsoleRouter,
+  ConsoleModuleRegistry,
+  createConsoleBffAuthModule,
+  InMemoryAdminAuditWriter,
+  InMemoryConsoleAccountAdminStore,
+  InMemoryConsoleIdentityResolver,
+  InMemoryConsoleSessionStore,
+  InMemoryIdempotencyStore,
+  InMemoryLoginTransactionStore,
+  InMemoryRuntimeSessionControlStore,
+  type IConsoleOAuthClient,
+} from '../../../../src/web-console/index.js';
 import { HmacConsoleOpaqueValueService } from '../../../../src/web-console/security/ConsoleOpaqueValues.js';
 
 const origin = 'https://console.example.test';
@@ -60,6 +74,36 @@ function safe(response: request.Response, forbidden: string[] = []) {
   expect(response.headers['referrer-policy']).toBe('no-referrer');
   expect(response.headers['content-security-policy']).toContain("script-src 'none'");
   for (const secret of forbidden) expect(response.text).not.toContain(secret);
+}
+function mountOrdinaryLogin(app: express.Express): void {
+  const opaqueValues = new HmacConsoleOpaqueValueService(randomBytes(32));
+  const sessionStore = new InMemoryConsoleSessionStore();
+  const identityResolver = new InMemoryConsoleIdentityResolver([]);
+  const oauthClient: IConsoleOAuthClient = {
+    createAuthorizationUrl: () => 'https://github.example/login',
+    exchangeAuthorizationCode: async () => { throw new Error('not used'); },
+  };
+  const registry = new ConsoleModuleRegistry();
+  registry.register(createConsoleBffAuthModule({
+    oauthClient,
+    loginTransactions: new InMemoryLoginTransactionStore(),
+    sessionStore,
+    identityResolver,
+    accountAdminStore: new InMemoryConsoleAccountAdminStore(),
+    opaqueValues,
+    secretEncryption: new AeadSecretEncryptionService({ keyId: 'test-key', key: randomBytes(32) }),
+    publicBaseUrl: origin,
+  }));
+  app.use(assembleSecuredConsoleRouter(registry, {
+    sessionStore,
+    identityResolver,
+    opaqueValues,
+    consoleOrigin: origin,
+    adminAuditWriter: new InMemoryAdminAuditWriter(),
+    idempotencyStore: new InMemoryIdempotencyStore(),
+    runtimeStore: new InMemoryRuntimeSessionControlStore(),
+    idleTimeoutMs: 60 * 60 * 1000,
+  }));
 }
 
 it('sets the original 168h owner horizon before exchange, while retaining a 15min server record', async () => {
@@ -421,7 +465,7 @@ it('offers ordinary sign-in recovery after a committed callback response is lost
   const signInTarget = /<a href="([^"]+)">continue to sign in<\/a>/.exec(recovered.text)?.[1];
   expect(signInTarget).toBeDefined();
 
-  f.app.get(signInTarget!, (_req, res) => { res.status(302).location('https://github.example/login').end(); });
+  mountOrdinaryLogin(f.app);
   const signIn = await request(f.app).get(signInTarget!).set('Cookie', cookies);
   expect(signIn.status).toBe(302);
   expect(signIn.headers.location).toBe('https://github.example/login');
