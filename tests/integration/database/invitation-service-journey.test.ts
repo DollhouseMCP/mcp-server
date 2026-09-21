@@ -133,6 +133,10 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
   const durable = await db.execute(sql`SELECT jsonb_build_object(
     'user', (SELECT to_jsonb(u) FROM users u WHERE id = ${userId}::uuid),
     'accounts', (SELECT jsonb_agg(a) FROM auth_accounts a WHERE user_id = ${userId}::uuid),
+    'intended_roles', (SELECT jsonb_agg(r) FROM account_invitation_intended_roles r WHERE invitation_id = ${issued.invitation.id}::uuid),
+    'granted_roles', (SELECT jsonb_agg(r) FROM user_admin_roles r WHERE user_id = ${userId}::uuid),
+    'allowlist', (SELECT jsonb_agg(a) FROM account_allowlist_entries a WHERE created_by_user_id = ${inviterId}::uuid),
+    'invalidations', (SELECT jsonb_agg(e) FROM security_invalidation_events e WHERE user_id = ${userId}::uuid),
     'invitations', (SELECT jsonb_agg(i) FROM account_invitations i WHERE id = ${issued.invitation.id}::uuid),
     'generations', (SELECT jsonb_agg(g) FROM account_invitation_generations g WHERE invitation_id = ${issued.invitation.id}::uuid),
     'claims', (SELECT jsonb_agg(c) FROM account_invitation_claim_assertions c WHERE invitation_id = ${issued.invitation.id}::uuid),
@@ -143,6 +147,10 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
   ) AS records`);
   const kv = await db.select().from(authKv).where(eq(authKv.id, owner.hash.toString('hex')));
   expect(durable[0].records).toMatchObject({
+    intended_roles: expect.arrayContaining([expect.objectContaining({ role: 'auditor' }), expect.objectContaining({ role: 'operator' })]),
+    granted_roles: expect.arrayContaining([expect.objectContaining({ role: 'auditor' }), expect.objectContaining({ role: 'operator' })]),
+    allowlist: [expect.objectContaining({ kind: 'github_id', normalized_value: githubId })],
+    invalidations: expect.arrayContaining([expect.objectContaining({ reason: 'invitation_activated' })]),
     generations: [expect.objectContaining({ state: 'accepted' })],
     claims: [expect.objectContaining({ state: 'completed' })],
     security: expect.arrayContaining([
