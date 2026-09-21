@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { jest } from '@jest/globals';
+import { PostgresIdempotencyStore } from '../../../src/web-console/stores/PostgresIdempotencyStore.js';
+import { InMemoryIdempotencyStore } from '../../../src/web-console/stores/InMemoryIdempotencyStore.js';
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { eq, sql } from 'drizzle-orm';
 import { createDatabaseConnection, type DatabaseInstance } from '../../../src/database/connection.js';
@@ -10,7 +12,7 @@ import { normalizeAuthAllowlistValue } from '../../../src/auth/embedded-as/allow
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 import { PostgresConsoleAccountInviteIssuer } from '../../../src/web-console/modules/account-admin/PostgresConsoleAccountInviteIssuer.js';
-import { ConsoleStoreConflictError } from '../../../src/web-console/stores/ConsoleStoreValidation.js';
+import { ConsoleStoreConflictError, ConsoleInvitationContentionError } from '../../../src/web-console/stores/ConsoleStoreValidation.js';
 import { closeTestDb, isDatabaseAvailable, TEST_DB_ADMIN_URL } from './test-db-helpers.js';
 
 const audit = { kind: 'system' as const, appendSecurityEvent: appendSecurityAuditEventWithTx };
@@ -111,7 +113,7 @@ it.each(['auth_accounts', 'user_admin_roles', 'admin_audit_chain_heads'] as cons
     // issuer would wait here while holding users, preventing that FK access.
     await writer.execute(sql.raw(`LOCK TABLE ${table} IN ROW EXCLUSIVE MODE`));
     await expect(issueLegacy(observedDb(() => {}), f.legacy)).rejects.toEqual(
-      new ConsoleStoreConflictError('Account creation conflicted with another operation. Please retry.'));
+      new ConsoleInvitationContentionError());
     await writer.select().from(users).where(eq(users.id, actorUserId)).for('key share');
   });
   expect(await connection.db.select().from(users).where(eq(users.username, f.legacy.username))).toHaveLength(0);
@@ -158,4 +160,26 @@ it('starts the legacy credential lifetime after a users lock wait longer than it
     const token = new URL(result.inviteUrl).searchParams.get('invite')!;
     expect(verifier.verify(token)).toMatchObject({ ok: true, payload: { sub: result.primarySub } });
   } finally { clock.mockRestore(); }
+});
+
+it.each(['postgres', 'memory'] as const)('releases only the exact pending idempotency claim in %s storage', async kind => {
+  if (!available) return;
+  const store = kind === 'postgres' ? new PostgresIdempotencyStore(connection.db) : new InMemoryIdempotencyStore();
+  const now = new Date();
+  const identity = { consoleSessionIdHash: randomBytes(32), idempotencyKey: randomUUID(),
+    httpMethod: 'POST' as const, canonicalTarget: '/api/v1/admin/accounts/users/invite', requestFingerprint: randomBytes(32),
+    createdAt: now, expiresAt: new Date(now.getTime() + 3600000) };
+  const first = await store.claim(identity);
+  if (first.kind !== 'claimed') throw new Error('Expected initial claim');
+  await store.release({ ...first.claim, claimId: randomUUID() });
+  expect((await store.claim(identity)).kind).toBe('in_progress');
+  await store.release(first.claim);
+  const next = await store.claim(identity);
+  if (next.kind !== 'claimed') throw new Error('Expected retry claim');
+  expect(next.claim.claimId).not.toBe(first.claim.claimId);
+  await store.release(first.claim);
+  expect((await store.claim(identity)).kind).toBe('in_progress');
+  await store.complete(next.claim, { responseStatus: 201, responseBodyPresent: false, responseBody: null });
+  await store.release(next.claim);
+  expect((await store.claim(identity)).kind).toBe('replay');
 });

@@ -12,7 +12,7 @@ import type { ISigningKeyStore } from '../../../storage/signingKeys/ISigningKeyS
 import { normalizeLocalUsername } from '../../ui/account-username.js';
 import type { ConsoleAdminRole } from '../../stores/IConsoleAccountAdminStore.js';
 import { grantConsoleAdminRoleWithTx } from '../../stores/PostgresConsoleAccountAdminStore.js';
-import { ConsoleStoreConflictError, isUniqueViolation } from '../../stores/ConsoleStoreValidation.js';
+import { ConsoleStoreConflictError, ConsoleInvitationContentionError, isUniqueViolation } from '../../stores/ConsoleStoreValidation.js';
 import type {
   ConsoleAccountInviteIssueInput,
   ConsoleAccountInviteIssueResult,
@@ -122,7 +122,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
       });
     } catch (error) {
       if (getErrorCode(error) === '55P03') {
-        throw new ConsoleStoreConflictError('Account creation conflicted with another operation. Please retry.');
+        throw new ConsoleInvitationContentionError();
       }
       // Duplicate username/sub -> a client conflict, not a server outage.
       if (isUniqueViolation(error)) {

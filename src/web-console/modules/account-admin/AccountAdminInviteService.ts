@@ -12,7 +12,7 @@ import {
   type ConsoleAdminRole,
   assertAdminRole,
 } from '../../stores/IConsoleAccountAdminStore.js';
-import { ConsoleStoreConflictError, ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
+import { ConsoleStoreConflictError, ConsoleStoreValidationError, ConsoleInvitationContentionError } from '../../stores/ConsoleStoreValidation.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountInvite } from './AccountAdminOnboardingDtos.js';
 import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
@@ -108,6 +108,9 @@ export class AccountAdminInviteService {
         issuedAt,
       });
     } catch (error) {
+      // The secured router audits the failure, releases this operation's pending
+      // idempotency claim and emits a sanitized 503; never cache it as a duplicate.
+      if (error instanceof ConsoleInvitationContentionError) throw error;
       if (error instanceof ConsoleStoreConflictError) {
         await this.writeAudit(req, route, 'conflict', 'conflict', null, {
           operation: 'invite',

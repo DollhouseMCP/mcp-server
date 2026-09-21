@@ -20,6 +20,27 @@ export class ConsoleStoreConflictError extends Error {
   }
 }
 
+/** Emitted only after legacy invitation creation has rolled back on lock contention. */
+export class ConsoleInvitationContentionError extends Error {
+  constructor() {
+    super('Invitation creation is temporarily busy. Retry this request.');
+    this.name = 'ConsoleInvitationContentionError';
+  }
+}
+
+/** The secured router's known wrapper preserves the original operation outcome. */
+export class ConsoleAdminAuditExecutionError extends AggregateError {
+  constructor(operationError: unknown, auditError: unknown) {
+    super([operationError, auditError], 'Console route execution and required administrative audit write both failed');
+    this.name = 'ConsoleAdminAuditExecutionError';
+  }
+}
+
+export function isRetryableInvitationContention(error: unknown): boolean {
+  return error instanceof ConsoleInvitationContentionError ||
+    (error instanceof ConsoleAdminAuditExecutionError && error.errors[0] instanceof ConsoleInvitationContentionError);
+}
+
 /** A descriptor-bound write lost a race with descriptor rotation or deletion. */
 export class IntegrationDescriptorChangedError extends ConsoleStoreConflictError {
   constructor(message: string) {

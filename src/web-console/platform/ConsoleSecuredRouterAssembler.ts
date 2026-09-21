@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 
 import { logger } from '../../utils/logger.js';
+import { ConsoleAdminAuditExecutionError } from '../stores/ConsoleStoreValidation.js';
 
 import type { IAdminAuditWriter } from '../audit/IAdminAuditWriter.js';
 import type { IConsoleIdentityResolver } from '../identity/IConsoleIdentityResolver.js';
@@ -268,10 +269,7 @@ async function executeAuditedConsoleRoute(
         occurredAt,
       );
     } catch (auditError) {
-      throw new AggregateError(
-        [error, auditError],
-        'Console route execution and required administrative audit write both failed',
-      );
+      throw new ConsoleAdminAuditExecutionError(error, auditError);
     }
     throw error;
   }
