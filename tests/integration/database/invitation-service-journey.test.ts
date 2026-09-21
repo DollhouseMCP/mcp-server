@@ -17,6 +17,8 @@ import { OnboardingCredentials } from '../../../src/invitations/onboarding/Onboa
 import { PostgresOnboardingStore } from '../../../src/invitations/onboarding/PostgresOnboardingStore.js';
 import { appendSecurityAuditEventWithTx } from '../../../src/security/auditSink.js';
 import { PostgresConsoleIdentityResolver } from '../../../src/web-console/identity/PostgresConsoleIdentityResolver.js';
+import { createDurableInvitationAdminAuditFactory } from '../../../src/web-console/modules/account-admin/DurableInvitationAdminAudit.js';
+import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
 import { ROLE_DESCRIPTIONS } from '../../../src/web-console/modules/account-admin/AccountAdminRoleDescriptions.js';
 import { HmacConsoleOpaqueValueService } from '../../../src/web-console/security/ConsoleOpaqueValues.js';
 import { PostgresConsoleAccountAllowlistStore } from '../../../src/web-console/stores/PostgresConsoleAccountAllowlistStore.js';
@@ -45,7 +47,20 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
   await db.insert(authAccounts).values({ provider: 'local', externalSub: unrelatedSub, sub: unrelatedSub,
     userId: unrelatedId, email: providerEmail, emailVerified: true });
 
-  const management = new InvitationManagementService(new PostgresInvitationManagementStore(db), audit, 24);
+  // The service boundary receives the same authenticated admin context and audit
+  // factory as console issuance; onboarding itself remains security-audit only.
+  const now = new Date();
+  const adminRequest = { consoleContext: { correlationId: randomUUID(), receivedAt: now },
+    consoleAuthentication: { userId: inviterId, authSub: `local_${inviterId}`, authzVersion: 1,
+      sessionIdHash: randomBytes(32), grantedCapabilities: ['console:admin:accounts'],
+      elevation: { capabilities: ['console:admin:accounts'], acr: 'urn:dollhouse:acr:admin-stepup', amr: ['otp'],
+        authTime: now, expiresAt: new Date(now.getTime() + 900000) } },
+    ip: '127.0.0.1', get: () => 'service-journey',
+  } as unknown as ConsoleRequest;
+  const adminAudit = await createDurableInvitationAdminAuditFactory({ resolve: async () => ({ keyId: 'journey', key: Buffer.alloc(32, 7) }) })(
+    adminRequest, { method: 'POST', path: '/api/v1/admin/accounts/invitations', audience: 'admin',
+      requiredCapability: 'console:admin:accounts', auditOperation: 'invitation.admin.issue', handler: async () => ({ status: 201 }) });
+  const management = new InvitationManagementService(new PostgresInvitationManagementStore(db), adminAudit, 24);
   const suffix = randomUUID();
   const inviteEmail = `Invitation-${suffix}@example.test`;
   const issued = await management.issue({ username: ` CAFÉ-${suffix} `, displayName: ' Rene\u0301e 李 ',
@@ -64,7 +79,7 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
     publicBaseUrl: 'https://console.example.test', supportEmail: 'Support@example.test',
     describeRole: role => ({ name: ROLE_DESCRIPTIONS[role].name, description: ROLE_DESCRIPTIONS[role].summary }),
   });
-  const delivered = await delivery.deliver(issued, randomUUID(), audit);
+  const delivered = await delivery.deliver(issued, randomUUID(), adminAudit);
   expect(delivered).toMatchObject({ status: 'recorded', attempt: { state: 'submitted' } });
   expect(sender.sendTransactionalEmail).toHaveBeenCalledTimes(1);
   expect(reservedState).toBe('submitting');
@@ -154,6 +169,11 @@ it('carries a Unicode invitation through delivery, atomic claim, activation and 
     invalidations: expect.arrayContaining([expect.objectContaining({ reason: 'invitation_activated' })]),
     generations: [expect.objectContaining({ state: 'accepted' })],
     claims: [expect.objectContaining({ state: 'completed' })],
+    admin: expect.arrayContaining([
+      expect.objectContaining({ operation: 'invitation.issued', actor_user_id: inviterId }),
+      expect.objectContaining({ operation: 'invitation.delivery.reserved', actor_user_id: inviterId }),
+      expect.objectContaining({ operation: 'invitation.delivery.submitted', actor_user_id: inviterId }),
+    ]),
     security: expect.arrayContaining([
       expect.objectContaining({ event_type: 'invitation.claimed' }),
       expect.objectContaining({ event_type: 'invitation.activated' }),
