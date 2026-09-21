@@ -357,6 +357,7 @@ it.each([
   expect(f.githubEnrollment.complete).not.toHaveBeenCalled();
   expect(response.headers['set-cookie']).toBeUndefined();
   expect(response.text).toContain('start GitHub enrollment again');
+  expect(response.text).toContain('href="/auth/onboarding/invitation"');
   safe(response, [query, f.cookie, session.value]);
 });
 
@@ -370,6 +371,9 @@ it('maps cancellation and contained failures to one fixed help page without clea
     .query({ state, error: 'access_denied' }).set('Cookie', cookies);
   expect(cancelled.status).toBe(400);
   expect(cancelled.headers['set-cookie']).toBeUndefined();
+  expect(cancelled.text).toContain('<html lang="en">');
+  expect(cancelled.text).toContain('name="viewport"');
+  expect(cancelled.text).toContain('href="/auth/onboarding/invitation"');
   expect(f.githubEnrollment.complete.mock.calls[0][0].callback).toEqual({
     kind: 'provider_error', state, error: 'access_denied',
   });
@@ -383,6 +387,7 @@ it('maps cancellation and contained failures to one fixed help page without clea
   expect(f.githubEnrollment.complete.mock.calls[1][0].callback).toEqual({
     kind: 'provider_error', state, error: 'other',
   });
+  safe(cancelled, [state, 'access_denied', f.cookie, session.value]);
   safe(failed, [state, 'provider_secret', f.cookie, session.value]);
 });
 

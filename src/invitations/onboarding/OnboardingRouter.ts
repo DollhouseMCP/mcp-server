@@ -268,8 +268,10 @@ function githubCallbackStatus(error: unknown): number {
 
 function sendGitHubHelp(res: Response, status: number): void {
   res.status(status).type('html').send(
-    '<!doctype html><html><head><meta charset="utf-8"><title>GitHub enrollment</title></head>' +
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1"><title>GitHub enrollment</title></head>' +
     '<body><main><h1>GitHub enrollment was not completed</h1>' +
-    '<p>Return to the enrollment page and start GitHub enrollment again.</p></main></body></html>',
+    '<p>Return to the enrollment page and start GitHub enrollment again.</p>' +
+    '<p><a href="/auth/onboarding/invitation">Return to enrollment</a></p></main></body></html>',
   );
 }
