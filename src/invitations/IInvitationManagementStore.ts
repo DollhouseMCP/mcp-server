@@ -20,6 +20,7 @@ export type InvitationManagementMutation = Pick<InvitationStoreMutation,
 /** Deliberately partial lifecycle: no claim, activation, delivery or cleanup implementation. */
 export interface IInvitationManagementStore {
   inspect(invitationId: string): Promise<InvitationView | null>;
+  inspectForUser(userId: string): Promise<InvitationView | null>;
   runMutation<T>(
     audit: InvitationManagementAudit,
     operation: (mutation: InvitationManagementMutation) => Promise<T>,

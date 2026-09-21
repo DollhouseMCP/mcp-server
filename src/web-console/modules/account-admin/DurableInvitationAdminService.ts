@@ -17,7 +17,7 @@ import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 import type { DurableInvitationAdminAuditFactory } from './DurableInvitationAdminAudit.js';
 import { invitationAdminDto } from './DurableInvitationAdminDtos.js';
 
-export type InvitationAdminAction = 'issue' | 'inspect' | 'regenerate' | 'revoke';
+export type InvitationAdminAction = 'issue' | 'inspect' | 'inspect_account' | 'regenerate' | 'revoke';
 export interface DurableInvitationAdminOptions {
   readonly store: IInvitationManagementStore;
   readonly auditFactory: DurableInvitationAdminAuditFactory;
@@ -48,7 +48,7 @@ export class DurableInvitationAdminService {
         detail: 'The invitation request could not be completed.' } };
     }
     // Successful mutations already appended both audits inside the store transaction.
-    if (action === 'inspect' || result.status >= 400) {
+    if (action === 'inspect' || action === 'inspect_account' || result.status >= 400) {
       try {
         await this.options.auditWriter.write(buildConsoleAdminAuditEvent(route, route.auditOperation!, req,
           result.status < 400 ? 'approved' : result.status >= 500 ? 'failed' : 'rejected',
@@ -62,16 +62,17 @@ export class DurableInvitationAdminService {
     const actor = requireConsoleAuthentication(req);
     const correlationId = requireConsoleRequestContext(req).correlationId;
     if (Object.keys(req.query).length) throw new RequestFailure(400, 'invalid_request');
-    if (action !== 'inspect') await this.admit(actor.userId);
+    if (action !== 'inspect' && action !== 'inspect_account') await this.admit(actor.userId);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const allowed = action === 'issue' ? ['username', 'display_name', 'email', 'intended_roles', 'ttl_hours'] :
       action === 'regenerate' ? ['ttl_hours'] : [];
     if (typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !allowed.includes(key))) invalid();
     if (body.ttl_hours !== undefined && (!Number.isInteger(body.ttl_hours) || Number(body.ttl_hours) < MIN_INVITATION_TTL_HOURS || Number(body.ttl_hours) > MAX_INVITATION_TTL_HOURS)) invalid();
     const ttlHours = body.ttl_hours as number | undefined;
-    const id = action === 'issue' ? null : req.params.invitation_id;
+    const id = action === 'issue' ? null : req.params[action === 'inspect_account' ? 'user_id' : 'invitation_id'];
     if (id !== null) { if (typeof id !== 'string') invalid(); try { assertUuid(id, 'invitation_id'); } catch { invalid(); } }
-    const existing = id === null ? null : await this.options.store.inspect(id as string);
+    const existing = id === null ? null : action === 'inspect_account'
+      ? await this.options.store.inspectForUser(id as string) : await this.options.store.inspect(id as string);
     if (id !== null && !existing) throw new RequestFailure(404, 'invitation_not_found');
     let roles: ConsoleAdminRole[] = existing ? [...existing.intendedRoles] : [];
     if (action === 'issue') {
@@ -82,7 +83,7 @@ export class DurableInvitationAdminService {
       if (new Set(roles).size !== roles.length) invalid();
     }
     if (rolesActorMayNotManage(req, roles).length) throw new RequestFailure(403, 'insufficient_role_authority');
-    if (action === 'inspect') return { status: 200, body: invitationAdminDto(existing!) };
+    if (action === 'inspect' || action === 'inspect_account') return { status: 200, body: invitationAdminDto(existing!) };
     const audit = await this.options.auditFactory(req, route);
     const service = new InvitationManagementService(this.options.store, audit);
     if (action === 'revoke') return { status: 200, body: invitationAdminDto(await service.revoke({ invitationId: id as string, correlationId })) };

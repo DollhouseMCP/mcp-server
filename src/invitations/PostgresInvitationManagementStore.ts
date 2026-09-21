@@ -1,5 +1,5 @@
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
@@ -29,6 +29,16 @@ export class PostgresInvitationManagementStore implements IInvitationManagementS
   async inspect(invitationId: string): Promise<InvitationView | null> {
     assertUuid(invitationId);
     return withSystemContext(this.db, tx => readInvitation(tx, invitationId));
+  }
+
+  /** Bounded account lookup; terminal history is ordered deterministically. */
+  async inspectForUser(userId: string): Promise<InvitationView | null> {
+    assertUuid(userId);
+    return withSystemContext(this.db, async tx => {
+      const [latest] = await tx.select({ id: invitations.id }).from(invitations)
+        .where(eq(invitations.userId, userId)).orderBy(desc(invitations.createdAt), desc(invitations.id)).limit(1);
+      return latest ? readInvitation(tx, latest.id) : null;
+    });
   }
 
   async runMutation<T>(

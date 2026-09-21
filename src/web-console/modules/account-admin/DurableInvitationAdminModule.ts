@@ -5,14 +5,14 @@ import { projectInvitationAdminDto } from './DurableInvitationAdminDtos.js';
 /** Unregistered: callers must use the secured console assembler; no live mount or UI is added. */
 export function createDurableInvitationAdminModule(options: DurableInvitationAdminOptions): ConsoleModuleDescriptor {
   const service = new DurableInvitationAdminService(options);
-  const actions: InvitationAdminAction[] = ['issue', 'inspect', 'regenerate', 'revoke'];
+  const actions: InvitationAdminAction[] = ['issue', 'inspect', 'inspect_account', 'regenerate', 'revoke'];
   return { id: 'durable_invitation_admin', apiVersion: 'v1', capabilities: ['console:admin:accounts'],
     auditOperations: actions.map(action => ({ id: `invitation.admin.${action}` })),
     routes: actions.map(action => {
       const secret = action === 'issue' || action === 'regenerate';
       const route: ConsoleRouteDefinition = {
-        method: action === 'inspect' ? 'GET' : 'POST',
-        path: '/api/v1/admin/accounts/invitations' + (action === 'issue' ? '' : '/:invitation_id') +
+        method: action === 'inspect' || action === 'inspect_account' ? 'GET' : 'POST',
+        path: action === 'inspect_account' ? '/api/v1/admin/accounts/users/:user_id/invitation' : '/api/v1/admin/accounts/invitations' + (action === 'issue' ? '' : '/:invitation_id') +
           (action === 'regenerate' || action === 'revoke' ? `/${action}` : ''),
         audience: 'admin', requiredCapability: 'console:admin:accounts', elevation: 'admin_30m', privacyClass: 'account_metadata',
         // Never persist the one-time link, even if a caller supplies Idempotency-Key.
