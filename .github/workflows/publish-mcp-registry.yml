@@ -70,6 +70,7 @@ jobs:
           # workflow_dispatch rerun with release_ref=refs/tags/v2.1.0-beta.1,
           # must still be refused. The MCP Registry lists stable builds only.
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          # Non-tag refs remain refs/* and are skipped by the version check below.
           TAG_PART="${SOURCE_REF#refs/tags/v}"
           for candidate in "${PACKAGE_VERSION}" "${TAG_PART}"; do
             if [[ -n "${candidate}" && "${candidate}" != refs/* && "${candidate}" == *-* ]]; then

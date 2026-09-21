@@ -1,9 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { load } from 'js-yaml';
 
-interface Workflow { jobs: Record<string, { steps: { name?: string; run?: string }[] }> }
+interface Workflow { jobs: Record<string, { steps: { name?: string; run?: string; if?: string }[] }> }
 function script(file: string, job: string, name: string): string {
   const workflow = load(readFileSync(`.github/workflows/${file}.yml`, 'utf8')) as Workflow;
   const source = workflow.jobs[job].steps.find(step => step.name === name)?.run;
@@ -14,7 +16,11 @@ function script(file: string, job: string, name: string): string {
 // Execute the actual workflow shell. Closed stubs prevent all network access,
 // publication and package mutation while supplying a version and release flag.
 function run(source: string, env: Record<string, string> = {}) {
-  return spawnSync('bash', ['-euo', 'pipefail', '-c', `
+  const directory = mkdtempSync(join(tmpdir(), 'publish-channel-'));
+  const outputPath = join(directory, 'github output');
+  writeFileSync(outputPath, '');
+  try {
+    const result = spawnSync('bash', ['-euo', 'pipefail', '-c', `
     node() { printf '%s\\n' "$PACKAGE_VERSION"; }
     gh() { [[ "$1 $2" == 'release view' ]] || return 99; printf '%s\\n' "$RELEASE_PRERELEASE"; }
     npm() {
@@ -29,9 +35,13 @@ function run(source: string, env: Record<string, string> = {}) {
     ${source}
   `], {
     encoding: 'utf8', timeout: 10000,
-    env: { ...process.env, GITHUB_OUTPUT: '/dev/stdout', PACKAGE_VERSION: '2.0.42',
+    env: { ...process.env, GITHUB_OUTPUT: outputPath.replace(/\\/g, '/'), PACKAGE_VERSION: '2.0.42',
       EVENT_NAME: 'release', RELEASE_PRERELEASE: 'false', GITHUB_RUN_ID: '123', ...env }
-  });
+    });
+    return { ...result, githubOutput: readFileSync(outputPath, 'utf8') };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 const npmChannel = script('publish-npm', 'publish-npm', 'Resolve npm dist-tag');
@@ -50,7 +60,7 @@ describe('release workflow channel boundaries', () => {
       const result = run(source, { PACKAGE_VERSION: version, RELEASE_PRERELEASE: prerelease });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain(`dist_tag=${tag}`);
+      expect(result.githubOutput).toContain(`dist_tag=${tag}`);
     }
     expect(run(packageGuard, { DIST_TAG: tag, RELEASE_PRERELEASE: prerelease }).status).toBe(0);
   });
@@ -71,7 +81,17 @@ describe('release workflow channel boundaries', () => {
   it('derives manual npm publication from the version rather than an absent release flag', () => {
     const result = run(npmChannel, { PACKAGE_VERSION: '2.1.0-beta.2', EVENT_NAME: 'workflow_dispatch' });
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('dist_tag=beta');
+    expect(result.githubOutput).toContain('dist_tag=beta');
+  });
+
+  it.each([['2.0.42', 'latest'], ['2.1.0-beta.2', 'beta']])('derives manual GitHub Packages channel for %s without a release flag', (version, tag) => {
+    const workflow = load(readFileSync('.github/workflows/publish-github-packages.yml', 'utf8')) as Workflow;
+    const guard = workflow.jobs['publish-gpr'].steps.find(step => step.name === 'Guard GitHub Packages release channel');
+    expect(guard?.if).toBe("${{ github.event_name == 'release' }}");
+    const result = run(packageChannel, { PACKAGE_VERSION: version, EVENT_NAME: 'workflow_dispatch', RELEASE_PRERELEASE: '' });
+    expect(result.status).toBe(0);
+    expect(result.githubOutput).toContain(`dist_tag=${tag}`);
+    expect(run(packageChannel, { PACKAGE_VERSION: '2.1.0-preview.1', EVENT_NAME: 'workflow_dispatch', RELEASE_PRERELEASE: '' }).status).toBe(1);
   });
 
   it.each(['release', 'workflow_dispatch'])('permits correctly labeled stable and beta bundles via %s', event => {
@@ -96,8 +116,8 @@ describe('release workflow channel boundaries', () => {
     expect(run(registryGuard, { PACKAGE_VERSION: version, SOURCE_REF: ref }).status).toBe(1);
   });
 
-  it('preserves stable MCP Registry publication', () => {
-    expect(run(registryGuard, { SOURCE_REF: 'refs/tags/v2.0.42' }).status).toBe(0);
+  it.each(['refs/tags/v2.0.42', 'refs/heads/main'])('preserves stable MCP Registry publication from %s', ref => {
+    expect(run(registryGuard, { SOURCE_REF: ref }).status).toBe(0);
   });
 
   it.each(['latest', 'beta'])('passes the resolved %s tag to both actual publish commands', tag => {
