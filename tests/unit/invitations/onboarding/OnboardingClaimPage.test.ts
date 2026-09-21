@@ -177,3 +177,13 @@ it('accepts only a single token entry when URLSearchParams.size is unavailable',
     expect(invalid.window.location.hash).toBe(''); invalid.window.close();
   }
 });
+
+it.each([['empty', '#'], ['empty token', '#token='], ['oversized', '#token=' + 'x'.repeat(2048)],
+  ['duplicate', `#token=${token}&token=${token}`], ['extra parameter', `#token=${token}&extra=value`]])(
+  'does not substitute existing claimed metadata for an invalid %s fragment', async (_label, fragment) => {
+    const b = await browser(fragment, url => ({ status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } }));
+    expect(b.calls.map(call => call.path)).toEqual(['/auth/onboarding/bootstrap']);
+    expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+    expect(b.document.body.textContent).not.toContain(metadata.account.verifiedEmail);
+    expect(b.button('claim-continue').disabled).toBe(true); expect(b.window.location.hash).toBe('');
+  });

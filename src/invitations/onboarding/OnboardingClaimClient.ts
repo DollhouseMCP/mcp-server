@@ -11,6 +11,7 @@ interface ClaimMetadata {
 
 /** Keep this function self-contained: only its compiled source and public config enter the HTML. */
 export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): void {
+  let sessionContextAllowed = !location.href.includes('#');
   const fragment = new URLSearchParams(location.hash.slice(1));
   history.replaceState(null, '', config.claimPath); // Before fetch, listeners, or reading account data.
   let credential = Array.from(fragment).length === 1 ? fragment.get('token') : null;
@@ -92,7 +93,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     clearDetails(); announce('Preparing your invitation…');
     const result = await api('/bootstrap', {}); readCsrf(result.csrfToken);
     if (!['ready', 'claimed'].includes(String(result.state))) throw new Error('unavailable');
-    if (result.state === 'claimed' && !credential) { await context(); return; }
+    if (result.state === 'claimed' && !credential && sessionContextAllowed) { await context(); return; }
     accept.hidden = !credential; retry.hidden = true;
     announce(credential ? 'Continue to verify your invitation email. This will not activate your account.'
       : 'Open the newest invitation link from your email to continue.');
@@ -101,7 +102,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     if (!credential || !csrf) throw new Error('unavailable');
     announce('Verifying your invitation…');
     const result = await api('/exchange', { credential });
-    credential = null; readCsrf(result.csrfToken); await context();
+    credential = null; readCsrf(result.csrfToken); sessionContextAllowed = true; await context();
   }); });
   retry.addEventListener('click', () => { void run(bootstrap); }); // Refresh CSRF only; never replay an exchange automatically.
   logout.addEventListener('click', () => { void run(async () => {
