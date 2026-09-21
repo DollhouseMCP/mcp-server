@@ -1,3 +1,4 @@
+import { invitationIdentityAllowedSql } from '../../auth/InvitationAuthenticationPolicy.js';
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
@@ -235,6 +236,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null> {
+    input = structuredClone(input);
     return withSystemContext(this.db, tx => linkConsoleIdentityWithTx(tx, input));
   }
 
@@ -511,12 +513,18 @@ export async function linkConsoleIdentityWithTx(
   tx: DrizzleTx,
   input: IdentityLinkInput,
 ): Promise<IdentityMutationResult | null> {
+  input = structuredClone(input);
   validateIdentityLinkInput(input);
+  // Observe the retained cohort marker only after a concurrent user creation
+  // commits, and keep users -> auth_accounts ordering with principal deletion.
+  const [target] = await tx.select({ id: users.id }).from(users).where(eq(users.id, input.userId)).for('key share');
+  if (!target) return null;
   // Only an UNLINKED login can be attached; the service rejects already-linked
   // targets up front, and this WHERE makes the write itself race-safe.
   const rows = await tx.update(authAccounts)
     .set({ userId: input.userId, updatedAt: input.linkedAt })
-    .where(and(eq(authAccounts.sub, input.sub), isNull(authAccounts.userId)))
+    .where(and(eq(authAccounts.sub, input.sub), isNull(authAccounts.userId),
+      invitationIdentityAllowedSql(sql`${input.userId}::uuid`, authAccounts)))
     .returning({ sub: authAccounts.sub, userId: authAccounts.userId });
   return rows[0] ? { sub: rows[0].sub, linkedUserId: rows[0].userId } : null;
 }

@@ -14,8 +14,9 @@
  * so canonical identity links and account eligibility cannot become stale.
  */
 
-import { assertUserAccountAllowed } from '../auth/AccountAccess.js';
-import { and, eq, isNull } from 'drizzle-orm';
+import { assertUserAccountAllowed, isSubjectAccountAllowed } from '../auth/AccountAccess.js';
+import { invitationIdentityAllowedSql } from '../auth/InvitationAuthenticationPolicy.js';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { createDatabaseConnection, type DatabaseInstance } from '../database/connection.js';
@@ -69,6 +70,7 @@ export class UserIdentityService {
     });
     try {
       const adminDb = adminConn.db;
+      if (!await isSubjectAccountAllowed(adminDb, sub)) throw new Error('Account is not available for authentication');
 
       // 1. Already linked? Return the person's row.
       const account = await adminDb
@@ -78,6 +80,7 @@ export class UserIdentityService {
         .limit(1);
       if (account[0]?.userId) {
         await assertUserAccountAllowed(adminDb, account[0].userId);
+        if (!await isSubjectAccountAllowed(adminDb, sub)) throw new Error('Account is not available for authentication');
         return account[0].userId;
       }
 
@@ -107,7 +110,8 @@ export class UserIdentityService {
         await adminDb
           .update(authAccounts)
           .set({ userId, updatedAt: new Date() })
-          .where(and(eq(authAccounts.sub, sub), isNull(authAccounts.userId)));
+          .where(and(eq(authAccounts.sub, sub), isNull(authAccounts.userId),
+            invitationIdentityAllowedSql(sql`${userId}::uuid`, authAccounts)));
         const relinked = await adminDb
           .select({ userId: authAccounts.userId })
           .from(authAccounts)
@@ -119,6 +123,7 @@ export class UserIdentityService {
       }
 
       await assertUserAccountAllowed(adminDb, userId);
+      if (!await isSubjectAccountAllowed(adminDb, sub)) throw new Error('Account is not available for authentication');
       SecurityMonitor.logSecurityEvent({
         type: 'IDENTITY_CHANGED',
         severity: 'LOW',

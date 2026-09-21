@@ -22,11 +22,12 @@ describe('PostgresAuthStorageLayer', () => {
   it('preserves an existing canonical user_id when AS account upsert has no user id', async () => {
     let conflictOptions: { readonly set?: Readonly<Record<string, unknown>> } | null = null;
     transaction = {
+      execute: jest.fn(async () => [{ allowed: true }]),
       insert: jest.fn(() => ({
         values: jest.fn(() => ({
           onConflictDoUpdate: jest.fn((options: typeof conflictOptions) => {
             conflictOptions = options;
-            return Promise.resolve();
+            return { returning: jest.fn(async () => [{ sub: 'local_alice' }]) };
           }),
         })),
       })),
