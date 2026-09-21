@@ -9,6 +9,7 @@ import { accountInvitationGenerations } from '../../../src/database/schema/invit
 import { PostgresInvitationManagementStore } from '../../../src/invitations/PostgresInvitationManagementStore.js';
 import { PostgresInvitationClaimStore } from '../../../src/invitations/PostgresInvitationClaimStore.js';
 import { generateInvitationToken } from '../../../src/invitations/InvitationToken.js';
+import { PostgresOnboardingMetadataStore } from '../../../src/invitations/onboarding/PostgresOnboardingMetadataStore.js';
 import { PostgresOnboardingStore } from '../../../src/invitations/onboarding/PostgresOnboardingStore.js';
 import { OnboardingCredentials } from '../../../src/invitations/onboarding/OnboardingCredentials.js';
 import { createOnboardingRouter } from '../../../src/invitations/onboarding/OnboardingRouter.js';
@@ -42,7 +43,7 @@ async function fixture(failAudit = false) {
   }));
   const credentials = new OnboardingCredentials(new HmacConsoleOpaqueValueService(randomBytes(32)));
   const store = new PostgresOnboardingStore(db, new PostgresInvitationClaimStore(db));
-  const app = express().use('/auth/onboarding', createOnboardingRouter({ store, credentials,
+  const app = express().use('/auth/onboarding', createOnboardingRouter({ store, metadataReader: new PostgresOnboardingMetadataStore(db, store), credentials,
     rateLimits: new InMemoryRateLimitStore(), trustedOrigin: origin,
     audit: failAudit ? { kind: 'system', appendSecurityEvent: async () => { throw new Error(token.token); } } : audit,
   }));
@@ -119,6 +120,40 @@ it('sanitizes an atomic exchange failure and leaves the invitation unconsumed wi
   const [generation] = await f.db.select().from(accountInvitationGenerations).where(eq(accountInvitationGenerations.invitationId, f.id));
   expect(generation.credentialConsumedAt).toBeNull();
   expect(await f.db.execute(sql`SELECT id FROM account_invitation_claim_assertions WHERE invitation_id = ${f.id}::uuid`)).toHaveLength(0);
+});
+
+it('returns only proof-bound context after exchange, denies wrong/revoked sessions and leaves state untouched', async () => {
+  if (!available) return;
+  const f = await fixture();
+  const bootstrap = await f.post('bootstrap').send({});
+  const owner = cookie(bootstrap, ONBOARDING_OWNER_COOKIE);
+  expect((await request(f.app).get('/auth/onboarding/context').set('Cookie', owner)).status).toBe(409);
+  const exchanged = await f.post('exchange', owner, bootstrap.body.csrfToken).send({ credential: f.token.token });
+  const session = cookie(exchanged, ONBOARDING_SESSION_COOKIE);
+  const cookies = `${owner}; ${session}`;
+  const ownerHash = f.credentials.hash('owner', owner.split('=')[1]);
+  const sessionHash = f.credentials.hash('session', session.split('=')[1]);
+  const beforeOwner = await f.store.findOwner(ownerHash), beforeSession = await f.store.findSession(ownerHash, sessionHash);
+  const beforeGeneration = await f.db.select().from(accountInvitationGenerations).where(eq(accountInvitationGenerations.invitationId, f.id));
+  const beforeAudit = await f.db.execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${f.id} ORDER BY occurred_at`);
+  const response = await request(f.app).get('/auth/onboarding/context').set('Cookie', cookies);
+  expect(response.status).toBe(200);
+  expect(response.body.account).toEqual({ username: `http-${f.id}`, displayName: 'HTTP journey', verifiedEmail: `${f.id}@example.test` });
+  expect(response.body).toMatchObject({ state: 'claimed', intendedRoles: [], sessionExpiresAt: beforeSession!.expiresAt.toISOString() });
+  expect(response.headers['cache-control']).toBe('no-store'); expect(response.headers['referrer-policy']).toBe('no-referrer');
+  expect(response.headers['content-security-policy']).toContain("script-src 'none'");
+  for (const forbidden of [f.token.token, owner, session, ownerHash.toString('hex'), sessionHash.toString('hex'), 'credentialHash', 'claimAssertionId', 'invitationId']) {
+    expect(response.text).not.toContain(forbidden);
+  }
+  expect(await f.store.findOwner(ownerHash)).toEqual(beforeOwner); expect(await f.store.findSession(ownerHash, sessionHash)).toEqual(beforeSession);
+  expect(await f.db.select().from(accountInvitationGenerations).where(eq(accountInvitationGenerations.invitationId, f.id))).toEqual(beforeGeneration);
+  expect(await f.db.execute(sql`SELECT * FROM security_audit_events WHERE target_id = ${f.id} ORDER BY occurred_at`)).toEqual(beforeAudit);
+  const wrong = `${owner}; ${ONBOARDING_SESSION_COOKIE}=${f.credentials.issue('session').value}`;
+  const rejected = await request(f.app).get('/auth/onboarding/context').set('Cookie', wrong);
+  expect(rejected.status).toBe(409);
+  await new PostgresInvitationManagementStore(f.db).runMutation(audit, mutation => mutation.revoke(f.id, randomUUID()));
+  const revoked = await request(f.app).get('/auth/onboarding/context').set('Cookie', cookies);
+  expect(revoked.status).toBe(409); expect(revoked.body).toEqual(rejected.body); expect(revoked.text).not.toContain('@example.test');
 });
 
 async function claimedFixture() {

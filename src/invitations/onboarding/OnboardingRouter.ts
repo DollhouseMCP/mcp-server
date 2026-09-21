@@ -6,6 +6,7 @@ import { securityHeaders } from '../../auth/embedded-as/securityHeaders.js';
 import type { InvitationManagementAudit } from '../IInvitationManagementStore.js';
 import { InvitationError } from '../InvitationTypes.js';
 import { InvitationTokenError, MAX_INVITATION_TOKEN_LENGTH, parseInvitationToken } from '../InvitationToken.js';
+import type { PostgresOnboardingMetadataStore, OnboardingInvitationMetadata } from './PostgresOnboardingMetadataStore.js';
 import { OnboardingCredentials } from './OnboardingCredentials.js';
 import { onboardingOwnerCookieMaxAgeSeconds } from './OnboardingOwnerCookie.js';
 import { ONBOARDING_SESSION_TTL_SECONDS } from './OnboardingRecords.js';
@@ -16,6 +17,7 @@ import { ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE, clearOnboardingCook
 export interface OnboardingRouterOptions {
   readonly store: Pick<PostgresOnboardingStore, 'createOwner' | 'findOwner' | 'findSession' | 'exchangeClaim' |
     'rotateOwnerCsrf' | 'rotateSessionCsrf' | 'endSession'>;
+  readonly metadataReader: Pick<PostgresOnboardingMetadataStore, 'read'>;
   readonly credentials: OnboardingCredentials;
   readonly rateLimits: IRateLimitStore;
   readonly trustedOrigin: string;
@@ -28,9 +30,9 @@ class BoundaryError extends Error {
 
 /** Unregistered API only. Future mounting owns TLS, trusted proxy and logging policy. */
 export function createOnboardingRouter(options: OnboardingRouterOptions): Router {
-  const { store, credentials, rateLimits, trustedOrigin, audit } = options;
+  const { store, metadataReader, credentials, rateLimits, trustedOrigin, audit } = options;
   const origin = new URL(trustedOrigin);
-  if (origin.protocol !== 'https:' || origin.origin !== trustedOrigin || !rateLimits || audit.kind !== 'system') {
+  if (origin.protocol !== 'https:' || origin.origin !== trustedOrigin || !rateLimits || typeof metadataReader?.read !== 'function' || audit.kind !== 'system') {
     throw new Error('Invalid onboarding router configuration');
   }
   const now = options.now ?? (() => new Date());
@@ -127,6 +129,28 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
       res.json({ ...metadata({ owner: ctx.owner, session: record }), csrfToken: csrf.value });
     } finally { parsed.secret.fill(0); }
   });
+  router.get('/context', (req, res, next) => { void (async () => {
+    if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] ?? 0) !== 0 || req.body !== undefined) {
+      throw new BoundaryError(400);
+    }
+    const rawOwner = readOnboardingCookie(req.headers.cookie, ONBOARDING_OWNER_COOKIE);
+    const rawSession = readOnboardingCookie(req.headers.cookie, ONBOARDING_SESSION_COOKIE);
+    if (!rawOwner || !rawSession) throw new BoundaryError(409);
+    const ownerHash = credentials.hash('owner', rawOwner);
+    const sessionHash = credentials.hash('session', rawSession);
+    try {
+      // One transactional authority read; no preceding owner/session lookup or public ID input.
+      const value = await metadataReader.read(ownerHash, sessionHash);
+      if (!value || value.state !== 'claimed') throw new BoundaryError(409);
+      const result: OnboardingInvitationMetadata = {
+        state: 'claimed', account: { username: value.account.username, displayName: value.account.displayName,
+          verifiedEmail: value.account.verifiedEmail }, intendedRoles: [...value.intendedRoles],
+        emailVerifiedAt: value.emailVerifiedAt, invitationExpiresAt: value.invitationExpiresAt,
+        sessionExpiresAt: value.sessionExpiresAt, serverTime: value.serverTime,
+      };
+      res.json(result);
+    } finally { ownerHash.fill(0); sessionHash.fill(0); }
+  })().catch(next); });
   router.get('/status', (req, res, next) => { void context(req).then(ctx => { res.json(metadata(ctx)); }).catch(next); });
   post('/logout', async (req, res) => {
     exactBody(req.body, []);
