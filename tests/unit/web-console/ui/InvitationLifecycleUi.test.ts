@@ -43,6 +43,20 @@ it('opens only an advertised selected-account lookup, renders safe metadata and 
   expect(document.getElementById('ua-inv-lifecycle')).toBeNull(); expect(document.activeElement).toBe(opener);
 });
 
+it.each(['close', 'Escape', 'backdrop'])('permits %s during a slow inspection and ignores its late metadata', async dismissal => {
+  const opener = document.createElement('button'); document.body.appendChild(opener); opener.focus();
+  let finish!: (value: unknown) => void;
+  get.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  open(userId, () => true);
+  expect(button('close').disabled).toBe(false); expect(button('regenerate').disabled).toBe(true);
+  if (dismissal === 'close') click('close');
+  else if (dismissal === 'Escape') document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+  else document.querySelector<HTMLElement>('.confirm-backdrop')!.click();
+  expect(document.getElementById('ua-inv-lifecycle')).toBeNull(); expect(document.activeElement).toBe(opener);
+  finish(reply()); await tick();
+  expect(document.body.textContent).not.toContain(metadata().email); expect(post).not.toHaveBeenCalled();
+});
+
 it('requires explicit regeneration confirmation, bounds TTL and shows only its immediate manual link', async () => {
   open(userId, () => true); await tick();
   const ttl = document.querySelector<HTMLInputElement>('#ua-il-ttl')!;

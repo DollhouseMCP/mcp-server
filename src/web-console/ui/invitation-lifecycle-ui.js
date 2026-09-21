@@ -31,10 +31,11 @@ export function openInvitationLifecycle(userId, hasRoute) {
   document.body.appendChild(modal);
   const el = name => modal.querySelector(`#ua-il-${name}`);
   const ttl = el('ttl'); ttl.min = String(INVITATION_TTL_HOURS.minimum); ttl.max = String(INVITATION_TTL_HOURS.maximum); ttl.value = String(INVITATION_TTL_HOURS.default);
-  let closed = false, pending = false, view = null, intent = null;
+  let closed = false, pending = false, mutationPending = false, view = null, intent = null;
   const status = text => { el('status').textContent = text; el('status').focus(); };
   function controls() {
     for (const button of modal.querySelectorAll('button')) button.disabled = pending;
+    el('close').disabled = mutationPending;
     for (const action of ['regenerate', 'revoke']) {
       const button = el(action); button.hidden = !hasRoute('POST', `${DURABLE_INVITATION_ROUTE}/:invitation_id/${action}`);
       button.disabled = pending || !!intent || !['pending', 'expired'].includes(view?.state);
@@ -44,7 +45,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
     el('confirm').hidden = !intent;
   }
   function close(force = false) {
-    if (closed || (pending && !force)) return;
+    if (closed || (mutationPending && !force)) return;
     closed = true; view = null; intent = null; userId = '';
     el('result').replaceChildren(); el('details').replaceChildren(); modal.remove();
     document.removeEventListener('keydown', onKey);
@@ -99,7 +100,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
   }
   async function apply() {
     if (pending || !intent || closed) return;
-    const request = intent; intent = null; pending = true; view = null; el('result').replaceChildren(); controls();
+    const request = intent; intent = null; pending = true; mutationPending = true; view = null; el('result').replaceChildren(); controls();
     const response = await post(`${DURABLE_INVITATION_ROUTE}/${request.id}/${request.action}`, { body: request.body }).catch(() => null);
     if (closed) return;
     try {
@@ -120,7 +121,7 @@ export function openInvitationLifecycle(userId, hasRoute) {
         el('result').appendChild(field); field.focus();
       }
     } catch { view = null; el('result').replaceChildren(); status('Action outcome or claim link unavailable. Inspect before deciding what to do next; do not resend automatically.'); }
-    pending = false; controls();
+    pending = false; mutationPending = false; controls();
   }
   el('close').addEventListener('click', () => close()); modal.querySelector('.confirm-backdrop').addEventListener('click', () => close());
   el('inspect').addEventListener('click', inspect);
