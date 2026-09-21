@@ -22,6 +22,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
   let claimed = false;
   let lifecycle = 0;
   let transport = new AbortController();
+  let serverClock: { time: number; started: number; deadline: number } | null = null;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const status = document.getElementById('claim-status')!;
   const details = document.getElementById('claim-details')!;
@@ -32,7 +33,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
   const text = (id: string, value: string) => { document.getElementById(id)!.textContent = value; };
   function announce(message: string) { status.textContent = message; status.focus(); }
   function clearDetails() {
-    claimed = false; github.disabled = true;
+    claimed = false; serverClock = null; github.disabled = true;
     details.hidden = true; logout.hidden = true; clearTimeout(expiryTimer);
     for (const id of ['claim-name', 'claim-username', 'claim-email', 'claim-expiry', 'claim-relative', 'claim-roles']) text(id, '');
   }
@@ -74,6 +75,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
       const item = document.createElement('li'); item.textContent = config.roles[role].name + ': ' + config.roles[role].summary; list.append(item);
     }
     if (!value.intendedRoles.length) list.textContent = 'Access to your own permitted console and MCP features after activation; no server administration.';
+    serverClock = { time: server, started, deadline: Math.min(sessionExpiry, invitationExpiry) };
     claimed = true;
     details.hidden = false; logout.hidden = false; accept.hidden = true; retry.hidden = true;
     announce('Email verified. Review your invitation. Use a GitHub account with a verified primary email.');
@@ -114,6 +116,10 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
     const result = await api('/github/start', {});
     if (typeof result.authorizationUrl !== 'string' || result.authorizationUrl.length > 4096 ||
       typeof result.expiresAt !== 'string' || !Number.isFinite(Date.parse(result.expiresAt))) throw new Error('unavailable');
+    // Use the context server clock plus monotonic elapsed time, including response latency.
+    // Recheck the claim because its expiry timer may have fired while start was pending.
+    if (!claimed || !csrf || !serverClock ||
+      Math.min(Date.parse(result.expiresAt), serverClock.deadline) <= serverClock.time + performance.now() - serverClock.started) throw new Error('unavailable');
     const destination = new URL(result.authorizationUrl);
     if (destination.origin !== 'https://github.com' || destination.pathname !== '/login/oauth/authorize' ||
       destination.username || destination.password || destination.hash) throw new Error('unavailable');

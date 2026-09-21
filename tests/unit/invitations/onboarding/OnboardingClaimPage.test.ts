@@ -21,10 +21,11 @@ async function until(predicate: () => boolean) {
 }
 interface Call { path: string; body?: string; headers: Record<string, string>; hash: string }
 interface Reply { status: number; body: unknown; bodyError?: Error }
-async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>, withoutSize = false) {
+async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>, withoutSize = false, setup?: (window: JSDOM['window']) => void) {
   const html = (await request(app()).get(path)).text;
   const calls: Call[] = [];
   dom = new JSDOM(html, { url: `https://console.example.test${path}${fragment}`, runScripts: 'dangerously', beforeParse(window) {
+    setup?.(window);
     if (withoutSize) Object.defineProperty(window.URLSearchParams.prototype, 'size', { value: undefined });
     window.fetch = (async (url: string, init: RequestInit) => {
       calls.push({ path: url, body: init.body as string | undefined, headers: init.headers as Record<string, string>, hash: window.location.hash });
@@ -243,6 +244,47 @@ it('ignores a GitHub start response after pagehide', async () => {
   b.window.dispatchEvent(new b.window.PageTransitionEvent('pagehide'));
   finish!({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt: '2026-10-01T12:05:00Z' } });
   await new Promise(resolve => setTimeout(resolve, 5));
+  expect(b.window.location.href).toBe(`https://console.example.test${path}`);
+  expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+  expect(b.button('claim-github').disabled).toBe(true);
+});
+
+
+it.each([
+  ['OAuth state', 5 * 60000 + 1, '2026-10-01T12:05:00Z'],
+  ['claim with a suspended timer', 15 * 60000 + 1, '2026-10-01T12:20:00Z'],
+])('rejects a delayed GitHub response after %s expiry using server-adjusted monotonic time', async (_label, elapsed, expiresAt) => {
+  let now = 0;
+  let finish!: (value: Reply) => void;
+  const pending = new Promise<Reply>(resolve => { finish = resolve; });
+  const b = await browser('', url => url.endsWith('/github/start') ? pending :
+    { status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } }, false,
+  window => { Object.defineProperty(window.performance, 'now', { value: () => now }); });
+  await until(() => !b.button('claim-github').disabled); b.button('claim-github').click();
+  now = Number(elapsed);
+  finish({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt } });
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');
+  expect(b.window.location.href).toBe(`https://console.example.test${path}`);
+  expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
+  expect(b.button('claim-github').disabled).toBe(true);
+  expect(b.document.body.textContent).not.toContain('rene@example.test');
+  b.button('claim-retry').click(); await until(() => b.calls.filter(call => call.path.endsWith('/bootstrap')).length === 2);
+  expect(b.calls.filter(call => call.path.endsWith('/github/start'))).toHaveLength(1);
+});
+
+it('rejects a late start after the claim expiry timer clears the session', async () => {
+  let expire!: () => void;
+  let finish!: (value: Reply) => void;
+  const pending = new Promise<Reply>(resolve => { finish = resolve; });
+  const b = await browser('', url => url.endsWith('/github/start') ? pending :
+    { status: 200, body: url.endsWith('/context') ? metadata : { state: 'claimed', csrfToken: 'csrf' } }, false,
+  window => { window.setTimeout = ((callback: () => void) => { expire = callback; return 1; }) as typeof window.setTimeout; });
+  await until(() => !b.button('claim-github').disabled); b.button('claim-github').click(); expire();
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('no longer available');
+  finish({ status: 200, body: { authorizationUrl: 'https://github.com/login/oauth/authorize?state=secret', expiresAt: '2026-10-01T12:05:00Z' } });
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Unable to continue');
   expect(b.window.location.href).toBe(`https://console.example.test${path}`);
   expect(b.document.getElementById('claim-details')!.hidden).toBe(true);
   expect(b.button('claim-github').disabled).toBe(true);
