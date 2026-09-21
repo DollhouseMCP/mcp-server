@@ -38,7 +38,7 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
       credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal,
       headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}),
         ...(csrf && path !== '/bootstrap' ? { 'X-Onboarding-CSRF': csrf } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}) });
+      ...(body ? { body: JSON.stringify(body) } : {}) }).catch(() => { throw new Error('temporary'); });
     if (!response.ok) throw new Error(response.status === 429 || response.status >= 500 ? 'temporary' : 'unavailable');
     const result = response.status === 204 ? {} : await response.json() as Record<string, unknown>;
     if (signal.aborted) throw new Error('unavailable');

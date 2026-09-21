@@ -110,3 +110,24 @@ it('clears credentials and account data on pagehide and ignores a late metadata 
   await until(() => b.calls.filter(call => call.path.endsWith('/bootstrap')).length === 2);
   expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(1);
 });
+
+it.each(['bootstrap', 'exchange'])('treats rejected %s transport as temporary and retries without automatic credential replay', async failedPath => {
+  let failed = false;
+  const b = await browser(`#token=${token}`, url => {
+    if (url.endsWith('/' + failedPath) && !failed) { failed = true; throw new TypeError('Network secret ' + token); }
+    return { status: 200, body: url.endsWith('/context') ? metadata :
+      { state: url.endsWith('/exchange') ? 'claimed' : 'ready', csrfToken: 'csrf' } };
+  });
+  if (failedPath === 'exchange') b.button('claim-continue').click();
+  await until(() => !b.button('claim-retry').hidden);
+  expect(b.document.getElementById('claim-status')!.textContent).toContain('Temporarily unavailable');
+  expect(b.document.body.textContent).not.toContain('Network secret');
+  expect(b.document.body.textContent).not.toContain(token);
+  const exchanges = b.calls.filter(call => call.path.endsWith('/exchange')).length;
+  b.button('claim-retry').click();
+  await until(() => !b.button('claim-continue').disabled);
+  expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(exchanges);
+  b.button('claim-continue').click();
+  await until(() => !b.document.getElementById('claim-details')!.hidden);
+  expect(b.calls.filter(call => call.path.endsWith('/exchange'))).toHaveLength(exchanges + 1);
+});
