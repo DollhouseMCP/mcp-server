@@ -106,7 +106,7 @@ describe('NodemailerEmailSender — port enforcement', () => {
 });
 
 describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
-  it('throws a sanitized connection category when the SMTP host is unreachable', async () => {
+  it('throws a sanitized neutral category for Nodemailer-wrapped unreachable sockets', async () => {
     // 127.0.0.1:1 is reliably "connection refused" on test machines
     // (port 1 is reserved tcpmux, almost never bound). Short timeout
     // keeps the test fast.
@@ -119,7 +119,7 @@ describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
 
     const error = await sender.verify().catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(SmtpReadinessError);
-    expect(error).toMatchObject({ category: 'connection' });
+    expect(error).toMatchObject({ category: 'unknown' });
     expect((error as Error).message).not.toContain('127.0.0.1');
     expect(error).not.toHaveProperty('cause');
   }, 5_000);
@@ -128,7 +128,7 @@ describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
     [{ code: 'EAUTH' }, 'authentication'],
     [{ code: 'EDNS' }, 'dns'],
     [{ code: 'ENOTFOUND' }, 'dns'],
-    [{ code: 'ESOCKET' }, 'connection'],
+    [{ code: 'ESOCKET' }, 'unknown'],
     [{ code: 'ECONNECTION' }, 'connection'],
     [{ code: 'ECONNREFUSED' }, 'connection'],
     [{ code: 'ETIMEDOUT' }, 'timeout'],
@@ -164,6 +164,25 @@ describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
     expect(error).toMatchObject({ category: 'authentication' });
     expect(JSON.stringify(error)).not.toContain('secret');
     expect((error as Error).message).not.toContain(SMTP_HOST);
+    expect(error).not.toHaveProperty('cause');
+  });
+
+  it('fails closed with neutral guidance when Nodemailer wraps a certificate failure as ESOCKET', async () => {
+    const sender = new NodemailerEmailSender({
+      host: SMTP_HOST, port: 587, user: 'private-user', password: 'private-password', from: FROM_EMAIL,
+    });
+    const transport = (sender as unknown as { transporter: { verify(): Promise<unknown> } }).transporter;
+    transport.verify = jest.fn<() => Promise<unknown>>().mockRejectedValue(Object.assign(
+      new Error(`certificate has expired for ${SMTP_HOST}`),
+      { code: 'ESOCKET', command: 'CONN', cause: new Error('private TLS details') },
+    ));
+    const error = await sender.verify().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(SmtpReadinessError);
+    expect(error).toMatchObject({ category: 'unknown' });
+    expect(String(error)).toContain('Check the SMTP service configuration');
+    expect(String(error)).not.toContain('network policy');
+    expect(String(error)).not.toContain(SMTP_HOST);
+    expect(JSON.stringify(error)).not.toContain('private');
     expect(error).not.toHaveProperty('cause');
   });
 });

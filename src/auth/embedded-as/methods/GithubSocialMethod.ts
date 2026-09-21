@@ -54,13 +54,14 @@ import {
 import {
   GITHUB_API_EMAILS_URL,
   GITHUB_AUTHORIZE_URL,
-  GITHUB_TOKEN_URL,
   MIN_AUTHCODE_SCOPES,
 } from './githubScopes.js';
 import {
   GitHubAuthenticatedUserClient,
   type GitHubAuthenticatedUser,
 } from '../../github/GitHubAuthenticatedUserClient.js';
+
+import { GitHubOAuthTokenClient } from '../../github/GitHubOAuthTokenClient.js';
 
 const GITHUB_PROVIDER = 'github';
 
@@ -131,10 +132,12 @@ export class GithubSocialMethod implements IAuthMethod {
 
   private readonly fetchImpl: typeof fetch;
   private readonly authenticatedUserClient: GitHubAuthenticatedUserClient;
+  private readonly tokenClient: GitHubOAuthTokenClient;
 
   constructor(private readonly options: GithubSocialMethodOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.authenticatedUserClient = new GitHubAuthenticatedUserClient({ fetchImpl: this.fetchImpl });
+    this.tokenClient = new GitHubOAuthTokenClient({ ...options, fetchImpl: this.fetchImpl });
   }
 
   beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
@@ -466,52 +469,10 @@ export class GithubSocialMethod implements IAuthMethod {
     return { kind: 'ok', interactionId: input.state, identity };
   }
 
-  /**
-   * Wrap network failures (DNS, connection refused, timeout) and JSON
-   * parse failures (GitHub returning HTML on a 5xx) into the structured
-   * `null` return path. Without this guard the unhandled rejection
-   * bubbles through processCallback into the AS callback handler's
-   * generic 500, losing the diagnostic.
-   */
+  /** A bounded client sanitizes every upstream failure before this boundary. */
   private async exchangeCodeForToken(code: string): Promise<string | null> {
-    let response: globalThis.Response;
-    try {
-      response = await this.fetchImpl(GITHUB_TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          client_id: this.options.clientId,
-          client_secret: this.options.clientSecret,
-          code,
-          redirect_uri: this.options.callbackUrl,
-        }),
-        // Cycle-16 fix: GitHub partial outages (token endpoint accepts
-        // connections but responds slowly) used to wedge the callback
-        // handler. Cap at 15s — well above the 99p of GitHub's normal
-        // response time but short enough that an outage doesn't
-        // exhaust the event loop with hung fetches.
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] token exchange network error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-    if (!response.ok) return null;
-    let body: { access_token?: string; error?: string };
-    try {
-      body = (await response.json()) as { access_token?: string; error?: string };
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] token exchange returned non-JSON body', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-    return body.access_token ?? null;
+    try { return await this.tokenClient.exchangeCode({ code }); }
+    catch { return null; }
   }
 
   /**

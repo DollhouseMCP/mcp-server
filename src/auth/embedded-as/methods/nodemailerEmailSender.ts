@@ -170,7 +170,9 @@ export function classifySmtpReadinessFailure(error: unknown): SmtpReadinessFailu
     case 'DEPTH_ZERO_SELF_SIGNED_CERT':
     case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
     case 'ERR_TLS_CERT_ALTNAME_INVALID': return 'tls';
-    case 'ESOCKET':
+    // Nodemailer wraps both TLS/certificate and connectivity failures in
+    // ESOCKET. Do not infer network-only remediation or inspect raw messages.
+    case 'ESOCKET': return 'unknown';
     case 'ECONNECTION':
     case 'ECONNREFUSED':
     case 'ECONNRESET':
