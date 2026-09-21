@@ -275,6 +275,7 @@ function sendGitHubHelp(res: Response, status: number): void {
     '<meta name="viewport" content="width=device-width,initial-scale=1"><title>GitHub enrollment</title></head>' +
     '<body><main><h1>GitHub enrollment was not completed</h1>' +
     '<p>Return to the enrollment page and start GitHub enrollment again.</p>' +
-    '<p><a href="/auth/onboarding/invitation">Return to enrollment</a></p></main></body></html>',
+    '<p><a href="/auth/onboarding/invitation">Return to enrollment</a></p>' +
+    '<p>If enrollment already completed, <a href="/api/v1/auth/login">continue to sign in</a>.</p></main></body></html>',
   );
 }

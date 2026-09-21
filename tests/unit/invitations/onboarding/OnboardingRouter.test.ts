@@ -376,6 +376,7 @@ it('maps cancellation and contained failures to one fixed help page without clea
   expect(cancelled.text).toContain('<html lang="en">');
   expect(cancelled.text).toContain('name="viewport"');
   expect(cancelled.text).toContain('href="/auth/onboarding/invitation"');
+  expect(cancelled.text).toContain('href="/api/v1/auth/login"');
   expect(f.githubEnrollment.complete.mock.calls[0][0].callback).toEqual({
     kind: 'provider_error', state, error: 'access_denied',
   });
