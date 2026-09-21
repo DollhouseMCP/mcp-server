@@ -26,6 +26,20 @@ on:
         description: 'Run in dry-run mode (test without publishing)'
         required: false
         type: boolean
+        default: true
+      safety_only:
+        description: 'Publish only safety from an exact trusted main commit'
+        required: false
+        type: boolean
+        default: false
+      safety_source_sha:
+        description: 'Required exact main commit SHA when safety_only is true'
+        required: false
+        type: string
+      debug_oidc:
+        description: 'Print sanitized npm/OIDC availability diagnostics'
+        required: false
+        type: boolean
         default: false
 
 concurrency:
@@ -47,6 +61,34 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Guard safety-only source
+        shell: bash
+        env:
+          SAFETY_ONLY: ${{ inputs.safety_only || false }}
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ inputs.safety_source_sha }}
+        run: |
+          if [[ "$SAFETY_ONLY" != "true" ]]; then exit 0; fi
+          if [[ "$EVENT_NAME" != "workflow_dispatch" || "$SOURCE_REPOSITORY" != "DollhouseMCP/mcp-server" || "$SOURCE_REF" != "refs/heads/main" ]]; then
+            echo "::error::Safety-only publication requires a manual dispatch from trusted main."
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ || "$EXPECTED_SHA" != "$SOURCE_SHA" || "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Safety-only publication requires the exact requested main commit."
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ "$(git rev-parse refs/remotes/origin/main)" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Trusted main advanced; review the new source before dispatching again."
+            exit 1
+          fi
 
       - name: Setup Node.js for npm
         uses: actions/setup-node@v4
@@ -122,6 +164,7 @@ jobs:
 
   publish-npm:
     name: Publish to npm Registry
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.safety_only != true }}
     needs: publish-safety
     runs-on: ubuntu-latest
     permissions:
@@ -210,25 +253,20 @@ jobs:
           echo "npm dist-tag: ${dist_tag}"
 
       - name: Debug OIDC Environment
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_oidc == true }}
         shell: bash
         run: |
-          echo "=== OIDC Environment Check ==="
-          echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:-NOT SET}"
-          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+SET (hidden)}"
-          echo "GITHUB_ACTIONS: $GITHUB_ACTIONS"
-          echo ""
-          echo "=== npm version ==="
           npm --version
-          echo ""
-          echo "=== .npmrc files ==="
-          cat ~/.npmrc 2>/dev/null || echo "No ~/.npmrc"
-          cat .npmrc 2>/dev/null || echo "No ./.npmrc"
-          echo ""
-          echo "=== NPM_CONFIG_* vars ==="
-          env | grep NPM_CONFIG || echo "No NPM_CONFIG vars"
-          echo ""
-          echo "=== NODE_AUTH_TOKEN ==="
-          echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-NOT SET}"
+          if [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+            echo "OIDC request credentials are available."
+          else
+            echo "OIDC request credentials are unavailable."
+          fi
+          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NODE_AUTH_TOKEN is set; check that token authentication is intentional."
+          else
+            echo "NODE_AUTH_TOKEN is unset."
+          fi
 
       - name: Publish to npm (with provenance)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
