@@ -354,18 +354,18 @@ function runScenario(scenario: Scenario): {
 
   const release = scenario.release;
   const bashExecutable = process.platform === 'win32' ? 'bash' : '/bin/bash';
-  const shellBinDirectory = process.platform === 'win32'
-    ? binDirectory
-      .replaceAll('\\', '/')
-      .replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`)
-    : binDirectory;
-  const shellScript = `set -eo pipefail\nexport PATH="$FAKE_BIN_DIRECTORY:$PATH"\n${validationScript ?? 'exit 99'}`;
-  const result = spawnSync(bashExecutable, ['-c', shellScript], {
+  const shellPath = (value: string): string => process.platform === 'win32'
+    ? value.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`)
+    : value;
+  // GHA executes a script file. Long -c arguments can be truncated on Windows.
+  const scriptPath = path.join(directory, 'validate-release.sh');
+  writeExecutable(scriptPath, `export PATH="$FAKE_BIN_DIRECTORY:$PATH"\n${validationScript ?? 'exit 99'}`);
+  const result = spawnSync(bashExecutable, ['-e', '-o', 'pipefail', shellPath(scriptPath)], {
     cwd: directory,
     encoding: 'utf8',
     env: {
       ...process.env,
-      FAKE_BIN_DIRECTORY: shellBinDirectory,
+      FAKE_BIN_DIRECTORY: shellPath(binDirectory),
       GITHUB_REF: scenario.sourceRef ?? 'refs/heads/beta',
       GITHUB_REPOSITORY: 'DollhouseMCP/mcp-server',
       FAKE_RELEASE_STATUS: scenario.releaseStatus ?? (release ? '200' : '404'),
