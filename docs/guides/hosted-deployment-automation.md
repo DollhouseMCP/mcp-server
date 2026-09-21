@@ -1,5 +1,7 @@
 # Hosted Deployment Automation
 
+Private-beta invitation enablement has additional qualification and rollback gates in the [onboarding runbook](private-beta-onboarding-runbook.md).
+
 This guide tracks the executable deployment path for hosted DollhouseMCP.
 It is the automation companion to the manual [Production Hosting Runbook](./production-hosting-runbook.md).
 
