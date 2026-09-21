@@ -1,18 +1,20 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { authAccounts } from '../database/schema/auth.js';
+import { invitationIdentityAllowedSql } from './InvitationAuthenticationPolicy.js';
 import { users } from '../database/schema/users.js';
 
 /** Read account eligibility from the authoritative user row; never cache it. */
 export async function isSubjectAccountAllowed(db: DatabaseInstance, sub: string): Promise<boolean> {
   return withSystemContext(db, async (tx) => {
-    const accounts = await tx.select({ userId: authAccounts.userId }).from(authAccounts)
+    const accounts = await tx.select({ userId: authAccounts.userId, provider: authAccounts.provider, sub: authAccounts.sub, externalSub: authAccounts.externalSub }).from(authAccounts)
       .where(eq(authAccounts.sub, sub)).limit(1);
     const userId = accounts[0]?.userId;
     const rows = await tx.select({
+      identityAllowed: invitationIdentityAllowedSql(sql`"users"."id"`, accounts[0] ?? { provider: null, sub: null, externalSub: null }),
       activationState: users.activationState,
       disabledAt: users.disabledAt,
       deletedAt: users.deletedAt,
@@ -20,7 +22,7 @@ export async function isSubjectAccountAllowed(db: DatabaseInstance, sub: string)
     // Existing provisioning may create the user on first console/MCP access.
     // A dangling canonical link must never be treated as a new identity.
     if (!rows[0]) return !userId;
-    return rows[0].activationState === 'active' && !rows[0].disabledAt && !rows[0].deletedAt;
+    return rows[0].identityAllowed === true && rows[0].activationState === 'active' && !rows[0].disabledAt && !rows[0].deletedAt;
   });
 }
 

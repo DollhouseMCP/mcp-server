@@ -50,6 +50,7 @@ import type {
   StoredAccount,
 } from './IAuthStorageLayer.js';
 import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
+import { assertInvitationIdentityWriteAllowed, invitationIdentityAllowedSql } from '../../InvitationAuthenticationPolicy.js';
 import { isSubjectAccountAllowed } from '../../AccountAccess.js';
 import { InProcessKeyedLock } from './InProcessKeyedLock.js';
 
@@ -119,6 +120,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async upsertAccount(account: StoredAccount): Promise<void> {
+    account = structuredClone(account);
     await withSystemContext(this.db, async (tx) => {
       await upsertAuthAccountWithTx(tx, account);
     });
@@ -564,8 +566,12 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
 
 /** Transaction-aware account upsert shared with the authoritative sign-in gate. */
 export async function upsertAuthAccountWithTx(tx: DrizzleTx, account: StoredAccount): Promise<void> {
+  account = structuredClone(account);
+  await assertInvitationIdentityWriteAllowed(tx, account);
   const row = storedAccountToRow(account);
-  await tx.insert(authAccounts).values(row).onConflictDoUpdate({
+  const existingUser = sql`COALESCE("auth_accounts"."user_id",
+    (SELECT id FROM users WHERE username = "auth_accounts"."sub"))`;
+  const written = await tx.insert(authAccounts).values(row).onConflictDoUpdate({
     target: [authAccounts.provider, authAccounts.externalSub],
     set: {
       sub: row.sub,
@@ -578,7 +584,10 @@ export async function upsertAuthAccountWithTx(tx: DrizzleTx, account: StoredAcco
       lastAuthAt: row.lastAuthAt,
       updatedAt: row.updatedAt,
     },
-  });
+    setWhere: and(invitationIdentityAllowedSql(existingUser, authAccounts),
+      invitationIdentityAllowedSql(existingUser, account)),
+  }).returning({ sub: authAccounts.sub });
+  if (written.length !== 1) throw new Error('Authentication method is not available for this account');
 }
 
 function notExpired(): SQL {

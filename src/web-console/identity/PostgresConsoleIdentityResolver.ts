@@ -1,4 +1,5 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { invitationIdentityAllowedSql } from '../../auth/InvitationAuthenticationPolicy.js';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -23,6 +24,7 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
         .innerJoin(users, eq(authAccounts.userId, users.id))
         .where(and(
           eq(authAccounts.sub, sub),
+          invitationIdentityAllowedSql(sql`"users"."id"`, authAccounts),
           eq(users.activationState, 'active'),
           isNull(users.disabledAt),
           isNull(users.deletedAt),
@@ -80,7 +82,8 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
       await tx
         .update(authAccounts)
         .set({ userId, updatedAt: new Date() })
-        .where(and(eq(authAccounts.sub, sub), isNull(authAccounts.userId)));
+        .where(and(eq(authAccounts.sub, sub), isNull(authAccounts.userId),
+          invitationIdentityAllowedSql(sql`${userId}::uuid`, authAccounts)));
     });
   }
 }

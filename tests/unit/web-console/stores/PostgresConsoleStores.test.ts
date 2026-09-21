@@ -2951,7 +2951,8 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     const bootstrapSelect = selectingForUpdateChain([]);
     const allowlistSelect = selectingForUpdateChain([{ authorityOrder: 1 }]);
     const tombstoneSelect = selectingForUpdateChain([]);
-    const accountInsert = insertChain();
+    const accountInsert = insertChain([{ sub: 'github_42' }]);
+    transaction.execute = jest.fn(async () => [{ allowed: true }]);
     const auditInsert = insertChain();
     transaction.select = jest.fn()
       .mockReturnValueOnce(bootstrapSelect)
@@ -2989,8 +2990,8 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     })).resolves.toEqual({ allowed: true });
 
     expect(withSystemContextMock).toHaveBeenCalledTimes(1);
-    // One subject lock plus locks for the email and stable GitHub id.
-    expect(transaction.execute).toHaveBeenCalledTimes(3);
+    // One subject lock, email and GitHub locks, and the invitation policy read.
+    expect(transaction.execute).toHaveBeenCalledTimes(4);
     expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
     expect(allowlistSelect.for).toHaveBeenCalledWith('update');
     expect(tombstoneSelect.for).toHaveBeenCalledWith('update');
