@@ -228,27 +228,32 @@ jobs:
             echo "npm_publish_complete=${npm_publish_complete}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Verify default-branch release workflows are prerelease-safe
+      - name: Verify selected and default-branch publisher safety
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git fetch origin main:refs/remotes/origin/main --depth=1
 
-          if ! git show origin/main:.github/workflows/publish-npm.yml | grep -F -- '--tag "${DIST_TAG}"' >/dev/null; then
-            echo "::error::Default branch publish-npm.yml is not prerelease-safe yet. Merge the dist-tag guard before creating a public beta prerelease."
-            exit 1
-          fi
+          # Dispatch uses the tagged checkout, while release events use main.
+          # Both sources must contain the reviewed prerelease guards before any
+          # tag/release mutation; documentation alone cannot enforce the sync.
+          for source in "${GITHUB_SHA}" origin/main; do
+            if ! git show "${source}:.github/workflows/publish-npm.yml" | grep -F -- '--tag "${DIST_TAG}"' >/dev/null; then
+              echo "::error::${source} publish-npm.yml is not prerelease-safe; synchronize the reviewed publisher guards before creating a beta release"
+              exit 1
+            fi
 
-          if ! git show origin/main:.github/workflows/publish-github-packages.yml | grep -F -- 'steps.package_dist_tag.outputs.dist_tag' >/dev/null; then
-            echo "::error::Default branch publish-github-packages.yml is not prerelease-safe yet. Merge the dist-tag guard before creating a public beta prerelease."
-            exit 1
-          fi
+            if ! git show "${source}:.github/workflows/publish-github-packages.yml" | grep -F -- 'steps.package_dist_tag.outputs.dist_tag' >/dev/null; then
+              echo "::error::${source} publish-github-packages.yml is not prerelease-safe; synchronize the reviewed publisher guards before creating a beta release"
+              exit 1
+            fi
 
-          if ! git show origin/main:.github/workflows/publish-mcp-registry.yml | grep -F -- "github.event.release.prerelease != true" >/dev/null; then
-            echo "::error::Default branch publish-mcp-registry.yml does not skip prereleases yet."
-            exit 1
-          fi
+            if ! git show "${source}:.github/workflows/publish-mcp-registry.yml" | grep -F -- "github.event.release.prerelease != true" >/dev/null; then
+              echo "::error::${source} publish-mcp-registry.yml does not skip prereleases"
+              exit 1
+            fi
+          done
 
       - name: Prepare beta release notes
         shell: bash

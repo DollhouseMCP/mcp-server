@@ -91,9 +91,15 @@ jobs:
               ;;
           esac
 
-          if [[ "${INPUT_GIT_REF}" != "beta" \
-              && "${INPUT_GIT_REF}" != "refs/heads/beta" \
-              && ! "${INPUT_GIT_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+          valid_beta_tag() {
+            local version="${1#v}"
+            local core='(0|[1-9][0-9]*)'
+            local identifier='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+            local LC_ALL=C
+            [[ "$1" == v* && ${#version} -le 256 && "$version" =~ ^${core}\.${core}\.${core}-beta(\.${identifier})*$ ]]
+          }
+          if [[ "${INPUT_GIT_REF}" != "beta" && "${INPUT_GIT_REF}" != "refs/heads/beta" ]] \
+              && ! valid_beta_tag "${INPUT_GIT_REF}"; then
             echo "::error::Deployments from this workflow are limited to beta, refs/heads/beta, or SemVer v*-beta / v*-beta.* tags; got ${INPUT_GIT_REF}"
             exit 1
           fi

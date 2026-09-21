@@ -85,17 +85,16 @@ The workflow validates that:
 - the version is a `-beta` or `-beta.*` prerelease
 - an existing tag/release/npm version is reusable only when its recorded identity
   and channel checks permit retrying missing artifacts
-- the default branch release workflows are prerelease-safe
+- both the selected immutable checkout and freshly fetched default-branch
+  publisher workflows are prerelease-safe
 
-The default-branch check is a bootstrap prerequisite: registered publishers must
-be prerelease-aware before the beta release button is used. The reviewed sync
-then carries those same guards into the beta/tag source used for artifact builds,
-so beta packages cannot accidentally move the npm `latest` dist-tag.
+The source checks enforce the sync prerequisite: registered publishers on main
+and the beta/tag source used for artifact builds must both contain the reviewed
+prerelease guards before the workflow creates public release state. Safe main
+workflows alone do not make an older beta checkout safe.
 
-That default-branch check is a bootstrap guard. Once the prerelease-safe publish
-workflows have permanently reached the default branch, replace the string-grep
-assertions with a simpler versioned invariant or remove the guard as part of the
-normal release workflow cleanup.
+The string-grep checks are bootstrap guards. A future versioned invariant may
+replace them, but must preserve validation of both publisher sources.
 
 A non-dry-run publish creates:
 
@@ -118,7 +117,7 @@ to `dry_run: true`; release events still publish normally after duplicate-versio
 The MCP Registry workflow skips GitHub prereleases.
 
 The beta-release dry run defaults to true and checks source/version/state and
-default-branch guards, then prepares notes and a summary. It creates no tag or
+both publisher-source guards, then prepares notes and a summary. It creates no tag or
 release and dispatches no publisher. It is **not** a package-build/provenance dry
 run: qualify downstream npm/GitHub Packages dry runs separately with their
 explicit dry-run inputs. Environment approval is still required. Real publication

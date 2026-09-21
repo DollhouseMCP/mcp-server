@@ -90,14 +90,14 @@ describe('manual beta deployment dispatch', () => {
     expect(run('Validate deployment request', { GITHUB_REF: ref }).status).toBe(1);
   });
 
-  it.each(['beta', 'refs/heads/beta', 'v2.1.0-beta', 'v2.1.0-beta.2'])('accepts intended deploy ref %s', ref => {
+  it.each(['beta', 'refs/heads/beta', 'v2.1.0-beta', 'v2.1.0-beta.2', 'v0.0.0-beta.0', 'v2.1.0-beta.1.alpha-2'])('accepts intended deploy ref %s', ref => {
     const result = run('Validate deployment request', { INPUT_GIT_REF: ref });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.output).toBe(`git_ref=${ref.replace('refs/heads/', '')}\n`);
   });
 
-  it.each(['main', 'v2.0.42', '--upload-pack=command'])('rejects deploy ref %s', ref => {
+  it.each(['main', 'v2.0.42', '--upload-pack=command', 'v01.2.3-beta', 'v2.01.3-beta', 'v2.1.03-beta', 'v2.1.0-beta.01', 'v2.1.0-beta..1', 'v2.1.0-beta.', 'v2.1.0-beta.+foo', `v2.1.0-beta.${'a'.repeat(256)}`])('rejects deploy ref %s', ref => {
     expect(run('Validate deployment request', { INPUT_GIT_REF: ref }).status).toBe(1);
   });
 

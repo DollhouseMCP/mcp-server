@@ -103,3 +103,54 @@ describe('beta publisher dispatch identity', () => {
     ]);
   });
 });
+
+describe('beta publisher source safety', () => {
+  const guard = workflow.jobs['publish-beta'].steps.find(step => step.name === 'Verify selected and default-branch publisher safety')?.run;
+  const selectedSha = '0123456789abcdef0123456789abcdef01234567';
+  const workflows = ['publish-npm.yml', 'publish-github-packages.yml', 'publish-mcp-registry.yml'];
+
+  function check(overrides: Record<string, string> = {}) {
+    if (!guard) throw new Error('Missing actual publisher safety script');
+    return spawnSync('bash', ['-euo', 'pipefail', '-c', `
+      git() {
+        if [[ "$1" == fetch ]]; then [[ "$FETCH_FAIL" != true ]]; return; fi
+        [[ "$1" == show ]] || return 99
+        if [[ "$2" == "$MISSING_SOURCE:.github/workflows/$MISSING_WORKFLOW" ]]; then
+          printf 'unsafe publisher\\n'
+          return 0
+        fi
+        case "$2" in
+          *:'.github/workflows/publish-npm.yml') printf '%s\\n' '--tag "\${DIST_TAG}"' ;;
+          *:'.github/workflows/publish-github-packages.yml') printf '%s\\n' 'steps.package_dist_tag.outputs.dist_tag' ;;
+          *:'.github/workflows/publish-mcp-registry.yml') printf '%s\\n' 'github.event.release.prerelease != true' ;;
+          *) return 99 ;;
+        esac
+        # Partial stdout must not hide a failed source read under pipefail.
+        [[ "$2" != "$FAILED_SOURCE:.github/workflows/publish-npm.yml" ]]
+      }
+      ${guard}
+    `], { encoding: 'utf8', timeout: 10000, env: { ...process.env,
+      GITHUB_SHA: selectedSha, MISSING_SOURCE: '', MISSING_WORKFLOW: '', FAILED_SOURCE: '', FETCH_FAIL: 'false', ...overrides } });
+  }
+
+  it('requires both exact selected source and main before any release mutation', () => {
+    expect(check().status).toBe(0);
+    expect(guard).toContain('for source in "${GITHUB_SHA}" origin/main');
+    const names = workflow.jobs['publish-beta'].steps.map(step => step.name);
+    expect(names.indexOf('Verify selected and default-branch publisher safety')).toBeLessThan(names.indexOf('Create beta tag and GitHub prerelease'));
+  });
+
+  it.each([selectedSha, 'origin/main'].flatMap(source => workflows.map(file => [source, file])))('rejects missing guard in %s %s', (MISSING_SOURCE, MISSING_WORKFLOW) => {
+    const result = check({ MISSING_SOURCE, MISSING_WORKFLOW });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`::error::${MISSING_SOURCE} ${MISSING_WORKFLOW}`);
+  });
+
+  it.each([selectedSha, 'origin/main'])('rejects failed reads of %s even with guard-bearing partial stdout', FAILED_SOURCE => {
+    expect(check({ FAILED_SOURCE }).status).toBe(1);
+  });
+
+  it('rejects a failed main fetch', () => {
+    expect(check({ FETCH_FAIL: 'true' }).status).toBe(1);
+  });
+});
