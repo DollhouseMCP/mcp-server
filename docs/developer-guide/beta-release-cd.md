@@ -131,7 +131,7 @@ Release publishing derives package channels from SemVer:
 | --- | --- |
 | `*-alpha.*` | `alpha` |
 | `*-beta`, `*-beta.*` | `beta` |
-| `*-rc.*` | `next` |
+| `*-rc.*` | `rc` |
 | stable version | `latest` |
 
 Unsupported prerelease channels fail closed.
