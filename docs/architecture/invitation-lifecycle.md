@@ -110,11 +110,56 @@ expiry jobs, delivery-attempt initialization (#2691), routes and pending-account
 authorization enforcement remain separate slices. No delivery records are created
 here, and migration 0054's explicit delivery-state requirement remains unchanged.
 
-Administrator management operations also acquire an `EXCLUSIVE NOWAIT` table lock
-on `admin_audit_chain_heads` before mutation writes. Ordinary audit writers lock
-that head before their user foreign-key checks, so waiting on the head while
-holding users could deadlock. The table preflight covers both first-head INSERT
-and existing-head row locking. Contention aborts the transaction and returns
+## Transactional claim slice
+
+`PostgresInvitationClaimStore` implements only durable `beginClaim` and the
+transaction-owned activation-candidate lock. `createInvitationClaimMutation`
+composes with the other lifecycle modules inside one system transaction.
+Transaction helpers live in `InvitationTransactionSupport` so management, claim
+and later delivery code use the same lock order and audit streams.
+
+Invalid credentials are rejected with a uniform error by a preliminary unlocked
+lookup/comparison before taking global account or audit locks. That comparison
+is not authoritative: the credential and all lifecycle state are checked again
+under the existing locks before any write.
+
+A valid current, pending, unexpired credential can create one claim assertion for
+its pending account. The transaction atomically sets `credentialConsumedAt` and
+stores a 32-byte browser-owner hash. A later exchange with the same valid
+credential and owner resumes that same claim; it does not extend its expiry or
+change the email-verification time. Another owner is `invitation_replayed`.
+Regeneration/revocation invalidates open claims under the same account/invitation
+locks. The account email must still match the invitation's canonical email, and
+its username must match the intended username. Independent disabled/deleted and
+activation checks still apply. Expiry is compared with database time after locks,
+including time spent waiting behind another account writer.
+
+The owner hash is a **server-derived value** from the managed onboarding/browser
+binding. It is never an owner selector accepted from request JSON or query
+parameters. A normal authenticated account session is not required for first
+claim. These internal modules deliberately introduce no HTTP claim route; #2680
+must establish and authenticate the browser binding at its integration boundary.
+Secrets and owner buffers are copied before awaits and cleared on completion.
+Views and audit records contain neither raw credentials nor owner hashes.
+
+`lockInvitationActivationCandidateWithTx` verifies the invitation, current
+generation, consumed credential, pending account, claim ID, open claim state,
+expiry and matching owner together. It returns only safe metadata while retaining
+locks in the caller's transaction. It does not commit or activate anything. #2681
+must perform identity linking, role application, account/invitation/claim
+transitions and audit writes before that same transaction commits. A failure in
+those later operations rolls back the whole transaction. The caller must not hold
+these locks during GitHub/provider network calls.
+
+This slice does not close #2690: route/session tests for caller-supplied binding
+rejection still belong to #2680 integration. Claiming alone grants no normal
+console/MCP access, identity, actual role or normal session.
+
+Administrator management/claim operations also acquire an `EXCLUSIVE NOWAIT`
+table lock on `admin_audit_chain_heads` before mutation writes. Ordinary audit
+writers lock that head before their user foreign-key checks, so waiting on the
+head while holding users could deadlock. The table preflight covers both first-head
+INSERT and existing-head row locking. Contention aborts the transaction and returns
 `concurrent_update`; callers may retry the whole operation with fresh validation.
 System/security-only operations do not acquire an administrator chain lock.
 
