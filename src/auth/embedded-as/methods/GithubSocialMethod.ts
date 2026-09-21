@@ -53,11 +53,15 @@ import {
 } from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
-  GITHUB_API_USER_URL,
   GITHUB_AUTHORIZE_URL,
-  GITHUB_TOKEN_URL,
   MIN_AUTHCODE_SCOPES,
 } from './githubScopes.js';
+import {
+  GitHubAuthenticatedUserClient,
+  type GitHubAuthenticatedUser,
+} from '../../github/GitHubAuthenticatedUserClient.js';
+
+import { GitHubOAuthTokenClient } from '../../github/GitHubOAuthTokenClient.js';
 
 const GITHUB_PROVIDER = 'github';
 
@@ -127,9 +131,13 @@ export class GithubSocialMethod implements IAuthMethod {
   readonly displayName = 'GitHub';
 
   private readonly fetchImpl: typeof fetch;
+  private readonly authenticatedUserClient: GitHubAuthenticatedUserClient;
+  private readonly tokenClient: GitHubOAuthTokenClient;
 
   constructor(private readonly options: GithubSocialMethodOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.authenticatedUserClient = new GitHubAuthenticatedUserClient({ fetchImpl: this.fetchImpl });
+    this.tokenClient = new GitHubOAuthTokenClient({ ...options, fetchImpl: this.fetchImpl });
   }
 
   beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
@@ -461,52 +469,10 @@ export class GithubSocialMethod implements IAuthMethod {
     return { kind: 'ok', interactionId: input.state, identity };
   }
 
-  /**
-   * Wrap network failures (DNS, connection refused, timeout) and JSON
-   * parse failures (GitHub returning HTML on a 5xx) into the structured
-   * `null` return path. Without this guard the unhandled rejection
-   * bubbles through processCallback into the AS callback handler's
-   * generic 500, losing the diagnostic.
-   */
+  /** A bounded client sanitizes every upstream failure before this boundary. */
   private async exchangeCodeForToken(code: string): Promise<string | null> {
-    let response: globalThis.Response;
-    try {
-      response = await this.fetchImpl(GITHUB_TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          client_id: this.options.clientId,
-          client_secret: this.options.clientSecret,
-          code,
-          redirect_uri: this.options.callbackUrl,
-        }),
-        // Cycle-16 fix: GitHub partial outages (token endpoint accepts
-        // connections but responds slowly) used to wedge the callback
-        // handler. Cap at 15s — well above the 99p of GitHub's normal
-        // response time but short enough that an outage doesn't
-        // exhaust the event loop with hung fetches.
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] token exchange network error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-    if (!response.ok) return null;
-    let body: { access_token?: string; error?: string };
-    try {
-      body = (await response.json()) as { access_token?: string; error?: string };
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] token exchange returned non-JSON body', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null;
-    }
-    return body.access_token ?? null;
+    try { return await this.tokenClient.exchangeCode({ code }); }
+    catch { return null; }
   }
 
   /**
@@ -518,26 +484,9 @@ export class GithubSocialMethod implements IAuthMethod {
   private async fetchProfile(
     accessToken: string,
   ): Promise<GithubProfile | { error: string }> {
-    let userResp: globalThis.Response;
+    let user: GitHubAuthenticatedUser;
     try {
-      userResp = await this.fetchImpl(GITHUB_API_USER_URL, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${accessToken}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
-    } catch (err) {
-      logger.warn('[GithubSocialMethod] /user network error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return { error: 'github user fetch failed' };
-    }
-    if (!userResp.ok) return { error: 'github user fetch failed' };
-    let user: { id: number; login: string; name: string | null };
-    try {
-      user = (await userResp.json()) as { id: number; login: string; name: string | null };
+      user = await this.authenticatedUserClient.fetchAuthenticatedUser(accessToken);
     } catch {
       return { error: 'github user fetch failed' };
     }
@@ -577,7 +526,7 @@ export class GithubSocialMethod implements IAuthMethod {
     return {
       id: user.id,
       login: user.login,
-      name: user.name,
+      name: user.displayName,
       verifiedPrimaryEmail: verifiedPrimary.email,
       // Cycle 19 / security-#3: explicit projection of /user payload
       // into rawProfile. The TypeScript cast at line ~433 narrows the
@@ -590,7 +539,7 @@ export class GithubSocialMethod implements IAuthMethod {
       // trim — fix shape is identical: project explicitly rather than
       // trust the cast.
       raw: {
-        user: { id: user.id, login: user.login, name: user.name },
+        user: { id: user.id, login: user.login, name: user.displayName },
         verifiedPrimaryEmail: verifiedPrimary.email,
       },
     };

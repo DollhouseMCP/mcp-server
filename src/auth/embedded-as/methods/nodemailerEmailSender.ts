@@ -24,17 +24,28 @@ import {
   classifyEmailSubmissionFailure,
   type EmailSubmissionResult, type TransactionalEmail, type TransactionalEmailSender,
 } from './TransactionalEmailSender.js';
+import {
+  validateSmtpOptions,
+  type NodemailerEmailSenderOptions,
+} from './smtpConfiguration.js';
 
-export interface NodemailerEmailSenderOptions {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  from: string;
-  /** Implicit TLS (true for port 465). Defaults based on port. */
-  secure?: boolean;
-  /** Connect timeout in ms (default 30s). Tests dial it down for fast failure. */
-  connectionTimeoutMs?: number;
+export type { NodemailerEmailSenderOptions } from './smtpConfiguration.js';
+
+export type SmtpReadinessFailureCategory =
+  | 'authentication'
+  | 'dns'
+  | 'connection'
+  | 'timeout'
+  | 'tls'
+  | 'protocol'
+  | 'unknown';
+
+/** Sanitized startup failure. It intentionally retains no upstream error or cause. */
+export class SmtpReadinessError extends Error {
+  constructor(readonly category: SmtpReadinessFailureCategory) {
+    super(readinessErrorMessage(category));
+    this.name = 'SmtpReadinessError';
+  }
 }
 
 export class NodemailerEmailSender implements EmailSender, TransactionalEmailSender {
@@ -44,34 +55,25 @@ export class NodemailerEmailSender implements EmailSender, TransactionalEmailSen
   private readonly port: number;
 
   constructor(options: NodemailerEmailSenderOptions) {
-    const secure = options.secure ?? options.port === 465;
-    if (!secure && options.port !== 587) {
-      // STARTTLS-mandatory: only port 587 (STARTTLS) or 465 (implicit TLS)
-      // are accepted. Plaintext SMTP on 25 / 2525 is refused.
-      throw new Error(
-        `SMTP misconfigured: port ${options.port} is not a TLS-supporting port. ` +
-        `Use 465 (implicit TLS) or 587 (STARTTLS).`,
-      );
-    }
-    const timeoutMs = options.connectionTimeoutMs ?? 30_000;
+    const validated = validateSmtpOptions(options);
     this.transporter = nodemailer.createTransport({
-      host: options.host,
-      port: options.port,
-      secure,
-      requireTLS: !secure, // force STARTTLS upgrade on 587
-      auth: { user: options.user, pass: options.password },
+      host: validated.host,
+      port: validated.port,
+      secure: validated.secure,
+      requireTLS: !validated.secure, // force STARTTLS upgrade on 587
+      auth: { user: validated.user, pass: validated.password },
       // Cycle-16 fix: cover all three timeout phases. connectionTimeout
       // gates TCP connect; greetingTimeout gates the SMTP banner;
       // socketTimeout gates inactivity during DATA. Without socketTimeout
       // a relay that accepts connections but hangs during DATA would
       // wedge sendMail forever, holding Express response objects open.
-      connectionTimeout: timeoutMs,
-      greetingTimeout: timeoutMs,
-      socketTimeout: timeoutMs,
+      connectionTimeout: validated.connectionTimeoutMs,
+      greetingTimeout: validated.connectionTimeoutMs,
+      socketTimeout: validated.connectionTimeoutMs,
     });
-    this.from = options.from;
-    this.host = options.host;
-    this.port = options.port;
+    this.from = validated.from;
+    this.host = validated.host;
+    this.port = validated.port;
   }
 
   /**
@@ -96,14 +98,8 @@ export class NodemailerEmailSender implements EmailSender, TransactionalEmailSen
         host: this.host,
         port: this.port,
       });
-    } catch (err) {
-      throw new Error(
-        `SMTP verify failed for ${this.host}:${this.port}. ` +
-        `Confirm the server supports STARTTLS (port 587) or implicit TLS (port 465), ` +
-        `and that DOLLHOUSE_SMTP_USER/PASSWORD authenticate successfully. ` +
-        `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
+    } catch (error) {
+      throw new SmtpReadinessError(classifySmtpReadinessFailure(error));
     }
   }
 
@@ -157,6 +153,57 @@ export class NodemailerEmailSender implements EmailSender, TransactionalEmailSen
     } catch (error) {
       return classifyEmailSubmissionFailure(error);
     }
+  }
+}
+
+export function classifySmtpReadinessFailure(error: unknown): SmtpReadinessFailureCategory {
+  const candidate = error as { code?: unknown; responseCode?: unknown } | null;
+  switch (candidate?.code) {
+    case 'EAUTH': return 'authentication';
+    case 'EDNS':
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN': return 'dns';
+    case 'ETIMEDOUT':
+    case 'ETIMEOUT': return 'timeout';
+    case 'ETLS':
+    case 'CERT_HAS_EXPIRED':
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'ERR_TLS_CERT_ALTNAME_INVALID': return 'tls';
+    // Nodemailer wraps both TLS/certificate and connectivity failures in
+    // ESOCKET. Do not infer network-only remediation or inspect raw messages.
+    case 'ESOCKET': return 'unknown';
+    case 'ECONNECTION':
+    case 'ECONNREFUSED':
+    case 'ECONNRESET':
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH': return 'connection';
+    case 'EPROTOCOL': return 'protocol';
+  }
+  if (candidate?.responseCode === 530 || candidate?.responseCode === 534
+      || candidate?.responseCode === 535) return 'authentication';
+  if (typeof candidate?.responseCode === 'number'
+      && Number.isInteger(candidate.responseCode)
+      && candidate.responseCode >= 400 && candidate.responseCode <= 599) return 'protocol';
+  return 'unknown';
+}
+
+function readinessErrorMessage(category: SmtpReadinessFailureCategory): string {
+  switch (category) {
+    case 'authentication':
+      return 'SMTP readiness failed: authentication was rejected. Check DOLLHOUSE_SMTP_USER and DOLLHOUSE_SMTP_PASSWORD.';
+    case 'dns':
+      return 'SMTP readiness failed: the server name could not be resolved. Check DOLLHOUSE_SMTP_HOST.';
+    case 'connection':
+      return 'SMTP readiness failed: the server could not be reached. Check the SMTP host, port, and network policy.';
+    case 'timeout':
+      return 'SMTP readiness failed: the connection timed out. Check server reachability and the configured timeout.';
+    case 'tls':
+      return 'SMTP readiness failed: TLS negotiation failed. Use STARTTLS on port 587 or implicit TLS on port 465.';
+    case 'protocol':
+      return 'SMTP readiness failed: the server rejected the verification exchange. Check the SMTP service configuration.';
+    case 'unknown':
+      return 'SMTP readiness failed for an unknown reason. Check the SMTP service configuration.';
   }
 }
 

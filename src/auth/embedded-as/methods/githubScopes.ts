@@ -16,6 +16,6 @@
 export const MIN_AUTHCODE_SCOPES = ['read:user', 'user:email'] as const;
 
 export const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
-export const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
-export const GITHUB_API_USER_URL = 'https://api.github.com/user';
+export { GITHUB_OAUTH_TOKEN_URL as GITHUB_TOKEN_URL } from '../../github/GitHubOAuthTokenClient.js';
+export { GITHUB_AUTHENTICATED_USER_URL as GITHUB_API_USER_URL } from '../../github/GitHubAuthenticatedUserClient.js';
 export const GITHUB_API_EMAILS_URL = 'https://api.github.com/user/emails';

@@ -37,13 +37,24 @@ export function generateInvitationToken(
   if (!Buffer.isBuffer(secret) || secret.length !== INVITATION_SECRET_BYTES) {
     throw new InvitationTokenError('invitation random source returned an invalid secret');
   }
+  const token = serializeInvitationToken(invitationId, generation, secret);
+  return { invitationId: invitationId.toLowerCase(), generation, secret: Buffer.from(secret), token };
+}
+
+/** Serializes a caller-owned secret without creating another secret buffer. */
+export function serializeInvitationToken(invitationId: string, generation: number, secret: Buffer): string {
+  assertUuid(invitationId);
+  assertGeneration(generation);
+  if (!Buffer.isBuffer(secret) || secret.length !== INVITATION_SECRET_BYTES) {
+    throw new InvitationTokenError('invitation secret has an invalid length');
+  }
   const token = [
     INVITATION_TOKEN_VERSION,
     uuidToBytes(invitationId).toString('base64url'),
     String(generation),
     secret.toString('base64url'),
   ].join('.');
-  return { invitationId: invitationId.toLowerCase(), generation, secret: Buffer.from(secret), token };
+  return token;
 }
 
 export function parseInvitationToken(token: string): ParsedInvitationToken {
