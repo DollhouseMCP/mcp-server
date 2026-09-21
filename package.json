@@ -86,6 +86,7 @@
     "test:console-e2e:auth:preflight": "node scripts/web-console-e2e-preflight.mjs",
     "test:console-e2e:auth": "npm run test:console-e2e:auth:preflight && playwright test --config tests/integration/web-console-e2e/playwright.config.ts",
     "test:console-e2e:auth:compiled": "npm run test:console-e2e:auth:preflight && npm run build && cross-env E2E_APP_ENTRY=dist/index.js playwright test --config tests/integration/web-console-e2e/playwright.config.ts",
+    "test:onboarding:browser": "npm run build && playwright test --config tests/integration/onboarding-browser/playwright.config.ts",
     "test:roundtrip": "npm run test:e2e",
     "test:roundtrip:manual": "./scripts/test-roundtrip-workflow.sh",
     "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup",
