@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { load } from 'js-yaml';
+import { runInNewContext } from 'node:vm';
 
 interface Workflow { jobs: Record<string, { steps: { name?: string; run?: string; if?: string }[] }> }
 function script(file: string, job: string, name: string): string {
@@ -142,6 +143,36 @@ describe('release workflow channel boundaries', () => {
     const result = run(packages);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`PUBLISH_COMMAND=publish --tag ${tag}`);
+  });
+
+  it.each(['true', 'false'])('exercises GitHub Packages dry-run even when already_published=%s', alreadyPublished => {
+    const workflow = load(readFileSync('.github/workflows/publish-github-packages.yml', 'utf8')) as Workflow;
+    const steps = workflow.jobs['publish-gpr'].steps;
+    const dry = steps.find(step => step.name === 'Dry run (skip GitHub Packages publish)')!;
+    const context = { github: { event_name: 'workflow_dispatch' }, inputs: { dry_run: true },
+      steps: { check_version: { outputs: { already_published: alreadyPublished } } } };
+    const enabled = (name: string) => Boolean(runInNewContext(
+      steps.find(step => step.name === name)!.if!.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), context,
+      { timeout: 1000 }));
+    expect(enabled(dry.name!)).toBe(true);
+    expect(enabled('Publish to GitHub Packages')).toBe(false);
+    expect(enabled('Skip publication (already exists)')).toBe(false);
+    for (const [tag, version] of [['latest', '0.0.123'], ['alpha', '0.0.0-alpha.dry-run.123'],
+      ['beta', '0.0.0-beta.dry-run.123'], ['rc', '0.0.0-rc.dry-run.123']]) {
+      const result = run(dry.run!.replaceAll('${{ steps.package_dist_tag.outputs.dist_tag }}', tag), { DIST_TAG: tag });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`VERSION=version=${version}`);
+      expect(result.stdout).toContain(`PUBLISH_COMMAND=publish --dry-run --tag ${tag}`);
+    }
+    context.inputs.dry_run = false;
+    expect(enabled(dry.name!)).toBe(false);
+    expect(enabled('Publish to GitHub Packages')).toBe(alreadyPublished === 'false');
+    expect(enabled('Skip publication (already exists)')).toBe(alreadyPublished === 'true');
+    context.github.event_name = 'release';
+    context.inputs.dry_run = true;
+    expect(enabled(dry.name!)).toBe(false);
+    expect(enabled('Publish to GitHub Packages')).toBe(alreadyPublished === 'false');
+    expect(enabled('Skip publication (already exists)')).toBe(alreadyPublished === 'true');
   });
 
   it.each([

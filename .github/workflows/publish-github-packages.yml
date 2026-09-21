@@ -164,19 +164,28 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Dry run (skip GitHub Packages publish)
-        if: ${{ steps.check_version.outputs.already_published == 'false' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
         shell: bash
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           echo "DRY RUN MODE - Skipping GitHub Packages publication"
           echo "Package would be published: @DollhouseMCP/mcp-server@${PACKAGE_VERSION}"
           echo "GitHub Packages dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
-          npm publish --dry-run --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
+          # npm may reject an existing version even during dry-run. Exercise
+          # the lifecycle on the resolved channel without a registry write.
+          case "${DIST_TAG}" in
+            latest) dry_run_version="0.0.${GITHUB_RUN_ID}" ;;
+            alpha|beta|rc) dry_run_version="0.0.0-${DIST_TAG}.dry-run.${GITHUB_RUN_ID}" ;;
+            *) echo "::error::Unsupported dry-run channel: ${DIST_TAG}"; exit 1 ;;
+          esac
+          npm pkg set "version=${dry_run_version}"
+          npm publish --dry-run --tag "${DIST_TAG}"
         env:
+          DIST_TAG: ${{ steps.package_dist_tag.outputs.dist_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Skip publication (already exists)
-        if: steps.check_version.outputs.already_published == 'true'
+        if: ${{ steps.check_version.outputs.already_published == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           echo "⏭️ Skipping publication - version already exists on GitHub Packages"
