@@ -31,6 +31,8 @@ export interface OnboardingSessionReplacement {
 }
 
 export type OnboardingClaimExchange = Omit<InvitationClaimRecord, 'claimOwnerHash'> & {
+  /** Server-derived presented session; absence permits owner-only lost-response recovery. */
+  readonly expectedSessionHash?: Buffer;
   readonly ownerHash: Buffer;
   readonly sessionHash: Buffer;
   readonly csrfTokenHash: Buffer;
@@ -82,16 +84,25 @@ export class PostgresOnboardingStore implements OnboardingSessionAuthority {
   async exchangeClaim(input: OnboardingClaimExchange, audit: InvitationManagementAudit): Promise<OnboardingSessionRecord> {
     const ownedAudit = copyAudit(audit);
     const owned = { ...input, ownerHash: copyHash(input.ownerHash), sessionHash: copyHash(input.sessionHash),
-      csrfTokenHash: copyHash(input.csrfTokenHash), credentialSecret: Buffer.from(input.credentialSecret) };
+      csrfTokenHash: copyHash(input.csrfTokenHash), credentialSecret: Buffer.from(input.credentialSecret),
+      expectedSessionHash: input.expectedSessionHash === undefined ? undefined : copyHash(input.expectedSessionHash) };
     try {
       return await withSystemContext(this.db, async tx => {
+        // Retain users -> claim -> owner -> session locks through consumption.
+        // A rejected presented session must never become an owner-only resume.
+        if (owned.expectedSessionHash) {
+          const current = await this.lockSession(tx, owned.ownerHash, owned.expectedSessionHash);
+          if (!current || current.invitationId !== owned.invitationId || current.generation !== owned.generation) {
+            throw new OnboardingStoreError('unavailable');
+          }
+        }
         const claim = await createInvitationClaimMutation(tx, ownedAudit).beginClaim({
           invitationId: owned.invitationId, generation: owned.generation, credentialSecret: owned.credentialSecret,
           claimOwnerHash: owned.ownerHash, correlationId: owned.correlationId,
         });
         return this.replaceSessionWithTx(tx, { ownerHash: owned.ownerHash, sessionHash: owned.sessionHash,
           csrfTokenHash: owned.csrfTokenHash, invitationId: claim.invitationId,
-          generation: claim.generation, claimAssertionId: claim.id });
+          generation: claim.generation, claimAssertionId: claim.id }, owned.expectedSessionHash);
       });
     } catch (error) {
       // Normalize only after the composed transaction has rolled back. A caller
@@ -100,7 +111,7 @@ export class PostgresOnboardingStore implements OnboardingSessionAuthority {
         throw new InvitationError('concurrent_update', 'Invitation claim transaction conflicted');
       }
       throw error;
-    } finally { owned.credentialSecret.fill(0); }
+    } finally { owned.credentialSecret.fill(0); owned.expectedSessionHash?.fill(0); }
   }
 
   /** Already-committed claim resume only; initial consumption uses exchangeClaim. */
@@ -110,7 +121,7 @@ export class PostgresOnboardingStore implements OnboardingSessionAuthority {
     return withSystemContext(this.db, tx => this.replaceSessionWithTx(tx, owned));
   }
 
-  private async replaceSessionWithTx(tx: DrizzleTx, owned: OnboardingSessionReplacement): Promise<OnboardingSessionRecord> {
+  private async replaceSessionWithTx(tx: DrizzleTx, owned: OnboardingSessionReplacement, expectedSessionHash?: Buffer): Promise<OnboardingSessionRecord> {
     // The authority acquires users -> invitation -> claim, before auth KV locks.
     const candidate = await this.authority.lockActivationCandidateWithTx(tx, {
       invitationId: owned.invitationId, generation: owned.generation,
@@ -120,6 +131,8 @@ export class PostgresOnboardingStore implements OnboardingSessionAuthority {
     const previous = await readSession(tx, owned.ownerHash);
     const now = await databaseTime(tx);
     if (!activeOwner(owner, now)) throw new OnboardingStoreError('unavailable');
+    if (expectedSessionHash && (!previous || !equal(previous.idHash, expectedSessionHash) ||
+        previous.revokedAt !== null || previous.expiresAt <= now)) throw new OnboardingStoreError('unavailable');
     if (previous && previous.expiresAt > now && previous.revokedAt === null &&
         (previous.invitationId !== owned.invitationId || previous.generation !== owned.generation ||
          previous.claimAssertionId !== owned.claimAssertionId)) throw new OnboardingStoreError('conflict');
