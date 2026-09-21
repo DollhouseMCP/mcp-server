@@ -11,6 +11,7 @@ import { users } from '../../../../dist/database/schema/users.js';
 import { userAdminRoles } from '../../../../dist/database/schema/webConsole.js';
 import { PostgresRateLimitStore } from '../../../../dist/auth/embedded-as/storage/PostgresRateLimitStore.js';
 import type { TransactionalEmail } from '../../../../dist/auth/embedded-as/methods/TransactionalEmailSender.js';
+import { buildContentSecurityPolicy } from '../../../../dist/auth/embedded-as/securityHeaders.js';
 import { createOnboardingComposition } from '../../../../dist/invitations/onboarding/createOnboardingComposition.js';
 import { PostgresInvitationManagementStore } from '../../../../dist/invitations/PostgresInvitationManagementStore.js';
 import { HmacConsoleOpaqueValueService } from '../../../../dist/web-console/security/ConsoleOpaqueValues.js';
@@ -135,7 +136,8 @@ async function runProxy(): Promise<void> {
     const destination = proxyDestination(req.method, req.url);
     if (!destination) { res.writeHead(404).end(); return; }
     if (destination.kind === 'login') {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+        'content-security-policy': buildContentSecurityPolicy('AAAAAAAAAAAAAAAAAAAAAA') });
       res.end('<!doctype html><html lang="en"><title>Sign in</title><body><h1>Account activated</h1></body></html>'); return;
     }
     const target = destination.replica === 'second' ? second : first;
@@ -147,7 +149,13 @@ async function runProxy(): Promise<void> {
         res.writeHead(502).end();
         return;
       }
-      res.writeHead(status, proxyResponseHeaders(upstream.headers, status));
+      const responseHeaders = proxyResponseHeaders(upstream.headers, status);
+      if (!responseHeaders) {
+        upstream.resume();
+        res.writeHead(502).end();
+        return;
+      }
+      res.writeHead(status, responseHeaders);
       upstream.pipe(res);
     });
     forwarded.on('error', () => {
@@ -164,22 +172,26 @@ async function runProxy(): Promise<void> {
 type ProxyDestination = { kind: 'login' } | {
   kind: 'upstream'; replica: 'first' | 'second'; method: 'GET' | 'POST'; path: string;
 };
+const STATIC_PROXY_DESTINATIONS = new Map<string, ProxyDestination>([
+  ['GET /api/v1/auth/login', { kind: 'login' }],
+  ['GET /auth/onboarding/invitation', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/invitation' }],
+  ['GET /auth/onboarding/context', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/context' }],
+  ['GET /auth/onboarding/status', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/status' }],
+  ['POST /auth/onboarding/bootstrap', { kind: 'upstream', replica: 'first', method: 'POST', path: '/auth/onboarding/bootstrap' }],
+  ['POST /auth/onboarding/logout', { kind: 'upstream', replica: 'first', method: 'POST', path: '/auth/onboarding/logout' }],
+  ['POST /auth/onboarding/exchange', { kind: 'upstream', replica: 'second', method: 'POST', path: '/auth/onboarding/exchange' }],
+  ['POST /auth/onboarding/github/start', { kind: 'upstream', replica: 'second', method: 'POST', path: '/auth/onboarding/github/start' }],
+]);
 function proxyDestination(method: string | undefined, rawPath: string | undefined): ProxyDestination | null {
   if (!rawPath || rawPath.length > 4_096 || !rawPath.startsWith('/')) return null;
   let url: URL;
   try { url = new URL(rawPath, 'https://onboarding.fixture.invalid'); } catch { return null; }
   if (url.origin !== 'https://onboarding.fixture.invalid' || url.hash || url.username || url.password) return null;
-  if (method === 'GET' && url.search === '' && url.pathname === '/api/v1/auth/login') return { kind: 'login' };
-  if (method === 'GET' && url.search === '' && [
-    '/auth/onboarding/invitation', '/auth/onboarding/context', '/auth/onboarding/status',
-  ].includes(url.pathname)) return { kind: 'upstream', replica: 'first', method, path: url.pathname };
-  if (method === 'POST' && url.search === '' && [
-    '/auth/onboarding/bootstrap', '/auth/onboarding/logout',
-  ].includes(url.pathname)) return { kind: 'upstream', replica: 'first', method, path: url.pathname };
-  if (method === 'POST' && url.search === '' && [
-    '/auth/onboarding/exchange', '/auth/onboarding/github/start',
-  ].includes(url.pathname)) return { kind: 'upstream', replica: 'second', method, path: url.pathname };
-  if (method !== 'GET' || url.pathname !== '/auth/onboarding/github/callback') return null;
+  const destination = url.search === '' ? STATIC_PROXY_DESTINATIONS.get(`${method} ${url.pathname}`) : undefined;
+  if (destination) return destination;
+  return method === 'GET' && url.pathname === '/auth/onboarding/github/callback' ? callbackDestination(url) : null;
+}
+function callbackDestination(url: URL): ProxyDestination | null {
   const states = url.searchParams.getAll('state');
   const codes = url.searchParams.getAll('code');
   const errors = url.searchParams.getAll('error');
@@ -190,7 +202,7 @@ function proxyDestination(method: string | undefined, rawPath: string | undefine
   const maximum = parameter === 'code' ? 2_048 : 256;
   if (!value || value.length > maximum || /[\s\p{Cc}\p{Cf}]/u.test(value)) return null;
   const path = `/auth/onboarding/github/callback?state=${encodeURIComponent(states[0])}&${parameter}=${encodeURIComponent(value)}`;
-  return { kind: 'upstream', replica: 'first', method, path };
+  return { kind: 'upstream', replica: 'first', method: 'GET', path };
 }
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
@@ -240,18 +252,19 @@ function proxyRequestHeaders(source: IncomingHttpHeaders, origin: URL): Outgoing
   }
   return headers;
 }
-function proxyResponseHeaders(source: IncomingHttpHeaders, status: number): OutgoingHttpHeaders {
+function proxyResponseHeaders(source: IncomingHttpHeaders, status: number): OutgoingHttpHeaders | null {
   const headers: OutgoingHttpHeaders = {};
   const contentType = boundedHeader(source['content-type'], 256);
   const cacheControl = boundedHeader(source['cache-control'], 256);
-  const contentSecurityPolicy = boundedHeader(source['content-security-policy'], 8_192);
+  const contentSecurityPolicy = rebuildContentSecurityPolicy(source['content-security-policy']);
   const referrerPolicy = boundedHeader(source['referrer-policy'], 256);
   const contentTypeOptions = boundedHeader(source['x-content-type-options'], 64);
   const frameOptions = boundedHeader(source['x-frame-options'], 64);
   const permissionsPolicy = boundedHeader(source['permissions-policy'], 2_048);
   if (contentType) headers['content-type'] = contentType;
   if (cacheControl) headers['cache-control'] = cacheControl;
-  if (contentSecurityPolicy) headers['content-security-policy'] = contentSecurityPolicy;
+  if (!contentSecurityPolicy) return null;
+  headers['content-security-policy'] = contentSecurityPolicy;
   if (referrerPolicy) headers['referrer-policy'] = referrerPolicy;
   if (contentTypeOptions) headers['x-content-type-options'] = contentTypeOptions;
   if (frameOptions) headers['x-frame-options'] = frameOptions;
@@ -260,6 +273,18 @@ function proxyResponseHeaders(source: IncomingHttpHeaders, status: number): Outg
   if (cookies?.length) headers['set-cookie'] = cookies;
   if (status === 303) headers.location = '/api/v1/auth/login';
   return headers;
+}
+function rebuildContentSecurityPolicy(value: string | string[] | undefined): string | undefined {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 8_192) return undefined;
+  const match = /(?:^|; )style-src 'self' 'nonce-([A-Za-z0-9_-]{22})'$/.exec(value);
+  if (!match) return undefined;
+  const bytes = Buffer.from(match[1], 'base64url');
+  const canonicalNonce = bytes.toString('base64url');
+  if (bytes.length !== 16 || canonicalNonce !== match[1]) return undefined;
+  const expected = buildContentSecurityPolicy(canonicalNonce);
+  const expectedWithScriptNonce = expected.replace("script-src 'none'", `script-src 'nonce-${canonicalNonce}'`);
+  if (value === expected) return expected;
+  return value === expectedWithScriptNonce ? expectedWithScriptNonce : undefined;
 }
 function boundedHeader(value: string | string[] | undefined, maximum: number): string | undefined {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\r\n]/.test(value)) return undefined;

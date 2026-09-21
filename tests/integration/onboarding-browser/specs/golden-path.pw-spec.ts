@@ -33,7 +33,10 @@ test('activates an invitation through explicit browser and GitHub consent across
       body: data.includes(credential!), exactExchange: path === '/auth/onboarding/exchange' && exactCredentialBody(data, credential!),
     })));
   });
-  await page.goto(issued.claim_url);
+  const claimPage = await page.goto(issued.claim_url);
+  const claimCsp = claimPage?.headers()['content-security-policy'] ?? '';
+  expect(claimCsp).toContain("script-src 'nonce-");
+  expect(claimCsp).not.toMatch(/unsafe-inline|unsafe-eval/);
   await expect(page.locator('#claim-status')).toContainText('Continue to verify');
   expect(pageErrors).toEqual([]);
   expect(exchangeRequests).toBe(0);
@@ -66,7 +69,9 @@ test('activates an invitation through explicit browser and GitHub consent across
   expect(page.url()).toContain('https://github.com/login/oauth/authorize');
   const replayCookies = (await page.context().cookies(origin))
     .filter(cookie => [ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].includes(cookie.name));
-  expect(replayCookies.map(cookie => cookie.name).sort()).toEqual([ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].sort());
+  const byName = (left: string, right: string) => left.localeCompare(right);
+  expect(replayCookies.map(cookie => cookie.name).sort(byName))
+    .toEqual([ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].sort(byName));
   const replayCookieHeader = replayCookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
   await page.locator('#authorize').click();
   await page.waitForURL(`${origin}/api/v1/auth/login`);
