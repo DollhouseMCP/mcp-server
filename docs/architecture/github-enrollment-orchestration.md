@@ -1,0 +1,13 @@
+# GitHub enrollment orchestration
+
+`GitHubEnrollmentOrchestrationService` is an unregistered composition boundary for an already claimed restricted onboarding session. It creates no HTTP route, normal login session, dependency registration, or deployment configuration.
+
+Starting enrollment creates a server UUID correlation, asks the dedicated state service to revalidate the restricted session and create one-time state plus S256 PKCE, then writes a durable start audit. The authorization URL is returned only after that audit succeeds. The public result projects only the URL and expiry; account, invitation, claim and correlation context remains internal. If audit is unavailable, the unreturned state remains unreachable and is overwritten by the next start or expires within five minutes.
+
+Completion consumes the state while revalidating the exact owner and session before contacting GitHub. A valid authorization code is exchanged exactly once, the authenticated `/user` profile is fetched exactly once, and activation is attempted exactly once. An ambiguous exchange, rate limit, provider outage, invalid response, or later activation failure never retries the same code. The restricted onboarding session remains available after those failures, so a caller may begin a fresh authorization flow. The transient provider token remains a local string only and is never persisted, returned, logged, or audited.
+
+The immutable canonical GitHub numeric ID is the activation key. GitHub login and optional public profile email are mutable metadata; the email is always marked unverified by this flow and is never compared with the invited address or used to choose an account. Display name and avatar are deliberately ignored here.
+
+The service writes fixed start, cancellation, denial, conflict and failure event categories. Their metadata contains only server-held account, invitation, generation, claim, correlation and purpose identifiers plus fixed stage/reason enums. It never includes URLs, OAuth state, authorization codes, access tokens, browser hashes, email addresses, GitHub login names, provider response text, or error causes. Successful identity linking and activation are already audited inside the atomic activation transaction, which also removes the restricted owner and session; the orchestrator does not add a non-atomic success duplicate.
+
+No completion result grants a normal console session. A future HTTP boundary must clear both onboarding cookies after activation and begin a fresh ordinary sign-in. Cancellation and sanitized failures may offer a fresh start while the restricted session remains live and authoritative.
