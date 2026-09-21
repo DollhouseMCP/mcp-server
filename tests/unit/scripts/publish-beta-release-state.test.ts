@@ -20,6 +20,10 @@ interface BetaWorkflow {
 
 interface Scenario {
   readonly sourceRef?: string;
+  readonly releaseStatus?: string;
+  readonly releaseBody?: string;
+  readonly gitFailure?: string;
+  readonly npmTagFailure?: string;
   readonly version?: string;
   readonly npmError?: string;
   readonly npmResponse?: string;
@@ -81,6 +85,35 @@ describe('Publish Beta Release state validation', () => {
 
   it.each(['null', '{}', '"2.1.0-beta.999"', 'not-json'])('rejects unexpected successful npm response %s', npmResponse => {
     const result = runScenario({ npmExists: true, npmResponse });
+    expect(result.status).toBe(1);
+    expect(result.outputs).toEqual({});
+  });
+
+  it.each(['401', '403', '429', '500', '503', ''])('rejects GitHub lookup error %s before npm/state outputs', releaseStatus => {
+    const result = runScenario({ releaseStatus });
+    expect(result.status).toBe(1);
+    expect(result.outputs).toEqual({});
+    expect(result.stdout).toContain('GitHub release lookup failed');
+    expect(result.commands.some(command => command.startsWith('npm'))).toBe(false);
+  });
+
+  it.each(['not-json', '{}', 'null'])('rejects malformed GitHub success metadata %s', releaseBody => {
+    const result = runScenario({ releaseStatus: '200', releaseBody });
+    expect(result.status).toBe(1);
+    expect(result.outputs).toEqual({});
+    expect(result.stdout).toContain('invalid release metadata');
+  });
+
+  it.each(['tag', 'target'])('stops on failed git %s lookup even with partial stdout', gitFailure => {
+    const result = runScenario({ tagTarget: expectedSha, gitFailure });
+    expect(result.status).not.toBe(0);
+    expect(result.outputs).toEqual({});
+    expect(result.commands.every(command => command.startsWith('git'))).toBe(true);
+  });
+
+  it.each(['beta', 'latest'])('rejects npm %s dist-tag lookup failure', npmTagFailure => {
+    const result = runScenario({ tagTarget: expectedSha, release: matchingRelease(), npmExists: true,
+      npmBetaVersion: packageVersion, npmLatestVersion: '2.0.42', npmTagFailure });
     expect(result.status).toBe(1);
     expect(result.outputs).toEqual({});
   });
@@ -326,7 +359,7 @@ function runScenario(scenario: Scenario): {
       .replaceAll('\\', '/')
       .replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`)
     : binDirectory;
-  const shellScript = `export PATH="$FAKE_BIN_DIRECTORY:$PATH"\n${validationScript ?? 'exit 99'}`;
+  const shellScript = `set -eo pipefail\nexport PATH="$FAKE_BIN_DIRECTORY:$PATH"\n${validationScript ?? 'exit 99'}`;
   const result = spawnSync(bashExecutable, ['-c', shellScript], {
     cwd: directory,
     encoding: 'utf8',
@@ -334,6 +367,10 @@ function runScenario(scenario: Scenario): {
       ...process.env,
       FAKE_BIN_DIRECTORY: shellBinDirectory,
       GITHUB_REF: scenario.sourceRef ?? 'refs/heads/beta',
+      GITHUB_REPOSITORY: 'DollhouseMCP/mcp-server',
+      FAKE_RELEASE_STATUS: scenario.releaseStatus ?? (release ? '200' : '404'),
+      FAKE_GIT_FAILURE: scenario.gitFailure ?? '',
+      FAKE_NPM_TAG_FAILURE: scenario.npmTagFailure ?? '',
       GITHUB_SHA: expectedSha,
       GITHUB_OUTPUT: outputPath,
       INPUT_VERSION: scenario.version ?? packageVersion,
@@ -343,8 +380,8 @@ function runScenario(scenario: Scenario): {
       FAKE_TAG_TARGET: scenario.tagTarget ?? '',
       FAKE_BRANCH_TARGET: scenario.branchTarget ?? '',
       FAKE_COMMAND_LOG: commandLogPath,
-      FAKE_RELEASE_EXISTS: release ? 'true' : 'false',
-      FAKE_RELEASE_JSON: release ? JSON.stringify(release) : '',
+      FAKE_RELEASE_JSON: scenario.releaseBody ?? (release ? JSON.stringify({ tag_name: release.tagName,
+        prerelease: release.isPrerelease, draft: release.isDraft, target_commitish: release.targetCommitish }) : '{}'),
       FAKE_NPM_EXISTS: scenario.npmExists ? 'true' : 'false',
       FAKE_NPM_BETA_VERSION: scenario.npmBetaVersion ?? '',
       FAKE_NPM_LATEST_VERSION: scenario.npmLatestVersion ?? '',
@@ -389,9 +426,11 @@ set -euo pipefail
 printf 'git %s\n' "$*" >> "\${FAKE_COMMAND_LOG}"
 case "$*" in
   *'refs/tags/'*'^{}'*)
+    [[ "\${FAKE_GIT_FAILURE}" != target ]] || { printf 'partial stdout\\n'; exit 1; }
     [[ -z "\${FAKE_TAG_TARGET:-}" ]] || printf '%s refs/tags/tag^{}\n' "\${FAKE_TAG_TARGET}"
     ;;
   *'refs/tags/'*)
+    [[ "\${FAKE_GIT_FAILURE}" != tag ]] || { printf 'partial stdout\\n'; exit 1; }
     [[ -z "\${FAKE_TAG_OBJECT:-}" ]] || printf '%s refs/tags/tag\n' "\${FAKE_TAG_OBJECT}"
     ;;
   *'refs/heads/'*)
@@ -406,10 +445,12 @@ esac
 const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
 printf 'gh %s\n' "$*" >> "\${FAKE_COMMAND_LOG}"
-if [[ "$1" == 'release' && "$2" == 'view' && "\${FAKE_RELEASE_EXISTS:-false}" == 'true' ]]; then
-  printf '%s\n' "\${FAKE_RELEASE_JSON}"
-  exit 0
+[[ "$1" == api && "$2" == --include && "$3" == repos/DollhouseMCP/mcp-server/releases/tags/* ]] || exit 99
+if [[ -n "\${FAKE_RELEASE_STATUS}" ]]; then
+  printf 'HTTP/2.0 %s fixture\\r\\nContent-Type: application/json\\r\\n\\r\\n%s\\n' "\${FAKE_RELEASE_STATUS}" "\${FAKE_RELEASE_JSON}"
 fi
+[[ "\${FAKE_RELEASE_STATUS}" == 200 ]] && exit 0
+printf 'gh: fixture lookup failure\\n' >&2
 exit 1
 `;
 
@@ -417,10 +458,12 @@ const fakeNpmScript = `#!/usr/bin/env bash
 set -euo pipefail
 printf 'npm %s\n' "$*" >> "\${FAKE_COMMAND_LOG}"
 if [[ "$*" == *'dist-tags.beta'* ]]; then
+  [[ "\${FAKE_NPM_TAG_FAILURE}" != beta ]] || exit 1
   [[ -z "\${FAKE_NPM_BETA_VERSION:-}" ]] || printf '%s\n' "\${FAKE_NPM_BETA_VERSION}"
   exit 0
 fi
 if [[ "$*" == *'dist-tags.latest'* ]]; then
+  [[ "\${FAKE_NPM_TAG_FAILURE}" != latest ]] || exit 1
   [[ -z "\${FAKE_NPM_LATEST_VERSION:-}" ]] || printf '%s\n' "\${FAKE_NPM_LATEST_VERSION}"
   exit 0
 fi

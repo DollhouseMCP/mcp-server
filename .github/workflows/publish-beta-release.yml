@@ -91,13 +91,23 @@ jobs:
           fi
 
           release_exists=false
-          if release_json=$(gh release view "${tag_name}" \
-            --json tagName,isPrerelease,isDraft,targetCommitish 2>/dev/null); then
+          release_lookup_ok=false
+          if release_response=$(gh api --include \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${tag_name}" 2>/dev/null); then
+            release_lookup_ok=true
+          fi
+          release_status=$(awk 'NR == 1 { print $2 }' <<<"${release_response}")
+          if [[ "${release_lookup_ok}" == "true" && "${release_status}" == "200" ]]; then
+            release_json=$(awk 'body { print } /^\r?$/ { body=1 }' <<<"${release_response}")
+            if ! jq -e 'type == "object" and (.tag_name | type == "string") and (.prerelease | type == "boolean") and (.draft | type == "boolean") and (.target_commitish | type == "string")' <<<"${release_json}" >/dev/null 2>&1; then
+              echo "::error::GitHub returned invalid release metadata; refusing to infer release state"
+              exit 1
+            fi
             release_exists=true
-            release_tag=$(jq -r '.tagName' <<<"${release_json}")
-            release_prerelease=$(jq -r '.isPrerelease' <<<"${release_json}")
-            release_draft=$(jq -r '.isDraft' <<<"${release_json}")
-            release_target=$(jq -r '.targetCommitish' <<<"${release_json}")
+            release_tag=$(jq -r '.tag_name' <<<"${release_json}")
+            release_prerelease=$(jq -r '.prerelease' <<<"${release_json}")
+            release_draft=$(jq -r '.draft' <<<"${release_json}")
+            release_target=$(jq -r '.target_commitish' <<<"${release_json}")
 
             if [[ "${tag_exists}" != "true" ]]; then
               echo "::error::Release ${tag_name} exists without its expected Git tag"
@@ -117,6 +127,9 @@ jobs:
             if [[ "${release_target}" != "${GITHUB_SHA}" ]]; then
               echo "::warning::Release ${tag_name} records a different targetCommitish; verified tag ${tag_name} resolves to ${GITHUB_SHA}"
             fi
+          elif [[ "${release_lookup_ok}" == "true" || "${release_status}" != "404" ]]; then
+            echo "::error::GitHub release lookup failed; retry validation when the API is available"
+            exit 1
           fi
 
           npm_publish_complete=false
