@@ -1,3 +1,6 @@
+import { bootstrapWebConsoleOnboarding } from './WebConsoleOnboardingBootstrap.js';
+import type { PrivateBetaOnboardingConfiguration } from '../invitations/onboarding/PrivateBetaOnboardingConfiguration.js';
+import type { OnboardingHttpRouters } from '../server/createStreamableHttpApp.js';
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { env } from '../config/env.js';
@@ -270,6 +273,7 @@ export { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS } from './WebConsoleRouteModuleI
 export type { WebConsoleOmittableRouteModuleId };
 
 export interface WebConsoleRegistrarOptions {
+  readonly onboardingConfiguration?: PrivateBetaOnboardingConfiguration | null;
   readonly activationProfile?: WebConsoleActivationProfile;
   readonly deploymentSignal?: WebConsoleDeploymentSignal;
   readonly productionReadiness?: WebConsoleProductionReadinessOptions;
@@ -353,6 +357,7 @@ export interface WebConsoleApiV1Mount {
 }
 
 export interface WebConsoleComposition {
+  readonly onboarding?: OnboardingHttpRouters;
   readonly activationProfile: WebConsoleActivationProfile;
   readonly registry: ConsoleModuleRegistry;
   readonly sessionStore: IConsoleSessionStore;
@@ -408,6 +413,7 @@ export class WebConsoleRegistrar {
   constructor(private readonly options: WebConsoleRegistrarOptions = {}) {}
 
   async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
+    const onboardingConfiguration = this.options.onboardingConfiguration ? structuredClone(this.options.onboardingConfiguration) : null;
     const database = resolveConsoleDatabase(container);
     const baseStores = await createConsoleStores(database);
     const stores = {
@@ -499,6 +505,17 @@ export class WebConsoleRegistrar {
       container,
       database,
     );
+    const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
+    const onboarding = await bootstrapWebConsoleOnboarding({
+      configuration: onboardingConfiguration, database, authStorage,
+      rateLimits: protectedCorrelationRateLimitStore, opaqueValues,
+      adminAuditKeys: container.hasRegistration('AuditHmacResolver')
+        ? container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver') : undefined,
+      apiEnabled: this.options.enableApiV1Mount === true,
+      sharedHosted: activationProfile === 'shared-hosted',
+      accountAdminEnabled: !isRouteModuleOmitted(this.options, 'accountAdmin'),
+      publicBaseUrl: this.options.publicBaseUrl,
+    });
     const apiV1MountState = createApiV1MountState();
     const healthProbes = createConsoleHealthProbes({
       database,
@@ -563,6 +580,7 @@ export class WebConsoleRegistrar {
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,
     }));
+    if (onboarding) registry.register(onboarding.adminModule);
     registerRouteModule(registry, this.options, 'runtimeSessions', () => createRuntimeSessionModule({
       runtimeStore: stores.runtimeSessionControlStore,
       accountAdminStore: stores.accountAdminStore,
@@ -703,7 +721,6 @@ export class WebConsoleRegistrar {
         'DOLLHOUSE_RATE_LIMIT_BACKEND=postgres for a single cross-replica budget.',
       );
     }
-    const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
     assertWebConsoleProductionActivation({
       activationProfile,
       storageBackend: database ? 'postgres' : 'memory',
@@ -712,34 +729,40 @@ export class WebConsoleRegistrar {
       readiness: productionReadiness,
       stores: createProductionCoreStores(stores),
       registeredRouteModuleIds: registeredRouteModuleIds(registry),
-      routeDependencies: createProductionRouteDependencies({
-        stores,
-        services: {
-          accountInviteIssuer,
-          oauthGrantRevocationService,
-          protectedCorrelationRateLimiter,
-          protectedCorrelationRateLimitStore,
-          collectionFetchRateLimiter,
-          adminAuditQuery,
-          approvalAuditQuery,
-          authenticationAuditQuery,
-          githubIntegrationProvider,
-          ownedActivityQuery,
-          ownedMetricQuery,
-          accountAdminMutationTransactionRunner,
-          operatorConfigStore,
-          signingKeyStore,
-          authPolicyStore,
-          userConfigStore,
-          sessionActivationStateAdapter,
-          sessionActivationEventSink,
-          sessionApprovalStore,
-          sessionApprovalEventSink,
-          sessionExecutionReader,
-          sessionGatekeeperReader,
-          telemetryQuery,
-        },
-      }),
+      routeDependencies: [
+        ...(onboarding ? [routeDependency(
+          onboarding.adminModule.id, 'onboardingRateLimits', protectedCorrelationRateLimitStore,
+          'Durable invitation routes require the shared PostgreSQL rate-limit adapter.',
+        )] : []),
+        ...createProductionRouteDependencies({
+          stores,
+          services: {
+            accountInviteIssuer,
+            oauthGrantRevocationService,
+            protectedCorrelationRateLimiter,
+            protectedCorrelationRateLimitStore,
+            collectionFetchRateLimiter,
+            adminAuditQuery,
+            approvalAuditQuery,
+            authenticationAuditQuery,
+            githubIntegrationProvider,
+            ownedActivityQuery,
+            ownedMetricQuery,
+            accountAdminMutationTransactionRunner,
+            operatorConfigStore,
+            signingKeyStore,
+            authPolicyStore,
+            userConfigStore,
+            sessionActivationStateAdapter,
+            sessionActivationEventSink,
+            sessionApprovalStore,
+            sessionApprovalEventSink,
+            sessionExecutionReader,
+            sessionGatekeeperReader,
+            telemetryQuery,
+          },
+        }),
+      ],
       services: {
         authStorage,
         secretEncryption,
@@ -766,8 +789,10 @@ export class WebConsoleRegistrar {
       apiV1MountState,
       userContext: resolveConsoleUserContext(container),
     });
+    if (onboarding && !apiV1Mount) throw new Error('Private beta onboarding requires an activated console API mount.');
     const cleanupScheduler = this.createCleanupScheduler(stores, database, container);
     const composition: WebConsoleComposition = {
+      ...(onboarding ? { onboarding: { claimPageRouter: onboarding.claimPageRouter, apiRouter: onboarding.apiRouter } } : {}),
       activationProfile,
       registry,
       ...stores,

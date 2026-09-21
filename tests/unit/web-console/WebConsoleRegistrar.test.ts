@@ -37,6 +37,8 @@ jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleFactorS
   },
 }));
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleAccountAllowlistStore.js', () => ({
+  accountAllowlistDeniesIdentityWithTx: jest.fn(),
+  accountAllowlistMatchesIdentityWithTx: jest.fn(),
   addAccountAllowlistEntryWithTx: jest.fn(),
   updateAccountAllowlistEntryWithTx: jest.fn(),
   removeAccountAllowlistEntryWithTx: jest.fn(),
@@ -898,14 +900,16 @@ describe('WebConsoleRegistrar', () => {
     expect(database.execute).toHaveBeenCalledTimes(2);
   });
 
-  it('accepts hosted/shared activation only when production dependencies are explicit', async () => {
+  it.each([false, true])('accepts hosted/shared activation with complete dependencies (onboarding: %s)', async onboardingEnabled => {
     const container = new TestContainer();
-    const database = {};
+    const { PostgresAuthStorageLayer } = await import('../../../src/auth/embedded-as/storage/PostgresAuthStorageLayer.js');
+    const { PostgresRateLimitStore } = await import('../../../src/auth/embedded-as/storage/PostgresRateLimitStore.js');
+    const database = { transaction: jest.fn() } as unknown as import('../../../src/database/connection.js').DatabaseInstance;
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
     container.seed('SigningKeyStore', productionAdapter());
-    container.seed('RateLimitStore', productionAdapter());
+    container.seed('RateLimitStore', new PostgresRateLimitStore(database));
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
     container.seed('WebConsoleAccountAllowlistAuthorityCutoverComplete', true);
@@ -930,7 +934,11 @@ describe('WebConsoleRegistrar', () => {
         keyId: 'prod-key',
         key: Buffer.alloc(32, 29),
       },
-      authStorage: productionAdapter(),
+      authStorage: new PostgresAuthStorageLayer({ db: database }),
+      onboardingConfiguration: onboardingEnabled ? {
+        publicBaseUrl: TEST_PUBLIC_BASE_URL, supportEmail: 'help@example.test',
+        github: { clientId: 'auth-client', clientSecret: 'secret-sentinel' }, smtp: { state: 'disabled' },
+      } : null,
       consoleOAuthClient: productionAdapter(),
       githubIntegrationProvider: productionAdapter(),
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
@@ -947,6 +955,20 @@ describe('WebConsoleRegistrar', () => {
       registerCleanup: false,
     }).bootstrapAndRegister(container);
 
+    const invitationRoutes = composition.registry.createRouteManifest().routes
+      .filter(route => route.moduleId === 'durable_invitation_admin');
+    if (onboardingEnabled) {
+      expect(invitationRoutes.map(route => route.auditOperation)).toEqual(expect.arrayContaining([
+        'invitation.admin.issue', 'invitation.admin.inspect', 'invitation.admin.regenerate', 'invitation.admin.revoke',
+      ]));
+      expect(Object.keys(composition.onboarding!).sort()).toEqual(['apiRouter', 'claimPageRouter']);
+      expect(composition).not.toHaveProperty('onboardingConfiguration');
+      const app = express().use(composition.apiV1Mount!.router);
+      expect((await request(app).post(invitationRoutes[0].path).send({})).status).toBe(401);
+    } else {
+      expect(composition.onboarding).toBeUndefined();
+      expect(invitationRoutes).toEqual([]);
+    }
     expect(composition.storageBackend).toBe('postgres');
     expect(composition.oauthGrantRevocationService?.constructor.name)
       .toBe('ConsoleOAuthGrantRevocationService');

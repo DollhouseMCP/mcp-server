@@ -45,6 +45,30 @@ function env(overrides: Partial<WebConsoleHttpBootstrapEnv> = {}): WebConsoleHtt
 }
 
 describe('WebConsoleHttpBootstrap', () => {
+  it('fails closed on an explicit onboarding opt-in even when the console API is disabled', () => {
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_BETA_ONBOARDING_ENABLED: true,
+      DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: false,
+    }))).toThrow('Private beta onboarding requires');
+  });
+
+  it('passes validated private beta configuration only on explicit opt-in', () => {
+    expect(resolveWebConsoleHttpBootstrapOptions(env())?.onboardingConfiguration).toBeNull();
+    const options = resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_BETA_ONBOARDING_ENABLED: true,
+      DOLLHOUSE_ONBOARDING_SUPPORT_EMAIL: 'support@example.test',
+      DOLLHOUSE_TRANSPORT: 'streamable-http', DOLLHOUSE_AUTH_ENABLED: true,
+      DOLLHOUSE_AUTH_PROVIDER: 'embedded', DOLLHOUSE_AUTH_METHODS: ['github'],
+      DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: true, DOLLHOUSE_STORAGE_BACKEND: 'database',
+      DOLLHOUSE_AUTH_STORAGE_BACKEND: 'postgres', DOLLHOUSE_RATE_LIMIT_BACKEND: 'postgres',
+      DOLLHOUSE_AUTH_GITHUB_CLIENT_ID: 'auth-client', DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET: 'auth-secret',
+    }));
+    expect(options?.onboardingConfiguration).toEqual({
+      publicBaseUrl: 'https://console.example.test', supportEmail: 'support@example.test',
+      github: { clientId: 'auth-client', clientSecret: 'auth-secret' }, smtp: { state: 'disabled' },
+    });
+  });
+
   it('stays dormant unless the api v1 env gate is enabled', () => {
     expect(resolveWebConsoleHttpBootstrapOptions(env({
       DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: false,
