@@ -102,6 +102,8 @@ it('composes admin issuance and delivery through cross-instance claim, OAuth, ac
   expect(authorization.searchParams.get('scope')).toBe('read:user');
   expect(authorization.searchParams.get('redirect_uri')).toBe(`${origin}/auth/onboarding/github/callback`);
   const state = authorization.searchParams.get('state')!;
+  const restrictedRecords = await db.select().from(authKv);
+  expect(restrictedRecords.length).toBeGreaterThanOrEqual(3);
   expect(provider).not.toHaveBeenCalled();
   const callback = `/auth/onboarding/github/callback?state=${state}&code=${oauthCode}`;
   const complete = await request(secondApp).get(callback).set('Cookie', cookies);
@@ -124,13 +126,48 @@ it('composes admin issuance and delivery through cross-instance claim, OAuth, ac
   expect(inspect.status).toBe(200); expect(inspect.body.invitation.state).toBe('accepted');
   expect(inspect.body.claim_url).toBeUndefined(); expect(inspect.body.delivery).toBeUndefined();
   const records = await db.execute(sql`SELECT jsonb_build_object(
-    'security', (SELECT jsonb_agg(e) FROM security_audit_events e WHERE target_id = ${invitation.id}),
+    'user', (SELECT to_jsonb(u) FROM users u WHERE id = ${invitation.user_id}::uuid),
+    'accounts', (SELECT jsonb_agg(a) FROM auth_accounts a WHERE user_id = ${invitation.user_id}::uuid),
+    'invitation', (SELECT to_jsonb(i) FROM account_invitations i WHERE id = ${invitation.id}::uuid),
+    'intended_roles', (SELECT jsonb_agg(r) FROM account_invitation_intended_roles r WHERE invitation_id = ${invitation.id}::uuid),
+    'granted_roles', (SELECT jsonb_agg(r) FROM user_admin_roles r WHERE user_id = ${invitation.user_id}::uuid),
+    'allowlist', (SELECT jsonb_agg(a) FROM account_allowlist_entries a WHERE kind = 'github_id' AND normalized_value = ${githubId}),
+    'invalidations', (SELECT jsonb_agg(e) FROM security_invalidation_events e WHERE user_id = ${invitation.user_id}::uuid),
+    'identity', (SELECT jsonb_agg(e) FROM auth_identity_events e WHERE sub = ${sub}),
+    'security', (SELECT jsonb_agg(e) FROM security_audit_events e WHERE target_id IN (${invitation.id}, ${invitation.user_id})),
     'admin', (SELECT jsonb_agg(e) FROM admin_audit_events e WHERE resource_id = ${invitation.id}),
     'generations', (SELECT jsonb_agg(g) FROM account_invitation_generations g WHERE invitation_id = ${invitation.id}::uuid),
     'claims', (SELECT jsonb_agg(c) FROM account_invitation_claim_assertions c WHERE invitation_id = ${invitation.id}::uuid),
     'delivery', (SELECT jsonb_agg(d) FROM account_invitation_delivery_attempts d WHERE invitation_id = ${invitation.id}::uuid)
   ) AS records`);
-  const serialized = JSON.stringify({ records, kv: await db.select().from(authKv), replay: replay.text, inspect: inspect.body });
-  for (const secret of [credential, credential.split('.')[3], owner.split('=')[1], session.split('=')[1], bootstrap.body.csrfToken,
-    exchange.body.csrfToken, state, oauthCode, githubToken, options.github.clientSecret]) expect(serialized).not.toContain(secret);
+  expect(records[0].records).toMatchObject({
+    accounts: expect.arrayContaining([expect.objectContaining({ sub, user_id: invitation.user_id })]),
+    intended_roles: [expect.objectContaining({ role: 'operator' })],
+    granted_roles: [expect.objectContaining({ role: 'operator' })],
+    allowlist: [expect.objectContaining({ kind: 'github_id', normalized_value: githubId })],
+    invalidations: expect.arrayContaining([expect.objectContaining({ reason: 'invitation_activated' })]),
+    admin: expect.arrayContaining([expect.objectContaining({ operation: 'invitation.issued', actor_user_id: inviterId })]),
+    security: expect.arrayContaining([expect.objectContaining({ event_type: 'invitation.activated' })]),
+  });
+  expectNoDurableCredentials({ records, restrictedRecords, kv: await db.select().from(authKv), replay: replay.text, inspect: inspect.body },
+    [credential, oauthCode, githubToken, options.github.clientSecret],
+    [credential.split('.')[3], owner.split('=')[1], session.split('=')[1], bootstrap.body.csrfToken, exchange.body.csrfToken, state]);
 });
+
+/** Include decoded bytes, so bytea/Buffer storage cannot evade a text-only check. */
+function expectNoDurableCredentials(snapshot: unknown, textSecrets: readonly string[], opaqueSecrets: readonly string[]) {
+  const serialized = JSON.stringify(snapshot);
+  for (const [values, encodings] of [[textSecrets, ['utf8']], [opaqueSecrets, ['utf8', 'base64url']]] as const) {
+    for (const value of values) {
+      expect(serialized).not.toContain(value);
+      for (const encoding of encodings) {
+        const bytes = Buffer.from(value, encoding);
+        try {
+          for (const representation of [bytes.toString('hex'), bytes.toString('base64'), bytes.toString('base64url'), JSON.stringify([...bytes])]) {
+            expect(serialized).not.toContain(representation);
+          }
+        } finally { bytes.fill(0); }
+      }
+    }
+  }
+}
