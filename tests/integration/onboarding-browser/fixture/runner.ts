@@ -104,12 +104,13 @@ async function runReplica(): Promise<void> {
   });
   app.post('/__fixture/resolve', async (req, res) => {
     if (!authorized(req.get('X-Fixture-Control'), controlSecret) || typeof req.body?.invitationId !== 'string') { res.sendStatus(404); return; }
-    const sub = `github_${githubId}`;
+    const githubIdString = String(githubId);
+    const sub = `github_${githubIdString}`;
     const resolver = new PostgresConsoleIdentityResolver(db);
     const provisioned = await new PostgresConsoleAccountAllowlistStore(db).provisionAccountIfAllowed({ required: true,
-      identity: { sub, method: 'github', provider: 'github', externalSub: githubId, githubId,
+      identity: { sub, method: 'github', provider: 'github', externalSub: githubIdString, githubId: githubIdString,
         githubUsername: 'browser-github-user', email: providerEmail },
-      account: { provider: 'github', externalSub: githubId, sub, email: providerEmail, emailVerified: false,
+      account: { provider: 'github', externalSub: githubIdString, sub, email: providerEmail, emailVerified: false,
         createdAt: Date.now(), updatedAt: Date.now() },
     });
     if (provisioned.allowed) await resolver.linkAccount(sub, 'Browser GitHub User');
