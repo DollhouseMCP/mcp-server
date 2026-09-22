@@ -153,6 +153,26 @@ export const suppressions: Suppression[] = [
     file: 'src/web-console/modules/integrations/IntegrationOperationCatalog.ts',
     reason: 'FALSE POSITIVE: Provider identity is validated by descriptor stores and OpenAPI content is structurally normalized, size-bounded, host-checked, and persisted as an API contract. Generic text normalization would change schema and operation semantics.'
   },
+  {
+    rule: RULE_DMCP_SEC_004,
+    file: 'src/invitations/onboarding/OnboardingRouter.ts',
+    reason: 'FALSE POSITIVE: OAuth state, authorization code, invitation credential, and callback query values are opaque protocol data that must remain byte-exact. The optional RFC 9207 issuer is exact-matched to the fixed GitHub issuer, while query cardinality, lengths, controls, origin, path, cookies, and invitation credentials are separately validated. Re-review if those boundaries change. Scanner data-flow follow-up: #2789.'
+  },
+  {
+    rule: RULE_DMCP_SEC_004,
+    file: 'src/web-console/modules/account-admin/DurableInvitationAdminService.ts',
+    reason: 'FALSE POSITIVE: This transport validates the request shape, UUIDs, numeric TTL, role enums, and role authority, then InvitationManagementService canonicalizes email, username, and display name before the transactional mutation. Re-review if issuance bypasses that domain service. Scanner data-flow follow-up: #2789.'
+  },
+  {
+    rule: RULE_DMCP_SEC_004,
+    file: 'src/web-console/ui/invitation-lifecycle-ui.js',
+    reason: 'FALSE POSITIVE: This browser UI accepts UUIDs and numeric TTL, renders server DTO text through textContent, and exposes the returned claim URL only as a read-only manual-copy value. Normalizing the opaque signed claim URL could corrupt its credential; server issuance owns identity canonicalization. Re-review if new free-text mutation input is added. Scanner data-flow follow-up: #2789.'
+  },
+  {
+    rule: RULE_DMCP_SEC_006,
+    file: 'src/invitations/onboarding/OnboardingRouter.ts',
+    reason: 'FALSE POSITIVE: Claim exchange passes the required system audit into the transactional invitation store, and GitHub enrollment delegates to orchestration that writes durable start, cancellation, and failure events while successful activation audit commits atomically with activation. A router-level event would duplicate or misstate transactional outcomes. Re-review if those audit dependencies change. Scanner data-flow follow-up: #2789.'
+  },
 
   // ========================================
   // Test File Suppressions
