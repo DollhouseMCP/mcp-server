@@ -37,7 +37,8 @@ async function runReplica(): Promise<void> {
   const inviterId = required('ONBOARDING_BROWSER_INVITER_ID');
   const unrelatedId = required('ONBOARDING_BROWSER_UNRELATED_ID');
   const providerEmail = required('ONBOARDING_BROWSER_PROVIDER_EMAIL');
-  const githubId = required('ONBOARDING_BROWSER_GITHUB_ID');
+  let githubId = Number(required('ONBOARDING_BROWSER_GITHUB_ID'));
+  if (!Number.isSafeInteger(githubId) || githubId < 1) throw new Error('Invalid ONBOARDING_BROWSER_GITHUB_ID');
   const oauthCode = required('ONBOARDING_BROWSER_OAUTH_CODE');
   const oauthToken = required('ONBOARDING_BROWSER_OAUTH_TOKEN');
   const connection = createDatabaseConnection({ connectionUrl: required('ONBOARDING_BROWSER_DATABASE_URL'), ssl: 'disable' });
@@ -70,7 +71,7 @@ async function runReplica(): Promise<void> {
     if (requestUrl !== 'https://api.github.com/user' || new Headers(init?.headers).get('Authorization') !== `Bearer ${oauthToken}`) {
       return jsonResponse({ message: 'unavailable' }, 500);
     }
-    return jsonResponse({ id: Number(githubId), login: 'browser-github-user', name: 'Browser GitHub User', email: providerEmail });
+    return jsonResponse({ id: githubId, login: 'browser-github-user', name: 'Browser GitHub User', email: providerEmail });
   };
   const sender = { sendTransactionalEmail: async (_message: TransactionalEmail) => {
     deliveryCalls++; return { state: 'submitted' as const, providerMessageId: null };
@@ -87,6 +88,7 @@ async function runReplica(): Promise<void> {
   app.use(express.json({ limit: '2kb' }));
   app.post('/__fixture/issue', async (req, res) => {
     if (!authorized(req.get('X-Fixture-Control'), controlSecret) || !admin) { res.sendStatus(404); return; }
+    providerCalls = 0; deliveryCalls = 0; githubId++;
     const id = randomUUID();
     const response = await admin.send('post', '', { username: `browser-user-${id}`, display_name: 'Browser Invitee',
       email: `${id}@invite.test`, intended_roles: ['operator'], ttl_hours: 24 });
