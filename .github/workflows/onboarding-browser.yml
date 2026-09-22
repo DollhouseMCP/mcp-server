@@ -55,5 +55,8 @@ jobs:
       - name: Verify system Chrome
         run: google-chrome --version
 
+      - name: Install Firefox for Origin privacy regression
+        run: node node_modules/playwright/cli.js install --with-deps firefox
+
       - name: Run onboarding browser qualification
         run: npm run test:onboarding:browser
