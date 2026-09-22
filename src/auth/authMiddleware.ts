@@ -32,6 +32,8 @@ export interface AuthMiddlewareOptions {
   publicPaths?: string[];
   /** RFC 9728 protected resource metadata URL for WWW-Authenticate discovery. */
   protectedResourceMetadataUrl?: string;
+  /** Resource scopes advertised on Bearer challenges, when the provider defines them. */
+  requiredScopes?: readonly string[];
 }
 
 /**
@@ -52,7 +54,7 @@ declare module 'express' {
  *   app.use('/api', createAuthMiddleware({ provider, publicPaths: ['/api/health'] }));
  */
 export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
-  const { provider, publicPaths = [], protectedResourceMetadataUrl } = options;
+  const { provider, publicPaths = [], protectedResourceMetadataUrl, requiredScopes } = options;
   const publicSet = new Set(publicPaths);
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -73,7 +75,7 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
         details: 'Missing authentication token',
         additionalData: { path: req.path, method: req.method },
       });
-      setAuthenticateHeader(res, protectedResourceMetadataUrl);
+      setAuthenticateHeader(res, protectedResourceMetadataUrl, requiredScopes);
       res.status(401).json({ error: 'Authentication required. Provide a Bearer token in the Authorization header.' });
       return;
     }
@@ -100,7 +102,7 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
         provider: provider.name,
         path: req.path,
       });
-      setAuthenticateHeader(res, protectedResourceMetadataUrl);
+      setAuthenticateHeader(res, protectedResourceMetadataUrl, requiredScopes);
       res.status(401).json({ error: `Authentication failed: ${result.reason}` });
       return;
     }
@@ -108,7 +110,7 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
     if (options.isAccountAllowed) {
       try {
         if (!await options.isAccountAllowed(result.claims.sub)) {
-          setAuthenticateHeader(res, protectedResourceMetadataUrl);
+          setAuthenticateHeader(res, protectedResourceMetadataUrl, requiredScopes);
           res.status(401).json({ error: 'Account is not available for authentication' });
           return;
         }
@@ -173,9 +175,18 @@ export function withJwtFallthrough(strict: RequestHandler): RequestHandler {
   };
 }
 
-function setAuthenticateHeader(res: Response, protectedResourceMetadataUrl: string | undefined): void {
+function setAuthenticateHeader(
+  res: Response,
+  protectedResourceMetadataUrl: string | undefined,
+  requiredScopes: readonly string[] | undefined,
+): void {
   if (protectedResourceMetadataUrl) {
-    res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${protectedResourceMetadataUrl}"`);
+    const scope = requiredScopes?.join(' ');
+    const scopeAttribute = scope ? `, scope="${scope}"` : '';
+    res.setHeader(
+      'WWW-Authenticate',
+      `Bearer resource_metadata="${protectedResourceMetadataUrl}"${scopeAttribute}`,
+    );
     return;
   }
 

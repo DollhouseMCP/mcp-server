@@ -181,6 +181,7 @@ export class AuthServiceRegistrar {
       protectedResourceMetadataUrl: hasProtectedResourceMetadata(provider)
         ? provider.getProtectedResourceMetadataUrl()
         : undefined,
+      requiredScopes: protectedResourceScopes(provider),
     });
     container.register('AuthMiddleware', () => middleware);
 
@@ -282,4 +283,8 @@ function parseRetiredSecretKeys(raw: string | undefined): { keyId: string; key: 
 
 function hasProtectedResourceMetadata(provider: IAuthProvider): provider is ProtectedResourceMetadataProvider {
   return typeof (provider as { getProtectedResourceMetadataUrl?: unknown }).getProtectedResourceMetadataUrl === 'function';
+}
+
+function protectedResourceScopes(provider: IAuthProvider): readonly string[] | undefined {
+  return hasProtectedResourceMetadata(provider) ? ['mcp'] : undefined;
 }

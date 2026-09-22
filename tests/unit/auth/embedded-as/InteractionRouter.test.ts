@@ -195,6 +195,31 @@ describe('InteractionRouter — multi-method dispatch', () => {
     }
   });
 
+  it('rejects a scopeless interaction through the provider before invoking an auth method', async () => {
+    const beginInteraction = jest.fn<IAuthMethod['beginInteraction']>(async () => ({
+      kind: 'render-html', html: '<form></form>', csrfToken: '',
+    }));
+    const method = { ...fakeMethod({ id: TRIVIAL_CONSENT_ID, displayName: 'Trivial' }), beginInteraction };
+    const scopeless = { ...details, params: { client_id: 'c', state: 'opaque-state', scope: '   ' } };
+    const interactionFinished = jest.fn<OidcProviderForInteractions['interactionFinished']>(
+      async (_req, res) => { res.redirect(303, '/validated-client-callback?error=invalid_scope'); },
+    );
+    const provider = fakeProvider({ details: scopeless, interactionFinished });
+    const h = await startHarness([method], storage, scopeless, undefined, provider);
+    try {
+      const res = await fetch(`${h.url}/interaction/${scopeless.uid}`, { redirect: 'manual' });
+      expect(res.status).toBe(303);
+      expect(interactionFinished).toHaveBeenCalledWith(
+        expect.anything(), expect.anything(),
+        { error: 'invalid_scope', error_description: 'scope is required; request mcp' },
+        { mergeWithLastSubmission: false },
+      );
+      expect(beginInteraction).not.toHaveBeenCalled();
+    } finally {
+      await h.close();
+    }
+  });
+
   it('multi-method GET renders the chooser when no method selected', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: 'GitHub' }),
@@ -977,7 +1002,9 @@ it('refuses pending login before saving grants, stamping authentication, or comp
   jest.spyOn(storage, 'isAccountAllowed').mockResolvedValue(false);
   const stamp = jest.spyOn(storage, 'updateAccountLastAuth');
   const finished = jest.fn<OidcProviderForInteractions['interactionFinished']>();
-  const details: OidcInteractionDetails = { uid: 'pending', params: {}, prompt: { name: 'login', details: {} } };
+  const details: OidcInteractionDetails = {
+    uid: 'pending', params: { scope: 'mcp' }, prompt: { name: 'login', details: {} },
+  };
   const provider = fakeProvider({ details, interactionFinished: finished });
   const save = jest.spyOn(provider.Grant.prototype, 'save');
   const app = express();

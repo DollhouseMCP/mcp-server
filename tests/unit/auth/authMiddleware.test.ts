@@ -34,6 +34,26 @@ describe('createUnifiedAuthMiddleware', () => {
       expect(res.status).toBe(401);
       expect(res.body.error).toContain('Authentication required');
     });
+
+    it('advertises an explicitly configured resource scope without changing generic challenges', async () => {
+      const provider = createMockProvider(async () => ({ ok: true, claims: { sub: 'user' } }));
+      const app = express();
+      app.use('/mcp', createUnifiedAuthMiddleware({
+        provider,
+        protectedResourceMetadataUrl: 'https://mcp.example.test/.well-known/oauth-protected-resource',
+        requiredScopes: ['mcp'],
+      }));
+      app.post('/mcp', (_req, res) => res.json({ ok: true }));
+
+      const res = await request(app).post('/mcp');
+      expect(res.status).toBe(401);
+      expect(res.headers['www-authenticate']).toBe(
+        'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource", scope="mcp"',
+      );
+
+      const generic = await request(createTestApp(provider)).get('/api/data');
+      expect(generic.headers['www-authenticate']).toBe('Bearer');
+    });
   });
 
   describe('invalid token', () => {

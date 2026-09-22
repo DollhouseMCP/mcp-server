@@ -263,6 +263,8 @@ async function handleGet(
     return;
   }
 
+  if (await rejectMissingScope(req, res, provider, details)) return;
+
   const resolution = await resolveMethodForRequest(req, details, methods, storage);
   if (resolution.kind === 'chooser') {
     res.type('html').send(renderLoginChooser(methods, details.uid));
@@ -526,6 +528,7 @@ export async function finishInteractionWithIdentity(
   options: FinishInteractionOptions,
 ): Promise<void> {
   try {
+    if (await rejectMissingScope(req, res, provider, details)) return;
     const { storage, defaultResource, adminClaims } = options;
     if (!await storage.isAccountAllowed(accountId)) {
       sendError(res, req, 403, 'access_denied', 'Account is not available for authentication');
@@ -572,6 +575,20 @@ export async function finishInteractionWithIdentity(
       sendError(res, req, 500, 'server_error', 'Failed to finish interaction');
     }
   }
+}
+
+async function rejectMissingScope(
+  req: Request,
+  res: Response,
+  provider: OidcProviderForInteractions,
+  details: OidcInteractionDetails,
+): Promise<boolean> {
+  if (typeof details.params.scope === 'string' && details.params.scope.trim().length > 0) return false;
+  await provider.interactionFinished(req, res, {
+    error: 'invalid_scope',
+    error_description: 'scope is required; request mcp',
+  }, { mergeWithLastSubmission: false });
+  return true;
 }
 
 interface PendingAdminStepUp {
