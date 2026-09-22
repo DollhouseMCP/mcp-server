@@ -284,6 +284,7 @@ async function createEmbeddedProvider(
     keyFilePath: config.localKeyFile,
     methods: builtMethods,
     storage,
+    performanceMonitor: config.performanceMonitor,
     // Phase 4.5: forwarded by AuthServiceRegistrar in DB mode; undefined
     // in filesystem mode → EmbeddedAuthorizationServer falls back to the
     // legacy persistKeys / cookieSecret file paths.

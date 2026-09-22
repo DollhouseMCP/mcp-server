@@ -28,6 +28,10 @@ import { env } from '../../config/env.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 import { logger } from '../../utils/logger.js';
 import type {
+  AuthAuthorizationFailureReason,
+  PerformanceMonitor,
+} from '../../utils/PerformanceMonitor.js';
+import type {
   AuthResult,
   IAuthProvider,
   IssueOptions,
@@ -257,6 +261,8 @@ export interface EmbeddedAuthorizationServerOptions {
   adminTotpService?: AdminTotpService;
   consoleIdentityResolver?: IConsoleIdentityResolver;
   adminTotpRateLimitStore?: IRateLimitStore;
+  /** Provider-level authorization outcome counters for /healthz. */
+  performanceMonitor?: PerformanceMonitor;
 }
 
 interface InitializedState {
@@ -290,6 +296,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly adminTotpService: AdminTotpService | null;
   private readonly consoleIdentityResolver: IConsoleIdentityResolver | null;
   private readonly adminTotpRateLimitStore: IRateLimitStore | null;
+  private readonly performanceMonitor: PerformanceMonitor | null;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -329,6 +336,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.adminTotpService = options.adminTotpService ?? null;
     this.consoleIdentityResolver = options.consoleIdentityResolver ?? null;
     this.adminTotpRateLimitStore = options.adminTotpRateLimitStore ?? null;
+    this.performanceMonitor = options.performanceMonitor ?? null;
     this.bootstrap = new EmbeddedASBootstrap(
       this.methods,
       this.storage,
@@ -1133,6 +1141,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     provider.on('access_token.issued', recordTokenIssued('access_token.issued'));
     provider.on('access_token.saved', recordTokenIssued('access_token.saved'));
     provider.on('refresh_token.saved', recordTokenIssued('refresh_token.saved'));
+    attachAuthorizationDiagnosticHandlers(provider, {
+      logFailure: (diagnostic) => {
+        logger.warn('[EmbeddedAuthorizationServer] OAuth authorization failed', diagnostic);
+      },
+      recordOutcome: (outcome) => {
+        this.performanceMonitor?.recordAuthAuthorizationFailure(outcome);
+      },
+    });
   }
 
   private supportedTokenEndpointAuthMethods(): ['none'] | ['none', 'client_secret_basic', 'client_secret_post'] {
@@ -1140,6 +1156,127 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       ? ['none']
       : ['none', 'client_secret_basic', 'client_secret_post'];
   }
+}
+
+export interface AuthorizationDiagnostic {
+  providerEvent: 'authorization.error' | 'server_error';
+  errorCode: 'access_denied' | 'invalid_request' | 'invalid_scope' | 'server_error' | 'other';
+  reason: AuthAuthorizationFailureReason;
+  hasRequestedScope: boolean;
+}
+
+const NO_SCOPE_DETAIL = 'authorization request resolved without requesting interactions but no scope was granted';
+const END_USER_DENIED_DESCRIPTION = 'End-User denied client authorization';
+const AUTHORIZATION_ROUTES = new Set(['authorization', 'resume']);
+
+interface AuthorizationEventSource {
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+interface AuthorizationDiagnosticHandlers {
+  logFailure(diagnostic: AuthorizationDiagnostic): void;
+  recordOutcome(outcome: AuthAuthorizationFailureReason): void;
+}
+
+/** Attach best-effort provider diagnostics without entering its response path. */
+export function attachAuthorizationDiagnosticHandlers(
+  provider: AuthorizationEventSource,
+  handlers: AuthorizationDiagnosticHandlers,
+): void {
+  const recordedContexts = new WeakSet<object>();
+  const claimContext = (ctx: unknown): boolean => {
+    if ((!ctx || typeof ctx !== 'object') && typeof ctx !== 'function') return true;
+    const objectContext = ctx as object;
+    if (recordedContexts.has(objectContext)) return false;
+    recordedContexts.add(objectContext);
+    return true;
+  };
+
+  provider.on('authorization.error', (ctx: unknown, error: unknown) => {
+    safely(() => recordProjectedFailure('authorization.error', ctx, error, handlers, claimContext));
+  });
+  provider.on('server_error', (ctx: unknown, error: unknown) => {
+    safely(() => {
+      if (isAuthorizationContext(ctx)) {
+        recordProjectedFailure('server_error', ctx, error, handlers, claimContext);
+      }
+    });
+  });
+}
+
+function recordProjectedFailure(
+  providerEvent: AuthorizationDiagnostic['providerEvent'],
+  ctx: unknown,
+  error: unknown,
+  handlers: AuthorizationDiagnosticHandlers,
+  claimContext: (ctx: unknown) => boolean,
+): void {
+  const diagnostic = projectAuthorizationDiagnostic(providerEvent, ctx, error);
+  if (!claimContext(ctx)) return;
+  safely(() => handlers.logFailure(diagnostic));
+  safely(() => handlers.recordOutcome(diagnostic.reason));
+}
+
+function safely(operation: () => void): void {
+  try {
+    operation();
+  } catch {
+    // Provider event diagnostics are best-effort and must not affect OAuth.
+  }
+}
+
+/** Reduce oidc-provider's event payload to finite, non-identifying fields. */
+export function projectAuthorizationDiagnostic(
+  providerEvent: AuthorizationDiagnostic['providerEvent'],
+  ctx: unknown,
+  error: unknown,
+): AuthorizationDiagnostic {
+  const rawErrorCode = nestedString(error, 'error');
+  const errorCode = rawErrorCode === 'access_denied'
+    || rawErrorCode === 'invalid_request'
+    || rawErrorCode === 'invalid_scope'
+    || rawErrorCode === 'server_error'
+    ? rawErrorCode
+    : 'other';
+  const reason = providerEvent === 'server_error'
+    ? 'server_error'
+    : classifyAuthorizationFailure(errorCode, error);
+
+  return {
+    providerEvent,
+    errorCode,
+    reason,
+    hasRequestedScope: Boolean(nestedString(nestedObject(ctx, 'oidc'), 'params', 'scope')),
+  };
+}
+
+function classifyAuthorizationFailure(
+  errorCode: AuthorizationDiagnostic['errorCode'],
+  error: unknown,
+): AuthAuthorizationFailureReason {
+  if (errorCode === 'access_denied' && nestedString(error, 'error_detail') === NO_SCOPE_DETAIL) {
+    return 'no_scope_granted';
+  }
+  if (errorCode === 'access_denied' && nestedString(error, 'error_description') === END_USER_DENIED_DESCRIPTION) {
+    return 'end_user_denied';
+  }
+  return 'oauth_error';
+}
+
+function isAuthorizationContext(ctx: unknown): boolean {
+  const route = nestedString(nestedObject(ctx, 'oidc'), 'route');
+  return route !== undefined && AUTHORIZATION_ROUTES.has(route);
+}
+
+function nestedObject(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object') return undefined;
+  return (value as Record<string, unknown>)[key];
+}
+
+function nestedString(value: unknown, ...keys: string[]): string | undefined {
+  let current = value;
+  for (const key of keys) current = nestedObject(current, key);
+  return typeof current === 'string' ? current : undefined;
 }
 
 

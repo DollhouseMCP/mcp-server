@@ -15,6 +15,7 @@ import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemo
 import type { SignInAllowlistAuthority } from '../../../src/auth/embedded-as/allowlistGate.js';
 import type { AdminTotpService } from '../../../src/auth/embedded-as/totp/AdminTotpService.js';
 import type { IConsoleIdentityResolver } from '../../../src/web-console/identity/IConsoleIdentityResolver.js';
+import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 
 const TRIVIAL_CONSENT_ID = 'trivial-consent';
 const LOOPBACK_BASE_URL = 'http://127.0.0.1:65530';
@@ -160,6 +161,24 @@ describe('AuthProviderFactory two-level structure', () => {
       const active = await signingKeyStore.getActive('invite');
       expect(active).not.toBeNull();
       expect(active?.payload.secret).toEqual(expect.any(String));
+    });
+  });
+
+  describe('provider diagnostics wiring', () => {
+    it('forwards the performance monitor to the embedded authorization server', async () => {
+      const performanceMonitor = new PerformanceMonitor();
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: [TRIVIAL_CONSENT_ID],
+        storage: new InMemoryAuthStorageLayer(),
+        rateLimitStore: new InMemoryRateLimitStore(),
+        publicBaseUrl: LOOPBACK_BASE_URL,
+        performanceMonitor,
+      });
+
+      expect((provider as unknown as { performanceMonitor: PerformanceMonitor }).performanceMonitor)
+        .toBe(performanceMonitor);
     });
   });
 
