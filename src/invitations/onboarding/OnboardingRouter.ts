@@ -164,7 +164,7 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
         if (result.status === 'cancelled') return sendGitHubHelp(res, 400);
         res.append('Set-Cookie', clearOnboardingCookie(ONBOARDING_OWNER_COOKIE));
         res.append('Set-Cookie', clearOnboardingCookie(ONBOARDING_SESSION_COOKIE));
-        res.status(303).location('/api/v1/auth/login').end();
+        res.status(303).location('/api/v1/auth/login?return_to=%2Fui').end();
       } catch (error) {
         sendGitHubHelp(res, githubCallbackStatus(error));
       } finally {
@@ -282,6 +282,6 @@ function sendGitHubHelp(res: Response, status: number): void {
     '<body><main><h1>GitHub enrollment was not completed</h1>' +
     '<p>Return to the enrollment page and start GitHub enrollment again.</p>' +
     '<p><a href="/auth/onboarding/invitation">Return to enrollment</a></p>' +
-    '<p>If enrollment already completed, <a href="/api/v1/auth/login">continue to sign in</a>.</p></main></body></html>',
+    '<p>If enrollment already completed, <a href="/api/v1/auth/login?return_to=%2Fui">continue to sign in</a>.</p></main></body></html>',
   );
 }

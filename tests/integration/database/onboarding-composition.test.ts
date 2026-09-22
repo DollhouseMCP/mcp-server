@@ -107,7 +107,7 @@ it('composes admin issuance and delivery through cross-instance claim, OAuth, ac
   expect(provider).not.toHaveBeenCalled();
   const callback = `/auth/onboarding/github/callback?state=${state}&code=${oauthCode}`;
   const complete = await request(secondApp).get(callback).set('Cookie', cookies);
-  expect(complete.status).toBe(303); expect(complete.headers.location).toBe('/api/v1/auth/login');
+  expect(complete.status).toBe(303); expect(complete.headers.location).toBe('/api/v1/auth/login?return_to=%2Fui');
   expect(cookie(complete, ONBOARDING_OWNER_COOKIE)).toBe(`${ONBOARDING_OWNER_COOKIE}=`);
   expect(cookie(complete, ONBOARDING_SESSION_COOKIE)).toBe(`${ONBOARDING_SESSION_COOKIE}=`);
   expect(provider).toHaveBeenCalledTimes(2);

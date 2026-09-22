@@ -37,7 +37,8 @@ async function runReplica(): Promise<void> {
   const inviterId = required('ONBOARDING_BROWSER_INVITER_ID');
   const unrelatedId = required('ONBOARDING_BROWSER_UNRELATED_ID');
   const providerEmail = required('ONBOARDING_BROWSER_PROVIDER_EMAIL');
-  const githubId = required('ONBOARDING_BROWSER_GITHUB_ID');
+  let githubId = Number(required('ONBOARDING_BROWSER_GITHUB_ID'));
+  if (!Number.isSafeInteger(githubId) || githubId < 1) throw new Error('Invalid ONBOARDING_BROWSER_GITHUB_ID');
   const oauthCode = required('ONBOARDING_BROWSER_OAUTH_CODE');
   const oauthToken = required('ONBOARDING_BROWSER_OAUTH_TOKEN');
   const connection = createDatabaseConnection({ connectionUrl: required('ONBOARDING_BROWSER_DATABASE_URL'), ssl: 'disable' });
@@ -70,7 +71,7 @@ async function runReplica(): Promise<void> {
     if (requestUrl !== 'https://api.github.com/user' || new Headers(init?.headers).get('Authorization') !== `Bearer ${oauthToken}`) {
       return jsonResponse({ message: 'unavailable' }, 500);
     }
-    return jsonResponse({ id: Number(githubId), login: 'browser-github-user', name: 'Browser GitHub User', email: providerEmail });
+    return jsonResponse({ id: githubId, login: 'browser-github-user', name: 'Browser GitHub User', email: providerEmail });
   };
   const sender = { sendTransactionalEmail: async (_message: TransactionalEmail) => {
     deliveryCalls++; return { state: 'submitted' as const, providerMessageId: null };
@@ -87,6 +88,7 @@ async function runReplica(): Promise<void> {
   app.use(express.json({ limit: '2kb' }));
   app.post('/__fixture/issue', async (req, res) => {
     if (!authorized(req.get('X-Fixture-Control'), controlSecret) || !admin) { res.sendStatus(404); return; }
+    providerCalls = 0; deliveryCalls = 0; githubId++;
     const id = randomUUID();
     const response = await admin.send('post', '', { username: `browser-user-${id}`, display_name: 'Browser Invitee',
       email: `${id}@invite.test`, intended_roles: ['operator'], ttl_hours: 24 });
@@ -102,12 +104,13 @@ async function runReplica(): Promise<void> {
   });
   app.post('/__fixture/resolve', async (req, res) => {
     if (!authorized(req.get('X-Fixture-Control'), controlSecret) || typeof req.body?.invitationId !== 'string') { res.sendStatus(404); return; }
-    const sub = `github_${githubId}`;
+    const githubIdString = String(githubId);
+    const sub = `github_${githubIdString}`;
     const resolver = new PostgresConsoleIdentityResolver(db);
     const provisioned = await new PostgresConsoleAccountAllowlistStore(db).provisionAccountIfAllowed({ required: true,
-      identity: { sub, method: 'github', provider: 'github', externalSub: githubId, githubId,
+      identity: { sub, method: 'github', provider: 'github', externalSub: githubIdString, githubId: githubIdString,
         githubUsername: 'browser-github-user', email: providerEmail },
-      account: { provider: 'github', externalSub: githubId, sub, email: providerEmail, emailVerified: false,
+      account: { provider: 'github', externalSub: githubIdString, sub, email: providerEmail, emailVerified: false,
         createdAt: Date.now(), updatedAt: Date.now() },
     });
     if (provisioned.allowed) await resolver.linkAccount(sub, 'Browser GitHub User');
@@ -173,7 +176,7 @@ type ProxyDestination = { kind: 'login' } | {
   kind: 'upstream'; replica: 'first' | 'second'; method: 'GET' | 'POST'; path: string;
 };
 const STATIC_PROXY_DESTINATIONS = new Map<string, ProxyDestination>([
-  ['GET /api/v1/auth/login', { kind: 'login' }],
+  ['GET /api/v1/auth/login?return_to=%2Fui', { kind: 'login' }],
   ['GET /auth/onboarding/invitation', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/invitation' }],
   ['GET /auth/onboarding/context', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/context' }],
   ['GET /auth/onboarding/status', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/status' }],
@@ -187,7 +190,7 @@ function proxyDestination(method: string | undefined, rawPath: string | undefine
   let url: URL;
   try { url = new URL(rawPath, 'https://onboarding.fixture.invalid'); } catch { return null; }
   if (url.origin !== 'https://onboarding.fixture.invalid' || url.hash || url.username || url.password) return null;
-  const destination = url.search === '' ? STATIC_PROXY_DESTINATIONS.get(`${method} ${url.pathname}`) : undefined;
+  const destination = STATIC_PROXY_DESTINATIONS.get(`${method} ${url.pathname}${url.search}`);
   if (destination) return destination;
   return method === 'GET' && url.pathname === '/auth/onboarding/github/callback' ? callbackDestination(url) : null;
 }
@@ -274,7 +277,7 @@ function proxyResponseHeaders(source: IncomingHttpHeaders, status: number): Outg
   if (permissionsPolicy) headers['permissions-policy'] = permissionsPolicy;
   const cookies = source['set-cookie']?.filter(value => boundedHeader(value, 4_096) !== undefined).slice(0, 8);
   if (cookies?.length) headers['set-cookie'] = cookies;
-  if (status === 303) headers.location = '/api/v1/auth/login';
+  if (status === 303) headers.location = '/api/v1/auth/login?return_to=%2Fui';
   return headers;
 }
 function rebuildContentSecurityPolicy(value: string | string[] | undefined): string | undefined {
@@ -296,7 +299,7 @@ function boundedHeader(value: string | string[] | undefined, maximum: number): s
 function safeUpstreamStatus(status: number | undefined, location: string | undefined): number {
   if (!status || status < 200 || status > 599) return 502;
   if ([301, 302, 303, 307, 308].includes(status)) {
-    return status === 303 && location === '/api/v1/auth/login' ? 303 : 502;
+    return status === 303 && location === '/api/v1/auth/login?return_to=%2Fui' ? 303 : 502;
   }
   return location === undefined ? status : 502;
 }

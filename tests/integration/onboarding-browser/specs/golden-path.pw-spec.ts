@@ -79,7 +79,7 @@ test('activates an invitation through explicit browser and GitHub consent across
     .toEqual([ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].sort(byName));
   const replayCookieHeader = replayCookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
   await page.locator('#authorize').click();
-  await page.waitForURL(`${origin}/api/v1/auth/login`);
+  await page.waitForURL(`${origin}/api/v1/auth/login?return_to=%2Fui`);
   await expect(page.locator('h1')).toHaveText('Account activated');
   await expectCredentialAbsentFromBrowser(page, credential!);
   const observations = (await Promise.all(credentialObservations)).filter(value => value.url || value.headers || value.body);

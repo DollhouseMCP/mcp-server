@@ -75,13 +75,16 @@ function safe(response: request.Response, forbidden: string[] = []) {
   expect(response.headers['content-security-policy']).toContain("script-src 'none'");
   for (const secret of forbidden) expect(response.text).not.toContain(secret);
 }
-function mountOrdinaryLogin(app: express.Express): void {
+function mountOrdinaryLogin(app: express.Express) {
   const opaqueValues = new HmacConsoleOpaqueValueService(randomBytes(32));
   const sessionStore = new InMemoryConsoleSessionStore();
-  const identityResolver = new InMemoryConsoleIdentityResolver([]);
+  const authSub = 'github_onboarding_landing';
+  const identityResolver = new InMemoryConsoleIdentityResolver([{
+    sub: authSub, userId: randomUUID(), disabledAt: null, authzVersion: 1, roles: [],
+  }]);
   const oauthClient: IConsoleOAuthClient = {
-    createAuthorizationUrl: () => 'https://github.example/login',
-    exchangeAuthorizationCode: async () => { throw new Error('not used'); },
+    createAuthorizationUrl: input => `https://github.example/login?state=${encodeURIComponent(input.state)}`,
+    exchangeAuthorizationCode: async () => ({ sub: authSub, displayName: 'Onboarded User' }),
   };
   const registry = new ConsoleModuleRegistry();
   registry.register(createConsoleBffAuthModule({
@@ -104,6 +107,7 @@ function mountOrdinaryLogin(app: express.Express): void {
     runtimeStore: new InMemoryRuntimeSessionControlStore(),
     idleTimeoutMs: 60 * 60 * 1000,
   }));
+  return { opaqueValues, sessionStore };
 }
 
 it('sets the original 168h owner horizon before exchange, while retaining a 15min server record', async () => {
@@ -368,7 +372,7 @@ it.each([undefined, 'https://github.com/login/oauth'])('accepts a strict callbac
   const response = await request(f.app).get('/auth/onboarding/github/callback')
     .query({ state, code, ...(issuer === undefined ? {} : { iss: issuer }) }).set('Cookie', cookies);
   expect(response.status).toBe(303);
-  expect(response.headers.location).toBe('/api/v1/auth/login');
+  expect(response.headers.location).toBe('/api/v1/auth/login?return_to=%2Fui');
   expect(response.headers['set-cookie']).toEqual(expect.arrayContaining([
     expect.stringContaining(`${ONBOARDING_OWNER_COOKIE}=; Path=/; Max-Age=0`),
     expect.stringContaining(`${ONBOARDING_SESSION_COOKIE}=; Path=/; Max-Age=0`),
@@ -469,14 +473,39 @@ it('offers ordinary sign-in recovery after a committed callback response is lost
   const recovered = await request(f.app).get('/auth/onboarding/github/callback').query(query).set('Cookie', cookies);
   expect(recovered.status).toBe(400);
   const signInTarget = /<a href="([^"]+)">continue to sign in<\/a>/.exec(recovered.text)?.[1];
-  expect(signInTarget).toBeDefined();
+  expect(signInTarget).toBe('/api/v1/auth/login?return_to=%2Fui');
 
   mountOrdinaryLogin(f.app);
   const signIn = await request(f.app).get(signInTarget!).set('Cookie', cookies);
   expect(signIn.status).toBe(302);
-  expect(signIn.headers.location).toBe('https://github.example/login');
+  expect(signIn.headers.location).toMatch(/^https:\/\/github\.example\/login\?state=/);
   expect(f.githubEnrollment.complete).toHaveBeenCalledTimes(2);
   safe(recovered, [...Object.values(query), f.cookie, session.value]);
+});
+
+it('carries successful onboarding through ordinary login to the console UI', async () => {
+  const f = fixture();
+  const session = f.credentials.issue('session');
+  const callback = await request(f.app).get('/auth/onboarding/github/callback')
+    .query({ state: 's'.repeat(43), code: 'github-code', iss: 'https://github.com/login/oauth' })
+    .set('Cookie', `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`);
+  expect(callback.status).toBe(303);
+  expect(callback.headers.location).toBe('/api/v1/auth/login?return_to=%2Fui');
+
+  mountOrdinaryLogin(f.app);
+  const login = await request(f.app).get(callback.headers.location);
+  expect(login.status).toBe(302);
+  const authorization = new URL(login.headers.location);
+  const loginState = authorization.searchParams.get('state');
+  const loginCookie = login.headers['set-cookie']?.find((value: string) => value.startsWith('dh_login_state='))
+    ?.split(';', 1)[0];
+  expect(loginState).toBeTruthy();
+  expect(loginCookie).toBeTruthy();
+
+  const completed = await request(f.app).get('/api/v1/auth/callback')
+    .query({ code: 'ordinary-code', state: loginState }).set('Cookie', loginCookie!);
+  expect(completed.status).toBe(302);
+  expect(completed.headers.location).toBe('/ui');
 });
 
 it('renders shared callback guard failures as the same fixed help page', async () => {

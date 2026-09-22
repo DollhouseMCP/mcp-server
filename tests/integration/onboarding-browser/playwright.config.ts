@@ -8,5 +8,6 @@ export default defineConfig({
   projects: [
     { name: 'chrome', use: { channel: 'chrome' } },
     { name: 'firefox-origin', testMatch: 'claim-origin.pw-spec.ts', use: { browserName: 'firefox' } },
+    { name: 'firefox-golden', testMatch: 'golden-path.pw-spec.ts', use: { browserName: 'firefox' } },
   ],
 });
