@@ -12,6 +12,7 @@ import { setHttpModeActive } from '../../../src/index.js';
 import { EmbeddedAuthorizationServer } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { createUnifiedAuthMiddleware } from '../../../src/auth/authMiddleware.js';
 import {
   createStreamableHttpRuntime,
@@ -106,6 +107,8 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       keyFilePath: path.join(testDir, 'oauth-key.json'),
       methods: [new TrivialConsentMethod({ defaultSubject: 'oauth-http-user' })],
       storage: new InMemoryAuthStorageLayer(),
+      openDCR: true,
+      rateLimitStore: new InMemoryRateLimitStore(),
     });
 
     container = new DollhouseContainer();
@@ -186,6 +189,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       authorization_endpoint: string;
       token_endpoint: string;
       jwks_uri: string;
+      registration_endpoint: string;
     };
     expect(authServer.authorization_endpoint).toBeTruthy();
     expect(authServer.token_endpoint).toBeTruthy();
@@ -195,14 +199,32 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(metadata.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(metadata.headers.get('x-frame-options')).toBe('DENY');
 
+    let clientId = 'dollhouse-claude-connector';
+    let redirectUri = 'http://127.0.0.1/callback';
+    if (requestedScope === 'mcp') {
+      redirectUri = 'https://client.example.test/callback';
+      const registration = await fetch(authServer.registration_endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          redirect_uris: [redirectUri],
+          scope: 'mcp',
+          application_type: 'web',
+          token_endpoint_auth_method: 'none',
+        }),
+      });
+      expect(registration.status).toBe(201);
+      clientId = ((await registration.json()) as { client_id: string }).client_id;
+    }
+
     // 3. Begin the OAuth flow. Browsers send GET to /authorize per RFC 6749;
     //    expect 303 redirect to the interaction URL.
     const verifier = randomBytes(32).toString('base64url');
     const jar = new CookieJar();
     const authorizeParams = new URLSearchParams({
       response_type: 'code',
-      client_id: 'dollhouse-claude-connector',
-      redirect_uri: 'http://127.0.0.1/callback',
+      client_id: clientId,
+      redirect_uri: redirectUri,
       code_challenge: pkceS256(verifier),
       code_challenge_method: 'S256',
       resource: runtime.url,
@@ -276,7 +298,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       });
       jar.ingest(followed.headers);
       const location = followed.headers.get('location');
-      if (location?.startsWith('http://127.0.0.1/callback')) {
+      if (location?.startsWith(redirectUri)) {
         code = new URL(location).searchParams.get('code');
         break;
       }
@@ -291,8 +313,8 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
-        client_id: 'dollhouse-claude-connector',
-        redirect_uri: 'http://127.0.0.1/callback',
+        client_id: clientId,
+        redirect_uri: redirectUri,
         code: code!,
         code_verifier: verifier,
         resource: runtime.url,
@@ -319,6 +341,46 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     } finally {
       await transport.terminateSession().catch(() => {});
       await client.close().catch(() => {});
+    }
+
+    if (requestedScope === 'mcp') {
+      // Reuse the authenticated provider session and the saved mcp grant.
+      // Without the authorization-policy guard oidc-provider skips the
+      // interaction router here and returns a bare access_denied.
+      for (const variant of [
+        { state: 'warm-session-omitted' },
+        { state: 'warm-session-blank', scope: '   ' },
+        { state: 'warm-session-prompt-none', prompt: 'none' },
+      ]) {
+        const params = new URLSearchParams({
+          response_type: 'code',
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          code_challenge: pkceS256(randomBytes(32).toString('base64url')),
+          code_challenge_method: 'S256',
+          resource: runtime.url,
+          state: variant.state,
+        });
+        if (variant.scope !== undefined) params.set('scope', variant.scope);
+        if (variant.prompt !== undefined) params.set('prompt', variant.prompt);
+        const warmAuthorize = await fetch(`${authServer.authorization_endpoint}?${params}`, {
+          redirect: 'manual', headers: { Cookie: jar.header() },
+        });
+        jar.ingest(warmAuthorize.headers);
+        let warmLocation = absoluteUrl(baseUrl, warmAuthorize.headers.get('location'));
+        if (variant.prompt === 'none') expect(warmLocation.startsWith(redirectUri)).toBe(true);
+        for (let hop = 0; hop < 10 && !warmLocation.startsWith(redirectUri); hop += 1) {
+          const followed = await fetch(warmLocation, {
+            redirect: 'manual', headers: { Cookie: jar.header() },
+          });
+          jar.ingest(followed.headers);
+          warmLocation = absoluteUrl(baseUrl, followed.headers.get('location'));
+        }
+        const callback = new URL(warmLocation);
+        expect(callback.searchParams.get('error')).toBe('invalid_scope');
+        expect(callback.searchParams.get('state')).toBe(variant.state);
+        expect(callback.searchParams.get('code')).toBeNull();
+      }
     }
     }, 30_000,
   );

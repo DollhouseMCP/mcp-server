@@ -5,7 +5,6 @@ import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 import { logger } from '../../../src/utils/logger.js';
 import {
   absoluteUrl,
-  approveClientConsentPage,
   CookieJar,
   newPkceVerifier,
   pkceS256,
@@ -25,7 +24,7 @@ describe('OAuth authorization diagnostics', () => {
     harness = null;
   });
 
-  it('records the real provider no-scope failure without exposing its payload', async () => {
+  it('records the real provider invalid_scope failure without exposing its payload', async () => {
     monitor = new PerformanceMonitor();
     monitor.startMonitoring();
     const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
@@ -63,23 +62,12 @@ describe('OAuth authorization diagnostics', () => {
     const jar = new CookieJar();
     jar.ingest(first.headers);
     const interactionUrl = absoluteUrl(harness.baseUrl, first.headers.get('location'));
-    const page = await fetch(interactionUrl, {
+    const rejected = await fetch(interactionUrl, {
       redirect: 'manual',
       headers: { Cookie: jar.header() },
     });
-    jar.ingest(page.headers);
-    const csrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await page.text())?.[1];
-    expect(csrf).toBeDefined();
-    const login = await fetch(interactionUrl, {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: jar.header() },
-      body: new URLSearchParams({ csrf_token: csrf!, action: 'approve' }),
-    });
-    const consent = await approveClientConsentPage({ baseUrl: harness.baseUrl, response: login, jar });
-    jar.ingest(consent.headers);
-
-    let next = absoluteUrl(harness.baseUrl, consent.headers.get('location'));
+    jar.ingest(rejected.headers);
+    let next = absoluteUrl(harness.baseUrl, rejected.headers.get('location'));
     let callback: URL | null = null;
     for (let hop = 0; hop < 10; hop += 1) {
       if (next.startsWith(redirectUri)) {
@@ -91,18 +79,18 @@ describe('OAuth authorization diagnostics', () => {
       next = absoluteUrl(harness.baseUrl, response.headers.get('location'));
     }
 
-    expect(callback?.searchParams.get('error')).toBe('access_denied');
-    expect(callback?.searchParams.get('error_description')).toBeNull();
+    expect(callback?.searchParams.get('error')).toBe('invalid_scope');
+    expect(callback?.searchParams.get('error_description')).toContain('request mcp');
     expect(monitor.getAuthAuthorizationFailureStats()).toMatchObject({
       failureCount: 1,
-      failuresByReason: { no_scope_granted: 1 },
+      failuresByReason: { oauth_error: 1 },
     });
     const diagnosticCall = warn.mock.calls.find(([message]) =>
       message === '[EmbeddedAuthorizationServer] OAuth authorization failed');
     expect(diagnosticCall?.[1]).toEqual({
       providerEvent: 'authorization.error',
-      errorCode: 'access_denied',
-      reason: 'no_scope_granted',
+      errorCode: 'invalid_scope',
+      reason: 'oauth_error',
       hasRequestedScope: false,
     });
     expect(JSON.stringify(diagnosticCall)).not.toContain(clientId);

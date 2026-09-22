@@ -22,7 +22,7 @@
  */
 
 import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
-import OidcProvider from 'oidc-provider';
+import OidcProvider, { interactionPolicy } from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
@@ -141,6 +141,22 @@ export function pickHeaderValue(
 ): string | undefined {
   if (Array.isArray(header)) return header[0];
   return header;
+}
+
+function createInteractionPolicy(): interactionPolicy.DefaultPolicy {
+  const policy = interactionPolicy.base();
+  const login = policy.get('login');
+  if (!login) throw new Error('oidc-provider login interaction policy is unavailable');
+  login.checks.add(new interactionPolicy.Check(
+    'scope_required',
+    'scope is required; request mcp',
+    'invalid_scope',
+    (ctx) => {
+      const scope = ctx.oidc.params?.scope;
+      return typeof scope !== 'string' || scope.trim().length === 0;
+    },
+  ), 0);
+  return policy;
 }
 
 const authAssetLocator = new PackageResourceLocator();
@@ -1018,6 +1034,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         return client.grantTypeAllowed('refresh_token') && code.scopes.has('offline_access');
       },
       interactions: {
+        // Force even an already-authenticated, already-granted request with
+        // no scope through our validated interaction error path. Without
+        // this check oidc-provider may skip interaction dispatch and return
+        // a bare access_denied before InteractionRouter can reject it clearly.
+        policy: createInteractionPolicy(),
         url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
       },
       findAccount: (_ctx, sub) => this.oidcAccount.findAccount(_ctx, sub),
@@ -1166,6 +1187,8 @@ export interface AuthorizationDiagnostic {
   hasRequestedScope: boolean;
 }
 
+// These finite classifiers and authorization route names match the pinned
+// oidc-provider 9.8.3 event vocabulary. Re-verify them when upgrading it.
 const NO_SCOPE_DETAIL = 'authorization request resolved without requesting interactions but no scope was granted';
 const END_USER_DENIED_DESCRIPTION = 'End-User denied client authorization';
 const AUTHORIZATION_ROUTES = new Set(['authorization', 'resume']);
