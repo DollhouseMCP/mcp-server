@@ -19,14 +19,17 @@ test('activates an invitation through explicit browser and GitHub consent across
   const pageErrors: string[] = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   let exchangeRequests = 0;
-  await page.route(`${origin}/auth/onboarding/bootstrap`, async route => {
-    expect(new URL(page.url()).hash).toBe('');
-    await route.continue();
-  });
+  // Observe real browser requests without intercepting bootstrap or supplying
+  // security headers; the browser must construct Origin and Referer itself.
+  const mutationHeaders: Array<Promise<{ origin: string | undefined; referrer: string | undefined }>> = [];
   page.on('request', browserRequest => {
     const path = new URL(browserRequest.url()).pathname;
     const data = browserRequest.postData() ?? '';
     requestPaths.push(path);
+    if (path === '/auth/onboarding/bootstrap') expect(new URL(page.url()).hash).toBe('');
+    if (browserRequest.method() === 'POST' && path.startsWith('/auth/onboarding/')) {
+      mutationHeaders.push(browserRequest.allHeaders().then(headers => ({ origin: headers.origin, referrer: headers.referer })));
+    }
     if (path === '/auth/onboarding/exchange') exchangeRequests++;
     credentialObservations.push(browserRequest.allHeaders().then(headers => ({ path,
       url: browserRequest.url().includes(credential!), headers: JSON.stringify(headers).includes(credential!),
@@ -40,6 +43,7 @@ test('activates an invitation through explicit browser and GitHub consent across
   await expect(page.locator('#claim-status')).toContainText('Continue to verify');
   expect(pageErrors).toEqual([]);
   expect(exchangeRequests).toBe(0);
+  expect(await Promise.all(mutationHeaders)).toEqual([{ origin, referrer: undefined }]);
   expect(page.url()).toBe(`${origin}/auth/onboarding/invitation`);
   await expectCredentialAbsentFromBrowser(page, credential!);
 
@@ -67,6 +71,7 @@ test('activates an invitation through explicit browser and GitHub consent across
   await page.locator('#claim-github').click();
   await expect(page.locator('#authorize')).toBeVisible();
   expect(page.url()).toContain('https://github.com/login/oauth/authorize');
+  expect(await Promise.all(mutationHeaders)).toEqual(Array.from({ length: 3 }, () => ({ origin, referrer: undefined })));
   const replayCookies = (await page.context().cookies(origin))
     .filter(cookie => [ONBOARDING_OWNER_COOKIE, ONBOARDING_SESSION_COOKIE].includes(cookie.name));
   const byName = (left: string, right: string) => left.localeCompare(right);

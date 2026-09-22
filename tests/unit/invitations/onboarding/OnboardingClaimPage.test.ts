@@ -19,7 +19,7 @@ async function until(predicate: () => boolean) {
   for (let attempt = 0; attempt < 100; attempt++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
   expect(predicate()).toBe(true);
 }
-interface Call { path: string; body?: string; headers: Record<string, string>; hash: string }
+interface Call { path: string; body?: string; headers: Record<string, string>; hash: string; policy: Pick<RequestInit, 'mode' | 'referrerPolicy' | 'credentials' | 'redirect'> }
 interface Reply { status: number; body: unknown; bodyError?: Error }
 async function browser(fragment = `#token=${token}`, reply?: (path: string) => Reply | Promise<Reply>, withoutSize = false, setup?: (window: JSDOM['window']) => void) {
   const html = (await request(app()).get(path)).text;
@@ -28,7 +28,8 @@ async function browser(fragment = `#token=${token}`, reply?: (path: string) => R
     setup?.(window);
     if (withoutSize) Object.defineProperty(window.URLSearchParams.prototype, 'size', { value: undefined });
     window.fetch = (async (url: string, init: RequestInit) => {
-      calls.push({ path: url, body: init.body as string | undefined, headers: init.headers as Record<string, string>, hash: window.location.hash });
+      calls.push({ path: url, body: init.body as string | undefined, headers: init.headers as Record<string, string>, hash: window.location.hash,
+        policy: { mode: init.mode, referrerPolicy: init.referrerPolicy, credentials: init.credentials, redirect: init.redirect } });
       const result: Reply = reply ? await reply(url) : { status: 200, body: url.endsWith('/context') ? metadata :
         { state: url.endsWith('/exchange') ? 'claimed' : 'ready', csrfToken: url.endsWith('/exchange') ? 'new-csrf' : 'csrf' } };
       return { ok: result.status >= 200 && result.status < 300, status: result.status, json: async () => { if (result.bodyError) throw result.bodyError; return result.body; } } as Response;
@@ -56,11 +57,14 @@ it('uses a route-only nonce policy under the actual parent wrapper while API res
 it('clears history before network and consumes a credential only on explicit click, rendering verified metadata as text', async () => {
   const b = await browser();
   expect(b.window.location.hash).toBe(''); expect(b.calls.map(call => call.path)).toEqual(['/auth/onboarding/bootstrap']);
-  expect(b.calls.every(call => !call.hash)).toBe(true); expect(b.document.body.textContent).not.toContain('rene@example.test');
+  expect(b.calls.every(call => !call.hash)).toBe(true);
+  expect(b.calls[0].policy).toEqual({ mode: 'cors', referrerPolicy: 'no-referrer', credentials: 'same-origin', redirect: 'error' }); expect(b.document.body.textContent).not.toContain('rene@example.test');
   expect(b.button('claim-continue').disabled).toBe(false);
   b.button('claim-continue').click();
   await until(() => !b.document.getElementById('claim-details')!.hidden);
   expect(b.calls.map(call => call.path)).toEqual(['/auth/onboarding/bootstrap', '/auth/onboarding/exchange', '/auth/onboarding/context']);
+  expect(b.calls.every(call => call.path.startsWith('/auth/onboarding/') && call.policy.mode === 'cors' &&
+    call.policy.referrerPolicy === 'no-referrer' && call.policy.credentials === 'same-origin' && call.policy.redirect === 'error')).toBe(true);
   expect(JSON.parse(b.calls[1].body!)).toEqual({ credential: token }); expect(b.calls[1].headers['X-Onboarding-CSRF']).toBe('csrf');
   expect(b.document.getElementById('claim-name')!.textContent).toBe(metadata.account.displayName);
   expect(b.document.querySelector('#claim-name img')).toBeNull(); expect(b.document.getElementById('claim-relative')!.textContent).toContain('60 minutes');

@@ -39,7 +39,9 @@ export function startOnboardingClaimPage(config: OnboardingClaimPageConfig): voi
   }
   async function api(path: string, body?: object): Promise<Record<string, unknown>> {
     const signal = transport.signal;
-    const response = await fetch('/auth/onboarding' + path, { method: body ? 'POST' : 'GET', mode: 'same-origin',
+    // CORS mode preserves Origin on POST under no-referrer. Targets stay fixed
+    // to this origin; credentials, redirects and CSP retain their restrictions.
+    const response = await fetch('/auth/onboarding' + path, { method: body ? 'POST' : 'GET', mode: 'cors', referrerPolicy: 'no-referrer',
       credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal,
       headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}),
         ...(csrf && path !== '/bootstrap' ? { 'X-Onboarding-CSRF': csrf } : {}) },
