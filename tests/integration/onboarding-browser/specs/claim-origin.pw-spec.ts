@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:https';
 import express from 'express';
@@ -14,7 +15,7 @@ test('bootstraps with its real Origin and no Referer under the claim page privac
   app.post('/auth/onboarding/bootstrap', express.json({ limit: '1kb' }), (req, res) => {
     observed.push({ origin: req.headers.origin, referrer: req.headers.referer });
     if (req.headers.origin !== origin) { res.status(403).json({ error: 'onboarding_request_rejected' }); return; }
-    res.set('Cache-Control', 'no-store').json({ state: 'ready', csrfToken: 'synthetic-csrf' });
+    res.set('Cache-Control', 'no-store').json({ state: 'ready', csrfToken: randomUUID() });
   });
   const server = createServer({
     key: readFileSync('tests/fixtures/tls/pinned-outbound/address-key.pem'),
