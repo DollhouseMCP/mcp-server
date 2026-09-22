@@ -203,7 +203,8 @@ function callbackDestination(url: URL): ProxyDestination | null {
   const value = codes[0] ?? errors[0];
   const maximum = parameter === 'code' ? 2_048 : 256;
   if (!value || value.length > maximum || /[\s\p{Cc}\p{Cf}]/u.test(value)) return null;
-  const path = `/auth/onboarding/github/callback?state=${encodeURIComponent(states[0])}&${parameter}=${encodeURIComponent(value)}${issuers.length ? `&iss=${encodeURIComponent(issuers[0])}` : ''}`;
+  const issuer = issuers.length ? `&iss=${encodeURIComponent(issuers[0])}` : '';
+  const path = `/auth/onboarding/github/callback?state=${encodeURIComponent(states[0])}&${parameter}=${encodeURIComponent(value)}${issuer}`;
   return { kind: 'upstream', replica: 'first', method: 'GET', path };
 }
 function jsonResponse(value: unknown, status = 200): Response {
