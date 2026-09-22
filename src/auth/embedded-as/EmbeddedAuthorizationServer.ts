@@ -433,6 +433,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         resource: this.resource,
         authorization_servers: [this.issuer],
         bearer_methods_supported: ['header'],
+        scopes_supported: ['mcp'],
         resource_documentation: joinUrl(this.publicBaseUrl, '/'),
       });
     });

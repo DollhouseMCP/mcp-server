@@ -181,6 +181,7 @@ export class AuthServiceRegistrar {
       protectedResourceMetadataUrl: hasProtectedResourceMetadata(provider)
         ? provider.getProtectedResourceMetadataUrl()
         : undefined,
+      requiredScopes: hasProtectedResourceMetadata(provider) ? ['mcp'] : undefined,
     });
     container.register('AuthMiddleware', () => middleware);
 

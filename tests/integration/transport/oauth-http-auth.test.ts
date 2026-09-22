@@ -138,6 +138,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
         authMiddleware: createUnifiedAuthMiddleware({
           provider,
           protectedResourceMetadataUrl: provider.getProtectedResourceMetadataUrl(),
+          requiredScopes: ['mcp'],
         }),
       },
     );
@@ -157,7 +158,9 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     }
   });
 
-  it('discovers OAuth, completes the interaction flow, and lists MCP tools with Bearer auth', async () => {
+  it.each(['mcp', 'mcp offline_access'])(
+    'discovers OAuth, completes the %s interaction flow, and lists MCP tools with Bearer auth',
+    async (requestedScope) => {
     // 1. Unauthenticated request returns 401 with discovery hint.
     const unauthorized = await fetch(runtime.url, {
       method: 'POST',
@@ -166,9 +169,17 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     });
     expect(unauthorized.status).toBe(401);
     expect(unauthorized.headers.get('www-authenticate')).toContain('/.well-known/oauth-protected-resource');
+    expect(unauthorized.headers.get('www-authenticate')).toContain('scope="mcp"');
+
+    const baseUrl = runtime.url.replace('/mcp', '');
+    const protectedResource = await fetch(`${baseUrl}/.well-known/oauth-protected-resource`);
+    expect(protectedResource.status).toBe(200);
+    expect(await protectedResource.json()).toMatchObject({
+      resource: runtime.url,
+      scopes_supported: ['mcp'],
+    });
 
     // 2. Discover the AS metadata.
-    const baseUrl = runtime.url.replace('/mcp', '');
     const metadata = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`);
     expect(metadata.status).toBe(200);
     const authServer = await metadata.json() as {
@@ -195,7 +206,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       code_challenge: pkceS256(verifier),
       code_challenge_method: 'S256',
       resource: runtime.url,
-      scope: 'mcp offline_access',
+      scope: requestedScope,
     });
     const authorize = await fetch(`${authServer.authorization_endpoint}?${authorizeParams}`, {
       method: 'GET',
@@ -288,8 +299,9 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       }),
     });
     expect(tokenResp.status).toBe(200);
-    const tokenBody = await tokenResp.json() as { access_token: string; refresh_token?: string };
+    const tokenBody = await tokenResp.json() as { access_token: string; refresh_token?: string; scope?: string };
     expect(tokenBody.access_token).toBeTruthy();
+    expect(tokenBody.scope).toBe('mcp');
 
     // 8. Use the access token over the MCP transport.
     const transport = new StreamableHTTPClientTransport(new URL(runtime.url), {
@@ -308,6 +320,48 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       await transport.terminateSession().catch(() => {});
       await client.close().catch(() => {});
     }
+    }, 30_000,
+  );
+
+  it('returns a validated invalid_scope error before login when scope is absent', async () => {
+    const baseUrl = runtime.url.replace('/mcp', '');
+    const metadata = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`);
+    const { authorization_endpoint } = await metadata.json() as { authorization_endpoint: string };
+
+    const authorizeError = async (scope?: string): Promise<URL> => {
+      const verifier = randomBytes(32).toString('base64url');
+      const state = `scope-state-${scope ?? 'absent'}`;
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: 'dollhouse-claude-connector',
+        redirect_uri: 'http://127.0.0.1/callback',
+        code_challenge: pkceS256(verifier),
+        code_challenge_method: 'S256',
+        resource: runtime.url,
+        state,
+      });
+      if (scope !== undefined) params.set('scope', scope);
+      const jar = new CookieJar();
+      const first = await fetch(`${authorization_endpoint}?${params}`, { redirect: 'manual' });
+      jar.ingest(first.headers);
+      let location = absoluteUrl(baseUrl, first.headers.get('location'));
+      for (let hop = 0; hop < 10 && !location.startsWith('http://127.0.0.1/callback'); hop += 1) {
+        const followed = await fetch(location, {
+          redirect: 'manual', headers: { Cookie: jar.header() },
+        });
+        jar.ingest(followed.headers);
+        location = absoluteUrl(baseUrl, followed.headers.get('location'));
+      }
+      const callback = new URL(location);
+      expect(callback.origin + callback.pathname).toBe('http://127.0.0.1/callback');
+      expect(callback.searchParams.get('error')).toBe('invalid_scope');
+      expect(callback.searchParams.get('state')).toBe(state);
+      return callback;
+    };
+
+    const absent = await authorizeError();
+    expect(absent.searchParams.get('error_description')).toContain('request mcp');
+
   }, 30_000);
 
   it('B7: ephemeral-port loopback redirect_uri is accepted (RFC 8252 §7.3)', async () => {

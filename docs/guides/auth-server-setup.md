@@ -274,6 +274,10 @@ You should see in stderr:
 [StreamableHttpServer] listening on 127.0.0.1:3000
 ```
 
+### OAuth resource scope
+
+The protected MCP resource advertises the single resource scope `mcp` in its RFC 9728 metadata and in unauthenticated Bearer challenges. Clients must include at least one explicit scope in authorization requests; an absent or blank scope is rejected with `invalid_scope` before sign-in begins. The authorization server continues to support the documented OIDC scopes such as `openid`, `profile`, `email`, and `offline_access`, but those identity and session scopes are not advertised as MCP resource permissions.
+
 ### What lives in Postgres in DB mode
 
 When `DOLLHOUSE_STORAGE_BACKEND=database` is set, **all persistent server state lives in Postgres**. There is no fallback to filesystem for any persistent item — the deployment is honest about being all-DB.
