@@ -888,6 +888,7 @@ export async function createStreamableHttpRuntime(
         ...sessionTelemetry,
       },
       auth: options.performanceMonitor?.getAuthOpStats() ?? {},
+      authAuthorization: options.performanceMonitor?.getAuthAuthorizationFailureStats() ?? null,
       memory: getProcessMemorySnapshot(),
     });
   });

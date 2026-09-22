@@ -99,12 +99,36 @@ export interface AuthOpAggregate {
   p99Ms: number;
 }
 
+export type AuthAuthorizationFailureReason =
+  | 'no_scope_granted'
+  | 'end_user_denied'
+  | 'oauth_error'
+  | 'server_error';
+
+export interface AuthAuthorizationFailureStats {
+  failureCount: number;
+  failuresByReason: Record<AuthAuthorizationFailureReason, number>;
+}
+
+function emptyAuthAuthorizationFailureStats(): AuthAuthorizationFailureStats {
+  return {
+    failureCount: 0,
+    failuresByReason: {
+      no_scope_granted: 0,
+      end_user_denied: 0,
+      oauth_error: 0,
+      server_error: 0,
+    },
+  };
+}
+
 export class PerformanceMonitor {
   private searchMetrics: SearchMetrics[] = [];
   private slowQueries: SlowQuery[] = [];
   private memorySnapshots: MemoryUsage[] = [];
   private cacheMetrics: Map<string, CachePerformance> = new Map();
   private authOpMetrics: AuthOpMetrics[] = [];
+  private authAuthorizationFailures = emptyAuthAuthorizationFailureStats();
 
   // Configuration
   private readonly maxMetricsHistory = 1000;
@@ -327,6 +351,22 @@ export class PerformanceMonitor {
     return result;
   }
 
+  /** Record a provider-level authorization result without fabricating latency. */
+  recordAuthAuthorizationFailure(reason: AuthAuthorizationFailureReason): void {
+    if (!this.isMonitoring) return;
+    this.authAuthorizationFailures.failureCount += 1;
+    this.authAuthorizationFailures.failuresByReason[reason] += 1;
+  }
+
+  /** Provider-level authorization counters surfaced alongside auth timings. */
+  getAuthAuthorizationFailureStats(): AuthAuthorizationFailureStats {
+    const stats = this.authAuthorizationFailures;
+    return {
+      ...stats,
+      failuresByReason: { ...stats.failuresByReason },
+    };
+  }
+
   /**
    * Record cache performance metrics
    */
@@ -539,6 +579,7 @@ export class PerformanceMonitor {
     this.memorySnapshots = [];
     this.cacheMetrics.clear();
     this.authOpMetrics = [];
+    this.authAuthorizationFailures = emptyAuthAuthorizationFailureStats();
 
     logger.info('Performance metrics reset');
   }
