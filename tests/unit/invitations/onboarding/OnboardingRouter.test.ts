@@ -350,7 +350,7 @@ it('starts GitHub enrollment only for the current session through the existing P
   expect(f.githubEnrollment.start).not.toHaveBeenCalled();
 });
 
-it('consumes a strict callback before provider work and clears both restricted cookies on success', async () => {
+it.each([undefined, 'https://github.com/login/oauth'])('accepts a strict callback with issuer %s and clears restricted cookies on success', async issuer => {
   const f = fixture();
   const session = f.credentials.issue('session');
   const state = 's'.repeat(43);
@@ -366,7 +366,7 @@ it('consumes a strict callback before provider work and clears both restricted c
     return { status: 'activated', userId: randomUUID(), invitationId: randomUUID() };
   });
   const response = await request(f.app).get('/auth/onboarding/github/callback')
-    .query({ state, code }).set('Cookie', cookies);
+    .query({ state, code, ...(issuer === undefined ? {} : { iss: issuer }) }).set('Cookie', cookies);
   expect(response.status).toBe(303);
   expect(response.headers.location).toBe('/api/v1/auth/login');
   expect(response.headers['set-cookie']).toEqual(expect.arrayContaining([
@@ -387,6 +387,12 @@ it('consumes a strict callback before provider work and clears both restricted c
 
 it.each([
   '?state=x&code=y&extra=z',
+  '?state=x&code=y&iss=',
+  '?state=x&code=y&iss=https%3A%2F%2Fevil.example',
+  '?state=x&code=y&iss=https%3A%2F%2Fgithub.com%2Flogin%2Foauth%2F',
+  '?state=x&code=y&iss=https%3A%2F%2Fgithub.com%2Flogin%2Foauth&iss=https%3A%2F%2Fgithub.com%2Flogin%2Foauth',
+  '?state=x&code=y&iss=https%3A%2F%2Fgithub.com%2Flogin%2Foauth&extra=z',
+  '?state=x&error=access_denied&iss=https%3A%2F%2Fevil.example',
   '?state=x&state=y&code=z',
   '?state=x&code=y&error=access_denied',
   '?state=x',
@@ -407,14 +413,14 @@ it.each([
   safe(response, [query, f.cookie, session.value]);
 });
 
-it('maps cancellation and contained failures to one fixed help page without clearing the session', async () => {
+it.each([undefined, 'https://github.com/login/oauth'])('maps cancellation and failures with issuer %s to fixed help without clearing the session', async issuer => {
   const f = fixture();
   const session = f.credentials.issue('session');
   const cookies = `${f.cookie}; ${ONBOARDING_SESSION_COOKIE}=${session.value}`;
   const state = 's'.repeat(43);
   f.githubEnrollment.complete.mockResolvedValueOnce({ status: 'cancelled' });
   const cancelled = await request(f.app).get('/auth/onboarding/github/callback')
-    .query({ state, error: 'access_denied' }).set('Cookie', cookies);
+    .query({ state, error: 'access_denied', ...(issuer === undefined ? {} : { iss: issuer }) }).set('Cookie', cookies);
   expect(cancelled.status).toBe(400);
   expect(cancelled.headers['set-cookie']).toBeUndefined();
   expect(cancelled.text).toContain('<html lang="en">');
@@ -426,7 +432,7 @@ it('maps cancellation and contained failures to one fixed help page without clea
 
   f.githubEnrollment.complete.mockRejectedValueOnce(new GitHubEnrollmentFlowError('provider_unavailable'));
   const failed = await request(f.app).get('/auth/onboarding/github/callback')
-    .query({ state, error: 'provider_secret' }).set('Cookie', cookies);
+    .query({ state, error: 'provider_secret', ...(issuer === undefined ? {} : { iss: issuer }) }).set('Cookie', cookies);
   expect(failed.status).toBe(503);
   expect(failed.text).toBe(cancelled.text);
   expect(failed.headers['set-cookie']).toBeUndefined();

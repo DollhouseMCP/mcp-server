@@ -60,7 +60,7 @@ test('activates an invitation through explicit browser and GitHub consent across
     const authorization = new URL(authorizationUrl);
     const state = authorization.searchParams.get('state');
     expect(state).toBeTruthy();
-    callbackUrl = `${origin}/auth/onboarding/github/callback?state=${encodeURIComponent(state!)}&code=${encodeURIComponent(oauthCode)}`;
+    callbackUrl = `${origin}/auth/onboarding/github/callback?state=${encodeURIComponent(state!)}&code=${encodeURIComponent(oauthCode)}&iss=${encodeURIComponent('https://github.com/login/oauth')}`;
     const recorded = await fetch(`${replica}/__fixture/authorization`, { method: 'POST', headers: controlHeaders,
       body: JSON.stringify({ url: authorizationUrl }) });
     expect(recorded.status).toBe(204);

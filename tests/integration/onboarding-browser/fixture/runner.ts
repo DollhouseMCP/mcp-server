@@ -195,13 +195,16 @@ function callbackDestination(url: URL): ProxyDestination | null {
   const states = url.searchParams.getAll('state');
   const codes = url.searchParams.getAll('code');
   const errors = url.searchParams.getAll('error');
-  if ([...url.searchParams].length !== 2 || states.length !== 1 || states[0].length === 0 || states[0].length > 512 ||
+  const issuers = url.searchParams.getAll('iss');
+  if (issuers.length > 1 || (issuers.length === 1 && issuers[0] !== 'https://github.com/login/oauth')) return null;
+  if ([...url.searchParams].length !== 2 + issuers.length || states.length !== 1 || states[0].length === 0 || states[0].length > 512 ||
       (codes.length === 1) === (errors.length === 1) || codes.length > 1 || errors.length > 1) return null;
   const parameter = codes.length === 1 ? 'code' : 'error';
   const value = codes[0] ?? errors[0];
   const maximum = parameter === 'code' ? 2_048 : 256;
   if (!value || value.length > maximum || /[\s\p{Cc}\p{Cf}]/u.test(value)) return null;
-  const path = `/auth/onboarding/github/callback?state=${encodeURIComponent(states[0])}&${parameter}=${encodeURIComponent(value)}`;
+  const issuer = issuers.length ? `&iss=${encodeURIComponent(issuers[0])}` : '';
+  const path = `/auth/onboarding/github/callback?state=${encodeURIComponent(states[0])}&${parameter}=${encodeURIComponent(value)}${issuer}`;
   return { kind: 'upstream', replica: 'first', method: 'GET', path };
 }
 function jsonResponse(value: unknown, status = 200): Response {

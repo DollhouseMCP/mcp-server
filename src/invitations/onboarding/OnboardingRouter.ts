@@ -243,7 +243,13 @@ function rejectGetBody(req: Request): void {
 function parseGitHubCallback(originalUrl: string, trustedOrigin: string) {
   const url = new URL(originalUrl, trustedOrigin);
   const entries = [...url.searchParams.entries()];
-  if (url.origin !== trustedOrigin || url.pathname !== '/auth/onboarding/github/callback' || entries.length !== 2) {
+  // GitHub may identify its authorization server using RFC 9207. Validate
+  // that identity exactly; it must never select a token endpoint dynamically.
+  const issuers = url.searchParams.getAll('iss');
+  if (issuers.length > 1 || (issuers.length === 1 && issuers[0] !== 'https://github.com/login/oauth')) {
+    throw new BoundaryError(400);
+  }
+  if (url.origin !== trustedOrigin || url.pathname !== '/auth/onboarding/github/callback' || entries.length !== 2 + issuers.length) {
     throw new BoundaryError(400);
   }
   const stateValues = url.searchParams.getAll('state');

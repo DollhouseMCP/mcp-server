@@ -44,6 +44,22 @@ describe('Security Audit Suppressions', () => {
           expect(shouldSuppress('CWE-89-001', path)).toBe(true);
         });
       });
+
+      it('should narrowly suppress the reviewed invitation findings', () => {
+        expect(shouldSuppress('DMCP-SEC-004', 'src/invitations/onboarding/OnboardingRouter.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-006', 'src/invitations/onboarding/OnboardingRouter.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004',
+          'src/web-console/modules/account-admin/DurableInvitationAdminService.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004', 'src/web-console/ui/invitation-lifecycle-ui.js')).toBe(true);
+      });
+
+      it('should leave neighboring invitation findings unsuppressed', () => {
+        expect(shouldSuppress('DMCP-SEC-006',
+          'src/web-console/modules/account-admin/DurableInvitationAdminService.ts')).toBe(false);
+        expect(shouldSuppress('DMCP-SEC-006', 'src/web-console/ui/invitation-lifecycle-ui.js')).toBe(false);
+        expect(shouldSuppress('DMCP-SEC-004',
+          'src/invitations/onboarding/GitHubEnrollmentOrchestrationService.ts')).toBe(false);
+      });
     });
 
     describe('wildcard patterns', () => {
