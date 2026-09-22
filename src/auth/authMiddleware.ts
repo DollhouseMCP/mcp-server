@@ -182,9 +182,10 @@ function setAuthenticateHeader(
 ): void {
   if (protectedResourceMetadataUrl) {
     const scope = requiredScopes?.join(' ');
+    const scopeAttribute = scope ? `, scope="${scope}"` : '';
     res.setHeader(
       'WWW-Authenticate',
-      `Bearer resource_metadata="${protectedResourceMetadataUrl}"${scope ? `, scope="${scope}"` : ''}`,
+      `Bearer resource_metadata="${protectedResourceMetadataUrl}"${scopeAttribute}`,
     );
     return;
   }
