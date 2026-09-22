@@ -173,7 +173,7 @@ type ProxyDestination = { kind: 'login' } | {
   kind: 'upstream'; replica: 'first' | 'second'; method: 'GET' | 'POST'; path: string;
 };
 const STATIC_PROXY_DESTINATIONS = new Map<string, ProxyDestination>([
-  ['GET /api/v1/auth/login', { kind: 'login' }],
+  ['GET /api/v1/auth/login?return_to=%2Fui', { kind: 'login' }],
   ['GET /auth/onboarding/invitation', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/invitation' }],
   ['GET /auth/onboarding/context', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/context' }],
   ['GET /auth/onboarding/status', { kind: 'upstream', replica: 'first', method: 'GET', path: '/auth/onboarding/status' }],
@@ -187,7 +187,7 @@ function proxyDestination(method: string | undefined, rawPath: string | undefine
   let url: URL;
   try { url = new URL(rawPath, 'https://onboarding.fixture.invalid'); } catch { return null; }
   if (url.origin !== 'https://onboarding.fixture.invalid' || url.hash || url.username || url.password) return null;
-  const destination = url.search === '' ? STATIC_PROXY_DESTINATIONS.get(`${method} ${url.pathname}`) : undefined;
+  const destination = STATIC_PROXY_DESTINATIONS.get(`${method} ${url.pathname}${url.search}`);
   if (destination) return destination;
   return method === 'GET' && url.pathname === '/auth/onboarding/github/callback' ? callbackDestination(url) : null;
 }
@@ -274,7 +274,7 @@ function proxyResponseHeaders(source: IncomingHttpHeaders, status: number): Outg
   if (permissionsPolicy) headers['permissions-policy'] = permissionsPolicy;
   const cookies = source['set-cookie']?.filter(value => boundedHeader(value, 4_096) !== undefined).slice(0, 8);
   if (cookies?.length) headers['set-cookie'] = cookies;
-  if (status === 303) headers.location = '/api/v1/auth/login';
+  if (status === 303) headers.location = '/api/v1/auth/login?return_to=%2Fui';
   return headers;
 }
 function rebuildContentSecurityPolicy(value: string | string[] | undefined): string | undefined {
@@ -296,7 +296,7 @@ function boundedHeader(value: string | string[] | undefined, maximum: number): s
 function safeUpstreamStatus(status: number | undefined, location: string | undefined): number {
   if (!status || status < 200 || status > 599) return 502;
   if ([301, 302, 303, 307, 308].includes(status)) {
-    return status === 303 && location === '/api/v1/auth/login' ? 303 : 502;
+    return status === 303 && location === '/api/v1/auth/login?return_to=%2Fui' ? 303 : 502;
   }
   return location === undefined ? status : 502;
 }
