@@ -42,7 +42,7 @@ async function browser(fragment = `#token=${token}`, reply?: (path: string) => R
 
 it('uses a route-only nonce policy under the actual parent wrapper while API responses remain script-none', async () => {
   const first = await request(app()).get(path); const second = await request(app()).get(path);
-  expect(first.status).toBe(200); expect(first.headers['cache-control']).toBe('no-store');
+  expect(first.status).toBe(200); expect(first.headers['cache-control']).toBe('no-store, no-transform');
   expect(first.headers['referrer-policy']).toBe('no-referrer'); expect(first.headers['x-frame-options']).toBe('DENY');
   const nonce = /script-src 'nonce-([^']+)'/.exec(first.headers['content-security-policy'])![1];
   expect(first.text).toContain(`<script nonce="${nonce}">`); expect(first.text).toContain(`<style nonce="${nonce}">`);
