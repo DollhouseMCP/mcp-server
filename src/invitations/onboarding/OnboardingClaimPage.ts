@@ -17,8 +17,9 @@ export function createOnboardingClaimPageRouter(supportEmail: string): Router {
   const router = express.Router();
   router.get(INVITATION_CLAIM_PATH, (req, res) => {
     const nonce = randomBytes(16).toString('base64url');
+    // Intermediary HTML rewriting (for example email obfuscation) cannot run under this nonce-only CSP.
     res.set({ 'Content-Security-Policy': buildContentSecurityPolicy(nonce).replace("script-src 'none'", `script-src 'nonce-${nonce}'`),
-      'Cache-Control': 'no-store', Pragma: 'no-cache', 'Referrer-Policy': 'no-referrer',
+      'Cache-Control': 'no-store, no-transform', Pragma: 'no-cache', 'Referrer-Policy': 'no-referrer',
       'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Content-Type': 'text/html; charset=utf-8' });
     if (req.url.includes('?')) { res.status(400).end('Invitation request unavailable'); return; }
     const config = JSON.stringify({ claimPath: INVITATION_CLAIM_PATH, maxTokenLength: MAX_INVITATION_TOKEN_LENGTH, roles: ROLE_DESCRIPTIONS })
