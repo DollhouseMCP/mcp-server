@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="security-admin.css">
   <link rel="stylesheet" href="accounts-admin.css">
   <link rel="stylesheet" href="portfolio-actions.css">
+  <link rel="stylesheet" href="connect.css">
 </head>
 <body>
 
@@ -64,6 +65,7 @@
       </div>
       <div class="header-nav-row">
         <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
+          <button class="console-tab" data-tab="connect" hidden>Connect</button>
           <button class="console-tab" data-tab="portfolio" hidden>Portfolio</button>
           <button class="console-tab" data-tab="sessions" hidden>Sessions</button>
           <button class="console-tab" data-tab="logs" hidden>Logs</button>
@@ -80,6 +82,9 @@
     <main class="site-main">
       <section id="console-empty-state" hidden aria-label="Console availability">
         <div class="panel-placeholder">No console features are available in this deployment.</div>
+      </section>
+      <section id="tab-connect" class="tab-panel" hidden aria-label="Connect an AI client">
+        <div class="panel-placeholder">Loading connection setup…</div>
       </section>
       <section id="tab-portfolio" class="tab-panel" hidden aria-label="Portfolio">
         <div class="panel-placeholder" id="portfolio-root">Loading portfolio…</div>

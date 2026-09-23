@@ -42,6 +42,10 @@ function initTheme() {
  * doesn't change. A module exports `init(panelEl)`.
  */
 const TAB_MODULES = {
+  connect: {
+    load: () => import('./connect.js'),
+    requiredRoutes: [['GET', '/me/sessions']],
+  },
   portfolio: {
     load: () => import('./portfolio.js'),
     requiredRoutes: [['GET', '/me/portfolio/elements']],
@@ -305,12 +309,12 @@ function showConsole(principal, metadata) {
 }
 
 // The tab to open on load: the `?tab=` param (e.g. when returning from step-up),
-// falling back to portfolio. Validated against the real tabs.
+// falling back to the guided connection setup. Validated against the real tabs.
 function initialTab() {
   const requested = new URLSearchParams(globalThis.location.search).get('tab');
   const available = [...document.querySelectorAll('.console-tab:not([hidden])')].map(t => t.dataset.tab);
   if (available.includes(requested)) return requested;
-  return available.includes('portfolio') ? 'portfolio' : available[0];
+  return available.includes('connect') ? 'connect' : available[0];
 }
 
 // Strip a provider prefix (e.g. "local_live_user" → "live_user") for a friendlier

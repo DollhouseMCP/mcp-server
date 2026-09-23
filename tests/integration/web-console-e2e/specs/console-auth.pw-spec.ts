@@ -189,7 +189,9 @@ test('console UI serves its asset graph and boots from server metadata', async (
   });
 
   await loginFromConsole(page);
-  await page.locator('#pf-grid').waitFor({ state: 'visible' });
+  await expect(page.locator('#tab-connect')).toBeVisible();
+  await expect(page.locator('#connect-client-panel')).toContainText('claude mcp add');
+  await expect(page.locator('.console-tab[data-tab="connect"]')).toHaveClass(/active/);
 
   await expect(page.locator('.console-tab[data-tab="portfolio"]')).toBeVisible();
   await expect(page.locator(SESSIONS_TAB)).toBeVisible();
@@ -199,8 +201,12 @@ test('console UI serves its asset graph and boots from server metadata', async (
   expect([...loadedPaths]).toContain('/api/v1/me/manifest');
   expect([...loadedPaths]).toContain('/api/v1/me/role-catalog');
   expect([...loadedPaths]).toContain('/ui/app.js');
-  expect([...loadedPaths]).toContain('/ui/portfolio.js');
+  expect([...loadedPaths]).toContain('/ui/connect.js');
   expect(assetFailures).toEqual([]);
+
+  await page.goto(`${BASE_URL}/ui?tab=portfolio`, { waitUntil: 'networkidle' });
+  await expect(page.locator('#pf-grid')).toBeVisible();
+  await expect(page.locator('.console-tab[data-tab="portfolio"]')).toHaveClass(/active/);
 
   await page.locator(SESSIONS_TAB).click();
   await expect(page.locator('#sessions-body .session-card').first()).toBeVisible();

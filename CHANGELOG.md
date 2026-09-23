@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add a hosted-console Connect guide for Claude Code, Codex, Claude web/Desktop, and Cursor, with deployment-owned endpoint discovery and current-user connection status. (#2803)
 - Incorporate the 2.0.42 macOS verification dialog security fix and prepare safety package 1.0.3, retaining beta’s timing-safe challenge comparison. (#2686)
 - Publish the safety package before the server and retain beta channel protection during version-safe release dry runs. (#2686)
 
