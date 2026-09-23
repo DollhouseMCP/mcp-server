@@ -50,7 +50,6 @@ describe('hosted connection endpoint validation', () => {
     'https://user:secret@mcp.example.test/mcp',
     'https://mcp.example.test/mcp?token=secret',
     'https://mcp.example.test/mcp#secret',
-    'https://mcp.example.test/not-mcp',
   ])('rejects unsafe endpoint %s', endpoint => {
     expect(() => connect.validateHostedMcpEndpoint(endpoint, 'https://mcp.example.test')).toThrow('safe endpoint');
   });
@@ -73,6 +72,15 @@ describe('hosted connection endpoint validation', () => {
     expect(link.searchParams.get('name')).toBe('dollhouse-beta');
     expect(JSON.parse(Buffer.from(link.searchParams.get('config')!, 'base64').toString('utf8'))).toEqual({ url: artifacts.endpoint });
     expect(JSON.parse(artifacts.cursorConfig)).toEqual({ mcpServers: { 'dollhouse-beta': { url: artifacts.endpoint } } });
+  });
+
+  it('generates artifacts for an authoritative custom MCP path', () => {
+    const artifacts = connect.connectionArtifacts('https://mcp.example.test/remote-mcp', 'https://mcp.example.test');
+    expect(artifacts.endpoint).toBe('https://mcp.example.test/remote-mcp');
+    expect(artifacts.claudeAdd).toContain("'https://mcp.example.test/remote-mcp'");
+    expect(JSON.parse(artifacts.cursorConfig)).toEqual({
+      mcpServers: { 'dollhouse-beta': { url: 'https://mcp.example.test/remote-mcp' } },
+    });
   });
 
   it('keeps artifact generation bound to the page origin', () => {

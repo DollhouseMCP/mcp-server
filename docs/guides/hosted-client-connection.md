@@ -13,4 +13,4 @@ Use the separate connection name `dollhouse-beta` so an existing local `dollhous
 
 Basic hosted access does not require a local DollhouseMCP server. Local permission hooks and host audit require separate local support and are not installed by the hosted flow.
 
-If endpoint discovery is unavailable or does not identify the current deployment's canonical `/mcp` URL, the Connect page fails closed and does not generate commands or links.
+If endpoint discovery is unavailable or does not identify a safe endpoint on the current deployment, the Connect page fails closed and does not generate commands or links. Deployments that configure a custom MCP path publish that path through the same protected-resource metadata.

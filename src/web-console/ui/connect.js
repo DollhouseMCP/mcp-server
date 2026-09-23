@@ -29,8 +29,7 @@ export function validateHostedMcpEndpoint(value, pageOrigin) {
   if ((endpoint.protocol !== 'https:' && !loopbackHttp)
       || endpoint.origin !== origin.origin
       || endpoint.username || endpoint.password
-      || endpoint.search || endpoint.hash
-      || endpoint.pathname !== '/mcp') {
+      || endpoint.search || endpoint.hash) {
     throw new Error('Connection metadata did not provide a safe endpoint for this deployment.');
   }
   return endpoint.href;
