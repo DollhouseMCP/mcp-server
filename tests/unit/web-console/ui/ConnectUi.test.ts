@@ -132,4 +132,23 @@ describe('hosted connection UI', () => {
     expect(panel.querySelector<HTMLTextAreaElement>('.connect-copy-fallback')?.selectionEnd).toBeGreaterThan(0);
     expect(panel.textContent).not.toContain('connected successfully');
   });
+
+  it('omits the Sessions link when the combined Sessions surface is unavailable', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, {
+      toast: jest.fn(),
+      hasRoute: (_method: string, path: string) => path === '/me/sessions',
+    });
+    expect(panel.querySelector('#connect-open-sessions')).toBeNull();
+  });
+
+  it('opens Sessions when both required routes are available', async () => {
+    const sessionsTab = document.querySelector<HTMLButtonElement>('[data-tab="sessions"]')!;
+    const clicked = jest.fn();
+    sessionsTab.addEventListener('click', clicked);
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn(), hasRoute: () => true });
+    panel.querySelector<HTMLButtonElement>('#connect-open-sessions')!.click();
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
 });

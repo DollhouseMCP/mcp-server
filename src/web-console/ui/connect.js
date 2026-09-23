@@ -8,6 +8,7 @@ const CONNECTION_NAME = 'dollhouse-beta';
 
 let host;
 let notify = () => {};
+let sessionsTabAvailable = false;
 
 export function validateHostedMcpEndpoint(value, pageOrigin) {
   if (typeof value !== 'string' || value.length === 0) throw new Error('Connection metadata did not include an MCP endpoint.');
@@ -63,7 +64,7 @@ export function connectionArtifacts(endpoint, pageOrigin) {
 }
 
 export function connectedAppsMarkup(sessions, failed = false) {
-  if (failed) return '<div class="connect-state connect-state--error"><strong>Could not check connected apps.</strong><span>Open Sessions to retry and inspect connections.</span></div>';
+  if (failed) return '<div class="connect-state connect-state--error"><strong>Could not check connected apps.</strong><span>Use Refresh to try again.</span></div>';
   if (!Array.isArray(sessions) || sessions.length === 0) {
     return '<div class="connect-state"><strong>No connected apps yet.</strong><span>Complete setup and OAuth in your client, then refresh this check.</span></div>';
   }
@@ -81,6 +82,8 @@ export function connectedAppsMarkup(sessions, failed = false) {
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
+  sessionsTabAvailable = ctx.hasRoute?.('GET', '/me/sessions') === true
+    && ctx.hasRoute?.('GET', '/me/security/sessions') === true;
   host.innerHTML = pageShell();
   bindStaticActions();
   await Promise.all([loadEndpoint(), refreshSessions()]);
@@ -102,7 +105,7 @@ function pageShell() {
       <section class="connect-status" aria-labelledby="connect-status-title">
         <div class="connect-status-head"><h3 id="connect-status-title">Connected apps</h3><button class="btn btn-ghost" id="connect-refresh" type="button">Refresh</button></div>
         <div id="connect-session-state" aria-live="polite">Checking your connections…</div>
-        <button class="btn btn-ghost" id="connect-open-sessions" type="button">Open Sessions</button>
+        ${sessionsTabAvailable ? '<button class="btn btn-ghost" id="connect-open-sessions" type="button">Open Sessions</button>' : ''}
       </section>
     </div>`;
 }
@@ -114,7 +117,7 @@ function clientTab(id, label, active = false) {
 function bindStaticActions() {
   host.querySelectorAll('[data-client]').forEach(button => button.addEventListener('click', () => selectClient(button.dataset.client)));
   host.querySelector('#connect-refresh').addEventListener('click', refreshSessions);
-  host.querySelector('#connect-open-sessions').addEventListener('click', () => {
+  host.querySelector('#connect-open-sessions')?.addEventListener('click', () => {
     document.querySelector('.console-tab[data-tab="sessions"]')?.click();
   });
 }
