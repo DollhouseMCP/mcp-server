@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { EnsembleActivationStrategy } from '../../../../src/handlers/strategies/EnsembleActivationStrategy.js';
 import type { EnsembleManager } from '../../../../src/elements/ensembles/EnsembleManager.js';
 import type { SkillManager } from '../../../../src/elements/skills/SkillManager.js';
@@ -7,8 +7,10 @@ import type { AgentManager } from '../../../../src/elements/agents/AgentManager.
 import type { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
 import type { PersonaManager } from '../../../../src/persona/PersonaManager.js';
 import type { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
+import { logger } from '../../../../src/utils/logger.js';
 
 describe('EnsembleActivationStrategy', () => {
+  afterEach(() => jest.restoreAllMocks());
   let strategy: EnsembleActivationStrategy;
   let mockEnsembleManager: jest.Mocked<EnsembleManager>;
   let mockPortfolioManager: jest.Mocked<PortfolioManager>;
@@ -38,7 +40,8 @@ describe('EnsembleActivationStrategy', () => {
       deactivateMemory: jest.fn(),
     } as unknown as jest.Mocked<MemoryManager>;
     mockPersonaManager = {
-      deactivatePersona: jest.fn(),
+      findPersonaAsync: jest.fn().mockResolvedValue({ filename: 'persona-member.md' }),
+      deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'Deactivated' }),
     } as unknown as jest.Mocked<PersonaManager>;
 
     strategy = new EnsembleActivationStrategy(
@@ -298,6 +301,23 @@ describe('EnsembleActivationStrategy', () => {
       expect(mockAgentManager.deactivateAgent).toHaveBeenCalledWith('agent-member');
       expect(mockMemoryManager.deactivateMemory).toHaveBeenCalledWith('memory-member');
       expect(mockEnsembleManager.deactivateEnsemble).toHaveBeenCalledWith('nested-ensemble');
+    });
+
+    it.each(['persona', 'personas'])('warns and continues after an unsuccessful %s member deactivation', async (elementType) => {
+      const warning = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      mockEnsembleManager.deactivateEnsemble.mockResolvedValue({
+        success: true,
+        ensemble: { metadata: { elements: [{ element_name: 'persona-member', element_type: elementType }] } },
+      } as any);
+      mockPersonaManager.deactivatePersona.mockReturnValue({ success: false, message: 'Persona member deactivation refused' });
+
+      await expect(strategy.deactivate('active-ensemble')).resolves.toEqual({
+        content: [{ type: 'text', text: "✅ Ensemble 'active-ensemble' deactivated" }],
+      });
+      expect(warning).toHaveBeenCalledWith(
+        'Persona member deactivation failed; continuing ensemble deactivation',
+        { memberName: 'persona-member', message: 'Persona member deactivation refused' },
+      );
     });
 
     // Issue #275: Now throws error instead of returning error content

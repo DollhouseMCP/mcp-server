@@ -82,7 +82,7 @@ This is a sample persona with enough instructional content to satisfy validation
       exportElement: jest.fn(),
       importPersona: jest.fn(),
       validatePersona: jest.fn(),
-      deletePersona: jest.fn(),
+      delete: jest.fn(),
     };
 
     mockPersonaExporter = {
@@ -165,7 +165,7 @@ This is a sample persona with enough instructional content to satisfy validation
     it('should deactivate the active persona', async () => {
       activePersonaState.current = 'sample-persona-1.md';
       const result = await handler.deactivatePersona();
-      expect(activePersonaState.current).toBe(null);
+      expect(activePersonaState.current).toBeNull();
       expect(result.content[0].text).toContain('Persona deactivated');
     });
 
@@ -205,7 +205,7 @@ This is a sample persona with enough instructional content to satisfy validation
 
   describe('validatePersona', () => {
     it('produces a validation report', async () => {
-      mockPersonaManager.validatePersona.mockReturnValue({
+      mockPersonaManager.validatePersona.mockResolvedValue({
         success: true,
         message: 'Valid',
         report: {
@@ -227,13 +227,10 @@ This is a sample persona with enough instructional content to satisfy validation
 
   describe('deletePersona', () => {
     it('removes persona file and cache entry', async () => {
-      mockPersonaManager.deletePersona.mockResolvedValue({
-        success: true,
-        message: "Successfully deleted persona 'sample-persona-1'"
-      });
+      mockPersonaManager.delete.mockResolvedValue(undefined);
       const result = await handler.deletePersona('sample-persona-1');
       expect(result.content[0].text).toContain("Successfully deleted persona 'sample-persona-1'");
-      expect(mockPersonaManager.deletePersona).toHaveBeenCalledWith('sample-persona-1.md');
+      expect(mockPersonaManager.delete).toHaveBeenCalledWith('sample-persona-1.md');
     });
 
     it('returns not found when persona is missing', async () => {
@@ -261,7 +258,7 @@ This is a sample persona with enough instructional content to satisfy validation
       mockPersonaManager.find.mockResolvedValue(null);
       const result = await handler.getActivePersona();
       expect(result.content[0].text).toContain('Active persona not found. Deactivated.');
-      expect(activePersonaState.current).toBe(null);
+      expect(activePersonaState.current).toBeNull();
     });
   });
 
@@ -443,7 +440,7 @@ This is a sample persona with enough instructional content to satisfy validation
         content: 'test'
       };
       mockPersonaManager.find.mockResolvedValue(persona);
-      mockPersonaManager.validatePersona.mockReturnValue({
+      mockPersonaManager.validatePersona.mockResolvedValue({
         success: false,
         message: 'Validation failed',
         report: {
@@ -472,13 +469,9 @@ This is a sample persona with enough instructional content to satisfy validation
         content: 'test'
       };
       mockPersonaManager.find.mockResolvedValue(persona);
-      mockPersonaManager.deletePersona.mockResolvedValue({
-        success: false,
-        message: 'Cannot delete default persona'
-      });
+      mockPersonaManager.delete.mockRejectedValue(new Error('Cannot delete default persona'));
 
-      const result = await handler.deletePersona('default-persona');
-      expect(result.content[0].text).toContain('Cannot delete default persona');
+      await expect(handler.deletePersona('default-persona')).rejects.toThrow('Failed to delete persona:');
     });
   });
 });

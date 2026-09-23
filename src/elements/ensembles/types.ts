@@ -222,7 +222,7 @@ export interface ElementManagers {
   templateManager?: import('../../types/elements/IElementManager.js').IElementManager<IElement>;
   agentManager?: import('../../types/elements/IElementManager.js').IElementManager<IElement>;
   memoryManager?: import('../../types/elements/IElementManager.js').IElementManager<IElement>;
-  personaManager?: any;    // PersonaManager has different interface (findPersona method)
+  personaManager?: any;    // PersonaManager has different interface (storage-backed findPersonaAsync method)
   ensembleManager?: import('../../types/elements/IElementManager.js').IElementManager<IElement>;
 }
 

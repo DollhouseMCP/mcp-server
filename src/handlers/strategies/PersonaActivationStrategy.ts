@@ -84,15 +84,14 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
    * @throws {Error} When name parameter is missing
    * @see Issue #275 - Handlers return success=true for missing elements
    */
-  deactivate(name: string): Promise<MCPResponse> {
-    try {
+  async deactivate(name: string): Promise<MCPResponse> {
     // Issue #275: Require name parameter for consistent error handling
     if (!name || name === '') {
       throw new Error('Name parameter is required for deactivate operation');
     }
 
     // Issue #275: Verify the named persona exists before deactivating
-    const persona = this.personaManager.findPersona(name);
+    const persona = await this.personaManager.findPersonaAsync(name);
     if (!persona) {
       throw new ElementNotFoundError('Persona', name);
     }
@@ -102,15 +101,15 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
     const indicator = this.getPersonaIndicator();
 
     if (!result.success) {
-      return Promise.resolve({
+      return {
         content: [{
           type: "text",
           text: `${indicator}❌ ${result.message}`
         }]
-      });
+      };
     }
 
-    return Promise.resolve({
+    return {
       content: [{
         type: "text",
         text: `${indicator}✅ ${result.message}`
@@ -119,10 +118,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
         name: persona.metadata.name,
         filename: persona.filename,
       },
-    });
-    } catch (error) {
-      return Promise.reject(error);
-    }
+    };
   }
 
   /**

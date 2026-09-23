@@ -394,7 +394,7 @@ export class ElementCRUDHandler {
       if (sessionStore) {
         const filename = result.activationRecord?.filename ?? (
           normalizedType === ElementType.PERSONA
-            ? this.personaManager.findPersona(name)?.filename
+            ? (await this.personaManager.findPersonaAsync(name))?.filename
             : undefined
         );
         sessionStore.recordActivation(

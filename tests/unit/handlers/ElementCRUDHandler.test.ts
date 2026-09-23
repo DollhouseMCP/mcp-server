@@ -81,7 +81,7 @@ describe('ElementCRUDHandler (DI)', () => {
       refreshIndex: jest.fn().mockResolvedValue(undefined),
       findByName: jest.fn().mockResolvedValue(undefined),
       deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'deactivated' }),
-      findPersona: jest.fn(),
+      findPersonaAsync: jest.fn(),
       list: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<PersonaHandler>;
 
@@ -855,7 +855,7 @@ describe('ElementCRUDHandler (DI)', () => {
       personaHandler.getActivePersonas.mockReturnValue([
         { metadata: { name: 'Locked Persona' } } as any,
       ]);
-      personaHandler.findPersona.mockReturnValue({ metadata: { name: 'Locked Persona' } } as any);
+      personaHandler.findPersonaAsync.mockResolvedValue({ metadata: { name: 'Locked Persona' } } as any);
       skillManager.getActiveSkills.mockResolvedValue([
         { metadata: { name: 'locked-skill' } } as any,
       ]);

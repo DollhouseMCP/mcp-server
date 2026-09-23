@@ -15,7 +15,7 @@ import { ELEMENT_TYPE_MAP } from './elementTypeNormalization.js';
  * Interface for managers passed to resolveElementTypes().
  * Each manager is optional — only available managers are searched.
  *
- * PersonaManager uses findPersona() (synchronous) instead of the standard
+ * PersonaManager uses findPersonaAsync() (storage-backed) instead of the standard
  * findByName() — both are supported.
  */
 export interface ElementManagersForResolution {
@@ -23,7 +23,7 @@ export interface ElementManagersForResolution {
   templateManager?: { findByName(name: string): Promise<any> };
   agentManager?: { findByName(name: string): Promise<any> };
   memoryManager?: { findByName(name: string): Promise<any> };
-  personaManager?: { findPersona?(name: string): any };
+  personaManager?: { findPersonaAsync?(name: string): Promise<any> };
   ensembleManager?: { findByName(name: string): Promise<any> };
 }
 
@@ -87,57 +87,67 @@ export async function resolveElementTypes(
       continue;
     }
 
-    // Search all managers for this element name
-    const typeMap: [string, any][] = [
-      ['skill', managers.skillManager],
-      ['template', managers.templateManager],
-      ['agent', managers.agentManager],
-      ['memory', managers.memoryManager],
-      ['persona', managers.personaManager],
-      ['ensemble', managers.ensembleManager],
-    ];
+    const matches = await findMatchingTypes(elementName, managers);
 
-    const matches: string[] = [];
-    for (const [typeName, manager] of typeMap) {
-      if (!manager) continue;
-      try {
-        if (typeName === 'persona' && manager.findPersona) {
-          const found = manager.findPersona(elementName);
-          if (found) matches.push(typeName);
-        } else if (manager.findByName) {
-          const found = await manager.findByName(elementName);
-          if (found) matches.push(typeName);
-        }
-      } catch {
-        // Manager lookup failed — skip this type silently
-      }
-    }
-
-    if (matches.length === 1) {
-      const resolvedType = matches[0];
-      // Validate the resolved type against the canonical element type map
-      if (!(resolvedType in ELEMENT_TYPE_MAP)) {
-        logger.warn(
-          `[resolveElementTypes] Element '${elementName}': resolved to unrecognized type '${resolvedType}'. Skipping element.`
-        );
-        notFound.push(elementName);
-        continue;
-      }
-      resolved.push({ ...elem, element_type: resolvedType });
-    } else if (matches.length > 1) {
-      ambiguous.push({ element_name: elementName, found_in: [...matches] });
-      logger.warn(
-        `[resolveElementTypes] Element '${elementName}': found in multiple types (${matches.join(', ')}). ` +
-        `Provide element_type explicitly. Skipping element.`
-      );
-    } else {
-      notFound.push(elementName);
-      logger.warn(
-        `[resolveElementTypes] Element '${elementName}': not found in any element type. ` +
-        `Provide element_type explicitly or ensure the element exists in the portfolio. Skipping element.`
-      );
-    }
+    recordResolution(elem, elementName, matches, { resolved, ambiguous, notFound });
   }
 
   return { resolved, ambiguous, notFound };
+}
+
+async function findMatchingTypes(elementName: string, managers: ElementManagersForResolution): Promise<string[]> {
+  // Search all managers for this element name
+  const typeMap: [string, any][] = [
+    ['skill', managers.skillManager],
+    ['template', managers.templateManager],
+    ['agent', managers.agentManager],
+    ['memory', managers.memoryManager],
+    ['persona', managers.personaManager],
+    ['ensemble', managers.ensembleManager],
+  ];
+
+  const matches: string[] = [];
+  for (const [typeName, manager] of typeMap) {
+    if (!manager) continue;
+    try {
+      if (typeName === 'persona' && manager.findPersonaAsync) {
+        const found = await manager.findPersonaAsync(elementName);
+        if (found) matches.push(typeName);
+      } else if (manager.findByName) {
+        const found = await manager.findByName(elementName);
+        if (found) matches.push(typeName);
+      }
+    } catch {
+      // Manager lookup failed — skip this type silently
+    }
+  }
+  return matches;
+}
+
+function recordResolution(elem: any, elementName: string, matches: string[], result: ResolveElementTypesResult): void {
+  const { resolved, ambiguous, notFound } = result;
+  if (matches.length === 1) {
+    const resolvedType = matches[0];
+    // Validate the resolved type against the canonical element type map
+    if (!(resolvedType in ELEMENT_TYPE_MAP)) {
+      logger.warn(
+        `[resolveElementTypes] Element '${elementName}': resolved to unrecognized type '${resolvedType}'. Skipping element.`
+      );
+      notFound.push(elementName);
+      return;
+    }
+    resolved.push({ ...elem, element_type: resolvedType });
+  } else if (matches.length > 1) {
+    ambiguous.push({ element_name: elementName, found_in: [...matches] });
+    logger.warn(
+      `[resolveElementTypes] Element '${elementName}': found in multiple types (${matches.join(', ')}). ` +
+      `Provide element_type explicitly. Skipping element.`
+    );
+  } else {
+    notFound.push(elementName);
+    logger.warn(
+      `[resolveElementTypes] Element '${elementName}': not found in any element type. ` +
+      `Provide element_type explicitly or ensure the element exists in the portfolio. Skipping element.`
+    );
+  }
 }

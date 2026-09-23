@@ -28,7 +28,7 @@ import {
   ElementStatus
 } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
-import * as vm from 'vm';
+import * as vm from 'node:vm';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -75,19 +75,19 @@ export class Ensemble extends BaseElement implements IElement {
 
   // Element management - using array for single source of truth
   private elements: EnsembleElement[] = [];
-  private elementInstances: Map<string, IElement> = new Map();
+  private readonly elementInstances: Map<string, IElement> = new Map();
   private readonly MAX_INSTANCE_CACHE_SIZE = 100;
-  private instanceAccessTimes: Map<string, number> = new Map();
+  private readonly instanceAccessTimes: Map<string, number> = new Map();
 
   // Shared context for inter-element communication
-  private sharedContext: SharedContext;
+  private readonly sharedContext: SharedContext;
 
   // Activation state
   private activationInProgress: boolean = false;
   private lastActivationResult?: EnsembleActivationResult;
 
   // Activation metrics for performance monitoring
-  private activationMetrics: EnsembleActivationMetrics = {
+  private readonly activationMetrics: EnsembleActivationMetrics = {
     totalActivations: 0,
     successfulActivations: 0,
     failedActivations: 0,
@@ -115,42 +115,41 @@ export class Ensemble extends BaseElement implements IElement {
    * @returns Resolved limits object
    */
   public getEffectiveLimits(): ResolvedEnsembleLimits {
-    if (this._effectiveLimits === null) {
-      // Convert ResourceLimits (per-ensemble API) to EnsembleLimitsConfig (internal config format)
-      //
-      // Field name mapping (historical reasons - ResourceLimits predates configurable limits):
-      //   ResourceLimits.maxActiveElements  -> EnsembleLimitsConfig.maxElements
-      //   ResourceLimits.maxExecutionTimeMs -> EnsembleLimitsConfig.maxActivationTime
-      //   Other fields have matching names (maxNestingDepth, maxContextSize, etc.)
-      const overrides: Partial<EnsembleLimitsConfig> = {};
-      const resourceLimits = this.metadata.resourceLimits;
-
-      if (resourceLimits) {
-        if (resourceLimits.maxActiveElements !== undefined) {
-          overrides.maxElements = resourceLimits.maxActiveElements;
-        }
-        if (resourceLimits.maxExecutionTimeMs !== undefined) {
-          overrides.maxActivationTime = resourceLimits.maxExecutionTimeMs;
-        }
-        if (resourceLimits.maxNestingDepth !== undefined) {
-          overrides.maxNestingDepth = resourceLimits.maxNestingDepth;
-        }
-        if (resourceLimits.maxContextSize !== undefined) {
-          overrides.maxContextSize = resourceLimits.maxContextSize;
-        }
-        if (resourceLimits.maxContextValueSize !== undefined) {
-          overrides.maxContextValueSize = resourceLimits.maxContextValueSize;
-        }
-        if (resourceLimits.maxDependencies !== undefined) {
-          overrides.maxDependencies = resourceLimits.maxDependencies;
-        }
-        if (resourceLimits.maxConditionLength !== undefined) {
-          overrides.maxConditionLength = resourceLimits.maxConditionLength;
-        }
-      }
-
-      this._effectiveLimits = getEffectiveLimits(overrides);
+    if (this._effectiveLimits !== null) {
+      return this._effectiveLimits;
     }
+    // Convert ResourceLimits (per-ensemble API) to EnsembleLimitsConfig (internal config format)
+    //
+    // Field name mapping (historical reasons - ResourceLimits predates configurable limits):
+    //   ResourceLimits.maxActiveElements  -> EnsembleLimitsConfig.maxElements
+    //   ResourceLimits.maxExecutionTimeMs -> EnsembleLimitsConfig.maxActivationTime
+    //   Other fields have matching names (maxNestingDepth, maxContextSize, etc.)
+    const overrides: Partial<EnsembleLimitsConfig> = {};
+    const resourceLimits = this.metadata.resourceLimits ?? {};
+
+    if (resourceLimits.maxActiveElements !== undefined) {
+      overrides.maxElements = resourceLimits.maxActiveElements;
+    }
+    if (resourceLimits.maxExecutionTimeMs !== undefined) {
+      overrides.maxActivationTime = resourceLimits.maxExecutionTimeMs;
+    }
+    if (resourceLimits.maxNestingDepth !== undefined) {
+      overrides.maxNestingDepth = resourceLimits.maxNestingDepth;
+    }
+    if (resourceLimits.maxContextSize !== undefined) {
+      overrides.maxContextSize = resourceLimits.maxContextSize;
+    }
+    if (resourceLimits.maxContextValueSize !== undefined) {
+      overrides.maxContextValueSize = resourceLimits.maxContextValueSize;
+    }
+    if (resourceLimits.maxDependencies !== undefined) {
+      overrides.maxDependencies = resourceLimits.maxDependencies;
+    }
+    if (resourceLimits.maxConditionLength !== undefined) {
+      overrides.maxConditionLength = resourceLimits.maxConditionLength;
+    }
+
+    this._effectiveLimits = getEffectiveLimits(overrides);
     return this._effectiveLimits;
   }
 
@@ -161,19 +160,20 @@ export class Ensemble extends BaseElement implements IElement {
     this._effectiveLimits = null;
   }
 
-  constructor(metadata: Partial<EnsembleMetadata>, elements: EnsembleElement[] = [], metadataService: MetadataService) {
+  private static sanitizeMetadataText(value: string | undefined, maxLength: number): string | undefined {
+    if (value === undefined || value === '') {
+      return value;
+    }
+    return sanitizeInput(UnicodeValidator.normalize(value).normalizedContent, maxLength);
+  }
+
+  constructor(metadata: Partial<EnsembleMetadata>, elements: EnsembleElement[] | undefined, metadataService: MetadataService) {
     // SECURITY: Sanitize all inputs
     // NOTE: We preserve empty strings so validation can catch them
     const sanitizedMetadata: Partial<EnsembleMetadata> = {
       ...metadata,
-      name: metadata.name !== undefined ? (
-        metadata.name === '' ? '' :  // Preserve empty string for validation
-        sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100)
-      ) : undefined,
-      description: metadata.description !== undefined ? (
-        metadata.description === '' ? '' :  // Preserve empty string for validation
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH)
-      ) : undefined
+      name: Ensemble.sanitizeMetadataText(metadata.name, 100),
+      description: Ensemble.sanitizeMetadataText(metadata.description, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH)
     };
 
     // Validate activation strategy
@@ -196,7 +196,7 @@ export class Ensemble extends BaseElement implements IElement {
     // NOTE: resourceLimits is optional - per-ensemble overrides are resolved via getEffectiveLimits()
     this.metadata = {
       ...this.metadata,
-      name: sanitizedMetadata.name !== undefined ? sanitizedMetadata.name : this.metadata.name,
+      name: sanitizedMetadata.name ?? this.metadata.name,
       activationStrategy: strategy,
       conflictResolution: conflictRes,
       contextSharing: metadata.contextSharing || ENSEMBLE_DEFAULTS.CONTEXT_SHARING,
@@ -222,7 +222,7 @@ export class Ensemble extends BaseElement implements IElement {
     };
 
     // Add elements from metadata
-    if (elements.length > 0) {
+    if (elements && elements.length > 0) {
       this.loadElementsFromMetadata(elements);
     }
 
@@ -348,14 +348,7 @@ export class Ensemble extends BaseElement implements IElement {
       // Issue #507: Validate each element is a plain object before accessing properties.
       // When users pass strings (e.g., ["my-skill"]) instead of objects, the old code
       // produced confusing "Element 'undefined' has no element_type" errors.
-      if (typeof element !== 'object' || element === null || Array.isArray(element)) {
-        const valueType = element === null ? 'null' : Array.isArray(element) ? 'array' : typeof element;
-        throw new Error(
-          `Element at index ${i} is a ${valueType} ("${String(element).substring(0, 50)}"), ` +
-          `but must be an object with { element_name, element_type }. ` +
-          `Example: { element_name: "my-skill", element_type: "skill", role: "support", priority: 50, activation: "always" }`
-        );
-      }
+      this.validateElementObject(element, i);
 
       // Migrate legacy field names: name→element_name, type→element_type (mirrors
       // EnsembleManager.create() lines 586-602 to keep create and edit paths consistent)
@@ -402,6 +395,27 @@ export class Ensemble extends BaseElement implements IElement {
     }
 
     this.syncElementsToMetadata();
+  }
+
+  private validateElementObject(element: unknown, index: number): void {
+    if (typeof element === 'object' && element !== null && !Array.isArray(element)) {
+      return;
+    }
+
+    let valueType: string = typeof element;
+    if (element === null) {
+      valueType = 'null';
+    } else if (Array.isArray(element)) {
+      valueType = 'array';
+    }
+    const preview = typeof element === 'object' && element !== null || typeof element === 'function'
+      ? ''
+      : ` ("${String(element).substring(0, 50)}")`;
+    throw new Error(
+      `Element at index ${index} is a ${valueType}${preview}, ` +
+      `but must be an object with { element_name, element_type }. ` +
+      `Example: { element_name: "my-skill", element_type: "skill", role: "support", priority: 50, activation: "always" }`
+    );
   }
 
   /**
@@ -473,21 +487,9 @@ export class Ensemble extends BaseElement implements IElement {
 
     // Validate and sanitize activation condition if provided
     if (element.condition) {
-      // Trim and enforce length limit (don't use sanitizeInput as it removes < > operators)
-      const conditionToValidate = element.condition
-        .trim()
-        .substring(0, limits.MAX_CONDITION_LENGTH);
-
-      if (!this.isValidCondition(conditionToValidate)) {
-        SecurityMonitor.logSecurityEvent({
-          type: ENSEMBLE_SECURITY_EVENTS.SUSPICIOUS_CONDITION,
-          severity: 'HIGH',
-          source: 'Ensemble.addElement',
-          details: `Suspicious activation condition: ${conditionToValidate}`
-        });
-        throw new Error('Invalid activation condition syntax');
-      }
-      sanitizedElement.condition = conditionToValidate;
+      sanitizedElement.condition = this.sanitizeActivationCondition(
+        element.condition, limits.MAX_CONDITION_LENGTH, 'Ensemble.addElement'
+      );
     }
 
     // Validate and sanitize dependencies
@@ -560,10 +562,10 @@ export class Ensemble extends BaseElement implements IElement {
     // Sanitize and validate updates
     const sanitizedUpdates: Partial<EnsembleElement> = {};
 
+    if (updates.role !== undefined && !ELEMENT_ROLES.includes(updates.role as any)) {
+      throw new Error(`${ENSEMBLE_ERRORS.INVALID_ELEMENT_ROLE}: ${updates.role}. Valid roles: ${ELEMENT_ROLES.join(', ')}`);
+    }
     if (updates.role !== undefined) {
-      if (!ELEMENT_ROLES.includes(updates.role as any)) {
-        throw new Error(`${ENSEMBLE_ERRORS.INVALID_ELEMENT_ROLE}: ${updates.role}. Valid roles: ${ELEMENT_ROLES.join(', ')}`);
-      }
       sanitizedUpdates.role = updates.role;
     }
 
@@ -576,21 +578,9 @@ export class Ensemble extends BaseElement implements IElement {
     }
 
     if (updates.condition !== undefined) {
-      // Trim and enforce length limit (don't use sanitizeInput as it removes < > operators)
-      const conditionToValidate = updates.condition
-        .trim()
-        .substring(0, limits.MAX_CONDITION_LENGTH);
-
-      if (!this.isValidCondition(conditionToValidate)) {
-        SecurityMonitor.logSecurityEvent({
-          type: ENSEMBLE_SECURITY_EVENTS.SUSPICIOUS_CONDITION,
-          severity: 'HIGH',
-          source: 'Ensemble.updateElement',
-          details: `Suspicious activation condition: ${conditionToValidate}`
-        });
-        throw new Error('Invalid activation condition syntax');
-      }
-      sanitizedUpdates.condition = conditionToValidate;
+      sanitizedUpdates.condition = this.sanitizeActivationCondition(
+        updates.condition, limits.MAX_CONDITION_LENGTH, 'Ensemble.updateElement'
+      );
     }
 
     if (updates.dependencies !== undefined) {
@@ -946,19 +936,17 @@ export class Ensemble extends BaseElement implements IElement {
     const result = super.validate();
 
     // Initialize arrays if they don't exist
-    if (!result.errors) result.errors = [];
-    if (!result.warnings) result.warnings = [];
+    result.errors ??= [];
+    result.warnings ??= [];
 
     // Check for circular dependencies
     const circular = this.detectAllCircularDependencies();
-    if (circular.length > 0) {
-      for (const cycle of circular) {
-        result.errors.push({
-          field: 'dependencies',
-          message: cycle.message,
-          severity: 'high'
-        } as ValidationError);
-      }
+    for (const cycle of circular) {
+      result.errors.push({
+        field: 'dependencies',
+        message: cycle.message,
+        severity: 'high'
+      } as ValidationError);
     }
 
     // Validate element count
@@ -973,15 +961,13 @@ export class Ensemble extends BaseElement implements IElement {
 
     // Check for orphaned dependencies
     for (const element of this.elements) {
-      if (element.dependencies) {
-        for (const dep of element.dependencies) {
-          if (!this.hasElement(dep)) {
-            result.errors.push({
-              field: `${element.element_name}.dependencies`,
-              message: `Dependency '${dep}' not found in ensemble`,
-              severity: 'medium'
-            } as ValidationError);
-          }
+      for (const dep of element.dependencies ?? []) {
+        if (!this.hasElement(dep)) {
+          result.errors.push({
+            field: `${element.element_name}.dependencies`,
+            message: `Dependency '${dep}' not found in ensemble`,
+            severity: 'medium'
+          } as ValidationError);
         }
       }
     }
@@ -1098,9 +1084,7 @@ export class Ensemble extends BaseElement implements IElement {
     nestingDepth: number
   ): Promise<void> {
     // order is already sorted by priority from getActivationOrder()
-    for (const elementName of order) {
-      await this.activateSingleElement(elementName, result, portfolioManager, managers, nestingDepth);
-    }
+    await this.activateSequential(order, result, portfolioManager, managers, nestingDepth);
   }
 
   /**
@@ -1148,7 +1132,6 @@ export class Ensemble extends BaseElement implements IElement {
       } else if (element.activation === 'on-demand') {
         // On-demand elements are not activated automatically in conditional strategy
         logger.debug(`Skipping ${elementName}: on-demand activation mode`);
-        shouldActivate = false;
       } else {
         // Default behavior for unspecified activation mode
         shouldActivate = true;
@@ -1386,9 +1369,9 @@ export class Ensemble extends BaseElement implements IElement {
     elementName: string,
     elementType: string
   ): Promise<IElement> {
-    // Special handling for PersonaManager which has findPersona method
-    if (elementType === 'persona' && manager.findPersona) {
-      const persona = manager.findPersona(elementName);
+    // Persona lookup must fall back to storage when the cache has been cleared or evicted.
+    if (elementType === 'persona' && manager.findPersonaAsync) {
+      const persona = await manager.findPersonaAsync(elementName);
       if (!persona) {
         throw new Error(`${this.capitalizeFirst(elementType)} '${elementName}' not found`);
       }
@@ -1803,6 +1786,21 @@ export class Ensemble extends BaseElement implements IElement {
     }
 
     return true;
+  }
+
+  private sanitizeActivationCondition(condition: string, maxLength: number, source: string): string {
+    // Preserve comparison operators that sanitizeInput would remove.
+    const sanitizedCondition = condition.trim().substring(0, maxLength);
+    if (!this.isValidCondition(sanitizedCondition)) {
+      SecurityMonitor.logSecurityEvent({
+        type: ENSEMBLE_SECURITY_EVENTS.SUSPICIOUS_CONDITION,
+        severity: 'HIGH',
+        source,
+        details: `Suspicious activation condition: ${sanitizedCondition}`
+      });
+      throw new Error('Invalid activation condition syntax');
+    }
+    return sanitizedCondition;
   }
 
   /**

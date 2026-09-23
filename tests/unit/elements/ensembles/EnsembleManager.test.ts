@@ -776,10 +776,10 @@ elements:
       expect(result.notFound).toEqual(['ghost-element']);
     });
 
-    it('should resolve persona via findPersona method', async () => {
+    it('should resolve persona via findPersonaAsync method', async () => {
       const mockManagers = {
         skillManager: { findByName: jest.fn<(name: string) => Promise<any>>().mockReturnValue(Promise.resolve()) },
-        personaManager: { findPersona: jest.fn<(name: string) => any>().mockReturnValue({ metadata: { name: 'my-persona' } }) },
+        personaManager: { findPersonaAsync: jest.fn<(name: string) => Promise<any>>().mockResolvedValue({ metadata: { name: 'my-persona' } }) },
       };
 
       const elements = [

@@ -558,7 +558,7 @@ export class PersonaHandler {
     }
 
     const indicator = this.indicatorService.getPersonaIndicator();
-    const validationResult = this.personaManager.validatePersona(personaIdentifier);
+    const validationResult = await this.personaManager.validatePersona(personaIdentifier);
     const issues = validationResult.report.errors ?? [];
     const warnings = validationResult.report.warnings ?? [];
     const statusLine = validationResult.success ? '✅ Status: Valid' : '❌ Status: Invalid';
@@ -637,15 +637,7 @@ export class PersonaHandler {
     }
 
     try {
-      const deleteResult = await this.personaManager.deletePersona(persona.filename);
-      if (!deleteResult.success) {
-        return {
-          content: [{
-            type: "text",
-            text: `❌ ${deleteResult.message}`
-          }]
-        };
-      }
+      await this.personaManager.delete(persona.filename);
 
       if (this.activePersona.get() === persona.filename) {
         this.activePersona.set(null);
@@ -666,7 +658,8 @@ export class PersonaHandler {
           }]
         };
       }
-      throw error;
+      const sanitized = SecureErrorHandler.sanitizeError(error);
+      throw new Error(`Failed to delete persona: ${sanitized.message}`);
     }
   }
 }
