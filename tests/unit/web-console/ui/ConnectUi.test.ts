@@ -65,7 +65,7 @@ describe('hosted connection endpoint validation', () => {
   });
 
   it('generates distinct hosted commands and a Cursor base64 JSON link', () => {
-    const artifacts = connect.connectionArtifacts('https://mcp.example.test/mcp');
+    const artifacts = connect.connectionArtifacts('https://mcp.example.test/mcp', 'https://mcp.example.test');
     expect(artifacts.claudeAdd).toBe("claude mcp add --transport http --scope user dollhouse-beta 'https://mcp.example.test/mcp'");
     expect(artifacts.codexLogin).toBe('codex mcp login dollhouse-beta');
     const link = new URL(artifacts.cursorLink);
@@ -73,6 +73,11 @@ describe('hosted connection endpoint validation', () => {
     expect(link.searchParams.get('name')).toBe('dollhouse-beta');
     expect(JSON.parse(Buffer.from(link.searchParams.get('config')!, 'base64').toString('utf8'))).toEqual({ url: artifacts.endpoint });
     expect(JSON.parse(artifacts.cursorConfig)).toEqual({ mcpServers: { 'dollhouse-beta': { url: artifacts.endpoint } } });
+  });
+
+  it('keeps artifact generation bound to the page origin', () => {
+    expect(() => connect.connectionArtifacts('https://evil.example/mcp', 'https://mcp.example.test'))
+      .toThrow('safe endpoint');
   });
 });
 

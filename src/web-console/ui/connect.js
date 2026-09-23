@@ -48,8 +48,8 @@ function base64Utf8(value) {
   return btoa(value);
 }
 
-export function connectionArtifacts(endpoint) {
-  const safeEndpoint = validateHostedMcpEndpoint(endpoint, new URL(endpoint).origin);
+export function connectionArtifacts(endpoint, pageOrigin) {
+  const safeEndpoint = validateHostedMcpEndpoint(endpoint, pageOrigin);
   const cursorLinkConfig = JSON.stringify({ url: safeEndpoint });
   const cursorConfig = JSON.stringify({ mcpServers: { [CONNECTION_NAME]: { url: safeEndpoint } } }, null, 2);
   return Object.freeze({
@@ -152,7 +152,9 @@ function selectClient(client) {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   });
-  host.querySelector('#connect-client-panel').replaceChildren(renderClientPanel(client, connectionArtifacts(endpoint)));
+  host.querySelector('#connect-client-panel').replaceChildren(
+    renderClientPanel(client, connectionArtifacts(endpoint, globalThis.location.origin)),
+  );
 }
 
 function renderClientPanel(client, artifacts) {
