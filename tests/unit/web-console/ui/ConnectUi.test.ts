@@ -108,6 +108,9 @@ describe('hosted connection UI', () => {
     expect(panel.textContent).toContain('Connection setup is unavailable.');
     expect(panel.textContent).toContain('Could not check connected apps.');
     expect(panel.querySelector('[href^="cursor:"]')).toBeNull();
+    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-client]')) button.click();
+    expect(panel.textContent).toContain('Setup instructions will appear when endpoint discovery is available.');
+    expect(panel.querySelector('[href^="cursor:"]')).toBeNull();
   });
 
   it('reports clipboard failure and selects a manual fallback without claiming connection', async () => {

@@ -72,9 +72,11 @@ export function connectedAppsMarkup(sessions, failed = false) {
     const name = session?.client_info?.name || 'MCP client';
     const version = session?.client_info?.version ? ` ${session.client_info.version}` : '';
     const activity = session?.last_active_at ? ` · last active ${relAgo(session.last_active_at)}` : '';
-    return `<li>${escapeHtml(`${name}${version}${activity}`)}</li>`;
+    const escapedSessionLabel = escapeHtml(`${name}${version}${activity}`);
+    return `<li>${escapedSessionLabel}</li>`;
   }).join('');
-  return `<div class="connect-state connect-state--ok"><strong>${sessions.length} connected ${sessions.length === 1 ? 'app' : 'apps'}</strong><ul>${apps}</ul></div>`;
+  const appLabel = sessions.length === 1 ? 'app' : 'apps';
+  return `<div class="connect-state connect-state--ok"><strong>${sessions.length} connected ${appLabel}</strong><ul>${apps}</ul></div>`;
 }
 
 export async function init(panelEl, ctx = {}) {
