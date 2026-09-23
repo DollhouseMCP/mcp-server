@@ -137,7 +137,7 @@ function applyEditValueToPersona(
 function bumpPatchVersion(currentVersion: string | undefined): string {
   if (!currentVersion) return '1.0.0';
   const normalized = normalizeVersion(String(currentVersion));
-  const versionMatch = normalized.match(/^(\d+)\.(\d+)\.(\d+)(-.*)?$/);
+  const versionMatch = /^(\d+)\.(\d+)\.(\d+)(-.*)?$/.exec(normalized);
   if (!versionMatch) return '1.0.1';
 
   const [, major, minor, patch, preRelease] = versionMatch;
@@ -145,7 +145,7 @@ function bumpPatchVersion(currentVersion: string | undefined): string {
     return `${major}.${minor}.${Number.parseInt(patch) + 1}`;
   }
 
-  const preReleaseMatch = preRelease.match(/^-([a-zA-Z]+)\.?(\d+)?$/);
+  const preReleaseMatch = /^-([a-zA-Z]+)\.?(\d+)?$/.exec(preRelease);
   if (!preReleaseMatch) {
     return `${major}.${minor}.${Number.parseInt(patch) + 1}`;
   }
@@ -207,15 +207,14 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   // Fallback identity for when no registry is injected (tests)
   private _localUserIdentity?: SessionUserIdentity;
   private indicatorConfig: IndicatorConfig;
-  protected override portfolioManager: PortfolioManager;
-  protected override fileLockManager: FileLockManager;
-  private personaImporter?: PersonaImporter;
-  private notifier?: StateChangeNotifier;
+  protected override readonly portfolioManager: PortfolioManager;
+  protected override readonly fileLockManager: FileLockManager;
+  private readonly personaImporter?: PersonaImporter;
+  private readonly notifier?: StateChangeNotifier;
   private readonly personasDir: string;
-  private pathValidatorInitialized = false;
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private metadataService: MetadataService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly metadataService: MetadataService;
   private readonly serializationService: SerializationService;
 
   constructor(deps: PersonaManagerDeps) {
@@ -482,7 +481,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Multi-strategy search: filename (with/without .md), name (case-insensitive), unique_id
    */
   /** Cache miss metrics for monitoring persona lookup health (Issue #843) */
-  private cacheMissMetrics = {
+  private readonly cacheMissMetrics = {
     cacheHits: 0,
     cacheMisses: 0,
     diskRecoveries: 0,
@@ -541,7 +540,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   /** In-flight disk lookups to prevent duplicate reads for the same identifier */
-  private pendingLookups = new Map<string, Promise<PersonaElement | undefined>>();
+  private readonly pendingLookups = new Map<string, Promise<PersonaElement | undefined>>();
 
   /**
    * Find a persona with disk fallback when cache misses.
@@ -831,7 +830,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     const metadata: PersonaMetadata = {
-      ...(metadataOverrides || {}),
+      ...metadataOverrides,
       name: validatedInputs.sanitizedName,
       description: validatedInputs.description,
       unique_id: validatedInputs.uniqueId,
@@ -1291,12 +1290,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   /**
    * Validate a persona and return a formatted report
    */
-  validatePersona(personaIdentifier: string) {
+  async validatePersona(personaIdentifier: string) {
     if (!personaIdentifier) {
       throw new Error('Missing Persona Identifier. Usage: validate_persona "persona_name"');
     }
 
-    const persona = this.findPersona(personaIdentifier);
+    const persona = await this.findPersonaAsync(personaIdentifier);
 
     if (!persona) {
       // SECURITY: Sanitize user input before including in error messages

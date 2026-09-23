@@ -17,7 +17,6 @@ describe('PersonaActivationStrategy', () => {
       getActivePersona: jest.fn(),
       // Issue #281: Add getActivePersonas for multiple active personas support
       getActivePersonas: jest.fn().mockReturnValue([]),
-      findPersona: jest.fn(),
       findPersonaAsync: jest.fn(),
     } as unknown as jest.Mocked<PersonaManager>;
 
@@ -180,6 +179,11 @@ describe('PersonaActivationStrategy', () => {
   });
 
   describe('deactivate', () => {
+    it('rejects an empty name before looking up a persona', async () => {
+      await expect(strategy.deactivate('')).rejects.toThrow('Name parameter is required for deactivate operation');
+      expect(mockPersonaManager.findPersonaAsync).not.toHaveBeenCalled();
+    });
+
     const mockPersona = {
       filename: 'test-persona.md',
       metadata: { name: TEST_PERSONA_NAME, description: 'Test' },
@@ -188,7 +192,7 @@ describe('PersonaActivationStrategy', () => {
     };
 
     it('should deactivate persona successfully', async () => {
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
       mockPersonaManager.deactivatePersona.mockReturnValue({
         success: true,
         message: 'Persona deactivated'
@@ -207,7 +211,7 @@ describe('PersonaActivationStrategy', () => {
     });
 
     it('should return error when deactivation fails', async () => {
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
       mockPersonaManager.deactivatePersona.mockReturnValue({
         success: false,
         message: 'No persona is currently active'
@@ -222,7 +226,7 @@ describe('PersonaActivationStrategy', () => {
 
     // Issue #275: Now throws error instead of returning error content
     it('should throw ElementNotFoundError when persona not found', async () => {
-      mockPersonaManager.findPersona.mockReturnValue(null);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(null);
 
       await expect(strategy.deactivate('missing-persona'))
         .rejects.toThrow('Persona \'missing-persona\' not found');
@@ -230,7 +234,7 @@ describe('PersonaActivationStrategy', () => {
 
     it('should use indicator service for prefix', async () => {
       mockPersonaIndicatorService.getPersonaIndicator.mockReturnValue('🎭>>');
-      mockPersonaManager.findPersona.mockReturnValue(mockPersona);
+      mockPersonaManager.findPersonaAsync.mockResolvedValue(mockPersona);
 
       mockPersonaManager.deactivatePersona.mockReturnValue({
         success: true,

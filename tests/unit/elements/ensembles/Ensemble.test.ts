@@ -96,7 +96,7 @@ describe('Ensemble Element', () => {
     });
 
     it('should load elements from constructor', () => {
-      expect(ensemble.getElements().length).toBe(2);
+      expect(ensemble.getElements()).toHaveLength(2);
       expect(ensemble.getElement('primary-skill')).toBeDefined();
       expect(ensemble.getElement('support-persona')).toBeDefined();
     });
@@ -244,7 +244,7 @@ describe('Ensemble Element', () => {
 
       expect(() => {
         new Ensemble({ name: 'String Elements Test' }, stringElements, metadataService);
-      }).toThrow(/Element at index 0 is a string.*must be an object.*element_name.*element_type/);
+      }).toThrow(/Element at index 0 is a string \("my-skill"\).*must be an object.*element_name.*element_type/);
     });
 
     it('should throw descriptive error when elements array contains numbers (#507)', () => {
@@ -252,7 +252,16 @@ describe('Ensemble Element', () => {
 
       expect(() => {
         new Ensemble({ name: 'Number Elements Test' }, numberElements, metadataService);
-      }).toThrow(/Element at index 0 is a number.*must be an object/);
+      }).toThrow(/Element at index 0 is a number \("42"\).*must be an object/);
+    });
+
+    it('bounds invalid primitive previews and does not stringify arrays', () => {
+      const longValue = 'x'.repeat(60);
+      expect(() => new Ensemble({ name: 'Bounded preview' }, [longValue] as any, metadataService))
+        .toThrow(`string ("${longValue.substring(0, 50)}")`);
+      const array = Object.assign([], { toString: jest.fn(() => { throw new Error('Must not stringify'); }) });
+      expect(() => new Ensemble({ name: 'Array preview' }, [array] as any, metadataService)).toThrow('is a array,');
+      expect(array.toString).not.toHaveBeenCalled();
     });
 
     it('should throw descriptive error when elements array contains null (#507)', () => {
@@ -276,7 +285,7 @@ describe('Ensemble Element', () => {
       };
 
       ensemble.addElement(newElement);
-      expect(ensemble.getElements().length).toBe(3);
+      expect(ensemble.getElements()).toHaveLength(3);
       expect(ensemble.getElement('new-template')).toEqual(newElement);
     });
 
@@ -296,7 +305,7 @@ describe('Ensemble Element', () => {
 
     it('should remove an element', () => {
       ensemble.removeElement('support-persona');
-      expect(ensemble.getElements().length).toBe(1);
+      expect(ensemble.getElements()).toHaveLength(1);
       expect(ensemble.getElement('support-persona')).toBeUndefined();
     });
 
@@ -380,7 +389,7 @@ describe('Ensemble Element', () => {
   describe('syncElementsFromMetadata - defensive guard', () => {
     it('should handle normal array elements correctly', () => {
       ensemble.syncElementsFromMetadata();
-      expect(ensemble.getElements().length).toBe(2);
+      expect(ensemble.getElements()).toHaveLength(2);
       expect(ensemble.getElement('primary-skill')).toBeDefined();
       expect(ensemble.getElement('support-persona')).toBeDefined();
     });
@@ -393,19 +402,19 @@ describe('Ensemble Element', () => {
 
       // Should not throw — just log warning and leave elements empty
       expect(() => ensemble.syncElementsFromMetadata()).not.toThrow();
-      expect(ensemble.getElements().length).toBe(0);
+      expect(ensemble.getElements()).toHaveLength(0);
     });
 
     it('should handle undefined metadata.elements gracefully', () => {
       (ensemble.metadata as any).elements = undefined;
       expect(() => ensemble.syncElementsFromMetadata()).not.toThrow();
-      expect(ensemble.getElements().length).toBe(0);
+      expect(ensemble.getElements()).toHaveLength(0);
     });
 
     it('should handle null metadata.elements gracefully', () => {
       (ensemble.metadata as any).elements = null;
       expect(() => ensemble.syncElementsFromMetadata()).not.toThrow();
-      expect(ensemble.getElements().length).toBe(0);
+      expect(ensemble.getElements()).toHaveLength(0);
     });
   });
 
@@ -469,7 +478,7 @@ describe('Ensemble Element', () => {
       validEnsemble.addElement(elementB);
       validEnsemble.addElement(elementC);
 
-      expect(validEnsemble.getElements().length).toBe(3);
+      expect(validEnsemble.getElements()).toHaveLength(3);
     });
 
     it('should detect self-dependencies', () => {
@@ -1404,8 +1413,8 @@ describe('Ensemble Element', () => {
         { element_name: 'my-memory', element_type: 'memory', role: 'monitor', activation: 'always' },
       ], metadataService);
 
-      // PersonaManager uses findPersona, not list+find
-      mockManagers.personaManager.findPersona = jest.fn().mockImplementation((name: string) =>
+      // PersonaManager resolves cache misses through its asynchronous lookup.
+      mockManagers.personaManager.findPersonaAsync = jest.fn().mockImplementation(async (name: string) =>
         ({ metadata: { name }, id: name, activate: jest.fn().mockResolvedValue(undefined) })
       );
       // Other managers use list() → find by metadata.name
@@ -1419,6 +1428,8 @@ describe('Ensemble Element', () => {
       expect(result.success).toBe(true);
       expect(result.activatedElements).toHaveLength(4);
       expect(result.failedElements).toHaveLength(0);
+
+      expect(mockManagers.personaManager.findPersonaAsync).toHaveBeenCalledWith('my-persona');
 
       // Critical: each type manager's activation method must have been called.
       // This is what was missing before #1769 — the ensemble called instance.activate()
@@ -1463,7 +1474,7 @@ describe('Ensemble Element', () => {
       };
 
       ensemble.addElement(nestedEnsemble);
-      expect(ensemble.getElements().length).toBe(3);
+      expect(ensemble.getElements()).toHaveLength(3);
 
       const added = ensemble.getElement('backend-team');
       expect(added).toBeDefined();
@@ -1498,7 +1509,7 @@ describe('Ensemble Element', () => {
       ];
 
       ensembles.forEach(ens => ensemble.addElement(ens));
-      expect(ensemble.getElements().length).toBe(5); // 2 original + 3 new
+      expect(ensemble.getElements()).toHaveLength(5); // 2 original + 3 new
 
       expect(ensemble.getElement('frontend-team')?.element_type).toBe('ensemble');
       expect(ensemble.getElement('backend-team')?.element_type).toBe('ensemble');
@@ -1678,7 +1689,7 @@ describe('Ensemble Element', () => {
         dependencies: ['ensemble-b']
       });
 
-      expect(ensemble.getElements().length).toBe(5); // 2 original + 3 new
+      expect(ensemble.getElements()).toHaveLength(5); // 2 original + 3 new
       expect(ensemble.getElement('ensemble-a')?.dependencies).toContain('ensemble-b');
     });
 
@@ -1700,7 +1711,7 @@ describe('Ensemble Element', () => {
         condition: 'nested-ensemble.active'
       });
 
-      expect(ensemble.getElements().length).toBe(4);
+      expect(ensemble.getElements()).toHaveLength(4);
       const elements = ensemble.getElements();
       const types = elements.map(e => e.element_type);
       expect(types).toContain('ensemble');
@@ -1782,7 +1793,7 @@ describe('Ensemble Element', () => {
         });
       }
 
-      expect(performanceEnsemble.getElements().length).toBe(8);
+      expect(performanceEnsemble.getElements()).toHaveLength(8);
 
       const startTime = Date.now();
       const validation = performanceEnsemble.validate();
@@ -1815,7 +1826,7 @@ describe('Ensemble Element', () => {
 
       const additionTime = Date.now() - startTime;
 
-      expect(maxEnsemble.getElements().length).toBe(10);
+      expect(maxEnsemble.getElements()).toHaveLength(10);
       expect(additionTime).toBeLessThan(50); // Should add quickly (< 50ms)
     });
 
@@ -1855,7 +1866,7 @@ describe('Ensemble Element', () => {
       const validationTime = Date.now() - startTime;
 
       expect(result.valid).toBe(true);
-      expect(largeEnsemble.getElements().length).toBe(35);
+      expect(largeEnsemble.getElements()).toHaveLength(35);
       expect(validationTime).toBeLessThan(200); // Should validate even large ensembles quickly
     });
 

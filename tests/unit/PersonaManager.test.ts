@@ -698,7 +698,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
   });
 
   describe('Persona Validation', () => {
-    it('should validate a persona and return validation result', () => {
+    it('should validate a persona and return validation result', async () => {
       // Arrange: Create a test persona using the real createElement flow
       const metadata = {
         name: 'Test Persona',
@@ -718,7 +718,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       (personaManager as any).cacheElement(persona, 'test-persona.md');
 
       // Now validate the persona
-      const result = personaManager.validatePersona('test-persona.md');
+      const result = await personaManager.validatePersona('test-persona.md');
 
       // Assert: Should return a validation result
       expect(result).toBeDefined();
@@ -726,10 +726,13 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(result).toHaveProperty('report');
     });
 
-    it('should throw error when validating non-existent persona', () => {
-      expect(() => {
-        personaManager.validatePersona('non-existent-persona');
-      }).toThrow('Persona not found');
+    it('should throw error when validating non-existent persona', async () => {
+      mockFileOperationsService.readElementFile.mockRejectedValue(Object.assign(new Error('File not found'), { code: 'ENOENT' }));
+      await expect(personaManager.validatePersona('non-existent-persona')).rejects.toThrow('Persona not found');
+    });
+
+    it('should reject validation without an identifier', async () => {
+      await expect(personaManager.validatePersona('')).rejects.toThrow('Missing Persona Identifier. Usage: validate_persona "persona_name"');
     });
   });
 });

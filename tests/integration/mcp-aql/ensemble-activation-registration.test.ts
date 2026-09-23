@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { PersonaManager } from '../../../src/persona/PersonaManager.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 describe('Ensemble Activation Registration (Issue #1769)', () => {
@@ -127,6 +128,52 @@ describe('Ensemble Activation Registration (Issue #1769)', () => {
     });
     const activeText = JSON.stringify(activePersonas);
     expect(activeText).toContain('ensemble-test-persona');
+  });
+
+  it('should activate a stored persona after its manager cache is cleared (Issue #2800)', async () => {
+    await mcpAqlHandler.handleCreate({
+      operation: 'create_element',
+      element_type: 'persona',
+      params: {
+        element_name: 'uncached-ensemble-persona',
+        description: 'Stored persona for cold-cache ensemble activation',
+        instructions: 'You are a test persona.',
+      },
+    });
+
+    await mcpAqlHandler.handleCreate({
+      operation: 'create_element',
+      element_type: 'ensemble',
+      params: {
+        element_name: 'uncached-persona-ensemble',
+        description: 'Ensemble whose primary persona is not cached',
+        metadata: {
+          elements: [
+            { element_name: 'uncached-ensemble-persona', element_type: 'persona', role: 'primary' },
+          ],
+        },
+      },
+    });
+
+    const personaManager = container.resolve<PersonaManager>('PersonaManager');
+    expect(personaManager.findPersona('uncached-ensemble-persona')).toBeDefined();
+    personaManager.clearCache();
+    expect(personaManager.findPersona('uncached-ensemble-persona')).toBeUndefined();
+
+    const activateResult = await mcpAqlHandler.handleRead({
+      operation: 'activate_element',
+      element_type: 'ensemble',
+      params: { element_name: 'uncached-persona-ensemble', element_type: 'ensemble' },
+    });
+    const activateText = JSON.stringify(activateResult);
+    expect(activateText).toContain('**Failed**: 0 elements');
+    expect(activateText).toContain('**Activated**: 1 elements');
+
+    const activePersonas = await mcpAqlHandler.handleRead({
+      operation: 'get_active_elements',
+      params: { element_type: 'persona' },
+    });
+    expect(JSON.stringify(activePersonas)).toContain('uncached-ensemble-persona');
   });
 
   it('should remove ensemble-activated members from get_active_elements after deactivation', async () => {
