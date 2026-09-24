@@ -539,7 +539,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     return candidate;
   }
 
-  /** In-flight disk lookups to prevent duplicate reads for the same identifier */
+  /** In-flight disk lookups scoped by user namespace and identifier. */
   private readonly pendingLookups = new Map<string, Promise<PersonaElement | undefined>>();
 
   /**
@@ -563,8 +563,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return cached;
     }
 
-    // Deduplicate concurrent disk lookups for the same identifier
-    const lookupKey = identifier.trim().toLowerCase();
+    // Resolve the namespace in the caller's context before sharing a lookup.
+    const lookupKey = `${this.getCacheNamespace()}:${identifier.trim().toLowerCase()}`;
     const pending = this.pendingLookups.get(lookupKey);
     if (pending) {
       this.cacheMissMetrics.deduplicatedLookups++;
