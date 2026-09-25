@@ -8,6 +8,12 @@
 .connect-endpoint { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
 .connect-endpoint > span { font-weight: 700; }
 .connect-endpoint code, .connect-value code { overflow-wrap: anywhere; }
+.connect-name { display: grid; gap: .4rem; }
+.connect-name label { font-weight: 700; }
+.connect-name input { width: min(100%, 24rem); box-sizing: border-box; padding: .65rem; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-950); background: var(--paper); font: inherit; }
+.connect-name input:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; }
+.connect-name p { margin: 0; color: var(--ink-500); line-height: 1.5; }
+.connect-name #connect-name-error { color: #b42318; }
 .connect-client-tabs { display: flex; gap: .5rem; flex-wrap: wrap; }
 .connect-client-tab { border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink-700); padding: .65rem 1rem; cursor: pointer; font: inherit; }
 .connect-client-tab.is-active { background: var(--ink-950); color: var(--paper); border-color: var(--ink-950); }
