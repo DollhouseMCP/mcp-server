@@ -51,5 +51,17 @@
     "jest": "^29.7.0",
     "ts-jest": "^29.4.9",
     "typescript": "^5.3.3"
+  },
+  "overrides": {
+    "brace-expansion@<1.1.18": "1.1.18",
+    "brace-expansion@>=2.0.0 <2.1.4": "2.1.4",
+    "browserslist": "4.28.7",
+    "baseline-browser-mapping": "2.11.0",
+    "caniuse-lite": "1.0.30001806",
+    "electron-to-chromium": "1.5.393",
+    "node-releases": "2.0.51",
+    "js-yaml@>=3 <3.15.2": "3.15.2",
+    "js-yaml@>=4 <4.3.2": "4.3.2",
+    "picomatch@<2.3.2": "2.3.2"
   }
 }
