@@ -7,6 +7,7 @@ jest.unstable_mockModule('../../../../src/web-console/ui/api', () => ({ get }));
 
 let dom: JSDOM;
 let connect: typeof import('../../../../src/web-console/ui/connect');
+let connectConfig: typeof import('../../../../src/web-console/ui/connect-config');
 let fetchMock: jest.Mock;
 
 beforeAll(async () => {
@@ -19,6 +20,7 @@ beforeAll(async () => {
     location: { configurable: true, value: dom.window.location },
   });
   connect = await import('../../../../src/web-console/ui/connect');
+  connectConfig = await import('../../../../src/web-console/ui/connect-config');
 });
 
 beforeEach(() => {
@@ -50,8 +52,12 @@ describe('hosted connection endpoint validation', () => {
     'https://user:secret@mcp.example.test/mcp',
     'https://mcp.example.test/mcp?token=secret',
     'https://mcp.example.test/mcp#secret',
+    'https://mcp.example.test/mcp\n',
+    'https://mcp.example.test/mcp\\evil',
+    '/mcp',
+    'data:text/plain,secret',
   ])('rejects unsafe endpoint %s', endpoint => {
-    expect(() => connect.validateHostedMcpEndpoint(endpoint, 'https://mcp.example.test')).toThrow('safe endpoint');
+    expect(() => connect.validateHostedMcpEndpoint(endpoint, 'https://mcp.example.test')).toThrow();
   });
 
   it('rejects a same-origin hostname containing a shell quote', () => {
@@ -87,6 +93,32 @@ describe('hosted connection endpoint validation', () => {
     expect(() => connect.connectionArtifacts('https://evil.example/mcp', 'https://mcp.example.test'))
       .toThrow('safe endpoint');
   });
+
+  it.each(['', ' ', 'a b', 'a\n', 'a\r', '-server', '_server', 'a;rm', 'a$(echo)', 'a`echo`', 'a/b', 'a'.repeat(65)])('rejects invalid names before generating any native link or command: %s', name => {
+    expect(() => connectConfig.connectionArtifacts('https://mcp.example.test/mcp', 'https://mcp.example.test', name)).toThrow('Use 1–64');
+  });
+
+  it('round-trips custom names and deployment paths through both native formats without secrets', () => {
+    const endpoint = 'https://mcp.example.test/remote/v2/mcp';
+    const artifacts = connectConfig.connectionArtifacts(endpoint, 'https://mcp.example.test', 'Research_2');
+    expect(artifacts.profile).toEqual({
+      schemaVersion: 1, connectionName: 'Research_2', endpoint, transport: 'streamable-http',
+    });
+    expect(artifacts.claudeAdd).toContain("Research_2 'https://mcp.example.test/remote/v2/mcp'");
+    expect(artifacts.codexAdd).toContain("Research_2 --url 'https://mcp.example.test/remote/v2/mcp'");
+
+    const cursorLink = new URL(artifacts.cursorLink);
+    expect(cursorLink.searchParams.get('name')).toBe('Research_2');
+    expect(JSON.parse(Buffer.from(cursorLink.searchParams.get('config')!, 'base64').toString('utf8'))).toEqual({ url: endpoint });
+    expect(JSON.parse(artifacts.cursorConfig)).toEqual({ mcpServers: { Research_2: { url: endpoint } } });
+
+    const vscodeLink = new URL(artifacts.vscodeLink);
+    expect(vscodeLink.protocol).toBe('vscode:');
+    expect(vscodeLink.pathname).toBe('mcp/install');
+    expect(JSON.parse(decodeURIComponent(vscodeLink.search.slice(1)))).toEqual({ name: 'Research_2', type: 'http', url: endpoint });
+    expect(JSON.parse(artifacts.vscodeConfig)).toEqual({ servers: { Research_2: { type: 'http', url: endpoint } } });
+    expect(JSON.stringify(artifacts)).not.toMatch(/token|secret|authorization|password/i);
+  });
 });
 
 describe('hosted connection UI', () => {
@@ -119,6 +151,7 @@ describe('hosted connection UI', () => {
     for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-client]')) button.click();
     expect(panel.textContent).toContain('Setup instructions will appear when endpoint discovery is available.');
     expect(panel.querySelector('[href^="cursor:"]')).toBeNull();
+    expect(panel.querySelector('[href^="vscode:"]')).toBeNull();
   });
 
   it('reports clipboard failure and selects a manual fallback without claiming connection', async () => {
@@ -150,5 +183,69 @@ describe('hosted connection UI', () => {
     await connect.init(panel, { toast: jest.fn(), hasRoute: () => true });
     panel.querySelector<HTMLButtonElement>('#connect-open-sessions')!.click();
     expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears stale setup actions as the name changes and uses the new name after correction', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="vscode"]')!.click();
+    expect(panel.querySelector<HTMLAnchorElement>('[href^="vscode:"]')).not.toBeNull();
+
+    const input = panel.querySelector<HTMLInputElement>('#connect-name')!;
+    input.value = 'bad name';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(panel.querySelector('.connect-client-panel')).toBeNull();
+    expect(panel.querySelector('[href^="vscode:"]')).toBeNull();
+    expect(panel.textContent).not.toContain('Copy manual JSON');
+
+    input.value = 'Research_2';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(input.hasAttribute('aria-invalid')).toBe(false);
+    expect(panel.querySelector('#connect-name-error')?.textContent).toBe('');
+    const link = panel.querySelector<HTMLAnchorElement>('[href^="vscode:"]')!;
+    expect(JSON.parse(decodeURIComponent(new URL(link.href).search.slice(1))).name).toBe('Research_2');
+    expect(panel.textContent).toContain('Research_2');
+  });
+
+  it('keeps a client selected while endpoint discovery is pending', async () => {
+    let completeFetch!: (response: any) => void;
+    fetchMock.mockImplementationOnce(() => new Promise(resolve => { completeFetch = resolve; }));
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    const ready = connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="vscode"]')!.click();
+    expect(panel.querySelector<HTMLButtonElement>('[data-client="vscode"]')!.getAttribute('aria-pressed')).toBe('true');
+    completeFetch({ ok: true, json: () => Promise.resolve({ resource: 'https://mcp.example.test/alternate-mcp' }) });
+    await ready;
+    const link = panel.querySelector<HTMLAnchorElement>('[href^="vscode:"]')!;
+    expect(JSON.parse(decodeURIComponent(new URL(link.href).search.slice(1))).url)
+      .toBe('https://mcp.example.test/alternate-mcp');
+    expect(panel.querySelector<HTMLButtonElement>('[data-client="claude-code"]')!.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps client selection and native-link handoff keyboard accessible without claiming success', async () => {
+    const toast = jest.fn();
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast });
+    const cursorTab = panel.querySelector<HTMLButtonElement>('[data-client="cursor"]')!;
+    cursorTab.focus();
+    cursorTab.click();
+    expect(cursorTab.getAttribute('aria-pressed')).toBe('true');
+    expect(panel.querySelector('[href^="cursor:"]')).not.toBeNull();
+
+    const vscodeTab = panel.querySelector<HTMLButtonElement>('[data-client="vscode"]')!;
+    vscodeTab.focus();
+    vscodeTab.click();
+    const link = panel.querySelector<HTMLAnchorElement>('[href^="vscode:"]')!;
+    expect(vscodeTab.getAttribute('aria-pressed')).toBe('true');
+    expect(cursorTab.getAttribute('aria-pressed')).toBe('false');
+    expect(link.tagName).toBe('A');
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    link.addEventListener('click', event => event.preventDefault());
+    link.click();
+    expect(toast).toHaveBeenCalledWith('Finish setup and OAuth in VS Code, then refresh connected apps.', 'info');
+    expect(panel.textContent).toContain('No connected apps yet.');
+    expect(panel.textContent).not.toMatch(/installed successfully|connected successfully/i);
   });
 });

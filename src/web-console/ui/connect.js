@@ -2,66 +2,15 @@
 
 import { get } from './api.js';
 import { escapeHtml, relAgo } from './ui-utils.js';
+import { connectionArtifacts, DEFAULT_CONNECTION_NAME, validateConnectionName, validateHostedMcpEndpoint } from './connect-config.js';
 
 const METADATA_PATH = '/.well-known/oauth-protected-resource';
-const CONNECTION_NAME = 'dollhouse-beta';
+
+export { connectionArtifacts, validateHostedMcpEndpoint } from './connect-config.js';
 
 let host;
 let notify = () => {};
 let sessionsTabAvailable = false;
-
-export function validateHostedMcpEndpoint(value, pageOrigin) {
-  if (typeof value !== 'string' || value.length === 0) throw new Error('Connection metadata did not include an MCP endpoint.');
-  if (unsafeEndpointText(value)) {
-    throw new Error('Connection metadata did not provide a safe endpoint for this deployment.');
-  }
-  let endpoint;
-  let origin;
-  try {
-    endpoint = new URL(value);
-    origin = new URL(pageOrigin);
-  } catch {
-    throw new Error('Connection metadata included an invalid MCP endpoint.');
-  }
-  if (unsafeEndpointText(endpoint.href)) {
-    throw new Error('Connection metadata did not provide a safe endpoint for this deployment.');
-  }
-  const loopbackHttp = endpoint.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname);
-  if ((endpoint.protocol !== 'https:' && !loopbackHttp)
-      || endpoint.origin !== origin.origin
-      || endpoint.username || endpoint.password
-      || endpoint.search || endpoint.hash) {
-    throw new Error('Connection metadata did not provide a safe endpoint for this deployment.');
-  }
-  return endpoint.href;
-}
-
-function unsafeEndpointText(value) {
-  return value.includes("'") || value.includes('\\') || [...value].some(character => {
-    const codePoint = character.codePointAt(0);
-    return codePoint <= 32 || codePoint === 127;
-  });
-}
-
-function base64Utf8(value) {
-  // Endpoint validation and URL canonicalization constrain this JSON to ASCII.
-  return btoa(value);
-}
-
-export function connectionArtifacts(endpoint, pageOrigin) {
-  const safeEndpoint = validateHostedMcpEndpoint(endpoint, pageOrigin);
-  const cursorLinkConfig = JSON.stringify({ url: safeEndpoint });
-  const cursorConfig = JSON.stringify({ mcpServers: { [CONNECTION_NAME]: { url: safeEndpoint } } }, null, 2);
-  return Object.freeze({
-    endpoint: safeEndpoint,
-    claudeAdd: `claude mcp add --transport http --scope user ${CONNECTION_NAME} '${safeEndpoint}'`,
-    claudeLogin: `claude mcp login ${CONNECTION_NAME}`,
-    codexAdd: `codex mcp add ${CONNECTION_NAME} --url '${safeEndpoint}'`,
-    codexLogin: `codex mcp login ${CONNECTION_NAME}`,
-    cursorLink: `cursor://anysphere.cursor-deeplink/mcp/install?name=${encodeURIComponent(CONNECTION_NAME)}&config=${encodeURIComponent(base64Utf8(cursorLinkConfig))}`,
-    cursorConfig,
-  });
-}
 
 export function connectedAppsMarkup(sessions, failed = false) {
   if (failed) return '<div class="connect-state connect-state--error"><strong>Could not check connected apps.</strong><span>Use Refresh to try again.</span></div>';
@@ -98,8 +47,14 @@ function pageShell() {
       </header>
       <div class="connect-notice"><strong>No local server is required for basic hosted access.</strong> Local permission hooks and host audit need separate local support and are not enabled by this setup.</div>
       <div id="connect-endpoint" class="connect-endpoint" aria-live="polite">Loading the secure endpoint…</div>
+      <div class="connect-name">
+        <label for="connect-name">Connection name</label>
+        <input id="connect-name" value="${DEFAULT_CONNECTION_NAME}" maxlength="64" autocomplete="off" spellcheck="false" aria-describedby="connect-name-help connect-name-error">
+        <p id="connect-name-help">Use a name that is free in your client to preserve existing connections. This page cannot check your client's saved names.</p>
+        <p id="connect-name-error" role="status"></p>
+      </div>
       <div class="connect-client-tabs" role="group" aria-label="Choose an AI client">
-        ${clientTab('claude-code', 'Claude Code', true)}${clientTab('codex', 'Codex')}${clientTab('claude', 'Claude web / Desktop')}${clientTab('cursor', 'Cursor')}
+        ${clientTab('claude-code', 'Claude Code', true)}${clientTab('codex', 'Codex')}${clientTab('claude', 'Claude web / Desktop')}${clientTab('cursor', 'Cursor')}${clientTab('vscode', 'VS Code / GitHub Copilot')}
       </div>
       <div id="connect-client-panel"></div>
       <section class="connect-status" aria-labelledby="connect-status-title">
@@ -116,6 +71,9 @@ function clientTab(id, label, active = false) {
 
 function bindStaticActions() {
   host.querySelectorAll('[data-client]').forEach(button => button.addEventListener('click', () => selectClient(button.dataset.client)));
+  host.querySelector('#connect-name').addEventListener('input', () => selectClient(
+    host.querySelector('[data-client][aria-pressed="true"]').dataset.client,
+  ));
   host.querySelector('#connect-refresh').addEventListener('click', refreshSessions);
   host.querySelector('#connect-open-sessions')?.addEventListener('click', () => {
     document.querySelector('.console-tab[data-tab="sessions"]')?.click();
@@ -140,7 +98,7 @@ async function loadEndpoint() {
     const code = document.createElement('code');
     code.textContent = endpoint;
     target.append(label, code, copyButton(endpoint, 'Copy endpoint'));
-    selectClient('claude-code');
+    selectClient(host.querySelector('[data-client][aria-pressed="true"]')?.dataset.client || 'claude-code');
   } catch {
     host.dataset.endpoint = '';
     host.querySelector('#connect-endpoint').innerHTML = '<div class="connect-state connect-state--error"><strong>Connection setup is unavailable.</strong><span>The server did not provide a safe MCP endpoint. Try again later.</span></div>';
@@ -149,16 +107,28 @@ async function loadEndpoint() {
 }
 
 function selectClient(client) {
-  const endpoint = host.dataset.endpoint;
-  if (!endpoint) return;
   host.querySelectorAll('[data-client]').forEach(button => {
     const active = button.dataset.client === client;
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   });
-  host.querySelector('#connect-client-panel').replaceChildren(
-    renderClientPanel(client, connectionArtifacts(endpoint, globalThis.location.origin)),
-  );
+  const endpoint = host.dataset.endpoint;
+  if (!endpoint) return;
+  const nameInput = host.querySelector('#connect-name');
+  const nameError = host.querySelector('#connect-name-error');
+  const target = host.querySelector('#connect-client-panel');
+  let connectionName;
+  try {
+    connectionName = validateConnectionName(nameInput.value);
+  } catch (error) {
+    nameInput.setAttribute('aria-invalid', 'true');
+    nameError.textContent = error.message;
+    target.replaceChildren(instructions('Choose a valid connection name to show setup actions.'));
+    return;
+  }
+  nameInput.removeAttribute('aria-invalid');
+  nameError.textContent = '';
+  target.replaceChildren(renderClientPanel(client, connectionArtifacts(endpoint, globalThis.location.origin, connectionName)));
 }
 
 function renderClientPanel(client, artifacts) {
@@ -174,16 +144,34 @@ function renderClientPanel(client, artifacts) {
       oauthNote(),
     );
   } else if (client === 'claude') {
-    panel.append(instructions('In Claude web or Desktop, open Customize → Connectors → + → Add custom connector. Enter a readable name such as “Dollhouse Beta,” paste this URL, then choose Connect and finish authorization in the browser.'), valueBlock(artifacts.endpoint, 'Copy connector URL'), oauthNote());
-  } else {
-    const link = document.createElement('a');
-    link.className = 'btn btn-primary';
-    link.href = artifacts.cursorLink;
-    link.textContent = 'Open in Cursor';
-    link.addEventListener('click', () => notify('Finish setup and OAuth in Cursor, then refresh connected apps.', 'info'));
-    panel.append(instructions('Use the install link, or open Cursor Settings → MCP and add the manual JSON below.'), link, valueBlock(artifacts.cursorConfig, 'Copy manual JSON'), oauthNote());
+    panel.append(instructions(`In Claude web or Desktop, open Customize → Connectors → + → Add custom connector. Use the name “${artifacts.profile.connectionName},” paste this URL, then choose Connect and finish authorization in the browser.`), valueBlock(artifacts.endpoint, 'Copy connector URL'), oauthNote());
+  } else if (client === 'cursor') {
+    panel.append(
+      instructions('Open Cursor from your browser, review the server configuration, then finish setup and OAuth in Cursor.'),
+      nativeInstallLink('Cursor', artifacts.cursorLink),
+      instructions('If Cursor is not installed, does not open, or you cancel, install or open Cursor and retry, or add this entry under mcpServers in Cursor Settings → MCP. Preserve your other entries.'),
+      valueBlock(artifacts.cursorConfig, 'Copy manual JSON'), oauthNote(),
+    );
+  } else if (client === 'vscode') {
+    panel.append(
+      instructions('Open the installed VS Code desktop app from your browser. Review the server URL and name, choose where to save it, then start the server and complete OAuth when prompted.'),
+      nativeInstallLink('VS Code', artifacts.vscodeLink),
+      instructions('If VS Code is not installed, does not open, or you cancel, install or open VS Code and retry, or run “MCP: Add Server” in its Command Palette, choose HTTP, and use the endpoint and connection name above. For manual configuration, merge this entry into your mcp.json without replacing other servers.'),
+      valueBlock(artifacts.vscodeConfig, 'Copy manual JSON'),
+      instructions('To remove this connection, remove its named entry from your MCP configuration. You can manage saved authentication separately in VS Code’s Accounts menu.'),
+      oauthNote(),
+    );
   }
   return panel;
+}
+
+function nativeInstallLink(clientName, href) {
+  const link = document.createElement('a');
+  link.className = 'btn btn-primary';
+  link.href = href;
+  link.textContent = `Open in ${clientName}`;
+  link.addEventListener('click', () => notify(`Finish setup and OAuth in ${clientName}, then refresh connected apps.`, 'info'));
+  return link;
 }
 
 function instructions(text) {
