@@ -289,4 +289,17 @@ describe('hosted connection UI', () => {
     expect(panel.textContent).not.toMatch(/Add to Claude|plugin marketplace|hooks enabled/i);
     expect(panel.textContent).toContain('Local permission hooks require separate setup.');
   });
+
+  it('opens official setup guidance separately while keeping native app handoffs direct', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="claude"]')!.click();
+    const docs = panel.querySelector<HTMLAnchorElement>('.connect-client-heading a')!;
+    expect(docs.target).toBe('_blank');
+    expect(docs.rel).toBe('noopener noreferrer');
+    expect(docs.getAttribute('aria-label')).toContain('opens in a new tab');
+    panel.querySelector<HTMLButtonElement>('[data-client="cursor"]')!.click();
+    const native = panel.querySelector<HTMLAnchorElement>('[href^="cursor:"]')!;
+    expect(native.target).toBe('');
+  });
 });
