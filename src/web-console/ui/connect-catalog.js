@@ -102,5 +102,8 @@ export function coreConnectionClients(artifacts) {
         ] },
       ],
     },
-  ];
+  ].map(client => ({
+    ...client,
+    connectionNote: 'OAuth opens in your browser. Sign in with this account and approve the MCP connection. Copying or opening setup does not mean the client is connected.',
+  }));
 }
