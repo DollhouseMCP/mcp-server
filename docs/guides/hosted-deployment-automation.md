@@ -103,6 +103,32 @@ The smoke test covers OAuth discovery, GitHub sign-in, Dollhouse client consent,
 bearer-token use, MCP read calls, Cloudflare WAF/rate-limit inspection, and log
 redaction checks.
 
+### Console UI cache policy
+
+The hosted `/ui` HTML, JavaScript modules (including lazy imports), CSS, and
+other static assets use stable URLs. The application serves the entire `/ui`
+tree with `Cache-Control: no-store, max-age=0, must-revalidate` so a page reload
+fetches the current assets. Configure Cloudflare to **bypass
+cache for `/ui` and `/ui/*`**, including any Cache Everything or Edge/Browser
+Cache TTL rules that would override the origin policy. Caddy only proxies this
+route; it does not provide a UI cache policy.
+
+After changing an existing Cloudflare rule, purge previously cached `/ui/*`
+entries once. Verify the public URL without a cache-busting query after each
+update or rollback:
+
+```bash
+BASE_URL=https://mcp.example.com
+for path in /ui/ /ui/app.js /ui/connect.js /ui/connect-catalog.js /ui/connect.css; do
+  curl -sSI "${BASE_URL}${path}" | grep -Ei '^(HTTP/|cache-control:|cf-cache-status:)'
+done
+```
+
+Every response should retain the origin `no-store` policy; Cloudflare should
+not report a cached `HIT`. Compare ordinary asset responses with the exact
+deployed build when validating a release. A cache-busted query alone can hide
+a stale response at the normal URL.
+
 Run an update on a remote host over SSH:
 
 ```bash
