@@ -1,10 +1,7 @@
 /** Microsoft and Google product surfaces have separate setup and eligibility rules. */
 
-const s = (title, text, extras = {}) => ({ title, text, ...extras });
-const r = (id, label, steps) => ({ id, label, steps });
-const c = (id, label, group, summary, docsUrl, routes, availability) =>
-  ({ id, label, group, summary, docsUrl, routes, ...(availability ? { availability } : {}) });
-const endpoint = (url) => s('MCP endpoint', 'Copy the hosted URL into the product setup.', { value: url, copyLabel: 'Copy endpoint' });
+import { s, r, c, endpointStep as endpoint } from './connect-extra-common.js';
+
 const check = (client) => s('Verify a tool', `After authorization in ${client}, run a harmless Dollhouse tool. A connector listing or session alone is not a tool check.`);
 
 export function microsoftGoogleClients({ endpoint: url, connectionName: name }) {
