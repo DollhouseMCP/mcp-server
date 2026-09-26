@@ -41,6 +41,16 @@ afterAll(() => {
 });
 
 describe('hosted connection endpoint validation', () => {
+  it('allows only official setup pages and supported native install schemes', () => {
+    expect(connect.safeSetupHref('https://claude.ai/customize/connectors')).toBe(true);
+    expect(connect.safeSetupHref('cursor://anysphere.cursor-deeplink/mcp/install?name=safe')).toBe(true);
+    expect(connect.safeSetupHref('vscode:mcp/install?name=safe')).toBe(true);
+    expect(connect.safeSetupHref('https://claude.ai.evil.test/connectors')).toBe(false);
+    expect(connect.safeSetupHref('javascript:alert(1)')).toBe(false);
+    expect(connect.safeSetupHref('data:text/html,evil')).toBe(false);
+    expect(connect.safeSetupHref('cursor://evil/mcp/install?name=safe')).toBe(false);
+  });
+
   it('accepts only the same-origin canonical MCP resource', () => {
     expect(connect.validateHostedMcpEndpoint('https://mcp.example.test/mcp', 'https://mcp.example.test')).toBe('https://mcp.example.test/mcp');
     expect(connect.validateHostedMcpEndpoint('http://localhost:3000/mcp', 'http://localhost:3000')).toBe('http://localhost:3000/mcp');

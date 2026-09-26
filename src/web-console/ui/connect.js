@@ -75,6 +75,7 @@ function pageShell() {
 }
 
 function bindStaticActions() {
+  // Populate choices while metadata is loading; setup actions remain hidden until the endpoint is validated.
   renderClientList(coreConnectionClients({
     endpoint: '', profile: { connectionName: DEFAULT_CONNECTION_NAME },
     claudeAdd: '', claudeLogin: '', codexAdd: '', codexLogin: '',
@@ -193,7 +194,9 @@ function renderClientPanel(client) {
   const head = document.createElement('div'); head.className = 'connect-client-heading';
   const heading = document.createElement('h3'); heading.textContent = client.label;
   const docs = safeLink(client.docsUrl, 'Client setup docs');
-  head.append(heading, docs); panel.append(head);
+  head.append(heading);
+  if (docs) head.append(docs);
+  panel.append(head);
   if (client.availability) panel.append(instructions(client.availability));
   const routes = document.createElement('div'); routes.className = 'connect-route-tabs';
   routes.setAttribute('role', 'group'); routes.setAttribute('aria-label', `Setup route for ${client.label}`);
@@ -220,11 +223,15 @@ function renderClientPanel(client) {
     if (item.value) li.append(valueBlock(item.value, item.copyLabel || 'Copy'));
     if (item.href) {
       const link = safeLink(item.href, item.linkLabel || 'Open setup');
-      if (item.href.startsWith('cursor:') || item.href.startsWith('vscode:')) {
-        link.className = 'btn btn-primary';
-        link.addEventListener('click', () => notify(`Finish setup and OAuth in ${item.linkLabel?.replace('Open in ', '') || client.label}, then refresh connected apps.`, 'info'));
+      if (link) {
+        if (item.href.startsWith('cursor:') || item.href.startsWith('vscode:')) {
+          link.className = 'btn btn-primary';
+          link.addEventListener('click', () => notify(`Finish setup and OAuth in ${item.linkLabel?.replace('Open in ', '') || client.label}, then refresh connected apps.`, 'info'));
+        }
+        li.append(link);
+      } else {
+        li.append(instructions('This setup link is unavailable. Use another setup route or the client documentation.'));
       }
-      li.append(link);
     }
     steps.append(li);
   }
@@ -233,11 +240,14 @@ function renderClientPanel(client) {
   return panel;
 }
 
-function safeLink(href, label) {
-  const allowed = /^https:\/\/(?:code\.claude\.com|claude\.ai|support\.claude\.com|developers\.openai\.com|code\.visualstudio\.com|cursor\.com)\//.test(href)
+export function safeSetupHref(href) {
+  return typeof href === 'string' && (/^https:\/\/(?:code\.claude\.com|claude\.ai|support\.claude\.com|developers\.openai\.com|code\.visualstudio\.com|cursor\.com)\//.test(href)
     || href.startsWith('cursor://anysphere.cursor-deeplink/mcp/install?')
-    || href.startsWith('vscode:mcp/install?');
-  if (!allowed) throw new Error('Unsafe setup link');
+    || href.startsWith('vscode:mcp/install?'));
+}
+
+function safeLink(href, label) {
+  if (!safeSetupHref(href)) return null;
   const link = document.createElement('a');
   link.href = href;
   if (href.startsWith('https:')) {
