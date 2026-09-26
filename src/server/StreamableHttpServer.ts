@@ -946,8 +946,15 @@ export async function createStreamableHttpRuntime(
     });
     // Serve the console UI (static) at /ui. Public; the page self-gates on
     // GET /api/v1/auth/me. Assets are copied to dist/web-console/ui by postbuild.
+    // All entry assets and their relative module imports keep stable URLs, so
+    // none can be cached across deployments. Apply this before express.static
+    // so conditional and missing-file responses also carry the policy.
     const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
-    app.use('/ui', expressStatic(consoleUiDir, { index: 'index.html' }));
+    app.use('/ui', (_req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
+      next();
+    });
+    app.use('/ui', expressStatic(consoleUiDir, { index: 'index.html', cacheControl: false }));
     logger.info('[StreamableHTTP] Console UI mounted', { basePath: '/ui' });
     app.use(options.webConsoleApiV1.router);
     options.webConsoleApiV1.markMounted();
