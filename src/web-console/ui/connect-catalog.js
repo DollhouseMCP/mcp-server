@@ -51,7 +51,7 @@ export function coreConnectionClients(artifacts) {
     },
     {
       id: 'claude-cowork', label: 'Claude Cowork', group: 'Anthropic', summary: 'Use an account connector in Cowork.',
-      docsUrl: 'https://support.claude.com/en/articles/13837440-use-plugins-in-claude',
+      docsUrl: 'https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp',
       routes: [{ id: 'inside', label: 'Inside Claude', steps: [
         { title: 'Add a custom connector', text: 'In Claude, open Customize → Connectors → + → Add custom connector. The account connector is available in Cowork on supported plans.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
         { title: 'Enter the server details', text: `Name it ${name}, paste this hosted MCP URL, choose Add, then Connect.`, value: endpoint, copyLabel: 'Copy endpoint' },
