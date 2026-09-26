@@ -1,6 +1,6 @@
 # Additional hosted client guides
 
-The Connect catalog includes additional client surfaces through `additionalConnectionClients(profile)`. The Connect page supplies a validated hosted endpoint and an unused connection name. Each guide carries a link to the client’s first-party setup documentation. Labels distinguish **In app**, **Terminal**, **Config file**, **Admin console**, and **Developer setup**; a documented product page is not an install link.
+The Connect catalog includes additional client surfaces through `additionalConnectionClients(profile)`. The Connect page supplies a validated hosted endpoint and an unused connection name. The factory checks the endpoint against the browser's deployment origin; non-browser callers must pass that trusted origin as the second argument. Each guide carries a link to the client’s first-party setup documentation. Labels distinguish **In app**, **Terminal**, **Config file**, **Admin console**, and **Developer setup**; a documented product page is not an install link.
 
 The copyable JSON and YAML blocks are entries to merge into the client’s existing configuration. They are not whole-file replacements. The catalog never includes an access token or secret. After setup, complete OAuth in the client and invoke a harmless Dollhouse tool. A saved entry, OAuth screen, or connected session does not by itself show that tools work. Hosted MCP access also does not install local permission hooks or host audit.
 
