@@ -56,7 +56,11 @@ describe('additional hosted client guides', () => {
     expect(byId('microsoft-365-copilot').routes[0].label).toBe('Admin / developer');
     expect(byId('google-ai-studio').availability).toContain('No verified');
     expect(byId('gemini-agent-platform').routes[0].label).toBe('Developer setup');
-    expect(byId('xcode-native').summary).not.toMatch(/mcpbridge/);
+    for (const id of ['microsoft-copilot-personal', 'google-ai-studio']) {
+      expect(byId(id).routes[0].id).toBe('availability');
+      expect(values(id)).toEqual([]);
+    }
+    expect(byId('xcode-native').routes[0].steps.at(-1)?.text).toContain('mcpbridge exports Xcode tools to other agents; it does not import this server.');
     expect(byId('hermes').routes.map(route => route.label)).toEqual(['In app', 'Config file']);
     expect(byId('junie').routes[0].label).toBe('In Junie CLI');
     expect(byId('copilot-cli').routes[0].steps[0].text).toContain('/mcp add');
