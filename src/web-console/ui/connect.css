@@ -31,7 +31,12 @@
 .connect-client-panel { display: grid; gap: 1rem; min-height: 170px; }
 .connect-client-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
 .connect-client-heading h3, .connect-status h3 { margin: 0; font-family: var(--font-heading); }
-.connect-route-tabs { display: flex; gap: .5rem; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.connect-route-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.connect-route-tabs { display: flex; gap: .5rem; flex-wrap: wrap; flex: 1 1 16rem; }
+.connect-direct-action { display: grid; justify-items: end; gap: .25rem; flex: 0 1 auto; text-align: right; }
+.connect-direct-label { color: var(--teal); font-size: .72rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.connect-direct-action .btn { white-space: nowrap; }
+.connect-client-panel .connect-direct-action p { font-size: .78rem; max-width: 18rem; }
 .connect-route-tab { border: 1px solid var(--line); border-radius: 999px; background: var(--surface-1); color: var(--ink-700); padding: .5rem .8rem; cursor: pointer; font: inherit; }
 .connect-route-tab.is-active { background: var(--ink-950); color: var(--paper); border-color: var(--ink-950); }
 .connect-steps { display: grid; gap: 1rem; margin: 0; padding-left: 1.45rem; }
@@ -61,4 +66,6 @@
   .connect-client-tab { width: 100%; }
   .connect-value { align-items: stretch; flex-direction: column; }
   .connect-value .btn { align-self: flex-start; }
+  .connect-route-header { flex-direction: column; align-items: stretch; }
+  .connect-direct-action { justify-items: start; text-align: left; }
 }
