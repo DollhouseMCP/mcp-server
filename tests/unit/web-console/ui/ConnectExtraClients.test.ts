@@ -1,9 +1,15 @@
 import { describe, expect, it } from '@jest/globals';
+// @ts-expect-error Jest's source resolver uses extensionless imports; NodeNext expects .js.
 import { hostedConnectionProfile } from '../../../../src/web-console/ui/connect-config';
+// @ts-expect-error Jest's source resolver uses extensionless imports; NodeNext expects .js.
 import { additionalConnectionClients } from '../../../../src/web-console/ui/connect-extra-clients';
 
+type ClientGuide = {
+  id: string; label: string; group: string; summary: string; docsUrl: string; availability?: string;
+  routes: { id: string; label: string; steps: { title: string; text: string; value?: string; copyLabel?: string }[] }[];
+};
 const profile = hostedConnectionProfile('https://mcp.example.test/custom/mcp', 'https://mcp.example.test', 'Research_2');
-const clients = additionalConnectionClients(profile);
+const clients: ClientGuide[] = additionalConnectionClients(profile);
 const byId = (id: string) => clients.find(client => client.id === id)!;
 const values = (id: string) => byId(id).routes.flatMap(route => route.steps.map(step => step.value).filter(Boolean));
 
