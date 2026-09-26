@@ -53,6 +53,16 @@ describe('additional hosted client guides', () => {
     expect(openClaw).toContain('"auth":"oauth"');
   });
 
+  it('gives CLI-only Hermes users a terminal connection check after OAuth', () => {
+    const steps = byId('hermes').routes.find(route => route.id === 'config')!.steps;
+    expect(steps.map(step => step.value).filter(Boolean)).toEqual([
+      expect.stringContaining('mcp_servers:'),
+      'hermes mcp login Research_2',
+      'hermes mcp test Research_2',
+    ]);
+    expect(steps.at(-1)?.text).toContain('If using Desktop');
+  });
+
   it('keeps personal Copilot and AI Studio distinct from admin or developer MCP routes', () => {
     expect(byId('microsoft-copilot-personal').availability).toContain('No verified');
     expect(byId('microsoft-365-copilot').routes[0].label).toBe('Admin / developer');
