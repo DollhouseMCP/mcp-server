@@ -105,10 +105,12 @@ redaction checks.
 
 ### Console UI cache policy
 
-The hosted `/ui` HTML, JavaScript modules (including lazy imports), CSS, and
-other static assets use stable URLs. The application serves the entire `/ui`
-tree with `Cache-Control: no-store, max-age=0, must-revalidate` so a page reload
-fetches the current assets. Configure Cloudflare to **bypass
+The hosted `/ui/` HTML points all local assets into one content-versioned
+`/ui/__assets/<digest>/` directory. Relative JavaScript imports (including
+lazy imports) and CSS font URLs stay in that same directory, so a new page
+load cannot reuse modules cached under a previous release's stable URLs.
+The application also serves the entire `/ui` tree with
+`Cache-Control: no-store, max-age=0, must-revalidate`. Configure Cloudflare to **bypass
 cache for `/ui` and `/ui/*`**, including any Cache Everything or Edge/Browser
 Cache TTL rules that would override the origin policy. Caddy only proxies this
 route; it does not provide a UI cache policy.
@@ -119,7 +121,8 @@ update or rollback:
 
 ```bash
 BASE_URL=https://mcp.example.com
-for path in /ui/ /ui/app.js /ui/connect.js /ui/connect-catalog.js /ui/connect.css; do
+ASSET_BASE="$(curl -fsS "${BASE_URL}/ui/" | grep -oE '/ui/__assets/[a-f0-9]{16}' | head -1)"
+for path in /ui/ "${ASSET_BASE}/app.js" "${ASSET_BASE}/connect.js" "${ASSET_BASE}/connect-catalog.js" "${ASSET_BASE}/connect.css"; do
   curl -sSI "${BASE_URL}${path}" | grep -Ei '^(HTTP/|cache-control:|cf-cache-status:)'
 done
 ```
@@ -127,7 +130,8 @@ done
 Every response should retain the origin `no-store` policy; Cloudflare should
 not report a cached `HIT`. Compare ordinary asset responses with the exact
 deployed build when validating a release. A cache-busted query alone can hide
-a stale response at the normal URL.
+a stale response at the normal URL. The old unversioned `/ui/*.js` URLs remain
+available during the transition and also carry `no-store`.
 
 Run an update on a remote host over SSH:
 
