@@ -3,6 +3,7 @@
 import { get } from './api.js';
 import { escapeHtml, relAgo } from './ui-utils.js';
 import { connectionArtifacts, DEFAULT_CONNECTION_NAME, validateConnectionName, validateHostedMcpEndpoint } from './connect-config.js';
+import { coreConnectionClients } from './connect-catalog.js';
 
 const METADATA_PATH = '/.well-known/oauth-protected-resource';
 
@@ -11,6 +12,8 @@ export { connectionArtifacts, validateHostedMcpEndpoint } from './connect-config
 let host;
 let notify = () => {};
 let sessionsTabAvailable = false;
+let selectedClient = 'claude-code';
+let selectedRoute = '';
 
 export function connectedAppsMarkup(sessions, failed = false) {
   if (failed) return '<div class="connect-state connect-state--error"><strong>Could not check connected apps.</strong><span>Use Refresh to try again.</span></div>';
@@ -30,6 +33,8 @@ export function connectedAppsMarkup(sessions, failed = false) {
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
+  selectedClient = 'claude-code';
+  selectedRoute = '';
   notify = ctx.toast || notify;
   sessionsTabAvailable = ctx.hasRoute?.('GET', '/me/sessions') === true
     && ctx.hasRoute?.('GET', '/me/security/sessions') === true;
@@ -53,27 +58,31 @@ function pageShell() {
         <p id="connect-name-help">Use a name that is free in your client to preserve existing connections. This page cannot check your client's saved names.</p>
         <p id="connect-name-error" role="status"></p>
       </div>
-      <div class="connect-client-tabs" role="group" aria-label="Choose an AI client">
-        ${clientTab('claude-code', 'Claude Code', true)}${clientTab('codex', 'Codex')}${clientTab('claude', 'Claude web / Desktop')}${clientTab('cursor', 'Cursor')}${clientTab('vscode', 'VS Code / GitHub Copilot')}
+      <div class="connect-setup-layout"><div class="connect-picker">
+        <label for="connect-search">Find your AI client</label>
+        <input id="connect-search" type="search" autocomplete="off" placeholder="Search clients" aria-controls="connect-client-list">
+        <div id="connect-client-list" class="connect-client-list" role="group" aria-label="Choose an AI client"></div>
+        <p id="connect-search-empty" class="connect-search-empty" hidden>No matching clients. Try another name.</p>
       </div>
-      <div id="connect-client-panel"></div>
+      <div id="connect-client-panel"></div></div>
       <section class="connect-status" aria-labelledby="connect-status-title">
         <div class="connect-status-head"><h3 id="connect-status-title">Connected apps</h3><button class="btn btn-ghost" id="connect-refresh" type="button">Refresh</button></div>
         <div id="connect-session-state" aria-live="polite">Checking your connections…</div>
+        <p class="connect-status-note">This lists current-user sessions. To confirm tool access, ask your client to use a Dollhouse tool. Local permission hooks require separate setup.</p>
         ${sessionsTabAvailable ? '<button class="btn btn-ghost" id="connect-open-sessions" type="button">Open Sessions</button>' : ''}
       </section>
     </div>`;
 }
 
-function clientTab(id, label, active = false) {
-  return `<button class="connect-client-tab${active ? ' is-active' : ''}" aria-pressed="${active}" data-client="${id}" type="button">${label}</button>`;
-}
-
 function bindStaticActions() {
-  host.querySelectorAll('[data-client]').forEach(button => button.addEventListener('click', () => selectClient(button.dataset.client)));
-  host.querySelector('#connect-name').addEventListener('input', () => selectClient(
-    host.querySelector('[data-client][aria-pressed="true"]').dataset.client,
-  ));
+  renderClientList(coreConnectionClients({
+    endpoint: '', profile: { connectionName: DEFAULT_CONNECTION_NAME },
+    claudeAdd: '', claudeLogin: '', codexAdd: '', codexLogin: '',
+    cursorLink: 'cursor://anysphere.cursor-deeplink/mcp/install?',
+    vscodeLink: 'vscode:mcp/install?', cursorConfig: '', vscodeConfig: '',
+  }));
+  host.querySelector('#connect-search').addEventListener('input', filterClients);
+  host.querySelector('#connect-name').addEventListener('input', renderSetup);
   host.querySelector('#connect-refresh').addEventListener('click', refreshSessions);
   host.querySelector('#connect-open-sessions')?.addEventListener('click', () => {
     document.querySelector('.console-tab[data-tab="sessions"]')?.click();
@@ -98,7 +107,7 @@ async function loadEndpoint() {
     const code = document.createElement('code');
     code.textContent = endpoint;
     target.append(label, code, copyButton(endpoint, 'Copy endpoint'));
-    selectClient(host.querySelector('[data-client][aria-pressed="true"]')?.dataset.client || 'claude-code');
+    renderSetup();
   } catch {
     host.dataset.endpoint = '';
     host.querySelector('#connect-endpoint').innerHTML = '<div class="connect-state connect-state--error"><strong>Connection setup is unavailable.</strong><span>The server did not provide a safe MCP endpoint. Try again later.</span></div>';
@@ -107,11 +116,17 @@ async function loadEndpoint() {
 }
 
 function selectClient(client) {
+  selectedClient = client;
+  selectedRoute = '';
   host.querySelectorAll('[data-client]').forEach(button => {
     const active = button.dataset.client === client;
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   });
+  renderSetup();
+}
+
+function renderSetup() {
   const endpoint = host.dataset.endpoint;
   if (!endpoint) return;
   const nameInput = host.querySelector('#connect-name');
@@ -128,61 +143,109 @@ function selectClient(client) {
   }
   nameInput.removeAttribute('aria-invalid');
   nameError.textContent = '';
-  target.replaceChildren(renderClientPanel(client, connectionArtifacts(endpoint, globalThis.location.origin, connectionName)));
+  const clients = coreConnectionClients(connectionArtifacts(endpoint, globalThis.location.origin, connectionName));
+  const client = clients.find(item => item.id === selectedClient) || clients[0];
+  target.replaceChildren(renderClientPanel(client));
 }
 
-function renderClientPanel(client, artifacts) {
+function renderClientList(clients) {
+  const list = host.querySelector('#connect-client-list');
+  list.replaceChildren();
+  for (const group of [...new Set(clients.map(client => client.group))]) {
+    const section = document.createElement('div'); section.className = 'connect-client-group';
+    const title = document.createElement('h3'); title.textContent = group;
+    section.append(title);
+    for (const client of clients.filter(item => item.group === group)) {
+      const button = document.createElement('button'); button.type = 'button';
+      button.className = 'connect-client-tab'; button.dataset.client = client.id;
+      button.setAttribute('aria-pressed', String(client.id === selectedClient));
+      button.classList.toggle('is-active', client.id === selectedClient);
+      const label = document.createElement('strong'); label.textContent = client.label;
+      const summary = document.createElement('span'); summary.textContent = client.summary;
+      button.append(label, summary);
+      button.addEventListener('click', () => selectClient(client.id));
+      section.append(button);
+    }
+    list.append(section);
+  }
+  filterClients();
+}
+
+function filterClients() {
+  const query = host.querySelector('#connect-search').value.trim().toLocaleLowerCase();
+  let matches = 0;
+  host.querySelectorAll('.connect-client-group').forEach(group => {
+    let groupMatches = 0;
+    group.querySelectorAll('[data-client]').forEach(button => {
+      const visible = button.textContent.toLocaleLowerCase().includes(query);
+      button.hidden = !visible;
+      if (visible) groupMatches++;
+    });
+    group.hidden = groupMatches === 0;
+    matches += groupMatches;
+  });
+  host.querySelector('#connect-search-empty').hidden = matches > 0;
+}
+
+function renderClientPanel(client) {
   const panel = document.createElement('section');
   panel.className = 'connect-client-panel';
-  if (client === 'claude-code') {
-    panel.append(step('1', 'Add the hosted server', artifacts.claudeAdd), step('2', 'Authorize if prompted', artifacts.claudeLogin), oauthNote());
-  } else if (client === 'codex') {
-    panel.append(
-      step('1', 'Add the hosted server', artifacts.codexAdd),
-      step('2', 'Authorize with OAuth', artifacts.codexLogin),
-      instructions('Prefer the Codex app? Open Settings → MCP servers → Add server, choose Streamable HTTP, paste the endpoint shown above, then Save, restart, and Authenticate.'),
-      oauthNote(),
-    );
-  } else if (client === 'claude') {
-    panel.append(instructions(`In Claude web or Desktop, open Customize → Connectors → + → Add custom connector. Use the name “${artifacts.profile.connectionName},” paste this URL, then choose Connect and finish authorization in the browser.`), valueBlock(artifacts.endpoint, 'Copy connector URL'), oauthNote());
-  } else if (client === 'cursor') {
-    panel.append(
-      instructions('Open Cursor from your browser, review the server configuration, then finish setup and OAuth in Cursor.'),
-      nativeInstallLink('Cursor', artifacts.cursorLink),
-      instructions('If Cursor is not installed, does not open, or you cancel, install or open Cursor and retry, or add this entry under mcpServers in Cursor Settings → MCP. Preserve your other entries.'),
-      valueBlock(artifacts.cursorConfig, 'Copy manual JSON'), oauthNote(),
-    );
-  } else if (client === 'vscode') {
-    panel.append(
-      instructions('Open the installed VS Code desktop app from your browser. Review the server URL and name, choose where to save it, then start the server and complete OAuth when prompted.'),
-      nativeInstallLink('VS Code', artifacts.vscodeLink),
-      instructions('If VS Code is not installed, does not open, or you cancel, install or open VS Code and retry, or run “MCP: Add Server” in its Command Palette, choose HTTP, and use the endpoint and connection name above. For manual configuration, merge this entry into your mcp.json without replacing other servers.'),
-      valueBlock(artifacts.vscodeConfig, 'Copy manual JSON'),
-      instructions('To remove this connection, remove its named entry from your MCP configuration. You can manage saved authentication separately in VS Code’s Accounts menu.'),
-      oauthNote(),
-    );
+  const head = document.createElement('div'); head.className = 'connect-client-heading';
+  const heading = document.createElement('h3'); heading.textContent = client.label;
+  const docs = safeLink(client.docsUrl, 'Client setup docs');
+  head.append(heading, docs); panel.append(head);
+  if (client.availability) panel.append(instructions(client.availability));
+  const routes = document.createElement('div'); routes.className = 'connect-route-tabs';
+  routes.setAttribute('role', 'group'); routes.setAttribute('aria-label', `Setup route for ${client.label}`);
+  const activeRoute = client.routes.find(route => route.id === selectedRoute) || client.routes[0];
+  for (const route of client.routes) {
+    const button = document.createElement('button'); button.type = 'button';
+    button.className = 'connect-route-tab'; button.dataset.route = route.id;
+    button.textContent = route.label;
+    button.setAttribute('aria-pressed', String(route.id === activeRoute.id));
+    button.classList.toggle('is-active', route.id === activeRoute.id);
+    button.addEventListener('click', () => {
+      selectedRoute = route.id;
+      renderSetup();
+      host.querySelector(`[data-route="${route.id}"]`)?.focus();
+    });
+    routes.append(button);
   }
+  panel.append(routes);
+  const steps = document.createElement('ol'); steps.className = 'connect-steps';
+  for (const item of activeRoute.steps) {
+    const li = document.createElement('li'); li.className = 'connect-step';
+    const title = document.createElement('h4'); title.textContent = item.title;
+    li.append(title, instructions(item.text));
+    if (item.value) li.append(valueBlock(item.value, item.copyLabel || 'Copy'));
+    if (item.href) {
+      const link = safeLink(item.href, item.linkLabel || 'Open setup');
+      if (item.href.startsWith('cursor:') || item.href.startsWith('vscode:')) {
+        link.className = 'btn btn-primary';
+        link.addEventListener('click', () => notify(`Finish setup and OAuth in ${item.linkLabel?.replace('Open in ', '') || client.label}, then refresh connected apps.`, 'info'));
+      }
+      li.append(link);
+    }
+    steps.append(li);
+  }
+  panel.append(steps);
+  panel.append(oauthNote());
   return panel;
 }
 
-function nativeInstallLink(clientName, href) {
+function safeLink(href, label) {
+  const allowed = /^https:\/\/(?:code\.claude\.com|claude\.ai|support\.claude\.com|developers\.openai\.com|code\.visualstudio\.com|cursor\.com)\//.test(href)
+    || href.startsWith('cursor://anysphere.cursor-deeplink/mcp/install?')
+    || href.startsWith('vscode:mcp/install?');
+  if (!allowed) throw new Error('Unsafe setup link');
   const link = document.createElement('a');
-  link.className = 'btn btn-primary';
   link.href = href;
-  link.textContent = `Open in ${clientName}`;
-  link.addEventListener('click', () => notify(`Finish setup and OAuth in ${clientName}, then refresh connected apps.`, 'info'));
+  link.textContent = label;
   return link;
 }
 
 function instructions(text) {
   const p = document.createElement('p'); p.textContent = text; return p;
-}
-
-function step(number, title, value) {
-  const wrap = document.createElement('div'); wrap.className = 'connect-step';
-  const heading = document.createElement('h3'); heading.textContent = `${number}. ${title}`;
-  wrap.append(heading, valueBlock(value, 'Copy command'));
-  return wrap;
 }
 
 function valueBlock(value, label) {

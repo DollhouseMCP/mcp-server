@@ -159,7 +159,7 @@ describe('hosted connection UI', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: jest.fn(() => Promise.reject(new Error('denied'))) } });
     const panel = document.querySelector<HTMLElement>('#panel')!;
     await connect.init(panel, { toast });
-    (panel.querySelector('.connect-client-panel button') as HTMLButtonElement).click();
+    (panel.querySelector('.connect-client-panel .connect-value button') as HTMLButtonElement).click();
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(toast).toHaveBeenCalledWith('Copy failed. The text is selected so you can copy it manually.', 'warn');
     expect(panel.querySelector<HTMLTextAreaElement>('.connect-copy-fallback')?.selectionEnd).toBeGreaterThan(0);
@@ -247,5 +247,46 @@ describe('hosted connection UI', () => {
     expect(toast).toHaveBeenCalledWith('Finish setup and OAuth in VS Code, then refresh connected apps.', 'info');
     expect(panel.textContent).toContain('No connected apps yet.');
     expect(panel.textContent).not.toMatch(/installed successfully|connected successfully/i);
+  });
+
+  it('filters the growing client catalog without changing the selected setup', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const search = panel.querySelector<HTMLInputElement>('#connect-search')!;
+    search.value = 'cowork';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(panel.querySelector<HTMLButtonElement>('[data-client="claude-cowork"]')!.hidden).toBe(false);
+    expect(panel.querySelector<HTMLButtonElement>('[data-client="codex"]')!.hidden).toBe(true);
+    expect(panel.querySelector('#connect-search-empty')?.hasAttribute('hidden')).toBe(true);
+    panel.querySelector<HTMLButtonElement>('[data-client="claude-cowork"]')!.click();
+    expect(panel.querySelector('#connect-client-panel')?.textContent).toContain('Resume in Cowork');
+    search.value = 'nothing matches';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(panel.querySelector('#connect-search-empty')?.hasAttribute('hidden')).toBe(false);
+    expect(panel.querySelector('#connect-client-panel')?.textContent).toContain('Resume in Cowork');
+  });
+
+  it('shows distinct supported routes and keeps route switching keyboard focused', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="codex"]')!.click();
+    expect(panel.querySelector('[data-route="inside"]')).not.toBeNull();
+    expect(panel.querySelector('[data-route="terminal"]')).not.toBeNull();
+    expect(panel.textContent).toContain('Settings → MCP servers');
+    panel.querySelector<HTMLButtonElement>('[data-route="terminal"]')!.click();
+    expect(document.activeElement?.getAttribute('data-route')).toBe('terminal');
+    expect(panel.textContent).toContain('codex mcp add');
+    expect(panel.textContent).toContain('codex mcp login');
+    expect(panel.textContent).not.toContain('Save, restart');
+  });
+
+  it('does not imply ChatGPT or Claude plugin publication or hook readiness', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="chatgpt"]')!.click();
+    expect(panel.textContent).toContain('developer mode');
+    expect(panel.textContent).toContain('Codex configuration does not automatically add it to ChatGPT');
+    expect(panel.textContent).not.toMatch(/Add to Claude|plugin marketplace|hooks enabled/i);
+    expect(panel.textContent).toContain('Local permission hooks require separate setup.');
   });
 });
