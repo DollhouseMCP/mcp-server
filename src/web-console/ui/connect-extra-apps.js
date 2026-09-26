@@ -1,10 +1,7 @@
 /** Other editors and chat applications; only documented setup actions are offered. */
 
-const s = (title, text, extras = {}) => ({ title, text, ...extras });
-const r = (id, label, steps) => ({ id, label, steps });
-const c = (id, label, group, summary, docsUrl, routes, availability) =>
-  ({ id, label, group, summary, docsUrl, routes, ...(availability ? { availability } : {}) });
-const endpoint = (url) => s('MCP endpoint', 'Copy the hosted URL into the client.', { value: url, copyLabel: 'Copy endpoint' });
+import { s, r, c, endpointStep as endpoint } from './connect-extra-common.js';
+
 const check = (client) => s('Test the connection', `Authorize in ${client} if prompted, then invoke a harmless Dollhouse tool. A saved entry or active session alone is not enough.`);
 
 export function appClients({ endpoint: url, connectionName: name }) {

@@ -1,10 +1,7 @@
 /** Developer agent guides, grounded in each client's linked MCP documentation. */
 
-const s = (title, text, extras = {}) => ({ title, text, ...extras });
-const r = (id, label, steps) => ({ id, label, steps });
-const c = (id, label, group, summary, docsUrl, routes, availability) =>
-  ({ id, label, group, summary, docsUrl, routes, ...(availability ? { availability } : {}) });
-const endpoint = (url) => s('MCP endpoint', 'Copy this HTTPS URL into the client.', { value: url, copyLabel: 'Copy endpoint' });
+import { s, r, c, endpointStep as endpoint } from './connect-extra-common.js';
+
 const finish = (client) => s('Authorize and check a tool', `Complete browser OAuth in ${client}, then run a harmless Dollhouse tool. A saved entry or session alone does not prove tool access.`);
 
 export function developerClients({ endpoint: url, connectionName: name }) {
