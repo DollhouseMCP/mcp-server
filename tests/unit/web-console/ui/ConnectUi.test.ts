@@ -312,4 +312,61 @@ describe('hosted connection UI', () => {
     const native = panel.querySelector<HTMLAnchorElement>('[href^="cursor:"]')!;
     expect(native.target).toBe('');
   });
+
+  it('renders every catalog client and each route with approved links', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const clientIds = [...panel.querySelectorAll<HTMLButtonElement>('[data-client]')].map(button => button.dataset.client!);
+    expect(clientIds).toHaveLength(40);
+    expect(new Set(clientIds).size).toBe(40);
+    for (const id of clientIds) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      const routeIds = [...panel.querySelectorAll<HTMLButtonElement>('[data-route]')].map(button => button.dataset.route!);
+      expect(routeIds.length).toBeGreaterThan(0);
+      expect(panel.querySelector('.connect-client-heading a')).not.toBeNull();
+      for (const routeId of routeIds) {
+        panel.querySelector<HTMLButtonElement>(`[data-route="${routeId}"]`)!.click();
+        expect(panel.querySelectorAll('.connect-steps li').length).toBeGreaterThan(0);
+        for (const link of panel.querySelectorAll<HTMLAnchorElement>('.connect-client-panel a[href]')) {
+          expect(connect.safeSetupHref(link.href)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('shows qualification limits instead of setup payloads for unsupported clients', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    for (const id of ['microsoft-copilot-personal', 'google-ai-studio']) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      expect(panel.querySelector('#connect-client-panel')?.textContent).toMatch(/No verified|unverified/i);
+      expect(panel.querySelector('.connect-client-panel .connect-value')).toBeNull();
+      expect(panel.querySelector('.connect-client-panel .connect-oauth-note')).toBeNull();
+    }
+  });
+
+  it('finds agent and platform clients and regenerates native payloads with the connection name', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const search = panel.querySelector<HTMLInputElement>('#connect-search')!;
+    for (const term of ['Hermes', 'Copilot', 'Gemini']) {
+      search.value = term;
+      search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      expect([...panel.querySelectorAll<HTMLButtonElement>('[data-client]')].some(button => !button.hidden)).toBe(true);
+    }
+    search.value = '';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    panel.querySelector<HTMLButtonElement>('[data-client="kiro"]')!.click();
+    expect(panel.querySelector<HTMLAnchorElement>('[href^="https://kiro.dev/launch/mcp/add"]')?.classList.contains('btn-primary')).toBe(true);
+    panel.querySelector<HTMLButtonElement>('[data-client="lm-studio"]')!.click();
+    const input = panel.querySelector<HTMLInputElement>('#connect-name')!;
+    input.value = 'Research_2';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const native = panel.querySelector<HTMLAnchorElement>('[href^="lmstudio:"]')!;
+    expect(native.classList.contains('btn-primary')).toBe(true);
+    expect(new URL(native.href).searchParams.get('name')).toBe('Research_2');
+    input.value = 'bad name';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(panel.querySelector('[href^="lmstudio:"]')).toBeNull();
+  });
 });

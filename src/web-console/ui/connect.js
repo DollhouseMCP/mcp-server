@@ -4,6 +4,8 @@ import { get } from './api.js';
 import { escapeHtml, relAgo } from './ui-utils.js';
 import { connectionArtifacts, DEFAULT_CONNECTION_NAME, validateConnectionName, validateHostedMcpEndpoint } from './connect-config.js';
 import { coreConnectionClients } from './connect-catalog.js';
+import { nativeConnectionClients } from './connect-native-clients.js';
+import { additionalConnectionClients } from './connect-extra-clients.js';
 
 const METADATA_PATH = '/.well-known/oauth-protected-resource';
 
@@ -14,6 +16,7 @@ let notify = () => {};
 let sessionsTabAvailable = false;
 let selectedClient = 'claude-code';
 let selectedRoute = '';
+let catalogReady = false;
 
 export function connectedAppsMarkup(sessions, failed = false) {
   if (failed) return '<div class="connect-state connect-state--error"><strong>Could not check connected apps.</strong><span>Use Refresh to try again.</span></div>';
@@ -35,6 +38,7 @@ export async function init(panelEl, ctx = {}) {
   host = panelEl;
   selectedClient = 'claude-code';
   selectedRoute = '';
+  catalogReady = false;
   notify = ctx.toast || notify;
   sessionsTabAvailable = ctx.hasRoute?.('GET', '/me/sessions') === true
     && ctx.hasRoute?.('GET', '/me/security/sessions') === true;
@@ -144,7 +148,16 @@ function renderSetup() {
   }
   nameInput.removeAttribute('aria-invalid');
   nameError.textContent = '';
-  const clients = coreConnectionClients(connectionArtifacts(endpoint, globalThis.location.origin, connectionName));
+  const artifacts = connectionArtifacts(endpoint, globalThis.location.origin, connectionName);
+  const clients = [
+    ...coreConnectionClients(artifacts),
+    ...nativeConnectionClients(artifacts.profile, globalThis.location.origin),
+    ...additionalConnectionClients(artifacts.profile),
+  ];
+  if (!catalogReady) {
+    renderClientList(clients);
+    catalogReady = true;
+  }
   const client = clients.find(item => item.id === selectedClient) || clients[0];
   target.replaceChildren(renderClientPanel(client));
 }
@@ -224,7 +237,7 @@ function renderClientPanel(client) {
     if (item.href) {
       const link = safeLink(item.href, item.linkLabel || 'Open setup');
       if (link) {
-        if (item.href.startsWith('cursor:') || item.href.startsWith('vscode:')) {
+        if (activeRoute.id === 'native') {
           link.className = 'btn btn-primary';
           link.addEventListener('click', () => notify(`Finish setup and OAuth in ${item.linkLabel?.replace('Open in ', '') || client.label}, then refresh connected apps.`, 'info'));
         }
@@ -236,15 +249,32 @@ function renderClientPanel(client) {
     steps.append(li);
   }
   panel.append(steps);
-  panel.append(oauthNote());
+  if (client.connectionNote) panel.append(connectionNote(client.connectionNote));
   return panel;
 }
 
 export function safeSetupHref(href) {
-  return typeof href === 'string' && (/^https:\/\/(?:code\.claude\.com|claude\.ai|support\.claude\.com|developers\.openai\.com|code\.visualstudio\.com|cursor\.com)\//.test(href)
-    || href.startsWith('cursor://anysphere.cursor-deeplink/mcp/install?')
-    || href.startsWith('vscode:mcp/install?'));
+  if (typeof href !== 'string') return false;
+  if (href.startsWith('cursor://anysphere.cursor-deeplink/mcp/install?')
+    || href.startsWith('vscode:mcp/install?')
+    || href.startsWith('lmstudio://add_mcp?')) return true;
+  let url;
+  try { url = new URL(href); } catch { return false; }
+  return url.protocol === 'https:' && !url.username && !url.password
+    && OFFICIAL_SETUP_HOSTS.has(url.hostname);
 }
+
+const OFFICIAL_SETUP_HOSTS = new Set([
+  'code.claude.com', 'claude.ai', 'support.claude.com', 'developers.openai.com',
+  'code.visualstudio.com', 'cursor.com', 'kiro.dev', 'lmstudio.ai',
+  'github.com', 'opencode.ai', 'docs.openclaw.ai', 'zed.dev',
+  'junie.jetbrains.com', 'docs.github.com', 'developer.apple.com',
+  'support.microsoft.com', 'learn.microsoft.com', 'support.google.com',
+  'docs.cloud.google.com', 'ai.google.dev', 'www.antigravity.google',
+  'roocodeinc.github.io', 'docs.continue.dev', 'docs.windsurf.com',
+  'www.librechat.ai', 'docs.openwebui.com', 'www.perplexity.ai',
+  'www.jetbrains.com',
+]);
 
 function safeLink(href, label) {
   if (!safeSetupHref(href)) return null;
@@ -289,9 +319,9 @@ async function copyText(value, button) {
   }
 }
 
-function oauthNote() {
+function connectionNote(text) {
   const note = document.createElement('p'); note.className = 'connect-oauth-note';
-  note.textContent = 'OAuth opens in your browser. Sign in with this account and approve the MCP connection. Copying or opening setup does not mean the client is connected.';
+  note.textContent = text;
   return note;
 }
 
