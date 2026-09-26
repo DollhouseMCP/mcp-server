@@ -211,10 +211,12 @@ function renderClientPanel(client) {
   if (docs) head.append(docs);
   panel.append(head);
   if (client.availability) panel.append(instructions(client.availability));
+  const routeHeader = document.createElement('div'); routeHeader.className = 'connect-route-header';
   const routes = document.createElement('div'); routes.className = 'connect-route-tabs';
   routes.setAttribute('role', 'group'); routes.setAttribute('aria-label', `Setup route for ${client.label}`);
-  const activeRoute = client.routes.find(route => route.id === selectedRoute) || client.routes[0];
-  for (const route of client.routes) {
+  const orderedRoutes = [...client.routes].sort((a, b) => routePriority(a.id) - routePriority(b.id));
+  const activeRoute = orderedRoutes.find(route => route.id === selectedRoute) || orderedRoutes[0];
+  for (const route of orderedRoutes) {
     const button = document.createElement('button'); button.type = 'button';
     button.className = 'connect-route-tab'; button.dataset.route = route.id;
     button.textContent = route.label;
@@ -227,20 +229,29 @@ function renderClientPanel(client) {
     });
     routes.append(button);
   }
-  panel.append(routes);
+  routeHeader.append(routes);
+  const nativeRoute = orderedRoutes.find(route => route.id === 'native');
+  const nativeStep = nativeRoute?.steps.find(step => step.href);
+  const nativeLink = nativeStep && safeLink(nativeStep.href, nativeStep.linkLabel || `Open in ${client.label}`);
+  if (nativeLink) {
+    const action = document.createElement('div'); action.className = 'connect-direct-action';
+    const label = document.createElement('span'); label.className = 'connect-direct-label'; label.textContent = 'Direct install';
+    nativeLink.classList.add('btn', 'btn-primary');
+    nativeLink.addEventListener('click', () => notify(`Review the import in ${client.label}, then complete OAuth and verify a Dollhouse tool call.`, 'info'));
+    const hint = instructions('Review the import in your client, then authorize.');
+    action.append(label, nativeLink, hint);
+    routeHeader.append(action);
+  }
+  panel.append(routeHeader);
   const steps = document.createElement('ol'); steps.className = 'connect-steps';
   for (const item of activeRoute.steps) {
     const li = document.createElement('li'); li.className = 'connect-step';
     const title = document.createElement('h4'); title.textContent = item.title;
     li.append(title, instructions(item.text));
     if (item.value) li.append(valueBlock(item.value, item.copyLabel || 'Copy'));
-    if (item.href) {
+    if (item.href && !(activeRoute.id === 'native' && item === nativeStep && nativeLink)) {
       const link = safeLink(item.href, item.linkLabel || 'Open setup');
       if (link) {
-        if (activeRoute.id === 'native') {
-          link.className = 'btn btn-primary';
-          link.addEventListener('click', () => notify(`Finish setup and OAuth in ${item.linkLabel?.replace('Open in ', '') || client.label}, then refresh connected apps.`, 'info'));
-        }
         li.append(link);
       } else {
         li.append(instructions('This setup link is unavailable. Use another setup route or the client documentation.'));
@@ -251,6 +262,14 @@ function renderClientPanel(client) {
   panel.append(steps);
   if (client.connectionNote) panel.append(connectionNote(client.connectionNote));
   return panel;
+}
+
+function routePriority(id) {
+  if (id === 'inside' || id === 'in-app') return 0;
+  if (id === 'terminal') return 1;
+  if (id === 'manual' || id === 'config') return 2;
+  if (id === 'native') return 3;
+  return 4;
 }
 
 export function safeSetupHref(href) {

@@ -254,7 +254,7 @@ describe('hosted connection UI', () => {
     expect(document.activeElement).toBe(link);
     link.addEventListener('click', event => event.preventDefault());
     link.click();
-    expect(toast).toHaveBeenCalledWith('Finish setup and OAuth in VS Code, then refresh connected apps.', 'info');
+    expect(toast).toHaveBeenCalledWith('Review the import in VS Code / GitHub Copilot, then complete OAuth and verify a Dollhouse tool call.', 'info');
     expect(panel.textContent).toContain('No connected apps yet.');
     expect(panel.textContent).not.toMatch(/installed successfully|connected successfully/i);
   });
@@ -290,6 +290,40 @@ describe('hosted connection UI', () => {
     expect(panel.textContent).not.toContain('Save, restart');
   });
 
+  it('orders in-app guidance before terminal and keeps documented install actions beside the routes', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const routes = () => [...panel.querySelectorAll<HTMLButtonElement>('[data-route]')].map(button => button.dataset.route);
+    panel.querySelector<HTMLButtonElement>('[data-client="claude-code"]')!.click();
+    expect(routes()).toEqual(['inside', 'terminal']);
+    panel.querySelector<HTMLButtonElement>('[data-client="copilot-cli"]')!.click();
+    expect(routes()).toEqual(['in-app', 'terminal']);
+    panel.querySelector<HTMLButtonElement>('[data-client="hermes"]')!.click();
+    expect(routes()).toEqual(['in-app', 'config']);
+
+    for (const [id, scheme] of [
+      ['vscode', 'vscode:'], ['cursor', 'cursor:'],
+      ['kiro', 'https://kiro.dev/launch/mcp/add'], ['lm-studio', 'lmstudio:'],
+    ]) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      expect(routes()[0]).toMatch(/^(inside|manual)$/);
+      const action = panel.querySelector<HTMLAnchorElement>('.connect-route-header .connect-direct-action a')!;
+      expect(action).not.toBeNull();
+      expect(action.href.startsWith(scheme)).toBe(true);
+      expect(action.classList.contains('btn-primary')).toBe(true);
+      expect(panel.querySelector('.connect-direct-action')?.textContent).toContain('Direct install');
+      expect(panel.querySelector('.connect-direct-action')?.textContent).toContain('then authorize');
+      panel.querySelector<HTMLButtonElement>('[data-route="native"]')!.click();
+      expect(panel.querySelectorAll('.connect-client-panel a[href^="' + scheme + '"]')).toHaveLength(1);
+      panel.querySelector<HTMLButtonElement>(`[data-route="${routes()[0]}"]`)!.click();
+      expect(panel.querySelector<HTMLAnchorElement>('.connect-direct-action a')?.href).toBe(action.href);
+    }
+    for (const id of ['codex', 'goose', 'cherry-studio', 'microsoft-copilot-personal']) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      expect(panel.querySelector('.connect-direct-action')).toBeNull();
+    }
+  });
+
   it('does not imply ChatGPT or Claude plugin publication or hook readiness', async () => {
     const panel = document.querySelector<HTMLElement>('#panel')!;
     await connect.init(panel, { toast: jest.fn() });
@@ -323,6 +357,10 @@ describe('hosted connection UI', () => {
       panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
       const routeIds = [...panel.querySelectorAll<HTMLButtonElement>('[data-route]')].map(button => button.dataset.route!);
       expect(routeIds.length).toBeGreaterThan(0);
+      expect(panel.querySelectorAll('.connect-direct-action')).toHaveLength(routeIds.includes('native') ? 1 : 0);
+      const insideRoute = routeIds.find(route => route === 'inside' || route === 'in-app');
+      if (insideRoute) expect(routeIds[0]).toBe(insideRoute);
+      if (insideRoute && routeIds.includes('terminal')) expect(routeIds[1]).toBe('terminal');
       expect(panel.querySelector('.connect-client-heading a')).not.toBeNull();
       for (const routeId of routeIds) {
         panel.querySelector<HTMLButtonElement>(`[data-route="${routeId}"]`)!.click();
@@ -365,6 +403,7 @@ describe('hosted connection UI', () => {
     const native = panel.querySelector<HTMLAnchorElement>('[href^="lmstudio:"]')!;
     expect(native.classList.contains('btn-primary')).toBe(true);
     expect(new URL(native.href).searchParams.get('name')).toBe('Research_2');
+    expect(native.href).not.toMatch(/token|secret|password/i);
     input.value = 'bad name';
     input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
     expect(panel.querySelector('[href^="lmstudio:"]')).toBeNull();
