@@ -115,6 +115,16 @@ cache for `/ui` and `/ui/*`**, including any Cache Everything or Edge/Browser
 Cache TTL rules that would override the origin policy. Caddy only proxies this
 route; it does not provide a UI cache policy.
 
+The generated Compose deployment has one application container. For a separate
+multi-replica deployment, do not round-robin `/ui/` and asset requests across
+different application releases: each replica serves only its own digest.
+For UI-changing releases, atomically drain old replicas before exposing the new
+release, or provide a shared origin retaining both asset digests or release-aware
+affinity for the shell and its complete asset graph. Rolling mixed-version UI
+traffic without one of these controls can return 404 for an unknown digest.
+Shared asset serving and rolling-release qualification are tracked in
+[#2857](https://github.com/DollhouseMCP/mcp-server/issues/2857).
+
 After changing an existing Cloudflare rule, purge previously cached `/ui/*`
 entries once. Verify the public URL without a cache-busting query after each
 update or rollback:
