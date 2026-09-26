@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
+import { load as loadYaml } from 'js-yaml';
 // @ts-expect-error Jest's source resolver uses extensionless imports; NodeNext expects .js.
 import { hostedConnectionProfile } from '../../../../src/web-console/ui/connect-config';
 // @ts-expect-error Jest's source resolver uses extensionless imports; NodeNext expects .js.
@@ -40,7 +41,7 @@ describe('additional hosted client guides', () => {
   it('uses separate documented schemas for Hermes, OpenCode, Junie and Antigravity', () => {
     const hermes = values('hermes').find(value => value?.startsWith('mcp_servers:'))!;
     expect(hermes).toContain('auth: oauth');
-    expect(hermes).toContain('Research_2:');
+    expect(hermes).toContain('"Research_2":');
     const openCode = JSON.parse(values('opencode').find(value => value?.startsWith('{'))!);
     expect(openCode.mcp.Research_2).toEqual({ type: 'remote', url: profile.endpoint });
     const junie = JSON.parse(values('junie').find(value => value?.startsWith('{'))!);
@@ -90,5 +91,15 @@ describe('additional hosted client guides', () => {
     expect(encoded.endpoint).toContain('%CE%B1');
     expect(additionalConnectionClients(encoded, origin).find(client => client.id === 'gemini-apps')?.routes[0].steps[1].value)
       .toBe(encoded.endpoint);
+  });
+
+  it.each(['false', 'null', 'true', '123'])('keeps Hermes YAML connection name %s as a string key', name => {
+    const named = hostedConnectionProfile(profile.endpoint, origin, name);
+    const entry = additionalConnectionClients(named, origin).find(client => client.id === 'hermes')!;
+    const yaml = entry.routes.find(route => route.id === 'config')!.steps[0].value!;
+    expect(yaml).toContain(`  "${name}":`);
+    const parsed = loadYaml(yaml) as { mcp_servers: Record<string, { url: string; auth: string }> };
+    expect(Object.keys(parsed.mcp_servers)).toEqual([name]);
+    expect(parsed.mcp_servers[name]).toEqual({ url: profile.endpoint, auth: 'oauth' });
   });
 });
