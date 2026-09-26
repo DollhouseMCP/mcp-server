@@ -16,7 +16,7 @@ export function coreConnectionClients(artifacts) {
         ] },
         { id: 'inside', label: 'Inside Claude Code', steps: [
           { title: 'Add a Claude account connector', text: 'Open Claude → Customize → Connectors → Add connector → Add custom connector. If the same MCP URL is already listed, reconnect that connector instead. This account route is available to Claude Code when signed in with a supported claude.ai subscription. API-key and alternative authentication may not share it.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
-          { title: 'Enter the server details', text: `Name it ${name}, paste this hosted MCP URL, then choose Add and Connect.`, value: endpoint, copyLabel: 'Copy endpoint' },
+          { title: 'Enter the server details', text: `Name it ${name}, paste this hosted MCP URL, and choose Continue. Then connect the new entry.`, value: endpoint, copyLabel: 'Copy endpoint' },
           oauth,
           { title: 'Verify in Claude Code', text: 'Open /mcp to check the connector, then ask Claude Code to use a Dollhouse tool. If the account connector is missing, check /status for a claude.ai subscription login. Claude Code fetches account connectors at startup, so restart Code after adding one if needed. A local server with the same URL may take precedence.' },
         ] },
