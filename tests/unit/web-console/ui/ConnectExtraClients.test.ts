@@ -9,7 +9,8 @@ type ClientGuide = {
   routes: { id: string; label: string; steps: { title: string; text: string; value?: string; copyLabel?: string }[] }[];
 };
 const profile = hostedConnectionProfile('https://mcp.example.test/custom/mcp', 'https://mcp.example.test', 'Research_2');
-const clients: ClientGuide[] = additionalConnectionClients(profile);
+const origin = 'https://mcp.example.test';
+const clients: ClientGuide[] = additionalConnectionClients(profile, origin);
 const byId = (id: string) => clients.find(client => client.id === id)!;
 const values = (id: string) => byId(id).routes.flatMap(route => route.steps.map(step => step.value).filter(Boolean));
 
@@ -74,9 +75,20 @@ describe('additional hosted client guides', () => {
       "https://mcp.example.test/mcp'",
       'javascript:alert(1)',
     ]) {
-      expect(() => additionalConnectionClients({ ...profile, endpoint })).toThrow();
+      expect(() => additionalConnectionClients({ ...profile, endpoint }, origin)).toThrow();
     }
-    expect(() => additionalConnectionClients({ ...profile, connectionName: 'x;$(touch /tmp/oops)' })).toThrow();
-    expect(() => additionalConnectionClients({ ...profile, transport: 'stdio' })).toThrow();
+    expect(() => additionalConnectionClients({ ...profile, endpoint: 'https://attacker.example/mcp' }, origin)).toThrow();
+    expect(() => additionalConnectionClients({ ...profile, connectionName: 'x;$(touch /tmp/oops)' }, origin)).toThrow();
+    expect(() => additionalConnectionClients({ ...profile, transport: 'stdio' }, origin)).toThrow();
+    expect(() => additionalConnectionClients(profile, '')).toThrow('deployment origin');
+  });
+
+  it('accepts valid loopback and canonical encoded deployment paths', () => {
+    const loopback = hostedConnectionProfile('http://localhost:3000/mcp', 'http://localhost:3000');
+    expect(additionalConnectionClients(loopback, 'http://localhost:3000')[0].id).toBe('hermes');
+    const encoded = hostedConnectionProfile('https://mcp.example.test/α/mcp', origin);
+    expect(encoded.endpoint).toContain('%CE%B1');
+    expect(additionalConnectionClients(encoded, origin).find(client => client.id === 'gemini-apps')?.routes[0].steps[1].value)
+      .toBe(encoded.endpoint);
   });
 });
