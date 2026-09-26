@@ -15,7 +15,7 @@ export function coreConnectionClients(artifacts) {
           { title: 'Verify and resume', text: 'Run claude mcp list or inspect /mcp for connection status, then return to your session and ask Claude Code to use a Dollhouse tool.' },
         ] },
         { id: 'inside', label: 'Inside Claude Code', steps: [
-          { title: 'Add a Claude account connector', text: 'Open Claude → Customize → Connectors → Add custom connector. This account route is available to Claude Code when signed in with a supported claude.ai subscription. API-key and alternative authentication may not share it.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
+          { title: 'Add a Claude account connector', text: 'Open Claude → Customize → Connectors → Add connector → Add custom connector. If the same MCP URL is already listed, reconnect that connector instead. This account route is available to Claude Code when signed in with a supported claude.ai subscription. API-key and alternative authentication may not share it.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
           { title: 'Enter the server details', text: `Name it ${name}, paste this hosted MCP URL, then choose Add and Connect.`, value: endpoint, copyLabel: 'Copy endpoint' },
           oauth,
           { title: 'Verify in Claude Code', text: 'Open /mcp to check the connector, then ask Claude Code to use a Dollhouse tool. If the account connector is missing, check /status for a claude.ai subscription login. Claude Code fetches account connectors at startup, so restart Code after adding one if needed. A local server with the same URL may take precedence.' },
@@ -43,8 +43,8 @@ export function coreConnectionClients(artifacts) {
       id: 'claude', label: 'Claude web / Desktop', group: 'Anthropic', summary: 'Add a custom connector to your Claude account.',
       docsUrl: 'https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp',
       routes: [{ id: 'inside', label: 'Inside Claude', steps: [
-        { title: 'Open connectors', text: 'In Claude web or Desktop, go to Customize → Connectors → + → Add custom connector.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
-        { title: 'Enter the server details', text: `Use ${name} as the name and paste the hosted MCP URL. Choose Add, then Connect.`, value: endpoint, copyLabel: 'Copy endpoint' },
+        { title: 'Open connectors', text: 'In Claude web or Desktop, go to Customize → Connectors → Add connector → Add custom connector. If this MCP URL is already listed, open the existing connector and choose Reconnect instead of adding a duplicate.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
+        { title: 'Enter the server details', text: `Use ${name} as the name, paste the hosted MCP URL, and choose Continue. Then connect the new entry.`, value: endpoint, copyLabel: 'Copy endpoint' },
         oauth,
         { title: 'Use in a conversation', text: 'In your conversation, enable the connector from + → Connectors if needed. Ask Claude to use a Dollhouse tool to verify it.' },
       ] }],
@@ -53,8 +53,8 @@ export function coreConnectionClients(artifacts) {
       id: 'claude-cowork', label: 'Claude Cowork', group: 'Anthropic', summary: 'Use an account connector in Cowork.',
       docsUrl: 'https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp',
       routes: [{ id: 'inside', label: 'Inside Claude', steps: [
-        { title: 'Add a custom connector', text: 'In Claude, open Customize → Connectors → + → Add custom connector. The account connector is available in Cowork on supported plans.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
-        { title: 'Enter the server details', text: `Name it ${name}, paste this hosted MCP URL, choose Add, then Connect.`, value: endpoint, copyLabel: 'Copy endpoint' },
+        { title: 'Add a custom connector', text: 'In Claude, open Customize → Connectors → Add connector → Add custom connector. If the same MCP URL is already listed, reconnect that connector instead. The account connector is available in Cowork on supported plans.', href: 'https://claude.ai/customize/connectors', linkLabel: 'Open Claude connectors' },
+        { title: 'Enter the server details', text: `Name it ${name}, paste this hosted MCP URL, and choose Continue. Then connect the new entry.`, value: endpoint, copyLabel: 'Copy endpoint' },
         oauth,
         { title: 'Resume in Cowork', text: 'Open Cowork and enable the connector for the task if needed. Ask it to use a Dollhouse tool to verify access.' },
       ] }],
@@ -64,8 +64,8 @@ export function coreConnectionClients(artifacts) {
       docsUrl: 'https://developers.openai.com/plugins/deploy/connect-chatgpt',
       availability: 'Custom MCP plugin setup requires ChatGPT developer mode and an eligible account or workspace.',
       routes: [{ id: 'inside', label: 'Inside ChatGPT', steps: [
-        { title: 'Open plugin setup', text: 'In ChatGPT, enable developer mode in Settings → Apps & Connectors → Advanced settings, then create a custom MCP plugin from the Connectors or Plugins settings. Workspace controls may limit this option.' },
-        { title: 'Enter the server details', text: `Use ${name} as the name and paste this remote MCP endpoint into the server URL field.`, value: endpoint, copyLabel: 'Copy endpoint' },
+        { title: 'Open MCP app setup', text: 'In ChatGPT, open Plugins → Add → Create MCP App. If Create MCP App is unavailable, check developer mode under Settings → Security and login; workspace controls may limit this option.', href: 'https://chatgpt.com/plugins', linkLabel: 'Open ChatGPT plugins' },
+        { title: 'Enter the server details', text: `Use ${name} as the name and paste this remote MCP endpoint into Connection → Server URL. Choose OAuth authentication, review the trust notice, and Create. Then choose Continue to the new app.`, value: endpoint, copyLabel: 'Copy endpoint' },
         oauth,
         { title: 'Enable and test', text: 'Enable the custom plugin for a conversation and ask ChatGPT to use a Dollhouse tool. Codex configuration does not automatically add it to ChatGPT.' },
       ] }],
