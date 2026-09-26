@@ -152,7 +152,7 @@ function renderSetup() {
   const clients = [
     ...coreConnectionClients(artifacts),
     ...nativeConnectionClients(artifacts.profile, globalThis.location.origin),
-    ...additionalConnectionClients(artifacts.profile),
+    ...additionalConnectionClients(artifacts.profile, globalThis.location.origin),
   ];
   if (!catalogReady) {
     renderClientList(clients);
