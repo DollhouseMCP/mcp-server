@@ -200,8 +200,13 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await expect(page.locator('#pf-source')).toBeHidden();
   expect([...loadedPaths]).toContain('/api/v1/me/manifest');
   expect([...loadedPaths]).toContain('/api/v1/me/role-catalog');
-  expect([...loadedPaths]).toContain('/ui/app.js');
-  expect([...loadedPaths]).toContain('/ui/connect.js');
+  const appAssetPath = [...loadedPaths].find(path => /^\/ui\/__assets\/[a-f0-9]{16}\/app\.js$/.test(path));
+  expect(appAssetPath).toBeDefined();
+  const assetBasePath = appAssetPath?.slice(0, -'/app.js'.length);
+  expect([...loadedPaths]).toContain(`${assetBasePath}/connect.js`);
+  expect([...loadedPaths]).toContain(`${assetBasePath}/connect-catalog.js`);
+  expect([...loadedPaths]).toContain(`${assetBasePath}/connect.css`);
+  expect([...loadedPaths]).not.toContain('/ui/connect.js');
   expect(assetFailures).toEqual([]);
 
   await page.goto(`${BASE_URL}/ui?tab=portfolio`, { waitUntil: 'networkidle' });
