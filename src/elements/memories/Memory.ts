@@ -1061,15 +1061,20 @@ export class Memory extends BaseElement implements IElement {
   /**
    * Issue #2859: entries in a stable newest-first order for persistence. The
    * former LRU store happened to write newest-first; a Map iterates in
-   * insertion order, so the order is now explicit. Malformed timestamps sort
-   * last instead of throwing, so a bad timestamp can never block a save.
+   * insertion order, so the order is now explicit. Entries with the same
+   * timestamp (added in the same millisecond) order by insertion, later
+   * first. Malformed timestamps sort last instead of throwing, so a bad
+   * timestamp can never block a save.
    */
   private getEntriesNewestFirst(): MemoryEntry[] {
     const timeOf = (entry: MemoryEntry): number => {
       const time = new Date(entry.timestamp as unknown as string | number | Date).getTime();
       return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
     };
-    return Array.from(this.entries.values()).sort((a, b) => timeOf(b) - timeOf(a));
+    return Array.from(this.entries.values())
+      .map((entry, index) => ({ entry, index, time: timeOf(entry) }))
+      .sort((a, b) => (b.time - a.time) || (b.index - a.index))
+      .map(item => item.entry);
   }
   
   /**

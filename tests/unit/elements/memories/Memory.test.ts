@@ -194,6 +194,20 @@ describe('Memory Element', () => {
         expect(serialized).toEqual(['Newer', 'Older', 'Broken timestamp']);
       });
 
+      it('serializes entries with identical timestamps later-added first', async () => {
+        const memory = new Memory({}, metadataService);
+        const tie = new Date('2026-03-01T00:00:00Z');
+        const entriesMap = (memory as any).entries as Map<string, MemoryEntry>;
+        for (const content of ['first', 'second', 'third']) {
+          const entry = await memory.addEntry(content);
+          entriesMap.get(entry.id)!.timestamp = tie;
+        }
+
+        const serialized = JSON.parse(memory.serialize()).entries.map((e: MemoryEntry) => e.content);
+
+        expect(serialized).toEqual(['third', 'second', 'first']);
+      });
+
       it('removes only expired entries from a full permanent memory during retention', async () => {
         const memory = new Memory({ maxEntries: 2 }, metadataService);
         const expired = await memory.addEntry('Expired');
