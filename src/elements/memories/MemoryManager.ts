@@ -309,14 +309,44 @@ export class MemoryManager extends BaseElementManager<Memory> {
   protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
     if (!content.trim()) return { data: {}, content: '' };
 
+    // Issue #2864: read with the legacy recovery limit, not the write limit.
+    // Files written before #2329 could reach 2MB; rejecting them here made the
+    // memory report "not found" with no warning. They load read-only instead:
+    // validateSerializedMemoryYaml still enforces MAX_YAML_SIZE on every save.
     const parsed = this.serializationService.parseFrontmatter(content, {
-      maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      maxYamlSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
       validateContent: false,  // FIX (#1206): Local files are pre-trusted
       source: 'MemoryManager.parseContent',
       schema: 'json',  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
     });
 
+    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+      this.reportOversizedLegacyMemory(parsed.data as Record<string, unknown>, content.length);
+    }
+
     return { data: parsed.data as Record<string, unknown>, content: parsed.content };
+  }
+
+  /**
+   * Issue #2864: an older memory over the write limit loads read-only. Record
+   * it at HIGH severity so it can be found and split, instead of disappearing.
+   */
+  private reportOversizedLegacyMemory(data: Record<string, unknown>, contentLength: number): void {
+    const nested = data.metadata && typeof data.metadata === 'object'
+      ? (data.metadata as Record<string, unknown>).name
+      : undefined;
+    const rawName = typeof nested === 'string' ? nested : data.name;
+    const name = typeof rawName === 'string' ? sanitizeInput(rawName, 100) : 'unknown';
+    const details = `Memory '${name}' is ${contentLength} characters, over the ${MEMORY_CONSTANTS.MAX_YAML_SIZE} limit. ` +
+      `Loaded read-only: new entries are rejected until it is split into smaller memories.`;
+    logger.warn(`[MemoryManager] ${details}`);
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_SIZE_EXCEEDED',
+      severity: 'HIGH',
+      source: 'MemoryManager.parseContent',
+      details,
+      metadata: { contentLength, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE },
+    });
   }
 
   /**

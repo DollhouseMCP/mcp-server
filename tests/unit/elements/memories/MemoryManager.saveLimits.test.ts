@@ -119,6 +119,44 @@ describe('MemoryManager save size limits (#2329)', () => {
       .rejects.toThrow();
   });
 
+  describe('legacy memories over MAX_YAML_SIZE (#2864)', () => {
+    /** Write serialized YAML directly, as the pre-#2329 2MB save cap allowed. */
+    async function writeLegacyMemory(name: string, filename: string, targetBytes: number): Promise<number> {
+      const memory = await buildMemoryOfSize(name, targetBytes);
+      const yaml: string = await (manager as unknown as { serializeElement(m: Memory): Promise<string> })
+        .serializeElement(memory);
+      await fs.writeFile(path.join(memoriesDir, filename), yaml, 'utf-8');
+      return yaml.length;
+    }
+
+    it('loads a legacy memory over MAX_YAML_SIZE instead of reporting it missing', async () => {
+      const size = await writeLegacyMemory('Legacy Oversized 2864', 'legacy-oversized-2864.yaml',
+        MEMORY_CONSTANTS.MAX_YAML_SIZE + 64 * 1024);
+      expect(size).toBeGreaterThan(MEMORY_CONSTANTS.MAX_YAML_SIZE);
+      expect(size).toBeLessThan(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE);
+
+      const loaded = await manager.load('legacy-oversized-2864.yaml');
+
+      expect(loaded.metadata.name).toBe('Legacy Oversized 2864');
+      expect((await loaded.search({})).length).toBeGreaterThan(0);
+    });
+
+    it('keeps a loaded legacy memory read-only: it still cannot be saved', async () => {
+      await writeLegacyMemory('Legacy Read Only 2864', 'legacy-read-only-2864.yaml',
+        MEMORY_CONSTANTS.MAX_YAML_SIZE + 64 * 1024);
+      const loaded = await manager.load('legacy-read-only-2864.yaml');
+
+      await expect(manager.assertPersistable(loaded)).rejects.toThrow('maximum serialized size');
+    });
+
+    it('still rejects a memory file over LEGACY_MAX_YAML_SIZE', async () => {
+      await writeLegacyMemory('Beyond Legacy 2864', 'beyond-legacy-2864.yaml',
+        MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE + 64 * 1024);
+
+      await expect(manager.load('beyond-legacy-2864.yaml')).rejects.toThrow();
+    });
+  });
+
   it('assertPersistable passes for a >64KB memory without writing anything', async () => {
     const memory = await buildMemoryOfSize('Persistable Check', 80 * 1024);
 
