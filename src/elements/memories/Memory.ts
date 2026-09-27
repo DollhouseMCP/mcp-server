@@ -231,7 +231,10 @@ export class Memory extends BaseElement implements IElement {
     return ref;
   }
   // Memory-specific properties (with size limits to prevent memory leaks)
-  private entries: LRUCache<MemoryEntry>;
+  // Issue #2859: the authoritative entry store is a plain Map, not a cache.
+  // Its size is bounded by policy: maxEntries and MAX_ENTRY_SIZE on add,
+  // MAX_YAML_SIZE on save, LEGACY_MAX_YAML_SIZE on load.
+  private entries: Map<string, MemoryEntry>;
   private storageBackend: StorageBackend;
   private retentionDays: number;
   private privacyLevel: PrivacyLevel;
@@ -304,17 +307,14 @@ export class Memory extends BaseElement implements IElement {
     );
     this.onFull = Memory.resolveOnFullPolicy(metadata.onFull, this.retentionDays);
 
-    // Initialize LRU caches with size limits to prevent memory leaks.
-    // Issue #2859: the entry cache is sized to a memory-safety ceiling, not to
-    // maxEntries. An LRU sized to maxEntries silently dropped the least recently
-    // used entry on overflow, including when loading a file holding more entries
-    // than the limit. The policy limit is enforced in addEntry() instead.
-    this.entries = new LRUCache<MemoryEntry>({
-      name: 'memory-entries',
-      maxSize: Math.max(this.maxEntries, MEMORY_CONSTANTS.MAX_LOADED_ENTRIES),
-      maxMemoryMB: 25, // Max 25MB for memory entries
-    });
+    // Issue #2859: entries were held in an LRUCache sized to maxEntries (and
+    // 25MB), which silently dropped the least recently used entry on overflow,
+    // including while loading a file holding more entries than the limit. A
+    // cache may forget; the entry store must not. Limits are enforced loudly
+    // by policy instead (see the field comment).
+    this.entries = new Map<string, MemoryEntry>();
 
+    // Initialize LRU caches with size limits to prevent memory leaks
     this.sanitizationCache = new LRUCache<string>({
       name: 'memory-sanitization',
       maxSize: Memory.MAX_SANITIZATION_CACHE_SIZE,
@@ -375,10 +375,9 @@ export class Memory extends BaseElement implements IElement {
 
   /**
    * Helper method to get the current number of entries
-   * Compatible with LRUCache
    */
   private get entriesSize(): number {
-    return this.entries.getStats().size;
+    return this.entries.size;
   }
 
   /**
@@ -1053,10 +1052,24 @@ export class Memory extends BaseElement implements IElement {
       version: this.version,
       metadata: this.metadata,
       extensions: this.extensions,
-      entries: Array.from(this.entries.values())
+      entries: this.getEntriesNewestFirst()
     };
-    
+
     return JSON.stringify(data, null, 2);
+  }
+
+  /**
+   * Issue #2859: entries in a stable newest-first order for persistence. The
+   * former LRU store happened to write newest-first; a Map iterates in
+   * insertion order, so the order is now explicit. Malformed timestamps sort
+   * last instead of throwing, so a bad timestamp can never block a save.
+   */
+  private getEntriesNewestFirst(): MemoryEntry[] {
+    const timeOf = (entry: MemoryEntry): number => {
+      const time = new Date(entry.timestamp as unknown as string | number | Date).getTime();
+      return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+    };
+    return Array.from(this.entries.values()).sort((a, b) => timeOf(b) - timeOf(a));
   }
   
   /**
@@ -1345,7 +1358,7 @@ export class Memory extends BaseElement implements IElement {
    */
   public getEntries(): Map<string, MemoryEntry> {
     // Return a new Map to prevent external modification of internal state
-    return new Map(this.entries.entries());
+    return new Map(this.entries);
   }
 
   /**

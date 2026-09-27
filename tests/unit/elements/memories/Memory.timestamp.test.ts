@@ -22,7 +22,7 @@ describe('Memory Timestamp Handling', () => {
 
       // Manually set the timestamp to ensure it's a Date object
       const entries = (memory as any).entries;
-      const entry = entries.values()[0]; // LRUCache.values() returns array
+      const entry = Array.from(entries.values())[0] as MemoryEntry;
       entry.timestamp = validDate;
 
       const stats = memory.getStats();
@@ -35,7 +35,7 @@ describe('Memory Timestamp Handling', () => {
 
       // Simulate editing by setting timestamp as string
       const entries = (memory as any).entries;
-      const entry = entries.values()[0]; // LRUCache.values() returns array
+      const entry = Array.from(entries.values())[0] as MemoryEntry;
       entry.timestamp = '2025-09-22T10:00:00Z';
 
       const stats = memory.getStats();
@@ -67,7 +67,7 @@ describe('Memory Timestamp Handling', () => {
       await memory.addEntry('Test entry', ['test']);
 
       const entries = (memory as any).entries;
-      const entry = entries.values()[0]; // LRUCache.values() returns array
+      const entry = Array.from(entries.values())[0] as MemoryEntry;
       entry.timestamp = null;
 
       const stats = memory.getStats();
@@ -202,20 +202,19 @@ describe('Memory Timestamp Handling', () => {
       await memory.addEntry('Entry 1', ['test']);
       await memory.addEntry('Entry 2', ['test']);
 
-      // Corrupt the timestamps
-      // NOTE: LRUCache.values() returns entries in MRU order (most recent first)
-      // So entriesArray[0] is Entry 2, entriesArray[1] is Entry 1
-      const entries = (memory as any).entries;
-      const entriesArray = entries.values() as MemoryEntry[];
-      entriesArray[0].timestamp = '2025-09-22T10:00:00Z' as any; // Entry 2 - oldest
-      entriesArray[1].timestamp = '2025-09-23T10:00:00Z' as any; // Entry 1 - newer
+      // Corrupt the timestamps so Entry 2 is the oldest
+      const entries = (memory as any).entries as Map<string, MemoryEntry>;
+      const byContent = (content: string) =>
+        Array.from(entries.values()).find(e => e.content === content)!;
+      byContent('Entry 2').timestamp = '2025-09-22T10:00:00Z' as any; // oldest
+      byContent('Entry 1').timestamp = '2025-09-23T10:00:00Z' as any; // newer
 
       // Adding a third entry should trigger retention without throwing
       await memory.addEntry('Entry 3', ['test']);
 
       // Should have removed the oldest entry (Entry 2, which has timestamp 2025-09-22)
-      expect((memory as any).entries.getStats().size).toBe(2); // LRUCache uses getStats()
-      const remainingEntries = entries.values() as MemoryEntry[]; // values() already returns array
+      expect(entries.size).toBe(2);
+      const remainingEntries = Array.from(entries.values());
       expect(remainingEntries.some(e => e.content === 'Entry 1')).toBe(true);
       expect(remainingEntries.some(e => e.content === 'Entry 2')).toBe(false); // Entry 2 removed (oldest)
       expect(remainingEntries.some(e => e.content === 'Entry 3')).toBe(true);

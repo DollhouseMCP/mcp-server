@@ -27,14 +27,6 @@ export const MEMORY_CONSTANTS = {
   MAX_ENTRIES_DEFAULT: 1000,           // Maximum number of entries
 
   /**
-   * Memory-safety ceiling for the in-process entry cache (Issue #2859).
-   * The policy limit is maxEntries, enforced loudly in addEntry(). This
-   * backstop only bounds process memory; it is set well above maxEntries so
-   * the cache never decides which entries a memory keeps.
-   */
-  MAX_LOADED_ENTRIES: 10_000,
-
-  /**
    * What addEntry() does when a memory reaches maxEntries (Issue #2859).
    * - 'error': reject the new entry; never delete existing entries.
    * - 'evict_oldest': delete the oldest entries to make room (caches).

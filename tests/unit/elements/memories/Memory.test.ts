@@ -179,6 +179,21 @@ describe('Memory Element', () => {
         expect(expiring.getPolicyRemovedCount()).toBe(1);
       });
 
+      it('serializes entries newest first, with malformed timestamps last', async () => {
+        const memory = new Memory({}, metadataService);
+        const older = await memory.addEntry('Older');
+        const newer = await memory.addEntry('Newer');
+        const broken = await memory.addEntry('Broken timestamp');
+        const entriesMap = (memory as any).entries as Map<string, MemoryEntry>;
+        entriesMap.get(older.id)!.timestamp = new Date('2026-01-01T00:00:00Z');
+        entriesMap.get(newer.id)!.timestamp = new Date('2026-02-01T00:00:00Z');
+        entriesMap.get(broken.id)!.timestamp = 'not a date' as unknown as Date;
+
+        const serialized = JSON.parse(memory.serialize()).entries.map((e: MemoryEntry) => e.content);
+
+        expect(serialized).toEqual(['Newer', 'Older', 'Broken timestamp']);
+      });
+
       it('removes only expired entries from a full permanent memory during retention', async () => {
         const memory = new Memory({ maxEntries: 2 }, metadataService);
         const expired = await memory.addEntry('Expired');
