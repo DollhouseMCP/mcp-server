@@ -26,7 +26,7 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, MemoryOnFullPolicy, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
-import { MemoryType } from './types.js';
+import { MemoryType, MemoryVolumeRecord } from './types.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
 import { logger } from '../../utils/logger.js';
@@ -95,6 +95,11 @@ export interface MemoryMetadata extends IElementMetadata {
    * sets an expiring retention policy. See MEMORY_CONSTANTS.ON_FULL_POLICIES.
    */
   onFull?: MemoryOnFullPolicy;
+  /**
+   * Index of sealed archive volumes created by rollover (Issue #2861).
+   * System-generated; validated on construction.
+   */
+  volumes?: MemoryVolumeRecord[];
   encryptionEnabled?: boolean;
   // Search index configuration (Issue #984)
   indexThreshold?: number;
@@ -334,6 +339,8 @@ export class Memory extends BaseElement implements IElement {
       // Issue #2859: persist only a valid explicit choice, so the default keeps
       // following retentionDays if that changes later.
       onFull: Memory.isOnFullPolicy(metadata.onFull) ? metadata.onFull : undefined,
+      // Issue #2861: keep only well-formed volume records
+      volumes: Memory.sanitizeVolumeRecords(metadata.volumes),
       autoLoad: metadata.autoLoad,
       priority: metadata.priority,
       encryptionEnabled: metadata.encryptionEnabled || false
@@ -494,6 +501,94 @@ export class Memory extends BaseElement implements IElement {
    */
   public getPolicyRemovedCount(): number {
     return this.policyRemovedCount;
+  }
+
+  /**
+   * Issue #2861: validate volume records from metadata. Anything malformed
+   * is dropped, so the index can only hold system-generated values.
+   */
+  private static sanitizeVolumeRecords(value: unknown): MemoryVolumeRecord[] | undefined {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+    const isoOrUndefined = (v: unknown): string | undefined =>
+      typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : undefined;
+    const records: MemoryVolumeRecord[] = [];
+    for (const raw of value) {
+      if (!raw || typeof raw !== 'object') continue;
+      const r = raw as Record<string, unknown>;
+      const sealedAt = isoOrUndefined(r.sealedAt);
+      if (
+        !Number.isInteger(r.volume) || (r.volume as number) < 1 ||
+        typeof r.file !== 'string' || !Memory.VOLUME_FILE_PATTERN.test(r.file) ||
+        !sealedAt ||
+        !Number.isInteger(r.entryCount) || (r.entryCount as number) < 0 ||
+        typeof r.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(r.sha256)
+      ) {
+        continue;
+      }
+      records.push({
+        volume: r.volume as number,
+        file: r.file,
+        sealedAt,
+        entryCount: r.entryCount as number,
+        firstEntryAt: isoOrUndefined(r.firstEntryAt),
+        lastEntryAt: isoOrUndefined(r.lastEntryAt),
+        sha256: r.sha256,
+      });
+    }
+    return records.length > 0 ? records : undefined;
+  }
+
+  /** Issue #2861: file name for a volume number, e.g. v0001.yaml */
+  public static volumeFileName(volume: number): string {
+    return `v${String(volume).padStart(4, '0')}.yaml`;
+  }
+
+  /** Issue #2861: relative path of a volume file under the memories directory */
+  private static readonly VOLUME_FILE_PATTERN = /^volumes\/[a-z0-9][a-z0-9._-]*\/v\d{4,}\.yaml$/;
+
+  /**
+   * Issue #2861: the sealed archive volumes recorded for this memory.
+   */
+  public getVolumeRecords(): MemoryVolumeRecord[] {
+    return [...((this.metadata as MemoryMetadata).volumes ?? [])];
+  }
+
+  /**
+   * Issue #2861: decide which entries a rollover seals. Entries tagged with
+   * any keepTags, and the keepLatest newest entries, stay in the live memory.
+   * Sealed entries are returned oldest first.
+   */
+  public planRollover(keepTags: readonly string[], keepLatest: number): { sealed: MemoryEntry[]; kept: MemoryEntry[] } {
+    const newestFirst = this.getEntriesNewestFirst();
+    const keep = new Set(keepTags);
+    const keptIds = new Set(newestFirst.slice(0, Math.max(0, keepLatest)).map(entry => entry.id));
+    for (const entry of newestFirst) {
+      if (entry.tags?.some(tag => keep.has(tag))) {
+        keptIds.add(entry.id);
+      }
+    }
+    return {
+      sealed: newestFirst.filter(entry => !keptIds.has(entry.id)).reverse(),
+      kept: newestFirst.filter(entry => keptIds.has(entry.id)),
+    };
+  }
+
+  /**
+   * Issue #2861: move sealed entries out of the live memory once their volume
+   * has been written and verified, and record the volumes. This is an
+   * explicit archive step, not a policy removal, so it is not counted in
+   * getPolicyRemovedCount().
+   */
+  public applyRollover(sealedIds: readonly string[], records: readonly MemoryVolumeRecord[]): void {
+    for (const id of sealedIds) {
+      this.entries.delete(id);
+      this.searchIndex.removeEntry(id);
+    }
+    const existing = (this.metadata as MemoryMetadata).volumes ?? [];
+    this.metadata = { ...this.metadata, volumes: [...existing, ...records] } as MemoryMetadata;
+    this._isDirty = true;
   }
 
   /**

@@ -270,6 +270,8 @@ Quick start examples:
 Valid ensemble roles: ${ELEMENT_ROLES.join(', ')}
 { operation: "addEntry", params: { element_name: "session-notes", content: "Remember this fact", tags: ["important"] } }
 Note: addEntry content supports markdown (headers, lists, bold, tables, code blocks). Ensure markdown content is properly JSON-escaped — use ${String.raw`\n`} for newlines, ${String.raw`\"`} for quotes, and ${String.raw`\\`} for backslashes within the JSON string value.
+When a memory is full, seal older entries into read-only archive volumes (keeps the memory name; nothing is deleted):
+{ operation: "rollover_memory", params: { element_name: "session-notes", keep_latest: 20, dry_run: true } }
 
 Execution lifecycle — record agent progress (appends step records, like addEntry):
 { operation: "record_execution_step", params: { element_name: "code-reviewer", stepDescription: "Analyzed files", outcome: "success", findings: "Found 3 issues" } }

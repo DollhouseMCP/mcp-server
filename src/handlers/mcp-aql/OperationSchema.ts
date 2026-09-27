@@ -1220,6 +1220,27 @@ export const MEMORY_SCHEMAS: OperationSchemaMap = {
       '{ operation: "addEntry", params: { element_name: "session-notes", content: "Key decision made" } }',
     ],
   },
+  // Issue #2861
+  rollover_memory: {
+    endpoint: 'CREATE',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchMemory',
+    category: 'Memory',
+    description: 'Seal older entries of a memory into read-only archive volumes and reset the live memory under the same name, so agents and ensembles that reference it keep working. Nothing is deleted: volumes are written and verified before entries leave the live memory. Use when a memory is full or near its size limit.',
+    params: {
+      element_name: { type: 'string', required: true, description: 'Memory element name' },
+      keep_tags: { type: 'string[]', description: 'Entries with any of these tags stay in the live memory. Default: ["pinned", "read-first", "schema"]' },
+      keep_latest: { type: 'number', description: 'Number of newest entries that stay in the live memory. Default: 0' },
+      reason: { type: 'string', description: 'Why the rollover happened; recorded in the marker entry (max 200 characters)' },
+      dry_run: { type: 'boolean', description: 'Report what would be sealed without writing anything. Default: false' },
+    },
+    returns: { name: 'MemoryRolloverReceipt', kind: 'object', description: 'Receipt: { memory, dryRun, sealedCount, keptCount, volumes: [{ volume, file, sealedAt, entryCount, firstEntryAt, lastEntryAt, sha256 }] }' },
+    examples: [
+      '{ operation: "rollover_memory", params: { element_name: "project-log", dry_run: true } }',
+      '{ operation: "rollover_memory", params: { element_name: "project-log", keep_latest: 20, reason: "memory near its size limit" } }',
+      '{ operation: "rollover_memory", params: { element_name: "agent-mailbox", keep_tags: ["schema", "pinned"] } }',
+    ],
+  },
   clear: {
     endpoint: 'DELETE',
     handler: 'mcpAqlHandler',

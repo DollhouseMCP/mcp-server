@@ -21,6 +21,7 @@ describe('OperationRouter', () => {
         'create_element',
         'import_element',
         'addEntry',
+        'rollover_memory',
         'verify_challenge',
         'release_deadlock',
         'beetlejuice_beetlejuice_beetlejuice',

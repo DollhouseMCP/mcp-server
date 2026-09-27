@@ -56,6 +56,7 @@ type Mutation {
   - create_element: Create a new element
   - import_element: Import an element from exported data
   - addEntry: Add an entry to a memory element
+  - rollover_memory: Seal older memory entries into read-only archive volumes, keeping the memory name
   - activate_element: Activate an element for use in session
 
   These operations add new data or state without removing or overwriting existing content.

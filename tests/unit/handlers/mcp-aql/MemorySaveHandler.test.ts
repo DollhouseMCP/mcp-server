@@ -21,6 +21,7 @@ interface MockMemory {
   addEntry: jest.Mock;
   getEntries: () => Map<string, unknown>;
   getPolicyRemovedCount: jest.Mock;
+  applyRollover: jest.Mock;
   removeEntry: jest.Mock;
   clearAll: jest.Mock;
 }
@@ -48,6 +49,7 @@ function makeMemory(name: string): MockMemory {
     }),
     getEntries: () => entries,
     getPolicyRemovedCount: jest.fn(() => 0),
+    applyRollover: jest.fn(),
     removeEntry: jest.fn((id: string) => entries.delete(id)),
     clearAll: jest.fn(() => ({ cleared: true })),
   };
@@ -60,6 +62,7 @@ function makeHandler(memory: MockMemory, sessionId = 'sessA', contextScope?: Han
     assertPersistable: jest.fn(() => Promise.resolve()),
     getMemoryProbeToken: jest.fn(() => 'test-memory-probe'),
     isMemoryDeletedAt: jest.fn(() => Promise.resolve(false)),
+    rolloverMemory: jest.fn(),
   };
   const handlers = { memoryManager: manager } as unknown as HandlerCtorArgs[0];
   // Session-scoped key, matching MCPAQLHandler.sessionKey('name') => `${sessionId}:${name}`
@@ -283,6 +286,119 @@ describe('MemorySaveHandler', () => {
         id: 'new-1',
         warning: expect.stringContaining("1 existing entry was removed from memory 'cache'"),
       });
+    });
+  });
+
+  describe('rollover_memory (#2861)', () => {
+    const record = {
+      volume: 1, file: 'volumes/notes/v0001.yaml', sealedAt: '2026-02-01T00:00:00.000Z',
+      entryCount: 3, firstEntryAt: '2026-01-01T00:00:00.000Z', lastEntryAt: '2026-01-03T00:00:00.000Z',
+      sha256: 'c'.repeat(64),
+    };
+    const sealedResult = (dryRun = false) => ({
+      memory: 'notes', dryRun, sealedCount: 3, keptCount: 2, volumes: [record],
+      sealedIds: dryRun ? [] : ['e1', 'e2', 'e3'],
+    });
+
+    it('applies the rollover, adds a marker entry, and saves immediately', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+      manager.rolloverMemory.mockResolvedValue(sealedResult());
+
+      const result = await handler.dispatch('rollover', { element_name: 'notes', keep_latest: 2, reason: 'near limit' });
+
+      expect(manager.rolloverMemory).toHaveBeenCalledWith(memory, expect.objectContaining({
+        keepLatest: 2, dryRun: false, reason: 'near limit', keepTags: ['pinned', 'read-first', 'schema'],
+      }));
+      expect(memory.applyRollover).toHaveBeenCalledWith(['e1', 'e2', 'e3'], [record]);
+      expect(memory.addEntry).toHaveBeenCalledWith(
+        expect.stringContaining('Rolled over 3 entries into archive volume 1'),
+        ['rollover', 'system'],
+        { rolloverVolumes: [1] },
+        'rollover',
+      );
+      expect(memory.addEntry.mock.calls[0][0]).toContain('Reason: near limit');
+      expect(manager.save).toHaveBeenCalledTimes(1); // immediate, not debounced
+      expect(result).toEqual({ memory: 'notes', dryRun: false, sealedCount: 3, keptCount: 2, volumes: [record] });
+    });
+
+    it('does not modify or save the memory on a dry run', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+      manager.rolloverMemory.mockResolvedValue(sealedResult(true));
+
+      const result = await handler.dispatch('rollover', { element_name: 'notes', dry_run: true });
+
+      expect(memory.applyRollover).not.toHaveBeenCalled();
+      expect(memory.addEntry).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ dryRun: true, sealedCount: 3 });
+    });
+
+    it('does not save when nothing was sealed', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+      manager.rolloverMemory.mockResolvedValue({ ...sealedResult(), sealedCount: 0, volumes: [], sealedIds: [] });
+
+      await handler.dispatch('rollover', { element_name: 'notes' });
+
+      expect(memory.applyRollover).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('still saves when the marker entry cannot be added', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+      manager.rolloverMemory.mockResolvedValue(sealedResult());
+      memory.addEntry.mockRejectedValueOnce(new Error("Memory 'notes' is full"));
+
+      await handler.dispatch('rollover', { element_name: 'notes' });
+
+      expect(memory.applyRollover).toHaveBeenCalled();
+      expect(manager.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('changes nothing when the rollover fails, and allows a later attempt', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+      manager.rolloverMemory.mockRejectedValueOnce(new Error('disk full'));
+
+      await expect(handler.dispatch('rollover', { element_name: 'notes' })).rejects.toThrow('disk full');
+      expect(memory.applyRollover).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+
+      manager.rolloverMemory.mockResolvedValue(sealedResult());
+      await expect(handler.dispatch('rollover', { element_name: 'notes' })).resolves.toBeDefined();
+    });
+
+    it('rejects a second rollover of the same memory while one is in progress', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+      let release: () => void = () => undefined;
+      manager.rolloverMemory.mockImplementation(() => new Promise(resolve => {
+        release = () => resolve(sealedResult());
+      }));
+
+      const first = handler.dispatch('rollover', { element_name: 'notes' });
+      await Promise.resolve();
+      await Promise.resolve();
+      await expect(handler.dispatch('rollover', { element_name: 'notes' })).rejects.toThrow('already in progress');
+      release();
+      await expect(first).resolves.toBeDefined();
+    });
+
+    it.each([
+      [{ keep_latest: -1 }, 'keep_latest must be an integer'],
+      [{ keep_latest: 1.5 }, 'keep_latest must be an integer'],
+      [{ keep_tags: 'pinned' }, 'keep_tags must be an array of strings'],
+      [{ dry_run: 'yes' }, 'dry_run must be a boolean'],
+      [{ reason: 42 }, 'reason must be a string'],
+    ])('rejects invalid parameters %p', async (params, message) => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory);
+
+      await expect(handler.dispatch('rollover', { element_name: 'notes', ...params })).rejects.toThrow(message);
+      expect(manager.rolloverMemory).not.toHaveBeenCalled();
     });
   });
 });

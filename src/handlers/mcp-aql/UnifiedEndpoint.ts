@@ -198,6 +198,7 @@ export function getOperationHelp(): string {
 - create_element: Create a new element
 - import_element: Import an element from exported data
 - addEntry: Add an entry to a memory element
+- rollover_memory: Seal older memory entries into read-only archive volumes, keeping the memory name
 - activate_element: Activate an element for use in session
 
 ### READ Operations (safe, read-only)
