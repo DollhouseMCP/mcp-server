@@ -119,6 +119,27 @@ describe('MemoryManager', () => {
       expect(contents).toContain('Second entry');
     });
     
+    it('should keep an explicit onFull policy across save and load (#2859)', async () => {
+      const cache = new Memory({ name: 'Cache Memory', onFull: 'evict_oldest' }, metadataService);
+      await cache.addEntry('Cached value');
+      await manager.save(cache, 'cache-memory.yaml');
+
+      const loaded = await manager.load('cache-memory.yaml');
+
+      expect(loaded.getOnFullPolicy()).toBe('evict_oldest');
+      expect(loaded.metadata.onFull).toBe('evict_oldest');
+    });
+
+    it('should default a reloaded permanent memory to onFull error (#2859)', async () => {
+      const log = new Memory({ name: 'Permanent Memory' }, metadataService);
+      await log.addEntry('Logged value');
+      await manager.save(log, 'permanent-memory.yaml');
+
+      const loaded = await manager.load('permanent-memory.yaml');
+
+      expect(loaded.getOnFullPolicy()).toBe('error');
+    });
+
     it('should handle file not found', async () => {
       await expect(manager.load('non-existent.yaml')).rejects.toThrow();
     });

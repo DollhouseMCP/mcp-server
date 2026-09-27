@@ -93,17 +93,104 @@ describe('Memory Element', () => {
     });
     
     it('should enforce max entries limit', async () => {
-      const smallMemory = new Memory({ maxEntries: 3 }, metadataService);
-      
+      const smallMemory = new Memory({ maxEntries: 3, onFull: 'evict_oldest' }, metadataService);
+
       await smallMemory.addEntry('Entry 1');
       await smallMemory.addEntry('Entry 2');
       await smallMemory.addEntry('Entry 3');
-      
+
       // Should enforce retention and allow new entry
       await expect(smallMemory.addEntry('Entry 4')).resolves.toBeDefined();
-      
+
       const stats = smallMemory.getStats();
       expect(stats.totalEntries).toBeLessThanOrEqual(3);
+    });
+
+    describe('onFull policy (Issue #2859)', () => {
+      it('rejects a new entry in a full permanent memory and keeps every existing entry', async () => {
+        const fullMemory = new Memory({ name: 'Permanent Log', maxEntries: 3 }, metadataService);
+        await fullMemory.addEntry('Entry 1');
+        await fullMemory.addEntry('Entry 2');
+        await fullMemory.addEntry('Entry 3');
+
+        await expect(fullMemory.addEntry('Entry 4')).rejects.toThrow(
+          "Memory 'Permanent Log' is full: it holds 3 entries and its limit is 3."
+        );
+
+        const contents = (await fullMemory.search({})).map(e => e.content);
+        expect(contents).toHaveLength(3);
+        expect(contents).toEqual(expect.arrayContaining(['Entry 1', 'Entry 2', 'Entry 3']));
+      });
+
+      it('defaults to error for permanent memories and evict_oldest for expiring ones', () => {
+        expect(new Memory({}, metadataService).getOnFullPolicy()).toBe('error');
+        expect(new Memory({ retentionDays: 30 }, metadataService).getOnFullPolicy()).toBe('evict_oldest');
+      });
+
+      it('lets an explicit onFull override the retention-based default', () => {
+        expect(new Memory({ retentionDays: 30, onFull: 'error' }, metadataService).getOnFullPolicy()).toBe('error');
+        expect(new Memory({ onFull: 'evict_oldest' }, metadataService).getOnFullPolicy()).toBe('evict_oldest');
+      });
+
+      it('ignores an invalid onFull value and does not persist it', () => {
+        const memory = new Memory({ onFull: 'delete_everything' as never }, metadataService);
+        expect(memory.getOnFullPolicy()).toBe('error');
+        expect(memory.metadata.onFull).toBeUndefined();
+      });
+
+      it('persists onFull in metadata only when set explicitly', () => {
+        expect(new Memory({ onFull: 'evict_oldest' }, metadataService).metadata.onFull).toBe('evict_oldest');
+        expect(new Memory({}, metadataService).metadata.onFull).toBeUndefined();
+      });
+
+      it('keeps all entries when loading more than maxEntries, and stays read-only', async () => {
+        const source = new Memory({ name: 'Oversized Source', onFull: 'evict_oldest' }, metadataService);
+        for (let i = 0; i < 5; i++) {
+          await source.addEntry(`Loaded entry ${i}`);
+        }
+
+        // A file holding more entries than the limit, loaded into a permanent memory.
+        const target = new Memory({ name: 'Loaded Log', maxEntries: 3 }, metadataService);
+        target.deserialize(JSON.stringify({ ...JSON.parse(source.serialize()), metadata: target.metadata }));
+
+        expect(target.getStats().totalEntries).toBe(5);
+        await expect(target.addEntry('One more')).rejects.toThrow('is full');
+        expect(target.getStats().totalEntries).toBe(5);
+      });
+
+      it('counts policy removals from eviction and expiry, but not explicit deletions', async () => {
+        const cache = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
+        const first = await cache.addEntry('First');
+        await cache.addEntry('Second');
+        expect(cache.getPolicyRemovedCount()).toBe(0);
+
+        await cache.addEntry('Third'); // evicts the oldest
+        expect(cache.getPolicyRemovedCount()).toBe(1);
+
+        const current = await cache.search({});
+        cache.removeEntry(current[0].id); // explicit deletion is not a policy removal
+        expect(cache.getPolicyRemovedCount()).toBe(1);
+        expect(first).toBeDefined();
+
+        const expiring = new Memory({ retentionDays: 1 }, metadataService);
+        const stale = await expiring.addEntry('Stale');
+        ((expiring as any).entries as Map<string, MemoryEntry>).get(stale.id)!.expiresAt = new Date(Date.now() - 1000);
+        await expiring.enforceRetentionPolicy();
+        expect(expiring.getPolicyRemovedCount()).toBe(1);
+      });
+
+      it('removes only expired entries from a full permanent memory during retention', async () => {
+        const memory = new Memory({ maxEntries: 2 }, metadataService);
+        const expired = await memory.addEntry('Expired');
+        await memory.addEntry('Current');
+        const entriesMap = (memory as any).entries as Map<string, MemoryEntry>;
+        entriesMap.get(expired.id)!.expiresAt = new Date(Date.now() - 1000);
+
+        const removed = await memory.enforceRetentionPolicy();
+
+        expect(removed).toBe(1);
+        expect((await memory.search({})).map(e => e.content)).toEqual(['Current']);
+      });
     });
     
     it('should limit number of tags per entry', async () => {
@@ -189,7 +276,7 @@ describe('Memory Element', () => {
     });
     
     it('should remove oldest entries when over capacity', async () => {
-      const smallMemory = new Memory({ maxEntries: 2 }, metadataService);
+      const smallMemory = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
       
       await smallMemory.addEntry('First');
       await new Promise(resolve => setTimeout(resolve, 10)); // Small delay

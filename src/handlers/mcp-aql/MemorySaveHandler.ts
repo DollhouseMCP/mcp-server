@@ -301,6 +301,7 @@ export class MemorySaveHandler {
     }
 
     const entriesBefore = targetMemory.getEntries().size;
+    const policyRemovedBefore = targetMemory.getPolicyRemovedCount();
     const entryResult = await targetMemory.addEntry(content, tags, metadata);
 
     // Issue #2329: verify the memory can still be persisted BEFORE reporting
@@ -326,12 +327,19 @@ export class MemorySaveHandler {
 
     this.trackSaveFrequency(memoryName);
     this.debouncedMemorySave(memoryName, targetMemory, manager);
+    // Issue #2859: removals are never silent. Expired entries and, for memories
+    // with onFull 'evict_oldest', the oldest entries can be removed by this add.
+    const removedCount = targetMemory.getPolicyRemovedCount() - policyRemovedBefore;
     // Entry prose begins as untrusted. Return only server-generated receipt
     // fields so the mutation response cannot bypass later rendering controls.
     return {
       id: entryResult.id,
       timestamp: entryResult.timestamp.toISOString(),
       trustLevel: entryResult.trustLevel,
+      ...(removedCount > 0 ? {
+        warning: `${removedCount} existing ${removedCount === 1 ? 'entry was' : 'entries were'} removed from memory ` +
+          `'${memoryName}' by its retention policy (expired entries, or the oldest entries when onFull is 'evict_oldest').`,
+      } : {}),
     };
   }
 

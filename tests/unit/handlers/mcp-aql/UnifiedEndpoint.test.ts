@@ -45,6 +45,7 @@ describe('UnifiedEndpoint', () => {
           }),
           removeEntry: jest.fn().mockReturnValue(true),
           getEntries: jest.fn().mockReturnValue(new Map()),
+          getPolicyRemovedCount: jest.fn().mockReturnValue(0),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
         }),
         save: jest.fn().mockResolvedValue(undefined),

@@ -20,6 +20,7 @@ interface MockMemory {
   entries: Map<string, unknown>;
   addEntry: jest.Mock;
   getEntries: () => Map<string, unknown>;
+  getPolicyRemovedCount: jest.Mock;
   removeEntry: jest.Mock;
   clearAll: jest.Mock;
 }
@@ -46,6 +47,7 @@ function makeMemory(name: string): MockMemory {
       });
     }),
     getEntries: () => entries,
+    getPolicyRemovedCount: jest.fn(() => 0),
     removeEntry: jest.fn((id: string) => entries.delete(id)),
     clearAll: jest.fn(() => ({ cleared: true })),
   };
@@ -244,6 +246,43 @@ describe('MemorySaveHandler', () => {
       await handler.dispatch('addEntry', { element_name: 'notes', content: 'hi' });
       await handler.flushPendingSaves();
       expect(manager.save).toHaveBeenCalledWith(memory);
+    });
+  });
+
+  describe('removal warnings (#2859)', () => {
+    it('returns no warning when an add removes nothing', async () => {
+      const memory = makeMemory('notes');
+      const { handler } = makeHandler(memory);
+
+      const result = await handler.dispatch('addEntry', { element_name: 'notes', content: 'hello' });
+
+      expect(result).not.toHaveProperty('warning');
+    });
+
+    it('warns when adding an entry removed existing entries', async () => {
+      const memory = makeMemory('cache');
+      memory.entries.set('old-1', { content: 'old' });
+      let policyRemoved = 0;
+      memory.getPolicyRemovedCount.mockImplementation(() => policyRemoved);
+      // Simulate an evict_oldest memory: the add evicts the oldest entry.
+      memory.addEntry.mockImplementation(() => {
+        memory.entries.delete('old-1');
+        policyRemoved += 1;
+        memory.entries.set('new-1', { content: 'new' });
+        return Promise.resolve({
+          id: 'new-1',
+          timestamp: new Date('2026-01-01T00:00:00.000Z'),
+          trustLevel: 'untrusted',
+        });
+      });
+      const { handler } = makeHandler(memory);
+
+      const result = await handler.dispatch('addEntry', { element_name: 'cache', content: 'new' });
+
+      expect(result).toMatchObject({
+        id: 'new-1',
+        warning: expect.stringContaining("1 existing entry was removed from memory 'cache'"),
+      });
     });
   });
 });

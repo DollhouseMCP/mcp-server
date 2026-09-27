@@ -407,12 +407,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // If markdown content exists after frontmatter, add it as a memory entry.
     // Preserves content from seed memories and memory files with markdown sections.
     if (parsedData.content.trim()) {
-      await memory.addEntry(
-        parsedData.content.trim(),
-        [],  // tags
-        { loadedAt: new Date().toISOString() },  // metadata
-        'file',  // source
-      );
+      try {
+        await memory.addEntry(
+          parsedData.content.trim(),
+          [],  // tags
+          { loadedAt: new Date().toISOString() },  // metadata
+          'file',  // source
+        );
+      } catch (error) {
+        // Issue #2859: a full memory rejects new entries rather than evicting.
+        // Keep the memory loadable; only the markdown body is skipped.
+        logger.warn(`[MemoryManager] Markdown body not added to memory '${memory.metadata.name}' on load`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -2209,6 +2217,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       privacyLevel: metadataSource.privacy_level || metadataSource.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
       searchable: metadataSource.searchable !== false,
       maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+      // Issue #2859: carry an explicit onFull choice through reload. The Memory
+      // constructor validates it and ignores unknown values.
+      onFull: metadataSource.onFull ?? metadataSource.on_full,
       // FIX #1430: Extract auto-load configuration
       autoLoad: metadataSource.autoLoad,
       priority: metadataSource.priority,

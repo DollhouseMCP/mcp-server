@@ -28,6 +28,7 @@ function makeMemory(name: string) {
     })),
     removeEntry: jest.fn(() => true),
     getEntries: jest.fn(() => new Map()),
+    getPolicyRemovedCount: jest.fn(() => 0),
     clearAll: jest.fn(() => Promise.resolve()),
   };
 }

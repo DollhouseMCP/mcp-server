@@ -26,6 +26,23 @@ export const MEMORY_CONSTANTS = {
   MAX_ENTRY_SIZE: 100 * 1024,          // 100KB per entry
   MAX_ENTRIES_DEFAULT: 1000,           // Maximum number of entries
 
+  /**
+   * Memory-safety ceiling for the in-process entry cache (Issue #2859).
+   * The policy limit is maxEntries, enforced loudly in addEntry(). This
+   * backstop only bounds process memory; it is set well above maxEntries so
+   * the cache never decides which entries a memory keeps.
+   */
+  MAX_LOADED_ENTRIES: 10_000,
+
+  /**
+   * What addEntry() does when a memory reaches maxEntries (Issue #2859).
+   * - 'error': reject the new entry; never delete existing entries.
+   * - 'evict_oldest': delete the oldest entries to make room (caches).
+   * Default: 'error' for permanent memories, 'evict_oldest' for memories
+   * with an expiring retention policy (retentionDays set below the default).
+   */
+  ON_FULL_POLICIES: ['error', 'evict_oldest'] as const,
+
   // Entry limits
   MAX_TAGS_PER_ENTRY: 20,              // Maximum tags per memory entry
   MAX_TAG_LENGTH: 50,                  // Maximum length of each tag
@@ -102,6 +119,7 @@ export const MEMORY_CONSTANTS = {
 
 // Type exports for privacy levels and storage backends
 export type PrivacyLevel = typeof MEMORY_CONSTANTS.PRIVACY_LEVELS[number];
+export type MemoryOnFullPolicy = typeof MEMORY_CONSTANTS.ON_FULL_POLICIES[number];
 export type StorageBackend = typeof MEMORY_CONSTANTS.SUPPORTED_STORAGE_BACKENDS[number];
 
 /**

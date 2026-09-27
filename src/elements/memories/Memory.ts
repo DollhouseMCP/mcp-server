@@ -25,7 +25,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, MemoryOnFullPolicy, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { MemoryType } from './types.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
@@ -89,6 +89,12 @@ export interface MemoryMetadata extends IElementMetadata {
   privacyLevel?: PrivacyLevel;
   searchable?: boolean;
   maxEntries?: number;
+  /**
+   * What addEntry() does when the memory holds maxEntries entries (Issue #2859).
+   * Omitted: 'error' for permanent memories, 'evict_oldest' when retentionDays
+   * sets an expiring retention policy. See MEMORY_CONSTANTS.ON_FULL_POLICIES.
+   */
+  onFull?: MemoryOnFullPolicy;
   encryptionEnabled?: boolean;
   // Search index configuration (Issue #984)
   indexThreshold?: number;
@@ -231,6 +237,10 @@ export class Memory extends BaseElement implements IElement {
   private privacyLevel: PrivacyLevel;
   private searchable: boolean;
   private maxEntries: number;
+  private onFull: MemoryOnFullPolicy;
+  // Issue #2859: running count of entries removed by policy (expiry or
+  // eviction), so callers can report removals instead of inferring them.
+  private policyRemovedCount = 0;
 
   // Search index for performance (Issue #984)
   private searchIndex: MemorySearchIndex;
@@ -292,11 +302,16 @@ export class Memory extends BaseElement implements IElement {
       metadata.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
       MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     );
+    this.onFull = Memory.resolveOnFullPolicy(metadata.onFull, this.retentionDays);
 
-    // Initialize LRU caches with size limits to prevent memory leaks
+    // Initialize LRU caches with size limits to prevent memory leaks.
+    // Issue #2859: the entry cache is sized to a memory-safety ceiling, not to
+    // maxEntries. An LRU sized to maxEntries silently dropped the least recently
+    // used entry on overflow, including when loading a file holding more entries
+    // than the limit. The policy limit is enforced in addEntry() instead.
     this.entries = new LRUCache<MemoryEntry>({
       name: 'memory-entries',
-      maxSize: this.maxEntries,
+      maxSize: Math.max(this.maxEntries, MEMORY_CONSTANTS.MAX_LOADED_ENTRIES),
       maxMemoryMB: 25, // Max 25MB for memory entries
     });
 
@@ -316,6 +331,9 @@ export class Memory extends BaseElement implements IElement {
       privacyLevel: this.privacyLevel,
       searchable: this.searchable,
       maxEntries: this.maxEntries,
+      // Issue #2859: persist only a valid explicit choice, so the default keeps
+      // following retentionDays if that changes later.
+      onFull: Memory.isOnFullPolicy(metadata.onFull) ? metadata.onFull : undefined,
       autoLoad: metadata.autoLoad,
       priority: metadata.priority,
       encryptionEnabled: metadata.encryptionEnabled || false
@@ -410,13 +428,18 @@ export class Memory extends BaseElement implements IElement {
       source: sanitizedSource
     };
 
+    // Issue #2859: synchronous capacity check immediately before the insert.
+    // No await sits between this check and set(), so concurrent addEntry calls
+    // cannot all pass it. A memory that has not opted into eviction rejects the
+    // new entry instead of deleting existing ones.
+    this.assertCapacityAvailable();
+
     // Store entry
     this.entries.set(entry.id, entry);
     this._isDirty = true;
 
-    // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions
-    // Multiple concurrent addEntry calls can all pass the "before" check, but
-    // by enforcing after, we guarantee the limit is never exceeded
+    // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions.
+    // Issue #2859: only memories with onFull 'evict_oldest' are trimmed here.
     this.enforceCapacitySync();
 
     // Update search index (Issue #984)
@@ -443,29 +466,114 @@ export class Memory extends BaseElement implements IElement {
   }
 
   /**
+   * Issue #2859: resolve the onFull policy. An explicit valid value wins;
+   * otherwise memories with an expiring retention policy evict their oldest
+   * entries and permanent memories (the default) reject new entries.
+   */
+  private static resolveOnFullPolicy(explicit: unknown, retentionDays: number): MemoryOnFullPolicy {
+    if (Memory.isOnFullPolicy(explicit)) {
+      return explicit;
+    }
+    return retentionDays < MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS ? 'evict_oldest' : 'error';
+  }
+
+  private static isOnFullPolicy(value: unknown): value is MemoryOnFullPolicy {
+    return typeof value === 'string'
+      && (MEMORY_CONSTANTS.ON_FULL_POLICIES as readonly string[]).includes(value);
+  }
+
+  /**
+   * The effective onFull policy for this memory (Issue #2859).
+   */
+  public getOnFullPolicy(): MemoryOnFullPolicy {
+    return this.onFull;
+  }
+
+  /**
+   * Total entries removed by retention expiry or onFull eviction since this
+   * instance was created (Issue #2859). Explicit deletions are not counted.
+   */
+  public getPolicyRemovedCount(): number {
+    return this.policyRemovedCount;
+  }
+
+  /**
+   * Issue #2859: reject a new entry when the memory is full and has not opted
+   * into eviction. Throws with a message the caller can act on.
+   */
+  private assertCapacityAvailable(): void {
+    if (this.onFull === 'evict_oldest' || this.entriesSize < this.maxEntries) {
+      return;
+    }
+    throw new Error(
+      `Memory '${this.metadata.name}' is full: it holds ${this.entriesSize} entries and its limit is ${this.maxEntries}. ` +
+      `Entries are never deleted automatically from a memory without an expiring retention policy. ` +
+      `Start a new memory for additional entries, or set onFull: 'evict_oldest' on this memory if it is a cache.`
+    );
+  }
+
+  /**
    * Enforce capacity limit synchronously
    * FIX (PR #1313): Made synchronous to prevent race conditions
-   * This is called AFTER adding an entry to ensure we never exceed maxEntries
+   * This is called AFTER adding an entry to ensure we never exceed maxEntries.
+   * Issue #2859: only memories with onFull 'evict_oldest' lose entries here.
    */
   private enforceCapacitySync(): void {
     if (this.entriesSize <= this.maxEntries) {
       return; // Within capacity
     }
 
+    if (this.onFull !== 'evict_oldest') {
+      // Never delete entries from a memory that has not opted into eviction.
+      // assertCapacityAvailable() stops new entries, so this only happens for a
+      // memory loaded with more entries than its limit; it stays read-only.
+      return;
+    }
+
     // Over capacity - remove oldest entries until we're at the limit
     const entriesToRemove = this.entriesSize - this.maxEntries;
+    const removed = this.removeOldestEntries(entriesToRemove);
+    this.logEviction(removed, 'Memory.enforceCapacitySync');
+  }
+
+  /**
+   * Remove up to `count` entries, oldest timestamp first. Returns how many
+   * were removed.
+   */
+  private removeOldestEntries(count: number): number {
     const sortedEntries = Array.from(this.entries.values())
       .sort((a, b) => {
+        // FIX #1069: Ensure timestamps are Date objects for sorting
         const aTime = this.ensureDateObject(a.timestamp).getTime();
         const bTime = this.ensureDateObject(b.timestamp).getTime();
         return aTime - bTime; // Oldest first
       });
 
-    // Remove the oldest entries
-    for (let i = 0; i < entriesToRemove && i < sortedEntries.length; i++) {
+    let removed = 0;
+    for (let i = 0; i < count && i < sortedEntries.length; i++) {
       this.entries.delete(sortedEntries[i].id);
       this.searchIndex.removeEntry(sortedEntries[i].id);
+      removed++;
     }
+    this.policyRemovedCount += removed;
+    return removed;
+  }
+
+  /**
+   * Issue #2859: evictions are recorded at MEDIUM severity so they are not
+   * lost among routine events.
+   */
+  private logEviction(count: number, source: string): void {
+    if (count <= 0) {
+      return;
+    }
+    this._isDirty = true;
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
+      severity: 'MEDIUM',
+      source,
+      details: `Evicted ${count} oldest entries from memory '${this.metadata.name}' to stay within ${this.maxEntries} entries (onFull: evict_oldest)`
+    });
   }
 
   /**
@@ -760,32 +868,25 @@ export class Memory extends BaseElement implements IElement {
         deletedCount++;
       }
     }
-    
-    // If still at or over capacity, remove oldest entries to make room for one more
-    if (this.entriesSize >= this.maxEntries) {
-      const sortedEntries = Array.from(this.entries.entries())
-        .sort((a, b) => {
-          // FIX #1069: Ensure timestamps are Date objects for sorting
-          const aTime = this.ensureDateObject(a[1].timestamp).getTime();
-          const bTime = this.ensureDateObject(b[1].timestamp).getTime();
-          return aTime - bTime;
-        });
-      
-      // Remove one extra to make room for new entry
+    this.policyRemovedCount += deletedCount;
+
+    // If still at or over capacity, remove oldest entries to make room for one
+    // more. Issue #2859: only for memories with onFull 'evict_oldest'; a
+    // permanent memory keeps every entry and addEntry() rejects instead.
+    if (this.onFull === 'evict_oldest' && this.entriesSize >= this.maxEntries) {
       const toDelete = Math.max(1, this.entriesSize - this.maxEntries + 1);
-      for (let i = 0; i < toDelete && i < sortedEntries.length; i++) {
-        this.entries.delete(sortedEntries[i][0]);
-        deletedCount++;
-      }
+      const evicted = this.removeOldestEntries(toDelete);
+      this.logEviction(evicted, 'Memory.enforceRetentionPolicy');
+      deletedCount += evicted;
     }
-    
+
     if (deletedCount > 0) {
       this._isDirty = true;
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
         severity: 'LOW',
         source: 'Memory.enforceRetentionPolicy',
-        details: `Removed ${deletedCount} expired memories`
+        details: `Removed ${deletedCount} expired or evicted memory entries`
       });
     }
     

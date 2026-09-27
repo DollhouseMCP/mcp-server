@@ -194,8 +194,10 @@ describe('Memory Timestamp Handling', () => {
     });
 
     it('should auto-repair during enforceRetentionPolicy', async () => {
-      // Set a small max entries to trigger retention
+      // Set a small max entries to trigger retention. Issue #2859: eviction is
+      // opt-in, so this memory is configured as a cache.
       (memory as any).maxEntries = 2;
+      (memory as any).onFull = 'evict_oldest';
 
       await memory.addEntry('Entry 1', ['test']);
       await memory.addEntry('Entry 2', ['test']);
