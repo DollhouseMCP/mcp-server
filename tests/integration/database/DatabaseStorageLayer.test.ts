@@ -3,10 +3,44 @@
  * Tests the full element CRUD path against real Docker PostgreSQL.
  */
 
+import { jest } from '@jest/globals';
+import { eq, sql } from 'drizzle-orm';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SkillManager } from '../../../src/elements/skills/SkillManager.js';
+import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
+import { FileLockManager } from '../../../src/security/fileLockManager.js';
+import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
+import { MetadataService } from '../../../src/services/MetadataService.js';
+import { ValidationRegistry } from '../../../src/services/validation/ValidationRegistry.js';
+import { ValidationService } from '../../../src/services/validation/ValidationService.js';
+import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { withUserContext } from '../../../src/database/rls.js';
+import { elements } from '../../../src/database/schema/elements.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import type { DrizzleTx } from '../../../src/database/db-utils.js';
 import type { DatabaseStorageIdentity } from '../../../src/storage/IStorageLayer.js';
 import { buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+
+class InspectableSkillManager extends SkillManager {
+  afterRead?: () => Promise<void>;
+  afterWrite?: () => Promise<void>;
+
+  protected override async afterSave(): Promise<void> {
+    await this.afterWrite?.();
+  }
+
+  protected override async afterLoad(): Promise<void> {
+    await this.afterRead?.();
+  }
+
+  cached(identity: string) {
+    return this.getCachedElementByStorageIdentity(identity);
+  }
+}
 
 class CleanupUserSwitchingStorageLayer extends DatabaseStorageLayer {
   beforeCleanup?: () => void;
@@ -281,6 +315,373 @@ describe('DatabaseStorageLayer', () => {
 
     expect(diff.removed).toHaveLength(1);
     expect(layer.getPathByName('will-remove')).toBeUndefined();
+  });
+
+  describe('refresh cache freshness (#2799)', () => {
+    let manager: InspectableSkillManager;
+    let layer: DatabaseStorageLayer;
+    let externalLayer: DatabaseStorageLayer;
+    let userId: string;
+    let directory: string;
+    const metadata = { author: 'test', version: '1.0.0', description: 'cache test', tags: [] };
+
+    beforeEach(async () => {
+      if (!dbAvailable) return;
+      userId = await ensureTestUser();
+      layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+      externalLayer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+      directory = await mkdtemp(join(tmpdir(), 'db-refresh-cache-'));
+      const fileLockManager = new FileLockManager();
+      const fileOperationsService = new FileOperationsService(fileLockManager);
+      const portfolioManager = new PortfolioManager(fileOperationsService, { baseDir: directory });
+      await portfolioManager.initialize();
+      const metadataService = new MetadataService();
+      manager = new InspectableSkillManager({
+        portfolioManager, fileLockManager, fileOperationsService, metadataService,
+        validationRegistry: new ValidationRegistry(
+          new ValidationService(), new TriggerValidationService(), metadataService,
+        ),
+        serializationService: new SerializationService(),
+        eventDispatcher: new ElementEventDispatcher(),
+        getCurrentUserId: fixedUserId(userId),
+        storageLayerFactory: { createForElement: () => layer },
+      });
+    });
+
+    afterEach(async () => {
+      jest.restoreAllMocks();
+      manager?.dispose();
+      if (directory) await rm(directory, { recursive: true, force: true });
+    });
+
+    async function seedAndLoad(name: string) {
+      const id = await externalLayer.writeContent('skills', name, buildSkillContent(name), metadata);
+      await manager.refreshIndex();
+      const element = await manager.load(id);
+      expect(manager.cached(id)).toBe(element);
+      return { id, element };
+    }
+
+    it('preserves cached X and reports no modifications after an unchanged refresh', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      const scan = jest.spyOn(layer, 'scan');
+
+      await manager.refreshIndex();
+
+      expect(await scan.mock.results[0].value).toEqual({
+        added: [], modified: [], removed: [], unchanged: [x.id],
+      });
+      expect(manager.cached(x.id)).toBe(x.element);
+    });
+
+    it('evicts only externally updated X, including changes within one millisecond', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      const y = await seedAndLoad('cache-y');
+      // Pin two distinct PostgreSQL versions that collapse to the same JS Date.
+      await withUserContext(getTestDb(), userId, tx => tx.update(elements).set({
+        updatedAt: sql`'2026-01-01 00:00:00.123001+00'::timestamptz`,
+      }).where(eq(elements.id, x.id)));
+      await manager.refreshIndex();
+      await manager.load(x.id);
+      const cachedY = await manager.load(y.id);
+      const scan = jest.spyOn(layer, 'scan');
+      await withUserContext(getTestDb(), userId, tx => tx.update(elements).set({
+        rawContent: buildSkillContent('cache-x', { description: 'external update' }),
+        updatedAt: sql`'2026-01-01 00:00:00.123002+00'::timestamptz`,
+      }).where(eq(elements.id, x.id)));
+
+      await manager.refreshIndex();
+
+      expect(await scan.mock.results[0].value).toEqual({
+        added: [], modified: [x.id], removed: [], unchanged: [y.id],
+      });
+      expect(manager.cached(x.id)).toBeUndefined();
+      expect(manager.cached(y.id)).toBe(cachedY);
+      expect((await manager.load(x.id)).metadata.description).toBe('external update');
+      await manager.refreshIndex();
+      expect(manager.cached(x.id)).toBeDefined();
+    });
+
+    it('does not cache an in-flight V1 load after refresh has observed V2 (#32)', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      let release!: () => void;
+      let signalRead!: () => void;
+      const paused = new Promise<void>(resolve => { signalRead = resolve; });
+      const resumed = new Promise<void>(resolve => { release = resolve; });
+      manager.afterRead = async () => {
+        manager.afterRead = undefined;
+        signalRead();
+        await resumed;
+      };
+      const staleLoad = manager.load(x.id);
+      await paused;
+      try {
+        await externalLayer.writeContent('skills', 'cache-x',
+          buildSkillContent('cache-x', { description: 'V2' }), metadata);
+        await manager.refreshIndex();
+        expect(manager.cached(x.id)).toBeUndefined();
+      } finally {
+        release();
+        await staleLoad;
+      }
+      await manager.refreshIndex();
+      expect(manager.cached(x.id)).toBeUndefined();
+      expect((await manager.load(x.id)).metadata.description).toBe('V2');
+      expect(manager.cached(x.id)?.metadata.description).toBe('V2');
+    });
+
+    it('evicts the old UUID on incremental same-name replacement (#33)', async () => {
+      if (!dbAvailable) return;
+      const old = await seedAndLoad('cache-x');
+      await externalLayer.deleteContent('skills', 'cache-x');
+      const replacement = await externalLayer.writeContent('skills', 'cache-x',
+        buildSkillContent('cache-x', { description: 'replacement' }), metadata);
+      await withUserContext(getTestDb(), userId, tx => tx.update(elements).set({
+        updatedAt: sql`NOW() + interval '1 second'`,
+      }).where(eq(elements.id, replacement)));
+      const scan = jest.spyOn(layer, 'scan');
+
+      await manager.list();
+
+      expect(await scan.mock.results[0].value).toEqual({
+        added: [replacement], modified: [], removed: [old.id], unchanged: [],
+      });
+      expect(manager.cached(old.id)).toBeUndefined();
+      expect(manager.cached(replacement)?.metadata.description).toBe('replacement');
+      await manager.refreshIndex();
+      expect(manager.cached(old.id)).toBeUndefined();
+    });
+
+    it('evicts cached X after its storage index state is reset (#34 A)', async () => {
+      if (!dbAvailable) return;
+      const id = await externalLayer.writeContent('skills', 'cache-x', buildSkillContent('cache-x'), metadata);
+      await layer.scan();
+      await manager.load(id);
+      layer.clear(); // Same loss of per-user scan state as index LRU pruning.
+      expect(layer.hasCompletedScan()).toBe(false);
+      await externalLayer.writeContent('skills', 'cache-x',
+        buildSkillContent('cache-x', { description: 'V2' }), metadata);
+      await manager.refreshIndex();
+      expect(manager.cached(id)).toBeUndefined();
+      expect((await manager.load(id)).metadata.description).toBe('V2');
+    });
+
+    it('evicts X loaded by UUID before the first scan (#34 B)', async () => {
+      if (!dbAvailable) return;
+      const id = await externalLayer.writeContent('skills', 'cache-x', buildSkillContent('cache-x'), metadata);
+      await manager.load(id);
+      expect(layer.hasCompletedScan()).toBe(false);
+      await externalLayer.writeContent('skills', 'cache-x',
+        buildSkillContent('cache-x', { description: 'V2' }), metadata);
+      await manager.refreshIndex();
+      expect(manager.cached(id)).toBeUndefined();
+      expect((await manager.load(id)).metadata.description).toBe('V2');
+    });
+
+    it('fences an unknown-UUID load when the first scan observes V2 (#34 C)', async () => {
+      if (!dbAvailable) return;
+      const id = await externalLayer.writeContent('skills', 'cache-x', buildSkillContent('cache-x'), metadata);
+      expect(layer.hasCompletedScan()).toBe(false);
+      let release!: () => void;
+      let signalRead!: () => void;
+      const paused = new Promise<void>(resolve => { signalRead = resolve; });
+      const resumed = new Promise<void>(resolve => { release = resolve; });
+      manager.afterRead = async () => {
+        manager.afterRead = undefined;
+        signalRead();
+        await resumed;
+      };
+      const staleLoad = manager.load(id);
+      await paused;
+      try {
+        await externalLayer.writeContent('skills', 'cache-x',
+          buildSkillContent('cache-x', { description: 'V2' }), metadata);
+        await manager.refreshIndex();
+      } finally {
+        release();
+        await staleLoad;
+      }
+      await manager.refreshIndex();
+      expect(manager.cached(id)).toBeUndefined();
+      expect((await manager.load(id)).metadata.description).toBe('V2');
+    });
+
+    it('audit: evicts a deleted cached UUID after losing its index history', async () => {
+      if (!dbAvailable) return;
+      const id = await externalLayer.writeContent('skills', 'cache-x', buildSkillContent('cache-x'), metadata);
+      await layer.scan();
+      await manager.load(id);
+      layer.clear();
+      await externalLayer.deleteContent('skills', 'cache-x');
+      await manager.refreshIndex();
+      await manager.refreshIndex();
+      expect(manager.cached(id)).toBeUndefined();
+    });
+
+    it.each(['summaries', 'indexed paths', 'name resolution'] as const)('audit: %s cannot consume a version change without cache invalidation', async reader => {
+      if (!dbAvailable) return;
+      const id = await externalLayer.writeContent('skills', 'cache-x', buildSkillContent('cache-x'), metadata);
+      await manager.load(id);
+      expect(layer.hasCompletedScan()).toBe(false);
+      await externalLayer.writeContent('skills', 'cache-x',
+        buildSkillContent('cache-x', { description: 'V2' }), metadata);
+      if (reader === 'summaries') await manager.listSummaries();
+      else if (reader === 'indexed paths') await layer.getIndexedPaths();
+      else await manager.findByName('missing-name');
+      await manager.refreshIndex();
+      expect(manager.cached(id)).toBeUndefined();
+    });
+
+    it('keeps sequential own writes visible to the next scan without recording their version', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      x.element.metadata.description = 'own V2';
+      await manager.save(x.element, x.id);
+      const scan = jest.spyOn(layer, 'scan');
+      await manager.refreshIndex();
+      expect((await scan.mock.results[0].value).modified).toEqual([x.id]);
+      expect(manager.cached(x.id)).toBeUndefined();
+      expect((await manager.load(x.id)).metadata.description).toBe('own V2');
+    });
+
+    it('evicts an own deletion from the manager cache and storage index', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      await manager.delete(x.id);
+      await manager.refreshIndex();
+      expect(manager.cached(x.id)).toBeUndefined();
+      expect(layer.getNameById(x.id)).toBeUndefined();
+      await expect(layer.readContent(x.id)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('audit: a paused own save cannot publish behind a newer scanned version', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      x.element.metadata.description = 'own V2';
+      let release!: () => void;
+      let signalWrite!: () => void;
+      const paused = new Promise<void>(resolve => { signalWrite = resolve; });
+      const resumed = new Promise<void>(resolve => { release = resolve; });
+      manager.afterWrite = async () => {
+        manager.afterWrite = undefined;
+        signalWrite();
+        await resumed;
+      };
+      const staleSave = manager.save(x.element, x.id);
+      await paused;
+      try {
+        await externalLayer.writeContent('skills', 'cache-x',
+          buildSkillContent('cache-x', { description: 'external V3' }), metadata);
+        await manager.refreshIndex();
+      } finally {
+        release();
+        await staleSave;
+      }
+      await manager.refreshIndex();
+      expect(manager.cached(x.id)).toBeUndefined();
+      expect((await manager.load(x.id)).metadata.description).toBe('external V3');
+    });
+
+    it('evicts externally deleted X and preserves unchanged Y during a full refresh', async () => {
+      if (!dbAvailable) return;
+      const x = await seedAndLoad('cache-x');
+      const y = await seedAndLoad('cache-y');
+      await manager.load(x.id);
+      const scan = jest.spyOn(layer, 'scan');
+      await externalLayer.deleteContent('skills', 'cache-x');
+
+      await manager.refreshIndex();
+
+      expect(await scan.mock.results[0].value).toEqual({
+        added: [], modified: [], removed: [x.id], unchanged: [y.id],
+      });
+      expect(manager.cached(x.id)).toBeUndefined();
+      expect(manager.cached(y.id)).toBe(y.element);
+      expect(layer.getNameById(x.id)).toBeUndefined();
+    });
+  });
+
+  it('tracks renamed and replaced rows by UUID across full refreshes', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const external = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const original = await external.writeContent('skills', 'original', buildSkillContent('original'), metadata);
+    await layer.scan();
+    await withUserContext(getTestDb(), userId, tx => tx.update(elements).set({
+      name: 'renamed', updatedAt: sql`NOW()`,
+    }).where(eq(elements.id, original)));
+    layer.invalidate();
+    expect((await layer.scan()).modified).toEqual([original]);
+    expect(layer.getPathByName('original')).toBeUndefined();
+    expect(layer.getPathByName('renamed')).toBe(original);
+
+    await external.deleteContent('skills', 'renamed');
+    const replacement = await external.writeContent('skills', 'renamed', buildSkillContent('renamed'), metadata);
+    layer.invalidate();
+    expect(await layer.scan()).toEqual({
+      added: [replacement], modified: [], removed: [original], unchanged: [],
+    });
+    expect(layer.getNameById(original)).toBeUndefined();
+    expect(layer.getPathByName('renamed')).toBe(replacement);
+    layer.invalidate();
+    expect((await layer.scan()).unchanged).toEqual([replacement]);
+    layer.clear();
+    expect((await layer.scan()).added).toEqual([replacement]);
+  });
+
+  it('classifies both identities before applying externally swapped names', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const first = await layer.writeContent('skills', 'first', buildSkillContent('first'), metadata);
+    const second = await layer.writeContent('skills', 'second', buildSkillContent('second'), metadata);
+    await layer.scan();
+    await withUserContext(getTestDb(), userId, async tx => {
+      await tx.update(elements).set({ name: 'temporary' }).where(eq(elements.id, first));
+      await tx.update(elements).set({ name: 'first', updatedAt: sql`NOW()` }).where(eq(elements.id, second));
+      await tx.update(elements).set({ name: 'second', updatedAt: sql`NOW()` }).where(eq(elements.id, first));
+    });
+    layer.invalidate();
+    const diff = await layer.scan();
+    expect(diff.added).toEqual([]);
+    expect(diff.modified).toHaveLength(2);
+    expect(diff.modified).toEqual(expect.arrayContaining([first, second]));
+    expect(layer.getPathByName('first')).toBe(second);
+    expect(layer.getPathByName('second')).toBe(first);
+    layer.invalidate();
+    expect((await layer.scan()).modified).toEqual([]);
+  });
+
+  it('keeps row versions isolated per user and detects incremental updates', async () => {
+    if (!dbAvailable) return;
+    const userA = await ensureTestUser();
+    const userB = await ensureTestUserB();
+    let currentUser = userA;
+    const layer = new DatabaseStorageLayer(getTestDb(), () => currentUser, 'skills');
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const idA = await layer.writeContent('skills', 'shared-version', buildSkillContent('shared-version'), metadata);
+    await layer.scan();
+    currentUser = userB;
+    const idB = await layer.writeContent('skills', 'shared-version', buildSkillContent('shared-version'), metadata);
+    await layer.scan();
+    currentUser = userA;
+    layer.invalidate();
+    expect((await layer.scan()).unchanged).toEqual([idA]);
+    // Future database timestamp deterministically crosses the existing JS watermark.
+    await withUserContext(getTestDb(), userA, tx => tx.update(elements).set({
+      updatedAt: sql`NOW() + interval '1 second'`,
+    }).where(eq(elements.id, idA)));
+    expect((await layer.scan()).modified).toEqual([idA]);
+    expect((await layer.scan()).modified).toEqual([]);
+    currentUser = userB;
+    layer.invalidate();
+    expect(await layer.scan()).toEqual({ added: [], modified: [], removed: [], unchanged: [idB] });
   });
 
   // ── listSummaries ─────────────────────────────────────────────────

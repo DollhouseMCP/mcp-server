@@ -112,6 +112,7 @@ export class ElementLoader<T extends IElement> {
       this.events.createEventPayload({ correlationId, filePath: relativePath }),
     );
 
+    const load = this.cache.beginLoad(relativePath);
     try {
       const content = await this.readContent(relativePath, absolutePath);
       const parsed = this.host.parseContent(content);
@@ -123,7 +124,7 @@ export class ElementLoader<T extends IElement> {
         await this.host.afterLoad(element, relativePath, parsed);
       }
 
-      this.cache.cacheElement(element, relativePath);
+      this.cache.cacheElement(element, relativePath, load);
 
       this.invalidElements.delete(relativePath);
       this.suppressedLoadPaths.delete(relativePath);
@@ -139,6 +140,8 @@ export class ElementLoader<T extends IElement> {
     } catch (error) {
       this.handleLoadError(error, relativePath, absolutePath, correlationId);
       throw error;
+    } finally {
+      load.release();
     }
   }
 
@@ -214,16 +217,21 @@ export class ElementLoader<T extends IElement> {
     const cached = this.cache.getCachedByAbsolutePath(absolutePath);
     if (cached) return cached;
 
-    const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
-      source: 'ElementLoader.loadElementSnapshot',
-    });
-    const contentContext = this.elementTypeToContext[this.host.elementType];
-    const parsed = SecureYamlParser.safeMatter(raw, undefined, { contentContext });
-    this.host.migrateMetadataDefaults(parsed.data, relativePath);
-    const metadata = await this.host.parseMetadata(parsed.data);
-    const element = this.host.createElement(metadata, parsed.content);
-    this.cache.cacheElement(element, relativePath);
-    return element;
+    const load = this.cache.beginLoad(relativePath);
+    try {
+      const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
+        source: 'ElementLoader.loadElementSnapshot',
+      });
+      const contentContext = this.elementTypeToContext[this.host.elementType];
+      const parsed = SecureYamlParser.safeMatter(raw, undefined, { contentContext });
+      this.host.migrateMetadataDefaults(parsed.data, relativePath);
+      const metadata = await this.host.parseMetadata(parsed.data);
+      const element = this.host.createElement(metadata, parsed.content);
+      this.cache.cacheElement(element, relativePath, load);
+      return element;
+    } finally {
+      load.release();
+    }
   }
 
   /**
@@ -233,12 +241,17 @@ export class ElementLoader<T extends IElement> {
     const cached = this.cache.getCachedByPath(relativePath);
     if (cached) return cached;
 
-    const raw = await (this.storageLayer as IWritableStorageLayer).readContent(relativePath);
-    const parsed = this.host.parseContent(raw);
-    this.host.migrateMetadataDefaults(parsed.data, relativePath);
-    const metadata = await this.host.parseMetadata(parsed.data);
-    const element = this.host.createElement(metadata, parsed.content);
-    this.cache.cacheElement(element, relativePath);
-    return element;
+    const load = this.cache.beginLoad(relativePath);
+    try {
+      const raw = await (this.storageLayer as IWritableStorageLayer).readContent(relativePath);
+      const parsed = this.host.parseContent(raw);
+      this.host.migrateMetadataDefaults(parsed.data, relativePath);
+      const metadata = await this.host.parseMetadata(parsed.data);
+      const element = this.host.createElement(metadata, parsed.content);
+      this.cache.cacheElement(element, relativePath, load);
+      return element;
+    } finally {
+      load.release();
+    }
   }
 }

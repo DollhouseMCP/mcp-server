@@ -315,6 +315,19 @@ describe('MCP Database E2E Tests', () => {
       expect(rows[0].rawContent).toContain('You are a helpful test persona');
     }, TEST_TIMEOUT);
 
+    it('preserves the persona cache across back-to-back MCP-AQL operations (#2799)', async () => {
+      if (!dbAvailable) return;
+      const details = await aql.read(client, {
+        operation: 'get_element_details',
+        params: { element_name: NAME, element_type: 'persona' },
+      });
+      expect(details).toContain(NAME);
+      const report = await aql.read(client, { operation: 'get_cache_budget_report' });
+      const personaCache = /\| elements:personas \| (\d+) \|/u.exec(report);
+      expect(personaCache).not.toBeNull();
+      expect(Number(personaCache?.[1])).toBeGreaterThan(0);
+    }, TEST_TIMEOUT);
+
     it('should update the persona description', async () => {
       if (!dbAvailable) return;
       const resp = await aql.update(client, {

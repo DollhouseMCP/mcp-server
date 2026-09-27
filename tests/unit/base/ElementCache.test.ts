@@ -209,3 +209,68 @@ describe('ElementCache storage identity', () => {
     expect(cache.getCacheStats().pathMappings).toBe(1);
   });
 });
+
+describe('ElementCache in-flight load generations', () => {
+  function fixture() {
+    const elementDir = path.resolve('/virtual/agents');
+    let namespace = 'user-a';
+    const cache = new ElementCache<IElement>(ElementType.AGENT, {
+      elementDir,
+      getCacheNamespace: () => namespace,
+      resolveAbsolutePath: filePath => path.resolve(elementDir, filePath),
+    }, { elementCacheTTL: 0, pathCacheTTL: 0 });
+    return { cache, setNamespace: (value: string) => { namespace = value; } };
+  }
+
+  it('invalidates only the affected identity and namespace, including cache misses', () => {
+    const { cache, setNamespace } = fixture();
+    const a = cache.beginLoad('same.md');
+    const other = cache.beginLoad('other.md');
+    setNamespace('user-b');
+    const b = cache.beginLoad('same.md');
+    cache.uncacheByPath('same.md');
+    expect(b.isCurrent()).toBe(false);
+    setNamespace('user-a');
+    expect(a.isCurrent()).toBe(true);
+    expect(other.isCurrent()).toBe(true);
+    cache.cacheElement(createElement('a', 'User A'), 'same.md', a);
+    expect(cache.getCachedByPath('same.md')?.metadata.name).toBe('User A');
+    a.release();
+    b.release();
+    other.release();
+    cache.dispose();
+  });
+
+  it('keeps overlapping readers live and cannot revive a released or invalidated token', () => {
+    const { cache } = fixture();
+    const first = cache.beginLoad('same.md');
+    const second = cache.beginLoad('same.md');
+    first.release();
+    first.release();
+    expect(first.isCurrent()).toBe(false);
+    expect(second.isCurrent()).toBe(true);
+    cache.uncacheByPath('same.md');
+    const newer = cache.beginLoad('same.md');
+    second.release();
+    expect(newer.isCurrent()).toBe(true);
+    cache.cacheElement(createElement('new', 'New'), 'same.md', newer);
+    cache.cacheElement(createElement('old', 'Old'), 'same.md', second);
+    expect(cache.getCachedByPath('same.md')?.metadata.name).toBe('New');
+    newer.release();
+    cache.dispose();
+  });
+
+  it.each(['clear', 'dispose'] as const)('%s fences pending reads without fencing later loads', action => {
+    const { cache } = fixture();
+    const old = cache.beginLoad('same.md');
+    cache[action]();
+    expect(old.isCurrent()).toBe(false);
+    const newer = cache.beginLoad('same.md');
+    old.release();
+    expect(newer.isCurrent()).toBe(true);
+    cache.cacheElement(createElement('old', 'Old'), 'same.md', old);
+    expect(cache.getCachedByPath('same.md')).toBeUndefined();
+    newer.release();
+    cache.dispose();
+  });
+});

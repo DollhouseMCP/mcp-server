@@ -25,6 +25,12 @@ export interface ElementCacheHost {
   getCacheNamespace(): string;
 }
 
+/** A load's permission to publish into its original cache namespace and path. */
+export interface ElementCacheLoad {
+  isCurrent(): boolean;
+  release(): void;
+}
+
 export class ElementCache<T extends IElement> {
   /** Primary cache: namespace + runtime ID + storage path → Element. */
   readonly elements: LRUCache<T>;
@@ -50,6 +56,8 @@ export class ElementCache<T extends IElement> {
   private readonly elementKeyToId = new Map<string, string>();
   private readonly elementGenerations = new Map<string, number>();
   private cacheGenerationCounter = 0;
+  /** Object identity is the invalidation generation; retain only active loads. */
+  private readonly pendingLoads = new Map<string, { readers: number }>();
   private readonly memoryBudget?: CacheMemoryBudget;
 
   private static readonly MAX_ELEMENT_CACHE_SIZE = 1000;
@@ -210,17 +218,43 @@ export class ElementCache<T extends IElement> {
     this.elementKeyToId.set(elementKey, elementIdKey);
   }
 
+  /** Capture before reading; always release in finally, even if parsing fails. */
+  beginLoad(filePath: string): ElementCacheLoad {
+    const absolutePath = this.host.resolveAbsolutePath(filePath);
+    const pathKey = this.key(absolutePath);
+    const generation = this.pendingLoads.get(pathKey) ?? { readers: 0 };
+    generation.readers += 1;
+    this.pendingLoads.set(pathKey, generation);
+    let released = false;
+    return {
+      isCurrent: () => !released
+        && this.pendingLoads.get(pathKey) === generation
+        && this.key(absolutePath) === pathKey,
+      release: () => {
+        if (released) return;
+        released = true;
+        generation.readers -= 1;
+        if (generation.readers === 0 && this.pendingLoads.get(pathKey) === generation) {
+          this.pendingLoads.delete(pathKey);
+        }
+      },
+    };
+  }
+
   /**
    * Adds an element to both caches (bidirectional mapping).
    * Also stamps `filename` and `filePath` onto the element object.
    */
-  cacheElement(element: T, filePath: string): void {
+  cacheElement(element: T, filePath: string, load?: ElementCacheLoad): void {
     const absolutePath = this.host.resolveAbsolutePath(filePath);
 
     const relativePath = path.isAbsolute(filePath)
       ? path.relative(this.host.elementDir, filePath)
       : filePath;
     this.attachPathMetadata(element, relativePath);
+    // Even an uncached result needs storage metadata, but an invalidated read
+    // must never overwrite a newer cache entry or repopulate an evicted path.
+    if (load && !load.isCurrent()) return;
 
     const pathKey = this.key(absolutePath);
     const indexedElementKey = this.elementToKey.get(element);
@@ -248,6 +282,8 @@ export class ElementCache<T extends IElement> {
   uncacheByPath(filePath: string): void {
     const absolutePath = this.host.resolveAbsolutePath(filePath);
     const pathKey = this.key(absolutePath);
+    // Invalidate pending reads even if this path has no cached element yet.
+    this.pendingLoads.delete(pathKey);
     const elementKey = this.filePathToId.get(pathKey)
       ?? this.findElementKeyByPath(pathKey);
 
@@ -319,6 +355,7 @@ export class ElementCache<T extends IElement> {
    * Clear all caches and the generation counter.
    */
   clear(): void {
+    this.pendingLoads.clear();
     this.elements.clear();
     this.filePathToId.clear();
     this.elementKeyToPaths.clear();

@@ -49,10 +49,25 @@ const MAX_INDEX_STATES = 256;
 interface DatabaseIndexState {
   nameToIdMap: Map<string, string>;
   idToNameMap: Map<string, string>;
+  idToUpdatedAt: Map<string, string>;
   lastScanTimestamp: Date | null;
   scanCompleted: boolean;
   activeOperations: number;
 }
+
+interface DatabaseScanRow {
+  id: string;
+  name: string;
+  updatedAt: string;
+}
+
+// Keep PostgreSQL microseconds: a JS Date would miss distinct writes within
+// the same millisecond. Epoch text also avoids session time-zone formatting.
+const scanColumns = {
+  id: elements.id,
+  name: elements.name,
+  updatedAt: sql<string>`extract(epoch from ${elements.updatedAt})::text`,
+};
 
 // ── Implementation ──────────────────────────────────────────────────
 
@@ -107,7 +122,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       const rows = await withUserRead(this.db, userId, async (tx) => {
         if (lastScan) {
           return tx
-            .select({ id: elements.id, name: elements.name, updatedAt: elements.updatedAt })
+            .select(scanColumns)
             .from(elements)
             .where(and(
               eq(elements.userId, userId),
@@ -116,7 +131,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
             ));
         }
         return tx
-          .select({ id: elements.id, name: elements.name, updatedAt: elements.updatedAt })
+          .select(scanColumns)
           .from(elements)
           .where(and(
             eq(elements.userId, userId),
@@ -141,39 +156,50 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   private processSubsequentScanRows(
     state: DatabaseIndexState,
-    rows: Array<{ id: string; name: string; updatedAt: Date }>,
+    rows: DatabaseScanRow[],
     result: ManifestDiffResult,
     isFullScan: boolean,
   ): void {
-    const seenIds = new Set<string>();
-
-    for (const row of rows) {
-      seenIds.add(row.id);
-      if (state.nameToIdMap.has(row.name)) {
-        result.modified.push(row.id);
-      } else {
-        result.added.push(row.id);
-      }
-      this.setIndexForState(state, row.name, row.id);
-    }
-
+    const seenIds = new Set(rows.map(row => row.id));
     if (isFullScan) {
-      for (const [name, id] of state.nameToIdMap.entries()) {
+      // Remove missing identities before adding rows: a replacement may reuse
+      // the deleted row's name, but still needs eviction under its old UUID.
+      for (const [id, name] of state.idToNameMap) {
         if (!seenIds.has(id)) {
           result.removed.push(id);
           this.removeIndexForState(state, name);
         }
       }
     }
+
+    for (const row of rows) {
+      const replacedId = state.nameToIdMap.get(row.name);
+      if (!isFullScan && replacedId && replacedId !== row.id && !seenIds.has(replacedId)) {
+        result.removed.push(replacedId);
+      }
+      if (!state.idToNameMap.has(row.id)) {
+        result.added.push(row.id);
+      } else if (state.idToUpdatedAt.get(row.id) !== row.updatedAt) {
+        result.modified.push(row.id);
+      } else {
+        result.unchanged.push(row.id);
+      }
+    }
+    // Classify against the previous index before applying any renamed rows.
+    for (const row of rows) {
+      this.setIndexForState(state, row.name, row.id);
+      state.idToUpdatedAt.set(row.id, row.updatedAt);
+    }
   }
 
   private processFirstScanRows(
     state: DatabaseIndexState,
-    rows: Array<{ id: string; name: string; updatedAt: Date }>,
+    rows: DatabaseScanRow[],
     result: ManifestDiffResult,
   ): void {
     for (const row of rows) {
       this.setIndexForState(state, row.name, row.id);
+      state.idToUpdatedAt.set(row.id, row.updatedAt);
       result.added.push(row.id);
     }
   }
@@ -452,10 +478,15 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   }
 
   private setIndexForState(state: DatabaseIndexState, name: string, id: string): void {
-    // Remove old reverse mapping if name changed
+    const oldName = state.idToNameMap.get(id);
+    if (oldName && oldName !== name && state.nameToIdMap.get(oldName) === id) {
+      state.nameToIdMap.delete(oldName);
+    }
+    // Remove old reverse mapping if the identity behind a name changed
     const oldId = state.nameToIdMap.get(name);
     if (oldId && oldId !== id) {
       state.idToNameMap.delete(oldId);
+      state.idToUpdatedAt.delete(oldId);
     }
     state.nameToIdMap.set(name, id);
     state.idToNameMap.set(id, name);
@@ -468,7 +499,10 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   private removeIndexForState(state: DatabaseIndexState, name: string): void {
     const id = state.nameToIdMap.get(name);
-    if (id) state.idToNameMap.delete(id);
+    if (id) {
+      state.idToNameMap.delete(id);
+      state.idToUpdatedAt.delete(id);
+    }
     state.nameToIdMap.delete(name);
   }
 
@@ -478,6 +512,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     const name = state.idToNameMap.get(id);
     if (name) state.nameToIdMap.delete(name);
     state.idToNameMap.delete(id);
+    state.idToUpdatedAt.delete(id);
   }
 
   private getState(userId = this.userId): DatabaseIndexState {
@@ -486,6 +521,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       state = {
         nameToIdMap: new Map<string, string>(),
         idToNameMap: new Map<string, string>(),
+        idToUpdatedAt: new Map<string, string>(),
         lastScanTimestamp: null,
         scanCompleted: false,
         activeOperations: 0,
@@ -517,7 +553,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       let evicted = false;
       for (const [userId, state] of this.indexStates) {
         if (userId === protectedUserId || state.activeOperations > 0) continue;
-        // The four index fields live in this single state object, so deleting
+        // All index fields live in this single state object, so deleting
         // the entry drops them atomically.
         this.indexStates.delete(userId);
         evicted = true;

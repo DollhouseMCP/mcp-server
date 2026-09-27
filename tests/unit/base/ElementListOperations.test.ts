@@ -7,7 +7,7 @@ describe('ElementListOperations.scanAndEvict', () => {
     const storageLayer = {
       invalidate: jest.fn(),
       scan: jest.fn().mockResolvedValue({
-        added: [],
+        added: ['added-uuid'],
         modified: ['modified-uuid'],
         removed: ['removed-uuid'],
         unchanged: [],
@@ -31,6 +31,7 @@ describe('ElementListOperations.scanAndEvict', () => {
     expect(storageLayer.invalidate).toHaveBeenCalledTimes(1);
     expect(storageLayer.scan).toHaveBeenCalledWith({ freshAfterInFlight: true });
     expect(cache.uncacheByPath.mock.calls).toEqual([
+      ['added-uuid'],
       ['modified-uuid'],
       ['removed-uuid'],
     ]);

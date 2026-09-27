@@ -68,7 +68,7 @@ export class ElementListOperations<T extends IElement> {
 
       try {
         const diff = await this.storageLayer.scan();
-        for (const relPath of [...diff.modified, ...diff.removed]) {
+        for (const relPath of [...diff.added, ...diff.modified, ...diff.removed]) {
           const absPath = path.join(this.host.elementDir, relPath);
           this.cache.uncacheByPath(absPath);
         }
@@ -138,7 +138,7 @@ export class ElementListOperations<T extends IElement> {
   private async listFromDatabase(options?: { includePublic?: boolean }): Promise<T[]> {
     try {
       const diff = await this.storageLayer.scan();
-      for (const id of [...diff.modified, ...diff.removed]) {
+      for (const id of [...diff.added, ...diff.modified, ...diff.removed]) {
         this.cache.uncacheByPath(id);
       }
 
@@ -205,7 +205,7 @@ export class ElementListOperations<T extends IElement> {
     this.storageLayer.invalidate();
     try {
       const diff = await this.storageLayer.scan(options);
-      for (const relPath of [...diff.modified, ...diff.removed]) {
+      for (const relPath of [...diff.added, ...diff.modified, ...diff.removed]) {
         const cachePath = isWritableStorageLayer(this.storageLayer)
           ? relPath
           : path.join(this.host.elementDir, relPath);
