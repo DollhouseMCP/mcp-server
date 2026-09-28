@@ -19,7 +19,7 @@ import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.j
 import { Memory } from '../../../../src/elements/memories/Memory.js';
 import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
-import { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
+import { ExclusiveCreateCleanupError, FileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { DollhouseContainer } from '../../../../src/di/Container.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
@@ -140,6 +140,32 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
     expect(result.volumes).toHaveLength(1);
     expect(result.sealedIds).toEqual([]);
     expect(await volumeFiles('dry-run-memory')).toEqual([]);
+  });
+
+  it('previews occupied volume numbers without overwriting an existing file', async () => {
+    const memory = await buildMemory('Occupied Preview', 3);
+    const volumeDir = path.join(memoriesDir, 'volumes', 'occupied-preview');
+    await fs.mkdir(volumeDir, { recursive: true });
+    const occupiedPath = path.join(volumeDir, 'v0001.yaml');
+    await fs.writeFile(occupiedPath, 'pre-existing owner bytes');
+
+    const preview = await manager.rolloverMemory(memory, options({ dryRun: true }));
+    expect(preview.volumes[0].file).toBe('volumes/occupied-preview/v0002.yaml');
+    expect(await volumeFiles('occupied-preview')).toEqual(['v0001.yaml']);
+
+    const actual = await manager.rolloverMemory(memory, options());
+    expect(actual.volumes[0].file).toBe(preview.volumes[0].file);
+    expect(await fs.readFile(occupiedPath, 'utf8')).toBe('pre-existing owner bytes');
+  });
+
+  it('rejects a name with no safe archive slug before creating a volume', async () => {
+    const memory = new Memory({ name: '日本語' }, metadataService);
+    await memory.addEntry('old');
+    await memory.addEntry('new');
+
+    await expect(manager.rolloverMemory(memory, options({ keepLatest: 1, keepTags: [] })))
+      .rejects.toThrow('no safe archive filename');
+    await expect(fs.access(path.join(memoriesDir, 'volumes', 'v0001.yaml'))).rejects.toThrow();
   });
 
   it('seals nothing and writes nothing when every entry is kept', async () => {
@@ -353,6 +379,23 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
     }
     expect(await volumeFiles('cleanup-fails')).toEqual(['v0001.yaml']);
     expect((await memory.search({})).length).toBe(40);
+  });
+
+  it('reports an untracked partial volume when exclusive-create cleanup fails', async () => {
+    const memory = await buildMemory('Partial Create', 2);
+    const fileOps = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const partialPath = path.join(memoriesDir, 'volumes', 'partial-create', 'v0001.yaml');
+    const spy = jest.spyOn(fileOps, 'createFileExclusive').mockRejectedValueOnce(
+      new ExclusiveCreateCleanupError(partialPath, new Error('disk full'), new Error('unlink denied')),
+    );
+
+    try {
+      await expect(manager.rolloverMemory(memory, options({ keepLatest: 1, keepTags: [] })))
+        .rejects.toThrow('unindexed archive copies may remain');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(memory.getStats().totalEntries).toBe(2);
   });
 
   it('keeps the volume index across save and reload, and continues numbering', async () => {

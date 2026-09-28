@@ -512,6 +512,10 @@ describe('getOperationHelp()', () => {
     // Check for UPDATE operations
     expect(help).toContain('UPDATE Operations');
     expect(help).toContain('edit_element');
+    const createHelp = help.split('### CREATE Operations')[1].split('### READ Operations')[0];
+    const updateHelp = help.split('### UPDATE Operations')[1].split('### DELETE Operations')[0];
+    expect(createHelp).not.toContain('rollover_memory');
+    expect(updateHelp).toContain('rollover_memory');
 
     // Check for DELETE operations
     expect(help).toContain('DELETE Operations');

@@ -1232,7 +1232,7 @@ export const MEMORY_SCHEMAS: OperationSchemaMap = {
       keep_tags: { type: 'string[]', description: 'Entries with any of these tags stay in the live memory. Default: ["pinned", "read-first", "schema"]' },
       keep_latest: { type: 'number', description: 'Number of newest entries that stay in the live memory. Default: 0' },
       reason: { type: 'string', description: 'Why the rollover happened; recorded in the marker entry (max 200 characters)' },
-      dry_run: { type: 'boolean', description: 'Report what would be sealed without writing anything. Default: false' },
+      dry_run: { type: 'boolean', description: 'Report what would be sealed and currently available volume numbers without writing anything. A concurrent writer may change final numbers. Default: false' },
     },
     returns: { name: 'MemoryRolloverReceipt', kind: 'object', description: 'Receipt: { memory, dryRun, sealedCount, keptCount, volumes: [{ volume, file, sealedAt, entryCount, firstEntryAt, lastEntryAt, sha256 }] }' },
     examples: [

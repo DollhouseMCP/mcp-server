@@ -22,6 +22,7 @@ import {
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import { ExclusiveCreateCleanupError } from '../../services/FileOperationsService.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _packageLocator = new PackageResourceLocator();
@@ -773,12 +774,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const keptIds = new Set(kept.map(entry => entry.id));
 
     const slug = this.normalizeFilename(memoryName);
+    if (!slug) {
+      throw new Error(`Memory '${memoryName}' has no safe archive filename; rollover was not started`);
+    }
     const volumeDir = path.join(this.memoriesDir, MEMORY_CONSTANTS.VOLUMES_DIR, slug);
     const sealedAt = new Date().toISOString();
     const chunks = await this.packVolumeChunks(memory, sealedSerialized);
     let nextVolume = Math.max(0, ...memory.getVolumeRecords().map(record => record.volume)) + 1;
+    const plannedNumbers = await this.planAvailableVolumeNumbers(volumeDir, nextVolume, chunks.length);
     const plannedRecords = chunks.map((chunk, index) =>
-      this.buildVolumeRecord(nextVolume + index, slug, sealedAt, chunk.entries, chunk.yaml));
+      this.buildVolumeRecord(plannedNumbers[index], slug, sealedAt, chunk.entries, chunk.yaml));
 
     // Project the actual serialized head, including the new volume index and
     // an optional marker, before creating any archive. A fixed headroom number
@@ -817,6 +822,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
         }
       }
       const cause = error instanceof Error ? error.message : String(error);
+      if (error instanceof ExclusiveCreateCleanupError) {
+        cleanupFailures.push(`partial volume ${path.basename(error.partialPath)}: exclusive-create cleanup failed`);
+      }
       if (cleanupFailures.length > 0) {
         throw new Error(
           `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
@@ -970,6 +978,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
     }
     throw new Error(`No free volume number in ${volumeDir}`);
+  }
+
+  /** Best-effort preview of exclusive-create assignments at this instant. */
+  private async planAvailableVolumeNumbers(volumeDir: string, firstVolume: number, count: number): Promise<number[]> {
+    const numbers: number[] = [];
+    let candidate = firstVolume;
+    for (let index = 0; index < count; index++) {
+      const searchEnd = candidate + 1000;
+      while (
+        candidate < searchEnd &&
+        await this.fileOperations.exists(path.join(volumeDir, Memory.volumeFileName(candidate)))
+      ) {
+        candidate++;
+      }
+      if (candidate >= searchEnd) throw new Error(`No free volume number in ${volumeDir}`);
+      numbers.push(candidate++);
+    }
+    return numbers;
   }
 
   private async verifyVolumeFile(absolutePath: string, expectedSha256: string, expectedEntries: number): Promise<void> {

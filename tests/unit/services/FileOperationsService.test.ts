@@ -346,6 +346,32 @@ describe('FileOperationsService', () => {
       const result = await service.createFileExclusive(filePath, content);
 
       expect(result).toBe(false);
+      expect(mockUnlink).not.toHaveBeenCalled();
+    });
+
+    it('removes only a file this call created when writing fails', async () => {
+      const filePath = '/test/partial-volume.yaml';
+      mockOpen.mockResolvedValue({
+        writeFile: jest.fn<() => Promise<void>>().mockRejectedValue(new Error('disk full')),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      });
+      mockUnlink.mockResolvedValue(undefined);
+
+      await expect(service.createFileExclusive(filePath, 'archive')).rejects.toThrow('disk full');
+      expect(mockUnlink).toHaveBeenCalledWith(filePath);
+    });
+
+    it('reports a residual partial file when cleanup fails', async () => {
+      const filePath = '/test/partial-volume.yaml';
+      mockOpen.mockResolvedValue({
+        writeFile: jest.fn<() => Promise<void>>().mockRejectedValue(new Error('disk full')),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      });
+      mockUnlink.mockRejectedValue(new Error('unlink denied'));
+
+      await expect(service.createFileExclusive(filePath, 'archive'))
+        .rejects.toThrow('partial file could not be removed');
+      expect(mockUnlink).toHaveBeenCalledWith(filePath);
     });
 
     it('should throw error if content exceeds max size', async () => {
