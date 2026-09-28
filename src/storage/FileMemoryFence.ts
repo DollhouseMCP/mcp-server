@@ -88,8 +88,7 @@ export class FileMemoryFence {
     operation: () => Promise<T> | T,
     options: FileMemoryFenceOptions = {},
   ): Promise<T> {
-    const capturedRoot = tenantRoot;
-    return this.withResolvedFence(() => this.resolveTenantLockPath(capturedRoot), operation, options);
+    return this.withResolvedFence(() => this.resolveTenantLockPath(tenantRoot), operation, options);
   }
 
   private async withResolvedFence<T>(
@@ -144,6 +143,8 @@ export class FileMemoryFence {
   }
 
   private async resolveTenantLockPath(suppliedRoot: string): Promise<string> {
+    // This lease excludes cooperating writers; callers must validate actual
+    // head/archive path confinement and links while holding it.
     const root = await this.canonicalTenantRoot(suppliedRoot);
     return path.join(await this.ensureLockRoot(root), TENANT_LOCK_NAME);
   }
