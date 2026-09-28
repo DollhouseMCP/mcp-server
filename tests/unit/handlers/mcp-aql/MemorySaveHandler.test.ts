@@ -2,6 +2,8 @@ import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals
 import { MemorySaveHandler } from '../../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import { logger } from '../../../../src/utils/logger.js';
 import { STORAGE_LAYER_CONFIG } from '../../../../src/config/performance-constants.js';
+import { Memory } from '../../../../src/elements/memories/Memory.js';
+import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 
 /**
  * Unit coverage for the #2329 durability behaviors that live in MemorySaveHandler
@@ -20,8 +22,12 @@ interface MockMemory {
   entries: Map<string, unknown>;
   addEntry: jest.Mock;
   getEntries: () => Map<string, unknown>;
+  getPolicyRemovedCount: jest.Mock;
   removeEntry: jest.Mock;
   clearAll: jest.Mock;
+  captureAppendState: jest.Mock;
+  createAppendCandidate: jest.Mock;
+  commitAppendCandidate: jest.Mock;
 }
 
 /** Private surface of MemorySaveHandler exercised directly by these unit tests. */
@@ -33,7 +39,7 @@ interface HandlerInternals {
 
 function makeMemory(name: string): MockMemory {
   const entries = new Map<string, unknown>();
-  return {
+  const memory: MockMemory = {
     metadata: { name },
     entries,
     addEntry: jest.fn((content: string) => {
@@ -46,9 +52,14 @@ function makeMemory(name: string): MockMemory {
       });
     }),
     getEntries: () => entries,
+    getPolicyRemovedCount: jest.fn(() => 0),
     removeEntry: jest.fn((id: string) => entries.delete(id)),
     clearAll: jest.fn(() => ({ cleared: true })),
+    captureAppendState: jest.fn(() => ({ fingerprint: JSON.stringify([...entries]) })),
+    createAppendCandidate: jest.fn(() => memory),
+    commitAppendCandidate: jest.fn(() => true),
   };
+  return memory;
 }
 
 function makeHandler(memory: MockMemory, sessionId = 'sessA', contextScope?: HandlerCtorArgs[2]) {
@@ -244,6 +255,208 @@ describe('MemorySaveHandler', () => {
       await handler.dispatch('addEntry', { element_name: 'notes', content: 'hi' });
       await handler.flushPendingSaves();
       expect(manager.save).toHaveBeenCalledWith(memory);
+    });
+  });
+
+  describe('removal warnings (#2859)', () => {
+    it('returns no warning when an add removes nothing', async () => {
+      const memory = makeMemory('notes');
+      const { handler } = makeHandler(memory);
+
+      const result = await handler.dispatch('addEntry', { element_name: 'notes', content: 'hello' });
+
+      expect(result).not.toHaveProperty('warning');
+    });
+
+    it('warns when adding an entry removed existing entries', async () => {
+      const memory = makeMemory('cache');
+      memory.entries.set('old-1', { content: 'old' });
+      let policyRemoved = 0;
+      memory.getPolicyRemovedCount.mockImplementation(() => policyRemoved);
+      // Simulate an evict_oldest memory: the add evicts the oldest entry.
+      memory.addEntry.mockImplementation(() => {
+        memory.entries.delete('old-1');
+        policyRemoved += 1;
+        memory.entries.set('new-1', { content: 'new' });
+        return Promise.resolve({
+          id: 'new-1',
+          timestamp: new Date('2026-01-01T00:00:00.000Z'),
+          trustLevel: 'untrusted',
+        });
+      });
+      const { handler } = makeHandler(memory);
+
+      const result = await handler.dispatch('addEntry', { element_name: 'cache', content: 'new' });
+
+      expect(result).toMatchObject({
+        id: 'new-1',
+        warning: expect.stringContaining("1 existing entry was removed from memory 'cache'"),
+      });
+    });
+  });
+
+  describe('rejected append rollback (#2867)', () => {
+    const metadataService = createTestMetadataService();
+
+    it('restores an evicted entry and its counter when persistence validation rejects', async () => {
+      const memory = new Memory({ name: 'cache', maxEntries: 1, onFull: 'evict_oldest' }, metadataService);
+      const original = await memory.addEntry('original');
+      const { handler, manager } = makeHandler(memory as unknown as MockMemory);
+      manager.assertPersistable.mockRejectedValueOnce(new Error('YAML too large'));
+
+      await expect(handler.dispatch('addEntry', { element_name: 'cache', content: 'rejected' }))
+        .rejects.toThrow('Entry NOT saved');
+
+      expect([...memory.getEntries().keys()]).toEqual([original.id]);
+      expect(memory.getPolicyRemovedCount()).toBe(0);
+      expect((await memory.search({ query: 'original' })).map(entry => entry.id)).toContain(original.id);
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('stages against the effective runtime capacity when metadata was edited', async () => {
+      const memory = new Memory({ name: 'cache', maxEntries: 1, onFull: 'evict_oldest' }, metadataService);
+      const original = await memory.addEntry('original');
+      memory.metadata.maxEntries = 5; // runtime capacity remains one until reconstruction
+      const { handler } = makeHandler(memory as unknown as MockMemory);
+
+      const receipt = await handler.dispatch('addEntry', { element_name: 'cache', content: 'replacement' }) as { id: string; warning?: string };
+
+      expect([...memory.getEntries().keys()]).toEqual([receipt.id]);
+      expect(memory.getEntries().has(original.id)).toBe(false);
+      expect(receipt.warning).toContain('1 existing entry was removed');
+    });
+
+    it('serializes overlapping handlers on one Memory, then lets the successful append evict', async () => {
+      const memory = new Memory({ name: 'cache', maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
+      const oldest = await memory.addEntry('oldest');
+      const newest = await memory.addEntry('newest');
+      const first = makeHandler(memory as unknown as MockMemory, 'first');
+      const second = makeHandler(memory as unknown as MockMemory, 'second');
+      let rejectFirst!: (error: Error) => void;
+      let signalEntered!: () => void;
+      const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+      first.manager.assertPersistable.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectFirst = reject;
+        signalEntered();
+      }));
+
+      const rejected = first.handler.dispatch('addEntry', { element_name: 'cache', content: 'rejected' });
+      await entered;
+      const accepted = second.handler.dispatch('addEntry', { element_name: 'cache', content: 'accepted' });
+      await Promise.resolve();
+      expect(second.manager.assertPersistable).not.toHaveBeenCalled();
+
+      rejectFirst(new Error('YAML too large'));
+      await expect(rejected).rejects.toThrow('Entry NOT saved');
+      const receipt = await accepted as { id: string; warning?: string };
+      expect([...memory.getEntries().keys()]).toEqual([newest.id, receipt.id]);
+      expect(memory.getEntries().has(oldest.id)).toBe(false);
+      expect(memory.getPolicyRemovedCount()).toBe(1);
+      expect(receipt.warning).toContain('1 existing entry was removed');
+    });
+
+    it('does not resurrect an out-of-band clear while validation is pending', async () => {
+      const memory = new Memory({ name: 'cache', maxEntries: 1, onFull: 'evict_oldest' }, metadataService);
+      await memory.addEntry('original');
+      const { handler, manager } = makeHandler(memory as unknown as MockMemory);
+      let finishValidation!: () => void;
+      let signalEntered!: () => void;
+      const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+      manager.assertPersistable.mockImplementationOnce(() => new Promise(resolve => {
+        finishValidation = () => resolve(undefined);
+        signalEntered();
+      }));
+      const pending = handler.dispatch('addEntry', { element_name: 'cache', content: 'rejected' });
+      await entered;
+      await memory.clearAll(true);
+      finishValidation();
+
+      await expect(pending).rejects.toThrow('memory changed during validation');
+      expect(memory.getEntries().size).toBe(0);
+    });
+
+    it('keeps an out-of-band addition and reports pending durability on conflict', async () => {
+      const memory = new Memory({ name: 'notes', maxEntries: 3 }, metadataService);
+      const original = await memory.addEntry('original');
+      const { handler, manager } = makeHandler(memory as unknown as MockMemory);
+      let finishValidation!: () => void;
+      let signalEntered!: () => void;
+      const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+      manager.assertPersistable.mockImplementationOnce(() => new Promise(resolve => {
+        finishValidation = () => resolve(undefined);
+        signalEntered();
+      }));
+      const pending = handler.dispatch('addEntry', { element_name: 'notes', content: 'rejected' });
+      await entered;
+      const concurrent = await memory.addEntry('concurrent');
+      finishValidation();
+
+      await expect(pending).rejects.toThrow('memory changed during validation');
+      expect([...memory.getEntries().keys()]).toEqual([original.id, concurrent.id]);
+      expect(manager.save).not.toHaveBeenCalled();
+      await handler.flushPendingSaves();
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a staged append if an existing entry changes in place', async () => {
+      const memory = new Memory({ name: 'notes', maxEntries: 2 }, metadataService);
+      const original = await memory.addEntry('original');
+      const { handler, manager } = makeHandler(memory as unknown as MockMemory);
+      let finishValidation!: () => void;
+      let signalEntered!: () => void;
+      const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+      manager.assertPersistable.mockImplementationOnce(() => new Promise(resolve => {
+        finishValidation = () => resolve(undefined);
+        signalEntered();
+      }));
+      const pending = handler.dispatch('addEntry', { element_name: 'notes', content: 'candidate' });
+      await entered;
+      original.content = 'edited concurrently';
+      finishValidation();
+
+      await expect(pending).rejects.toThrow('memory changed during validation');
+      expect(memory.getAllEntries()).toEqual([original]);
+      expect(original.content).toBe('edited concurrently');
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('queues a second handler clear behind rejected append validation', async () => {
+      const memory = new Memory({ name: 'notes', maxEntries: 1, onFull: 'evict_oldest' }, metadataService);
+      const original = await memory.addEntry('original');
+      const first = makeHandler(memory as unknown as MockMemory, 'first');
+      const second = makeHandler(memory as unknown as MockMemory, 'second');
+      let rejectValidation!: (error: Error) => void;
+      let signalEntered!: () => void;
+      const entered = new Promise<void>(resolve => { signalEntered = resolve; });
+      first.manager.assertPersistable.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectValidation = reject;
+        signalEntered();
+      }));
+      const pending = first.handler.dispatch('addEntry', { element_name: 'notes', content: 'rejected' });
+      await entered;
+      const cleared = second.handler.dispatch('clear', { element_name: 'notes' });
+      expect(second.manager.save).not.toHaveBeenCalled();
+      expect([...memory.getEntries().keys()]).toEqual([original.id]);
+      rejectValidation(new Error('YAML too large'));
+      await expect(pending).rejects.toThrow('Entry NOT saved');
+      await cleared;
+      expect(memory.getEntries().size).toBe(0);
+      expect(second.manager.save).toHaveBeenCalledWith(memory);
+    });
+
+    it('clears the pending authoritative instance after find returns a stale reload', async () => {
+      const authoritative = new Memory({ name: 'notes' }, metadataService);
+      const staleReload = new Memory({ name: 'notes' }, metadataService);
+      await staleReload.addEntry('stale disk view');
+      const { handler, manager } = makeHandler(authoritative as unknown as MockMemory);
+      manager.find.mockResolvedValueOnce(authoritative).mockResolvedValueOnce(staleReload);
+
+      await handler.dispatch('addEntry', { element_name: 'notes', content: 'pending' });
+      await handler.dispatch('clear', { element_name: 'notes' });
+
+      expect(authoritative.getEntries().size).toBe(0);
+      expect(staleReload.getEntries().size).toBe(1);
+      expect(manager.save).toHaveBeenCalledWith(authoritative);
     });
   });
 });

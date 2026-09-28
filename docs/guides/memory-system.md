@@ -59,6 +59,24 @@ trustLevel: VALIDATED
 | `trustLevel` | string | No | "UNTRUSTED" | Security trust level |
 | `autoLoad` | boolean | No | false | Load on server startup (v1.9.25+) |
 | `priority` | number | No | 999 | Auto-load priority (lower = first) |
+| `onFull` | `error` or `evict_oldest` | No | See below | What happens when `maxEntries` is reached |
+
+`onFull` defaults to `error` for permanent memories, so adding an entry at
+capacity fails without removing existing entries. Memories with an expiring
+`retentionDays` default to `evict_oldest`; set `onFull: error` to keep them from
+evicting at capacity. Set `onFull: evict_oldest` explicitly only when losing the
+oldest entries is acceptable. You can change it through `edit_element` using
+`input: { metadata: { onFull: "evict_oldest" } }`; the new policy applies to the
+loaded memory immediately. A successful add that removes entries includes a
+warning. If a stored or imported `onFull` value is invalid, the memory uses
+`error` to protect existing entries; `edit_element` rejects invalid values.
+Older memory files up to the legacy 2 MB recovery limit can be loaded,
+but files above the current 256 KB save limit must be split before new entries
+can be saved. These limits are measured in JavaScript string length, not encoded
+byte size. A legacy frontmatter markdown body is loaded as untrusted content
+without evicting existing entries, even when the memory is already at its entry
+limit. It keeps its content up to the 2 MB recovery bound on reload; ordinary
+new entries still have the 100 KB entry limit.
 
 ### Auto-Load Fields (v1.9.25+)
 

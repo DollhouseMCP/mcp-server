@@ -93,17 +93,203 @@ describe('Memory Element', () => {
     });
     
     it('should enforce max entries limit', async () => {
-      const smallMemory = new Memory({ maxEntries: 3 }, metadataService);
-      
+      const smallMemory = new Memory({ maxEntries: 3, onFull: 'evict_oldest' }, metadataService);
+
       await smallMemory.addEntry('Entry 1');
       await smallMemory.addEntry('Entry 2');
       await smallMemory.addEntry('Entry 3');
-      
+
       // Should enforce retention and allow new entry
       await expect(smallMemory.addEntry('Entry 4')).resolves.toBeDefined();
-      
+
       const stats = smallMemory.getStats();
       expect(stats.totalEntries).toBeLessThanOrEqual(3);
+    });
+
+    describe('onFull policy (Issue #2859)', () => {
+      it('rejects a new entry in a full permanent memory and keeps every existing entry', async () => {
+        const fullMemory = new Memory({ name: 'Permanent Log', maxEntries: 3 }, metadataService);
+        await fullMemory.addEntry('Entry 1');
+        await fullMemory.addEntry('Entry 2');
+        await fullMemory.addEntry('Entry 3');
+
+        await expect(fullMemory.addEntry('Entry 4')).rejects.toThrow(
+          "Memory 'Permanent Log' is full: it holds 3 entries and its limit is 3."
+        );
+
+        const contents = (await fullMemory.search({})).map(e => e.content);
+        expect(contents).toHaveLength(3);
+        expect(contents).toEqual(expect.arrayContaining(['Entry 1', 'Entry 2', 'Entry 3']));
+      });
+
+      it('defaults to error for permanent memories and evict_oldest for expiring ones', () => {
+        expect(new Memory({}, metadataService).getOnFullPolicy()).toBe('error');
+        expect(new Memory({ retentionDays: 30 }, metadataService).getOnFullPolicy()).toBe('evict_oldest');
+      });
+
+      it('lets an explicit onFull override the retention-based default', () => {
+        expect(new Memory({ retentionDays: 30, onFull: 'error' }, metadataService).getOnFullPolicy()).toBe('error');
+        expect(new Memory({ onFull: 'evict_oldest' }, metadataService).getOnFullPolicy()).toBe('evict_oldest');
+      });
+
+      it('fails closed and persists error for invalid explicit onFull values', async () => {
+        const memory = new Memory({ name: 'Invalid Policy', retentionDays: 30, maxEntries: 1, onFull: 'delete_everything' as never }, metadataService);
+        expect(memory.getOnFullPolicy()).toBe('error');
+        expect(memory.metadata.onFull).toBe('error');
+        const kept = await memory.addEntry('Kept');
+        await expect(memory.addEntry('Blocked')).rejects.toThrow('is full');
+        expect(memory.getEntries().has(kept.id)).toBe(true);
+
+        const alias = new Memory({ name: 'Alias Policy', retentionDays: 30, on_full: 'errorr' } as never, metadataService);
+        expect(alias.metadata.onFull).toBe('error');
+      });
+
+      it('persists onFull in metadata only when set explicitly', () => {
+        expect(new Memory({ onFull: 'evict_oldest' }, metadataService).metadata.onFull).toBe('evict_oldest');
+        expect(new Memory({}, metadataService).metadata.onFull).toBeUndefined();
+      });
+
+      it('follows edited retentionDays for the default policy and new entry expiry', async () => {
+        const memory = new Memory({ name: 'Edited Retention' }, metadataService);
+        expect(memory.getOnFullPolicy()).toBe('error');
+
+        memory.metadata.retentionDays = 30;
+        expect(memory.getOnFullPolicy()).toBe('evict_oldest');
+        const entry = await memory.addEntry('Expires after edit');
+        const daysUntilExpiry = (entry.expiresAt!.getTime() - entry.timestamp.getTime()) / 86_400_000;
+        expect(daysUntilExpiry).toBeGreaterThan(29);
+        expect(daysUntilExpiry).toBeLessThan(31);
+      });
+
+      it('uses deserialized metadata policy on the same instance', async () => {
+        const full = new Memory({ name: 'Reloaded Policy', maxEntries: 2 }, metadataService);
+        const oldest = await full.addEntry('Oldest');
+        await full.addEntry('Newer');
+        const data = JSON.parse(full.serialize());
+        data.metadata.onFull = 'evict_oldest';
+
+        full.deserialize(JSON.stringify(data));
+        expect(full.getOnFullPolicy()).toBe('evict_oldest');
+        await expect(full.addEntry('Newest')).resolves.toBeDefined();
+        expect(full.getEntries().has(oldest.id)).toBe(false);
+      });
+
+      it('fails closed when deserialization replaces metadata with an invalid policy', async () => {
+        const memory = new Memory({ name: 'Reloaded Invalid', retentionDays: 30, maxEntries: 1 }, metadataService);
+        const kept = await memory.addEntry('Kept');
+        const data = JSON.parse(memory.serialize());
+        data.metadata.onFull = 'errorr';
+        memory.deserialize(JSON.stringify(data));
+
+        expect(memory.metadata.onFull).toBe('error');
+        await expect(memory.addEntry('Blocked')).rejects.toThrow('is full');
+        expect(memory.getEntries().has(kept.id)).toBe(true);
+      });
+
+      it('keeps tied entries stable across repeated save/load and evicts the oldest insertion', async () => {
+        const original = new Memory({ name: 'Tied Entries', maxEntries: 3, onFull: 'evict_oldest' }, metadataService);
+        const tiedAt = new Date('2026-03-01T00:00:00Z');
+        const inserted = [];
+        for (const content of ['first', 'second', 'third']) {
+          const entry = await original.addEntry(content);
+          (original as any).entries.get(entry.id).timestamp = tiedAt;
+          inserted.push(entry.id);
+        }
+
+        let serialized = original.serialize();
+        const firstOrder = JSON.parse(serialized).entries.map((entry: MemoryEntry) => entry.id);
+        expect(firstOrder).toEqual([...inserted].reverse());
+        let loaded = original;
+        for (let i = 0; i < 3; i++) {
+          loaded = new Memory({ name: 'Tied Entries', maxEntries: 3 }, metadataService);
+          loaded.deserialize(serialized);
+          serialized = loaded.serialize();
+          expect(JSON.parse(serialized).entries.map((entry: MemoryEntry) => entry.id)).toEqual(firstOrder);
+        }
+
+        await loaded.addEntry('fourth');
+        expect(loaded.getEntries().has(inserted[0])).toBe(false);
+        expect(loaded.getEntries().has(inserted[1])).toBe(true);
+        expect(loaded.getEntries().has(inserted[2])).toBe(true);
+      });
+
+      it('keeps all entries when loading more than maxEntries, and stays read-only', async () => {
+        const source = new Memory({ name: 'Oversized Source', onFull: 'evict_oldest' }, metadataService);
+        for (let i = 0; i < 5; i++) {
+          await source.addEntry(`Loaded entry ${i}`);
+        }
+
+        // A file holding more entries than the limit, loaded into a permanent memory.
+        const target = new Memory({ name: 'Loaded Log', maxEntries: 3 }, metadataService);
+        target.deserialize(JSON.stringify({ ...JSON.parse(source.serialize()), metadata: target.metadata }));
+
+        expect(target.getStats().totalEntries).toBe(5);
+        await expect(target.addEntry('One more')).rejects.toThrow('is full');
+        expect(target.getStats().totalEntries).toBe(5);
+      });
+
+      it('counts policy removals from eviction and expiry, but not explicit deletions', async () => {
+        const cache = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
+        const first = await cache.addEntry('First');
+        await cache.addEntry('Second');
+        expect(cache.getPolicyRemovedCount()).toBe(0);
+
+        await cache.addEntry('Third'); // evicts the oldest
+        expect(cache.getPolicyRemovedCount()).toBe(1);
+
+        const current = await cache.search({});
+        cache.removeEntry(current[0].id); // explicit deletion is not a policy removal
+        expect(cache.getPolicyRemovedCount()).toBe(1);
+        expect(first).toBeDefined();
+
+        const expiring = new Memory({ retentionDays: 1 }, metadataService);
+        const stale = await expiring.addEntry('Stale');
+        ((expiring as any).entries as Map<string, MemoryEntry>).get(stale.id)!.expiresAt = new Date(Date.now() - 1000);
+        await expiring.enforceRetentionPolicy();
+        expect(expiring.getPolicyRemovedCount()).toBe(1);
+      });
+
+      it('serializes entries newest first, with malformed timestamps last', async () => {
+        const memory = new Memory({}, metadataService);
+        const older = await memory.addEntry('Older');
+        const newer = await memory.addEntry('Newer');
+        const broken = await memory.addEntry('Broken timestamp');
+        const entriesMap = (memory as any).entries as Map<string, MemoryEntry>;
+        entriesMap.get(older.id)!.timestamp = new Date('2026-01-01T00:00:00Z');
+        entriesMap.get(newer.id)!.timestamp = new Date('2026-02-01T00:00:00Z');
+        entriesMap.get(broken.id)!.timestamp = 'not a date' as unknown as Date;
+
+        const serialized = JSON.parse(memory.serialize()).entries.map((e: MemoryEntry) => e.content);
+
+        expect(serialized).toEqual(['Newer', 'Older', 'Broken timestamp']);
+      });
+
+      it('serializes entries with identical timestamps later-added first', async () => {
+        const memory = new Memory({}, metadataService);
+        const tie = new Date('2026-03-01T00:00:00Z');
+        const entriesMap = (memory as any).entries as Map<string, MemoryEntry>;
+        for (const content of ['first', 'second', 'third']) {
+          const entry = await memory.addEntry(content);
+          entriesMap.get(entry.id)!.timestamp = tie;
+        }
+
+        const serialized = JSON.parse(memory.serialize()).entries.map((e: MemoryEntry) => e.content);
+
+        expect(serialized).toEqual(['third', 'second', 'first']);
+      });
+
+      it('removes only expired entries from a full permanent memory during retention', async () => {
+        const memory = new Memory({ maxEntries: 2 }, metadataService);
+        const expired = await memory.addEntry('Expired');
+        await memory.addEntry('Current');
+        const entriesMap = (memory as any).entries as Map<string, MemoryEntry>;
+        entriesMap.get(expired.id)!.expiresAt = new Date(Date.now() - 1000);
+
+        const removed = await memory.enforceRetentionPolicy();
+
+        expect(removed).toBe(1);
+        expect((await memory.search({})).map(e => e.content)).toEqual(['Current']);
+      });
     });
     
     it('should limit number of tags per entry', async () => {
@@ -189,7 +375,7 @@ describe('Memory Element', () => {
     });
     
     it('should remove oldest entries when over capacity', async () => {
-      const smallMemory = new Memory({ maxEntries: 2 }, metadataService);
+      const smallMemory = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
       
       await smallMemory.addEntry('First');
       await new Promise(resolve => setTimeout(resolve, 10)); // Small delay

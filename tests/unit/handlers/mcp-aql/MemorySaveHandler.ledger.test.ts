@@ -19,7 +19,7 @@ import { MemorySaveHandler } from '../../../../src/handlers/mcp-aql/MemorySaveHa
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 
 function makeMemory(name: string) {
-  return {
+  const memory = {
     metadata: { name },
     addEntry: jest.fn(() => Promise.resolve({
       id: 'entry-1',
@@ -28,8 +28,14 @@ function makeMemory(name: string) {
     })),
     removeEntry: jest.fn(() => true),
     getEntries: jest.fn(() => new Map()),
+    getPolicyRemovedCount: jest.fn(() => 0),
     clearAll: jest.fn(() => Promise.resolve()),
+    captureAppendState: jest.fn(() => ({ fingerprint: 'unchanged' })),
+    createAppendCandidate: jest.fn(),
+    commitAppendCandidate: jest.fn(() => true),
   };
+  memory.createAppendCandidate.mockImplementation(() => memory);
+  return memory;
 }
 
 describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {

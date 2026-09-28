@@ -601,8 +601,8 @@ export class MemorySearchIndex {
       });
     }
 
-    // Sort by score and apply pagination
-    results.sort((a, b) => b.score - a.score);
+    // Preserve the memory's newest-first order for equally relevant results.
+    this.sortByScoreAndRecency(results, entries);
 
     const offset = query.offset || 0;
     const limit = query.limit || 100;
@@ -659,12 +659,26 @@ export class MemorySearchIndex {
       });
     }
 
-    // Sort and paginate
-    results.sort((a, b) => b.score - a.score);
+    // Match the indexed path's ordering before the default 100-result limit.
+    this.sortByScoreAndRecency(results, entries);
     const offset = query.offset || 0;
     const limit = query.limit || 100;
 
     return results.slice(offset, offset + limit);
+  }
+
+  private sortByScoreAndRecency(results: SearchResult[], entries: MemoryEntryMap): void {
+    const insertionOrder = new Map<string, number>();
+    let index = 0;
+    for (const id of entries.keys()) insertionOrder.set(id, index++);
+    const timeOf = (entry: MemoryEntry): number => {
+      const time = new Date(entry.timestamp as unknown as string | number | Date).getTime();
+      return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+    };
+    results.sort((a, b) =>
+      (b.score - a.score)
+      || (timeOf(b.entry) - timeOf(a.entry))
+      || ((insertionOrder.get(b.entry.id) ?? -1) - (insertionOrder.get(a.entry.id) ?? -1)));
   }
 
   /**

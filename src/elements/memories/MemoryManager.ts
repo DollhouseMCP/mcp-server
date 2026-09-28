@@ -309,14 +309,45 @@ export class MemoryManager extends BaseElementManager<Memory> {
   protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
     if (!content.trim()) return { data: {}, content: '' };
 
+    // Issue #2864: read with the legacy recovery limit, not the write limit.
+    // Files written before #2329 could reach 2MB; rejecting them here made the
+    // memory report "not found" with no warning. They load read-only instead:
+    // validateSerializedMemoryYaml still enforces MAX_YAML_SIZE on every save.
     const parsed = this.serializationService.parseFrontmatter(content, {
-      maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      maxYamlSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
+      maxContentSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
       validateContent: false,  // FIX (#1206): Local files are pre-trusted
       source: 'MemoryManager.parseContent',
       schema: 'json',  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
     });
 
+    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+      this.reportOversizedLegacyMemory(parsed.data as Record<string, unknown>, content.length);
+    }
+
     return { data: parsed.data as Record<string, unknown>, content: parsed.content };
+  }
+
+  /**
+   * Issue #2864: an older memory over the write limit loads read-only. Record
+   * it at HIGH severity so it can be found and split, instead of disappearing.
+   */
+  private reportOversizedLegacyMemory(data: Record<string, unknown>, contentLength: number): void {
+    const nested = data.metadata && typeof data.metadata === 'object'
+      ? (data.metadata as Record<string, unknown>).name
+      : undefined;
+    const rawName = typeof nested === 'string' ? nested : data.name;
+    const name = typeof rawName === 'string' ? sanitizeInput(rawName, 100) : 'unknown';
+    const details = `Memory '${name}' is ${contentLength} characters, over the ${MEMORY_CONSTANTS.MAX_YAML_SIZE} limit. ` +
+      `Loaded read-only: new entries are rejected until it is split into smaller memories.`;
+    logger.warn(`[MemoryManager] ${details}`);
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_SIZE_EXCEEDED',
+      severity: 'HIGH',
+      source: 'MemoryManager.parseContent',
+      details,
+      metadata: { contentLength, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE },
+    });
   }
 
   /**
@@ -377,12 +408,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // If markdown content exists after frontmatter, add it as a memory entry.
     // Preserves content from seed memories and memory files with markdown sections.
     if (parsedData.content.trim()) {
-      await memory.addEntry(
-        parsedData.content.trim(),
-        [],  // tags
-        { loadedAt: new Date().toISOString() },  // metadata
-        'file',  // source
-      );
+      // Loading existing bytes must not apply append-time capacity or retention
+      // policy: a full memory may be read-only, but its body is still data.
+      memory.appendLoadedMarkdownBody(parsedData.content.trim());
     }
   }
 
@@ -2179,6 +2207,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       privacyLevel: metadataSource.privacy_level || metadataSource.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
       searchable: metadataSource.searchable !== false,
       maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+      // A present invalid/null camelCase value must not fall through to an
+      // alias or the retention-based eviction default.
+      onFull: Object.hasOwn(metadataSource, 'onFull')
+        ? metadataSource.onFull
+        : metadataSource.on_full,
       // FIX #1430: Extract auto-load configuration
       autoLoad: metadataSource.autoLoad,
       priority: metadataSource.priority,

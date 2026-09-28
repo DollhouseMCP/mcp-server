@@ -26,6 +26,15 @@ export const MEMORY_CONSTANTS = {
   MAX_ENTRY_SIZE: 100 * 1024,          // 100KB per entry
   MAX_ENTRIES_DEFAULT: 1000,           // Maximum number of entries
 
+  /**
+   * What addEntry() does when a memory reaches maxEntries (Issue #2859).
+   * - 'error': reject the new entry; never delete existing entries.
+   * - 'evict_oldest': delete the oldest entries to make room (caches).
+   * Default: 'error' for permanent memories, 'evict_oldest' for memories
+   * with an expiring retention policy (retentionDays set below the default).
+   */
+  ON_FULL_POLICIES: ['error', 'evict_oldest'] as const,
+
   // Entry limits
   MAX_TAGS_PER_ENTRY: 20,              // Maximum tags per memory entry
   MAX_TAG_LENGTH: 50,                  // Maximum length of each tag
@@ -56,7 +65,17 @@ export const MEMORY_CONSTANTS = {
    * - 1MB: Parse time ~50-100ms (acceptable but not ideal)
    * - >5MB: Parse time >500ms (unacceptable, blocks UI)
    */
-  MAX_YAML_SIZE: 256 * 1024,           // 256KB max serialized memory YAML — enforced on save, load, import, and index extraction (#2329)
+  MAX_YAML_SIZE: 256 * 1024,           // 256KB max serialized memory YAML — enforced on save and import; the write limit (#2329)
+
+  /**
+   * Read-only recovery limit for memories written before #2329 tightened the
+   * save cap from 2MB to MAX_YAML_SIZE (Issue #2864). Load and index
+   * extraction accept files up to this size so an older, oversized memory
+   * stays visible instead of reporting "not found". Such a memory cannot be
+   * saved again until it is back under MAX_YAML_SIZE, so it is effectively
+   * read-only. Mirrors AGENT_STATE_RECOVERY_MAX_YAML_SIZE for agent state.
+   */
+  LEGACY_MAX_YAML_SIZE: 2 * 1024 * 1024,
 
   /**
    * Privacy Level Hierarchy:
@@ -92,6 +111,7 @@ export const MEMORY_CONSTANTS = {
 
 // Type exports for privacy levels and storage backends
 export type PrivacyLevel = typeof MEMORY_CONSTANTS.PRIVACY_LEVELS[number];
+export type MemoryOnFullPolicy = typeof MEMORY_CONSTANTS.ON_FULL_POLICIES[number];
 export type StorageBackend = typeof MEMORY_CONSTANTS.SUPPORTED_STORAGE_BACKENDS[number];
 
 /**
