@@ -263,4 +263,20 @@ describe('DatabaseMemoryStorageLayer versioned head contract', () => {
     expect(await layer.readHeadSnapshot(id)).toEqual(before);
     expect((await layer.getEntries(id)).map(entry => entry.entryId)).toEqual(['keep']);
   });
+
+  it('rejects invalid candidate YAML without changing the qualified head', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('invalid-candidate', [{ id: 'keep', content: 'Keep' }]);
+    const id = await layer.writeContent('memories', 'invalid-candidate', original, metadata);
+    const before = await layer.readHeadSnapshot(id);
+    for (const invalid of ['', '   ', 'entries: [', 'name: invalid-candidate\nentries: bad-shape',
+      buildMemoryContent('invalid-candidate')]) {
+      await expect(layer.writeHeadIfCurrent(before.token, 'invalid-candidate', invalid, metadata))
+        .rejects.toMatchObject({ code: 'EINVALIDHEAD' });
+      expect(await layer.readHeadSnapshot(id)).toEqual(before);
+      expect((await layer.getEntries(id)).map(entry => entry.entryId)).toEqual(['keep']);
+    }
+  });
 });

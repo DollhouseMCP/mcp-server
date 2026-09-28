@@ -188,6 +188,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     if (typeof nextName !== 'string' || !nextName) {
       throw new TypeError('Memory head name must be a non-empty string');
     }
+    if (typeof content !== 'string' || !content.trim()) {
+      throw this.createInvalidHeadError('Memory head YAML must be non-empty');
+    }
     const inputMetadata = { ...metadata, tags: [...metadata.tags] };
     let result: { id: string; revision?: bigint };
     try {
@@ -404,6 +407,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     return error;
   }
 
+  private createInvalidHeadError(message: string, cause?: unknown): NodeJS.ErrnoException {
+    const error = new Error(message, { cause }) as NodeJS.ErrnoException;
+    error.code = 'EINVALIDHEAD';
+    return error;
+  }
+
   private parseExpectedRevision(token: MemoryHeadToken, userId: string): bigint {
     if (
       token.backend !== 'database' || token.userId !== userId ||
@@ -411,7 +420,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       token.locator !== token.ownerId || !UUID_PATTERN.test(token.ownerId) ||
       typeof token.name !== 'string' || !token.name ||
       typeof token.revision !== 'string' || token.revision.length > 19 ||
-      !/^[1-9][0-9]*$/u.test(token.revision)
+      !/^[1-9]\d*$/u.test(token.revision)
     ) {
       throw this.createStaleWriteError(token.name, token.ownerId);
     }
@@ -578,6 +587,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
         throw new Error('Malicious memory control content detected');
       }
     } catch (err) {
+      if (strict) {
+        throw this.createInvalidHeadError('Memory head YAML is invalid or exceeds its size limit', err);
+      }
       // Parse failure drops entries silently — element row still persists.
       // Log so operators see skipped entry sync and can investigate corrupted YAML.
       logger.warn(
@@ -592,13 +604,21 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       const existing = await tx.select({ id: memoryEntries.id }).from(memoryEntries).where(and(
         eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, memoryElementId),
       )).limit(1);
+      if (strict && existing.length > 0) {
+        throw this.createInvalidHeadError('Memory head omitted its existing entries');
+      }
       return existing.length === 0;
     }
-    if (!Array.isArray(entries)) return false;
+    if (!Array.isArray(entries)) {
+      if (strict) throw this.createInvalidHeadError('Memory head entries must be an array');
+      return false;
+    }
     if (strict && entries.some(entry => !entry || typeof entry !== 'object' ||
       typeof (entry as Record<string, unknown>).id !== 'string' ||
       typeof (entry as Record<string, unknown>).content !== 'string' ||
-      !(entry as Record<string, unknown>).content)) return false;
+      !(entry as Record<string, unknown>).content)) {
+      throw this.createInvalidHeadError('Memory head contains an invalid entry');
+    }
 
     // Defense-in-depth: include userId alongside the RLS context. Every other
     // DELETE in this module does the same — syncEntriesInTx is the last one
@@ -618,7 +638,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       return [this.buildEntryRow(e, idx, memoryElementId, content, userId)];
     });
 
-    if (strict && rows.length !== entries.length) return false;
+    if (strict && rows.length !== entries.length) {
+      throw this.createInvalidHeadError('Memory head contains an invalid entry');
+    }
 
     if (rows.length > 0) {
       await tx.insert(memoryEntries).values(rows);
