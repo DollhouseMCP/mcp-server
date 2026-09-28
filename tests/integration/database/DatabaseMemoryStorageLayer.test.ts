@@ -5,7 +5,10 @@
  */
 
 import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
-import { buildMemoryContent, cleanupAllTestData, closeTestDb, ensureTestUser, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+import { withUserContext } from '../../../src/database/rls.js';
+import { elements } from '../../../src/database/schema/elements.js';
+import { and, eq } from 'drizzle-orm';
+import { buildMemoryContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 let dbAvailable = false;
 
@@ -42,6 +45,104 @@ describe('DatabaseMemoryStorageLayer', () => {
 
     const readBack = await layer.readContent(elementId);
     expect(readBack).toBe(content);
+  });
+
+  it('updates the exact expected memory row and syncs its entries', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const metadata = { author: '', version: '1.0.0', description: '', tags: [] };
+    const original = buildMemoryContent('guarded-memory', [{ id: 'old', content: 'Old' }]);
+    const id = await layer.writeContent('memories', 'guarded-memory', original, metadata);
+    const identity = { id, name: 'guarded-memory' };
+    const updated = buildMemoryContent('guarded-memory', [{ id: 'new', content: 'New' }]);
+
+    await expect(layer.writeContent('memories', 'guarded-memory', updated, metadata, {
+      expectedIdentity: identity,
+    })).resolves.toBe(id);
+    await expect(layer.readContent(id)).resolves.toBe(updated);
+    expect((await layer.getEntries(id)).map(entry => entry.entryId)).toEqual(['new']);
+  });
+
+  it('rejects a missing expected memory identity without inserting by name', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const content = buildMemoryContent('never-created');
+
+    await expect(layer.writeContent('memories', 'never-created', content,
+      { author: '', version: '', description: '', tags: [] },
+      { expectedIdentity: { id: '11111111-1111-4111-8111-111111111111', name: 'never-created' } },
+    )).rejects.toMatchObject({ code: 'ESTALE' });
+    await expect(layer.resolveContentIdentity('memories', 'never-created')).resolves.toBeUndefined();
+  });
+
+  it('rejects a stale memory save after delete and same-name recreation', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const otherLayer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const name = 'recreated-memory';
+    const originalId = await layer.writeContent('memories', name,
+      buildMemoryContent(name, [{ id: 'original', content: 'Original' }]), metadata);
+    const expectedIdentity = { id: originalId, name };
+    await otherLayer.deleteContentByIdentity('memories', name, expectedIdentity);
+    const replacement = buildMemoryContent(name, [{ id: 'replacement', content: 'Replacement' }]);
+    const replacementId = await otherLayer.writeContent('memories', name, replacement, metadata);
+    expect(replacementId).not.toBe(originalId);
+
+    await expect(layer.writeContent('memories', name,
+      buildMemoryContent(name, [{ id: 'stale', content: 'Stale' }]), metadata,
+      { expectedIdentity },
+    )).rejects.toMatchObject({ code: 'ESTALE' });
+    await expect(layer.readContent(replacementId)).resolves.toBe(replacement);
+    expect((await layer.getEntries(replacementId)).map(entry => entry.entryId)).toEqual(['replacement']);
+  });
+
+  it('rejects a stale memory save after its row is renamed', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const original = buildMemoryContent('original-name');
+    const id = await layer.writeContent('memories', 'original-name', original, metadata);
+    await withUserContext(db, userId, async tx => {
+      await tx.update(elements).set({ name: 'renamed-memory' }).where(and(
+        eq(elements.userId, userId), eq(elements.id, id),
+      ));
+    });
+
+    await expect(layer.writeContent('memories', 'original-name',
+      buildMemoryContent('original-name', [{ id: 'stale', content: 'Stale' }]), metadata,
+      { expectedIdentity: { id, name: 'original-name' } },
+    )).rejects.toMatchObject({ code: 'ESTALE' });
+    await expect(layer.readContent(id)).resolves.toBe(original);
+    await expect(layer.resolveContentIdentity('memories', 'original-name')).resolves.toBeUndefined();
+  });
+
+  it('does not let another tenant use a memory identity to overwrite its own same-name row', async () => {
+    if (!dbAvailable) return;
+    const userA = await ensureTestUser();
+    const userB = await ensureTestUserB();
+    const db = getTestDb();
+    const layerA = new DatabaseMemoryStorageLayer(db, fixedUserId(userA));
+    const layerB = new DatabaseMemoryStorageLayer(db, fixedUserId(userB));
+    const metadata = { author: '', version: '', description: '', tags: [] };
+    const name = 'tenant-memory';
+    const contentA = buildMemoryContent(name, [{ id: 'a', content: 'A' }]);
+    const contentB = buildMemoryContent(name, [{ id: 'b', content: 'B' }]);
+    const idA = await layerA.writeContent('memories', name, contentA, metadata);
+    const idB = await layerB.writeContent('memories', name, contentB, metadata);
+
+    await expect(layerB.writeContent('memories', name,
+      buildMemoryContent(name, [{ id: 'intruder', content: 'Wrong' }]), metadata,
+      { expectedIdentity: { id: idA, name } },
+    )).rejects.toMatchObject({ code: 'ESTALE' });
+    await expect(layerA.readContent(idA)).resolves.toBe(contentA);
+    await expect(layerB.readContent(idB)).resolves.toBe(contentB);
   });
 
   // ── Entry sync (within same transaction) ──────────────────────────
