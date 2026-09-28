@@ -572,11 +572,12 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     tx: DrizzleTx,
     elementId: string,
     tags: string[],
+    userId = this.userId,
   ): Promise<void> {
     await tx.delete(elementTags).where(eq(elementTags.elementId, elementId));
     if (tags.length > 0) {
       await tx.insert(elementTags).values(
-        tags.map(tag => ({ elementId, userId: this.userId, tag })),
+        tags.map(tag => ({ elementId, userId, tag })),
       );
     }
   }

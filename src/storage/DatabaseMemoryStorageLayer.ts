@@ -18,7 +18,7 @@ import { withUserContext, withUserRead } from '../database/rls.js';
 import { elements } from '../database/schema/elements.js';
 import { memoryEntries } from '../database/schema/memories.js';
 import type { UserIdResolver } from '../database/UserContext.js';
-import { isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
@@ -151,6 +151,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
         name: elements.name,
         content: elements.rawContent,
         revision: elements.storageRevision,
+        outOfSync: elements.memoryEntriesOutOfSync,
       })
       .from(elements)
       .where(and(
@@ -165,6 +166,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       error.code = 'ENOENT';
       throw error;
     }
+    if (row.outOfSync) throw this.createOutOfSyncError(row.name, row.id);
     return {
       content: row.content,
       token: {
@@ -183,10 +185,24 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     const userId = this.userId;
     const token = { ...expected };
     const revision = this.parseExpectedRevision(token, userId);
+    if (typeof nextName !== 'string' || !nextName) {
+      throw new TypeError('Memory head name must be a non-empty string');
+    }
     const inputMetadata = { ...metadata, tags: [...metadata.tags] };
-    const result = await this.persistMemoryContent(userId, nextName, content, inputMetadata, undefined, {
-      token, revision,
-    });
+    let result: { id: string; revision?: bigint };
+    try {
+      result = await this.persistMemoryContent(userId, nextName, content, inputMetadata, undefined, {
+        token, revision,
+      });
+    } catch (cause) {
+      if (!isSerializationFailure(cause)) throw cause;
+      // PostgreSQL rolled back the whole transaction. The caller must retain
+      // its unsaved head and reread before deciding whether to retry.
+      const error = new Error('Memory head save conflicted; keep the pending changes and reload before retrying',
+        { cause }) as NodeJS.ErrnoException;
+      error.code = 'EHEADCONFLICT';
+      throw error;
+    }
     return {
       backend: 'database', userId, ownerId: result.id, locator: result.id,
       name: nextName, revision: result.revision!.toString(),
@@ -254,10 +270,19 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
 
       // Replace tags
       const tags = metadata.tags.length > 0 ? metadata.tags : (extracted.tags ?? []);
-      await this.replaceTags(tx, row.id, tags);
+      await this.replaceTags(tx, row.id, tags, userId);
 
-      // Sync entries within the same transaction — no race window
-      await this.syncEntriesInTx(tx, row.id, content);
+      // Qualify the raw head against its child projection in this transaction.
+      // A malformed/unsynchronized head cannot receive a trusted new token.
+      const synchronized = await this.syncEntriesInTx(tx, row.id, content, userId, !!expectedHead);
+      if (expectedHead && !synchronized) {
+        throw this.createOutOfSyncError(elementName, row.id);
+      }
+      if (synchronized) {
+        await tx.update(elements)
+          .set({ memoryEntriesOutOfSync: false })
+          .where(and(eq(elements.userId, userId), eq(elements.id, row.id)));
+      }
 
       if (!expectedHead) return { id: row.id };
       // Child-entry triggers can advance the revision after the parent UPDATE.
@@ -310,6 +335,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
           eq(elements.id, token.ownerId),
           eq(elements.name, token.name),
           eq(elements.storageRevision, revision),
+          eq(elements.memoryEntriesOutOfSync, false),
         ))
         .returning({ id: elements.id });
       if (rows.length !== 1) {
@@ -367,6 +393,14 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       `Memory not found or identity changed during save: ${name}; expected row ${expectedId}`,
     ) as NodeJS.ErrnoException;
     error.code = 'ESTALE';
+    return error;
+  }
+
+  private createOutOfSyncError(name: string, ownerId: string): NodeJS.ErrnoException {
+    const error = new Error(
+      `Memory head and entry projection require reconciliation: ${name}; row ${ownerId}`,
+    ) as NodeJS.ErrnoException;
+    error.code = 'EHEADOUTOFSYNC';
     return error;
   }
 
@@ -531,7 +565,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     tx: DrizzleTx,
     memoryElementId: string,
     yamlContent: string,
-  ): Promise<void> {
+    userId: string,
+    strict: boolean,
+  ): Promise<boolean> {
     let parsed: Record<string, unknown>;
     try {
       parsed = SecureYamlParser.parseRawYaml(yamlContent, {
@@ -548,33 +584,46 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
         `[${STORE_NAME}] syncEntriesInTx: YAML parse failed for memory ${memoryElementId}, entries not synced`,
         { error: err instanceof Error ? err.message : String(err) },
       );
-      return;
+      return false;
     }
 
     const entries = parsed.entries;
-    if (!Array.isArray(entries)) return;
+    if (entries === undefined) {
+      const existing = await tx.select({ id: memoryEntries.id }).from(memoryEntries).where(and(
+        eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, memoryElementId),
+      )).limit(1);
+      return existing.length === 0;
+    }
+    if (!Array.isArray(entries)) return false;
+    if (strict && entries.some(entry => !entry || typeof entry !== 'object' ||
+      typeof (entry as Record<string, unknown>).id !== 'string' ||
+      typeof (entry as Record<string, unknown>).content !== 'string' ||
+      !(entry as Record<string, unknown>).content)) return false;
 
     // Defense-in-depth: include userId alongside the RLS context. Every other
     // DELETE in this module does the same — syncEntriesInTx is the last one
     // that needed to be brought in line.
     await tx.delete(memoryEntries).where(and(
-      eq(memoryEntries.userId, this.userId),
+      eq(memoryEntries.userId, userId),
       eq(memoryEntries.memoryId, memoryElementId),
     ));
 
-    if (entries.length === 0) return;
+    if (entries.length === 0) return true;
 
     const rows = entries.flatMap((entry, idx) => {
       if (!entry || typeof entry !== 'object') return [];
       const e = entry as Record<string, unknown>;
       const content = typeof e.content === 'string' ? e.content : '';
       if (!content) return [];
-      return [this.buildEntryRow(e, idx, memoryElementId, content)];
+      return [this.buildEntryRow(e, idx, memoryElementId, content, userId)];
     });
+
+    if (strict && rows.length !== entries.length) return false;
 
     if (rows.length > 0) {
       await tx.insert(memoryEntries).values(rows);
     }
+    return rows.length === entries.length;
   }
 
   private static parseTimestamp(value: unknown): Date {
@@ -600,9 +649,10 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     idx: number,
     memoryElementId: string,
     content: string,
+    userId: string,
   ) {
     return {
-      userId: this.userId,
+      userId,
       memoryId: memoryElementId,
       entryId: typeof e.id === 'string' ? e.id : `entry-${idx}`,
       timestamp: DatabaseMemoryStorageLayer.parseTimestamp(e.timestamp),

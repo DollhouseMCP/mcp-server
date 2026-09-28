@@ -46,6 +46,9 @@ export const elements = pgTable('elements', {
   // Monotonic storage token for conditional memory-head writes. A trigger
   // advances it for every UPDATE, including legacy and non-memory writers.
   storageRevision: bigint('storage_revision', { mode: 'bigint' }).notNull().default(1n),
+  // A raw head may not match memory_entries after legacy/direct writes. New
+  // snapshots fail closed until a full-head sync explicitly qualifies it.
+  memoryEntriesOutOfSync: boolean('memory_entries_out_of_sync').notNull().default(true),
 
   // Extracted metadata (indexed, query-optimized)
   elementType: varchar('element_type', { length: 32 }).notNull(),
