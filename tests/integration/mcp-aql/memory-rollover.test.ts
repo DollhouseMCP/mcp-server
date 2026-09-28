@@ -53,7 +53,7 @@ describe('rollover_memory (#2861)', () => {
   }
 
   function rollover(name: string, params: Record<string, unknown> = {}) {
-    return mcpAqlHandler.handleCreate({
+    return mcpAqlHandler.handleUpdate({
       operation: 'rollover_memory',
       params: { element_name: name, ...params },
     });

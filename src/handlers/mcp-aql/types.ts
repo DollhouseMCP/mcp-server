@@ -219,7 +219,7 @@ export const ENDPOINT_SAFETY: Record<string, OperationSafety> = {
  * Operation names grouped by endpoint
  */
 export const ENDPOINT_OPERATIONS = {
-  create: ['create_element', 'import_element', 'addEntry', 'rollover_memory', 'activate_element'],
+  create: ['create_element', 'import_element', 'addEntry', 'activate_element'],
   read: [
     'list_elements',
     'get_element',
@@ -232,7 +232,7 @@ export const ENDPOINT_OPERATIONS = {
     'deactivate_element',
     'introspect',
   ],
-  update: ['edit_element'],
+  update: ['edit_element', 'rollover_memory'],
   delete: ['delete_element', 'execute_agent', 'clear'],
 } as const;
 

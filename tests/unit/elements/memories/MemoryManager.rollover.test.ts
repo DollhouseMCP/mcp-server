@@ -27,7 +27,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
-import { MEMORY_CONSTANTS } from '../../../../src/elements/memories/constants.js';
+import { MEMORY_CONSTANTS, TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
 import type { MemoryRolloverOptions } from '../../../../src/elements/memories/types.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -169,6 +169,141 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
     await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
   });
 
+  it('omits the marker when a reduced entry limit would evict a kept entry', async () => {
+    const original = await buildMemory('Reduced Limit', 4);
+    const serialized = JSON.parse(original.serialize()) as { metadata: Record<string, unknown> };
+    serialized.metadata.maxEntries = 2;
+    serialized.metadata.onFull = 'evict_oldest';
+    const memory = new Memory({ name: 'Reduced Limit', maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
+    memory.deserialize(JSON.stringify(serialized));
+    // Editing metadata does not change the instance's effective constructor
+    // limit; the projected head must use the same capacity as the live head.
+    memory.metadata.maxEntries = 5000;
+    const keptIds = memory.planRollover([], 2).kept.map(entry => entry.id);
+
+    const result = await manager.rolloverMemory(memory, options({ keepLatest: 2, keepTags: [] }));
+
+    expect(result.includeMarker).toBe(false);
+    expect(result.markerEntry).toBeUndefined();
+    memory.applyRollover(result.sealedIds, result.volumes);
+    expect(memory.getStats().totalEntries).toBe(2);
+    expect(memory.planRollover([], 2).kept.map(entry => entry.id)).toEqual(keptIds);
+    expect(memory.getPolicyRemovedCount()).toBe(0);
+    await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
+  });
+
+  it('leaves the final count-limit slot for the next user entry', async () => {
+    const memory = new Memory({ name: 'One Free Slot', maxEntries: 2, onFull: 'error' }, metadataService);
+    await memory.addEntry('seal this');
+    const kept = await memory.addEntry('keep this');
+
+    const result = await manager.rolloverMemory(memory, options({ keepLatest: 1, keepTags: [] }));
+    expect(result.includeMarker).toBe(false);
+    memory.applyRollover(result.sealedIds, result.volumes);
+    expect(memory.getEntries().has(kept.id)).toBe(true);
+    await expect(memory.addEntry('next user entry')).resolves.toBeDefined();
+    expect(memory.getStats().totalEntries).toBe(2);
+    expect(memory.getPolicyRemovedCount()).toBe(0);
+  });
+
+  it('never evicts an entry for a marker when maxEntries is clamped to 1000', () => {
+    const memory = new Memory({ name: 'Clamped Limit', maxEntries: 5000, onFull: 'evict_oldest' }, metadataService);
+    const serialized = JSON.parse(memory.serialize()) as { entries: Array<Record<string, unknown>> };
+    serialized.entries = Array.from({ length: 1000 }, (_, index) => ({
+      id: `kept-${index}`, timestamp: '2026-01-01T00:00:00.000Z',
+      content: `kept ${index}`, tags: [], trustLevel: 'untrusted',
+    }));
+    memory.deserialize(JSON.stringify(serialized));
+    memory.metadata.maxEntries = 5000;
+    const keptIds = new Set(memory.planRollover([], 1000).kept.map(entry => entry.id));
+    const marker = memory.prepareRolloverMarker('Archived earlier entries.', [1]);
+
+    expect(memory.appendPreparedRolloverMarkerIfCapacity(marker)).toBe(false);
+    expect(new Set(memory.planRollover([], 1000).kept.map(entry => entry.id))).toEqual(keptIds);
+    expect(memory.getPolicyRemovedCount()).toBe(0);
+  });
+
+  it('uses the identical sanitized marker in projection and live memory', async () => {
+    const memory = await buildMemory('Prepared Marker', 4);
+    const result = await manager.rolloverMemory(memory, options({ keepLatest: 1, reason: 'exact entry' }));
+
+    expect(result.markerEntry).toBeDefined();
+    expect(result.markerEntry?.metadata?.rolloverVolumes).toEqual([1]);
+    memory.applyRollover(result.sealedIds, result.volumes);
+    expect(memory.appendPreparedRolloverMarkerIfCapacity(result.markerEntry!)).toBe(true);
+    expect(memory.appendPreparedRolloverMarkerIfCapacity(result.markerEntry!)).toBe(false);
+    expect(memory.getEntries().get(result.markerEntry!.id)).toBe(result.markerEntry);
+    expect(memory.getPolicyRemovedCount()).toBe(0);
+    await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
+  });
+
+  it('projects expired kept entries without invoking on-load retention', async () => {
+    const retention = { shouldEnforceOnLoad: () => true, isEnabled: () => true };
+    const memory = new Memory({ name: 'Expired Kept', retentionDays: 1 }, metadataService, undefined, retention);
+    const kept = await memory.addEntry('must stay live', ['pinned']);
+    kept.expiresAt = new Date('2020-01-01T00:00:00.000Z');
+    await memory.addEntry('seal me');
+
+    const result = await manager.rolloverMemory(memory, options({ keepTags: ['pinned'], keepLatest: 0 }));
+    memory.applyRollover(result.sealedIds, result.volumes);
+    if (result.markerEntry) memory.appendPreparedRolloverMarkerIfCapacity(result.markerEntry);
+
+    expect(memory.getEntries().has(kept.id)).toBe(true);
+    await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
+  });
+
+  it('archives every selected live entry without a second quarantine filter', async () => {
+    const memory = new Memory({ name: 'Quarantined Archive' }, metadataService);
+    const archived = await memory.addEntry('archive the exact bytes');
+    archived.trustLevel = TRUST_LEVELS.QUARANTINED;
+    await memory.addEntry('keep newest');
+
+    const result = await manager.rolloverMemory(memory, options({ keepLatest: 1, keepTags: [] }));
+    expect(result.sealedCount).toBe(1);
+    const yaml = await fs.readFile(path.join(memoriesDir, result.volumes[0].file), 'utf8');
+    expect(yaml).toContain(archived.id);
+    expect(yaml).toContain('archive the exact bytes');
+    expect(result.volumes[0].entryCount).toBe(1);
+  });
+
+  it('keeps the actual post-rollover YAML within the limit at the marker boundary', async () => {
+    const makeBoundaryMemory = (thirdSize: number): Memory => {
+      const memory = new Memory({ name: 'Marker Boundary' }, metadataService);
+      const serialized = JSON.parse(memory.serialize()) as { entries: Array<Record<string, unknown>> };
+      serialized.entries = [
+        { id: 'keep-3', timestamp: '2026-01-04T00:00:00.000Z', content: 'c'.repeat(thirdSize), tags: [] },
+        { id: 'keep-2', timestamp: '2026-01-03T00:00:00.000Z', content: 'b'.repeat(100_000), tags: [] },
+        { id: 'keep-1', timestamp: '2026-01-02T00:00:00.000Z', content: 'a'.repeat(100_000), tags: [] },
+        { id: 'seal-1', timestamp: '2026-01-01T00:00:00.000Z', content: 'old', tags: [] },
+      ];
+      memory.deserialize(JSON.stringify(serialized));
+      return memory;
+    };
+
+    // Find the largest retained payload accepted by preflight; it leaves less
+    // room than a marker and exercises the exact serialized-head boundary.
+    let low = 0;
+    let high = 62_000;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      const probe = makeBoundaryMemory(mid);
+      try {
+        await manager.rolloverMemory(probe, options({ dryRun: true, keepLatest: 3, keepTags: [] }));
+        low = mid;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes('still over the')) throw error;
+        high = mid - 1;
+      }
+    }
+
+    const memory = makeBoundaryMemory(low);
+    const result = await manager.rolloverMemory(memory, options({ keepLatest: 3, keepTags: [] }));
+    expect(result.includeMarker).toBe(false);
+    memory.applyRollover(result.sealedIds, result.volumes);
+    expect(memory.getStats().totalEntries).toBe(3);
+    await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
+  });
+
   it('refuses before writing anything when the live memory would still be too large', async () => {
     const memory = await buildMemory('Still Too Big', 40, 16 * 1024);
 
@@ -177,7 +312,7 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
     expect(await volumeFiles('still-too-big')).toEqual([]);
   });
 
-  it('removes the volumes it wrote when a later volume fails, and changes nothing', async () => {
+  it('removes the volumes it wrote when a later volume fails, without changing the live memory', async () => {
     const memory = await buildMemory('Fails Midway', 40, 16 * 1024);
     const fileOps = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
     const original = fileOps.createFileExclusive.bind(fileOps);
@@ -190,11 +325,33 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
 
     try {
       await expect(manager.rolloverMemory(memory, options({ keepLatest: 2 })))
-        .rejects.toThrow('nothing was changed');
+        .rejects.toThrow('recorded volumes were removed');
     } finally {
       spy.mockRestore();
     }
     expect(await volumeFiles('fails-midway')).toEqual([]);
+    expect((await memory.search({})).length).toBe(40);
+  });
+
+  it('reports an incomplete cleanup instead of claiming a full rollback', async () => {
+    const memory = await buildMemory('Cleanup Fails', 40, 16 * 1024);
+    const fileOps = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const create = fileOps.createFileExclusive.bind(fileOps);
+    let calls = 0;
+    const createSpy = jest.spyOn(fileOps, 'createFileExclusive').mockImplementation(async (...args) => {
+      calls++;
+      if (calls === 2) throw new Error('second volume failed');
+      return create(...args);
+    });
+    const deleteSpy = jest.spyOn(fileOps, 'deleteFile').mockRejectedValueOnce(new Error('permission denied'));
+    try {
+      await expect(manager.rolloverMemory(memory, options({ keepLatest: 2 })))
+        .rejects.toThrow(/cleanup failed and unindexed archive copies may remain.*volume 1: permission denied/);
+    } finally {
+      createSpy.mockRestore();
+      deleteSpy.mockRestore();
+    }
+    expect(await volumeFiles('cleanup-fails')).toEqual(['v0001.yaml']);
     expect((await memory.search({})).length).toBe(40);
   });
 

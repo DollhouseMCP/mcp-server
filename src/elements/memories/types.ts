@@ -129,4 +129,8 @@ export interface MemoryRolloverResult {
   volumes: MemoryVolumeRecord[];
   /** Entry ids moved out of the live memory; empty on a dry run */
   sealedIds: string[];
+  /** Internal preflight decision; an informational marker must never evict kept entries. */
+  includeMarker?: boolean;
+  /** Exact prepared marker projected into the head; omitted when it would exceed a limit. */
+  markerEntry?: MemoryEntry;
 }

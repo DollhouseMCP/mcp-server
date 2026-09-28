@@ -16,10 +16,12 @@ import { STORAGE_LAYER_CONFIG } from '../../../../src/config/performance-constan
 type HandlerCtorArgs = ConstructorParameters<typeof MemorySaveHandler>;
 
 interface MockMemory {
-  metadata: { name: string };
+  metadata: { name: string; maxEntries?: number };
   entries: Map<string, unknown>;
   addEntry: jest.Mock;
+  appendPreparedRolloverMarkerIfCapacity: jest.Mock;
   getEntries: () => Map<string, unknown>;
+  getStats: () => { totalEntries: number };
   getPolicyRemovedCount: jest.Mock;
   applyRollover: jest.Mock;
   removeEntry: jest.Mock;
@@ -47,7 +49,9 @@ function makeMemory(name: string): MockMemory {
         trustLevel: 'untrusted',
       });
     }),
+    appendPreparedRolloverMarkerIfCapacity: jest.fn(() => true),
     getEntries: () => entries,
+    getStats: () => ({ totalEntries: entries.size }),
     getPolicyRemovedCount: jest.fn(() => 0),
     applyRollover: jest.fn(),
     removeEntry: jest.fn((id: string) => entries.delete(id)),
@@ -295,9 +299,15 @@ describe('MemorySaveHandler', () => {
       entryCount: 3, firstEntryAt: '2026-01-01T00:00:00.000Z', lastEntryAt: '2026-01-03T00:00:00.000Z',
       sha256: 'c'.repeat(64),
     };
+    const markerEntry = {
+      id: 'prepared-marker', timestamp: new Date('2026-02-01T00:00:00.000Z'),
+      content: 'Rolled over 3 entries into archive volume 1. Reason: near limit',
+      tags: ['rollover', 'system'], metadata: { rolloverVolumes: [1] }, source: 'rollover',
+    };
     const sealedResult = (dryRun = false) => ({
       memory: 'notes', dryRun, sealedCount: 3, keptCount: 2, volumes: [record],
       sealedIds: dryRun ? [] : ['e1', 'e2', 'e3'],
+      markerEntry: dryRun ? undefined : markerEntry,
     });
 
     it('applies the rollover, adds a marker entry, and saves immediately', async () => {
@@ -311,13 +321,8 @@ describe('MemorySaveHandler', () => {
         keepLatest: 2, dryRun: false, reason: 'near limit', keepTags: ['pinned', 'read-first', 'schema'],
       }));
       expect(memory.applyRollover).toHaveBeenCalledWith(['e1', 'e2', 'e3'], [record]);
-      expect(memory.addEntry).toHaveBeenCalledWith(
-        expect.stringContaining('Rolled over 3 entries into archive volume 1'),
-        ['rollover', 'system'],
-        { rolloverVolumes: [1] },
-        'rollover',
-      );
-      expect(memory.addEntry.mock.calls[0][0]).toContain('Reason: near limit');
+      expect(memory.appendPreparedRolloverMarkerIfCapacity).toHaveBeenCalledWith(markerEntry);
+      expect(memory.addEntry).not.toHaveBeenCalled();
       expect(manager.save).toHaveBeenCalledTimes(1); // immediate, not debounced
       expect(result).toEqual({ memory: 'notes', dryRun: false, sealedCount: 3, keptCount: 2, volumes: [record] });
     });
@@ -350,11 +355,27 @@ describe('MemorySaveHandler', () => {
       const memory = makeMemory('notes');
       const { handler, manager } = makeHandler(memory);
       manager.rolloverMemory.mockResolvedValue(sealedResult());
-      memory.addEntry.mockRejectedValueOnce(new Error("Memory 'notes' is full"));
+      memory.appendPreparedRolloverMarkerIfCapacity.mockReturnValueOnce(false);
 
       await handler.dispatch('rollover', { element_name: 'notes' });
 
       expect(memory.applyRollover).toHaveBeenCalled();
+      expect(manager.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips an informational marker when it would evict a kept entry', async () => {
+      const memory = makeMemory('notes');
+      memory.metadata.maxEntries = 2;
+      memory.entries.set('kept-1', { content: 'keep this' });
+      memory.entries.set('kept-2', { content: 'and this' });
+      const { handler, manager } = makeHandler(memory);
+      manager.rolloverMemory.mockResolvedValue({ ...sealedResult(), markerEntry: undefined, includeMarker: false });
+
+      await handler.dispatch('rollover', { element_name: 'notes' });
+
+      expect(memory.addEntry).not.toHaveBeenCalled();
+      expect(memory.appendPreparedRolloverMarkerIfCapacity).not.toHaveBeenCalled();
+      expect(memory.entries.size).toBe(2);
       expect(manager.save).toHaveBeenCalledTimes(1);
     });
 

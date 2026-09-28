@@ -62,9 +62,9 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Memory.addEntry',
     description: 'Add a new entry to a memory element',
   },
-  // Issue #2861: seal older entries into read-only archive volumes
+  // Issue #2861: rewrites the existing live memory, so UPDATE confirmation applies.
   rollover_memory: {
-    endpoint: 'CREATE',
+    endpoint: 'UPDATE',
     handler: 'Memory.rollover',
     description: 'Seal older memory entries into read-only archive volumes, keeping the memory name',
   },

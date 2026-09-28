@@ -1222,7 +1222,7 @@ export const MEMORY_SCHEMAS: OperationSchemaMap = {
   },
   // Issue #2861
   rollover_memory: {
-    endpoint: 'CREATE',
+    endpoint: 'UPDATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchMemory',
     category: 'Memory',

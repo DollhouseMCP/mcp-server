@@ -528,6 +528,7 @@ describe('OperationSchema', () => {
 
       it('should have correct endpoints', () => {
         expect(MEMORY_SCHEMAS.addEntry.endpoint).toBe('CREATE');
+        expect(MEMORY_SCHEMAS.rollover_memory.endpoint).toBe('UPDATE');
         expect(MEMORY_SCHEMAS.clear.endpoint).toBe('DELETE');
       });
 

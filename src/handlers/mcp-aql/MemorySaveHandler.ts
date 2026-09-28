@@ -422,7 +422,9 @@ export class MemorySaveHandler {
         this.pendingSaves.delete(saveKey);
       }
       targetMemory.applyRollover(result.sealedIds, result.volumes);
-      await this.addRolloverMarker(targetMemory, result, options.reason);
+      if (result.markerEntry) {
+        this.addRolloverMarker(targetMemory, result);
+      }
       await this.saveMemoryTracked(saveKey, targetMemory, manager);
       return MemorySaveHandler.rolloverReceipt(result);
     } finally {
@@ -469,15 +471,11 @@ export class MemorySaveHandler {
    * authoritative; this entry is informational, so a failure here (for example
    * a memory whose kept entries still fill it) does not stop the save.
    */
-  private async addRolloverMarker(memory: Memory, result: MemoryRolloverResult, reason?: string): Promise<void> {
-    const volumes = result.volumes.map(record => record.volume);
-    const first = result.volumes[0]?.firstEntryAt;
-    const last = result.volumes.at(-1)?.lastEntryAt;
-    const range = first && last ? ` (${first} to ${last})` : '';
-    const text = `Rolled over ${result.sealedCount} entries into archive volume${volumes.length === 1 ? '' : 's'} ` +
-      `${volumes.join(', ')}${range}.` + (reason ? ` Reason: ${reason}` : '');
+  private addRolloverMarker(memory: Memory, result: MemoryRolloverResult): void {
     try {
-      await memory.addEntry(text, [...MEMORY_CONSTANTS.ROLLOVER_MARKER_TAGS], { rolloverVolumes: volumes }, 'rollover');
+      // The same sanitized entry was measured in the projected head. This
+      // operation cannot invoke the memory's eviction policy.
+      memory.appendPreparedRolloverMarkerIfCapacity(result.markerEntry!);
     } catch (error) {
       logger.warn(`[MemorySaveHandler] Rollover marker not added to memory '${memory.metadata.name}'`, {
         error: error instanceof Error ? error.message : String(error),
