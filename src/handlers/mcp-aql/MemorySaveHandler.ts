@@ -53,6 +53,8 @@ interface FailedSave {
 }
 
 export class MemorySaveHandler {
+  /** Serialize append validation and clear for the same in-process Memory object. */
+  private static readonly mutationTails = new WeakMap<Memory, Promise<void>>();
   private readonly pendingSaves = new Map<string, PendingSave>();
   private readonly debounceMetrics = { coalesced: 0, written: 0 };
   private readonly saveFrequencyCounters = new Map<string, SaveFrequencyCounter>();
@@ -293,6 +295,39 @@ export class MemorySaveHandler {
     const priorFailure = this.failedMemorySaves.get(saveKey);
     const targetMemory = priorFailure?.memory ?? this.pendingSaves.get(saveKey)?.memory ?? memory;
 
+    return MemorySaveHandler.withMemoryMutation(targetMemory, () =>
+      this.appendValidated(memoryName, targetMemory, manager, saveKey, priorFailure, content, tags, metadata)
+    );
+  }
+
+  private static async withMemoryMutation<T>(memory: Memory, mutate: () => Promise<T>): Promise<T> {
+    const prior = MemorySaveHandler.mutationTails.get(memory) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const tail = prior.then(() => gate);
+    MemorySaveHandler.mutationTails.set(memory, tail);
+    await prior;
+    try {
+      return await mutate();
+    } finally {
+      release();
+      if (MemorySaveHandler.mutationTails.get(memory) === tail) {
+        MemorySaveHandler.mutationTails.delete(memory);
+      }
+    }
+  }
+
+  private async appendValidated(
+    memoryName: string,
+    targetMemory: Memory,
+    manager: MemoryManager,
+    saveKey: string,
+    priorFailure: FailedSave | undefined,
+    content: string,
+    tags: string[] | undefined,
+    metadata: Record<string, unknown> | undefined,
+  ): Promise<unknown> {
+
     // Issue #2329: if a previous save of this memory failed (e.g. disk error),
     // recover before accepting more entries — otherwise they pile up in RAM
     // behind the same failure and are lost on restart.
@@ -308,28 +343,29 @@ export class MemorySaveHandler {
       }
     }
 
-    const entriesBefore = targetMemory.getEntries().size;
+    const before = targetMemory.captureAppendState();
     const policyRemovedBefore = targetMemory.getPolicyRemovedCount();
-    const entryResult = await targetMemory.addEntry(content, tags, metadata);
+    const candidate = targetMemory.createAppendCandidate();
+    let entryResult: Awaited<ReturnType<Memory['addEntry']>>;
 
     // Issue #2329: verify the memory can still be persisted BEFORE reporting
     // success. The disk write below is deferred (debounced), so a validation
     // failure there can never reach the caller — entries were acknowledged with
     // an id and then silently lost when the memory outgrew save limits.
     try {
-      await manager.assertPersistable(targetMemory);
+      entryResult = await candidate.addEntry(content, tags, metadata);
+      await manager.assertPersistable(candidate);
     } catch (validationErr) {
-      targetMemory.removeEntry(entryResult.id);
-      // addEntry may have evicted old entries (retention/capacity policy) before
-      // validation failed. The eviction stands — it would happen on any future
-      // successful add — but it must reach disk, or RAM and disk silently
-      // diverge with no save scheduled.
-      if (targetMemory.getEntries().size !== entriesBefore) {
-        this.debouncedMemorySave(memoryName, targetMemory, manager);
-      }
       throw new Error(
         `Entry NOT saved to memory '${memoryName}': ` +
         `${validationErr instanceof Error ? validationErr.message : validationErr}`
+      );
+    }
+
+    if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {
+      throw new Error(
+        `Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. ` +
+        `Check the current memory and retry.`
       );
     }
 
@@ -494,19 +530,24 @@ export class MemorySaveHandler {
   }
 
   private async clear(memoryName: string, memory: Memory, manager: MemoryManager): Promise<unknown> {
-    // Issue #2329: cancel any pending debounced save first — a stale timer
-    // firing after the clear would resurrect the pre-clear entries on disk.
     const clearKey = this.memorySaveKey(memoryName);
-    const pendingClear = this.pendingSaves.get(clearKey);
-    if (pendingClear) {
-      clearTimeout(pendingClear.timer);
-      this.pendingSaves.delete(clearKey);
-    }
-    const clearResult = await memory.clearAll(true);
-    // Fix #438: persist so cleared state survives restart. Tracked so a success
-    // clears any stale failure record for this memory.
-    await this.saveMemoryTracked(clearKey, memory, manager);
-    return clearResult;
+    const targetMemory = this.failedMemorySaves.get(clearKey)?.memory
+      ?? this.pendingSaves.get(clearKey)?.memory
+      ?? memory;
+    return MemorySaveHandler.withMemoryMutation(targetMemory, async () => {
+      // Issue #2329: cancel any pending debounced save first — a stale timer
+      // firing after the clear would resurrect the pre-clear entries on disk.
+      const pendingClear = this.pendingSaves.get(clearKey);
+      if (pendingClear) {
+        clearTimeout(pendingClear.timer);
+        this.pendingSaves.delete(clearKey);
+      }
+      const clearResult = await targetMemory.clearAll(true);
+      // Fix #438: persist so cleared state survives restart. Tracked so a success
+      // clears any stale failure record for this memory.
+      await this.saveMemoryTracked(clearKey, targetMemory, manager);
+      return clearResult;
+    });
   }
 
   private debouncedMemorySave(

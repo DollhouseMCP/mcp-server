@@ -410,20 +410,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // If markdown content exists after frontmatter, add it as a memory entry.
     // Preserves content from seed memories and memory files with markdown sections.
     if (parsedData.content.trim()) {
-      try {
-        await memory.addEntry(
-          parsedData.content.trim(),
-          [],  // tags
-          { loadedAt: new Date().toISOString() },  // metadata
-          'file',  // source
-        );
-      } catch (error) {
-        // Issue #2859: a full memory rejects new entries rather than evicting.
-        // Keep the memory loadable; only the markdown body is skipped.
-        logger.warn(`[MemoryManager] Markdown body not added to memory '${memory.metadata.name}' on load`, {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      // Loading existing bytes must not apply append-time capacity or retention
+      // policy: a full memory may be read-only, but its body is still data.
+      memory.appendLoadedMarkdownBody(parsedData.content.trim());
     }
   }
 

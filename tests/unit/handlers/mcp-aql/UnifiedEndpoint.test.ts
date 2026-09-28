@@ -46,6 +46,15 @@ describe('UnifiedEndpoint', () => {
           removeEntry: jest.fn().mockReturnValue(true),
           getEntries: jest.fn().mockReturnValue(new Map()),
           getPolicyRemovedCount: jest.fn().mockReturnValue(0),
+          captureAppendState: jest.fn().mockReturnValue({ fingerprint: 'unchanged' }),
+          createAppendCandidate: jest.fn().mockReturnValue({
+            addEntry: jest.fn().mockResolvedValue({
+              id: 'entry-1',
+              timestamp: new Date('2026-01-01T00:00:00.000Z'),
+              trustLevel: 'untrusted',
+            }),
+          }),
+          commitAppendCandidate: jest.fn().mockReturnValue(true),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
         }),
         save: jest.fn().mockResolvedValue(undefined),
