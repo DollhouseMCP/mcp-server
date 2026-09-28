@@ -272,7 +272,13 @@ describe('DatabaseMemoryStorageLayer versioned head contract', () => {
     const id = await layer.writeContent('memories', 'invalid-candidate', original, metadata);
     const before = await layer.readHeadSnapshot(id);
     for (const invalid of ['', '   ', 'entries: [', 'name: invalid-candidate\nentries: bad-shape',
-      buildMemoryContent('invalid-candidate')]) {
+      buildMemoryContent('invalid-candidate'),
+      buildMemoryContent('invalid-candidate', [
+        { id: 'duplicate', content: 'First' }, { id: 'duplicate', content: 'Second' },
+      ]),
+      buildMemoryContent('invalid-candidate', [{ id: 'bad-date', content: 'Bad', timestamp: 'not-a-date' }]),
+      'name: invalid-candidate\nentries:\n  - id: bad-expiry\n    content: Bad\n    expiresAt: impossible\n',
+    ]) {
       await expect(layer.writeHeadIfCurrent(before.token, 'invalid-candidate', invalid, metadata))
         .rejects.toMatchObject({ code: 'EINVALIDHEAD' });
       expect(await layer.readHeadSnapshot(id)).toEqual(before);

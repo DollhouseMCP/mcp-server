@@ -595,11 +595,11 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       return false;
     }
     const qualifiable = entries.every(DatabaseMemoryStorageLayer.isQualifiableEntry);
-    if (strict && !qualifiable) {
-      throw this.createInvalidHeadError('Memory head contains an invalid entry');
-    }
     // Legacy writes may still project id-less entries using synthetic child
     // IDs, but such YAML cannot round-trip through a strict conditional save.
+
+    const rows = this.buildSyncEntryRows(entries, memoryElementId, userId);
+    if (strict) this.assertStrictSyncEntries(qualifiable, entries.length, rows.map(row => row.entryId));
 
     // Defense-in-depth: include userId alongside the RLS context. Every other
     // DELETE in this module does the same — syncEntriesInTx is the last one
@@ -610,12 +610,6 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     ));
 
     if (entries.length === 0) return true;
-
-    const rows = this.buildSyncEntryRows(entries, memoryElementId, userId);
-
-    if (strict && rows.length !== entries.length) {
-      throw this.createInvalidHeadError('Memory head contains an invalid entry');
-    }
 
     if (rows.length > 0) {
       await tx.insert(memoryEntries).values(rows);
@@ -655,7 +649,24 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     if (!entry || typeof entry !== 'object') return false;
     const value = entry as Record<string, unknown>;
     return typeof value.id === 'string' && !!value.id &&
-      typeof value.content === 'string' && !!value.content;
+      typeof value.content === 'string' && !!value.content &&
+      DatabaseMemoryStorageLayer.isValidOptionalEntryDate(value.timestamp) &&
+      DatabaseMemoryStorageLayer.isValidOptionalEntryDate(value.expiresAt);
+  }
+
+  private static isValidOptionalEntryDate(value: unknown): boolean {
+    if (value instanceof Date) return Number.isFinite(value.getTime());
+    if (typeof value === 'string') return Number.isFinite(Date.parse(value));
+    return true;
+  }
+
+  private assertStrictSyncEntries(qualifiable: boolean, entryCount: number, entryIds: readonly string[]): void {
+    if (!qualifiable || entryIds.length !== entryCount) {
+      throw this.createInvalidHeadError('Memory head contains an invalid entry');
+    }
+    if (new Set(entryIds).size !== entryIds.length) {
+      throw this.createInvalidHeadError('Memory head contains duplicate entry IDs');
+    }
   }
 
   private buildSyncEntryRows(entries: unknown[], memoryElementId: string, userId: string) {
