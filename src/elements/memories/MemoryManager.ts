@@ -315,6 +315,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // validateSerializedMemoryYaml still enforces MAX_YAML_SIZE on every save.
     const parsed = this.serializationService.parseFrontmatter(content, {
       maxYamlSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
+      maxContentSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
       validateContent: false,  // FIX (#1206): Local files are pre-trusted
       source: 'MemoryManager.parseContent',
       schema: 'json',  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
