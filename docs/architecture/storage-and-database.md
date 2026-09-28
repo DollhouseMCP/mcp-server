@@ -371,6 +371,10 @@ In addition to the `IWritableStorageLayer` methods, `DatabaseMemoryStorageLayer`
 
 The default limit for `getEntries` is 1,000 rows. Pass an explicit `limit` for hot paths that only need a small window.
 
+**Versioned memory-head storage contract (migration 0056):** `readHeadSnapshot(rowId)` reads the YAML and an owner-, tenant-, name-, and revision-bound token from one row. `writeHeadIfCurrent(token, nextName, content, metadata)` compares that token inside a transaction, synchronizes tags and child entries, and returns the final revision only after commit. PostgreSQL advances the revision on parent updates and direct child mutations, including an A→B→A content cycle. A stale token fails with `ESTALE`; checked malformed YAML, invalid entry IDs, and invalid entry dates fail with `EINVALIDHEAD` without changing the stored head; a deadlock or serialization abort fails with `EHEADCONFLICT` and retains its original cause. Other entry-field constraint errors still pass through pending #2887. The caller must keep its unsaved content and reload before deciding whether to retry a conflict.
+
+The `memory_entries_out_of_sync` flag defaults to true, including for pre-existing memories. A snapshot fails with `EHEADOUTOFSYNC` until a full-head sync qualifies the row. Qualification requires entries with explicit nonempty IDs and content; legacy writes may still project id-less entries using fallback child IDs, but those heads remain unqualified. Direct child writes or external raw-content edits mark the head out of sync again. Existing rows need explicit reconciliation before this API can be activated for production saves. Legacy `writeContent()` remains a name-keyed upsert and can overwrite a newer child projection even after the flag is set; routing all production memory writers through conditional head saves is a remaining #2870 integration requirement. This storage contract alone does not make direct child writes and whole-head writers interchangeable. Concurrent child/head transactions can deadlock; PostgreSQL aborts one transaction rather than committing a stale head.
+
 ---
 
 ## Schema design
