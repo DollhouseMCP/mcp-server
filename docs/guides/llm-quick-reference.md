@@ -231,9 +231,10 @@ mcp_aql_create {
 }
 ```
 
-The response is a receipt containing `id`, `timestamp`, and `trustLevel`. Entry
-content is not echoed because new entries begin as untrusted and are validated
-asynchronously before their trust level can be promoted.
+The response is a receipt containing `id`, `timestamp`, and `trustLevel`, plus an
+optional `warning` when retention or an explicit `onFull: evict_oldest` policy
+removed existing entries. Entry content is not echoed because new entries begin
+as untrusted and are validated asynchronously before their trust level can be promoted.
 
 ---
 

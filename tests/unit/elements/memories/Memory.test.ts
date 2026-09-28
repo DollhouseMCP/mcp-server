@@ -143,6 +143,58 @@ describe('Memory Element', () => {
         expect(new Memory({}, metadataService).metadata.onFull).toBeUndefined();
       });
 
+      it('follows edited retentionDays for the default policy and new entry expiry', async () => {
+        const memory = new Memory({ name: 'Edited Retention' }, metadataService);
+        expect(memory.getOnFullPolicy()).toBe('error');
+
+        memory.metadata.retentionDays = 30;
+        expect(memory.getOnFullPolicy()).toBe('evict_oldest');
+        const entry = await memory.addEntry('Expires after edit');
+        const daysUntilExpiry = (entry.expiresAt!.getTime() - entry.timestamp.getTime()) / 86_400_000;
+        expect(daysUntilExpiry).toBeGreaterThan(29);
+        expect(daysUntilExpiry).toBeLessThan(31);
+      });
+
+      it('uses deserialized metadata policy on the same instance', async () => {
+        const full = new Memory({ name: 'Reloaded Policy', maxEntries: 2 }, metadataService);
+        const oldest = await full.addEntry('Oldest');
+        await full.addEntry('Newer');
+        const data = JSON.parse(full.serialize());
+        data.metadata.onFull = 'evict_oldest';
+
+        full.deserialize(JSON.stringify(data));
+        expect(full.getOnFullPolicy()).toBe('evict_oldest');
+        await expect(full.addEntry('Newest')).resolves.toBeDefined();
+        expect(full.getEntries().has(oldest.id)).toBe(false);
+      });
+
+      it('keeps tied entries stable across repeated save/load and evicts the oldest insertion', async () => {
+        const original = new Memory({ name: 'Tied Entries', maxEntries: 3, onFull: 'evict_oldest' }, metadataService);
+        const tiedAt = new Date('2026-03-01T00:00:00Z');
+        const inserted = [];
+        for (const content of ['first', 'second', 'third']) {
+          const entry = await original.addEntry(content);
+          (original as any).entries.get(entry.id).timestamp = tiedAt;
+          inserted.push(entry.id);
+        }
+
+        let serialized = original.serialize();
+        const firstOrder = JSON.parse(serialized).entries.map((entry: MemoryEntry) => entry.id);
+        expect(firstOrder).toEqual([...inserted].reverse());
+        let loaded = original;
+        for (let i = 0; i < 3; i++) {
+          loaded = new Memory({ name: 'Tied Entries', maxEntries: 3 }, metadataService);
+          loaded.deserialize(serialized);
+          serialized = loaded.serialize();
+          expect(JSON.parse(serialized).entries.map((entry: MemoryEntry) => entry.id)).toEqual(firstOrder);
+        }
+
+        await loaded.addEntry('fourth');
+        expect(loaded.getEntries().has(inserted[0])).toBe(false);
+        expect(loaded.getEntries().has(inserted[1])).toBe(true);
+        expect(loaded.getEntries().has(inserted[2])).toBe(true);
+      });
+
       it('keeps all entries when loading more than maxEntries, and stays read-only', async () => {
         const source = new Memory({ name: 'Oversized Source', onFull: 'evict_oldest' }, metadataService);
         for (let i = 0; i < 5; i++) {

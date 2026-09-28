@@ -5,6 +5,7 @@ const { ElementType } = await import('../../../../src/portfolio/PortfolioManager
 const { ElementNotFoundError } = await import('../../../../src/utils/ErrorHandler.js');
 const { SECURITY_LIMITS } = await import('../../../../src/security/constants.js');
 const { Ensemble } = await import('../../../../src/elements/ensembles/Ensemble.js');
+const { Memory } = await import('../../../../src/elements/memories/Memory.js');
 const { createTestMetadataService } = await import('../../../helpers/di-mocks.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 
@@ -188,6 +189,27 @@ describe('editElement helper', () => {
 
       expect(mockContext.memoryManager.save).toHaveBeenCalled();
       expect(result.content[0].text).toContain('✅');
+    });
+
+    it('applies an edited onFull policy to the cached memory before the next add', async () => {
+      const element = new Memory({ name: TEST_MEMORY_NAME, maxEntries: 2 }, createTestMetadataService());
+      const oldest = await element.addEntry('Oldest');
+      await element.addEntry('Newer');
+      await expect(element.addEntry('Blocked')).rejects.toThrow('is full');
+      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: TEST_MEMORY_NAME,
+        type: ElementType.MEMORY,
+        input: { metadata: { onFull: 'evict_oldest' } },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      expect(result.content[0].text).not.toContain('Unrecognized');
+      expect(mockContext.memoryManager.save).toHaveBeenCalledWith(element, 'test-memory.yaml');
+      expect(element.getOnFullPolicy()).toBe('evict_oldest');
+      await element.addEntry('Newest');
+      expect(element.getEntries().has(oldest.id)).toBe(false);
     });
 
     // Issue #1591: Memory content is append-only
