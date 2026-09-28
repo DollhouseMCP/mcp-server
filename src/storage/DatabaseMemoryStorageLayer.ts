@@ -577,27 +577,8 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     userId: string,
     strict: boolean,
   ): Promise<boolean> {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = SecureYamlParser.parseRawYaml(yamlContent, {
-        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
-        contentPolicy: 'structure-only',
-      });
-      if (!validateMemoryControlFields(parsed)) {
-        throw new Error('Malicious memory control content detected');
-      }
-    } catch (err) {
-      if (strict) {
-        throw this.createInvalidHeadError('Memory head YAML is invalid or exceeds its size limit', err);
-      }
-      // Parse failure drops entries silently — element row still persists.
-      // Log so operators see skipped entry sync and can investigate corrupted YAML.
-      logger.warn(
-        `[${STORE_NAME}] syncEntriesInTx: YAML parse failed for memory ${memoryElementId}, entries not synced`,
-        { error: err instanceof Error ? err.message : String(err) },
-      );
-      return false;
-    }
+    const parsed = this.parseMemoryHeadForSync(yamlContent, memoryElementId, strict);
+    if (!parsed) return false;
 
     const entries = parsed.entries;
     if (entries === undefined) {
@@ -613,12 +594,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       if (strict) throw this.createInvalidHeadError('Memory head entries must be an array');
       return false;
     }
-    if (strict && entries.some(entry => !entry || typeof entry !== 'object' ||
-      typeof (entry as Record<string, unknown>).id !== 'string' ||
-      typeof (entry as Record<string, unknown>).content !== 'string' ||
-      !(entry as Record<string, unknown>).content)) {
+    const qualifiable = entries.every(DatabaseMemoryStorageLayer.isQualifiableEntry);
+    if (strict && !qualifiable) {
       throw this.createInvalidHeadError('Memory head contains an invalid entry');
     }
+    // Legacy writes may still project id-less entries using synthetic child
+    // IDs, but such YAML cannot round-trip through a strict conditional save.
 
     // Defense-in-depth: include userId alongside the RLS context. Every other
     // DELETE in this module does the same — syncEntriesInTx is the last one
@@ -630,13 +611,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
 
     if (entries.length === 0) return true;
 
-    const rows = entries.flatMap((entry, idx) => {
-      if (!entry || typeof entry !== 'object') return [];
-      const e = entry as Record<string, unknown>;
-      const content = typeof e.content === 'string' ? e.content : '';
-      if (!content) return [];
-      return [this.buildEntryRow(e, idx, memoryElementId, content, userId)];
-    });
+    const rows = this.buildSyncEntryRows(entries, memoryElementId, userId);
 
     if (strict && rows.length !== entries.length) {
       throw this.createInvalidHeadError('Memory head contains an invalid entry');
@@ -645,7 +620,52 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     if (rows.length > 0) {
       await tx.insert(memoryEntries).values(rows);
     }
-    return rows.length === entries.length;
+    return rows.length === entries.length && qualifiable;
+  }
+
+  private parseMemoryHeadForSync(
+    yamlContent: string,
+    memoryElementId: string,
+    strict: boolean,
+  ): Record<string, unknown> | undefined {
+    try {
+      const parsed = SecureYamlParser.parseRawYaml(yamlContent, {
+        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
+      if (!validateMemoryControlFields(parsed)) {
+        throw new Error('Malicious memory control content detected');
+      }
+      return parsed;
+    } catch (err) {
+      if (strict) {
+        throw this.createInvalidHeadError('Memory head YAML is invalid or exceeds its size limit', err);
+      }
+      // Parse failure drops entries silently — element row still persists.
+      // Log so operators see skipped entry sync and can investigate corrupted YAML.
+      logger.warn(
+        `[${STORE_NAME}] syncEntriesInTx: YAML parse failed for memory ${memoryElementId}, entries not synced`,
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      return undefined;
+    }
+  }
+
+  private static isQualifiableEntry(entry: unknown): boolean {
+    if (!entry || typeof entry !== 'object') return false;
+    const value = entry as Record<string, unknown>;
+    return typeof value.id === 'string' && !!value.id &&
+      typeof value.content === 'string' && !!value.content;
+  }
+
+  private buildSyncEntryRows(entries: unknown[], memoryElementId: string, userId: string) {
+    return entries.flatMap((entry, idx) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const value = entry as Record<string, unknown>;
+      const content = typeof value.content === 'string' ? value.content : '';
+      if (!content) return [];
+      return [this.buildEntryRow(value, idx, memoryElementId, content, userId)];
+    });
   }
 
   private static parseTimestamp(value: unknown): Date {

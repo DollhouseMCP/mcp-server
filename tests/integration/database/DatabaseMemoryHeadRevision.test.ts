@@ -279,4 +279,25 @@ describe('DatabaseMemoryStorageLayer versioned head contract', () => {
       expect((await layer.getEntries(id)).map(entry => entry.entryId)).toEqual(['keep']);
     }
   });
+
+  it('keeps legacy fallback and empty entry IDs unqualified until full reconciliation', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const withoutId = 'name: legacy-ids\nentries:\n  - content: No ID\n';
+    const id = await layer.writeContent('memories', 'legacy-ids', withoutId, metadata);
+    expect((await layer.getEntries(id)).map(entry => entry.entryId)).toEqual(['entry-0']);
+    await expect(layer.readHeadSnapshot(id)).rejects.toMatchObject({ code: 'EHEADOUTOFSYNC' });
+
+    const emptyId = 'name: legacy-ids\nentries:\n  - id: ""\n    content: Empty ID\n';
+    await layer.writeContent('memories', 'legacy-ids', emptyId, metadata);
+    await expect(layer.readHeadSnapshot(id)).rejects.toMatchObject({ code: 'EHEADOUTOFSYNC' });
+
+    const reconciled = buildMemoryContent('legacy-ids', [{ id: 'fixed', content: 'Has ID' }]);
+    await layer.writeContent('memories', 'legacy-ids', reconciled, metadata);
+    const snapshot = await layer.readHeadSnapshot(id);
+    expect(snapshot.content).toBe(reconciled);
+    const saved = await layer.writeHeadIfCurrent(snapshot.token, 'legacy-ids', reconciled, metadata);
+    expect(saved).toEqual((await layer.readHeadSnapshot(id)).token);
+  });
 });
