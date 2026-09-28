@@ -141,11 +141,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     // Use the caller-provided name as authoritative, falling back to extracted
     const elementName = name || extracted.name || 'unnamed';
 
-    const elementId = await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    const elementId = await withUserContext(this.db, userId, async (tx) => {
       // Build the column values once; both insert and upsert-SET reuse the
       // same object so adding a column is a one-line change, not two.
       const values = {
-        userId: this.userId,
+        userId,
         rawContent: content,
         bodyContent: null,
         contentHash,
@@ -161,35 +162,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
         autoLoad: extracted.autoLoad ?? null,
         priority: extracted.priority ?? null,
       };
-      // SET clause derives from values — strip identity columns (conflict target)
-      // and force updatedAt to NOW(). Single source of truth for everything else.
-      const buildUpdateSet = () => {
-        const { userId: _u, elementType: _et, name: _n, ...rest } = values;
-        return { ...rest, updatedAt: sql`NOW()` };
-      };
-
-      let rows;
-      if (options?.exclusive) {
-        // Atomic create-or-fail — mirrors file-mode createFileExclusive semantics.
-        try {
-          rows = await tx.insert(elements).values(values).returning({ id: elements.id });
-        } catch (err) {
-          if (isUniqueViolation(err)) {
-            const label = options.elementLabel ?? 'Memory';
-            throw new Error(`${label} '${elementName}' already exists`);
-          }
-          throw err;
-        }
-      } else {
-        rows = await tx
-          .insert(elements)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [elements.userId, elements.elementType, elements.name],
-            set: buildUpdateSet(),
-          })
-          .returning({ id: elements.id });
-      }
+      const rows = await this.writeElementRow(tx, values, options, userId);
 
       const row = rows.at(0);
       if (!row) {
@@ -213,6 +186,69 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       { elementId, name: elementName });
 
     return elementId;
+  }
+
+  private async writeElementRow(
+    tx: DrizzleTx,
+    values: typeof elements.$inferInsert,
+    options: WriteContentOptions | undefined,
+    userId: string,
+  ): Promise<Array<{ id: string }>> {
+    // SET derives from the inserted values, without identity columns. The
+    // guarded path mirrors DatabaseStorageLayer's exact-row lifecycle update.
+    const { userId: _u, elementType: _et, name: _n, ...rest } = values;
+    const updateSet = { ...rest, updatedAt: sql`NOW()` };
+
+    if (options?.expectedIdentity) {
+      const expected = options.expectedIdentity;
+      if (expected.name !== values.name) {
+        throw this.createStaleWriteError(values.name, expected.id);
+      }
+      const rows = await tx
+        .update(elements)
+        .set(updateSet)
+        .where(and(
+          eq(elements.userId, userId),
+          eq(elements.elementType, 'memories'),
+          eq(elements.id, expected.id),
+          eq(elements.name, expected.name),
+        ))
+        .returning({ id: elements.id });
+      if (rows.length !== 1) {
+        throw this.createStaleWriteError(values.name, expected.id);
+      }
+      return rows;
+    }
+
+    if (options?.exclusive) {
+      // Atomic create-or-fail — mirrors file-mode createFileExclusive semantics.
+      try {
+        return await tx.insert(elements).values(values).returning({ id: elements.id });
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          const label = options.elementLabel ?? 'Memory';
+          throw new Error(`${label} '${values.name}' already exists`);
+        }
+        throw err;
+      }
+    }
+
+    return tx
+      .insert(elements)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [elements.userId, elements.elementType, elements.name],
+        set: updateSet,
+      })
+      .returning({ id: elements.id });
+  }
+
+  private createStaleWriteError(name: string, expectedId: string): NodeJS.ErrnoException {
+    const error = new Error(
+      `Memory not found or identity changed during save: ${name}; expected row ${expectedId}`,
+    ) as NodeJS.ErrnoException;
+    error.code = 'ESTALE';
+    return error;
   }
 
   async deleteContent(_elementType: string, name: string): Promise<void> {
