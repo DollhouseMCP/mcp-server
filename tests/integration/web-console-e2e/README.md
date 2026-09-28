@@ -46,6 +46,9 @@ E2E_OPAQUE_HMAC_KEY='<base64>' \
 npm run test:console-e2e:attach
 ```
 
+CI runs the compiled real-auth browser suite in the existing Chrome and PostgreSQL
+qualification job, alongside the onboarding browser suite.
+
 The PostgreSQL superuser defaults to `dollhouse:dollhouse`; override it with
 `E2E_PG_SUPERUSER_URL` when using a different local database. Set `E2E_PW_PORT`
 to use a different browser-test port.

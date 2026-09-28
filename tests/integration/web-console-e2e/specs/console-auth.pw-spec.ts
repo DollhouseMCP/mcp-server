@@ -130,7 +130,7 @@ async function approveClientConsentIfShown(page: Page): Promise<void> {
   }
 }
 
-async function loginFromConsole(page: Page): Promise<void> {
+async function loginFromConsole(page: Page, landingTab: 'connect' | 'portfolio' = 'connect'): Promise<void> {
   await page.goto(`${BASE_URL}/ui`, { waitUntil: 'domcontentloaded' });
   await page.locator('#auth-gate-signin').click();
   await page.fill('input[name="username"]', USER);
@@ -138,6 +138,8 @@ async function loginFromConsole(page: Page): Promise<void> {
   await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
   await approveClientConsentIfShown(page);
   await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
+  if (landingTab === 'portfolio') await page.locator('.console-tab[data-tab="portfolio"]').click();
+  await expect(page.locator(`.console-tab[data-tab="${landingTab}"]`)).toHaveClass(/active/);
 }
 
 async function stepUpWithTotp(page: Page, totp: TOTP): Promise<void> {
@@ -190,6 +192,10 @@ test('console UI serves its asset graph and boots from server metadata', async (
 
   await loginFromConsole(page);
   await expect(page.locator('#tab-connect')).toBeVisible();
+  await expect(page.locator('#connect-client-panel .connect-route-tab[data-route="inside"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#connect-client-panel')).toContainText('Add a Claude account connector');
+  await page.locator('#connect-client-panel .connect-route-tab[data-route="terminal"]').click();
+  await expect(page.locator('#connect-client-panel .connect-route-tab[data-route="terminal"]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#connect-client-panel')).toContainText('claude mcp add');
   await expect(page.locator('.console-tab[data-tab="connect"]')).toHaveClass(/active/);
 
@@ -230,7 +236,7 @@ test('All combines every collection page with the portfolio and reports source t
     { method: 'GET', path: '/api/v1/collection/elements/:type/:name' },
   ]);
   const mock = await installPortfolioUiMock(page, { includeCollection: true });
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
 
   await expect(page.locator('#pf-source')).toBeVisible();
   await expect(page.locator('#pf-summary')).toHaveText('3 total elements');
@@ -260,7 +266,7 @@ test('All combines every collection page with the portfolio and reports source t
 
 test('portfolio authoring validates drafts, preserves conflicts, and confirms hard deletion', async ({ page }) => {
   const mock = await installPortfolioUiMock(page, { conflictOnFirstPatch: true });
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
 
   await expect(page.locator('.portfolio-start-action')).toHaveCount(2);
   await expect(page.locator(PORTFOLIO_CREATE)).toContainText('Create new');
@@ -315,7 +321,7 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
 
 test('portfolio guided authoring serializes agent and ensemble settings', async ({ page }) => {
   const mock = await installPortfolioUiMock(page);
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
 
   await page.locator(PORTFOLIO_CREATE).click();
   await page.locator('.portfolio-editor [name="type"][value="agents"]').check();
@@ -949,7 +955,7 @@ test('selecting discovered operations promotes them without disturbing the remot
 
 test('portfolio imports a reviewed file without silently overwriting a duplicate', async ({ page }) => {
   const mock = await installPortfolioUiMock(page);
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
   const file = {
     name: 'imported-skill.md',
     mimeType: 'text/markdown',
@@ -1001,7 +1007,7 @@ Follow the reviewed skill instructions.`,
 
 test('portfolio import keeps legacy instructions but strips internal extensions', async ({ page }) => {
   const mock = await installPortfolioUiMock(page);
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
   const file = {
     name: 'legacy-agent.json',
     mimeType: 'application/json',
@@ -1042,7 +1048,7 @@ test('portfolio import keeps legacy instructions but strips internal extensions'
 
 test('portfolio create cancel leaves the workspace without saving', async ({ page }) => {
   await installPortfolioUiMock(page);
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
 
   await page.locator(PORTFOLIO_CREATE).click();
   await page.locator('.portfolio-editor [data-editor-close]').last().click();
@@ -1052,7 +1058,7 @@ test('portfolio create cancel leaves the workspace without saving', async ({ pag
 
 test('portfolio editor stays blocked when conflict reload omits its ETag', async ({ page }) => {
   await installPortfolioUiMock(page, { conflictOnFirstPatch: true, omitEtagAfterConflict: true });
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
 
   await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
   await page.locator(EDITOR_CONTENT).fill('Draft that must not overwrite newer content.');
@@ -1066,7 +1072,7 @@ test('portfolio editor stays blocked when conflict reload omits its ETag', async
 
 test('portfolio sync reports successful and failed terminal jobs', async ({ page }) => {
   const success = await installPortfolioUiMock(page);
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
   await page.locator('#pf-sync').click();
   await page.locator('.portfolio-sync button[type="submit"]').click();
   await expect(page.locator('[data-sync-status]')).toContainText('Succeeded', { timeout: 5_000 });
@@ -1092,7 +1098,7 @@ test('portfolio write controls disappear when the manifest omits write routes', 
     'POST /api/v1/me/portfolio/elements/:type/:name/validate',
     'POST /api/v1/me/portfolio/elements/:type/:name/render',
   ]));
-  await loginFromConsole(page);
+  await loginFromConsole(page, 'portfolio');
   await expect(page.locator('#pf-grid')).toBeVisible();
   await expect(page.locator('#pf-create, #pf-import, #pf-sync, [data-action="edit"]')).toHaveCount(0);
   await page.locator('[data-name="alpha-persona"]').click();
