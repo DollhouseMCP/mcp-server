@@ -655,9 +655,10 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
   }
 
   private static isValidOptionalEntryDate(value: unknown): boolean {
+    if (value === undefined || value === null) return true;
     if (value instanceof Date) return Number.isFinite(value.getTime());
     if (typeof value === 'string') return Number.isFinite(Date.parse(value));
-    return true;
+    return false;
   }
 
   private assertStrictSyncEntries(qualifiable: boolean, entryCount: number, entryIds: readonly string[]): void {

@@ -278,6 +278,8 @@ describe('DatabaseMemoryStorageLayer versioned head contract', () => {
       ]),
       buildMemoryContent('invalid-candidate', [{ id: 'bad-date', content: 'Bad', timestamp: 'not-a-date' }]),
       'name: invalid-candidate\nentries:\n  - id: bad-expiry\n    content: Bad\n    expiresAt: impossible\n',
+      'name: invalid-candidate\nentries:\n  - id: numeric-date\n    content: Bad\n    timestamp: 123\n',
+      'name: invalid-candidate\nentries:\n  - id: object-expiry\n    content: Bad\n    expiresAt: { unexpected: object }\n',
     ]) {
       await expect(layer.writeHeadIfCurrent(before.token, 'invalid-candidate', invalid, metadata))
         .rejects.toMatchObject({ code: 'EINVALIDHEAD' });
