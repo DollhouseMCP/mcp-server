@@ -434,35 +434,41 @@ export class MemorySaveHandler {
       // Operate on the authoritative instance, as addEntry does (#2329).
       const priorFailure = this.failedMemorySaves.get(saveKey);
       const targetMemory = priorFailure?.memory ?? this.pendingSaves.get(saveKey)?.memory ?? memory;
-      if (priorFailure && !options.dryRun) {
-        try {
-          await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
-        } catch (retryErr) {
-          throw new Error(
-            `Rollover NOT performed: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
-            `(${priorFailure.error.message}) and the retry also failed: ` +
-            `${retryErr instanceof Error ? retryErr.message : retryErr}`
-          );
+      // Share the same-instance mutation queue with addEntry and clear. A
+      // volume write can await I/O before applyRollover, and the immediate
+      // head save can also await; neither window may accept a competing
+      // mutation on this in-memory object.
+      return await MemorySaveHandler.withMemoryMutation(targetMemory, async () => {
+        if (priorFailure && !options.dryRun) {
+          try {
+            await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
+          } catch (retryErr) {
+            throw new Error(
+              `Rollover NOT performed: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
+              `(${priorFailure.error.message}) and the retry also failed: ` +
+              `${retryErr instanceof Error ? retryErr.message : retryErr}`
+            );
+          }
         }
-      }
 
-      const result = await manager.rolloverMemory(targetMemory, options);
-      if (options.dryRun || result.sealedCount === 0) {
+        const result = await manager.rolloverMemory(targetMemory, options);
+        if (options.dryRun || result.sealedCount === 0) {
+          return MemorySaveHandler.rolloverReceipt(result);
+        }
+
+        // The immediate save below supersedes any pending debounced save.
+        const pending = this.pendingSaves.get(saveKey);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingSaves.delete(saveKey);
+        }
+        targetMemory.applyRollover(result.sealedIds, result.volumes);
+        if (result.markerEntry) {
+          this.addRolloverMarker(targetMemory, result);
+        }
+        await this.saveMemoryTracked(saveKey, targetMemory, manager);
         return MemorySaveHandler.rolloverReceipt(result);
-      }
-
-      // The immediate save below supersedes any pending debounced save.
-      const pending = this.pendingSaves.get(saveKey);
-      if (pending) {
-        clearTimeout(pending.timer);
-        this.pendingSaves.delete(saveKey);
-      }
-      targetMemory.applyRollover(result.sealedIds, result.volumes);
-      if (result.markerEntry) {
-        this.addRolloverMarker(targetMemory, result);
-      }
-      await this.saveMemoryTracked(saveKey, targetMemory, manager);
-      return MemorySaveHandler.rolloverReceipt(result);
+      });
     } finally {
       this.rolloversInFlight.delete(saveKey);
     }

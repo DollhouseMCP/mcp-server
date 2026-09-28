@@ -417,6 +417,59 @@ describe('MemorySaveHandler', () => {
       await expect(first).resolves.toBeDefined();
     });
 
+    it('queues an append on the same memory until volume creation and rollover save finish', async () => {
+      const memory = makeMemory('notes');
+      const rolloverHandler = makeHandler(memory, 'rollover');
+      const appendHandler = makeHandler(memory, 'append');
+      let releaseVolume!: () => void;
+      let volumeStarted!: () => void;
+      const entered = new Promise<void>(resolve => { volumeStarted = resolve; });
+      rolloverHandler.manager.rolloverMemory.mockImplementation(() => new Promise(resolve => {
+        releaseVolume = () => resolve(sealedResult());
+        volumeStarted();
+      }));
+
+      const rollover = rolloverHandler.handler.dispatch('rollover', { element_name: 'notes' });
+      await entered;
+      const append = appendHandler.handler.dispatch('addEntry', { element_name: 'notes', content: 'after rollover' });
+      await Promise.resolve();
+      expect(appendHandler.manager.assertPersistable).not.toHaveBeenCalled();
+      expect(memory.addEntry).not.toHaveBeenCalled();
+
+      releaseVolume();
+      await rollover;
+      await append;
+      expect(rolloverHandler.manager.save).toHaveBeenCalledTimes(1);
+      expect(appendHandler.manager.assertPersistable).toHaveBeenCalledTimes(1);
+    });
+
+    it('queues a clear on the same memory while the rollover head save is pending', async () => {
+      const memory = makeMemory('notes');
+      const rolloverHandler = makeHandler(memory, 'rollover');
+      const clearHandler = makeHandler(memory, 'clear');
+      rolloverHandler.manager.rolloverMemory.mockResolvedValue(sealedResult());
+      let releaseSave!: () => void;
+      let saveStarted!: () => void;
+      const entered = new Promise<void>(resolve => { saveStarted = resolve; });
+      rolloverHandler.manager.save.mockImplementationOnce(() => new Promise(resolve => {
+        releaseSave = () => resolve(undefined);
+        saveStarted();
+      }));
+
+      const rollover = rolloverHandler.handler.dispatch('rollover', { element_name: 'notes' });
+      await entered;
+      const clear = clearHandler.handler.dispatch('clear', { element_name: 'notes' });
+      await Promise.resolve();
+      expect(memory.clearAll).not.toHaveBeenCalled();
+      expect(clearHandler.manager.save).not.toHaveBeenCalled();
+
+      releaseSave();
+      await rollover;
+      await clear;
+      expect(memory.clearAll).toHaveBeenCalledTimes(1);
+      expect(clearHandler.manager.save).toHaveBeenCalledWith(memory);
+    });
+
     it.each([
       [{ keep_latest: -1 }, 'keep_latest must be an integer'],
       [{ keep_latest: 1.5 }, 'keep_latest must be an integer'],
