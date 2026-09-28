@@ -12,6 +12,7 @@ export { users, userSettings } from './users.js';
 export { elements, elementTags, elementRelationships } from './elements.js';
 export { elementProvenance } from './provenance.js';
 export { memoryEntries } from './memories.js';
+export { memoryVolumes } from './memoryVolumes.js';
 export { ensembleMembers } from './ensembles.js';
 export { agentStates } from './agents.js';
 export { sessions } from './sessions.js';
