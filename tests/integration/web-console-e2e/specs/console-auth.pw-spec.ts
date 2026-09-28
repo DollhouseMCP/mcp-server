@@ -472,6 +472,7 @@ test('custom integration authoring keeps secrets write-only and imports OpenAPI 
 
   customCard = page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Browser Calendar Updated' });
   await customCard.locator('[data-descriptor-spec]').click();
+  await expect(page.locator('.int-notice')).toHaveText('No API definition has been imported yet.');
   await setTextInputFile(page, '[name="spec_file"]', {
     name: 'calendar.openapi.yaml',
     mimeType: 'application/yaml',
@@ -503,6 +504,44 @@ test('custom integration authoring keeps secrets write-only and imports OpenAPI 
   await customCard.locator('[data-descriptor-delete]').click();
   await page.locator('#confirm-modal [data-confirm="1"]').click();
   await expect(customCard).toHaveCount(0);
+});
+
+test('OpenAPI editor waits for its initial fetch before accepting a draft', async ({ page }) => {
+  await includeManifestRoutes(page, INTEGRATION_ROUTES);
+  await installIntegrationsUiMock(page);
+  let releaseFetches!: () => void;
+  const holdFetches = new Promise<void>(resolve => { releaseFetches = resolve; });
+  let heldGets = 0;
+  await page.route('**/api/v1/me/integrations/descriptors/*/spec**', async route => {
+    if (route.request().method() === 'GET') {
+      heldGets += 1;
+      await holdFetches;
+    }
+    await route.fallback();
+  });
+  await loginFromConsole(page);
+  await page.locator(INTEGRATIONS_TAB).click();
+  await page.locator('[data-int-view="descriptors"]').click();
+  await page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Acme Tasks' })
+    .locator('[data-descriptor-spec]').click();
+
+  try {
+    await expect.poll(() => heldGets).toBe(2);
+    await expect(page.locator('.int-notice')).toHaveText('Loading the current API definition…');
+    await expect(page.locator('#int-spec-form')).toHaveAttribute('aria-busy', 'true');
+    for (const selector of ['[name="spec_file"]', '[name="spec_text"]', '[name="source_url"]', '#int-spec-form button[type="submit"]']) {
+      await expect(page.locator(selector)).toBeDisabled();
+    }
+  } finally {
+    releaseFetches();
+  }
+
+  await expect(page.locator('.int-notice')).toHaveText('No API definition has been imported yet.');
+  await expect(page.locator('#int-spec-form')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('[name="spec_file"]')).toBeEnabled();
+  await expect(page.locator('[name="spec_text"]')).toBeEnabled();
+  await expect(page.locator('[name="source_url"]')).toBeEnabled();
+  await expect(page.locator('#int-spec-form button[type="submit"]')).toBeEnabled();
 });
 
 const AUDIT_TAB = '.console-tab[data-tab="audit"]';
@@ -915,6 +954,7 @@ test('selecting discovered operations promotes them without disturbing the remot
   await page.locator('[data-int-view="descriptors"]').click();
   await page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Acme Tasks' })
     .locator('[data-descriptor-spec]').click();
+  await expect(page.locator('.int-notice')).toHaveText('No API definition has been imported yet.');
 
   await setTextInputFile(page, '[name="spec_file"]', {
     name: 'acme.openapi.yaml',
@@ -933,6 +973,7 @@ test('selecting discovered operations promotes them without disturbing the remot
       '          description: OK',
     ].join('\n'),
   });
+  await expect(page.locator('[name="spec_text"]')).toHaveValue(/openapi: 3\.0\.3/u);
   await page.locator('#int-spec-form button[type="submit"]').click();
   await expect(page.locator(INTEGRATION_OPERATION_ROW)).toHaveCount(2);
 
