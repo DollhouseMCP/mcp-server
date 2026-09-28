@@ -131,14 +131,14 @@ async function approveClientConsentIfShown(page: Page): Promise<void> {
 }
 
 async function loginFromConsole(page: Page, landingTab: 'connect' | 'portfolio' = 'connect'): Promise<void> {
-  const tabQuery = landingTab === 'portfolio' ? '?tab=portfolio' : '';
-  await page.goto(`${BASE_URL}/ui${tabQuery}`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${BASE_URL}/ui`, { waitUntil: 'domcontentloaded' });
   await page.locator('#auth-gate-signin').click();
   await page.fill('input[name="username"]', USER);
   await page.fill('input[name="password"]', SEED_PASSWORD);
   await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
   await approveClientConsentIfShown(page);
   await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
+  if (landingTab === 'portfolio') await page.locator('.console-tab[data-tab="portfolio"]').click();
   await expect(page.locator(`.console-tab[data-tab="${landingTab}"]`)).toHaveClass(/active/);
 }
 
