@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -89,6 +90,8 @@ describe('FileMemoryFence local POSIX primitive', () => {
     const tenantRoot = await root();
     const child = await holdingChild(tenantRoot);
     const fence = new FileMemoryFence();
+    const [lockName] = await fs.readdir(path.join(tenantRoot, '.memory-fences'));
+    expect(lockName).toBe(`${createHash('sha256').update('notes/example.yaml').digest('hex')}.lock`);
     await expect(fence.withFence(
       { tenantRoot, memoryLocator: 'notes/./example.yaml' }, () => 'contended', { timeoutMs: 80 },
     )).rejects.toBeInstanceOf(FileMemoryFenceTimeoutError);

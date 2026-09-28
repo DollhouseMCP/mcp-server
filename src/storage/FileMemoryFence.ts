@@ -119,7 +119,9 @@ export class FileMemoryFence {
     const root = await fs.realpath(suppliedRoot);
     const relative = await this.resolveExistingComponents(root, normalized);
     const lockRoot = await this.ensureLockRoot(root);
-    const key = createHash('sha256').update(root).update('\0').update(relative.split(path.sep).join('/')).digest('hex');
+    // The directory is already tenant-root scoped. Hashing only the locator
+    // keeps bind-mount aliases of that same directory on one lease name.
+    const key = createHash('sha256').update(relative.split(path.sep).join('/')).digest('hex');
     return path.join(lockRoot, `${key}.lock`);
   }
 
@@ -231,8 +233,8 @@ export class FileMemoryFence {
       let cleanupError: unknown;
       try {
         await this.releaseFailedSetup(lease);
-      } catch (failedRelease) {
-        cleanupError = failedRelease;
+      } catch (error_) {
+        cleanupError = error_;
       }
       if (cleanupError) {
         throw new AggregateError([error, cleanupError], 'Memory fence acquisition failed and left a lock', { cause: error });
