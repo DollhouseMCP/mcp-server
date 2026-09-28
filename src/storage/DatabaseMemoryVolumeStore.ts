@@ -41,6 +41,9 @@ export interface DatabaseMemoryVolumeRecord {
   readonly sealedAt: Date;
 }
 
+/** Planning metadata; archive YAML is fetched only by read(). */
+export type DatabaseMemoryVolumeInfo = Omit<DatabaseMemoryVolumeRecord, 'rawContent'>;
+
 /** The row UUID makes rollback conditional on the exact create, even after a name is reused. */
 export type DatabaseMemoryVolumeReceipt = Pick<
   DatabaseMemoryVolumeRecord, 'id' | 'userId' | 'memoryId' | 'volume' | 'sha256'
@@ -74,7 +77,10 @@ function locator(memoryId: string, volume: number): string {
   return `volumes/${memoryId}/v${String(volume).padStart(4, '0')}.yaml`;
 }
 
-function toRecord(row: typeof memoryVolumes.$inferSelect): DatabaseMemoryVolumeRecord {
+type VolumeInfoRow = Pick<typeof memoryVolumes.$inferSelect,
+  'id' | 'userId' | 'memoryId' | 'volume' | 'sha256' | 'entryCount' | 'firstEntryAt' | 'lastEntryAt' | 'sealedAt'>;
+
+function toInfo(row: VolumeInfoRow): DatabaseMemoryVolumeInfo {
   requireVolume(row.volume);
   return {
     id: row.id,
@@ -82,13 +88,16 @@ function toRecord(row: typeof memoryVolumes.$inferSelect): DatabaseMemoryVolumeR
     memoryId: row.memoryId,
     volume: row.volume,
     file: locator(row.memoryId, row.volume),
-    rawContent: row.rawContent,
     sha256: row.sha256.trim(),
     entryCount: row.entryCount,
     firstEntryAt: row.firstEntryAt,
     lastEntryAt: row.lastEntryAt,
     sealedAt: row.sealedAt,
   };
+}
+
+function toRecord(row: typeof memoryVolumes.$inferSelect): DatabaseMemoryVolumeRecord {
+  return { ...toInfo(row), rawContent: row.rawContent };
 }
 
 export class DatabaseMemoryVolumeStore {
@@ -109,9 +118,9 @@ export class DatabaseMemoryVolumeStore {
     const minimumVolume = input.minimumVolume;
     const entryCount = input.entryCount;
     const rawContent = input.rawContent;
-    const sealedAt = new Date(input.sealedAt.getTime());
-    const firstEntryAt = input.firstEntryAt ? new Date(input.firstEntryAt.getTime()) : null;
-    const lastEntryAt = input.lastEntryAt ? new Date(input.lastEntryAt.getTime()) : null;
+    const sealedAt = new Date(input.sealedAt);
+    const firstEntryAt = input.firstEntryAt ? new Date(input.firstEntryAt) : null;
+    const lastEntryAt = input.lastEntryAt ? new Date(input.lastEntryAt) : null;
     requireVolume(minimumVolume);
     if (!Number.isSafeInteger(entryCount) || entryCount < 0 || entryCount > 2_147_483_647) {
       throw new RangeError('Memory volume entry count is invalid');
@@ -120,6 +129,9 @@ export class DatabaseMemoryVolumeStore {
       (firstEntryAt && !Number.isFinite(firstEntryAt.getTime())) ||
       (lastEntryAt && !Number.isFinite(lastEntryAt.getTime()))) {
       throw new RangeError('Memory volume timestamp is invalid');
+    }
+    if (firstEntryAt && lastEntryAt && firstEntryAt > lastEntryAt) {
+      throw new RangeError('Memory volume first entry timestamp is after its last entry');
     }
     verifyContent(rawContent, entryCount);
     const sha256 = createHash('sha256').update(rawContent, 'utf8').digest('hex');
@@ -167,13 +179,23 @@ export class DatabaseMemoryVolumeStore {
   }
 
   /** Includes archives not yet indexed by the live head after an interrupted save. */
-  async list(owner: DatabaseMemoryVolumeOwner): Promise<DatabaseMemoryVolumeRecord[]> {
+  async list(owner: DatabaseMemoryVolumeOwner): Promise<DatabaseMemoryVolumeInfo[]> {
     const captured = this.captureOwner(owner);
-    const rows = await withUserRead(this.db, captured.userId, (tx) => tx.select().from(memoryVolumes).where(and(
+    const rows = await withUserRead(this.db, captured.userId, (tx) => tx.select({
+      id: memoryVolumes.id,
+      userId: memoryVolumes.userId,
+      memoryId: memoryVolumes.memoryId,
+      volume: memoryVolumes.volume,
+      sha256: memoryVolumes.sha256,
+      entryCount: memoryVolumes.entryCount,
+      firstEntryAt: memoryVolumes.firstEntryAt,
+      lastEntryAt: memoryVolumes.lastEntryAt,
+      sealedAt: memoryVolumes.sealedAt,
+    }).from(memoryVolumes).where(and(
       eq(memoryVolumes.userId, captured.userId),
       eq(memoryVolumes.memoryId, captured.memoryId),
     )).orderBy(asc(memoryVolumes.volume)));
-    return rows.map(toRecord);
+    return rows.map(toInfo);
   }
 
   /** Roll back only the row created by this receipt; never delete by path or number alone. */
