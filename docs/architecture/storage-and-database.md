@@ -419,6 +419,8 @@ One row per user. Configuration fields are JSONB to allow schema evolution witho
 
 The central table. All element types (personas, skills, templates, agents, ensembles, memories) share one table, discriminated by `element_type`.
 
+Migration 0055 adds a unique `(id, user_id, element_type)` index so sealed memory archives can use a composite foreign key that binds the durable parent, tenant, and `memories` type together. This index does not change element identity or existing content.
+
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | uuid PK | Auto-generated; used as `relativePath` in DB mode |
@@ -504,6 +506,14 @@ Individual time-series entries within a memory element.
 | `source` | varchar(64) | |
 | `expires_at` | timestamptz | For TTL-based purging |
 | UNIQUE | `(memory_id, entry_id)` | Upsert conflict target |
+
+#### memory_volumes (foundation only)
+
+Migration 0055 adds immutable, sealed archive rows outside `memory_entries`, whose rows are replaced by ordinary live-memory saves. Each archive has a row UUID, a parent `elements.id`, owner `user_id`, safe positive `volume` number, YAML content, SHA-256 digest, entry count, and sealing timestamps. `(memory_id, volume)` is unique. A composite foreign key requires the parent to be the same user's memory and cascades on parent deletion. Forced row-level security allows only the owner to select, insert, or delete archive rows; there is no update policy, including when a parent memory is public.
+
+`DatabaseMemoryVolumeStore` accepts a durable owner snapshot and binds it to the active user context once at operation entry. It validates bounded YAML and entry count, inserts without overwriting, verifies SHA-256 and entry count on read, lists even unindexed orphan rows, and can remove only the row named by an exact create receipt. It is not connected to rollover or head persistence yet; #2870 and the remaining #2871 file-store/lifecycle work must qualify before that wiring is enabled.
+
+The migration is additive and empty on upgrade: existing live memory rows are not rewritten. Rollback to the previous application binary can leave the table in place because that binary does not use it. Once archives contain data, do not drop the table on code rollback; preserve and back up its rows. Migration and rollback qualification must run against an isolated database before hosted rollout.
 
 #### sessions
 

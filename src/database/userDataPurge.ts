@@ -56,7 +56,7 @@ export async function purgeUserScopedData(tx: DrizzleTx, userId: string): Promis
   await tx.delete(sessions).where(eq(sessions.userId, userId));
   await tx.delete(userSettings).where(eq(userSettings.userId, userId));
   // elements last: cascades element_tags, element_relationships, memory_entries,
-  // agent_states, ensemble_members, and element_provenance via elements.id.
+  // memory_volumes, agent_states, ensemble_members, and element_provenance via elements.id.
   await tx.delete(elements).where(eq(elements.userId, userId));
 }
 
@@ -87,6 +87,7 @@ export const USER_SCOPED_CASCADE_VIA_PARENT: readonly string[] = [
   'element_tags',
   'element_relationships',
   'memory_entries',
+  'memory_volumes',
   'agent_states',
   'ensemble_members',
   'element_provenance',
