@@ -103,6 +103,46 @@ The smoke test covers OAuth discovery, GitHub sign-in, Dollhouse client consent,
 bearer-token use, MCP read calls, Cloudflare WAF/rate-limit inspection, and log
 redaction checks.
 
+### Console UI cache policy
+
+The hosted `/ui/` HTML points all local assets into one content-versioned
+`/ui/__assets/<digest>/` directory. Relative JavaScript imports (including
+lazy imports) and CSS font URLs stay in that same directory, so a new page
+load cannot reuse modules cached under a previous release's stable URLs.
+The application also serves the entire `/ui` tree with
+`Cache-Control: no-store, max-age=0, must-revalidate`. Configure Cloudflare to **bypass
+cache for `/ui` and `/ui/*`**, including any Cache Everything or Edge/Browser
+Cache TTL rules that would override the origin policy. Caddy only proxies this
+route; it does not provide a UI cache policy.
+
+The generated Compose deployment has one application container. For a separate
+multi-replica deployment, do not round-robin `/ui/` and asset requests across
+different application releases: each replica serves only its own digest.
+For UI-changing releases, atomically drain old replicas before exposing the new
+release, or provide a shared origin retaining both asset digests or release-aware
+affinity for the shell and its complete asset graph. Rolling mixed-version UI
+traffic without one of these controls can return 404 for an unknown digest.
+Shared asset serving and rolling-release qualification are tracked in
+[#2857](https://github.com/DollhouseMCP/mcp-server/issues/2857).
+
+After changing an existing Cloudflare rule, purge previously cached `/ui/*`
+entries once. Verify the public URL without a cache-busting query after each
+update or rollback:
+
+```bash
+BASE_URL=https://mcp.example.com
+ASSET_BASE="$(curl -fsS "${BASE_URL}/ui/" | grep -oE '/ui/__assets/[a-f0-9]{16}' | head -1)"
+for path in /ui/ "${ASSET_BASE}/app.js" "${ASSET_BASE}/connect.js" "${ASSET_BASE}/connect-catalog.js" "${ASSET_BASE}/connect.css"; do
+  curl -sSI "${BASE_URL}${path}" | grep -Ei '^(HTTP/|cache-control:|cf-cache-status:)'
+done
+```
+
+Every response should retain the origin `no-store` policy; Cloudflare should
+not report a cached `HIT`. Compare ordinary asset responses with the exact
+deployed build when validating a release. A cache-busted query alone can hide
+a stale response at the normal URL. The old unversioned `/ui/*.js` URLs remain
+available during the transition and also carry `no-store`.
+
 Run an update on a remote host over SSH:
 
 ```bash

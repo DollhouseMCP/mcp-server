@@ -1023,6 +1023,14 @@ DOLLHOUSE_INVITE_TOKEN_SECRET=<hex secret>        # for invite + magic-link toke
 
 Without these, each replica generates its own keys at first run and stores them in the run directory. Single-replica deployments are unaffected; multi-replica without env-var secrets produces non-deterministic JWKS and revoked refresh-token sessions on rotation. Multi-replica HA has additional limitations beyond signing-secret sharing (rate limits are per-replica; mode-switch invalidation can race across replicas; key rotation is not coordinated) — these are documented separately and tracked as follow-up work.
 
+The hosted console adds a UI rollout constraint: each replica serves only its
+own content-versioned `/ui/__assets/<digest>/` tree. For UI-changing releases,
+atomically drain old replicas before exposing the new release, or use a shared
+origin retaining both digests or release-aware affinity for `/ui/` and all its
+asset requests. A mixed-version round-robin rollout can return 404 rather than
+serve the wrong JavaScript. Shared asset serving is tracked in
+[#2857](https://github.com/DollhouseMCP/mcp-server/issues/2857).
+
 The `DOLLHOUSE_COOKIE_SIGNING_SECRET` value is also used as the HMAC salt for IP/UA hashes when the optional `refreshRotationCheckIpUa: true` rotation-grace IP/UA gate is enabled.
 
 #### Refresh-token rotation grace

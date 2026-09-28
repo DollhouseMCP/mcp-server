@@ -41,6 +41,16 @@ afterAll(() => {
 });
 
 describe('hosted connection endpoint validation', () => {
+  it('allows only official setup pages and supported native install schemes', () => {
+    expect(connect.safeSetupHref('https://claude.ai/customize/connectors')).toBe(true);
+    expect(connect.safeSetupHref('cursor://anysphere.cursor-deeplink/mcp/install?name=safe')).toBe(true);
+    expect(connect.safeSetupHref('vscode:mcp/install?name=safe')).toBe(true);
+    expect(connect.safeSetupHref('https://claude.ai.evil.test/connectors')).toBe(false);
+    expect(connect.safeSetupHref('javascript:alert(1)')).toBe(false);
+    expect(connect.safeSetupHref('data:text/html,evil')).toBe(false);
+    expect(connect.safeSetupHref('cursor://evil/mcp/install?name=safe')).toBe(false);
+  });
+
   it('accepts only the same-origin canonical MCP resource', () => {
     expect(connect.validateHostedMcpEndpoint('https://mcp.example.test/mcp', 'https://mcp.example.test')).toBe('https://mcp.example.test/mcp');
     expect(connect.validateHostedMcpEndpoint('http://localhost:3000/mcp', 'http://localhost:3000')).toBe('http://localhost:3000/mcp');
@@ -159,7 +169,7 @@ describe('hosted connection UI', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: jest.fn(() => Promise.reject(new Error('denied'))) } });
     const panel = document.querySelector<HTMLElement>('#panel')!;
     await connect.init(panel, { toast });
-    (panel.querySelector('.connect-client-panel button') as HTMLButtonElement).click();
+    (panel.querySelector('.connect-client-panel .connect-value button') as HTMLButtonElement).click();
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(toast).toHaveBeenCalledWith('Copy failed. The text is selected so you can copy it manually.', 'warn');
     expect(panel.querySelector<HTMLTextAreaElement>('.connect-copy-fallback')?.selectionEnd).toBeGreaterThan(0);
@@ -244,8 +254,158 @@ describe('hosted connection UI', () => {
     expect(document.activeElement).toBe(link);
     link.addEventListener('click', event => event.preventDefault());
     link.click();
-    expect(toast).toHaveBeenCalledWith('Finish setup and OAuth in VS Code, then refresh connected apps.', 'info');
+    expect(toast).toHaveBeenCalledWith('Review the import in VS Code / GitHub Copilot, then complete OAuth and verify a Dollhouse tool call.', 'info');
     expect(panel.textContent).toContain('No connected apps yet.');
     expect(panel.textContent).not.toMatch(/installed successfully|connected successfully/i);
+  });
+
+  it('filters the growing client catalog without changing the selected setup', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const search = panel.querySelector<HTMLInputElement>('#connect-search')!;
+    search.value = 'cowork';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(panel.querySelector<HTMLButtonElement>('[data-client="claude-cowork"]')!.hidden).toBe(false);
+    expect(panel.querySelector<HTMLButtonElement>('[data-client="codex"]')!.hidden).toBe(true);
+    expect(panel.querySelector('#connect-search-empty')?.hasAttribute('hidden')).toBe(true);
+    panel.querySelector<HTMLButtonElement>('[data-client="claude-cowork"]')!.click();
+    expect(panel.querySelector('#connect-client-panel')?.textContent).toContain('Resume in Cowork');
+    search.value = 'nothing matches';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(panel.querySelector('#connect-search-empty')?.hasAttribute('hidden')).toBe(false);
+    expect(panel.querySelector('#connect-client-panel')?.textContent).toContain('Resume in Cowork');
+  });
+
+  it('shows distinct supported routes and keeps route switching keyboard focused', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="codex"]')!.click();
+    expect(panel.querySelector('[data-route="inside"]')).not.toBeNull();
+    expect(panel.querySelector('[data-route="terminal"]')).not.toBeNull();
+    expect(panel.textContent).toContain('Settings → MCP servers');
+    panel.querySelector<HTMLButtonElement>('[data-route="terminal"]')!.click();
+    expect(document.activeElement?.getAttribute('data-route')).toBe('terminal');
+    expect(panel.textContent).toContain('codex mcp add');
+    expect(panel.textContent).toContain('codex mcp login');
+    expect(panel.textContent).not.toContain('Save, restart');
+  });
+
+  it('orders in-app guidance before terminal and keeps documented install actions beside the routes', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const routes = () => [...panel.querySelectorAll<HTMLButtonElement>('[data-route]')].map(button => button.dataset.route);
+    panel.querySelector<HTMLButtonElement>('[data-client="claude-code"]')!.click();
+    expect(routes()).toEqual(['inside', 'terminal']);
+    panel.querySelector<HTMLButtonElement>('[data-client="copilot-cli"]')!.click();
+    expect(routes()).toEqual(['in-app', 'terminal']);
+    panel.querySelector<HTMLButtonElement>('[data-client="hermes"]')!.click();
+    expect(routes()).toEqual(['in-app', 'config']);
+
+    for (const [id, scheme] of [
+      ['vscode', 'vscode:'], ['cursor', 'cursor:'],
+      ['kiro', 'https://kiro.dev/launch/mcp/add'], ['lm-studio', 'lmstudio:'],
+    ]) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      expect(routes()[0]).toMatch(/^(inside|manual)$/);
+      const action = panel.querySelector<HTMLAnchorElement>('.connect-route-header .connect-direct-action a')!;
+      expect(action).not.toBeNull();
+      expect(action.href.startsWith(scheme)).toBe(true);
+      expect(action.classList.contains('btn-primary')).toBe(true);
+      expect(panel.querySelector('.connect-direct-action')?.textContent).toContain('Direct install');
+      expect(panel.querySelector('.connect-direct-action')?.textContent).toContain('then authorize');
+      panel.querySelector<HTMLButtonElement>('[data-route="native"]')!.click();
+      expect(panel.querySelectorAll('.connect-client-panel a[href^="' + scheme + '"]')).toHaveLength(1);
+      panel.querySelector<HTMLButtonElement>(`[data-route="${routes()[0]}"]`)!.click();
+      expect(panel.querySelector<HTMLAnchorElement>('.connect-direct-action a')?.href).toBe(action.href);
+    }
+    for (const id of ['codex', 'goose', 'cherry-studio', 'microsoft-copilot-personal']) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      expect(panel.querySelector('.connect-direct-action')).toBeNull();
+    }
+  });
+
+  it('does not imply ChatGPT or Claude plugin publication or hook readiness', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="chatgpt"]')!.click();
+    expect(panel.textContent).toContain('developer mode');
+    expect(panel.textContent).toContain('Codex configuration does not automatically add it to ChatGPT');
+    expect(panel.textContent).not.toMatch(/Add to Claude|plugin marketplace|hooks enabled/i);
+    expect(panel.textContent).toContain('Local permission hooks require separate setup.');
+  });
+
+  it('opens official setup guidance separately while keeping native app handoffs direct', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    panel.querySelector<HTMLButtonElement>('[data-client="claude"]')!.click();
+    const docs = panel.querySelector<HTMLAnchorElement>('.connect-client-heading a')!;
+    expect(docs.target).toBe('_blank');
+    expect(docs.rel).toBe('noopener noreferrer');
+    expect(docs.getAttribute('aria-label')).toContain('opens in a new tab');
+    panel.querySelector<HTMLButtonElement>('[data-client="cursor"]')!.click();
+    const native = panel.querySelector<HTMLAnchorElement>('[href^="cursor:"]')!;
+    expect(native.target).toBe('');
+  });
+
+  it('renders every catalog client and each route with approved links', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const clientIds = [...panel.querySelectorAll<HTMLButtonElement>('[data-client]')].map(button => button.dataset.client!);
+    expect(clientIds).toHaveLength(40);
+    expect(new Set(clientIds).size).toBe(40);
+    for (const id of clientIds) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      const routeIds = [...panel.querySelectorAll<HTMLButtonElement>('[data-route]')].map(button => button.dataset.route!);
+      expect(routeIds.length).toBeGreaterThan(0);
+      expect(panel.querySelectorAll('.connect-direct-action')).toHaveLength(routeIds.includes('native') ? 1 : 0);
+      const insideRoute = routeIds.find(route => route === 'inside' || route === 'in-app');
+      if (insideRoute) expect(routeIds[0]).toBe(insideRoute);
+      if (insideRoute && routeIds.includes('terminal')) expect(routeIds[1]).toBe('terminal');
+      expect(panel.querySelector('.connect-client-heading a')).not.toBeNull();
+      for (const routeId of routeIds) {
+        panel.querySelector<HTMLButtonElement>(`[data-route="${routeId}"]`)!.click();
+        expect(panel.querySelectorAll('.connect-steps li').length).toBeGreaterThan(0);
+        for (const link of panel.querySelectorAll<HTMLAnchorElement>('.connect-client-panel a[href]')) {
+          expect(connect.safeSetupHref(link.href)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('shows qualification limits instead of setup payloads for unsupported clients', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    for (const id of ['microsoft-copilot-personal', 'google-ai-studio']) {
+      panel.querySelector<HTMLButtonElement>(`[data-client="${id}"]`)!.click();
+      expect(panel.querySelector('#connect-client-panel')?.textContent).toMatch(/No verified|unverified/i);
+      expect(panel.querySelector('.connect-client-panel .connect-value')).toBeNull();
+      expect(panel.querySelector('.connect-client-panel .connect-oauth-note')).toBeNull();
+    }
+  });
+
+  it('finds agent and platform clients and regenerates native payloads with the connection name', async () => {
+    const panel = document.querySelector<HTMLElement>('#panel')!;
+    await connect.init(panel, { toast: jest.fn() });
+    const search = panel.querySelector<HTMLInputElement>('#connect-search')!;
+    for (const term of ['Hermes', 'Copilot', 'Gemini']) {
+      search.value = term;
+      search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      expect([...panel.querySelectorAll<HTMLButtonElement>('[data-client]')].some(button => !button.hidden)).toBe(true);
+    }
+    search.value = '';
+    search.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    panel.querySelector<HTMLButtonElement>('[data-client="kiro"]')!.click();
+    expect(panel.querySelector<HTMLAnchorElement>('[href^="https://kiro.dev/launch/mcp/add"]')?.classList.contains('btn-primary')).toBe(true);
+    panel.querySelector<HTMLButtonElement>('[data-client="lm-studio"]')!.click();
+    const input = panel.querySelector<HTMLInputElement>('#connect-name')!;
+    input.value = 'Research_2';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    const native = panel.querySelector<HTMLAnchorElement>('[href^="lmstudio:"]')!;
+    expect(native.classList.contains('btn-primary')).toBe(true);
+    expect(new URL(native.href).searchParams.get('name')).toBe('Research_2');
+    expect(native.href).not.toMatch(/token|secret|password/i);
+    input.value = 'bad name';
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(panel.querySelector('[href^="lmstudio:"]')).toBeNull();
   });
 });

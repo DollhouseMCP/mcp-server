@@ -18,6 +18,7 @@ import { pickHeaderValue } from '../auth/embedded-as/EmbeddedAuthorizationServer
 import { logger } from '../utils/logger.js';
 import { assertSafePublicBaseUrl, isLoopbackHost } from '../auth/oauth/url.js';
 import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
+import { loadVersionedConsoleUi } from './consoleUiAssets.js';
 import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
@@ -946,8 +947,31 @@ export async function createStreamableHttpRuntime(
     });
     // Serve the console UI (static) at /ui. Public; the page self-gates on
     // GET /api/v1/auth/me. Assets are copied to dist/web-console/ui by postbuild.
+    // The shell points to a content-versioned asset path. Relative JS imports
+    // and CSS font URLs then stay in that same versioned module graph.
     const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
-    app.use('/ui', expressStatic(consoleUiDir, { index: 'index.html' }));
+    const { assetBasePath, html } = await loadVersionedConsoleUi(consoleUiDir);
+    app.use('/ui', (_req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
+      next();
+    });
+    app.get(['/ui', '/ui/', '/ui/index.html'], (req, res) => {
+      if (req.path === '/ui') {
+        const queryIndex = req.originalUrl.indexOf('?');
+        res.redirect(301, `/ui/${queryIndex < 0 ? '' : req.originalUrl.slice(queryIndex)}`);
+        return;
+      }
+      res.type('html').send(html);
+    });
+    app.use(assetBasePath, (req, res, next) => {
+      let assetPath: string;
+      try { assetPath = decodeURIComponent(req.path); }
+      catch { res.sendStatus(400); return; }
+      if (assetPath.toLowerCase().endsWith('.html')) { res.sendStatus(404); return; }
+      next();
+    }, expressStatic(consoleUiDir, { index: false, cacheControl: false }));
+    // Old asset URLs remain available during the transition, without caching.
+    app.use('/ui', expressStatic(consoleUiDir, { index: false, cacheControl: false }));
     logger.info('[StreamableHTTP] Console UI mounted', { basePath: '/ui' });
     app.use(options.webConsoleApiV1.router);
     options.webConsoleApiV1.markMounted();
