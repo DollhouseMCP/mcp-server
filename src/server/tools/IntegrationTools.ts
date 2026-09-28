@@ -34,6 +34,7 @@ const REMOTE_SCHEMA_ANNOTATION_KEYS = new Set([
 export function getIntegrationTools(
   gateway: AuthorizedIntegrationGateway,
   operationCatalog?: AuthorizedIntegrationOperationCatalog | null,
+  includeReadTools = true,
 ): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler }> = [{
     tool: {
@@ -97,6 +98,7 @@ export function getIntegrationTools(
   }];
   if (operationCatalog) {
     tools.push(...getIntegrationOperationTools(operationCatalog));
+    if (includeReadTools) tools.push(...getIntegrationReadTools(operationCatalog));
   }
   return tools;
 }
@@ -222,6 +224,14 @@ function getIntegrationOperationTools(
         }
       },
     },
+  ];
+}
+
+/** Shared READ adapters for discrete tools and configured MCP-AQL operations. */
+export function getIntegrationReadTools(
+  operationCatalog: AuthorizedIntegrationOperationCatalog,
+): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
+  return [
     {
       tool: {
         name: 'list_operations',

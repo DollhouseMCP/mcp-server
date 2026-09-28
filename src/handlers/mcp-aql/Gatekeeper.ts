@@ -16,6 +16,7 @@
  * - Audit logging for all decisions
  */
 
+import { type OperationRegistry } from './OperationRegistry.js';
 import { getRoute } from './OperationRouter.js';
 import type { CRUDEndpoint } from './OperationRouter.js';
 import { logger } from '../../utils/logger.js';
@@ -236,15 +237,15 @@ export class Gatekeeper {
    * @param calledEndpoint - The endpoint it was called through (e.g., 'CREATE')
    * @throws Error if operation unknown or endpoint mismatch
    */
-  validateRoute(operation: string, calledEndpoint: CRUDEndpoint): void {
-    this.validateRouteWithSession(operation, calledEndpoint, this.resolveSession());
+  validateRoute(operation: string, calledEndpoint: CRUDEndpoint, operations: OperationRegistry): void {
+    this.validateRouteWithSession(operation, calledEndpoint, this.resolveSession(), operations);
   }
 
   /**
    * Internal route validation with pre-resolved session (avoids double-resolve in enforce()).
    */
-  private validateRouteWithSession(operation: string, calledEndpoint: CRUDEndpoint, session: GatekeeperSession): void {
-    const route = getRoute(operation);
+  private validateRouteWithSession(operation: string, calledEndpoint: CRUDEndpoint, session: GatekeeperSession, operations: OperationRegistry): void {
+    const route = operations.getRoute(operation);
 
     if (!route) {
       this.logAuditEvent(operation, calledEndpoint, {
@@ -313,14 +314,14 @@ export class Gatekeeper {
    * @param input - The enforcement input containing operation context
    * @returns A GatekeeperDecision indicating whether the operation is allowed
    */
-  enforce(input: EnforceInput): GatekeeperDecision {
+  enforce(input: EnforceInput, operations: OperationRegistry): GatekeeperDecision {
     const { operation, endpoint, elementType, activeElements = [], skipElementPolicies = false } = input;
     const session = this.resolveSession();
 
     // Layer 1: Route validation (throws if invalid)
     // Uses pre-resolved session to avoid double-resolve
     try {
-      this.validateRouteWithSession(operation, endpoint, session);
+      this.validateRouteWithSession(operation, endpoint, session, operations);
     } catch (error) {
       // Convert thrown error to decision for consistent return type
       return {
@@ -337,8 +338,8 @@ export class Gatekeeper {
     const shouldResolveElementPolicies = this.config.allowElementPolicyOverrides && !skipElementPolicies;
     const policyStart = Date.now();
     const policyResult = shouldResolveElementPolicies
-      ? resolveElementPolicy(operation, activeElements, elementType)
-      : { permissionLevel: getDefaultPermissionLevel(operation), sourceElement: undefined, matchedPolicy: undefined as ElementPolicyResult['matchedPolicy'] };
+      ? resolveElementPolicy(operation, activeElements, elementType, operations)
+      : { permissionLevel: getDefaultPermissionLevel(operation, operations), sourceElement: undefined, matchedPolicy: undefined as ElementPolicyResult['matchedPolicy'] };
     const policyMs = Date.now() - policyStart;
     // Only log policy resolution when it's not the default AUTO_APPROVE path
     if (policyResult.permissionLevel !== PermissionLevel.AUTO_APPROVE || policyMs > 5) {
@@ -577,8 +578,8 @@ export class Gatekeeper {
    * @param operation - The operation name
    * @returns The default permission level
    */
-  getDefaultPermissionLevel(operation: string): PermissionLevel {
-    return getDefaultPermissionLevel(operation);
+  getDefaultPermissionLevel(operation: string, operations: OperationRegistry): PermissionLevel {
+    return getDefaultPermissionLevel(operation, operations);
   }
 
   /**

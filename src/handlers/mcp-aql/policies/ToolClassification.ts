@@ -77,6 +77,8 @@ const GATEKEEPER_ESSENTIAL_OPERATIONS = new Set([
  * unnecessary 'evaluate' round-trips for operations that can't modify state.
  */
 const SAFE_MCP_OPERATIONS = new Set([
+  'list_integration_operations',
+  'describe_integration_operation',
   'list_elements',
   'get_element',
   'get_element_details',
@@ -634,9 +636,7 @@ export function evaluateCliToolPolicy(
     if (evaluation.hasAllowPatterns) {
       anyElementHasAllowPatterns = true;
       elementsWithAllowPatterns.push(`${element.type} '${element.name}'`);
-      if (evaluation.allowed) {
-        toolAllowedByAnyElement = true;
-      }
+      toolAllowedByAnyElement ||= evaluation.allowed;
     }
   }
 

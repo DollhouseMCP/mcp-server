@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 import { jest } from '@jest/globals';
 
 import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
@@ -169,6 +170,7 @@ function createHandler(
       executingAgents,
       abortedGoals,
       (name) => `${sessionId}:${name}`,
+      BASE_OPERATION_REGISTRY,
     ),
     abortedGoals,
   };

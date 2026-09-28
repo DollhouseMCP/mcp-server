@@ -21,7 +21,9 @@
  * - data: never (discriminated union enforces this)
  */
 
-import { type CRUDEndpoint, getRoute } from './OperationRouter.js';
+import { OperationRegistry } from './OperationRegistry.js';
+import type { AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import { type CRUDEndpoint } from './OperationRouter.js';
 import type { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, canOperationBeElevated } from './policies/index.js';
 import { isGatekeeperInfraOperation, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
@@ -375,6 +377,7 @@ class VerificationMetricsTracker {
  * Abstracts the concrete handler types for better testability and decoupling.
  */
 export interface HandlerRegistry {
+  integrationOperationCatalog?: AuthorizedIntegrationOperationCatalog;
   elementCRUD: ElementCRUDHandler;
   memoryManager: MemoryManager;
   agentManager: AgentManager;
@@ -444,6 +447,7 @@ export interface CorrelationIdProvider extends SaveContextScope {
 }
 
 export class MCPAQLHandler {
+  readonly operations: OperationRegistry;
   private readonly gatekeeper: Gatekeeper;
   private readonly searchHandler: SearchHandler;
   private readonly elementCRUDDispatcher: ElementCRUDDispatcher;
@@ -522,6 +526,7 @@ export class MCPAQLHandler {
     private readonly handlers: HandlerRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
   ) {
+    this.operations = new OperationRegistry(handlers.integrationOperationCatalog);
     // Initialize normalizers for schema-driven operations (Issue #243)
     initializeNormalizers();
     // Issue #452: Store Gatekeeper instance for policy enforcement
@@ -541,10 +546,12 @@ export class MCPAQLHandler {
       this.executingAgents,
       this.abortedGoals,
       (name) => this.sessionKey(name),
+      this.operations,
       contextTracker,
     );
     this.gatekeeperHandler = new GatekeeperHandler({
       handlers,
+      operations: this.operations,
       gatekeeper: this.gatekeeper,
       contextTracker,
       executingAgents: this.executingAgents,
@@ -951,7 +958,7 @@ export class MCPAQLHandler {
       if (gatekeeperFailure) return gatekeeperFailure;
 
       // Step 3: Route operation to handler reference
-      const route = getRoute(operation);
+      const route = this.operations.getRoute(operation);
       if (!route) {
         // This should never happen after PermissionGuard.validate, but guard defensively
         return this.failure(`Unknown operation: ${operation}`, startTime);
@@ -1012,7 +1019,7 @@ export class MCPAQLHandler {
     const { operation, params } = input;
     const elementType = resolveInputElementType(input);
     if (!env.DOLLHOUSE_GATEKEEPER_ENABLED) {
-      this.gatekeeper.validateRoute(operation, endpoint);
+      this.gatekeeper.validateRoute(operation, endpoint, this.operations);
       return null;
     }
 
@@ -1023,7 +1030,7 @@ export class MCPAQLHandler {
       elementType,
       activeElements,
       skipElementPolicies: isGatekeeperInfraOperation(operation),
-    });
+    }, this.operations);
 
     this.recordGatekeeperDecision(decision);
     this.handleDeniedGatekeeperDecision(decision, operation, endpoint, elementType, params);
@@ -1078,7 +1085,7 @@ export class MCPAQLHandler {
 
     this.gatekeeper.recordConfirmation(operation, confirmLevel, elementType);
 
-    const summary = buildOperationSummary(operation, elementType, params);
+    const summary = buildOperationSummary(operation, elementType, params, this.operations);
     const scope = elementType ? ' ['.concat(elementType, ']') : '';
     let riskLabel = 'LOW';
     if (riskScore >= 80) {
@@ -1301,12 +1308,13 @@ export class MCPAQLHandler {
     // Issue #247: Schema-driven dispatch for configured operations
     // This eliminates the need for manual switch statements
     // Issue #251: Pass full input for operations needing elementType resolution
-    if (SchemaDispatcher.canDispatch(operation)) {
+    if (SchemaDispatcher.canDispatch(operation, this.operations)) {
       return SchemaDispatcher.dispatch(
         operation,
         params || {},
         this.handlers,
-        input
+        input,
+        this.operations
       );
     }
 
@@ -1500,7 +1508,7 @@ export class MCPAQLHandler {
     params: Record<string, unknown>
   ): unknown {
     if (method === 'resolve') {
-      return IntrospectionResolver.resolve(params);
+      return IntrospectionResolver.resolve(params, this.operations);
     }
     throw new Error(`Unknown Introspection method: ${method}`);
   }
@@ -2105,7 +2113,7 @@ export class MCPAQLHandler {
    * Used by dispatchGatekeeper to determine the correct endpoint context.
    */
   private getEndpointForOperation(operation: string): CRUDEndpoint {
-    const route = getRoute(operation);
+    const route = this.operations.getRoute(operation);
     if (!route) {
       throw new Error(`Unknown operation: ${operation}`);
     }
@@ -2238,6 +2246,10 @@ export class MCPAQLHandler {
   ]);
 
   private requiresIdentityCheck(operation: string): boolean {
+    // Let route validation reject unavailable operations before identity handling.
+    if (!this.operations.getRoute(operation)) return false;
+    // Integration discovery owns its identity checks through the authorized catalog.
+    if (this.operations.getIntegrationHandler(operation)) return false;
     if (MCPAQLHandler.IDENTITY_EXEMPT_OPS.has(operation)) return false;
     if (!this.handlers.isDbMode) return false;
     // DOLLHOUSE_USER set = operator established identity at startup

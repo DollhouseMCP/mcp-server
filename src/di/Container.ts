@@ -1259,6 +1259,10 @@ export class DollhouseContainer {
       configurable: true,
       enumerable: true,
     });
+    const integrationServices = this.buildAuthorizedIntegrationServices(
+      handlerDeps.gatekeeper, () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+    );
+    handlerDeps.integrationOperationCatalog = integrationServices.authorizedIntegrationOperationCatalog;
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
 
     // Register mcpAqlHandler as a singleton for test access
@@ -1277,7 +1281,7 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry, // No tool registry in bootstrap-only mode
       enhancedIndexHandler,
       mcpAqlHandler,
-      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
+      ...integrationServices,
     };
   }
 
@@ -1801,6 +1805,10 @@ export class DollhouseContainer {
       enumerable: true,
     });
 
+    const integrationServices = this.buildAuthorizedIntegrationServices(
+      handlerDeps.gatekeeper, () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+    );
+    handlerDeps.integrationOperationCatalog = integrationServices.authorizedIntegrationOperationCatalog;
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
     return {
       personaHandler,
@@ -1815,7 +1823,7 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
       mcpAqlHandler,
-      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
+      ...integrationServices,
     };
   }
 
@@ -1830,14 +1838,14 @@ export class DollhouseContainer {
    */
   private buildAuthorizedIntegrationServices(
     gatekeeper: IntegrationRequestPolicyEnforcerOptions['gatekeeper'],
-    mcpAqlHandler: MCPAQLHandler,
+    getActiveElements: IntegrationRequestPolicyEnforcerOptions['getActiveElements'],
   ): Pick<
     HandlerBundle,
     'authorizedIntegrationGateway' | 'authorizedIntegrationOperationCatalog' | 'authorizedIntegrationRemoteMcpBridge'
   > {
     const policyEnforcer = new IntegrationRequestPolicyEnforcer({
       gatekeeper,
-      getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+      getActiveElements,
     });
     const gateway = this.resolveIntegrationRequestGateway();
     const catalog = this.resolveIntegrationOperationCatalog();
@@ -2071,6 +2079,7 @@ export class DollhouseContainer {
       toolRegistry.registerIntegrationTools(
         bundle.authorizedIntegrationGateway,
         bundle.authorizedIntegrationOperationCatalog,
+        interfaceMode === 'discrete',
       );
     }
   }

@@ -498,17 +498,17 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
  * Resolve an operation name to its canonical form, checking aliases.
  * Returns the canonical operation name, or the input if no alias matches.
  */
-export function resolveOperationName(operation: string): string {
-  if (operation in OPERATION_ROUTES) return operation;
-  for (const [canonical, route] of Object.entries(OPERATION_ROUTES)) {
+export function resolveOperationName(operation: string, routes: Readonly<Record<string, OperationRoute>> = OPERATION_ROUTES): string {
+  if (Object.hasOwn(routes, operation)) return operation;
+  for (const [canonical, route] of Object.entries(routes)) {
     if (route.aliases?.includes(operation)) return canonical;
   }
   return operation;
 }
 
-export function getRoute(operation: string): OperationRoute | undefined {
-  const canonical = resolveOperationName(operation);
-  return OPERATION_ROUTES[canonical];
+export function getRoute(operation: string, routes: Readonly<Record<string, OperationRoute>> = OPERATION_ROUTES): OperationRoute | undefined {
+  const canonical = resolveOperationName(operation, routes);
+  return Object.hasOwn(routes, canonical) ? routes[canonical] : undefined;
 }
 
 /**

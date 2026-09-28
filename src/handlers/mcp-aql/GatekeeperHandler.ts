@@ -1,3 +1,4 @@
+import type { OperationRegistry } from './OperationRegistry.js';
 import { randomUUID } from 'node:crypto';
 import { generateDisplayCode } from '@dollhousemcp/safety';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -57,6 +58,7 @@ interface VerificationLimiter {
 
 export interface GatekeeperHandlerDeps {
   handlers: HandlerRegistry;
+  operations: OperationRegistry;
   gatekeeper: Gatekeeper;
   contextTracker?: CorrelationIdProvider;
   executingAgents: Map<string, ExecutingAgentEntry>;
@@ -127,7 +129,7 @@ export class GatekeeperHandler {
     const elementType = rawElementType
       ? normalizeMCPAQLElementType(rawElementType) ?? rawElementType
       : undefined;
-    const summary = buildOperationSummary(operation, elementType, params);
+    const summary = buildOperationSummary(operation, elementType, params, this.deps.operations);
     const activeElements = await this.deps.getActiveElements();
 
     this.enforceConfirmationSandbox(operation, elementType, activeElements);
@@ -137,7 +139,7 @@ export class GatekeeperHandler {
       endpoint: this.deps.getEndpointForOperation(operation),
       elementType,
       activeElements,
-    });
+    }, this.deps.operations);
 
     if (decision.allowed) {
       return {

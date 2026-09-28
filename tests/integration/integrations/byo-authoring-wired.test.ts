@@ -117,7 +117,10 @@ describe('BYO authoring wired end-to-end', () => {
   });
 
   it('derives operations from the authored spec for the agent surface', async () => {
-    const operations = await harness.callViaRegistry('list_operations', { provider: BYO_PROVIDER });
+    const envelope = await harness.callViaRegistry('mcp_aql_read', { operation: 'list_integration_operations', params: { provider: BYO_PROVIDER } });
+    expect(envelope).toMatchObject({ success: true });
+    if (!('data' in envelope)) throw new Error('Expected MCP-AQL data envelope');
+    const operations = JSON.parse((envelope.data as { content: { text: string }[] }).content[0].text);
 
     expect(operations.ok).toBe(true);
     expect(operations.result).toMatchObject({

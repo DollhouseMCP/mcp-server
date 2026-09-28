@@ -23,7 +23,7 @@
  */
 
 import { MCPAQLHandler } from './MCPAQLHandler.js';
-import { getRoute, CRUDEndpoint } from './OperationRouter.js';
+import { CRUDEndpoint } from './OperationRouter.js';
 import { OperationResult, BatchResult, ResponseMeta, isOperationInput, parseOperationInput, describeInvalidInput } from './types.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -79,7 +79,7 @@ export class UnifiedEndpoint {
       const { operation } = parsedInput;
 
       // Step 2: Determine the correct CRUD endpoint for this operation
-      const route = getRoute(operation);
+      const route = this.mcpAqlHandler.operations.getRoute(operation);
       if (!route) {
         SecurityMonitor.logSecurityEvent({
           type: 'UPDATE_SECURITY_VIOLATION',
@@ -167,7 +167,7 @@ export class UnifiedEndpoint {
   private buildMeta(startTime: number): ResponseMeta {
     return {
       requestId: this.mcpAqlHandler.getCorrelationId() ?? 'unknown',
-      durationMs: parseFloat((performance.now() - startTime).toFixed(2)),
+      durationMs: Number.parseFloat((performance.now() - startTime).toFixed(2)),
       timestamp: new Date().toISOString(),
     };
   }

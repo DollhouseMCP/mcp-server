@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Integration tests for allowElementPolicyOverrides kill switch (Issue #679/#683)
  *
@@ -136,7 +137,7 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
         operation: 'create_element',
         endpoint: 'CREATE',
         activeElements: [],
-      });
+      }, BASE_OPERATION_REGISTRY);
       expect(baselineDecision.allowed).toBe(false);
       expect(baselineDecision.confirmationPending).toBe(true);
       expect(baselineDecision.permissionLevel).toBe(PermissionLevel.CONFIRM_SESSION);
@@ -151,7 +152,7 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
         operation: 'create_element',
         endpoint: 'CREATE',
         activeElements: buildPermissiveActiveElements(),
-      });
+      }, BASE_OPERATION_REGISTRY);
       expect(elevatedDecision.allowed).toBe(true);
       expect(elevatedDecision.permissionLevel).toBe(PermissionLevel.AUTO_APPROVE);
 
@@ -186,7 +187,7 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
         operation: 'create_element',
         endpoint: 'CREATE',
         activeElements: buildPermissiveActiveElements(),
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -344,7 +345,7 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
         operation: 'create_element',
         endpoint: 'CREATE',
         activeElements,
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       // CONFIRM_SESSION (not AUTO_APPROVE) — confirm-persona's policy won over
       // allow-persona's policy, proving the priority hierarchy.

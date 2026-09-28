@@ -40,7 +40,9 @@ describe('Integrations v2 — connect→agent end-to-end (real MCP transport)', 
 
   it('lists the integration tools over the MCP protocol', async () => {
     const names = await client.listToolNames();
-    expect(names).toEqual(expect.arrayContaining(['integration_request', 'list_operations', 'describe_operation', 'ingest_openapi_spec']));
+    expect(names).toEqual(expect.arrayContaining(['integration_request', 'mcp_aql_read', 'ingest_openapi_spec']));
+    expect(names).not.toContain('list_operations');
+    expect(names).not.toContain('describe_operation');
   });
 
   it('executes integration_request via tools/call, injecting the credential server-side', async () => {

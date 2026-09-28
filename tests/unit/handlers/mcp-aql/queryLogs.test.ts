@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Unit tests for CRUDE-routed query_logs operation (Issue #528)
  *
@@ -55,7 +56,7 @@ describe('query_logs CRUDE migration (Issue #528)', () => {
 
   describe('OperationPolicies', () => {
     it('should have AUTO_APPROVE policy for query_logs', () => {
-      const level = getDefaultPermissionLevel('query_logs');
+      const level = getDefaultPermissionLevel('query_logs', BASE_OPERATION_REGISTRY);
       expect(level).toBe(PermissionLevel.AUTO_APPROVE);
     });
 
@@ -64,7 +65,7 @@ describe('query_logs CRUDE migration (Issue #528)', () => {
       // AUTO_APPROVE is derived from the endpoint routing
       const route = getRoute('query_logs');
       expect(route?.endpoint).toBe('READ');
-      expect(getDefaultPermissionLevel('query_logs')).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('query_logs', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
     });
   });
 

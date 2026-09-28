@@ -25,8 +25,9 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
 
   it('registers integration tools on the per-session registry', () => {
     expect(harness.hasTool('integration_request')).toBe(true);
-    expect(harness.hasTool('list_operations')).toBe(true);
-    expect(harness.hasTool('describe_operation')).toBe(true);
+    expect(harness.hasTool('list_operations')).toBe(false);
+    expect(harness.hasTool('mcp_aql_read')).toBe(true);
+    expect(harness.hasTool('describe_operation')).toBe(false);
   });
 
   it('executes a read through the gateway, injecting the credential server-side', async () => {
@@ -128,8 +129,11 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
     }
   });
 
-  it('derives operations from the stored OpenAPI spec via list_operations', async () => {
-    const response = await harness.callViaRegistry('list_operations', { provider: PROVIDER });
+  it('derives operations from the stored OpenAPI spec via list_integration_operations', async () => {
+    const envelope = await harness.callViaRegistry('mcp_aql_read', { operation: 'list_integration_operations', params: { provider: PROVIDER } });
+    expect(envelope).toMatchObject({ success: true });
+    if (!('data' in envelope)) throw new Error('Expected MCP-AQL data envelope');
+    const response = JSON.parse((envelope.data as { content: { text: string }[] }).content[0].text);
 
     expect(response.ok).toBe(true);
     const operations = (response.result as { operations: { operationId: string }[] }).operations;
@@ -137,10 +141,13 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
   });
 
   it('describes an operation with gateway-request metadata and spec contract', async () => {
-    const response = await harness.callViaRegistry('describe_operation', {
-      provider: PROVIDER,
-      operation_id: 'getThing',
+    const envelope = await harness.callViaRegistry('mcp_aql_read', {
+      operation: 'describe_integration_operation',
+      params: { provider: PROVIDER, operation_id: 'getThing' },
     });
+    expect(envelope).toMatchObject({ success: true });
+    if (!('data' in envelope)) throw new Error('Expected MCP-AQL data envelope');
+    const response = JSON.parse((envelope.data as { content: { text: string }[] }).content[0].text);
 
     expect(response.ok).toBe(true);
     expect(response.result).toMatchObject({

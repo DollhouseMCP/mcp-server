@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Permission Flow Full Matrix (Issue #1669)
  *
@@ -61,7 +62,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
 
     it('every operation should resolve to a permission level', () => {
       for (const op of ALL_OPERATIONS) {
-        const level = getDefaultPermissionLevel(op);
+        const level = getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY);
         expect([
           PermissionLevel.AUTO_APPROVE,
           PermissionLevel.CONFIRM_SESSION,
@@ -72,9 +73,9 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     it('unknown operations should default to CONFIRM_SINGLE_USE (secure fallback)', () => {
-      expect(getDefaultPermissionLevel('nonexistent_operation')).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
-      expect(getDefaultPermissionLevel('sneaky_backdoor')).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
-      expect(getDefaultPermissionLevel('')).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+      expect(getDefaultPermissionLevel('nonexistent_operation', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+      expect(getDefaultPermissionLevel('sneaky_backdoor', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+      expect(getDefaultPermissionLevel('', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
     });
   });
 
@@ -95,7 +96,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
         // the endpoint default or has an explicit override
         for (const op of opsOnEndpoint) {
           const override = OPERATION_POLICY_OVERRIDES[op];
-          const effectiveLevel = getDefaultPermissionLevel(op);
+          const effectiveLevel = getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY);
 
           if (override) {
             it(`${op}: overridden to ${override.defaultLevel} (reason: ${override.rationale?.slice(0, 60)}...)`, () => {
@@ -114,7 +115,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
   // ── Auto-Approved Operations (READ + overrides) ──
 
   describe('AUTO_APPROVE operations — no confirmation needed', () => {
-    const autoApproved = getAutoApprovedOperations();
+    const autoApproved = getAutoApprovedOperations(BASE_OPERATION_REGISTRY);
 
     it('should include all READ operations without overrides', () => {
       const readOps = ALL_OPERATIONS.filter(
@@ -150,7 +151,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     // Verify each auto-approved operation
     for (const op of autoApproved) {
       it(`${op}: should be AUTO_APPROVE`, () => {
-        expect(getDefaultPermissionLevel(op)).toBe(PermissionLevel.AUTO_APPROVE);
+        expect(getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
       });
     }
   });
@@ -158,7 +159,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
   // ── CONFIRM_SESSION Operations ──
 
   describe('CONFIRM_SESSION operations — confirm once per session', () => {
-    const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION);
+    const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION, BASE_OPERATION_REGISTRY);
 
     it('should include core CRUD additive operations', () => {
       expect(sessionOps).toContain('create_element');
@@ -191,7 +192,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     // Verify each session operation
     for (const op of sessionOps) {
       it(`${op}: should be CONFIRM_SESSION`, () => {
-        expect(getDefaultPermissionLevel(op)).toBe(PermissionLevel.CONFIRM_SESSION);
+        expect(getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SESSION);
       });
     }
   });
@@ -199,7 +200,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
   // ── CONFIRM_SINGLE_USE Operations ──
 
   describe('CONFIRM_SINGLE_USE operations — confirm every time', () => {
-    const singleUseOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE);
+    const singleUseOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE, BASE_OPERATION_REGISTRY);
 
     it('should include all DELETE operations', () => {
       const deleteOps = ALL_OPERATIONS.filter(
@@ -228,7 +229,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     // Verify each single-use operation
     for (const op of singleUseOps) {
       it(`${op}: should be CONFIRM_SINGLE_USE`, () => {
-        expect(getDefaultPermissionLevel(op)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+        expect(getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
       });
     }
   });
@@ -310,8 +311,8 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
 
   describe('Confirmation categories completeness', () => {
     it('auto-approved + confirmation-required should cover all operations', () => {
-      const autoApproved = getAutoApprovedOperations();
-      const confirmRequired = getConfirmationRequiredOperations();
+      const autoApproved = getAutoApprovedOperations(BASE_OPERATION_REGISTRY);
+      const confirmRequired = getConfirmationRequiredOperations(BASE_OPERATION_REGISTRY);
       const allCovered = new Set([...autoApproved, ...confirmRequired]);
 
       for (const op of ALL_OPERATIONS) {
@@ -320,8 +321,8 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     it('no operation should appear in both auto-approved and confirmation-required', () => {
-      const autoApproved = new Set(getAutoApprovedOperations());
-      const confirmRequired = getConfirmationRequiredOperations();
+      const autoApproved = new Set(getAutoApprovedOperations(BASE_OPERATION_REGISTRY));
+      const confirmRequired = getConfirmationRequiredOperations(BASE_OPERATION_REGISTRY);
 
       for (const op of confirmRequired) {
         expect(autoApproved.has(op)).toBe(false);
@@ -351,7 +352,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     describe('AUTO_APPROVE operations should be allowed without confirmation', () => {
-      const autoOps = getAutoApprovedOperations();
+      const autoOps = getAutoApprovedOperations(BASE_OPERATION_REGISTRY);
 
       for (const op of autoOps) {
         const route = OPERATION_ROUTES[op];
@@ -359,7 +360,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
           const decision = gatekeeper.enforce({
             operation: op,
             endpoint: route.endpoint,
-          });
+          }, BASE_OPERATION_REGISTRY);
           expect(decision.allowed).toBe(true);
           expect(decision.permissionLevel).toBe(PermissionLevel.AUTO_APPROVE);
         });
@@ -367,7 +368,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     describe('CONFIRM_SESSION operations should return confirmationPending without confirmation', () => {
-      const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION);
+      const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION, BASE_OPERATION_REGISTRY);
 
       for (const op of sessionOps) {
         const route = OPERATION_ROUTES[op];
@@ -375,7 +376,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
           const decision = gatekeeper.enforce({
             operation: op,
             endpoint: route.endpoint,
-          });
+          }, BASE_OPERATION_REGISTRY);
           expect(decision.allowed).toBe(false);
           expect(decision.confirmationPending).toBe(true);
           expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SESSION);
@@ -384,7 +385,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     describe('CONFIRM_SINGLE_USE operations should return confirmationPending without confirmation', () => {
-      const singleOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE);
+      const singleOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE, BASE_OPERATION_REGISTRY);
 
       for (const op of singleOps) {
         const route = OPERATION_ROUTES[op];
@@ -392,7 +393,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
           const decision = gatekeeper.enforce({
             operation: op,
             endpoint: route.endpoint,
-          });
+          }, BASE_OPERATION_REGISTRY);
           expect(decision.allowed).toBe(false);
           expect(decision.confirmationPending).toBe(true);
           expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
@@ -401,7 +402,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     });
 
     describe('Session-confirmed operations should pass enforce()', () => {
-      const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION);
+      const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION, BASE_OPERATION_REGISTRY);
 
       for (const op of sessionOps) {
         const route = OPERATION_ROUTES[op];
@@ -410,14 +411,14 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
           const decision = gatekeeper.enforce({
             operation: op,
             endpoint: route.endpoint,
-          });
+          }, BASE_OPERATION_REGISTRY);
           expect(decision.allowed).toBe(true);
         });
       }
     });
 
     describe('Single-use confirmed operations should pass once then require re-confirmation', () => {
-      const singleOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE);
+      const singleOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE, BASE_OPERATION_REGISTRY);
 
       for (const op of singleOps) {
         const route = OPERATION_ROUTES[op];
@@ -428,14 +429,14 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
           const first = gatekeeper.enforce({
             operation: op,
             endpoint: route.endpoint,
-          });
+          }, BASE_OPERATION_REGISTRY);
           expect(first.allowed).toBe(true);
 
           // Second check — should require re-confirmation
           const second = gatekeeper.enforce({
             operation: op,
             endpoint: route.endpoint,
-          });
+          }, BASE_OPERATION_REGISTRY);
           expect(second.allowed).toBe(false);
           expect(second.confirmationPending).toBe(true);
         });

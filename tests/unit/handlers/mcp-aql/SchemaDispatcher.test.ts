@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Unit tests for SchemaDispatcher
  *
@@ -79,26 +80,26 @@ describe('SchemaDispatcher', () => {
 
   describe('canDispatch()', () => {
     it('should return true for schema-driven operations', () => {
-      expect(SchemaDispatcher.canDispatch('browse_collection')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('setup_github_auth')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('render')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('introspect')).toBe(true);
+      expect(SchemaDispatcher.canDispatch('browse_collection', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('setup_github_auth', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('render', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('introspect', BASE_OPERATION_REGISTRY)).toBe(true);
     });
 
     it('should return false for legacy operations', () => {
       // Legacy operations not yet migrated to schema
-      expect(SchemaDispatcher.canDispatch('execute_agent')).toBe(false);
-      expect(SchemaDispatcher.canDispatch('addEntry')).toBe(false);
-      expect(SchemaDispatcher.canDispatch('activate_element')).toBe(false);
+      expect(SchemaDispatcher.canDispatch('execute_agent', BASE_OPERATION_REGISTRY)).toBe(false);
+      expect(SchemaDispatcher.canDispatch('addEntry', BASE_OPERATION_REGISTRY)).toBe(false);
+      expect(SchemaDispatcher.canDispatch('activate_element', BASE_OPERATION_REGISTRY)).toBe(false);
     });
 
     it('should return true for ElementCRUD operations (Issue #251)', () => {
       // ElementCRUD operations are now schema-driven
-      expect(SchemaDispatcher.canDispatch('create_element')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('list_elements')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('get_element')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('edit_element')).toBe(true);
-      expect(SchemaDispatcher.canDispatch('delete_element')).toBe(true);
+      expect(SchemaDispatcher.canDispatch('create_element', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('list_elements', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('get_element', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('edit_element', BASE_OPERATION_REGISTRY)).toBe(true);
+      expect(SchemaDispatcher.canDispatch('delete_element', BASE_OPERATION_REGISTRY)).toBe(true);
     });
   });
 
@@ -107,7 +108,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'browse_collection',
         { section: 'skills', type: 'productivity' },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockCollectionHandler.browseCollection).toHaveBeenCalledWith(
@@ -120,7 +121,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'search_collection',
         { query: 'test' },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockCollectionHandler.searchCollection).toHaveBeenCalledWith('test');
@@ -130,7 +131,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'search_collection_enhanced',
         { query: 'test', limit: 10 },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockCollectionHandler.searchCollectionEnhanced).toHaveBeenCalledWith(
@@ -143,7 +144,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'get_collection_cache_health',
         {},
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockCollectionHandler.getCollectionCacheHealth).toHaveBeenCalled();
@@ -155,7 +156,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'setup_github_auth',
         {},
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockAuthHandler.setupGitHubAuth).toHaveBeenCalled();
@@ -165,7 +166,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'check_github_auth',
         {},
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockAuthHandler.checkGitHubAuth).toHaveBeenCalled();
@@ -175,7 +176,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'configure_oauth',
         { client_id: 'test-client-id' },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockAuthHandler.configureOAuth).toHaveBeenCalledWith('test-client-id');
@@ -187,7 +188,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'find_similar_elements',
         { element_name: 'TestPersona', element_type: 'persona', limit: 5 },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockEnhancedIndexHandler.findSimilarElements).toHaveBeenCalledWith({
@@ -202,7 +203,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'search_by_verb',
         { verb: 'create' },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockEnhancedIndexHandler.searchByVerb).toHaveBeenCalledWith({
@@ -218,7 +219,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'render',
         { element_name: 'TestTemplate', variables: { foo: 'bar' } },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockTemplateRenderer.render).toHaveBeenCalledWith(
@@ -235,7 +236,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'import_persona',
         { source: '/path/to/persona.md', overwrite: true },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockPersonaHandler.importPersona).toHaveBeenCalledWith(
@@ -250,7 +251,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'dollhouse_config',
         { action: 'get', setting: 'debug' },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockConfigHandler.handleConfigOperation).toHaveBeenCalledWith({
@@ -263,7 +264,7 @@ describe('SchemaDispatcher', () => {
       const result = await SchemaDispatcher.dispatch(
         'get_build_info',
         {},
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockBuildInfoService.getBuildInfo).toHaveBeenCalled();
@@ -280,7 +281,7 @@ describe('SchemaDispatcher', () => {
       const result = await SchemaDispatcher.dispatch(
         'introspect',
         { query: 'operations' },
-        mockRegistry
+        mockRegistry, undefined, BASE_OPERATION_REGISTRY
       );
 
       // Introspect returns operation list
@@ -292,13 +293,13 @@ describe('SchemaDispatcher', () => {
   describe('dispatch() - Error handling', () => {
     it('should throw for unknown operations', async () => {
       await expect(
-        SchemaDispatcher.dispatch('nonexistent', {}, mockRegistry)
+        SchemaDispatcher.dispatch('nonexistent', {}, mockRegistry, undefined, BASE_OPERATION_REGISTRY)
       ).rejects.toThrow("No schema definition found for operation 'nonexistent'");
     });
 
     it('should throw for missing required params', async () => {
       await expect(
-        SchemaDispatcher.dispatch('search_collection', {}, mockRegistry)
+        SchemaDispatcher.dispatch('search_collection', {}, mockRegistry, undefined, BASE_OPERATION_REGISTRY)
       ).rejects.toThrow("Missing required parameter 'query' for operation 'search_collection'");
     });
 
@@ -309,7 +310,7 @@ describe('SchemaDispatcher', () => {
       };
 
       await expect(
-        SchemaDispatcher.dispatch('browse_collection', {}, registryWithoutCollection)
+        SchemaDispatcher.dispatch('browse_collection', {}, registryWithoutCollection, undefined, BASE_OPERATION_REGISTRY)
       ).rejects.toThrow('CollectionHandler operations not available');
     });
   });
@@ -338,7 +339,7 @@ describe('SchemaDispatcher', () => {
         'create_element',
         { element_name: 'TestPersona', description: 'A test persona' },
         registryWithElementCRUD,
-        { operation: 'create_element', elementType: 'persona', params: {} }
+        { operation: 'create_element', elementType: 'persona', params: {} }, BASE_OPERATION_REGISTRY
       );
 
       // Issue #290: mapTo converts element_name->elementName, element_type->elementType
@@ -356,7 +357,7 @@ describe('SchemaDispatcher', () => {
         'create_element',
         { element_name: 'TestSkill', element_type: 'skill', description: 'A test skill' },
         registryWithElementCRUD,
-        { operation: 'create_element', params: { element_type: 'skill' } }
+        { operation: 'create_element', params: { element_type: 'skill' } }, BASE_OPERATION_REGISTRY
       );
 
       // Issue #290: mapTo converts element_name->elementName, element_type->elementType
@@ -374,7 +375,7 @@ describe('SchemaDispatcher', () => {
         'create_element',
         { element_name: 'TestElement', element_type: 'template', description: 'Test' },
         registryWithElementCRUD,
-        { operation: 'create_element', elementType: 'persona', params: { element_type: 'template' } }
+        { operation: 'create_element', elementType: 'persona', params: { element_type: 'template' } }, BASE_OPERATION_REGISTRY
       );
 
       // input.elementType is checked first in sources array
@@ -390,7 +391,7 @@ describe('SchemaDispatcher', () => {
         'list_elements',
         {},
         registryWithElementCRUD,
-        { operation: 'list_elements', elementType: 'skill', params: {} }
+        { operation: 'list_elements', elementType: 'skill', params: {} }, BASE_OPERATION_REGISTRY
       );
 
       // typeWithParams argBuilder passes (type, fullParams)
@@ -402,7 +403,7 @@ describe('SchemaDispatcher', () => {
         'get_element',
         { element_name: 'MyPersona' },
         registryWithElementCRUD,
-        { operation: 'get_element', elementType: 'persona', params: {} }
+        { operation: 'get_element', elementType: 'persona', params: {} }, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.getElementDetails).toHaveBeenCalledWith('MyPersona', 'persona');
@@ -413,7 +414,7 @@ describe('SchemaDispatcher', () => {
         'edit_element',
         { element_name: 'MyPersona', input: { description: 'Updated description' } },
         registryWithElementCRUD,
-        { operation: 'edit_element', elementType: 'persona', params: {} }
+        { operation: 'edit_element', elementType: 'persona', params: {} }, BASE_OPERATION_REGISTRY
       );
 
       // Issue #290: mapTo converts element_name->elementName, element_type->elementType
@@ -436,7 +437,7 @@ describe('SchemaDispatcher', () => {
           variables: [{ name: 'name', type: 'string', required: true }],
         },
         registryWithElementCRUD,
-        { operation: 'create_element', elementType: 'template', params: {} }
+        { operation: 'create_element', elementType: 'template', params: {} }, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -460,7 +461,7 @@ describe('SchemaDispatcher', () => {
           variables: 'name',
         },
         registryWithElementCRUD,
-        { operation: 'create_element', elementType: 'template', params: {} }
+        { operation: 'create_element', elementType: 'template', params: {} }, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -484,7 +485,7 @@ describe('SchemaDispatcher', () => {
           'create_element',
           { element_name: 'NoType', description: 'Missing type' },
           registryWithElementCRUD,
-          { operation: 'create_element', params: {} }
+          { operation: 'create_element', params: {} }, BASE_OPERATION_REGISTRY
         )
       ).rejects.toThrow("Missing required parameter 'element_type'");
     });
@@ -503,7 +504,7 @@ describe('SchemaDispatcher', () => {
           'list_elements',
           { element_type: 'persona' },
           registryWithElementCRUD,
-          validInput
+          validInput, BASE_OPERATION_REGISTRY
         );
 
         // Verify the handler was called (paths validated internally)
@@ -522,7 +523,7 @@ describe('SchemaDispatcher', () => {
           'create_element',
           { element_name: 'test', description: 'Test' },
           registryWithElementCRUD,
-          validInput
+          validInput, BASE_OPERATION_REGISTRY
         );
 
         expect(mockElementCRUD.createElement).toHaveBeenCalled();
@@ -553,7 +554,7 @@ describe('SchemaDispatcher', () => {
       const result = await SchemaDispatcher.dispatch(
         'export_element',
         { element_name: 'portable-persona', element_type: 'persona' },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.getElementDetails).toHaveBeenCalledWith('portable-persona', 'persona');
@@ -578,7 +579,7 @@ describe('SchemaDispatcher', () => {
         },
       };
 
-      await SchemaDispatcher.dispatch('import_element', { data }, registryWithElementCRUD);
+      await SchemaDispatcher.dispatch('import_element', { data }, registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY);
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith({
         name: 'imported-persona',
@@ -600,7 +601,7 @@ describe('SchemaDispatcher', () => {
       };
 
       await expect(
-        SchemaDispatcher.dispatch('import_element', { data, overwrite: false }, registryWithElementCRUD)
+        SchemaDispatcher.dispatch('import_element', { data, overwrite: false }, registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY)
       ).rejects.toThrow("Element 'existing-persona' already exists. Use overwrite: true to replace.");
       expect(mockElementCRUD.createElement).not.toHaveBeenCalled();
     });
@@ -634,7 +635,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'sync_portfolio',
         { direction: 'push', dry_run: true, confirm_deletions: false },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockPortfolioHandler.syncPortfolio).toHaveBeenCalledWith(
@@ -650,7 +651,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'sync_portfolio',
         { direction: 'pull' },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockPortfolioHandler.syncPortfolio).toHaveBeenCalledWith(
@@ -666,7 +667,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'search_portfolio',
         { query: 'test', type: 'persona', fuzzy_match: true },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       // 'type' should map to 'elementType' (explicit mapTo)
@@ -684,7 +685,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'search_all',
         { query: 'test', page_size: 20, sort_by: 'name' },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockPortfolioHandler.searchAll).toHaveBeenCalledWith(
@@ -700,18 +701,18 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'search_portfolio',
         { query: 'test', fields: 'minimal' },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
       await SchemaDispatcher.dispatch(
         'search_portfolio',
         { query: 'test', fields: ['element_name', 'description'] },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       await expect(SchemaDispatcher.dispatch(
         'search_portfolio',
         { query: 'test', fields: ['element_name', 42] },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       )).rejects.toThrow(
         "Parameter 'fields' for operation 'search_portfolio' must be a string or string array, got array"
       );
@@ -721,7 +722,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'init_portfolio',
         { repository_name: 'my-portfolio', private: true },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockPortfolioHandler.initPortfolio).toHaveBeenCalledWith(
@@ -736,7 +737,7 @@ describe('SchemaDispatcher', () => {
       await SchemaDispatcher.dispatch(
         'portfolio_element_manager',
         { operation: 'download', element_name: 'TestPersona', element_type: 'persona' },
-        registryWithPortfolio
+        registryWithPortfolio, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockSyncHandler.handleSyncOperation).toHaveBeenCalledWith(
@@ -782,7 +783,7 @@ describe('SchemaDispatcher', () => {
           description: TEST_AGENT_DESCRIPTION,
           systemPrompt: 'You are a helpful assistant.',
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -805,7 +806,7 @@ describe('SchemaDispatcher', () => {
           description: TEST_AGENT_DESCRIPTION,
           system_prompt: 'You are a snake_case assistant.',
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -833,7 +834,7 @@ describe('SchemaDispatcher', () => {
           description: TEST_AGENT_DESCRIPTION,
           goal,
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -861,7 +862,7 @@ describe('SchemaDispatcher', () => {
           description: TEST_AGENT_DESCRIPTION,
           activates,
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -889,7 +890,7 @@ describe('SchemaDispatcher', () => {
           description: TEST_AGENT_DESCRIPTION,
           tools,
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -917,7 +918,7 @@ describe('SchemaDispatcher', () => {
           description: TEST_AGENT_DESCRIPTION,
           autonomy,
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -948,7 +949,7 @@ describe('SchemaDispatcher', () => {
           description: 'Complete V2 agent',
           ...v2Fields,
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
@@ -972,7 +973,7 @@ describe('SchemaDispatcher', () => {
             systemPrompt: 'Metadata prompt',
           },
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       // Should keep the metadata value, not overwrite with top-level
@@ -994,7 +995,7 @@ describe('SchemaDispatcher', () => {
           description: 'A test persona',
           systemPrompt: 'Should not be merged',
         },
-        registryWithElementCRUD
+        registryWithElementCRUD, undefined, BASE_OPERATION_REGISTRY
       );
 
       // For non-agent types, systemPrompt should NOT be in metadata
@@ -1017,7 +1018,7 @@ describe('SchemaDispatcher', () => {
         await SchemaDispatcher.dispatch(
           'search_collection',
           { query: 'test query' },
-          mockRegistry
+          mockRegistry, undefined, BASE_OPERATION_REGISTRY
         );
 
         expect(mockCollectionHandler.searchCollection).toHaveBeenCalledWith('test query');
@@ -1025,25 +1026,25 @@ describe('SchemaDispatcher', () => {
 
       it('should reject number when string expected', async () => {
         await expect(
-          SchemaDispatcher.dispatch('search_collection', { query: 123 }, mockRegistry)
+          SchemaDispatcher.dispatch('search_collection', { query: 123 }, mockRegistry, undefined, BASE_OPERATION_REGISTRY)
         ).rejects.toThrow("Parameter 'query' for operation 'search_collection' must be a string, got number");
       });
 
       it('should reject object when string expected', async () => {
         await expect(
-          SchemaDispatcher.dispatch('search_collection', { query: { foo: 'bar' } }, mockRegistry)
+          SchemaDispatcher.dispatch('search_collection', { query: { foo: 'bar' } }, mockRegistry, undefined, BASE_OPERATION_REGISTRY)
         ).rejects.toThrow("Parameter 'query' for operation 'search_collection' must be a string, got object");
       });
 
       it('should reject null when string expected', async () => {
         await expect(
-          SchemaDispatcher.dispatch('search_collection', { query: null }, mockRegistry)
+          SchemaDispatcher.dispatch('search_collection', { query: null }, mockRegistry, undefined, BASE_OPERATION_REGISTRY)
         ).rejects.toThrow("Parameter 'query' for operation 'search_collection' must be a string, got null");
       });
 
       it('should reject array when string expected', async () => {
         await expect(
-          SchemaDispatcher.dispatch('search_collection', { query: ['test'] }, mockRegistry)
+          SchemaDispatcher.dispatch('search_collection', { query: ['test'] }, mockRegistry, undefined, BASE_OPERATION_REGISTRY)
         ).rejects.toThrow("Parameter 'query' for operation 'search_collection' must be a string, got array");
       });
     });
@@ -1053,7 +1054,7 @@ describe('SchemaDispatcher', () => {
         await SchemaDispatcher.dispatch(
           'find_similar_elements',
           { element_name: 'test', limit: 10, threshold: 0.5 },
-          mockRegistry
+          mockRegistry, undefined, BASE_OPERATION_REGISTRY
         );
 
         expect(mockEnhancedIndexHandler.findSimilarElements).toHaveBeenCalled();
@@ -1064,7 +1065,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'find_similar_elements',
             { element_name: 'test', limit: 'ten' },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'limit' for operation 'find_similar_elements' must be a number, got string");
       });
@@ -1074,7 +1075,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'find_similar_elements',
             { element_name: 'test', limit: Number.NaN },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'limit' for operation 'find_similar_elements' must be a number, got number");
       });
@@ -1085,7 +1086,7 @@ describe('SchemaDispatcher', () => {
         await SchemaDispatcher.dispatch(
           'import_persona',
           { source: '/path/to/file', overwrite: true },
-          mockRegistry
+          mockRegistry, undefined, BASE_OPERATION_REGISTRY
         );
 
         expect(mockPersonaHandler.importPersona).toHaveBeenCalledWith('/path/to/file', true);
@@ -1096,7 +1097,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'import_persona',
             { source: '/path/to/file', overwrite: 'true' },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'overwrite' for operation 'import_persona' must be a boolean, got string");
       });
@@ -1106,7 +1107,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'import_persona',
             { source: '/path/to/file', overwrite: 1 },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'overwrite' for operation 'import_persona' must be a boolean, got number");
       });
@@ -1118,7 +1119,7 @@ describe('SchemaDispatcher', () => {
         await SchemaDispatcher.dispatch(
           'render',
           { element_name: 'test', variables: { foo: 'bar' } },
-          mockRegistry
+          mockRegistry, undefined, BASE_OPERATION_REGISTRY
         );
 
         expect(mockTemplateRenderer.render).toHaveBeenCalledWith('test', { foo: 'bar' }, undefined, undefined);
@@ -1129,7 +1130,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'render',
             { element_name: 'test', variables: 'not an object' },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'variables' for operation 'render' must be an object, got string");
       });
@@ -1139,7 +1140,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'render',
             { element_name: 'test', variables: ['array'] },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'variables' for operation 'render' must be an object, got array");
       });
@@ -1149,7 +1150,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'render',
             { element_name: 'test', variables: null },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'variables' for operation 'render' must be an object, got null");
       });
@@ -1160,7 +1161,7 @@ describe('SchemaDispatcher', () => {
         await SchemaDispatcher.dispatch(
           'get_element_relationships',
           { element_name: 'test', relationship_types: ['similar', 'depends'] },
-          mockRegistry
+          mockRegistry, undefined, BASE_OPERATION_REGISTRY
         );
 
         expect(mockEnhancedIndexHandler.getElementRelationships).toHaveBeenCalled();
@@ -1171,7 +1172,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'get_element_relationships',
             { element_name: 'test', relationship_types: 'similar' },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'relationship_types' for operation 'get_element_relationships' must be a string array, got string");
       });
@@ -1181,7 +1182,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'get_element_relationships',
             { element_name: 'test', relationship_types: ['similar', 123] },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("Parameter 'relationship_types[1]' for operation 'get_element_relationships' must be a string, got number");
       });
@@ -1192,7 +1193,7 @@ describe('SchemaDispatcher', () => {
         await SchemaDispatcher.dispatch(
           'find_similar_elements',
           { element_name: 'test' }, // limit and threshold are optional
-          mockRegistry
+          mockRegistry, undefined, BASE_OPERATION_REGISTRY
         );
 
         expect(mockEnhancedIndexHandler.findSimilarElements).toHaveBeenCalled();
@@ -1203,7 +1204,7 @@ describe('SchemaDispatcher', () => {
           SchemaDispatcher.dispatch(
             'find_similar_elements',
             { element_name: 'test', limit: 'ten' },
-            mockRegistry
+            mockRegistry, undefined, BASE_OPERATION_REGISTRY
           )
         ).rejects.toThrow("must be a number");
       });

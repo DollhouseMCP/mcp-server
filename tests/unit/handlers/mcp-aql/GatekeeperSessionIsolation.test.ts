@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Tests for per-session Gatekeeper isolation (Issue #1947).
  *
@@ -68,7 +69,7 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
         decisionB = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         return Promise.resolve();
       });
 
@@ -92,7 +93,7 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
         decisionA = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         return Promise.resolve();
       });
 
@@ -128,7 +129,7 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
         decisionB = gatekeeper.enforce({
           operation: 'delete_element',
           endpoint: 'DELETE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         return Promise.resolve();
       });
       expect(decisionB.allowed).toBe(true);
@@ -156,7 +157,7 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
         decisionB = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         return Promise.resolve();
       });
       expect(decisionB.allowed).toBe(true);

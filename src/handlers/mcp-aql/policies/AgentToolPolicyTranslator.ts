@@ -16,7 +16,7 @@
 
 import type { ElementGatekeeperPolicy } from '../GatekeeperTypes.js';
 import type { AgentToolConfig } from '../../../elements/agents/types.js';
-import { getOperationsForEndpoint } from '../OperationRouter.js';
+import type { OperationRegistry } from '../OperationRegistry.js';
 import type { CRUDEndpoint } from '../OperationRouter.js';
 
 /**
@@ -97,43 +97,18 @@ const ENDPOINT_TOOL_MAP = new Map<string, CRUDEndpoint>([
  * ```
  */
 export function translateToolConfigToPolicy(
-  toolConfig: AgentToolConfig
+  toolConfig: AgentToolConfig,
+  operations: OperationRegistry
 ): ElementGatekeeperPolicy | undefined {
   const denySet = new Set<string>();
+  const allowedTools = toolConfig.allowed?.length ? new Set(toolConfig.allowed) : undefined;
+  const deniedTools = new Set(toolConfig.denied);
 
-  if (toolConfig.allowed && toolConfig.allowed.length > 0) {
-    // Compute the set of allowed operations from allowed endpoints
-    const allowedOps = new Set<string>();
-    for (const toolName of toolConfig.allowed) {
-      const endpoint = ENDPOINT_TOOL_MAP.get(toolName);
-      if (endpoint) {
-        for (const op of getOperationsForEndpoint(endpoint)) {
-          allowedOps.add(op);
-        }
-      }
-    }
-
-    // Everything NOT in the allowed set gets denied (except exempt operations)
-    for (const endpoint of ENDPOINT_TOOL_MAP.values()) {
-      for (const op of getOperationsForEndpoint(endpoint)) {
-        if (!allowedOps.has(op) && !EXEMPT_OPERATIONS.has(op)) {
-          denySet.add(op);
-        }
-      }
-    }
-  }
-
-  if (toolConfig.denied && toolConfig.denied.length > 0) {
-    // Add all operations from denied endpoints
-    for (const toolName of toolConfig.denied) {
-      const endpoint = ENDPOINT_TOOL_MAP.get(toolName);
-      if (endpoint) {
-        for (const op of getOperationsForEndpoint(endpoint)) {
-          if (!EXEMPT_OPERATIONS.has(op)) {
-            denySet.add(op);
-          }
-        }
-      }
+  for (const [tool, endpoint] of ENDPOINT_TOOL_MAP) {
+    const denied = deniedTools.has(tool) || (allowedTools !== undefined && !allowedTools.has(tool));
+    if (!denied) continue;
+    for (const operation of operations.getOperationsForEndpoint(endpoint)) {
+      if (!EXEMPT_OPERATIONS.has(operation)) denySet.add(operation);
     }
   }
 
