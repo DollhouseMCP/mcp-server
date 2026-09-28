@@ -300,6 +300,13 @@ function renderSpec(manager) {
       </form>
       ${operationList(manager)}
     </div>`;
+  const form = manager.host.querySelector('#int-spec-form');
+  form.setAttribute('aria-busy', String(manager.loading));
+  if (manager.loading) {
+    form.querySelectorAll('input, textarea, button[type="submit"]').forEach(control => {
+      control.disabled = true;
+    });
+  }
   manager.host.querySelector('[name="spec_file"]')?.addEventListener('change', event => {
     void readSelectedSpec(manager, event.currentTarget);
   });

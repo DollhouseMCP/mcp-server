@@ -25,7 +25,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, MemoryOnFullPolicy, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { MemoryType } from './types.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
@@ -89,6 +89,12 @@ export interface MemoryMetadata extends IElementMetadata {
   privacyLevel?: PrivacyLevel;
   searchable?: boolean;
   maxEntries?: number;
+  /**
+   * What addEntry() does when the memory holds maxEntries entries (Issue #2859).
+   * Omitted: 'error' for permanent memories, 'evict_oldest' when retentionDays
+   * sets an expiring retention policy. See MEMORY_CONSTANTS.ON_FULL_POLICIES.
+   */
+  onFull?: MemoryOnFullPolicy;
   encryptionEnabled?: boolean;
   // Search index configuration (Issue #984)
   indexThreshold?: number;
@@ -118,6 +124,11 @@ export interface MemoryEntry {
   sanitizedContent?: string;
   // Source information for trust decisions
   source?: string;  // e.g., 'user', 'web-scrape', 'agent', 'api'
+}
+
+/** One in-process append attempt; this is not a cross-process persistence revision. */
+export interface MemoryAppendSnapshot {
+  fingerprint: string;
 }
 
 export interface MemorySearchOptions {
@@ -181,6 +192,8 @@ export class Memory extends BaseElement implements IElement {
   // Set via constructor params when MemoryManager creates Memory instances.
   private readonly _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<unknown> };
   private readonly _retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
+  private readonly metadataServiceRef: MetadataService;
+  private readonly appendCandidate: boolean;
 
   /**
    * @deprecated Issue #1948: Use constructor injection instead.
@@ -225,12 +238,18 @@ export class Memory extends BaseElement implements IElement {
     return ref;
   }
   // Memory-specific properties (with size limits to prevent memory leaks)
-  private readonly entries: LRUCache<MemoryEntry>;
-  private readonly storageBackend: StorageBackend;
-  private readonly retentionDays: number;
-  private readonly privacyLevel: PrivacyLevel;
-  private readonly searchable: boolean;
-  private readonly maxEntries: number;
+  // Issue #2859: the authoritative entry store is a plain Map, not a cache.
+  // Its size is bounded by policy: maxEntries and MAX_ENTRY_SIZE on add,
+  // MAX_YAML_SIZE on save, LEGACY_MAX_YAML_SIZE on load.
+  private entries: Map<string, MemoryEntry>;
+  private storageBackend: StorageBackend;
+  private retentionDays: number;
+  private privacyLevel: PrivacyLevel;
+  private searchable: boolean;
+  private maxEntries: number;
+  // Issue #2859: running count of entries removed by policy (expiry or
+  // eviction), so callers can report removals instead of inferring them.
+  private policyRemovedCount = 0;
 
   // Search index for performance (Issue #984)
   private readonly searchIndex: MemorySearchIndex;
@@ -252,6 +271,7 @@ export class Memory extends BaseElement implements IElement {
     memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<unknown> },
     /** Issue #1948: RetentionPolicyService ref for retention enforcement. */
     retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean },
+    appendCandidate = false,
   ) {
     // SECURITY FIX: Sanitize all inputs during construction
     const sanitizedMetadata = {
@@ -279,6 +299,8 @@ export class Memory extends BaseElement implements IElement {
     // Issue #1948: Store injected service refs
     this._memoryManagerRef = memoryManagerRef;
     this._retentionPolicyRef = retentionPolicyRef;
+    this.metadataServiceRef = metadataService;
+    this.appendCandidate = appendCandidate;
 
     // Initialize memory-specific properties with defaults
     this.storageBackend = metadata.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND;
@@ -293,13 +315,14 @@ export class Memory extends BaseElement implements IElement {
       MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     );
 
-    // Initialize LRU caches with size limits to prevent memory leaks
-    this.entries = new LRUCache<MemoryEntry>({
-      name: 'memory-entries',
-      maxSize: this.maxEntries,
-      maxMemoryMB: 25, // Max 25MB for memory entries
-    });
+    // Issue #2859: entries were held in an LRUCache sized to maxEntries (and
+    // 25MB), which silently dropped the least recently used entry on overflow,
+    // including while loading a file holding more entries than the limit. A
+    // cache may forget; the entry store must not. Limits are enforced loudly
+    // by policy instead (see the field comment).
+    this.entries = new Map<string, MemoryEntry>();
 
+    // Initialize LRU caches with size limits to prevent memory leaks
     this.sanitizationCache = new LRUCache<string>({
       name: 'memory-sanitization',
       maxSize: Memory.MAX_SANITIZATION_CACHE_SIZE,
@@ -309,6 +332,7 @@ export class Memory extends BaseElement implements IElement {
     // FIX #1430: Update metadata to include all MemoryMetadata fields
     // This ensures they are preserved when serializeElement() is called
     // Per Todd's suggestion: store all runtime properties in metadata, not extensions
+    const requestedOnFull = Memory.rawOnFullPolicy(metadata);
     this.metadata = {
       ...this.metadata,
       storageBackend: this.storageBackend,
@@ -316,10 +340,20 @@ export class Memory extends BaseElement implements IElement {
       privacyLevel: this.privacyLevel,
       searchable: this.searchable,
       maxEntries: this.maxEntries,
+      // Issue #2859: persist only a valid explicit choice, so the default keeps
+      // following retentionDays if that changes later.
+      // A present but invalid policy must fail safe. Silently dropping a typo
+      // here would make an expiring memory default to evict_oldest instead.
+      onFull: requestedOnFull === undefined
+        ? undefined
+        : Memory.isOnFullPolicy(requestedOnFull) ? requestedOnFull : 'error',
       autoLoad: metadata.autoLoad,
       priority: metadata.priority,
       encryptionEnabled: metadata.encryptionEnabled || false
     } as MemoryMetadata;
+    if (requestedOnFull !== undefined && !Memory.isOnFullPolicy(requestedOnFull)) {
+      logger.warn(`Invalid onFull policy for memory '${this.metadata.name}'; using 'error' to preserve entries`);
+    }
 
     // Set up extensions for backward compatibility
     this.extensions = {
@@ -342,7 +376,7 @@ export class Memory extends BaseElement implements IElement {
     this.searchIndex = new MemorySearchIndex(indexConfig);
 
     // Log memory creation (once per unique name, bounded to prevent unbounded growth)
-    if (!Memory.createdMemoryNames.has(this.metadata.name)) {
+    if (!this.appendCandidate && !Memory.createdMemoryNames.has(this.metadata.name)) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED,
         severity: 'LOW',
@@ -357,10 +391,9 @@ export class Memory extends BaseElement implements IElement {
 
   /**
    * Helper method to get the current number of entries
-   * Compatible with LRUCache
    */
   private get entriesSize(): number {
-    return this.entries.getStats().size;
+    return this.entries.size;
   }
 
   /**
@@ -410,20 +443,25 @@ export class Memory extends BaseElement implements IElement {
       source: sanitizedSource
     };
 
+    // Issue #2859: synchronous capacity check immediately before the insert.
+    // No await sits between this check and set(), so concurrent addEntry calls
+    // cannot all pass it. A memory that has not opted into eviction rejects the
+    // new entry instead of deleting existing ones.
+    this.assertCapacityAvailable();
+
     // Store entry
     this.entries.set(entry.id, entry);
     this._isDirty = true;
 
-    // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions
-    // Multiple concurrent addEntry calls can all pass the "before" check, but
-    // by enforcing after, we guarantee the limit is never exceeded
+    // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions.
+    // Issue #2859: only memories with onFull 'evict_oldest' are trimmed here.
     this.enforceCapacitySync();
 
     // Update search index (Issue #984)
-    this.searchIndex.addEntry(entry);
+    if (!this.appendCandidate) this.searchIndex.addEntry(entry);
 
     // Check if we should build/rebuild the index
-    if (!this.searchIndex.isIndexed && this.entriesSize >= 100) {
+    if (!this.appendCandidate && !this.searchIndex.isIndexed && this.entriesSize >= 100) {
       // Build index asynchronously to avoid blocking, with retry logic
       this.buildSearchIndexWithRetry().catch(error => {
         // Final failure after retries - search will fall back to linear scan
@@ -432,7 +470,7 @@ export class Memory extends BaseElement implements IElement {
     }
 
     // Log memory addition
-    SecurityMonitor.logSecurityEvent({
+    if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
       severity: 'LOW',
       source: 'Memory.addEntry',
@@ -443,29 +481,236 @@ export class Memory extends BaseElement implements IElement {
   }
 
   /**
+   * Issue #2859: resolve the onFull policy. An explicit valid value wins;
+   * otherwise memories with an expiring retention policy evict their oldest
+   * entries and permanent memories (the default) reject new entries.
+   */
+  private static resolveOnFullPolicy(explicit: unknown, retentionDays: number): MemoryOnFullPolicy {
+    if (Memory.isOnFullPolicy(explicit)) {
+      return explicit;
+    }
+    // Deserialization can replace metadata after construction. A malformed
+    // explicit value there must also preserve entries rather than evict them.
+    if (explicit !== undefined) return 'error';
+    return retentionDays < MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS ? 'evict_oldest' : 'error';
+  }
+
+  private static isOnFullPolicy(value: unknown): value is MemoryOnFullPolicy {
+    return typeof value === 'string'
+      && (MEMORY_CONSTANTS.ON_FULL_POLICIES as readonly string[]).includes(value);
+  }
+
+  private static rawOnFullPolicy(metadata: Partial<MemoryMetadata>): unknown {
+    const source = metadata as Record<string, unknown>;
+    return Object.hasOwn(source, 'onFull') ? source.onFull : source.on_full;
+  }
+
+  private getRetentionDays(): number {
+    const current = (this.metadata as MemoryMetadata).retentionDays;
+    return typeof current === 'number' && Number.isFinite(current) ? current : this.retentionDays;
+  }
+
+  /**
+   * The effective onFull policy for this memory (Issue #2859).
+   */
+  public getOnFullPolicy(): MemoryOnFullPolicy {
+    return Memory.resolveOnFullPolicy(Memory.rawOnFullPolicy(this.metadata as MemoryMetadata), this.getRetentionDays());
+  }
+
+  /**
+   * Total entries removed by retention expiry or onFull eviction since this
+   * instance was created (Issue #2859). Explicit deletions are not counted.
+   */
+  public getPolicyRemovedCount(): number {
+    return this.policyRemovedCount;
+  }
+
+  /** Capture all state that can affect append or YAML preflight validation. */
+  public captureAppendState(): MemoryAppendSnapshot {
+    return {
+      fingerprint: JSON.stringify({
+        id: this.id,
+        version: this.version,
+        entries: [...this.entries],
+        metadata: this.metadata,
+        extensions: this.extensions,
+        instructions: this.instructions,
+        policyRemovedCount: this.policyRemovedCount,
+        maxEntries: this.maxEntries,
+        retentionDays: this.retentionDays,
+        privacyLevel: this.privacyLevel,
+        storageBackend: this.storageBackend,
+        searchable: this.searchable,
+      }),
+    };
+  }
+
+  /**
+   * Preview an append against an independent entry store. A rejected preflight
+   * never evicts or otherwise changes authoritative live entries.
+   */
+  public createAppendCandidate(): Memory {
+    const candidate = new Memory(
+      this.metadata as MemoryMetadata,
+      this.metadataServiceRef,
+      this._memoryManagerRef,
+      this._retentionPolicyRef,
+      true,
+    );
+    candidate.id = this.id;
+    candidate.version = this.version;
+    candidate.metadata = { ...this.metadata };
+    candidate.extensions = { ...this.extensions };
+    candidate.instructions = this.instructions;
+    candidate.entries = new Map(this.entries);
+    candidate.maxEntries = this.maxEntries;
+    candidate.retentionDays = this.retentionDays;
+    candidate.privacyLevel = this.privacyLevel;
+    candidate.storageBackend = this.storageBackend;
+    candidate.searchable = this.searchable;
+    candidate.policyRemovedCount = this.policyRemovedCount;
+    return candidate;
+  }
+
+  /** Commit a validated candidate only if no other live mutation intervened. */
+  public commitAppendCandidate(before: MemoryAppendSnapshot, candidate: Memory, entry: MemoryEntry): boolean {
+    if (this.captureAppendState().fingerprint !== before.fingerprint) return false;
+    const removedCount = candidate.policyRemovedCount - this.policyRemovedCount;
+    this.replaceEntries(candidate.entries);
+    this.policyRemovedCount = candidate.policyRemovedCount;
+    this._isDirty = true;
+    if (removedCount > 0) {
+      SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
+        severity: 'MEDIUM',
+        source: 'Memory.commitAppendCandidate',
+        details: `Removed ${removedCount} entries from memory '${this.metadata.name}' by retention or onFull policy`,
+      });
+    }
+    if (!this.searchIndex.isIndexed && this.entriesSize >= 100) {
+      this.buildSearchIndexWithRetry().catch(error => {
+        logger.error('Failed to build search index after retries, search will use fallback', error);
+      });
+    }
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
+      severity: 'LOW',
+      source: 'Memory.commitAppendCandidate',
+      details: `Added memory entry ${entry.id} with ${entry.tags?.length ?? 0} tags (UNTRUSTED, pending validation)`,
+    });
+    return true;
+  }
+
+  private replaceEntries(next: Map<string, MemoryEntry>): void {
+    for (const id of this.entries.keys()) {
+      if (!next.has(id)) this.searchIndex.removeEntry(id);
+    }
+    for (const [id, entry] of next) {
+      if (!this.entries.has(id)) this.searchIndex.addEntry(entry);
+    }
+    this.entries = new Map(next);
+  }
+
+  /** Preserve legacy frontmatter body as untrusted input without an add-time eviction. */
+  public appendLoadedMarkdownBody(content: string): void {
+    if (content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+      throw new Error('Memory markdown body exceeds the 2MB legacy read limit');
+    }
+    const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE);
+    if (!sanitizedContent) throw new Error('Memory markdown body cannot be empty after sanitization');
+    const entry: MemoryEntry = {
+      id: generateMemoryId(),
+      timestamp: new Date(),
+      content: sanitizedContent,
+      tags: [],
+      metadata: this.sanitizeMetadata({ loadedAt: new Date().toISOString() }),
+      privacyLevel: this.privacyLevel,
+      expiresAt: this.calculateExpiryDate(),
+      trustLevel: TRUST_LEVELS.UNTRUSTED,
+      source: 'file',
+    };
+    this.entries.set(entry.id, entry);
+    this.searchIndex.addEntry(entry);
+    this._isDirty = true;
+  }
+
+  /**
+   * Issue #2859: reject a new entry when the memory is full and has not opted
+   * into eviction. Throws with a message the caller can act on.
+   */
+  private assertCapacityAvailable(): void {
+    if (this.getOnFullPolicy() === 'evict_oldest' || this.entriesSize < this.maxEntries) {
+      return;
+    }
+    throw new Error(
+      `Memory '${this.metadata.name}' is full: it holds ${this.entriesSize} entries and its limit is ${this.maxEntries}. ` +
+      `Entries are never deleted automatically while onFull is 'error'. ` +
+      `Start a new memory for additional entries, or set onFull: 'evict_oldest' on this memory if it is a cache.`
+    );
+  }
+
+  /**
    * Enforce capacity limit synchronously
    * FIX (PR #1313): Made synchronous to prevent race conditions
-   * This is called AFTER adding an entry to ensure we never exceed maxEntries
+   * This is called AFTER adding an entry to ensure we never exceed maxEntries.
+   * Issue #2859: only memories with onFull 'evict_oldest' lose entries here.
    */
   private enforceCapacitySync(): void {
     if (this.entriesSize <= this.maxEntries) {
       return; // Within capacity
     }
 
+    if (this.getOnFullPolicy() !== 'evict_oldest') {
+      // Never delete entries from a memory that has not opted into eviction.
+      // assertCapacityAvailable() stops new entries, so this only happens for a
+      // memory loaded with more entries than its limit; it stays read-only.
+      return;
+    }
+
     // Over capacity - remove oldest entries until we're at the limit
     const entriesToRemove = this.entriesSize - this.maxEntries;
+    const removed = this.removeOldestEntries(entriesToRemove);
+    this.logEviction(removed, 'Memory.enforceCapacitySync');
+  }
+
+  /**
+   * Remove up to `count` entries, oldest timestamp first. Returns how many
+   * were removed.
+   */
+  private removeOldestEntries(count: number): number {
     const sortedEntries = Array.from(this.entries.values())
       .sort((a, b) => {
+        // FIX #1069: Ensure timestamps are Date objects for sorting
         const aTime = this.ensureDateObject(a.timestamp).getTime();
         const bTime = this.ensureDateObject(b.timestamp).getTime();
         return aTime - bTime; // Oldest first
       });
 
-    // Remove the oldest entries
-    for (let i = 0; i < entriesToRemove && i < sortedEntries.length; i++) {
+    let removed = 0;
+    for (let i = 0; i < count && i < sortedEntries.length; i++) {
       this.entries.delete(sortedEntries[i].id);
       this.searchIndex.removeEntry(sortedEntries[i].id);
+      removed++;
     }
+    this.policyRemovedCount += removed;
+    return removed;
+  }
+
+  /**
+   * Issue #2859: evictions are recorded at MEDIUM severity so they are not
+   * lost among routine events.
+   */
+  private logEviction(count: number, source: string): void {
+    if (count <= 0) {
+      return;
+    }
+    this._isDirty = true;
+    if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
+      severity: 'MEDIUM',
+      source,
+      details: `Evicted ${count} oldest entries from memory '${this.metadata.name}' to stay within ${this.maxEntries} entries (onFull: evict_oldest)`
+    });
   }
 
   /**
@@ -525,24 +770,13 @@ export class Memory extends BaseElement implements IElement {
     const queryLower = sanitizedQuery?.toLowerCase();
     const searchTags = options.tags && options.tags.length > 0 ? this.sanitizeTags(options.tags) : null;
 
-    // Single iteration through entries with all filters applied
-    for (const entry of this.entries.values()) {
+    // Use the same timestamp/insertion ordering as serialization and display.
+    for (const entry of this.getEntriesNewestFirst()) {
       if (!this.matchesSearch(entry, options, queryLower, searchTags)) continue;
 
       // Entry passes all filters
       results.push(entry);
     }
-    
-    // Sort by timestamp (newest first) - using string comparison for IDs as secondary sort
-    results.sort((a, b) => {
-      // FIX #1069: Ensure timestamps are Date objects for sorting
-      const bTime = this.ensureDateObject(b.timestamp).getTime();
-      const aTime = this.ensureDateObject(a.timestamp).getTime();
-      const timeDiff = bTime - aTime;
-      if (timeDiff !== 0) return timeDiff;
-      // If timestamps are exactly the same, sort by ID (which contains timestamp)
-      return b.id.localeCompare(a.id);
-    });
     
     // Apply limit
     if (options.limit && options.limit > 0) {
@@ -604,13 +838,7 @@ export class Memory extends BaseElement implements IElement {
     }
 
     // Format entries as readable content (newest first)
-    const sortedEntries = Array.from(this.entries.values())
-      .sort((a, b) => {
-        // FIX #1069: Ensure timestamps are Date objects for sorting
-        const aTime = this.ensureDateObject(a.timestamp).getTime();
-        const bTime = this.ensureDateObject(b.timestamp).getTime();
-        return bTime - aTime;
-      });
+    const sortedEntries = this.getEntriesNewestFirst();
 
     return sortedEntries.map(entry => this.formatEntryForDisplay(entry)).join('\n\n');
   }
@@ -742,32 +970,25 @@ export class Memory extends BaseElement implements IElement {
         deletedCount++;
       }
     }
-    
-    // If still at or over capacity, remove oldest entries to make room for one more
-    if (this.entriesSize >= this.maxEntries) {
-      const sortedEntries = Array.from(this.entries.entries())
-        .sort((a, b) => {
-          // FIX #1069: Ensure timestamps are Date objects for sorting
-          const aTime = this.ensureDateObject(a[1].timestamp).getTime();
-          const bTime = this.ensureDateObject(b[1].timestamp).getTime();
-          return aTime - bTime;
-        });
-      
-      // Remove one extra to make room for new entry
+    this.policyRemovedCount += deletedCount;
+
+    // If still at or over capacity, remove oldest entries to make room for one
+    // more. Issue #2859: only for memories with onFull 'evict_oldest'; a
+    // permanent memory keeps every entry and addEntry() rejects instead.
+    if (this.getOnFullPolicy() === 'evict_oldest' && this.entriesSize >= this.maxEntries) {
       const toDelete = Math.max(1, this.entriesSize - this.maxEntries + 1);
-      for (let i = 0; i < toDelete && i < sortedEntries.length; i++) {
-        this.entries.delete(sortedEntries[i][0]);
-        deletedCount++;
-      }
+      const evicted = this.removeOldestEntries(toDelete);
+      this.logEviction(evicted, 'Memory.enforceRetentionPolicy');
+      deletedCount += evicted;
     }
-    
+
     if (deletedCount > 0) {
       this._isDirty = true;
-      SecurityMonitor.logSecurityEvent({
+      if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
         severity: 'LOW',
         source: 'Memory.enforceRetentionPolicy',
-        details: `Removed ${deletedCount} expired memories`
+        details: `Removed ${deletedCount} expired or evicted memory entries`
       });
     }
     
@@ -784,6 +1005,7 @@ export class Memory extends BaseElement implements IElement {
     }
     
     const count = this.entriesSize;
+    for (const id of this.entries.keys()) this.searchIndex.removeEntry(id);
     this.entries.clear();
     this._isDirty = true;
     
@@ -891,7 +1113,8 @@ export class Memory extends BaseElement implements IElement {
     result.errors ??= [];
     
     // Additional memory-specific validation
-    if (this.retentionDays < MEMORY_CONSTANTS.MIN_RETENTION_DAYS || this.retentionDays > MEMORY_CONSTANTS.MAX_RETENTION_DAYS) {
+    const retentionDays = this.getRetentionDays();
+    if (retentionDays < MEMORY_CONSTANTS.MIN_RETENTION_DAYS || retentionDays > MEMORY_CONSTANTS.MAX_RETENTION_DAYS) {
       result.errors.push({
         field: 'retentionDays',
         message: `Retention days must be between ${MEMORY_CONSTANTS.MIN_RETENTION_DAYS} and ${MEMORY_CONSTANTS.MAX_RETENTION_DAYS}`,
@@ -934,10 +1157,29 @@ export class Memory extends BaseElement implements IElement {
       version: this.version,
       metadata: this.metadata,
       extensions: this.extensions,
-      entries: Array.from(this.entries.values())
+      entries: this.getEntriesNewestFirst()
     };
-    
+
     return JSON.stringify(data, null, 2);
+  }
+
+  /**
+   * Issue #2859: entries in a stable newest-first order for persistence. The
+   * former LRU store happened to write newest-first; a Map iterates in
+   * insertion order, so the order is now explicit. Entries with the same
+   * timestamp (added in the same millisecond) order by insertion, later
+   * first. Malformed timestamps sort last instead of throwing, so a bad
+   * timestamp can never block a save.
+   */
+  private getEntriesNewestFirst(): MemoryEntry[] {
+    const timeOf = (entry: MemoryEntry): number => {
+      const time = new Date(entry.timestamp as unknown as string | number | Date).getTime();
+      return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+    };
+    return Array.from(this.entries.values())
+      .map((entry, index) => ({ entry, index, time: timeOf(entry) }))
+      .sort((a, b) => (b.time - a.time) || (b.index - a.index))
+      .map(item => item.entry);
   }
   
   /**
@@ -972,7 +1214,16 @@ export class Memory extends BaseElement implements IElement {
     }
 
     // Sanitize content (basic Unicode normalization + DOMPurify only)
-    entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+    // Legacy markdown bodies can exceed the ordinary 100KB add limit. They
+    // were already bounded by the 2MB file reader; retain them on subsequent
+    // YAML reloads instead of silently truncating at the ordinary entry limit.
+    if (entry.source === 'file' && entry.content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+      throw new Error('Loaded memory file entry exceeds the 2MB legacy read limit');
+    }
+    const loadedLimit = entry.source === 'file'
+      ? MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE
+      : MEMORY_CONSTANTS.MAX_ENTRY_SIZE;
+    entry.content = this.sanitizeWithCache(entry.content, loadedLimit);
     entry.tags = this.sanitizeTags(entry.tags || []);
     entry.timestamp = new Date(entry.timestamp);
     entry.trustLevel = trustLevel;  // Use trust level from file
@@ -1004,6 +1255,15 @@ export class Memory extends BaseElement implements IElement {
       this.id = parsed.id;
       this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
       this.metadata = parsed.metadata || {};
+      const requestedOnFull = Memory.rawOnFullPolicy(this.metadata as MemoryMetadata);
+      if (requestedOnFull !== undefined) {
+        (this.metadata as MemoryMetadata).onFull = Memory.isOnFullPolicy(requestedOnFull)
+          ? requestedOnFull
+          : 'error';
+        if (!Memory.isOnFullPolicy(requestedOnFull)) {
+          logger.warn(`Invalid onFull policy for memory '${this.metadata.name}'; using 'error' to preserve entries`);
+        }
+      }
       this.extensions = parsed.extensions || {};
 
       // Clear and reload entries
@@ -1011,7 +1271,10 @@ export class Memory extends BaseElement implements IElement {
       let quarantinedCount = 0;
 
       if (Array.isArray(parsed.entries)) {
-        for (const entry of parsed.entries) {
+        // Serialized entries are newest-first, including insertion ties. Load
+        // them oldest-first so Map order remains the eviction tie-breaker and
+        // a subsequent save keeps the same persisted order.
+        for (const entry of [...parsed.entries].reverse()) {
           const loaded = this.processDeserializedEntry(entry);
           if (!loaded) {
             quarantinedCount++;
@@ -1070,7 +1333,7 @@ export class Memory extends BaseElement implements IElement {
   
   private calculateExpiryDate(): Date {
     const expiry = new Date();
-    expiry.setDate(expiry.getDate() + this.retentionDays);
+    expiry.setDate(expiry.getDate() + this.getRetentionDays());
     return expiry;
   }
   
@@ -1226,7 +1489,7 @@ export class Memory extends BaseElement implements IElement {
    */
   public getEntries(): Map<string, MemoryEntry> {
     // Return a new Map to prevent external modification of internal state
-    return new Map(this.entries.entries());
+    return new Map(this.entries);
   }
 
   /**

@@ -5,6 +5,7 @@
 import { jest } from '@jest/globals';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
 import { Memory } from '../../../../src/elements/memories/Memory.js';
+import { MemorySaveHandler } from '../../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
@@ -119,6 +120,61 @@ describe('MemoryManager', () => {
       expect(contents).toContain('Second entry');
     });
     
+    it('should keep an explicit onFull policy across save and load (#2859)', async () => {
+      const cache = new Memory({ name: 'Cache Memory', onFull: 'evict_oldest' }, metadataService);
+      await cache.addEntry('Cached value');
+      await manager.save(cache, 'cache-memory.yaml');
+
+      const loaded = await manager.load('cache-memory.yaml');
+
+      expect(loaded.getOnFullPolicy()).toBe('evict_oldest');
+      expect(loaded.metadata.onFull).toBe('evict_oldest');
+    });
+
+    it('should default a reloaded permanent memory to onFull error (#2859)', async () => {
+      const log = new Memory({ name: 'Permanent Memory' }, metadataService);
+      await log.addEntry('Logged value');
+      await manager.save(log, 'permanent-memory.yaml');
+
+      const loaded = await manager.load('permanent-memory.yaml');
+
+      expect(loaded.getOnFullPolicy()).toBe('error');
+    });
+
+    it('fails closed for invalid policies at create, import, and legacy load boundaries', async () => {
+      const created = await manager.create({
+        name: 'Invalid Create Policy', description: 'Create-boundary policy test',
+        retentionDays: 30, maxEntries: 1, onFull: 'errorr' as never,
+      });
+      expect(created.metadata.onFull).toBe('error');
+      const kept = await created.addEntry('Kept');
+      await expect(created.addEntry('Blocked')).rejects.toThrow('is full');
+      expect(created.getEntries().has(kept.id)).toBe(true);
+
+      const createdAlias = await manager.create({
+        name: 'Invalid Create Alias', description: 'Create alias policy test',
+        retentionDays: 30, maxEntries: 1, on_full: 'errorr',
+      } as never);
+      expect(createdAlias.metadata.onFull).toBe('error');
+
+      const imported = await manager.importElement(JSON.stringify({
+        metadata: { name: 'Invalid Import Alias', retentionDays: 30, maxEntries: 1, on_full: 123 },
+        entries: [{ id: 'imported-entry', content: 'Imported kept', timestamp: new Date().toISOString() }],
+      }), 'json');
+      expect(imported.metadata.onFull).toBe('error');
+      await expect(imported.addEntry('Blocked')).rejects.toThrow('is full');
+      expect(imported.getEntries().has('imported-entry')).toBe(true);
+
+      const relativePath = '2026-09-28/invalid-legacy-policy.yaml';
+      const fullPath = path.join(memoriesDir, relativePath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, `metadata:\n  name: Invalid Legacy Policy\n  retentionDays: 30\n  maxEntries: 1\n  onFull: null\n  on_full: evict_oldest\nentries:\n  - id: legacy-entry\n    content: Legacy kept\n    timestamp: ${new Date().toISOString()}\n`);
+      const loaded = await manager.load(relativePath);
+      expect(loaded.metadata.onFull).toBe('error');
+      await expect(loaded.addEntry('Blocked')).rejects.toThrow('is full');
+      expect(loaded.getEntries().has('legacy-entry')).toBe(true);
+    });
+
     it('should handle file not found', async () => {
       await expect(manager.load('non-existent.yaml')).rejects.toThrow();
     });
@@ -389,6 +445,55 @@ entries:
       expect(loaded.metadata.name).toBe('Frontmatter Memory');
       expect(loaded.metadata.description).toBe('Memory with frontmatter markers');
       expect(loaded.metadata.version).toBe('2.0.0');
+    });
+
+    it('preserves a full legacy memory body above the ordinary entry limit through save and reload', async () => {
+      const body = 'Legacy body content. '.repeat(8_000); // >100KB, <256KB serialized
+      const relativePath = '2026-09-28/full-legacy-body.yaml';
+      const fullPath = path.join(memoriesDir, relativePath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, `---\nmetadata:\n  name: Full Legacy Body\n  maxEntries: 1\n  onFull: error\nentries:\n  - id: original\n    content: original entry\n    timestamp: 2026-09-28T00:00:00.000Z\n---\n\n${body}`);
+
+      const loaded = await manager.load(relativePath);
+      expect(loaded.getEntries().size).toBe(2);
+      expect(loaded.getAllEntries().find(entry => entry.source === 'file')?.content).toBe(body.trim());
+      expect(loaded.getAllEntries().find(entry => entry.source === 'file')?.trustLevel).toBe('untrusted');
+      await expect(loaded.addEntry('new entry')).rejects.toThrow('is full');
+
+      await manager.save(loaded);
+      manager.clearCache();
+      const reloaded = await manager.load(relativePath);
+      expect(reloaded.getEntries().size).toBe(2);
+      expect(reloaded.getAllEntries().find(entry => entry.source === 'file')?.content).toBe(body.trim());
+      expect(reloaded.getAllEntries().some(entry => entry.id === 'original')).toBe(true);
+
+      const ordinary = new Memory({ name: 'Ordinary limit' }, metadataService);
+      const added = await ordinary.addEntry('x'.repeat(120 * 1024));
+      expect(added.content).toHaveLength(100 * 1024);
+    });
+
+    it('restores an eviction when the real YAML-size preflight rejects a new entry', async () => {
+      const memory = new Memory({ name: 'Near YAML limit', maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
+      const oldest = await memory.addEntry('oldest');
+      memory.appendLoadedMarkdownBody('b'.repeat(200 * 1024));
+      await manager.assertPersistable(memory);
+      const save = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const handler = new MemorySaveHandler({
+        memoryManager: {
+          find: async () => memory,
+          assertPersistable: manager.assertPersistable.bind(manager),
+          save,
+        },
+      } as unknown as ConstructorParameters<typeof MemorySaveHandler>[0], name => name);
+
+      await expect(handler.dispatch('addEntry', {
+        element_name: 'Near YAML limit',
+        content: 'n'.repeat(100 * 1024),
+      })).rejects.toThrow('maximum serialized size');
+      expect(memory.getEntries().size).toBe(2);
+      expect(memory.getEntries().has(oldest.id)).toBe(true);
+      expect(memory.getPolicyRemovedCount()).toBe(0);
+      expect(save).not.toHaveBeenCalled();
     });
 
     // Test edge case: empty file

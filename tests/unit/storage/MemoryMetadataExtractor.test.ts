@@ -3,6 +3,7 @@
  */
 
 import { MemoryMetadataExtractor } from '../../../src/storage/MemoryMetadataExtractor.js';
+import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
 
 describe('MemoryMetadataExtractor', () => {
   describe('extractMetadata', () => {
@@ -145,9 +146,9 @@ payload: !!js/function "function () { return process.env; }"
     });
 
     it('should fail closed for oversized YAML input', () => {
-      // Issue #2329: the cap is MAX_YAML_SIZE (256KB, matching save/load) — a
-      // 70KB memory is legitimate and must extract; past 256KB fails closed.
-      const hugeValue = 'a'.repeat(280 * 1024);
+      // Issue #2329 raised the cap from 64KB. Issue #2864: extraction uses the
+      // legacy recovery limit (2MB, matching load); past it fails closed.
+      const hugeValue = 'a'.repeat(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE + 1024);
       const raw = `
 name: Oversized
 description: ${hugeValue}
@@ -157,6 +158,19 @@ description: ${hugeValue}
       expect(result.name).toBe('unnamed');
       expect(result.description).toBe('');
       expect(result.filePath).toBe('oversized.yml');
+    });
+
+    it('should extract a legacy memory between MAX_YAML_SIZE and LEGACY_MAX_YAML_SIZE (#2864)', () => {
+      // Written before the 256KB save cap; must still list under its own name.
+      const entries = Array.from({ length: 40 }, (_, i) =>
+        `  - id: mem_${i}\n    timestamp: '2026-05-07T00:00:00.000Z'\n    content: ${'b'.repeat(8 * 1024)}`
+      ).join('\n');
+      const raw = `metadata:\n  name: Legacy State\n  description: Pre-2329 memory\nentries:\n${entries}\n`;
+      expect(raw.length).toBeGreaterThan(MEMORY_CONSTANTS.MAX_YAML_SIZE);
+
+      const result = MemoryMetadataExtractor.extractMetadata(raw, '2026-05-07/legacy-state.yaml');
+
+      expect(result.name).toBe('Legacy State');
     });
 
     it('should extract totalEntries from stats.totalEntries', () => {
