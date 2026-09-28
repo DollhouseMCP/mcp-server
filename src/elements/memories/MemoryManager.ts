@@ -101,6 +101,17 @@ interface BackupCleanupResult {
   errorDetails: Array<{ file: string; error: string }>;
 }
 
+interface RolloverWritePlan {
+  chunks: Array<{ entries: Array<Record<string, unknown>>; yaml: string }>;
+  volumeDir: string;
+  firstVolume: number;
+  slug: string;
+  sealedAt: string;
+  keptIds: ReadonlySet<string>;
+  sealedCount: number;
+  reason?: string;
+}
+
 export class MemoryManager extends BaseElementManager<Memory> {
   /**
    * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
@@ -770,7 +781,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const volumeDir = path.join(this.memoriesDir, MEMORY_CONSTANTS.VOLUMES_DIR, slug);
     const sealedAt = new Date().toISOString();
     const chunks = await this.packVolumeChunks(memory, sealedSerialized);
-    let nextVolume = Math.max(0, ...memory.getVolumeRecords().map(record => record.volume)) + 1;
+    const nextVolume = Math.max(0, ...memory.getVolumeRecords().map(record => record.volume)) + 1;
     const plannedNumbers = await this.planAvailableVolumeNumbers(volumeDir, nextVolume, chunks.length);
     const plannedRecords = chunks.map((chunk, index) =>
       this.buildVolumeRecord(plannedNumbers[index], slug, sealedAt, chunk.entries, chunk.yaml));
@@ -786,49 +797,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
         includeMarker: !!markerEntry };
     }
 
-    await this.fileOperations.createDirectory(volumeDir);
-    const written: Array<{ absolutePath: string; record: MemoryVolumeRecord }> = [];
-    try {
-      for (const chunk of chunks) {
-        const { absolutePath, volume } = await this.createVolumeFile(volumeDir, nextVolume, chunk.yaml);
-        nextVolume = volume + 1;
-        const record = this.buildVolumeRecord(volume, slug, sealedAt, chunk.entries, chunk.yaml);
-        written.push({ absolutePath, record });
-        await this.verifyVolumeFile(absolutePath, record.sha256, chunk.entries.length);
-      }
-      // An exclusive-create collision can change a volume number, so measure
-      // the actual index as well. A failure here still precedes head mutation.
-      markerEntry = await this.assertRolloverHeadFits(
-        memory, keptIds, written.map(item => item.record), sealedSerialized.length, options.reason);
-    } catch (error) {
-      // The live memory has not changed, but a failed cleanup can leave an
-      // unindexed copy of sealed entries. Never report full rollback in that case.
-      const cleanupFailures: string[] = [];
-      for (const { absolutePath, record } of written) {
-        try {
-          await this.fileOperations.deleteFile(absolutePath);
-        } catch (cleanupError) {
-          cleanupFailures.push(`volume ${record.volume}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-        }
-      }
-      const cause = error instanceof Error ? error.message : String(error);
-      if (error instanceof ExclusiveCreateCleanupError) {
-        cleanupFailures.push(`partial volume ${path.basename(error.partialPath)}: exclusive-create cleanup failed`);
-      }
-      if (cleanupFailures.length > 0) {
-        throw new Error(
-          `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
-          `cleanup failed and unindexed archive copies may remain (${cleanupFailures.join('; ')}). ` +
-          `Original error: ${cause}`
-        );
-      }
-      throw new Error(
-        `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
-        `recorded volumes were removed. Original error: ${cause}`
-      );
-    }
-
-    const records = written.map(w => w.record);
+    const written = await this.writeRolloverVolumes(memory, {
+      chunks, volumeDir, firstVolume: nextVolume, slug, sealedAt, keptIds,
+      sealedCount: sealedSerialized.length, reason: options.reason,
+    });
+    const records = written.records;
+    markerEntry = written.markerEntry;
     SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_ROLLED_OVER,
       severity: 'MEDIUM',
@@ -844,6 +818,64 @@ export class MemoryManager extends BaseElementManager<Memory> {
       includeMarker: !!markerEntry,
       markerEntry,
     };
+  }
+
+  /** Write and verify every archive before the caller changes the live head. */
+  private async writeRolloverVolumes(
+    memory: Memory,
+    plan: RolloverWritePlan,
+  ): Promise<{ records: MemoryVolumeRecord[]; markerEntry?: MemoryEntry }> {
+    await this.fileOperations.createDirectory(plan.volumeDir);
+    const written: Array<{ absolutePath: string; record: MemoryVolumeRecord }> = [];
+    let nextVolume = plan.firstVolume;
+    try {
+      for (const chunk of plan.chunks) {
+        const { absolutePath, volume } = await this.createVolumeFile(plan.volumeDir, nextVolume, chunk.yaml);
+        nextVolume = volume + 1;
+        const record = this.buildVolumeRecord(volume, plan.slug, plan.sealedAt, chunk.entries, chunk.yaml);
+        written.push({ absolutePath, record });
+        await this.verifyVolumeFile(absolutePath, record.sha256, chunk.entries.length);
+      }
+      const records = written.map(item => item.record);
+      // A collision can change a number, so remeasure the actual head before
+      // mutation; a sizing failure still triggers archive cleanup.
+      const markerEntry = await this.assertRolloverHeadFits(memory, plan.keptIds, records, plan.sealedCount, plan.reason);
+      return { records, markerEntry };
+    } catch (error) {
+      throw await this.rolloverWriteError(memory.metadata.name, written, error);
+    }
+  }
+
+  private async rolloverWriteError(
+    memoryName: string,
+    written: Array<{ absolutePath: string; record: MemoryVolumeRecord }>,
+    error: unknown,
+  ): Promise<Error> {
+    // The live head has not changed, but failed cleanup may leave an unindexed
+    // copy. Never report full rollback when an archive could remain.
+    const cleanupFailures: string[] = [];
+    for (const { absolutePath, record } of written) {
+      try {
+        await this.fileOperations.deleteFile(absolutePath);
+      } catch (cleanupError) {
+        cleanupFailures.push(`volume ${record.volume}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      }
+    }
+    const cause = error instanceof Error ? error.message : String(error);
+    if (error instanceof ExclusiveCreateCleanupError) {
+      cleanupFailures.push(`partial volume ${path.basename(error.partialPath)}: exclusive-create cleanup failed`);
+    }
+    if (cleanupFailures.length > 0) {
+      return new Error(
+        `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
+        `cleanup failed and unindexed archive copies may remain (${cleanupFailures.join('; ')}). ` +
+        `Original error: ${cause}`
+      );
+    }
+    return new Error(
+      `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
+      `recorded volumes were removed. Original error: ${cause}`
+    );
   }
 
   private async assertRolloverHeadFits(
@@ -961,7 +993,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     firstVolume: number,
     yaml: string,
   ): Promise<{ absolutePath: string; volume: number }> {
-    for (let volume = firstVolume; volume < firstVolume + 1000; volume++) {
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const volume = firstVolume + attempt;
       const absolutePath = path.join(volumeDir, Memory.volumeFileName(volume));
       if (await this.fileOperations.createFileExclusive(absolutePath, yaml, { source: 'MemoryManager.rolloverMemory' })) {
         return { absolutePath, volume };
@@ -975,14 +1008,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const numbers: number[] = [];
     let candidate = firstVolume;
     for (let index = 0; index < count; index++) {
-      const searchEnd = candidate + 1000;
-      while (
-        candidate < searchEnd &&
-        await this.fileOperations.exists(path.join(volumeDir, Memory.volumeFileName(candidate)))
-      ) {
+      let attempts = 0;
+      while (attempts < 1000 &&
+        await this.fileOperations.exists(path.join(volumeDir, Memory.volumeFileName(candidate)))) {
         candidate++;
+        attempts++;
       }
-      if (candidate >= searchEnd) throw new Error(`No free volume number in ${volumeDir}`);
+      if (attempts >= 1000) throw new Error(`No free volume number in ${volumeDir}`);
       numbers.push(candidate++);
     }
     return numbers;

@@ -737,7 +737,7 @@ export class Memory extends BaseElement implements IElement {
       const r = raw as Record<string, unknown>;
       const sealedAt = isoOrUndefined(r.sealedAt);
       if (
-        !Number.isInteger(r.volume) || (r.volume as number) < 1 ||
+        !Number.isSafeInteger(r.volume) || (r.volume as number) < 1 ||
         typeof r.file !== 'string' || !Memory.VOLUME_FILE_PATTERN.test(r.file) ||
         !sealedAt ||
         !Number.isInteger(r.entryCount) || (r.entryCount as number) < 0 ||
@@ -760,6 +760,9 @@ export class Memory extends BaseElement implements IElement {
 
   /** Issue #2861: file name for a volume number, e.g. v0001.yaml */
   public static volumeFileName(volume: number): string {
+    if (!Number.isSafeInteger(volume) || volume < 1) {
+      throw new RangeError('Memory volume number must be a positive safe integer');
+    }
     return `v${String(volume).padStart(4, '0')}.yaml`;
   }
 
@@ -770,7 +773,7 @@ export class Memory extends BaseElement implements IElement {
    * Issue #2861: the sealed archive volumes recorded for this memory.
    */
   public getVolumeRecords(): MemoryVolumeRecord[] {
-    return [...((this.metadata as MemoryMetadata).volumes ?? [])];
+    return [...(Memory.sanitizeVolumeRecords((this.metadata as MemoryMetadata).volumes) ?? [])];
   }
 
   /**
@@ -804,7 +807,7 @@ export class Memory extends BaseElement implements IElement {
       this.entries.delete(id);
       this.searchIndex.removeEntry(id);
     }
-    const existing = (this.metadata as MemoryMetadata).volumes ?? [];
+    const existing = this.getVolumeRecords();
     this.metadata = { ...this.metadata, volumes: [...existing, ...records] } as MemoryMetadata;
     this._isDirty = true;
   }

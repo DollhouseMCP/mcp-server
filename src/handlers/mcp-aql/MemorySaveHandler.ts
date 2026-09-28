@@ -7,6 +7,7 @@ import type { ExecutionContext } from '../../security/encryption/ContextTracker.
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { validateRequiredString } from './shared.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
 import type { MemoryRolloverOptions, MemoryRolloverResult } from '../../elements/memories/types.js';
 
@@ -477,13 +478,13 @@ export class MemorySaveHandler {
   private static parseRolloverOptions(params: Record<string, unknown>): MemoryRolloverOptions {
     const keepTagsParam = params.keep_tags;
     if (keepTagsParam !== undefined && (!Array.isArray(keepTagsParam) || keepTagsParam.some(tag => typeof tag !== 'string'))) {
-      throw new Error('keep_tags must be an array of strings');
+      throw new TypeError('keep_tags must be an array of strings');
     }
     const keepTags = keepTagsParam === undefined
       ? [...MEMORY_CONSTANTS.ROLLOVER_DEFAULT_KEEP_TAGS]
       : (keepTagsParam as string[])
           .slice(0, MEMORY_CONSTANTS.MAX_TAGS_PER_ENTRY)
-          .map(tag => sanitizeInput(tag, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
+          .map(tag => sanitizeInput(UnicodeValidator.normalize(tag).normalizedContent, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
           .filter(tag => tag.length > 0);
 
     const keepLatestParam = params.keep_latest ?? 0;
@@ -494,12 +495,12 @@ export class MemorySaveHandler {
 
     const dryRunParam = params.dry_run ?? false;
     if (typeof dryRunParam !== 'boolean') {
-      throw new Error('dry_run must be a boolean');
+      throw new TypeError('dry_run must be a boolean');
     }
 
     const reasonParam = params.reason;
     if (reasonParam !== undefined && typeof reasonParam !== 'string') {
-      throw new Error('reason must be a string');
+      throw new TypeError('reason must be a string');
     }
     const reason = reasonParam
       ? sanitizeInput(reasonParam, MEMORY_CONSTANTS.ROLLOVER_REASON_MAX_LENGTH)

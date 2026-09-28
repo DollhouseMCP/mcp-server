@@ -128,6 +128,32 @@ describe('rollover_memory (#2861)', () => {
     expect(await fs.readFile(await liveMemoryFile('dry-run-log'), 'utf-8')).toBe(before);
   });
 
+  it('keeps a decomposed Unicode tag in both dry-run and actual rollover', async () => {
+    const name = 'unicode-tags';
+    const decomposedTag = 'cafe\u0301';
+    await createMemory(name);
+    expect((await addEntry(name, 'keep tagged entry', [decomposedTag])).success).toBe(true);
+    expect((await addEntry(name, 'seal untagged entry')).success).toBe(true);
+    await mcpAqlHandler.flushPendingSaves();
+
+    const preview = await rollover(name, { keep_tags: [decomposedTag], dry_run: true });
+    expect(preview.success).toBe(true);
+    if (!preview.success) return;
+    expect(preview.data).toMatchObject({ sealedCount: 1, keptCount: 1, dryRun: true });
+    await expect(fs.access(path.join(memoriesDir, 'volumes', name))).rejects.toThrow();
+
+    const actual = await rollover(name, { keep_tags: [decomposedTag] });
+    expect(actual.success).toBe(true);
+    if (!actual.success) return;
+    expect(actual.data).toMatchObject({ sealedCount: 1, keptCount: 1, dryRun: false });
+    const live = await fs.readFile(await liveMemoryFile(name), 'utf8');
+    const volume = await fs.readFile(path.join(memoriesDir, 'volumes', name, 'v0001.yaml'), 'utf8');
+    expect(live).toContain('keep tagged entry');
+    expect(live).not.toContain('seal untagged entry');
+    expect(volume).toContain('seal untagged entry');
+    expect(volume).not.toContain('keep tagged entry');
+  });
+
   it('lets a memory that is full accept new entries again', async () => {
     await createMemory('full-log');
     // ~90KB per entry: two fit under MAX_YAML_SIZE (256KB), the third does not.

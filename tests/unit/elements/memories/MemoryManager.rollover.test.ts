@@ -123,7 +123,7 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
     expect(written).not.toContain('entry-5:');
 
     // The live memory is untouched until the caller applies the result.
-    expect((await memory.search({})).length).toBe(6);
+    expect(await memory.search({})).toHaveLength(6);
 
     const listed = (await manager.list()).map(m => m.metadata.name);
     expect(listed).toContain('Volume Basics');
@@ -156,6 +156,101 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
     const actual = await manager.rolloverMemory(memory, options());
     expect(actual.volumes[0].file).toBe(preview.volumes[0].file);
     expect(await fs.readFile(occupiedPath, 'utf8')).toBe('pre-existing owner bytes');
+  });
+
+  it('rejects an unsafe persisted volume number and still assigns dry-run and live filenames safely', async () => {
+    const memory = await buildMemory('Unsafe Index', 2);
+    const serialized = JSON.parse(memory.serialize()) as { metadata: Record<string, unknown> };
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    serialized.metadata.volumes = [{
+      volume: unsafe,
+      file: `volumes/unsafe-index/v${unsafe}.yaml`,
+      sealedAt: '2026-01-01T00:00:00.000Z',
+      entryCount: 1,
+      sha256: 'a'.repeat(64),
+    }];
+    const loaded = new Memory({ name: 'Unsafe Index' }, metadataService);
+    loaded.deserialize(JSON.stringify(serialized));
+    expect(loaded.getVolumeRecords()).toHaveLength(0);
+
+    const preview = await manager.rolloverMemory(loaded, options({ dryRun: true }));
+    expect(preview.volumes[0].file).toBe('volumes/unsafe-index/v0001.yaml');
+    expect(await volumeFiles('unsafe-index')).toEqual([]);
+    const actual = await manager.rolloverMemory(loaded, options());
+    expect(actual.volumes[0].file).toBe(preview.volumes[0].file);
+    expect(await volumeFiles('unsafe-index')).toEqual(['v0001.yaml']);
+    loaded.applyRollover(actual.sealedIds, actual.volumes);
+    expect(loaded.getVolumeRecords()).toEqual(actual.volumes);
+    expect(loaded.metadata.volumes).toEqual(actual.volumes);
+  });
+
+  it('stops dry-run and live allocation when the next safe number is occupied', async () => {
+    const first = Number.MAX_SAFE_INTEGER - 1;
+    const memory = new Memory({
+      name: 'Safe Boundary',
+      volumes: [{
+        volume: first,
+        file: `volumes/safe-boundary/v${first}.yaml`,
+        sealedAt: '2026-01-01T00:00:00.000Z',
+        entryCount: 1,
+        sha256: 'b'.repeat(64),
+      }],
+    }, metadataService);
+    await memory.addEntry('seal this entry');
+    const volumeDir = path.join(memoriesDir, 'volumes', 'safe-boundary');
+    await fs.mkdir(volumeDir, { recursive: true });
+    const occupied = Memory.volumeFileName(Number.MAX_SAFE_INTEGER);
+    await fs.writeFile(path.join(volumeDir, occupied), 'pre-existing owner bytes');
+
+    await expect(manager.rolloverMemory(memory, options({ dryRun: true })))
+      .rejects.toThrow('positive safe integer');
+    await expect(manager.rolloverMemory(memory, options()))
+      .rejects.toThrow('positive safe integer');
+    // The directory can change after a successful preview. Force an exclusive
+    // create collision at the last safe integer to exercise the live allocator.
+    const fileOps = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const exists = jest.spyOn(fileOps, 'exists').mockResolvedValue(false);
+    const create = jest.spyOn(fileOps, 'createFileExclusive').mockResolvedValue(false);
+    try {
+      await expect(manager.rolloverMemory(memory, options()))
+        .rejects.toThrow('positive safe integer');
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      exists.mockRestore();
+      create.mockRestore();
+    }
+    expect(await volumeFiles('safe-boundary')).toEqual([occupied]);
+    expect(await fs.readFile(path.join(volumeDir, occupied), 'utf8')).toBe('pre-existing owner bytes');
+    expect(memory.getVolumeRecords()).toHaveLength(1);
+    expect(await memory.search({})).toHaveLength(1);
+  });
+
+  it('bounds dry-run and live collision probing to 1000 attempts', async () => {
+    const memory = await buildMemory('No Free Number', 2);
+    const fileOps = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const exists = jest.spyOn(fileOps, 'exists').mockResolvedValue(true);
+    try {
+      await expect(manager.rolloverMemory(memory, options({ dryRun: true })))
+        .rejects.toThrow('No free volume number');
+      expect(exists).toHaveBeenCalledTimes(1000);
+      exists.mockClear();
+      await expect(manager.rolloverMemory(memory, options()))
+        .rejects.toThrow('No free volume number');
+      expect(exists).toHaveBeenCalledTimes(1000);
+      exists.mockResolvedValue(false);
+      const create = jest.spyOn(fileOps, 'createFileExclusive').mockResolvedValue(false);
+      try {
+        await expect(manager.rolloverMemory(memory, options()))
+          .rejects.toThrow('No free volume number');
+        expect(create).toHaveBeenCalledTimes(1000);
+      } finally {
+        create.mockRestore();
+      }
+    } finally {
+      exists.mockRestore();
+    }
+    expect(await volumeFiles('no-free-number')).toEqual([]);
+    expect(await memory.search({})).toHaveLength(2);
   });
 
   it('rejects a name with no safe archive slug before creating a volume', async () => {
@@ -356,7 +451,7 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
       spy.mockRestore();
     }
     expect(await volumeFiles('fails-midway')).toEqual([]);
-    expect((await memory.search({})).length).toBe(40);
+    expect(await memory.search({})).toHaveLength(40);
   });
 
   it('reports an incomplete cleanup instead of claiming a full rollback', async () => {
@@ -378,7 +473,7 @@ describe('MemoryManager.rolloverMemory (#2861)', () => {
       deleteSpy.mockRestore();
     }
     expect(await volumeFiles('cleanup-fails')).toEqual(['v0001.yaml']);
-    expect((await memory.search({})).length).toBe(40);
+    expect(await memory.search({})).toHaveLength(40);
   });
 
   it('reports an untracked partial volume when exclusive-create cleanup fails', async () => {
