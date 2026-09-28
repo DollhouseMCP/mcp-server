@@ -1,4 +1,9 @@
-import { describe, expect, it } from '@jest/globals';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRealManagerSuite } from '../../../helpers/di-mocks.js';
+import { ManagerBackedPortfolioElementStore } from '../../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   createPortfolioModule,
@@ -746,6 +751,37 @@ describe('PortfolioModule', () => {
       status: 404,
       body: { code: 'portfolio_element_not_found' },
     });
+  });
+
+  it.each(['PATCH', 'DELETE'])('returns 412 for a real manager %s race without overwriting the winner', async method => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-conflict-'));
+    const suite = createRealManagerSuite(directory);
+    const managers = { personas: suite.personaManager, skills: suite.skillManager, templates: suite.templateManager,
+      agents: suite.agentManager, memories: suite.memoryManager, ensembles: suite.ensembleManager };
+    const store = new ManagerBackedPortfolioElementStore({ managers, getCurrentUserId: () => USER_ID });
+    try {
+      const created = await store.create({ userId: USER_ID, type: 'skills', name: REVIEW_HELPER_NAME, displayName: null,
+        metadata: { description: 'Review helper', instructions: 'Review carefully' }, content: 'Original', tags: [], now: NOW });
+      const win = () => store.update({ userId: USER_ID, type: 'skills', canonicalName: created.canonicalName,
+        expectedVersion: 1, expectedContentHash: created.contentHash, content: 'Winning edit', now: NOW });
+      if (method === 'PATCH') {
+        const save = managers.skills.save.bind(managers.skills);
+        jest.spyOn(managers.skills, 'save').mockImplementationOnce(async (...args) => { await win(); return save(...args); });
+      } else {
+        const remove = managers.skills.delete.bind(managers.skills);
+        jest.spyOn(managers.skills, 'delete').mockImplementationOnce(async (...args) => { await win(); return remove(...args); });
+      }
+      const { module } = moduleFixtureWithStore(store);
+      await expect(findRoute(module.routes, ELEMENT_DETAIL_PATH, method).handler(consoleRequest({
+        params: { type: 'skills', name: REVIEW_HELPER_NAME }, headers: { 'if-match': `"sha256:${created.contentHash}"` },
+        body: method === 'PATCH' ? { content: 'Losing edit' } : {},
+      }))).resolves.toMatchObject({ status: 412, body: { code: 'precondition_failed' } });
+      expect((await store.findByName(USER_ID, 'skills', created.canonicalName))?.content.trim()).toBe('Winning edit');
+    } finally {
+      jest.restoreAllMocks();
+      for (const manager of Object.values(managers)) manager.dispose();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('maps raced store version conflicts to precondition failures', async () => {

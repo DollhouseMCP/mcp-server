@@ -144,7 +144,7 @@ describe('MemoryManager save size limits (#2329)', () => {
     await memory.addEntry('Historical research quoted exec("example-command") for defensive analysis.');
 
     await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
-    await expect(manager.save(memory, 'historical-scanner-match.yaml')).resolves.toBeUndefined();
+    await expect(manager.save(memory, 'historical-scanner-match.yaml')).resolves.toMatchObject({ relativePath: 'historical-scanner-match.yaml' });
 
     const loaded = await manager.load('historical-scanner-match.yaml');
     await expect(loaded.addEntry('A new verified entry after the historical text.')).resolves.toBeDefined();

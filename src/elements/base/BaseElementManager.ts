@@ -41,6 +41,8 @@ import { type ElementValidator } from '../../services/validation/ElementValidato
 import {
   type IStorageLayer,
   type ElementSaveOptions,
+  type ElementDeleteOptions,
+  type VersionedElement,
   type StorageScanOptions,
   isWritableStorageLayer,
 } from '../../storage/IStorageLayer.js';
@@ -61,7 +63,7 @@ import { ElementCache } from './ElementCache.js';
 import { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import { ElementLoader } from './ElementLoader.js';
 import { ElementPersister } from './ElementPersister.js';
-import { ElementListOperations } from './ElementListOperations.js';
+import { ElementListOperations, type ElementScanOptions } from './ElementListOperations.js';
 import { ElementResolver } from './ElementResolver.js';
 
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
@@ -472,12 +474,36 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._loader.loadDefinition(filePath);
   }
 
-  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
+  /** Fresh stored bytes and token; bypasses and never publishes to the element cache. */
+  async readVersioned(name: string): Promise<VersionedElement> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      const identity = await this.storageLayer.resolveContentIdentity(this.elementType, this.extractNameFromPath(name));
+      if (!identity) {
+        const error = new Error(`Element not found: ${name}`) as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return this._persister.readVersioned(identity.id);
+    }
+    return this._persister.readVersioned(await this.resolveVersionedPath(name));
+  }
+
+  protected async resolveVersionedPath(name: string): Promise<string> {
+    await this.scanAndEvict({ respectCooldown: true });
+    return this.storageLayer.getPathByName(name) ?? this.resolveUnindexedVersionedPath(name);
+  }
+
+  /** Legacy filename fallback, used only when no indexed identity exists. */
+  protected async resolveUnindexedVersionedPath(name: string): Promise<string> {
+    return name.endsWith(this.getFileExtension()) ? name : this.getElementFilename(name);
+  }
+
+  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<VersionedElement> {
     return this._persister.save(element, filePath, options);
   }
 
-  async delete(filePath: string): Promise<void> {
-    return this._persister.delete(filePath);
+  async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
+    return this._persister.delete(filePath, options);
   }
 
   async exists(filePath: string): Promise<boolean> {
@@ -687,7 +713,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    * Fixes #1895 (ensemble activation serving stale cached element list).
    */
-  protected async scanAndEvict(options?: StorageScanOptions): Promise<void> {
+  protected async scanAndEvict(options?: ElementScanOptions): Promise<void> {
     return this._listOps.scanAndEvict(options);
   }
 

@@ -12,7 +12,9 @@
  */
 
 import { createHash } from 'node:crypto';
+import { StaleElementWriteError, validateConditionalWrite } from './ElementVersion.js';
 import { eq, and, gt, lt, sql, desc, inArray, arrayOverlaps } from 'drizzle-orm';
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
 import { elements } from '../database/schema/elements.js';
@@ -134,6 +136,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     metadata: ElementWriteMetadata,
     options?: WriteContentOptions,
   ): Promise<string> {
+    validateConditionalWrite(options);
     const extracted = MemoryMetadataExtractor.extractMetadata(content, name);
     const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
     const byteSize = Buffer.byteLength(content, 'utf8');
@@ -141,11 +144,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     // Use the caller-provided name as authoritative, falling back to extracted
     const elementName = name || extracted.name || 'unnamed';
 
-    const elementId = await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    const elementId = await withUserContext(this.db, userId, async (tx) => {
       // Build the column values once; both insert and upsert-SET reuse the
       // same object so adding a column is a one-line change, not two.
       const values = {
-        userId: this.userId,
+        userId,
         rawContent: content,
         bodyContent: null,
         contentHash,
@@ -169,7 +173,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       };
 
       let rows;
-      if (options?.exclusive) {
+      if (options?.expectedIdentity) {
+        rows = await this.updateExpectedMemoryRow(tx, values, buildUpdateSet(), options);
+      } else if (options?.exclusive) {
         // Atomic create-or-fail — mirrors file-mode createFileExclusive semantics.
         try {
           rows = await tx.insert(elements).values(values).returning({ id: elements.id });
@@ -215,6 +221,23 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     return elementId;
   }
 
+  private async updateExpectedMemoryRow(
+    tx: DrizzleTx,
+    values: typeof elements.$inferInsert,
+    updates: PgUpdateSetSource<typeof elements>,
+    options: WriteContentOptions,
+  ): Promise<{ id: string }[]> {
+    const expected = options.expectedIdentity;
+    if (expected?.name !== values.name) throw new StaleElementWriteError();
+    const rows = await tx.update(elements).set(updates).where(and(
+      eq(elements.userId, values.userId), eq(elements.elementType, 'memories'),
+      eq(elements.id, expected.id), eq(elements.name, expected.name),
+      options.expectedVersion === undefined ? undefined : eq(elements.contentHash, options.expectedVersion),
+    )).returning({ id: elements.id });
+    if (rows.length !== 1) throw new StaleElementWriteError();
+    return rows;
+  }
+
   async deleteContent(_elementType: string, name: string): Promise<void> {
     await this.deleteContentByIdentity('memories', name);
   }
@@ -222,14 +245,15 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
   // ── Entry-Level Operations ────────────────────────────────────────
 
   async addEntry(memoryElementId: string, entry: MemoryEntryData): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    await withUserContext(this.db, userId, async (tx) => {
       // Single source of truth for the column values — both the insert values
       // and the upsert SET reuse it. Identity columns (memoryId, entryId) are
       // stripped from the SET via the buildUpdateSet closure pattern (same
       // approach as writeContent), so adding a column to `values` is a one-
       // line change rather than two.
       const values = {
-        userId: this.userId,
+        userId,
         memoryId: memoryElementId,
         entryId: entry.entryId,
         timestamp: entry.timestamp,

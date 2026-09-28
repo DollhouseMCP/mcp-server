@@ -24,9 +24,10 @@ export interface ConsolePortfolioElementSummaryRecord {
   /**
    * Legacy mirror-store revision retained only for older in-memory tests and
    * DTO compatibility. Manager-backed portfolio concurrency is defined by
-   * contentHash/ETag, not this integer.
+   * contentHash/ETag; this integer stays 1.
    */
   readonly version: number;
+  /** SHA-256 of the exact stored bytes, paired with detail content in one read; omitted on list summaries. */
   readonly contentHash?: string;
   readonly updatedAt: Date;
   readonly validationStatus: ConsolePortfolioValidationStatus;

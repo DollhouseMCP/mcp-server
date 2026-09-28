@@ -1,3 +1,5 @@
+import type { OperationRegistry } from '../../handlers/mcp-aql/OperationRegistry.js';
+import { INTEGRATION_MANAGEMENT_OPERATIONS, type IntegrationManagementOperation } from '../../handlers/mcp-aql/IntegrationManagementOperations.js';
 import type { ToolDefinition, ToolHandler } from '../../handlers/types/ToolTypes.js';
 import { IntegrationRequestError } from '../../web-console/modules/integrations/IntegrationRequestGateway.js';
 import {
@@ -34,7 +36,7 @@ const REMOTE_SCHEMA_ANNOTATION_KEYS = new Set([
 export function getIntegrationTools(
   gateway: AuthorizedIntegrationGateway,
   operationCatalog?: AuthorizedIntegrationOperationCatalog | null,
-  includeReadTools = true,
+  includeCatalogTools = true,
 ): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler }> = [{
     tool: {
@@ -97,10 +99,72 @@ export function getIntegrationTools(
     },
   }];
   if (operationCatalog) {
-    tools.push(...getIntegrationOperationTools(operationCatalog));
-    if (includeReadTools) tools.push(...getIntegrationReadTools(operationCatalog));
+    if (includeCatalogTools) tools.push(...getIntegrationOperationTools(operationCatalog), ...getIntegrationReadTools(operationCatalog));
   }
   return tools;
+}
+
+/** Internal operation registrations, never standalone tools. */
+export function getIntegrationManagementTools(catalog: AuthorizedIntegrationOperationCatalog, operations: OperationRegistry): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
+  return (Object.keys(INTEGRATION_MANAGEMENT_OPERATIONS) as IntegrationManagementOperation[]).map(name => {
+    const definition = INTEGRATION_MANAGEMENT_OPERATIONS[name];
+    const spec = definition.resource === 'openapi_spec';
+    const update = definition.action === 'update';
+    const specMethod = update ? 'updateSpec' : 'createSpec';
+    const skillMethod = update ? 'updateSkill' : 'createSkill';
+    const properties: Record<string, object> = { provider: { type: 'string', description: PROVIDER_DESCRIPTION } };
+    if (spec) {
+      properties.spec = { type: 'object', description: 'OpenAPI 3.x JSON object. Spec writes never persist a skill.' };
+      properties.source_url = { type: 'string', description: 'Optional HTTPS source URL.' };
+      if (update) properties.expected_spec_hash = { type: 'string', description: 'Optional current specHash from mcp_aql_read / list_integration_operations; mismatches fail without writes.' };
+    } else {
+      properties.skill_name = { type: 'string', description: 'Exact target skill name; defaults to the generated name. For a new revision use create_integration_skill with a different name.' };
+      if (update) properties.expected_content_hash = { type: 'string', description: 'Optional content_hash from a successful skill write or current_content_hash from a conflict response; mismatches fail without writes.' };
+    }
+    return {
+      tool: { name, description: `${update ? 'Update an existing' : 'Create a missing'} integration ${spec ? 'specification' : 'generated skill'} using mcp_aql_${definition.action}. Requires provider${spec ? ' and spec' : '; optional skill_name'}. ${update ? 'Never creates a missing resource or revision; preserves edited skills.' : 'Fails on collision; never overwrites or chooses another name.'} Call individually; batches are rejected.`,
+        inputSchema: { type: 'object', properties, required: spec ? ['provider', 'spec'] : ['provider'] },
+        annotations: { readOnlyHint: false, destructiveHint: update } },
+      handler: async (args: unknown) => {
+        try {
+          const input = readObject(args);
+          validateManagementInput(input, name, properties);
+          const provider = readRequiredString(input.provider, 'provider');
+          const outcome = spec
+            ? await catalog[specMethod]({ provider,
+              spec: readRequiredRecord(input.spec, 'spec'), sourceUrl: readOptionalString(input.source_url, 'source_url'),
+              ...(input.expected_spec_hash === undefined ? {} : { expectedSpecHash: input.expected_spec_hash as string }),
+            }, operations)
+            : await catalog[skillMethod]({ provider,
+              skillName: readOptionalString(input.skill_name, 'skill_name') ?? undefined,
+              ...(input.expected_content_hash === undefined ? {} : { expectedContentHash: input.expected_content_hash as string }),
+            }, operations);
+          if (!outcome.ok) return policyDenialResponse(outcome);
+          return textResponse({ ok: true, result: outcome.result, approvalContext: outcome.approvalContext });
+        } catch (error) {
+          if (error instanceof IntegrationOperationCatalogError) return catalogErrorResponse(error);
+          throw error;
+        }
+      },
+    };
+  });
+}
+
+function validateManagementInput(input: Record<string, unknown>, operation: IntegrationManagementOperation, properties: Record<string, unknown>): void {
+  const definition = INTEGRATION_MANAGEMENT_OPERATIONS[operation];
+  if (Object.hasOwn(input, 'regenerate_skill')) {
+    throw new IntegrationOperationCatalogError('integration_separate_skill_write_required',
+      `Spec and skill writes are separate. Use mcp_aql_${definition.action} / ${definition.action}_integration_skill with provider and optional skill_name.`, 400);
+  }
+  const unknown = Object.keys(input).find(key => key !== 'fields' && !Object.hasOwn(properties, key));
+  if (unknown) throw new IntegrationOperationCatalogError('integration_management_invalid_input',
+    `Unsupported parameter ${unknown}. Use mcp_aql_${definition.action} / ${operation} with ${Object.keys(properties).join(', ')}; no upsert, overwrite or force behavior is supported.`, 400);
+  if (input.expected_spec_hash !== undefined && (typeof input.expected_spec_hash !== 'string' || !/^[a-f0-9]{64}$/u.test(input.expected_spec_hash))) {
+    throw new IntegrationOperationCatalogError('integration_spec_invalid_hash', 'Use mcp_aql_update / update_integration_spec with provider, spec and expected_spec_hash from mcp_aql_read / list_integration_operations.', 400);
+  }
+  if (input.expected_content_hash !== undefined && (typeof input.expected_content_hash !== 'string' || !/^[a-f0-9]{64}$/u.test(input.expected_content_hash))) {
+    throw new IntegrationOperationCatalogError('integration_skill_invalid_hash', 'Use mcp_aql_update / update_integration_skill with provider, skill_name and a lowercase SHA-256 expected_content_hash from content_hash in a successful skill write or current_content_hash in a conflict response.', 400);
+  }
 }
 
 export async function getPromotedIntegrationTools(

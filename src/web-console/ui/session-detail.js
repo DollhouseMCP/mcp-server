@@ -230,8 +230,11 @@ export async function createSessionDetail(host, sessionId, ctx) {
       const confirmed = await ctx.confirm('Deny this request? The waiting operation will not run.', 'Deny request');
       if (!confirmed) return;
     }
-    if (action === 'approve' && scope === 'session') {
-      const confirmed = await ctx.confirm('Approve this tool for the rest of this session?', 'Approve for session');
+    if (action === 'approve' && (scope === 'session' || scope === 'input_session')) {
+      const message = scope === 'input_session'
+        ? 'Approve this exact request for the rest of this session?'
+        : 'Approve this tool for the rest of this session?';
+      const confirmed = await ctx.confirm(message, 'Approve for session');
       if (!confirmed) return;
     }
     const verb = action === 'approve' ? 'approve' : 'deny';
@@ -513,9 +516,10 @@ function approvalsMarkup(approvals, routes) {
 
 function approvalActions(approval, routes) {
   const id = escapeHtml(approval.approval_id);
-  const approve = routes.approve ? `
-    <button class="btn btn-primary" data-approval-id="${id}" data-approval-action="approve" data-approval-scope="once" type="button">Approve once</button>
-    <button class="btn btn-ghost" data-approval-id="${id}" data-approval-action="approve" data-approval-scope="session" type="button">Approve for session</button>` : '';
+  const scopes = approval.allowed_scopes ?? ['once', 'session'];
+  const labels = { once: 'Approve once', session: 'Approve tool for session', input_session: 'Approve exact request for session' };
+  const approve = routes.approve ? scopes.filter(scope => Object.hasOwn(labels, scope)).map(scope => `
+    <button class="btn ${scope === 'once' ? 'btn-primary' : 'btn-ghost'}" data-approval-id="${id}" data-approval-action="approve" data-approval-scope="${scope}" type="button">${labels[scope]}</button>`).join('') : '';
   const deny = routes.deny ? `<button class="btn btn-ghost session-danger" data-approval-id="${id}" data-approval-action="deny" type="button">Deny</button>` : '';
   return `<div class="session-detail-row-actions">${approve}${deny}</div>`;
 }

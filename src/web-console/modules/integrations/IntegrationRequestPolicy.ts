@@ -1,3 +1,8 @@
+import type { OperationRegistry } from '../../../handlers/mcp-aql/OperationRegistry.js';
+import { PermissionLevel, type CliApprovalScope } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
+import { resolveElementPolicy } from '../../../handlers/mcp-aql/policies/ElementPolicies.js';
+import type { IntegrationManagementOperation } from '../../../handlers/mcp-aql/IntegrationManagementOperations.js';
+
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
 import type { ActiveElement } from '../../../handlers/mcp-aql/policies/index.js';
 import { resolveCliApprovalPolicy } from '../../../handlers/mcp-aql/OperationSummary.js';
@@ -17,6 +22,12 @@ import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 const INTEGRATION_TOOL_NAME = 'integration_request';
 const INTERNAL_INTEGRATION_POLICY_PREFIX = '_internal:/integration/';
 const REMOTE_MCP_DISCOVERY_POLICY_PATH = '_internal:/integration/remote_mcp_discovery';
+
+export interface IntegrationManagementPolicyContext {
+  readonly operation: IntegrationManagementOperation;
+  readonly operations: OperationRegistry;
+  readonly legacyPath: string;
+}
 
 export interface IntegrationRequestPolicyInput {
   readonly provider: string;
@@ -40,6 +51,7 @@ export interface IntegrationRequestPolicyDecision {
     readonly riskScore: number;
     readonly irreversible: boolean;
     readonly reason: string;
+    readonly allowedScopes?: readonly CliApprovalScope[];
   };
   readonly approvalContext?: {
     readonly requestId: string;
@@ -56,16 +68,16 @@ export interface IntegrationRequestPolicyEnforcerOptions {
 export class IntegrationRequestPolicyEnforcer {
   constructor(private readonly options: IntegrationRequestPolicyEnforcerOptions) {}
 
-  async authorize(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
+  async authorize(input: IntegrationRequestPolicyInput, management?: IntegrationManagementPolicyContext): Promise<IntegrationRequestPolicyDecision> {
     try {
-      return await this.evaluateAuthorization(input);
+      return await this.evaluateAuthorization(input, management);
     } catch (error) {
       if (error instanceof IntegrationPolicyUnavailableError) throw error;
       throw new IntegrationPolicyUnavailableError(error);
     }
   }
 
-  private async evaluateAuthorization(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
+  private async evaluateAuthorization(input: IntegrationRequestPolicyInput, management?: IntegrationManagementPolicyContext): Promise<IntegrationRequestPolicyDecision> {
     let toolInput: Record<string, unknown>;
     try {
       toolInput = integrationToolInput(input);
@@ -83,7 +95,7 @@ export class IntegrationRequestPolicyEnforcer {
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const activeElements = await this.options.getActiveElements();
     const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
-    const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+    const elementDecision = this.evaluateManagementPolicy(toolInput, activeElements, management);
     if (elementDecision.behavior === 'deny') {
       return {
         allowed: false,
@@ -95,7 +107,10 @@ export class IntegrationRequestPolicyEnforcer {
         policyContext: elementDecision.policyContext,
       };
     }
-    const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass);
+    const approvalPolicy = resolveCliApprovalPolicy(activeElements);
+    const requiresSingleUse = approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous') === true;
+    const allowInputSession = management?.operation.startsWith('create_') === true && !requiresSingleUse;
+    const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass, allowInputSession);
     if (existingApproval) {
       return {
         allowed: true,
@@ -106,16 +121,16 @@ export class IntegrationRequestPolicyEnforcer {
         policyContext: elementDecision.policyContext,
       };
     }
-    if (elementDecision.behavior === 'confirm') {
+    if (management || elementDecision.behavior === 'confirm') {
       return this.createApprovalRequest(toolInput, classification, activeElements, {
         reason: elementDecision.message ?? 'Integration request requires approval by policy.',
         denyReason: elementDecision.message ?? 'Integration request requires approval by policy.',
         policySource: elementDecision.confirmSource ?? 'unknown',
         policyContext: elementDecision.policyContext,
+        allowInputSession,
       });
     }
 
-    const approvalPolicy = resolveCliApprovalPolicy(activeElements);
     if (approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous')) {
       const policySource = activeElements
         .filter(el => el.metadata.gatekeeper?.externalRestrictions?.approvalPolicy?.requireApproval?.length)
@@ -130,6 +145,30 @@ export class IntegrationRequestPolicyEnforcer {
     }
 
     return { allowed: true, policyContext: elementDecision.policyContext };
+  }
+
+  private evaluateManagementPolicy(
+    toolInput: Record<string, unknown>, activeElements: ActiveElement[], management?: IntegrationManagementPolicyContext,
+  ): ReturnType<typeof evaluateCliToolPolicy> {
+    if (!management) return evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+    // Only explicit legacy denies carry forward. Old allows/confirmations are
+    // deliberately excluded from this compatibility projection.
+    const legacyDenies = activeElements.map(element => ({ ...element, metadata: { ...element.metadata,
+      gatekeeper: { externalRestrictions: { description: 'Legacy management denies', denyPatterns: element.metadata.gatekeeper?.externalRestrictions?.denyPatterns } },
+    } }));
+    const legacy = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, { ...toolInput, path: management.legacyPath }, legacyDenies);
+    if (legacy.behavior === 'deny') return legacy;
+    const external = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+    if (external.behavior === 'deny') return external;
+    const operation = resolveElementPolicy(management.operation,
+      this.options.gatekeeper.allowsElementPolicyOverrides() ? activeElements : [], undefined, management.operations);
+    if (operation.permissionLevel === PermissionLevel.DENY) {
+      return { ...external, behavior: 'deny', message: 'Integration management operation denied by active element policy.' };
+    }
+    if (operation.matchedPolicy === 'confirm') {
+      return { ...external, behavior: 'confirm', message: 'Integration management operation requires approval by active element policy.', confirmSource: operation.sourceElement };
+    }
+    return external;
   }
 
   /**
@@ -177,10 +216,11 @@ export class IntegrationRequestPolicyEnforcer {
     return allowed;
   }
 
-  private async checkExistingApproval(toolInput: Record<string, unknown>, readWriteClass: 'read' | 'write') {
+  private async checkExistingApproval(toolInput: Record<string, unknown>, readWriteClass: 'read' | 'write', allowInputSession = false) {
     try {
       return await this.options.gatekeeper.checkCliApprovalForInput(INTEGRATION_TOOL_NAME, toolInput, {
         allowToolSession: readWriteClass === 'read',
+        allowInputSession,
       });
     } catch {
       throw new IntegrationPolicyUnavailableError();
@@ -196,10 +236,13 @@ export class IntegrationRequestPolicyEnforcer {
       readonly denyReason: string;
       readonly policySource: string;
       readonly policyContext: unknown;
+      readonly allowInputSession?: boolean;
     },
   ): Promise<IntegrationRequestPolicyDecision> {
     const risk = assessRisk(INTEGRATION_TOOL_NAME, toolInput, classification);
     const approvalPolicy = resolveCliApprovalPolicy(activeElements);
+    let allowedScopes: readonly CliApprovalScope[] | undefined = toolInput.read_write_class === 'write' ? ['single'] : undefined;
+    if (request.allowInputSession) allowedScopes = ['single', 'input_session'];
     const requestId = await this.options.gatekeeper.createCliApprovalRequest({
       toolName: INTEGRATION_TOOL_NAME,
       toolInput,
@@ -209,7 +252,7 @@ export class IntegrationRequestPolicyEnforcer {
       denyReason: request.denyReason,
       policySource: request.policySource,
       ttlMs: approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined,
-      allowedScopes: toolInput.read_write_class === 'write' ? ['single'] : undefined,
+      allowedScopes,
     });
     return {
       allowed: false,
@@ -225,6 +268,7 @@ export class IntegrationRequestPolicyEnforcer {
         riskScore: risk.score,
         irreversible: risk.irreversible,
         reason: request.reason,
+        allowedScopes,
       },
       policyContext: request.policyContext,
     };

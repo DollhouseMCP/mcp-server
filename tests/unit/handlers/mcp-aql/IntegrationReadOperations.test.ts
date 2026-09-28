@@ -35,6 +35,7 @@ import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/El
 import type { AgentToolConfig } from '../../../../src/elements/agents/types.js';
 import { PermissionLevel } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import { classifyTool } from '../../../../src/handlers/mcp-aql/policies/ToolClassification.js';
+import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
 import { env } from '../../../../src/config/env.js';
 
 const LIST = 'list_integration_operations';
@@ -44,8 +45,8 @@ afterEach(() => { env.MCP_AQL_ENDPOINT_MODE = originalMode; jest.restoreAllMocks
 
 function setup(configured = true, options: Parameters<typeof createCatalog>[0] = { scopes: [GMAIL_READONLY] }, policy: { gatekeeper?: Gatekeeper; elements?: ActiveElement[]; tools?: AgentToolConfig; dbMode?: boolean } = {}) {
   const fixture = createCatalog(options);
-  const gatekeeper = policy.gatekeeper ?? new Gatekeeper(undefined, { enableAuditLogging: false }, fixture.contextTracker);
-  const policyEnforcer = new IntegrationRequestPolicyEnforcer({ gatekeeper, getActiveElements: async () => [] });
+  const gatekeeper = policy.gatekeeper ?? new Gatekeeper(undefined, { enableAuditLogging: false }, fixture.contextTracker, 'management-test', new StaticAuditHmacKeyResolver('66'.repeat(32)));
+  const policyEnforcer = new IntegrationRequestPolicyEnforcer({ gatekeeper, getActiveElements: async () => policy.elements ?? [] });
   const catalog = new AuthorizedIntegrationOperationCatalog({ catalog: fixture.catalog, policyEnforcer });
   const handlers = {
     gatekeeper,
@@ -73,6 +74,207 @@ async function invoke(fixture: ReturnType<typeof setup>, operation: string, para
 function responseText(data: { content: Array<{ text: string }> }) {
   return JSON.parse(data.content[0].text);
 }
+
+const MANAGEMENT = ['create_integration_spec', 'update_integration_spec', 'create_integration_skill', 'update_integration_skill'] as const;
+
+describe.each(['crude', 'single'] as const)('strict integration management routing (%s)', mode => {
+  it.each(MANAGEMENT)('advertises %s only when configured and rejects wrong endpoints', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup();
+    const endpoint = operation.startsWith('create') ? 'CREATE' : 'UPDATE';
+    expect(fixture.handler.operations.getRoute(operation)?.endpoint).toBe(endpoint);
+    expect(fixture.handler.operations.getSchema(operation)?.params.provider?.required).toBe(true);
+    expect(setup(false).handler.operations.getRoute(operation)).toBeUndefined();
+    expect(await fixture.handler.handleRead({ operation, params: { provider: 'gmail' } })).toMatchObject({ success: false, error: expect.stringContaining(endpoint) });
+    expect(getDefaultPermissionLevel(operation, fixture.handler.operations)).toBe(PermissionLevel.AUTO_APPROVE);
+  });
+
+  it.each(MANAGEMENT)('blocks whole batches containing %s before dispatch', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup();
+    const list = jest.spyOn(fixture.catalog, 'listOperations');
+    const result = await fixture.handler.handleRead({ operations: [
+      { operation: LIST, params: { provider: 'gmail' } }, { operation, params: { provider: 'gmail' } },
+    ] });
+    expect(result).toMatchObject({ success: false });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it.each(['create_integration_skill', 'update_integration_skill'])('preflights normalized mixed-format %s before any dispatch', async operation => {
+    const fixture = setup();
+    const list = jest.spyOn(fixture.catalog, 'listOperations');
+    const create = jest.spyOn(fixture.catalog, 'createSkill');
+    const update = jest.spyOn(fixture.catalog, 'updateSkill');
+    const approval = jest.spyOn(fixture.gatekeeper, 'checkCliApprovalForInput');
+    const dispatch = jest.spyOn(fixture.handler as unknown as { executeOperation: (...args: unknown[]) => Promise<unknown> }, 'executeOperation');
+    const batch = { operations: [
+      { operation: LIST, params: { provider: 'gmail' } },
+      { operation: 'create_element', element_type: 'invalid', tool: operation,
+        args: { provider: 'gmail', skill_name: 'batch-target' } },
+    ] };
+    const result = operation.startsWith('create')
+      ? await fixture.handler.handleCreate(batch) : await fixture.handler.handleUpdate(batch);
+    expect(result).toMatchObject({ success: false, results: [], error: expect.stringContaining('individual') });
+    for (const call of [dispatch, list, create, update, approval]) expect(call).not.toHaveBeenCalled();
+  });
+
+  it.each(MANAGEMENT)('treats unconfigured batch operation %s as unknown', async operation => {
+    const fixture = setup(false, undefined, { dbMode: false });
+    const result = await fixture.handler.handleRead({ operations: [{ operation, params: { provider: 'gmail' } }] });
+    expect(result).toMatchObject({ results: [{ result: { success: false, error: expect.stringContaining('Unknown operation') } }] });
+    expect(JSON.stringify(result)).not.toContain('individual');
+  });
+
+  it.each(['create_integration_spec', 'update_integration_spec'])('rejects regenerate_skill on %s before catalog writes', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup();
+    const before = await fixture.specStore.findByDescriptorId(DESCRIPTOR_ID);
+    const result = await invoke(fixture, operation, { provider: 'gmail', spec: openApiSpec(), regenerate_skill: false });
+    expect(JSON.stringify(result)).toContain('integration_skill');
+    expect(JSON.stringify(result)).toContain('separate');
+    expect(await fixture.specStore.findByDescriptorId(DESCRIPTOR_ID)).toEqual(before);
+  });
+
+  it.each(MANAGEMENT)('rejects boundary-changing flags for %s without writes', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup();
+    const create = jest.spyOn(fixture.specStore, 'create');
+    const update = jest.spyOn(fixture.specStore, 'update');
+    const createSkill = jest.spyOn(fixture.catalog, 'createSkill');
+    const updateSkill = jest.spyOn(fixture.catalog, 'updateSkill');
+    for (const key of ['force', 'upsert', 'overwrite']) {
+      const result = await invoke(fixture, operation, { provider: 'gmail', [key]: true, ...(operation.endsWith('spec') ? { spec: openApiSpec() } : {}) });
+      expect(responseText(result.data)).toMatchObject({ ok: false, error: { message: expect.stringContaining(operation) } });
+    }
+    for (const write of [create, update, createSkill, updateSkill]) expect(write).not.toHaveBeenCalled();
+  });
+
+  it.each(MANAGEMENT)('preserves payload keys and rejects unconfigured calls for %s', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const method = { create_integration_spec: 'createSpec', update_integration_spec: 'updateSpec', create_integration_skill: 'createSkill', update_integration_skill: 'updateSkill' }[operation] as 'createSpec';
+    const payload = JSON.parse('{"name":"root","nested":{"constructor":{"name":"retained"},"prototype":42,"__proto__":{"name":"retained"}}}');
+    for (const configured of [true, false]) {
+      const fixture = setup(configured);
+      const call = jest.spyOn(fixture.catalog, method).mockResolvedValue(payload);
+      const params = { provider: 'gmail', ...(operation.endsWith('spec') ? { spec: openApiSpec() } : {}), fields: ['missing'] };
+      let result = await invoke(fixture, operation, params);
+      if (configured) {
+        const pending = responseText(result.data);
+        await fixture.gatekeeper.approveCliRequest(pending.approvalRequest.requestId, 'single');
+        result = await invoke(fixture, operation, params);
+      }
+      if (configured) expect(responseText(result.data).result).toEqual(payload);
+      else {
+        expect(result).toMatchObject({ success: false, error: expect.stringContaining('Unknown operation') });
+        expect(call).not.toHaveBeenCalled();
+        expect(JSON.stringify(await invoke(fixture, 'get_capabilities'))).not.toContain(operation);
+        expect(JSON.stringify(await invoke(fixture, 'introspect', { query: 'operations' }))).not.toContain(operation);
+        expect(getMCPAQLTools(fixture.handler).map(tool => tool.tool.description).join()).not.toContain(operation);
+      }
+    }
+  });
+
+  it.each(MANAGEMENT)('enforces identity, visibility and connection before writing %s', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    for (const state of ['unauthenticated', 'disconnected', 'invisible', 'non-owner'] as const) {
+      if (state === 'non-owner' && operation.endsWith('skill')) continue;
+      const portfolioStore = new InMemoryPortfolioElementStore();
+      const fixture = setup(true, { scopes: [GMAIL_READONLY], portfolioStore,
+        descriptor: descriptor(state === 'non-owner' ? {} : { ownership: 'byo', ownerUserId: state === 'invisible' ? '00000000-0000-4000-8000-000000000099' : USER_ID }),
+        ...(state === 'disconnected' ? { integration: { ...integration([GMAIL_READONLY]), status: 'revoked', revokedAt: new Date(TIMESTAMP) } } : {}),
+      });
+      const before = await fixture.specStore.findByDescriptorId(DESCRIPTOR_ID);
+      const call = () => invoke(fixture, operation, { provider: 'gmail', ...(operation.endsWith('spec') ? { spec: openApiSpec() } : {}) });
+      const result = state === 'unauthenticated' ? await call() : await runAsUser(fixture.contextTracker, call);
+      expect(responseText(result.data)).toMatchObject({ ok: false });
+      expect(await fixture.specStore.findByDescriptorId(DESCRIPTOR_ID)).toEqual(before);
+      expect(await portfolioStore.listByUser(USER_ID)).toEqual([]);
+    }
+  });
+
+  it.each(MANAGEMENT.flatMap(operation => [false, true].map(confirm => ({ operation, confirm }))))('uses one management approval for $operation (element confirm: $confirm)', async ({ operation, confirm }) => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const elements: ActiveElement[] = confirm ? [{ type: 'persona', name: 'guard', metadata: { name: 'guard', gatekeeper: {
+      confirm: [operation], externalRestrictions: { description: 'Allow target', allowPatterns: ['integration_request:*'] },
+    } } }] : [];
+    const fixture = setup(true, { scopes: [GMAIL_READONLY], descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }) }, { elements, dbMode: false });
+    const request = jest.spyOn(fixture.gatekeeper, 'createCliApprovalRequest');
+    const generic = jest.spyOn(fixture.gatekeeper, 'recordConfirmation');
+    const params = { provider: 'gmail', ...(operation.endsWith('spec') ? { spec: openApiSpec() } : { skill_name: 'review-target' }) };
+    await runAsUser(fixture.contextTracker, async () => {
+      if (operation === 'create_integration_spec') await fixture.specStore.deleteByDescriptorId(DESCRIPTOR_ID);
+      if (operation === 'update_integration_skill') await fixture.catalog.createSkill({ provider: 'gmail', skillName: 'review-target' });
+      if (operation === 'update_integration_skill') await fixture.specStore.upsert({
+        descriptorId: DESCRIPTOR_ID, spec: openApiSpec(), specHash: 'b'.repeat(64),
+        createdAt: new Date(TIMESTAMP), updatedAt: new Date(TIMESTAMP),
+      });
+      const method = { create_integration_spec: 'createSpec', update_integration_spec: 'updateSpec', create_integration_skill: 'createSkill', update_integration_skill: 'updateSkill' }[operation] as 'createSpec';
+      const write = jest.spyOn(fixture.catalog, method);
+      const pending = responseText((await invoke(fixture, operation, params)).data);
+      expect(pending).toMatchObject({ ok: false, approvalRequest: { requestId: expect.any(String) } });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(write).not.toHaveBeenCalled();
+      const targets = {
+        create_integration_spec: '_internal:/integration/openapi_spec/create',
+        update_integration_spec: '_internal:/integration/openapi_spec/update',
+        create_integration_skill: '_internal:/integration/generated_skill/create',
+        update_integration_skill: '_internal:/integration/generated_skill/update',
+      };
+      expect(request.mock.calls[0][0].toolInput).toMatchObject({ path: targets[operation],
+        body: { provider: 'gmail', ...(operation.endsWith('skill') ? { skillName: 'review-target' } : {}) },
+      });
+      expect(generic).not.toHaveBeenCalled();
+      await fixture.gatekeeper.approveCliRequest(pending.approvalRequest.requestId,
+        operation.startsWith('create') ? 'input_session' : 'single');
+      expect(responseText((await invoke(fixture, operation, params)).data).ok).toBe(true);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledTimes(1);
+      const repeated = responseText((await invoke(fixture, operation, params)).data);
+      if (operation.startsWith('create')) {
+        expect(repeated).toMatchObject({ ok: false, error: { code: expect.stringContaining('exists') } });
+        expect(request).toHaveBeenCalledTimes(1);
+      } else {
+        expect(repeated).toMatchObject({ ok: false, approvalRequest: { requestId: expect.any(String) } });
+        expect(write).toHaveBeenCalledTimes(1);
+      }
+      elements.push({ type: 'persona', name: 'deny-guard', metadata: { name: 'deny-guard', gatekeeper: { deny: [operation] } } });
+      expect(await invoke(fixture, operation, params)).toMatchObject({ success: false, error: expect.stringContaining('deny policy') });
+    });
+  });
+
+  it.each(MANAGEMENT)('never treats element allow or generic confirmation as management approval for %s', async operation => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const elements: ActiveElement[] = [{ type: 'persona', name: 'guard', metadata: { name: 'guard', gatekeeper: {
+      allow: [operation],
+    } } }];
+    const fixture = setup(true, undefined, { elements, dbMode: false });
+    await runAsUser(fixture.contextTracker, async () => {
+      fixture.gatekeeper.recordConfirmation(operation, PermissionLevel.CONFIRM_SESSION);
+      const result = await invoke(fixture, operation, { provider: 'gmail', ...(operation.endsWith('spec') ? { spec: openApiSpec() } : {}) });
+      expect(responseText(result.data)).toMatchObject({ ok: false, approvalRequest: { requestId: expect.any(String) } });
+    });
+  });
+
+  it.each(['mcp_aql_create', 'mcp_aql_update'])('enforces executing agent restriction %s', async denied => {
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup(true, undefined, { tools: { allowed: [], denied: [denied] }, dbMode: false });
+    await runAsUser(fixture.contextTracker, async () => {
+      expect(await invoke(fixture, 'execute_agent', { element_name: 'restricted-agent' })).toMatchObject({ success: true });
+      for (const operation of MANAGEMENT.filter(name => name.startsWith(denied.slice('mcp_aql_'.length)))) {
+        expect(await invoke(fixture, operation, { provider: 'gmail', spec: openApiSpec() })).toMatchObject({ success: false, error: expect.stringContaining('deny policy') });
+      }
+    });
+  });
+
+  it('removes both legacy management tools only in MCP-AQL registration', () => {
+    const fixture = setup();
+    const tools = getIntegrationTools({} as AuthorizedIntegrationGateway, new AuthorizedIntegrationOperationCatalog({
+      catalog: fixture.catalog, policyEnforcer: new IntegrationRequestPolicyEnforcer({ gatekeeper: fixture.gatekeeper, getActiveElements: async () => [] }),
+    }), false);
+    expect(tools.map(entry => entry.tool.name)).toEqual(['integration_request']);
+    expect(fixture.standalone.map(entry => entry.tool.name)).toEqual(expect.arrayContaining(['ingest_openapi_spec', 'regenerate_integration_skill']));
+  });
+});
 
 describe.each(['crude', 'single'] as const)('Integration catalog READ operations (%s)', mode => {
   it('preserves standalone results, parameters and in-memory skill previews', async () => {

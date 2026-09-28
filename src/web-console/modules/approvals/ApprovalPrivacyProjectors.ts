@@ -28,6 +28,8 @@ export function projectSessionApproval(value: unknown): SessionApprovalDto {
     reason: stringField(input.reason),
     policy_source: nullableString(input.policy_source),
     scope: approvalScope(input.scope),
+    ...(Array.isArray(input.allowed_scopes)
+      ? { allowed_scopes: input.allowed_scopes.filter(isApprovalScope) } : {}),
     requested_at: stringField(input.requested_at),
     expires_at: stringField(input.expires_at),
     decided_at: nullableString(input.decided_at),
@@ -50,7 +52,11 @@ function approvalStatus(value: unknown): ConsoleApprovalStatus {
 }
 
 function approvalScope(value: unknown): ConsoleApprovalScope {
-  return value === 'session' ? 'session' : 'once';
+  return isApprovalScope(value) ? value : 'once';
+}
+
+function isApprovalScope(value: unknown): value is ConsoleApprovalScope {
+  return value === 'once' || value === 'session' || value === 'input_session';
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

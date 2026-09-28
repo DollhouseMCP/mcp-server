@@ -43,6 +43,22 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('createCliApprovalRequest', () => {
+    it('reuses input_session only for matching input through the opted-in exact-input API', async () => {
+      const requestId = await session.createCliApprovalRequest({
+        ...dangerousArgs(TOOL_BASH, NPM_INSTALL), allowedScopes: ['single', 'input_session'],
+      });
+      await session.approveCliRequest(requestId, 'input_session');
+      expect(session.checkCliApproval(TOOL_BASH, NPM_INSTALL)).toBeUndefined();
+      expect(await session.checkCliApprovalForInput(TOOL_BASH, NPM_INSTALL)).toBeUndefined();
+      const options = { allowToolSession: false, allowInputSession: true };
+      expect(await session.checkCliApprovalForInput(TOOL_BASH, { command: 'npm publish' }, options)).toBeUndefined();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await session.checkCliApprovalForInput(TOOL_BASH, NPM_INSTALL, options)).toMatchObject({ requestId, consumed: false });
+      }
+      const otherSession = new GatekeeperSession(undefined, 100, 50, undefined, undefined, auditResolver);
+      expect(await otherSession.checkCliApprovalForInput(TOOL_BASH, NPM_INSTALL, options)).toBeUndefined();
+    });
+
     it('should create a request with cli- prefixed UUID', async () => {
       const requestId = await session.createCliApprovalRequest(
         dangerousArgs(TOOL_BASH, NPM_INSTALL, 'dangerous command'),

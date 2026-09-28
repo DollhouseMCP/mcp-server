@@ -5,7 +5,7 @@ export type ConsoleApprovalStatus =
   | 'expired'
   | 'cancelled_session_terminated';
 
-export type ConsoleApprovalScope = 'once' | 'session';
+export type ConsoleApprovalScope = 'once' | 'session' | 'input_session';
 
 export interface SessionApprovalDto {
   readonly approval_id: string;
@@ -20,6 +20,7 @@ export interface SessionApprovalDto {
   readonly reason: string;
   readonly policy_source: string | null;
   readonly scope: ConsoleApprovalScope;
+  readonly allowed_scopes?: readonly ConsoleApprovalScope[];
   readonly requested_at: string;
   readonly expires_at: string;
   readonly decided_at: string | null;

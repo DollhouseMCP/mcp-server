@@ -18,7 +18,7 @@ import { IElement, ElementValidationResult, ValidationError } from '../../types/
 import { ElementType } from '../../portfolio/types.js';
 import { IElementMetadata } from '../../types/elements/IElement.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { MetadataService } from '../../services/MetadataService.js';
@@ -132,7 +132,7 @@ export interface MemorySearchOptions {
 /**
  * Memory Element Implementation
  *
- * TODO: Memory Sharding Strategy (Issue #981)
+ * Planned Memory Sharding Strategy (tracked in Issue #981)
  * ---------------------------------------------
  * Current: Single Map<id, entry> for all memories
  * Problem: Large memory sets (>10K entries) cause performance degradation
@@ -149,7 +149,7 @@ export interface MemorySearchOptions {
  * - Better corruption resistance (one shard failure doesn't affect others)
  * - Efficient incremental updates
  *
- * TODO: Content Integrity Verification (Issue #982)
+ * Planned Content Integrity Verification (tracked in Issue #982)
  * --------------------------------------------------
  * Add SHA-256 hashes to detect:
  * - Accidental corruption from disk errors
@@ -161,7 +161,7 @@ export interface MemorySearchOptions {
  * - Verify on load, warn on mismatch
  * - Option to auto-restore from backup on corruption
  *
- * TODO: Memory Capacity Management (Issue #983)
+ * Planned Memory Capacity Management (tracked in Issue #983)
  * ---------------------------------------------
  * Current: Synchronous retention enforcement on each add
  * Better: Background cleanup with smart triggers:
@@ -179,7 +179,7 @@ export class Memory extends BaseElement implements IElement {
   private static readonly MAX_CREATED_MEMORY_NAMES = 10_000;
   // Issue #1948: Instance-injected service refs (replaces static resolvers).
   // Set via constructor params when MemoryManager creates Memory instances.
-  private readonly _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
+  private readonly _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<unknown> };
   private readonly _retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   /**
@@ -191,10 +191,10 @@ export class Memory extends BaseElement implements IElement {
   public static resetResolvers(): void { /* no-op */ }
 
   // Issue #1948: Root memory manager ref for static methods (findByTrustLevel, etc.)
-  private static _rootMemoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
+  private static _rootMemoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<unknown> };
 
   /** Set the root memory manager ref (called by Container). Warns on re-set (prevents silent replacement). */
-  static setRootMemoryManager(manager: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> }): void {
+  static setRootMemoryManager(manager: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<unknown> }): void {
     if (Memory._rootMemoryManagerRef && Memory._rootMemoryManagerRef !== manager) {
       // Warn but don't throw — tests create multiple containers
       if (process.env.NODE_ENV !== 'test') {
@@ -225,18 +225,18 @@ export class Memory extends BaseElement implements IElement {
     return ref;
   }
   // Memory-specific properties (with size limits to prevent memory leaks)
-  private entries: LRUCache<MemoryEntry>;
-  private storageBackend: StorageBackend;
-  private retentionDays: number;
-  private privacyLevel: PrivacyLevel;
-  private searchable: boolean;
-  private maxEntries: number;
+  private readonly entries: LRUCache<MemoryEntry>;
+  private readonly storageBackend: StorageBackend;
+  private readonly retentionDays: number;
+  private readonly privacyLevel: PrivacyLevel;
+  private readonly searchable: boolean;
+  private readonly maxEntries: number;
 
   // Search index for performance (Issue #984)
-  private searchIndex: MemorySearchIndex;
+  private readonly searchIndex: MemorySearchIndex;
 
   // Sanitization cache to avoid redundant processing (with size limits)
-  private sanitizationCache: LRUCache<string>;
+  private readonly sanitizationCache: LRUCache<string>;
 
   // FIX #1320: Store file path for persistence
   private filePath?: string;
@@ -249,7 +249,7 @@ export class Memory extends BaseElement implements IElement {
     metadata: Partial<MemoryMetadata>,
     metadataService: MetadataService,
     /** Issue #1948: MemoryManager ref for self-save operations. */
-    memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> },
+    memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<unknown> },
     /** Issue #1948: RetentionPolicyService ref for retention enforcement. */
     retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean },
   ) {
@@ -270,7 +270,7 @@ export class Memory extends BaseElement implements IElement {
           .map(t => String(t).trim())
           .filter(t => t && TRIGGER_VALIDATION_REGEX.test(t)) // Validate format FIRST
           .map(t => sanitizeInput(t, MAX_TRIGGER_LENGTH)) // Then sanitize for length
-          .filter(t => t) : // Remove any that became empty after sanitization
+          .filter(Boolean) : // Remove any that became empty after sanitization
         []
     };
 
@@ -478,7 +478,7 @@ export class Memory extends BaseElement implements IElement {
    * - Date index: Binary tree for efficient range queries ✓
    * - Privacy index: Pre-sorted entries by privacy level ✓
    *
-   * TODO: Advanced indexing features (Future enhancements):
+   * Advanced indexing roadmap (future enhancements, not implemented):
    * - Composite indices: Combined indices for common query patterns
    * - Index-of-indexes pattern:
    *   - Master index file (meta.yaml) with pointers to shard indices
@@ -491,6 +491,14 @@ export class Memory extends BaseElement implements IElement {
    * - Previous: ~100ms for 10,000 entries (linear scan)
    * - Current: <5ms for same dataset (indexed search)
    */
+  private matchesSearch(entry: MemoryEntry, options: MemorySearchOptions, query?: string, tags?: string[] | null): boolean {
+    if (options.privacyLevel && !this.canAccessPrivacyLevel(entry.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL, options.privacyLevel)) return false;
+    if (query && !entry.content.toLowerCase().includes(query) && !entry.tags?.some(tag => tag.toLowerCase().includes(query))) return false;
+    if (tags && !tags.some(tag => entry.tags?.includes(tag))) return false;
+    if (options.startDate && entry.timestamp < options.startDate) return false;
+    return !(options.endDate && entry.timestamp > options.endDate);
+  }
+
   public async search(options: MemorySearchOptions = {}): Promise<MemoryEntry[]> {
     // SECURITY FIX: Sanitize search query (use regular sanitizeInput for queries)
     const sanitizedQuery = options.query ?
@@ -519,34 +527,8 @@ export class Memory extends BaseElement implements IElement {
 
     // Single iteration through entries with all filters applied
     for (const entry of this.entries.values()) {
-      // Privacy level check
-      if (options.privacyLevel && 
-          !this.canAccessPrivacyLevel(entry.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL, options.privacyLevel)) {
-        continue;
-      }
-      
-      // Query text check
-      if (queryLower) {
-        const contentMatch = entry.content.toLowerCase().includes(queryLower);
-        const tagMatch = entry.tags?.some(tag => tag.toLowerCase().includes(queryLower));
-        if (!contentMatch && !tagMatch) {
-          continue;
-        }
-      }
-      
-      // Tag filter check
-      if (searchTags && !searchTags.some(searchTag => entry.tags?.includes(searchTag))) {
-        continue;
-      }
-      
-      // Date range checks
-      if (options.startDate && entry.timestamp < options.startDate) {
-        continue;
-      }
-      if (options.endDate && entry.timestamp > options.endDate) {
-        continue;
-      }
-      
+      if (!this.matchesSearch(entry, options, queryLower, searchTags)) continue;
+
       // Entry passes all filters
       results.push(entry);
     }
@@ -820,21 +802,23 @@ export class Memory extends BaseElement implements IElement {
   private ensureDateObject(value: unknown): Date {
     // Handle null/undefined
     if (value == null) {
-      throw new Error(`Date value is null or undefined`);
+      throw new TypeError(`Date value is null or undefined`);
     }
 
     // If already a Date, validate it
     if (value instanceof Date) {
       if (Number.isNaN(value.getTime())) {
-        throw new Error(`Invalid Date object provided`);
+        throw new TypeError(`Invalid Date object provided`);
       }
       return value;
     }
 
-    // Try to convert to Date (value must be string, number, or Date-compatible)
-    const date = new Date(value as string | number | Date);
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new TypeError('Invalid date value: expected a string, number, or Date');
+    }
+    const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
-      throw new Error(`Invalid date value: ${value}`);
+      throw new TypeError(`Invalid date value: ${value}`);
     }
 
     // Check for unreasonable dates (before 1970 or more than 100 years in future)
@@ -904,9 +888,7 @@ export class Memory extends BaseElement implements IElement {
     const result = super.validate();
     
     // Initialize errors array if not present
-    if (!result.errors) {
-      result.errors = [];
-    }
+    result.errors ??= [];
     
     // Additional memory-specific validation
     if (this.retentionDays < MEMORY_CONSTANTS.MIN_RETENTION_DAYS || this.retentionDays > MEMORY_CONSTANTS.MAX_RETENTION_DAYS) {

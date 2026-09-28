@@ -1,3 +1,4 @@
+import { isIntegrationManagementOperation } from './IntegrationManagementOperations.js';
 /**
  * MCPAQLHandler - Unified handler for all MCP-AQL operations
  *
@@ -1204,6 +1205,14 @@ export class MCPAQLHandler {
     batch: BatchRequest,
     endpoint: CRUDEndpoint
   ): Promise<BatchResult> {
+    const normalizedOperations = batch.operations.map(item => parseOperationInput(item));
+    if (normalizedOperations.some(item => item !== null &&
+      isIntegrationManagementOperation(item.operation) && this.operations.getIntegrationHandler(item.operation))) {
+      return { success: false, results: [],
+        summary: { total: batch.operations.length, succeeded: 0, failed: batch.operations.length },
+        error: 'Integration management operations require individual mcp_aql_create or mcp_aql_update calls with operation and params (provider plus spec or skill_name); batches are rejected before dispatch.',
+        _meta: this.buildMeta(performance.now()) };
+    }
     // Issue #221/#543: Reject oversized batches to prevent resource exhaustion
     if (batch.operations.length > SECURITY_LIMITS.MAX_BATCH_OPERATIONS) {
       SecurityMonitor.logSecurityEvent({
@@ -1229,10 +1238,9 @@ export class MCPAQLHandler {
     let failed = 0;
 
     for (let i = 0; i < batch.operations.length; i++) {
-      const op = batch.operations[i];
+      const op = normalizedOperations[i] ?? batch.operations[i];
 
-      // Pass raw operation through — parseOperationInput() in executeOperation()
-      // handles all normalization (element_type vs elementType, legacy formats, etc.)
+      // Dispatch the same normalized operation inspected by the batch preflight.
       const result = await this.executeOperation(op, endpoint);
 
       results.push({

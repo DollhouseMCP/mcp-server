@@ -70,8 +70,11 @@ describe('Integration READ registration', () => {
       const tools = names(bundle);
       expect(tools).not.toContain('list_operations');
       expect(tools).not.toContain('describe_operation');
-      for (const name of ['integration_request', 'ingest_openapi_spec', 'regenerate_integration_skill']) {
-        expect(tools.includes(name)).toBe(configured);
+      expect(tools.includes('integration_request')).toBe(configured);
+      expect(tools).not.toContain('ingest_openapi_spec');
+      expect(tools).not.toContain('regenerate_integration_skill');
+      for (const operation of ['create_integration_spec', 'update_integration_spec', 'create_integration_skill', 'update_integration_skill']) {
+        expect(bundle.mcpAqlHandler.operations.getRoute(operation) !== undefined).toBe(configured);
       }
       const discovery = await bundle.mcpAqlHandler.handleRead({ operation: 'introspect', params: { query: 'operations' } });
       expect(JSON.stringify(discovery).includes('list_integration_operations')).toBe(configured);

@@ -884,8 +884,8 @@ export class GatekeeperHandler {
       'the approval request ID from permission_prompt deny response (format: cli-<UUID>)'
     );
     const rawScope = params.scope ?? 'single';
-    if (rawScope !== 'single' && rawScope !== 'tool_session') {
-      throw new Error(`Invalid scope ${JSON.stringify(rawScope)}. Must be "single" or "tool_session".`);
+    if (rawScope !== 'single' && rawScope !== 'tool_session' && rawScope !== 'input_session') {
+      throw new Error(`Invalid scope ${JSON.stringify(rawScope)}. Must be "single", "tool_session" or "input_session".`);
     }
     const scope: CliApprovalScope = rawScope;
 
@@ -894,14 +894,17 @@ export class GatekeeperHandler {
       throw new Error(`No pending approval for "${requestId}". It may have expired or already been approved.`);
     }
 
+    const messages: Record<CliApprovalScope, string> = {
+      tool_session: `Approved for all uses of '${record.toolName}' this session.`,
+      input_session: `Approved this exact input to '${record.toolName}' for this session. Retry the tool call now.`,
+      single: `Approved single use of '${record.toolName}'. Retry the tool call now.`,
+    };
     return {
       approved: true,
       requestId,
       toolName: record.toolName,
       scope,
-      message: scope === 'tool_session'
-        ? `Approved for all uses of '${record.toolName}' this session.`
-        : `Approved single use of '${record.toolName}'. Retry the tool call now.`,
+      message: messages[scope],
     };
   }
 

@@ -5,7 +5,7 @@ import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntim
 import type { ConsoleApprovalScope, ConsoleApprovalStatus, SessionApprovalDto, SessionApprovalListDto } from './ApprovalDtos.js';
 import type { ISessionApprovalEventSink } from './ApprovalEvents.js';
 import type { ConsoleApprovalRecord, SessionApprovalStore } from './ApprovalStore.js';
-import { toCliApprovalScope } from './ApprovalStore.js';
+import { toCliApprovalScope, toConsoleApprovalScope } from './ApprovalStore.js';
 
 const DEFAULT_APPROVAL_TTL_MS = 300_000;
 
@@ -45,11 +45,15 @@ export class ApprovalService {
     if (currentStatus !== 'pending') {
       return { status: 200, body: this.toDto(sessionId, record) };
     }
-    const requestedScope = toCliApprovalScope(parsed.scope);
-    if (decision === 'approved' && record.allowedScopes && !record.allowedScopes.includes(requestedScope)) {
+    const requestedScope = parsed.scope === 'session' && record.allowedScopes?.includes('input_session')
+      ? 'input_session' : toCliApprovalScope(parsed.scope);
+    if (decision === 'approved' && (
+      (requestedScope === 'input_session' && !record.allowedScopes?.includes('input_session')) ||
+      (record.allowedScopes && !record.allowedScopes.includes(requestedScope))
+    )) {
       return validationProblem(
         `scope "${parsed.scope}" is not allowed for this approval; use ` +
-        record.allowedScopes.map(scope => `"${scope === 'single' ? 'once' : 'session'}"`).join(' or ') + '.',
+        (record.allowedScopes ?? ['single', 'tool_session']).map(scope => `"${toConsoleApprovalScope(scope)}"`).join(' or ') + '.',
       );
     }
 
@@ -65,7 +69,7 @@ export class ApprovalService {
         deniedAt: decidedAt,
       };
     await this.options.approvalStore.save(actor.userId, sessionId, approvalId, updated);
-    await this.recordEvent(actor.userId, sessionId, record, decision, parsed.scope, requireConsoleRequestContext(req).correlationId);
+    await this.recordEvent(actor.userId, sessionId, record, decision, toConsoleApprovalScope(requestedScope), requireConsoleRequestContext(req).correlationId);
     return { status: 200, body: this.toDto(sessionId, updated) };
   }
 
@@ -97,7 +101,8 @@ export class ApprovalService {
       irreversible: record.irreversible,
       reason: record.denyReason,
       policy_source: record.policySource ?? null,
-      scope: record.scope === 'tool_session' ? 'session' : 'once',
+      scope: toConsoleApprovalScope(record.scope),
+      ...(record.allowedScopes ? { allowed_scopes: record.allowedScopes.map(toConsoleApprovalScope) } : {}),
       requested_at: record.requestedAt,
       expires_at: this.expiresAt(record).toISOString(),
       decided_at: record.approvedAt ?? record.deniedAt ?? record.expiredAt ?? record.cancelledAt ?? null,
@@ -147,8 +152,8 @@ function parseDecisionBody(body: unknown): ParsedDecisionBody {
   }
   const scope = (body as Record<string, unknown>).scope;
   if (scope === undefined) return { kind: 'valid', scope: 'once' };
-  if (scope !== 'once' && scope !== 'session') {
-    return { kind: 'invalid', detail: 'scope must be "once" or "session".' };
+  if (scope !== 'once' && scope !== 'session' && scope !== 'input_session') {
+    return { kind: 'invalid', detail: 'scope must be "once", "session", or "input_session".' };
   }
   return { kind: 'valid', scope };
 }

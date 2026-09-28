@@ -1,10 +1,11 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import { integrationOpenApiSpecs } from '../../database/schema/index.js';
 import { assertUuid } from './ConsoleStoreValidation.js';
 import {
+  IntegrationSpecWriteError,
   cloneIntegrationOpenApiSpecRecord,
   type IIntegrationOpenApiSpecStore,
   type IntegrationOpenApiSpecRecord,
@@ -58,6 +59,31 @@ export class PostgresIntegrationOpenApiSpecStore implements IIntegrationOpenApiS
       }).returning();
     });
     if (!rows[0]) throw new Error('PostgreSQL did not return integration OpenAPI spec row');
+    return fromSpecRow(rows[0]);
+  }
+
+  async create(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord> {
+    validateIntegrationOpenApiSpecInput(input);
+    const rows = await withSystemContext(this.db, tx => tx.insert(integrationOpenApiSpecs)
+      .values({ ...input, spec: structuredClone(input.spec), sourceUrl: input.sourceUrl ?? null })
+      .onConflictDoNothing({ target: integrationOpenApiSpecs.descriptorId }).returning());
+    if (!rows[0]) throw new IntegrationSpecWriteError('exists');
+    return fromSpecRow(rows[0]);
+  }
+
+  async update(input: IntegrationOpenApiSpecUpsertInput, expectedSpecHash?: string): Promise<IntegrationOpenApiSpecRecord> {
+    validateIntegrationOpenApiSpecInput(input);
+    const rows = await withSystemContext(this.db, tx => tx.update(integrationOpenApiSpecs).set({
+      spec: structuredClone(input.spec), sourceUrl: input.sourceUrl ?? null,
+      specHash: input.specHash, updatedAt: input.updatedAt,
+    }).where(and(
+      eq(integrationOpenApiSpecs.descriptorId, input.descriptorId),
+      expectedSpecHash === undefined ? undefined : eq(integrationOpenApiSpecs.specHash, expectedSpecHash),
+    )).returning());
+    if (!rows[0]) {
+      // Classify the failed write itself; a later lookup can observe a different row.
+      throw new IntegrationSpecWriteError(expectedSpecHash === undefined ? 'missing' : 'conflict');
+    }
     return fromSpecRow(rows[0]);
   }
 }

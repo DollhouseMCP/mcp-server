@@ -1,3 +1,4 @@
+import { isIntegrationManagementOperation } from './IntegrationManagementOperations.js';
 /**
  * Gatekeeper Policy Engine
  *
@@ -293,10 +294,15 @@ export class Gatekeeper {
         },
       });
 
+      const requiredInputs = operation.endsWith('_spec') ? ', spec' : ' and optional skill_name';
+      const managementGuidance = isIntegrationManagementOperation(operation)
+        ? ` Use operation ${operation} with params: provider${requiredInputs}.`
+        : '';
       throw new Error(
         `Security violation: Operation "${operation}" must be called via mcp_aql_${route.endpoint.toLowerCase()} endpoint, ` +
           `not mcp_aql_${calledEndpoint.toLowerCase()}. ` +
-          `This operation is classified as ${route.endpoint} due to its ${this.getPermissionReason(route.endpoint)}.`
+          `This operation is classified as ${route.endpoint} due to its ${this.getPermissionReason(route.endpoint)}.` +
+          managementGuidance
       );
     }
   }
@@ -357,6 +363,17 @@ export class Gatekeeper {
     // If element policy denies, return immediately
     if (policyResult.permissionLevel === PermissionLevel.DENY) {
       const decision = createDecisionFromPolicy(operation, policyResult, elementType);
+      this.logAuditEvent(operation, endpoint, decision, elementType, session);
+      return decision;
+    }
+
+    // Management authorization repeats element policy resolution and owns the
+    // single input-bound approval. Never consume a generic confirmation here.
+    if (isIntegrationManagementOperation(operation)) {
+      const decision: GatekeeperDecision = {
+        allowed: true, permissionLevel: policyResult.permissionLevel,
+        reason: 'Input-bound integration management authorization required',
+      };
       this.logAuditEvent(operation, endpoint, decision, elementType, session);
       return decision;
     }
@@ -509,7 +526,7 @@ export class Gatekeeper {
   async checkCliApprovalForInput(
     toolName: string,
     toolInput: Record<string, unknown>,
-    options: { readonly allowToolSession?: boolean } = {},
+    options: { readonly allowToolSession?: boolean; readonly allowInputSession?: boolean } = {},
   ): Promise<CliApprovalRecord | undefined> {
     const session = this.resolveSession();
     const record = await session.checkCliApprovalForInput(toolName, toolInput, options);
@@ -525,6 +542,11 @@ export class Gatekeeper {
     }
 
     return record;
+  }
+
+  /** Whether the operator permits active elements to override operation policy. */
+  allowsElementPolicyOverrides(): boolean {
+    return this.config.allowElementPolicyOverrides;
   }
 
   /**

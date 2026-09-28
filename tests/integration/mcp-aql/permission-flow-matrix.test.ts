@@ -1,4 +1,7 @@
-import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
+import { AuthorizedIntegrationOperationCatalog } from '../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import type { IntegrationOperationCatalog } from '../../../src/web-console/modules/integrations/IntegrationOperationCatalog.js';
+import { IntegrationRequestPolicyEnforcer } from '../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
+import { BASE_OPERATION_REGISTRY, OperationRegistry } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Permission Flow Full Matrix (Issue #1669)
  *
@@ -277,9 +280,13 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
   // ── Override Audit ──
 
   describe('Operation policy overrides audit', () => {
+    const operations = new OperationRegistry(new AuthorizedIntegrationOperationCatalog({
+      catalog: {} as IntegrationOperationCatalog,
+      policyEnforcer: new IntegrationRequestPolicyEnforcer({ gatekeeper: new Gatekeeper(), getActiveElements: async () => [] }),
+    }));
     it('every override should reference a valid operation in the router', () => {
       for (const op of Object.keys(OPERATION_POLICY_OVERRIDES)) {
-        expect(OPERATION_ROUTES[op]).toBeDefined();
+        expect(operations.getRoute(op)).toBeDefined();
       }
     });
 
@@ -293,13 +300,13 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     it('AUTO_APPROVE overrides on non-READ endpoints should have clear justification', () => {
       for (const [op, policy] of Object.entries(OPERATION_POLICY_OVERRIDES)) {
         if (policy.defaultLevel === PermissionLevel.AUTO_APPROVE) {
-          const route = OPERATION_ROUTES[op];
-          if (route.endpoint !== 'READ') {
+          const route = operations.getRoute(op);
+          if (route?.endpoint !== 'READ') {
             // These are special cases that bypass normal confirmation
             // Each should have a clear rationale about why
             expect(policy.rationale).toBeDefined();
             expect(policy.rationale).toMatch(
-              /auto-approved|frictionless|avoid.*confirmation|avoid.*loop|deadlock|out-of-band/i
+              /auto-approved|frictionless|avoid.*confirmation|avoid.*loop|deadlock|out-of-band|integration management policy owns approval/i
             );
           }
         }

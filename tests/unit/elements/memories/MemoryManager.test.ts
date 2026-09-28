@@ -790,7 +790,7 @@ data:
 
       // Save both memories - the second should detect a duplicate
       await manager.save(memory1);
-      await expect(manager.save(memory2)).resolves.toBeUndefined();
+      await expect(manager.save(memory2)).resolves.toMatchObject({ version: expect.stringMatching(/^[a-f0-9]{64}$/u) });
     });
   });
 

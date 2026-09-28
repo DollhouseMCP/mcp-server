@@ -43,6 +43,11 @@ export interface ElementListHost<T extends IElement> {
   readonly constructor: { name: string };
 }
 
+export interface ElementScanOptions extends StorageScanOptions {
+  /** Skip invalidation so ordinary reads reuse the storage layer scan cooldown. */
+  readonly respectCooldown?: boolean;
+}
+
 export class ElementListOperations<T extends IElement> {
   constructor(
     private readonly host: ElementListHost<T>,
@@ -198,11 +203,11 @@ export class ElementListOperations<T extends IElement> {
   }
 
   /**
-   * Force a fresh disk scan and evict modified/removed cache entries.
+   * Scan and evict modified/removed cache entries; force freshness unless cooldown is requested.
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    */
-  async scanAndEvict(options?: StorageScanOptions): Promise<void> {
-    this.storageLayer.invalidate();
+  async scanAndEvict(options?: ElementScanOptions): Promise<void> {
+    if (!options?.respectCooldown) this.storageLayer.invalidate();
     try {
       const diff = await this.storageLayer.scan(options);
       for (const relPath of [...diff.modified, ...diff.removed]) {

@@ -151,8 +151,9 @@ export interface ElementGatekeeperPolicy {
  * Scope for CLI approval records.
  * - 'single': consumed after one use
  * - 'tool_session': all uses of that tool for the session
+ * - 'input_session': exact-input reuse for the session, explicitly permitted by the request
  */
-export type CliApprovalScope = 'single' | 'tool_session';
+export type CliApprovalScope = 'single' | 'tool_session' | 'input_session';
 
 /**
  * Approval policy for CLI tool operations.

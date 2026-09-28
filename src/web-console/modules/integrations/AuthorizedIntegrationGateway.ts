@@ -1,3 +1,5 @@
+import type { OperationRegistry } from '../../../handlers/mcp-aql/OperationRegistry.js';
+import { INTEGRATION_MANAGEMENT_OPERATIONS, type IntegrationManagementOperation } from '../../../handlers/mcp-aql/IntegrationManagementOperations.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import {
   type IntegrationRequestGateway,
@@ -6,11 +8,14 @@ import {
 } from './IntegrationRequestGateway.js';
 import {
   IntegrationPolicyUnavailableError,
+  type IntegrationManagementPolicyContext,
   type IntegrationRequestPolicyDecision,
   type IntegrationRequestPolicyEnforcer,
 } from './IntegrationRequestPolicy.js';
 import {
   type IntegrationOperationCatalog,
+  type IntegrationSpecWriteInput,
+  type IntegrationSkillWriteInput,
   type IntegrationGeneratedSkillInput,
   type IntegrationOpenApiIngestInput,
   type IntegrationOpenApiIngestResult,
@@ -92,6 +97,10 @@ export class AuthorizedIntegrationGateway {
   }) {}
 
   async request(input: IntegrationRequestInput): Promise<IntegrationAuthorizedOutcome<IntegrationRequestResult>> {
+    if (input.path.trim().toLowerCase().startsWith('_internal:')) {
+      return { ok: false, error: { code: 'invalid_integration_path',
+        message: 'Internal management paths cannot be used for integration requests.', status: 400 } };
+    }
     const decision = await authorizeOrDeny(this.options.policyEnforcer, input);
     if (!decision.authorized) return decision.denial;
     const result = await this.options.gateway.request(input);
@@ -143,6 +152,38 @@ export class AuthorizedIntegrationOperationCatalog {
       result,
       ...(decision.approvalContext ? { approvalContext: decision.approvalContext } : {}),
     };
+  }
+
+  async createSpec(input: IntegrationSpecWriteInput, operations: OperationRegistry) {
+    const decision = await this.authorizeManagement('create_integration_spec', input, operations);
+    if (!decision.authorized) return decision.denial;
+    return { ok: true as const, result: await this.options.catalog.createSpec(input), approvalContext: decision.approvalContext };
+  }
+
+  async updateSpec(input: IntegrationSpecWriteInput, operations: OperationRegistry) {
+    const decision = await this.authorizeManagement('update_integration_spec', input, operations);
+    if (!decision.authorized) return decision.denial;
+    return { ok: true as const, result: await this.options.catalog.updateSpec(input), approvalContext: decision.approvalContext };
+  }
+
+  async createSkill(input: IntegrationSkillWriteInput, operations: OperationRegistry) {
+    const decision = await this.authorizeManagement('create_integration_skill', input, operations);
+    if (!decision.authorized) return decision.denial;
+    return { ok: true as const, result: await this.options.catalog.createSkill(input), approvalContext: decision.approvalContext };
+  }
+
+  async updateSkill(input: IntegrationSkillWriteInput, operations: OperationRegistry) {
+    const decision = await this.authorizeManagement('update_integration_skill', input, operations);
+    if (!decision.authorized) return decision.denial;
+    return { ok: true as const, result: await this.options.catalog.updateSkill(input), approvalContext: decision.approvalContext };
+  }
+
+  private authorizeManagement(operation: IntegrationManagementOperation, input: IntegrationSpecWriteInput | IntegrationSkillWriteInput, operations: OperationRegistry) {
+    const definition = INTEGRATION_MANAGEMENT_OPERATIONS[operation];
+    const legacyPath = `_internal:/integration/${definition.resource}`;
+    return authorizeOrDeny(this.options.policyEnforcer, {
+      provider: input.provider, method: 'PUT', path: `${legacyPath}/${definition.action}`, body: input,
+    }, { operation, operations, legacyPath });
   }
 
   listOperations(input: IntegrationOperationListInput): Promise<IntegrationOperationCatalogResult> {
@@ -197,10 +238,11 @@ type AuthorizeDecision =
 async function authorizeOrDeny(
   policyEnforcer: IntegrationRequestPolicyEnforcer,
   input: Parameters<IntegrationRequestPolicyEnforcer['authorize']>[0],
+  management?: IntegrationManagementPolicyContext,
 ): Promise<AuthorizeDecision> {
   let policy: IntegrationRequestPolicyDecision;
   try {
-    policy = await policyEnforcer.authorize(input);
+    policy = management ? await policyEnforcer.authorize(input, management) : await policyEnforcer.authorize(input);
   } catch (error) {
     auditAuthorization('unavailable');
     if (error instanceof IntegrationPolicyUnavailableError) {

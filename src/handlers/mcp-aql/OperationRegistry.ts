@@ -1,6 +1,7 @@
+import { INTEGRATION_MANAGEMENT_OPERATIONS, isIntegrationManagementOperation } from './IntegrationManagementOperations.js';
 import { OPERATION_ROUTES, getRoute, type CRUDEndpoint, type OperationRoute } from './OperationRouter.js';
 import { ALL_OPERATION_SCHEMAS, getOperationSchema, type OperationDef, type ParamSchema, type ParamType } from './OperationSchema.js';
-import { getIntegrationReadTools } from '../../server/tools/IntegrationTools.js';
+import { getIntegrationReadTools, getIntegrationManagementTools } from '../../server/tools/IntegrationTools.js';
 import type { ToolHandler } from '../types/ToolTypes.js';
 import type { AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 
@@ -18,17 +19,18 @@ export class OperationRegistry {
   constructor(catalog?: AuthorizedIntegrationOperationCatalog) {
     const routes = { ...OPERATION_ROUTES };
     const schemas = { ...ALL_OPERATION_SCHEMAS };
-    for (const { tool, handler } of catalog ? getIntegrationReadTools(catalog) : []) {
-      const name = INTEGRATION_READ_NAMES[tool.name];
+    for (const { tool, handler } of catalog ? [...getIntegrationReadTools(catalog), ...getIntegrationManagementTools(catalog, this)] : []) {
+      const name = INTEGRATION_READ_NAMES[tool.name] ?? tool.name;
+      const endpoint = isIntegrationManagementOperation(name) ? INTEGRATION_MANAGEMENT_OPERATIONS[name].endpoint : 'READ';
       const description = tool.description ?? name;
       const params: ParamSchema = {};
       for (const [key, value] of Object.entries(tool.inputSchema.properties ?? {})) {
         const property = value as { type: ParamType; description?: string };
         params[key] = { ...property, required: tool.inputSchema.required?.includes(key) ?? false };
       }
-      routes[name] = { endpoint: 'READ', handler: `Integration.${name}`, description };
+      routes[name] = { endpoint, handler: `Integration.${name}`, description };
       schemas[name] = {
-        endpoint: 'READ', handler: 'mcpAqlHandler', method: name,
+        endpoint, handler: 'mcpAqlHandler', method: name,
         description, params, category: 'Integrations',
       };
       this.integrationHandlers.set(name, handler);

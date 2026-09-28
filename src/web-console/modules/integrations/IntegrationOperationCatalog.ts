@@ -4,9 +4,10 @@ import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
-import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
+import { IntegrationSpecWriteError, type IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import {
   PortfolioElementAlreadyExistsError,
+  PortfolioElementVersionConflictError,
   canonicalizePortfolioElementName,
   type ConsolePortfolioElementDetailRecord,
   type IPortfolioElementStore,
@@ -52,6 +53,27 @@ export interface IntegrationOpenApiIngestInput {
   readonly spec: Readonly<Record<string, unknown>>;
   readonly sourceUrl?: string | null;
   readonly regenerateSkill?: boolean;
+}
+
+export interface IntegrationSpecWriteInput extends Omit<IntegrationOpenApiIngestInput, 'regenerateSkill'> {
+  readonly expectedSpecHash?: string;
+}
+
+export interface IntegrationSkillWriteInput extends IntegrationGeneratedSkillInput {
+  readonly skillName?: string;
+  readonly expectedContentHash?: string;
+}
+
+export interface IntegrationSpecWriteResult extends IntegrationOpenApiIngestResult {
+  readonly outcome: 'created' | 'updated';
+}
+
+export interface IntegrationSkillWriteResult extends GeneratedIntegrationSkillWriteResult {
+  readonly outcome: 'created' | 'updated' | 'no-op';
+  readonly skill_name: string;
+  readonly content_hash?: string;
+  readonly specHash: string;
+  readonly operationCount: number;
 }
 
 export interface IntegrationOpenApiIngestResult {
@@ -189,6 +211,105 @@ export class IntegrationOperationCatalog {
       operationCount: operations.length,
       ...(generatedSkill ? { generatedSkill } : {}),
     };
+  }
+
+  createSpec(input: IntegrationSpecWriteInput): Promise<IntegrationSpecWriteResult> {
+    return this.writeSpec('create', input);
+  }
+
+  updateSpec(input: IntegrationSpecWriteInput): Promise<IntegrationSpecWriteResult> {
+    return this.writeSpec('update', input);
+  }
+
+  private async writeSpec(action: 'create' | 'update', input: IntegrationSpecWriteInput): Promise<IntegrationSpecWriteResult> {
+    const context = await this.resolveDescriptorContext(input.provider);
+    if (context.descriptor.ownership !== 'byo' || context.descriptor.ownerUserId !== context.userId) {
+      throw new IntegrationOperationCatalogError('integration_spec_forbidden', 'Spec writes require an owned BYO descriptor.', 403);
+    }
+    const granted = await this.resolveGrantedScopes(context.userId, context.descriptor);
+    const { normalizedSpec, specHash } = prepareOpenApiSpecForDescriptor(input.spec, context.descriptor);
+    const operations = deriveOperations(context.descriptor, normalizedSpec, granted);
+    const now = this.now();
+    const write = { descriptorId: context.descriptor.id, spec: normalizedSpec, specHash,
+      sourceUrl: input.sourceUrl ?? null, createdAt: now, updatedAt: now };
+    try {
+      if (action === 'create') await this.options.specStore.create(write);
+      else await this.options.specStore.update(write, input.expectedSpecHash);
+    } catch (error) {
+      if (!(error instanceof IntegrationSpecWriteError)) throw error;
+      const guidance = {
+        exists: 'Use mcp_aql_update / update_integration_spec with provider and spec.',
+        missing: 'Use mcp_aql_create / create_integration_spec with provider and spec.',
+        conflict: 'Re-read mcp_aql_read / list_integration_operations with provider, then use mcp_aql_update / update_integration_spec with provider, spec and the current expected_spec_hash.',
+      };
+      throw new IntegrationOperationCatalogError(`integration_spec_${error.reason}`, guidance[error.reason], 409);
+    }
+    return { provider: context.descriptor.provider, descriptorId: context.descriptor.id,
+      specHash, operationCount: operations.length, outcome: action === 'create' ? 'created' : 'updated' };
+  }
+
+  async createSkill(input: IntegrationSkillWriteInput): Promise<IntegrationSkillWriteResult> {
+    const prepared = await this.prepareSkillWrite(input);
+    const { store, userId, skill, descriptor, operationCount, canonicalName } = prepared;
+    const metadata = generatedSkillMetadata(descriptor, skill, this.now());
+    let contentHash: string | undefined;
+    try {
+      const created = await store.create({ userId, type: 'skills', name: canonicalName, displayName: skill.name,
+        metadata, content: generatedSkillBody(metadata),
+        tags: [GENERATED_SKILL_TAG, `integration:${descriptor.provider}`], now: this.now() });
+      contentHash = created.contentHash;
+    } catch (error) {
+      if (!(error instanceof PortfolioElementAlreadyExistsError)) throw error;
+      const existing = await store.findByName(userId, 'skills', canonicalName);
+      const guidance = existing && isEligibleGeneratedSkill(existing, descriptor)
+        ? 'Use mcp_aql_update / update_integration_skill with provider, skill_name and optional expected_content_hash.'
+        : 'Use mcp_aql_create / create_integration_skill with provider and a different skill_name.';
+      throw new IntegrationOperationCatalogError('integration_skill_exists', guidance, 409);
+    }
+    return strictSkillResult(skill, operationCount, 'created', contentHash);
+  }
+
+  async updateSkill(input: IntegrationSkillWriteInput): Promise<IntegrationSkillWriteResult> {
+    const { store, userId, skill, descriptor, operationCount, canonicalName } = await this.prepareSkillWrite(input);
+    const existing = await store.findByName(userId, 'skills', canonicalName);
+    if (!existing) throw missingSkillError();
+    if (!isEligibleGeneratedSkill(existing, descriptor)) {
+      throw new IntegrationOperationCatalogError('integration_skill_protected',
+        'Skill is edited or unmanaged. Use mcp_aql_create / create_integration_skill with provider and a different skill_name.', 409);
+    }
+    if (input.expectedContentHash !== undefined && existing.contentHash !== input.expectedContentHash) throw skillHashError(existing.contentHash);
+    if (isCurrentGeneratedSkill(existing.metadata, skill.regeneration.specHash, skill.regeneration.scopeFingerprint)) {
+      return strictSkillResult(skill, operationCount, 'no-op', existing.contentHash);
+    }
+    try {
+      const metadata = generatedSkillMetadata(descriptor, skill, this.now());
+      const updated = await store.update({ userId, type: 'skills', canonicalName,
+        expectedVersion: existing.version, expectedContentHash: existing.contentHash,
+        displayName: skill.name, metadata, content: generatedSkillBody(metadata),
+        tags: [GENERATED_SKILL_TAG, `integration:${descriptor.provider}`], now: this.now() });
+      if (!updated) throw missingSkillError();
+      return strictSkillResult(skill, operationCount, 'updated', updated.contentHash);
+    } catch (error) {
+      if (error instanceof PortfolioElementVersionConflictError) {
+        const current = await store.findByName(userId, 'skills', canonicalName);
+        throw skillHashError(current?.contentHash);
+      }
+      throw error;
+    }
+  }
+
+  private async prepareSkillWrite(input: IntegrationSkillWriteInput) {
+    const context = await this.resolveConnectedContext(input.provider);
+    const store = this.options.portfolioStore;
+    if (!store) throw new IntegrationOperationCatalogError('integration_generated_skill_store_unavailable', 'Generated integration skill storage is not configured.', 503);
+    const operations = deriveOperations(context.descriptor, context.spec.spec, context.grantedScopes).filter(operation => operation.available);
+    const generated = generateSkill(context.descriptor, context.spec.specHash, operations, context.grantedScopes);
+    const canonicalName = canonicalizePortfolioElementName(input.skillName ?? generated.name);
+    if (!canonicalName || canonicalName.length > 200 || /[/\\\p{Cc}]/u.test(canonicalName)) {
+      throw new IntegrationOperationCatalogError('integration_skill_invalid_target', 'Use a nonempty skill_name without path separators with mcp_aql_create / create_integration_skill or mcp_aql_update / update_integration_skill and provider.', 400);
+    }
+    return { ...context, store, userId: this.currentUserId(), canonicalName,
+      skill: { ...generated, name: canonicalName }, operationCount: operations.length };
   }
 
   async listOperations(input: IntegrationOperationListInput): Promise<IntegrationOperationCatalogResult> {
@@ -359,16 +480,16 @@ export class IntegrationOperationCatalog {
     const portfolioName = skill.name;
     const canonicalName = canonicalizePortfolioElementName(portfolioName);
     const existing = await this.options.portfolioStore.findByName(userId, 'skills', canonicalName);
-    const metadata = generatedSkillMetadata(descriptor, skill);
+    const metadata = generatedSkillMetadata(descriptor, skill, this.now());
     const tags = [GENERATED_SKILL_TAG, `integration:${descriptor.provider}`];
     if (!existing) {
       await this.options.portfolioStore.create({
         userId,
         type: 'skills',
         name: portfolioName,
-        displayName: null,
+        displayName: skill.name,
         metadata,
-        content: skill.content,
+        content: generatedSkillBody(metadata),
         tags,
         now: this.now(),
       });
@@ -378,7 +499,7 @@ export class IntegrationOperationCatalog {
       return { ...skill, written: false, portfolioAction: 'skipped', portfolioName };
     }
     if (!isManagedGeneratedSkill(existing.metadata) || hasGeneratedSkillUserEdits(existing)) {
-      return this.createGeneratedSkillRevision(userId, descriptor, skill, metadata, tags);
+      return this.createGeneratedSkillRevision(userId, descriptor, skill, tags);
     }
     await this.options.portfolioStore.update({
       userId,
@@ -386,9 +507,9 @@ export class IntegrationOperationCatalog {
       canonicalName,
       expectedVersion: existing.version,
       expectedContentHash: existing.contentHash,
-      displayName: null,
+      displayName: skill.name,
       metadata,
-      content: skill.content,
+      content: generatedSkillBody(metadata),
       tags,
       now: this.now(),
     });
@@ -399,21 +520,21 @@ export class IntegrationOperationCatalog {
     userId: string,
     descriptor: IntegrationDescriptorRecord,
     skill: GeneratedIntegrationSkill,
-    metadata: Readonly<Record<string, unknown>>,
     tags: readonly string[],
   ): Promise<GeneratedIntegrationSkillWriteResult> {
     if (!this.options.portfolioStore) {
       throw new IntegrationOperationCatalogError('integration_generated_skill_store_unavailable', 'Generated integration skill storage is not configured.', 503);
     }
     const revisionName = `${skill.name}-${skill.regeneration.specHash.slice(0, 8)}`;
+    const revisionMetadata = generatedSkillMetadata(descriptor, { ...skill, name: revisionName }, this.now());
     try {
       await this.options.portfolioStore.create({
         userId,
         type: 'skills',
         name: revisionName,
-        displayName: null,
-        metadata,
-        content: skill.content,
+        displayName: revisionName,
+        metadata: revisionMetadata,
+        content: generatedSkillBody(revisionMetadata),
         tags,
         now: this.now(),
       });
@@ -827,10 +948,14 @@ function sha256Json(value: unknown): string {
 function generatedSkillMetadata(
   descriptor: IntegrationDescriptorRecord,
   skill: GeneratedIntegrationSkill,
+  now: Date,
 ): Readonly<Record<string, unknown>> {
-  return {
+  const metadata = {
     name: skill.name,
     description: `Generated helper for ${descriptor.displayName} integration`,
+    type: 'skill', format_version: 'v2', version: '1.0.0', author: 'integration-generator',
+    created: now.toISOString().slice(0, 10),
+    tags: [GENERATED_SKILL_TAG, `integration:${descriptor.provider}`],
     // Skills are v2 dual-field: the behavioral guidance lives in the `instructions`
     // frontmatter field (which element managers preserve across save/reload), not the
     // markdown body (which is rendered from name+description). Carry the generated
@@ -847,6 +972,48 @@ function generatedSkillMetadata(
       generated: true,
     },
   };
+  return { ...metadata, integration: { ...metadata.integration,
+    generatedProjectionHash: generatedSkillProjectionHash({ metadata, content: generatedSkillBody(metadata),
+      tags: metadata.tags, displayName: skill.name }),
+  } };
+}
+
+function generatedSkillBody(metadata: Readonly<Record<string, unknown>>): string {
+  return `# ${String(metadata.name)}\n\n${String(metadata.description)}\n`;
+}
+
+// These fields describe persistence, not authored skill behavior.
+const GENERATED_SKILL_STORAGE_FIELDS = new Set([
+  'unique_id', 'modified', 'type', 'format_version', 'created',
+]);
+
+// Canonical generated-skill defaults: omit only default-equal values, never edits.
+const GENERATED_SKILL_DEFAULTS: Readonly<Record<string, unknown>> = {
+  version: '1.0.0', author: 'integration-generator',
+  languages: [], complexity: 'beginner', domains: [], prerequisites: [],
+  parameters: [], examples: [], proficiency_level: 0,
+};
+
+function isAuthoredSkillField(key: string, value: unknown): boolean {
+  if (GENERATED_SKILL_STORAGE_FIELDS.has(key) || value === undefined) return false;
+  return !Object.hasOwn(GENERATED_SKILL_DEFAULTS, key) ||
+    JSON.stringify(value) !== JSON.stringify(GENERATED_SKILL_DEFAULTS[key]);
+}
+
+/** Fingerprint editable content and metadata independently of serializer defaults. */
+function generatedSkillProjectionHash(existing: Pick<ConsolePortfolioElementDetailRecord, 'metadata' | 'content' | 'tags' | 'displayName'>): string {
+  const { integration, ...fields } = existing.metadata;
+  const metadata = Object.fromEntries(Object.entries(fields).filter(([key, value]) => isAuthoredSkillField(key, value)));
+  const { generatedProjectionHash: _fingerprint, ...provenance } = asRecord(integration);
+  return sha256Json(sortProjection({ metadata: { ...metadata, integration: provenance },
+    content: existing.content, tags: existing.tags, displayName: existing.displayName }));
+}
+
+function sortProjection(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortProjection);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, sortProjection(entry)]));
 }
 
 function isManagedGeneratedSkill(metadata: Readonly<Record<string, unknown>>): boolean {
@@ -856,6 +1023,9 @@ function isManagedGeneratedSkill(metadata: Readonly<Record<string, unknown>>): b
 
 function hasGeneratedSkillUserEdits(existing: ConsolePortfolioElementDetailRecord): boolean {
   const integration = asRecord(existing.metadata.integration);
+  if (typeof integration.generatedProjectionHash === 'string') {
+    return generatedSkillProjectionHash(existing) !== integration.generatedProjectionHash;
+  }
   const generatedContentHash = integration.generatedContentHash;
   if (typeof generatedContentHash === 'string' && generatedContentHash !== '') {
     return sha256Text(existing.content) !== generatedContentHash ||
@@ -927,4 +1097,29 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+function isEligibleGeneratedSkill(existing: ConsolePortfolioElementDetailRecord, descriptor: IntegrationDescriptorRecord): boolean {
+  const integration = asRecord(existing.metadata.integration);
+  // Older fingerprints cannot prove that custom metadata has remained unedited.
+  return typeof integration.generatedProjectionHash === 'string' &&
+    isManagedGeneratedSkill(existing.metadata) && !hasGeneratedSkillUserEdits(existing) &&
+    integration.descriptorId === descriptor.id && integration.provider === descriptor.provider;
+}
+
+function missingSkillError(): IntegrationOperationCatalogError {
+  return new IntegrationOperationCatalogError('integration_skill_missing',
+    'Use mcp_aql_create / create_integration_skill with provider and skill_name to create the missing target.', 404);
+}
+
+function skillHashError(contentHash?: string): IntegrationOperationCatalogError {
+  const currentHash = contentHash ? `current_content_hash=${contentHash}. ` : '';
+  return new IntegrationOperationCatalogError('integration_skill_conflict',
+    `${currentHash}Review the skill using mcp_aql_read / get_element with element_type skills and element_name matching skill_name. Retry mcp_aql_update / update_integration_skill with provider, skill_name and expected_content_hash from this conflict response (current_content_hash) or the last successful write result (content_hash). Repeat with your previous expected_content_hash to refresh a stale token. To preserve edits, use mcp_aql_create / create_integration_skill with a different skill_name.`, 409);
+}
+
+function strictSkillResult(skill: GeneratedIntegrationSkill, operationCount: number, outcome: IntegrationSkillWriteResult['outcome'], contentHash?: string): IntegrationSkillWriteResult {
+  return { ...skill, written: outcome !== 'no-op', portfolioAction: outcome === 'no-op' ? 'skipped' : outcome,
+    portfolioName: skill.name, skill_name: skill.name, specHash: skill.regeneration.specHash, operationCount, outcome,
+    ...(contentHash ? { content_hash: contentHash } : {}) };
 }

@@ -110,6 +110,8 @@ export interface ElementWriteMetadata {
  * Options for {@link IWritableStorageLayer.writeContent}.
  */
 export interface WriteContentOptions {
+  /** Stored-byte version; requires expectedIdentity and never permits insertion. */
+  expectedVersion?: string;
   /**
    * When true, fail with "already exists" if an element with the same
    * (userType, elementType, name) tuple already exists. Used to mirror the
@@ -138,6 +140,26 @@ export interface WriteContentOptions {
 export interface ElementSaveOptions {
   exclusive?: boolean;
   expectedIdentity?: DatabaseStorageIdentity;
+  expected?: ExpectedElementVersion;
+}
+
+export type ElementStorageIdentity =
+  | { readonly kind: 'file'; readonly path: string }
+  | ({ readonly kind: 'database' } & DatabaseStorageIdentity);
+
+export interface ExpectedElementVersion {
+  readonly identity: ElementStorageIdentity;
+  readonly version: string;
+}
+
+/** Content and opaque stored-byte token from one observation, or a committed write. */
+export interface VersionedElement extends ExpectedElementVersion {
+  readonly relativePath: string;
+  readonly raw: string;
+}
+
+export interface ElementDeleteOptions {
+  readonly expected?: ExpectedElementVersion;
 }
 
 /** Authoritative database identity for a persisted element row. */
@@ -192,13 +214,14 @@ export interface IWritableStorageLayer extends IStorageLayer {
   /**
    * Re-resolve an identity and delete the resulting UUID in one transaction.
    * `expectedIdentity` binds the mutation to the same row ID and raw name that
-   * passed the caller's authorization check. Content changes are outside this
-   * identity guard and remain governed by the caller's authorization policy.
+   * passed the caller's authorization check. Supplying expectedVersion also
+   * requires the stored-byte hash to match; a missing or changed row is ESTALE.
    */
   deleteContentByIdentity(
     elementType: string,
     identifier: string,
     expectedIdentity?: DatabaseStorageIdentity,
+    expectedVersion?: string,
   ): Promise<DatabaseStorageIdentity>;
 
   /**
@@ -207,6 +230,7 @@ export interface IWritableStorageLayer extends IStorageLayer {
    * Returns the full raw_content (YAML frontmatter + body).
    */
   readContent(relativePath: string): Promise<string>;
+  readVersioned(relativePath: string): Promise<VersionedElement>;
 }
 
 /**

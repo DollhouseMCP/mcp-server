@@ -1,3 +1,5 @@
+import { storedContentVersion } from '../../../src/storage/ElementVersion.js';
+import type { VersionedElement } from '../../../src/storage/IStorageLayer.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -168,7 +170,9 @@ describe('ManagerBackedPortfolioElementStore', () => {
       store.create(elementInput('ensembles', 'Real Ensemble', '', { description: 'Ensemble description', elements: [] })),
     ]);
 
-    const records = await store.listByUser(USER_ID);
+    const summaries = await store.listByUser(USER_ID);
+    expect(summaries.every(record => record.contentHash === undefined)).toBe(true);
+    const records = await Promise.all(summaries.map(record => store.findByName(USER_ID, record.type, record.canonicalName)));
 
     expect(records).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'personas', name: 'Real Persona', contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
@@ -308,13 +312,22 @@ class FakeManager {
     return new FakeElement(this.type, { name, description }, match[2]);
   }
 
-  async save(element: FakeElement): Promise<void> {
+  async save(element: FakeElement): Promise<VersionedElement> {
     await Promise.resolve();
     const validation = element.validate();
     if (!validation.valid) {
       throw new Error(validation.errors?.[0]?.message ?? 'invalid fake element');
     }
     this.elements.set(canonical(element.metadata.name), element);
+    return this.readVersioned(element.metadata.name);
+  }
+
+  async readVersioned(name: string): Promise<VersionedElement> {
+    const element = await this.findByName(name);
+    if (!element) throw Object.assign(new Error('Missing element'), { code: 'ENOENT' });
+    const raw = this.rawContentFor(element.metadata.name);
+    const relativePath = `${canonical(element.metadata.name)}.md`;
+    return { raw, relativePath, identity: { kind: 'file', path: relativePath }, version: storedContentVersion(raw) };
   }
 
   async delete(path: string): Promise<void> {

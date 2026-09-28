@@ -1,4 +1,10 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRealManagerSuite } from '../../../helpers/di-mocks.js';
+import { ManagerBackedPortfolioElementStore } from '../../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
+import { CONSOLE_PORTFOLIO_ELEMENT_TYPES } from '../../../../src/web-console/stores/IPortfolioElementStore.js';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
   AeadSecretEncryptionService,
@@ -18,7 +24,61 @@ const secretEncryption = new AeadSecretEncryptionService({
   key: Buffer.alloc(32, 7),
 });
 
+const realSuites: { directory: string; managers: { dispose(): void }[] }[] = [];
+afterEach(() => {
+  for (const suite of realSuites.splice(0)) {
+    for (const manager of suite.managers) manager.dispose();
+    fs.rmSync(suite.directory, { recursive: true, force: true });
+  }
+});
+
 describe('ConsolePortfolioSyncExecutor', () => {
+  it.each(CONSOLE_PORTFOLIO_ELEMENT_TYPES)('pushes and pulls %s using versioned manager details', async type => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'versioned-sync-'));
+    const suite = createRealManagerSuite(directory);
+    const managers = { personas: suite.personaManager, skills: suite.skillManager, templates: suite.templateManager,
+      agents: suite.agentManager, memories: suite.memoryManager, ensembles: suite.ensembleManager };
+    realSuites.push({ directory, managers: Object.values(managers) });
+    const portfolioStore = new ManagerBackedPortfolioElementStore({ managers, getCurrentUserId: () => USER_ID });
+    const created = await portfolioStore.create({ userId: USER_ID, type, name: 'sync-example', displayName: null,
+      metadata: { description: 'Sync example', instructions: 'Review carefully', goal: 'Assist carefully', elements: [] },
+      content: 'Reference body', tags: ['sync'], now: NOW });
+    const remote = new Map<string, string>();
+    const fetchMock = jest.fn<typeof fetch>(async (input, init) => {
+      const pathname = new URL(inputUrl(input)).pathname;
+      const key = pathname.split('/contents/')[1];
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(bodyString(init.body)) as { content: string };
+        remote.set(key, body.content);
+        return jsonResponse(200, { content: { path: key } });
+      }
+      if (!key.includes('/')) {
+        return jsonResponse(200, [...remote.keys()].filter(file => file.startsWith(`${key}/`)).map(file => ({
+          type: 'file', name: file.split('/')[1], path: file,
+        })));
+      }
+      const content = remote.get(key);
+      return content ? jsonResponse(200, { content, sha: 'remote-sha' }) : jsonResponse(404, {});
+    });
+    const executor = new ConsolePortfolioSyncExecutor({ portfolioStore, secretEncryption,
+      integrationStore: new InMemoryUserIntegrationStore([integrationRecord()]), fetch: fetchMock, now: () => NOW });
+    await expect(executor.execute(syncJob({ direction: 'push', conflictPolicy: 'prefer_local' })))
+      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pushed: 1 } });
+    managers[type].clearCache();
+    await expect(executor.execute(syncJob({ direction: 'push', conflictPolicy: 'fail' })))
+      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pushed: 0, skipped: 1 } });
+    await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'fail' })))
+      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pulled: 0, skipped: 1 } });
+    await portfolioStore.delete({ userId: USER_ID, type, canonicalName: created.canonicalName,
+      expectedVersion: 1, expectedContentHash: created.contentHash, now: NOW });
+    await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'prefer_remote' })))
+      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pulled: 1 } });
+    const restored = await portfolioStore.findByName(USER_ID, type, created.canonicalName);
+    expect(restored?.tags).toEqual(['sync']);
+    expect(restored?.validationStatus).toBe('valid');
+    expect(restored?.content).toContain('Reference body');
+  });
+
   it('pushes local portfolio elements with decrypted GitHub credentials', async () => {
     const portfolioStore = new InMemoryPortfolioElementStore([{
       userId: USER_ID,

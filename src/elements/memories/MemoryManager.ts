@@ -20,7 +20,7 @@ import { BaseElementManager } from '../base/BaseElementManager.js';
 import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
-import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer, type ElementSaveOptions, type ElementDeleteOptions, type VersionedElement } from '../../storage/IStorageLayer.js';
 import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
@@ -212,12 +212,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.contentHashByPath.clear();
   }
 
-  /**
-   * Resolve memory file path across different storage locations
-   * Searches in this order: system/, adapters/, date folders, root (legacy)
-   * Extracted method to reduce cognitive complexity (PR #7)
-   * @private
-   */
+  /** Indexed paths are authoritative; only index misses use legacy basename lookup. */
+  protected override async resolveUnindexedVersionedPath(name: string): Promise<string> {
+    const filePath = await super.resolveUnindexedVersionedPath(name);
+    return path.relative(this.memoriesDir, await this.resolveMemoryPath(filePath)).split(path.sep).join('/');
+  }
+
+  /** Search system, adapters and date folders before the legacy root fallback. */
   private async resolveMemoryPath(filePath: string): Promise<string> {
     // Check if it's a relative path (no date folder)
     if (!filePath.includes(path.sep) || !/^\d{4}-\d{2}-\d{2}/.test(filePath)) {
@@ -575,7 +576,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When path validation fails or file system errors occur
    * @throws {Error} When atomic write operation fails
    */
-  override async save(element: Memory, filePath?: string): Promise<void> {
+  override async save(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<VersionedElement> {
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -620,7 +621,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // 3) newly generated date/type-based path for first-time saves
     // Keeping #2 ahead of #3 prevents loaded memories from being copied into a new
     // date folder on each save (Issue #699).
-    const resolvedRelativePath = await this.resolveMemorySavePath(element, filePath);
+    const resolvedRelativePath = options?.expected?.identity.kind === 'file'
+      ? options.expected.identity.path
+      : await this.resolveMemorySavePath(element, filePath);
 
     // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
     // Validation: our validateSerializedContent override handles memory-specific checks
@@ -629,7 +632,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // MEMORY_SAVE_FAILED is emitted via the onSaveError hook (base class calls it
     // from its transaction rollback). No try/catch wrapper here — that would
     // double-emit alongside base's element:save:error event.
-    await super.save(element, resolvedRelativePath);
+    return super.save(element, resolvedRelativePath, options);
   }
 
   /**
@@ -1676,13 +1679,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Delete a memory file
    * SECURITY: Validates path and logs deletion
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
     try {
       // Resolve to a relative path that super.delete() can handle.
       // In DB mode, filePath may be a name or UUID — passed through as-is.
       // In file mode, resolve via validateAndResolvePath to find the actual file.
       let resolvedRelative: string;
-      if (isWritableStorageLayer(this.storageLayer)) {
+      if (options?.expected?.identity.kind === 'file') {
+        resolvedRelative = options.expected.identity.path;
+      } else if (isWritableStorageLayer(this.storageLayer)) {
         resolvedRelative = filePath;
       } else {
         try {
@@ -1696,7 +1701,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
       // afterDelete() runs inside that transaction and emits MEMORY_DELETED.
-      await super.delete(resolvedRelative);
+      await super.delete(resolvedRelative, options);
 
       // Memory-specific cleanup: content hash index.
       // Use the same key shape that afterSave used (UUID in DB mode, absolute path in file mode).
@@ -1713,7 +1718,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
     } catch (error) {
       // Preserve idempotent delete semantics: ENOENT is not an error
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      if (!options?.expected && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw error;
     }
   }

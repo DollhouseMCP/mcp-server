@@ -23,7 +23,7 @@ import {
 } from './helpers.js';
 
 type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
-  save(element: T, filePath: string): Promise<void>;
+  save(element: T, filePath: string): Promise<unknown>;
 };
 
 export interface UpgradeElementArgs {
@@ -141,56 +141,12 @@ export async function upgradeElement(
     };
   }
 
-  // Determine new field values
-  let newInstructions: string;
-  let newContent: string;
-
-  if (instructions_override !== undefined || content_override !== undefined) {
-    // Manual override mode
-    newInstructions = instructions_override ?? currentInstructions;
-    newContent = content_override ?? currentContent;
-  } else {
-    // Auto-detection: field values stay the same — the managers already assigned the
-    // body text to the correct field during load (per getV1BodyMapping). The upgrade
-    // is the re-save itself: serializeElement() writes instructions to YAML frontmatter
-    // and content as the markdown body, converting the on-disk format from v1 to v2.
-    newInstructions = currentInstructions;
-    newContent = currentContent;
-  }
+  // Managers already map the v1 body; absent overrides, re-save those fields as v2.
+  const newInstructions = instructions_override ?? currentInstructions;
+  const newContent = content_override ?? currentContent;
 
   if (dry_run) {
-    // Preview mode — show what would change
-    const changes: string[] = [];
-    if (newInstructions !== currentInstructions) {
-      changes.push(`**instructions**: "${truncate(currentInstructions, 80)}" → "${truncate(newInstructions, 80)}"`);
-    }
-    if (newContent !== currentContent) {
-      changes.push(`**content**: "${truncate(currentContent, 80)}" → "${truncate(newContent, 80)}"`);
-    }
-
-    const displayName = (element as any).metadata?.name || name;
-    const label = getElementTypeLabel(normalizedType);
-
-    if (changes.length === 0) {
-      return {
-        content: [{
-          type: 'text',
-          text: `ℹ️ ${label} '${displayName}' — no field changes needed for upgrade.\n\n` +
-            `The file will be re-saved in v2 format (instructions in YAML frontmatter, content as body).\n\n` +
-            `**instructions** (${newInstructions.length} chars): ${truncate(newInstructions, 150)}\n` +
-            `**content** (${newContent.length} chars): ${truncate(newContent, 150)}`
-        }]
-      };
-    }
-
-    return {
-      content: [{
-        type: 'text',
-        text: `🔍 Dry run — ${label} '${displayName}' upgrade preview:\n\n` +
-          changes.join('\n') + '\n\n' +
-          `Run without dry_run to apply these changes.`
-      }]
-    };
+    return upgradePreview(element, name, normalizedType, currentInstructions, currentContent, newInstructions, newContent);
   }
 
   // Apply upgrade
@@ -270,4 +226,39 @@ function getManagerForType(context: ElementCrudContext, type: ElementType): Elem
     default:
       return null;
   }
+}
+
+function upgradePreview(element: any, name: string, normalizedType: ElementType, currentInstructions: string, currentContent: string, newInstructions: string, newContent: string) {
+    // Preview mode — show what would change
+    const changes: string[] = [];
+    if (newInstructions !== currentInstructions) {
+      changes.push(`**instructions**: "${truncate(currentInstructions, 80)}" → "${truncate(newInstructions, 80)}"`);
+    }
+    if (newContent !== currentContent) {
+      changes.push(`**content**: "${truncate(currentContent, 80)}" → "${truncate(newContent, 80)}"`);
+    }
+
+    const displayName = (element as any).metadata?.name || name;
+    const label = getElementTypeLabel(normalizedType);
+
+    if (changes.length === 0) {
+      return {
+        content: [{
+          type: 'text',
+          text: `ℹ️ ${label} '${displayName}' — no field changes needed for upgrade.\n\n` +
+            `The file will be re-saved in v2 format (instructions in YAML frontmatter, content as body).\n\n` +
+            `**instructions** (${newInstructions.length} chars): ${truncate(newInstructions, 150)}\n` +
+            `**content** (${newContent.length} chars): ${truncate(newContent, 150)}`
+        }]
+      };
+    }
+
+    return {
+      content: [{
+        type: 'text',
+        text: `🔍 Dry run — ${label} '${displayName}' upgrade preview:\n\n` +
+          changes.join('\n') + '\n\n' +
+          `Run without dry_run to apply these changes.`
+      }]
+    };
 }
