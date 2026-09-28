@@ -238,7 +238,9 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     } catch (error) {
       if (isUniqueViolation(error)) {
         const label = elementLabel ?? capitalize(values.elementType);
-        throw new Error(`${label} '${values.name}' already exists`);
+        const conflict = new Error(`${label} '${values.name}' already exists`) as NodeJS.ErrnoException;
+        conflict.code = 'EEXIST';
+        throw conflict;
       }
       throw error;
     }

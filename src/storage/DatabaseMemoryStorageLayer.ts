@@ -375,7 +375,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       } catch (err) {
         if (isUniqueViolation(err)) {
           const label = options.elementLabel ?? 'Memory';
-          throw new Error(`${label} '${values.name}' already exists`);
+          const conflict = new Error(`${label} '${values.name}' already exists`) as NodeJS.ErrnoException;
+          conflict.code = 'EEXIST';
+          throw conflict;
         }
         throw err;
       }
