@@ -60,3 +60,8 @@ jobs:
 
       - name: Run onboarding browser qualification
         run: npm run test:onboarding:browser
+
+      - name: Run compiled console auth browser qualification
+        env:
+          E2E_PG_SUPERUSER_URL: postgres://dollhouse@localhost:5432/postgres
+        run: npm run test:console-e2e:auth:compiled
