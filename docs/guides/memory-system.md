@@ -71,7 +71,10 @@ loaded memory immediately. A successful add that removes entries includes a
 warning. Older memory files up to the legacy 2 MB recovery limit can be loaded,
 but files above the current 256 KB save limit must be split before new entries
 can be saved. These limits are measured in JavaScript string length, not encoded
-byte size.
+byte size. A legacy frontmatter markdown body is loaded as untrusted content
+without evicting existing entries, even when the memory is already at its entry
+limit. It keeps its content up to the 2 MB recovery bound on reload; ordinary
+new entries still have the 100 KB entry limit.
 
 ### Auto-Load Fields (v1.9.25+)
 

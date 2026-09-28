@@ -126,6 +126,11 @@ export interface MemoryEntry {
   source?: string;  // e.g., 'user', 'web-scrape', 'agent', 'api'
 }
 
+/** One in-process append attempt; this is not a cross-process persistence revision. */
+export interface MemoryAppendSnapshot {
+  fingerprint: string;
+}
+
 export interface MemorySearchOptions {
   query?: string;
   tags?: string[];
@@ -187,6 +192,8 @@ export class Memory extends BaseElement implements IElement {
   // Set via constructor params when MemoryManager creates Memory instances.
   private readonly _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
   private readonly _retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
+  private readonly metadataServiceRef: MetadataService;
+  private readonly appendCandidate: boolean;
 
   /**
    * @deprecated Issue #1948: Use constructor injection instead.
@@ -264,6 +271,7 @@ export class Memory extends BaseElement implements IElement {
     memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> },
     /** Issue #1948: RetentionPolicyService ref for retention enforcement. */
     retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean },
+    appendCandidate = false,
   ) {
     // SECURITY FIX: Sanitize all inputs during construction
     const sanitizedMetadata = {
@@ -291,6 +299,8 @@ export class Memory extends BaseElement implements IElement {
     // Issue #1948: Store injected service refs
     this._memoryManagerRef = memoryManagerRef;
     this._retentionPolicyRef = retentionPolicyRef;
+    this.metadataServiceRef = metadataService;
+    this.appendCandidate = appendCandidate;
 
     // Initialize memory-specific properties with defaults
     this.storageBackend = metadata.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND;
@@ -358,7 +368,7 @@ export class Memory extends BaseElement implements IElement {
     this.searchIndex = new MemorySearchIndex(indexConfig);
 
     // Log memory creation (once per unique name, bounded to prevent unbounded growth)
-    if (!Memory.createdMemoryNames.has(this.metadata.name)) {
+    if (!this.appendCandidate && !Memory.createdMemoryNames.has(this.metadata.name)) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED,
         severity: 'LOW',
@@ -440,10 +450,10 @@ export class Memory extends BaseElement implements IElement {
     this.enforceCapacitySync();
 
     // Update search index (Issue #984)
-    this.searchIndex.addEntry(entry);
+    if (!this.appendCandidate) this.searchIndex.addEntry(entry);
 
     // Check if we should build/rebuild the index
-    if (!this.searchIndex.isIndexed && this.entriesSize >= 100) {
+    if (!this.appendCandidate && !this.searchIndex.isIndexed && this.entriesSize >= 100) {
       // Build index asynchronously to avoid blocking, with retry logic
       this.buildSearchIndexWithRetry().catch(error => {
         // Final failure after retries - search will fall back to linear scan
@@ -452,7 +462,7 @@ export class Memory extends BaseElement implements IElement {
     }
 
     // Log memory addition
-    SecurityMonitor.logSecurityEvent({
+    if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
       severity: 'LOW',
       source: 'Memory.addEntry',
@@ -497,6 +507,115 @@ export class Memory extends BaseElement implements IElement {
    */
   public getPolicyRemovedCount(): number {
     return this.policyRemovedCount;
+  }
+
+  /** Capture all state that can affect append or YAML preflight validation. */
+  public captureAppendState(): MemoryAppendSnapshot {
+    return {
+      fingerprint: JSON.stringify({
+        id: this.id,
+        version: this.version,
+        entries: [...this.entries],
+        metadata: this.metadata,
+        extensions: this.extensions,
+        instructions: this.instructions,
+        policyRemovedCount: this.policyRemovedCount,
+        maxEntries: this.maxEntries,
+        retentionDays: this.retentionDays,
+        privacyLevel: this.privacyLevel,
+        storageBackend: this.storageBackend,
+        searchable: this.searchable,
+      }),
+    };
+  }
+
+  /**
+   * Preview an append against an independent entry store. A rejected preflight
+   * never evicts or otherwise changes authoritative live entries.
+   */
+  public createAppendCandidate(): Memory {
+    const candidate = new Memory(
+      this.metadata as MemoryMetadata,
+      this.metadataServiceRef,
+      this._memoryManagerRef,
+      this._retentionPolicyRef,
+      true,
+    );
+    candidate.id = this.id;
+    candidate.version = this.version;
+    candidate.metadata = { ...this.metadata };
+    candidate.extensions = { ...this.extensions };
+    candidate.instructions = this.instructions;
+    candidate.entries = new Map(this.entries);
+    candidate.maxEntries = this.maxEntries;
+    candidate.retentionDays = this.retentionDays;
+    candidate.privacyLevel = this.privacyLevel;
+    candidate.storageBackend = this.storageBackend;
+    candidate.searchable = this.searchable;
+    candidate.policyRemovedCount = this.policyRemovedCount;
+    return candidate;
+  }
+
+  /** Commit a validated candidate only if no other live mutation intervened. */
+  public commitAppendCandidate(before: MemoryAppendSnapshot, candidate: Memory, entry: MemoryEntry): boolean {
+    if (this.captureAppendState().fingerprint !== before.fingerprint) return false;
+    const removedCount = candidate.policyRemovedCount - this.policyRemovedCount;
+    this.replaceEntries(candidate.entries);
+    this.policyRemovedCount = candidate.policyRemovedCount;
+    this._isDirty = true;
+    if (removedCount > 0) {
+      SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
+        severity: 'MEDIUM',
+        source: 'Memory.commitAppendCandidate',
+        details: `Removed ${removedCount} entries from memory '${this.metadata.name}' by retention or onFull policy`,
+      });
+    }
+    if (!this.searchIndex.isIndexed && this.entriesSize >= 100) {
+      this.buildSearchIndexWithRetry().catch(error => {
+        logger.error('Failed to build search index after retries, search will use fallback', error);
+      });
+    }
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
+      severity: 'LOW',
+      source: 'Memory.commitAppendCandidate',
+      details: `Added memory entry ${entry.id} with ${entry.tags?.length ?? 0} tags (UNTRUSTED, pending validation)`,
+    });
+    return true;
+  }
+
+  private replaceEntries(next: Map<string, MemoryEntry>): void {
+    for (const id of this.entries.keys()) {
+      if (!next.has(id)) this.searchIndex.removeEntry(id);
+    }
+    for (const [id, entry] of next) {
+      if (!this.entries.has(id)) this.searchIndex.addEntry(entry);
+    }
+    this.entries = new Map(next);
+  }
+
+  /** Preserve legacy frontmatter body as untrusted input without an add-time eviction. */
+  public appendLoadedMarkdownBody(content: string): void {
+    if (content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+      throw new Error('Memory markdown body exceeds the 2MB legacy read limit');
+    }
+    const sanitizedContent = sanitizeMemoryContent(content, MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE);
+    if (!sanitizedContent) throw new Error('Memory markdown body cannot be empty after sanitization');
+    const entry: MemoryEntry = {
+      id: generateMemoryId(),
+      timestamp: new Date(),
+      content: sanitizedContent,
+      tags: [],
+      metadata: this.sanitizeMetadata({ loadedAt: new Date().toISOString() }),
+      privacyLevel: this.privacyLevel,
+      expiresAt: this.calculateExpiryDate(),
+      trustLevel: TRUST_LEVELS.UNTRUSTED,
+      source: 'file',
+    };
+    this.entries.set(entry.id, entry);
+    this.searchIndex.addEntry(entry);
+    this._isDirty = true;
   }
 
   /**
@@ -570,7 +689,7 @@ export class Memory extends BaseElement implements IElement {
       return;
     }
     this._isDirty = true;
-    SecurityMonitor.logSecurityEvent({
+    if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
       severity: 'MEDIUM',
       source,
@@ -884,7 +1003,7 @@ export class Memory extends BaseElement implements IElement {
 
     if (deletedCount > 0) {
       this._isDirty = true;
-      SecurityMonitor.logSecurityEvent({
+      if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
         severity: 'LOW',
         source: 'Memory.enforceRetentionPolicy',
@@ -905,6 +1024,7 @@ export class Memory extends BaseElement implements IElement {
     }
     
     const count = this.entriesSize;
+    for (const id of this.entries.keys()) this.searchIndex.removeEntry(id);
     this.entries.clear();
     this._isDirty = true;
     
@@ -1113,7 +1233,16 @@ export class Memory extends BaseElement implements IElement {
     }
 
     // Sanitize content (basic Unicode normalization + DOMPurify only)
-    entry.content = this.sanitizeWithCache(entry.content, MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+    // Legacy markdown bodies can exceed the ordinary 100KB add limit. They
+    // were already bounded by the 2MB file reader; retain them on subsequent
+    // YAML reloads instead of silently truncating at the ordinary entry limit.
+    if (entry.source === 'file' && entry.content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+      throw new Error('Loaded memory file entry exceeds the 2MB legacy read limit');
+    }
+    const loadedLimit = entry.source === 'file'
+      ? MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE
+      : MEMORY_CONSTANTS.MAX_ENTRY_SIZE;
+    entry.content = this.sanitizeWithCache(entry.content, loadedLimit);
     entry.tags = this.sanitizeTags(entry.tags || []);
     entry.timestamp = new Date(entry.timestamp);
     entry.trustLevel = trustLevel;  // Use trust level from file
