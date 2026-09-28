@@ -20,7 +20,7 @@ import { BaseElementManager } from '../base/BaseElementManager.js';
 import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
-import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer, type ElementSaveOptions } from '../../storage/IStorageLayer.js';
 import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
@@ -603,7 +603,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When path validation fails or file system errors occur
    * @throws {Error} When atomic write operation fails
    */
-  override async save(element: Memory, filePath?: string): Promise<void> {
+  override async save(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -657,7 +657,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // MEMORY_SAVE_FAILED is emitted via the onSaveError hook (base class calls it
     // from its transaction rollback). No try/catch wrapper here — that would
     // double-emit alongside base's element:save:error event.
-    await super.save(element, resolvedRelativePath);
+    await super.save(element, resolvedRelativePath, options);
   }
 
   /**
