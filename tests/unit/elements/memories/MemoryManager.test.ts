@@ -141,6 +141,40 @@ describe('MemoryManager', () => {
       expect(loaded.getOnFullPolicy()).toBe('error');
     });
 
+    it('fails closed for invalid policies at create, import, and legacy load boundaries', async () => {
+      const created = await manager.create({
+        name: 'Invalid Create Policy', description: 'Create-boundary policy test',
+        retentionDays: 30, maxEntries: 1, onFull: 'errorr' as never,
+      });
+      expect(created.metadata.onFull).toBe('error');
+      const kept = await created.addEntry('Kept');
+      await expect(created.addEntry('Blocked')).rejects.toThrow('is full');
+      expect(created.getEntries().has(kept.id)).toBe(true);
+
+      const createdAlias = await manager.create({
+        name: 'Invalid Create Alias', description: 'Create alias policy test',
+        retentionDays: 30, maxEntries: 1, on_full: 'errorr',
+      } as never);
+      expect(createdAlias.metadata.onFull).toBe('error');
+
+      const imported = await manager.importElement(JSON.stringify({
+        metadata: { name: 'Invalid Import Alias', retentionDays: 30, maxEntries: 1, on_full: 123 },
+        entries: [{ id: 'imported-entry', content: 'Imported kept', timestamp: new Date().toISOString() }],
+      }), 'json');
+      expect(imported.metadata.onFull).toBe('error');
+      await expect(imported.addEntry('Blocked')).rejects.toThrow('is full');
+      expect(imported.getEntries().has('imported-entry')).toBe(true);
+
+      const relativePath = '2026-09-28/invalid-legacy-policy.yaml';
+      const fullPath = path.join(memoriesDir, relativePath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, `metadata:\n  name: Invalid Legacy Policy\n  retentionDays: 30\n  maxEntries: 1\n  onFull: null\n  on_full: evict_oldest\nentries:\n  - id: legacy-entry\n    content: Legacy kept\n    timestamp: ${new Date().toISOString()}\n`);
+      const loaded = await manager.load(relativePath);
+      expect(loaded.metadata.onFull).toBe('error');
+      await expect(loaded.addEntry('Blocked')).rejects.toThrow('is full');
+      expect(loaded.getEntries().has('legacy-entry')).toBe(true);
+    });
+
     it('should handle file not found', async () => {
       await expect(manager.load('non-existent.yaml')).rejects.toThrow();
     });

@@ -132,10 +132,16 @@ describe('Memory Element', () => {
         expect(new Memory({ onFull: 'evict_oldest' }, metadataService).getOnFullPolicy()).toBe('evict_oldest');
       });
 
-      it('ignores an invalid onFull value and does not persist it', () => {
-        const memory = new Memory({ onFull: 'delete_everything' as never }, metadataService);
+      it('fails closed and persists error for invalid explicit onFull values', async () => {
+        const memory = new Memory({ name: 'Invalid Policy', retentionDays: 30, maxEntries: 1, onFull: 'delete_everything' as never }, metadataService);
         expect(memory.getOnFullPolicy()).toBe('error');
-        expect(memory.metadata.onFull).toBeUndefined();
+        expect(memory.metadata.onFull).toBe('error');
+        const kept = await memory.addEntry('Kept');
+        await expect(memory.addEntry('Blocked')).rejects.toThrow('is full');
+        expect(memory.getEntries().has(kept.id)).toBe(true);
+
+        const alias = new Memory({ name: 'Alias Policy', retentionDays: 30, on_full: 'errorr' } as never, metadataService);
+        expect(alias.metadata.onFull).toBe('error');
       });
 
       it('persists onFull in metadata only when set explicitly', () => {
@@ -166,6 +172,18 @@ describe('Memory Element', () => {
         expect(full.getOnFullPolicy()).toBe('evict_oldest');
         await expect(full.addEntry('Newest')).resolves.toBeDefined();
         expect(full.getEntries().has(oldest.id)).toBe(false);
+      });
+
+      it('fails closed when deserialization replaces metadata with an invalid policy', async () => {
+        const memory = new Memory({ name: 'Reloaded Invalid', retentionDays: 30, maxEntries: 1 }, metadataService);
+        const kept = await memory.addEntry('Kept');
+        const data = JSON.parse(memory.serialize());
+        data.metadata.onFull = 'errorr';
+        memory.deserialize(JSON.stringify(data));
+
+        expect(memory.metadata.onFull).toBe('error');
+        await expect(memory.addEntry('Blocked')).rejects.toThrow('is full');
+        expect(memory.getEntries().has(kept.id)).toBe(true);
       });
 
       it('keeps tied entries stable across repeated save/load and evicts the oldest insertion', async () => {

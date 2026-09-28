@@ -2484,9 +2484,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       privacyLevel: metadataSource.privacy_level || metadataSource.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
       searchable: metadataSource.searchable !== false,
       maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
-      // Issue #2859: carry an explicit onFull choice through reload. The Memory
-      // constructor validates it and ignores unknown values.
-      onFull: metadataSource.onFull ?? metadataSource.on_full,
+      // A present invalid/null camelCase value must not fall through to an
+      // alias or the retention-based eviction default.
+      onFull: Object.hasOwn(metadataSource, 'onFull')
+        ? metadataSource.onFull
+        : metadataSource.on_full,
       // Issue #2861: carry the sealed-volume index through reload; the Memory
       // constructor drops anything malformed.
       volumes: metadataSource.volumes,
