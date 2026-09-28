@@ -64,6 +64,8 @@ export const elements = pgTable('elements', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [
+  // Enables tenant- and type-bound FKs for durable memory archives.
+  uniqueIndex('idx_elements_id_user_type_unique').on(table.id, table.userId, table.elementType),
   uniqueIndex('idx_elements_user_type_name').on(table.userId, table.elementType, table.name),
   index('idx_elements_user_type').on(table.userId, table.elementType),
   index('idx_elements_name').on(table.userId, table.name),
