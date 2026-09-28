@@ -212,6 +212,28 @@ describe('editElement helper', () => {
       expect(element.getEntries().has(oldest.id)).toBe(false);
     });
 
+    it.each([
+      { onFull: 'evict-oldest' },
+      { metadata: { onFull: 'evict-oldest' } },
+    ])('rejects invalid onFull edit input without saving or changing the policy: %j', async input => {
+      const element = new Memory({ name: TEST_MEMORY_NAME, maxEntries: 1 }, createTestMetadataService());
+      await element.addEntry('Kept');
+      mockContext.memoryManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: TEST_MEMORY_NAME,
+        type: ElementType.MEMORY,
+        input,
+      });
+
+      expect(result.content[0].text).toContain("Invalid onFull policy: use 'error' or 'evict_oldest'.");
+      expect(mockContext.memoryManager.save).not.toHaveBeenCalled();
+      expect(element.metadata.onFull).toBeUndefined();
+      expect(element.getOnFullPolicy()).toBe('error');
+      await expect(element.addEntry('Rejected')).rejects.toThrow('is full');
+      expect(element.getEntries().size).toBe(1);
+    });
+
     // Issue #1591: Memory content is append-only
     it('should reject attempts to edit memory content field', async () => {
       const element = createMockElement(TEST_MEMORY_NAME);

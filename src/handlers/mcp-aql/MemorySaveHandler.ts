@@ -336,10 +336,18 @@ export class MemorySaveHandler {
       id: entryResult.id,
       timestamp: entryResult.timestamp.toISOString(),
       trustLevel: entryResult.trustLevel,
-      ...(removedCount > 0 ? {
-        warning: `${removedCount} existing ${removedCount === 1 ? 'entry was' : 'entries were'} removed from memory ` +
-          `'${memoryName}' by its retention policy (expired entries, or the oldest entries when onFull is 'evict_oldest').`,
-      } : {}),
+      ...this.removalWarningFields(memoryName, removedCount),
+    };
+  }
+
+  private removalWarningFields(memoryName: string, removedCount: number): { warning?: string } {
+    if (removedCount <= 0) {
+      return {};
+    }
+    const noun = removedCount === 1 ? 'entry was' : 'entries were';
+    return {
+      warning: `${removedCount} existing ${noun} removed from memory ` +
+        `'${memoryName}' by its retention policy (expired entries, or the oldest entries when onFull is 'evict_oldest').`,
     };
   }
 
