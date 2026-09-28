@@ -691,6 +691,9 @@ function validateMemoryOnFullEditInput(input: Record<string, unknown>): string |
     : undefined;
   const allowed = MEMORY_CONSTANTS.ON_FULL_POLICIES as readonly string[];
   for (const candidate of [input, nested]) {
+    if (candidate && Object.hasOwn(candidate, 'on_full')) {
+      return "Use 'onFull' when editing a memory policy; choose 'error' or 'evict_oldest'.";
+    }
     if (candidate && Object.hasOwn(candidate, 'onFull') && !allowed.includes(candidate.onFull as string)) {
       return "Invalid onFull policy: use 'error' or 'evict_oldest'.";
     }

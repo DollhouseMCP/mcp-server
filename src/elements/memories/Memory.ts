@@ -332,6 +332,7 @@ export class Memory extends BaseElement implements IElement {
     // FIX #1430: Update metadata to include all MemoryMetadata fields
     // This ensures they are preserved when serializeElement() is called
     // Per Todd's suggestion: store all runtime properties in metadata, not extensions
+    const requestedOnFull = Memory.rawOnFullPolicy(metadata);
     this.metadata = {
       ...this.metadata,
       storageBackend: this.storageBackend,
@@ -341,11 +342,18 @@ export class Memory extends BaseElement implements IElement {
       maxEntries: this.maxEntries,
       // Issue #2859: persist only a valid explicit choice, so the default keeps
       // following retentionDays if that changes later.
-      onFull: Memory.isOnFullPolicy(metadata.onFull) ? metadata.onFull : undefined,
+      // A present but invalid policy must fail safe. Silently dropping a typo
+      // here would make an expiring memory default to evict_oldest instead.
+      onFull: requestedOnFull === undefined
+        ? undefined
+        : Memory.isOnFullPolicy(requestedOnFull) ? requestedOnFull : 'error',
       autoLoad: metadata.autoLoad,
       priority: metadata.priority,
       encryptionEnabled: metadata.encryptionEnabled || false
     } as MemoryMetadata;
+    if (requestedOnFull !== undefined && !Memory.isOnFullPolicy(requestedOnFull)) {
+      logger.warn(`Invalid onFull policy for memory '${this.metadata.name}'; using 'error' to preserve entries`);
+    }
 
     // Set up extensions for backward compatibility
     this.extensions = {
@@ -481,12 +489,20 @@ export class Memory extends BaseElement implements IElement {
     if (Memory.isOnFullPolicy(explicit)) {
       return explicit;
     }
+    // Deserialization can replace metadata after construction. A malformed
+    // explicit value there must also preserve entries rather than evict them.
+    if (explicit !== undefined) return 'error';
     return retentionDays < MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS ? 'evict_oldest' : 'error';
   }
 
   private static isOnFullPolicy(value: unknown): value is MemoryOnFullPolicy {
     return typeof value === 'string'
       && (MEMORY_CONSTANTS.ON_FULL_POLICIES as readonly string[]).includes(value);
+  }
+
+  private static rawOnFullPolicy(metadata: Partial<MemoryMetadata>): unknown {
+    const source = metadata as Record<string, unknown>;
+    return Object.hasOwn(source, 'onFull') ? source.onFull : source.on_full;
   }
 
   private getRetentionDays(): number {
@@ -498,7 +514,7 @@ export class Memory extends BaseElement implements IElement {
    * The effective onFull policy for this memory (Issue #2859).
    */
   public getOnFullPolicy(): MemoryOnFullPolicy {
-    return Memory.resolveOnFullPolicy((this.metadata as MemoryMetadata).onFull, this.getRetentionDays());
+    return Memory.resolveOnFullPolicy(Memory.rawOnFullPolicy(this.metadata as MemoryMetadata), this.getRetentionDays());
   }
 
   /**
@@ -1257,6 +1273,15 @@ export class Memory extends BaseElement implements IElement {
       this.id = parsed.id;
       this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
       this.metadata = parsed.metadata || {};
+      const requestedOnFull = Memory.rawOnFullPolicy(this.metadata as MemoryMetadata);
+      if (requestedOnFull !== undefined) {
+        (this.metadata as MemoryMetadata).onFull = Memory.isOnFullPolicy(requestedOnFull)
+          ? requestedOnFull
+          : 'error';
+        if (!Memory.isOnFullPolicy(requestedOnFull)) {
+          logger.warn(`Invalid onFull policy for memory '${this.metadata.name}'; using 'error' to preserve entries`);
+        }
+      }
       this.extensions = parsed.extensions || {};
 
       // Clear and reload entries

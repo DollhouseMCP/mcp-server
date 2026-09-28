@@ -68,7 +68,9 @@ evicting at capacity. Set `onFull: evict_oldest` explicitly only when losing the
 oldest entries is acceptable. You can change it through `edit_element` using
 `input: { metadata: { onFull: "evict_oldest" } }`; the new policy applies to the
 loaded memory immediately. A successful add that removes entries includes a
-warning. Older memory files up to the legacy 2 MB recovery limit can be loaded,
+warning. If a stored or imported `onFull` value is invalid, the memory uses
+`error` to protect existing entries; `edit_element` rejects invalid values.
+Older memory files up to the legacy 2 MB recovery limit can be loaded,
 but files above the current 256 KB save limit must be split before new entries
 can be saved. These limits are measured in JavaScript string length, not encoded
 byte size. A legacy frontmatter markdown body is loaded as untrusted content
