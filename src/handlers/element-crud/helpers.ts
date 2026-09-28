@@ -301,7 +301,7 @@ export const KNOWN_METADATA_PROPERTIES: Record<ElementType, Set<string>> = {
     // Gatekeeper policy (all element types)
     'gatekeeper',
     // Memory-specific
-    'id', 'entries', 'instructions', 'retentionPolicy', 'retention_policy', 'maxEntries',
+    'id', 'entries', 'instructions', 'retentionPolicy', 'retention_policy', 'maxEntries', 'onFull',
     'max_entries', 'category', 'scope'
   ]),
   [ElementType.ENSEMBLE]: new Set([

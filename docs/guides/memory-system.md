@@ -59,6 +59,19 @@ trustLevel: VALIDATED
 | `trustLevel` | string | No | "UNTRUSTED" | Security trust level |
 | `autoLoad` | boolean | No | false | Load on server startup (v1.9.25+) |
 | `priority` | number | No | 999 | Auto-load priority (lower = first) |
+| `onFull` | `error` or `evict_oldest` | No | See below | What happens when `maxEntries` is reached |
+
+`onFull` defaults to `error` for permanent memories, so adding an entry at
+capacity fails without removing existing entries. Memories with an expiring
+`retentionDays` default to `evict_oldest`; set `onFull: error` to keep them from
+evicting at capacity. Set `onFull: evict_oldest` explicitly only when losing the
+oldest entries is acceptable. You can change it through `edit_element` using
+`input: { metadata: { onFull: "evict_oldest" } }`; the new policy applies to the
+loaded memory immediately. A successful add that removes entries includes a
+warning. Older memory files up to the legacy 2 MB recovery limit can be loaded,
+but files above the current 256 KB save limit must be split before new entries
+can be saved. These limits are measured in JavaScript string length, not encoded
+byte size.
 
 ### Auto-Load Fields (v1.9.25+)
 

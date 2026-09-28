@@ -8,6 +8,7 @@ import type { EnsembleElementInput } from '../../elements/ensembles/types.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
 import type { ElementCrudContext } from './types.js';
 import { generateMemoryId } from '../../elements/memories/utils.js';
+import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
 import { logger } from '../../utils/logger.js';
 import { normalizeVersion } from '../../elements/BaseElement.js';
 import { ValidationService, type ValidationFieldType } from '../../services/validation/ValidationService.js';
@@ -648,6 +649,13 @@ function validateEditInput(
       `Use the 'addEntry' operation to add new entries to this memory.`;
   }
 
+  const onFullError = normalizedType === ElementType.MEMORY
+    ? validateMemoryOnFullEditInput(input)
+    : undefined;
+  if (onFullError) {
+    return onFullError;
+  }
+
   const typeErrors = validateFieldTypes(input, normalizedType);
   if (typeErrors.length > 0) {
     const formattedErrors = typeErrors.map(typeError => `  • ${typeError}`).join('\n');
@@ -672,6 +680,19 @@ function validateEditInput(
     const validationError = validateFieldValue(validator, field, value);
     if (validationError) {
       return `Invalid value for '${field}': ${validationError}`;
+    }
+  }
+  return undefined;
+}
+
+function validateMemoryOnFullEditInput(input: Record<string, unknown>): string | undefined {
+  const nested = input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)
+    ? input.metadata as Record<string, unknown>
+    : undefined;
+  const allowed = MEMORY_CONSTANTS.ON_FULL_POLICIES as readonly string[];
+  for (const candidate of [input, nested]) {
+    if (candidate && Object.hasOwn(candidate, 'onFull') && !allowed.includes(candidate.onFull as string)) {
+      return "Invalid onFull policy: use 'error' or 'evict_oldest'.";
     }
   }
   return undefined;

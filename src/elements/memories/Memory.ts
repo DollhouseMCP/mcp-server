@@ -245,7 +245,6 @@ export class Memory extends BaseElement implements IElement {
   private privacyLevel: PrivacyLevel;
   private searchable: boolean;
   private maxEntries: number;
-  private onFull: MemoryOnFullPolicy;
   // Issue #2859: running count of entries removed by policy (expiry or
   // eviction), so callers can report removals instead of inferring them.
   private policyRemovedCount = 0;
@@ -310,7 +309,6 @@ export class Memory extends BaseElement implements IElement {
       metadata.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
       MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     );
-    this.onFull = Memory.resolveOnFullPolicy(metadata.onFull, this.retentionDays);
 
     // Issue #2859: entries were held in an LRUCache sized to maxEntries (and
     // 25MB), which silently dropped the least recently used entry on overflow,
@@ -488,11 +486,16 @@ export class Memory extends BaseElement implements IElement {
       && (MEMORY_CONSTANTS.ON_FULL_POLICIES as readonly string[]).includes(value);
   }
 
+  private getRetentionDays(): number {
+    const current = (this.metadata as MemoryMetadata).retentionDays;
+    return typeof current === 'number' && Number.isFinite(current) ? current : this.retentionDays;
+  }
+
   /**
    * The effective onFull policy for this memory (Issue #2859).
    */
   public getOnFullPolicy(): MemoryOnFullPolicy {
-    return this.onFull;
+    return Memory.resolveOnFullPolicy((this.metadata as MemoryMetadata).onFull, this.getRetentionDays());
   }
 
   /**
@@ -596,12 +599,12 @@ export class Memory extends BaseElement implements IElement {
    * into eviction. Throws with a message the caller can act on.
    */
   private assertCapacityAvailable(): void {
-    if (this.onFull === 'evict_oldest' || this.entriesSize < this.maxEntries) {
+    if (this.getOnFullPolicy() === 'evict_oldest' || this.entriesSize < this.maxEntries) {
       return;
     }
     throw new Error(
       `Memory '${this.metadata.name}' is full: it holds ${this.entriesSize} entries and its limit is ${this.maxEntries}. ` +
-      `Entries are never deleted automatically from a memory without an expiring retention policy. ` +
+      `Entries are never deleted automatically while onFull is 'error'. ` +
       `Start a new memory for additional entries, or set onFull: 'evict_oldest' on this memory if it is a cache.`
     );
   }
@@ -617,7 +620,7 @@ export class Memory extends BaseElement implements IElement {
       return; // Within capacity
     }
 
-    if (this.onFull !== 'evict_oldest') {
+    if (this.getOnFullPolicy() !== 'evict_oldest') {
       // Never delete entries from a memory that has not opted into eviction.
       // assertCapacityAvailable() stops new entries, so this only happens for a
       // memory loaded with more entries than its limit; it stays read-only.
@@ -967,7 +970,7 @@ export class Memory extends BaseElement implements IElement {
     // If still at or over capacity, remove oldest entries to make room for one
     // more. Issue #2859: only for memories with onFull 'evict_oldest'; a
     // permanent memory keeps every entry and addEntry() rejects instead.
-    if (this.onFull === 'evict_oldest' && this.entriesSize >= this.maxEntries) {
+    if (this.getOnFullPolicy() === 'evict_oldest' && this.entriesSize >= this.maxEntries) {
       const toDelete = Math.max(1, this.entriesSize - this.maxEntries + 1);
       const evicted = this.removeOldestEntries(toDelete);
       this.logEviction(evicted, 'Memory.enforceRetentionPolicy');
@@ -1104,7 +1107,8 @@ export class Memory extends BaseElement implements IElement {
     }
     
     // Additional memory-specific validation
-    if (this.retentionDays < MEMORY_CONSTANTS.MIN_RETENTION_DAYS || this.retentionDays > MEMORY_CONSTANTS.MAX_RETENTION_DAYS) {
+    const retentionDays = this.getRetentionDays();
+    if (retentionDays < MEMORY_CONSTANTS.MIN_RETENTION_DAYS || retentionDays > MEMORY_CONSTANTS.MAX_RETENTION_DAYS) {
       result.errors.push({
         field: 'retentionDays',
         message: `Retention days must be between ${MEMORY_CONSTANTS.MIN_RETENTION_DAYS} and ${MEMORY_CONSTANTS.MAX_RETENTION_DAYS}`,
@@ -1243,7 +1247,10 @@ export class Memory extends BaseElement implements IElement {
       let quarantinedCount = 0;
 
       if (Array.isArray(parsed.entries)) {
-        for (const entry of parsed.entries) {
+        // Serialized entries are newest-first, including insertion ties. Load
+        // them oldest-first so Map order remains the eviction tie-breaker and
+        // a subsequent save keeps the same persisted order.
+        for (const entry of [...parsed.entries].reverse()) {
           const loaded = this.processDeserializedEntry(entry);
           if (!loaded) {
             quarantinedCount++;
@@ -1302,7 +1309,7 @@ export class Memory extends BaseElement implements IElement {
   
   private calculateExpiryDate(): Date {
     const expiry = new Date();
-    expiry.setDate(expiry.getDate() + this.retentionDays);
+    expiry.setDate(expiry.getDate() + this.getRetentionDays());
     return expiry;
   }
   
