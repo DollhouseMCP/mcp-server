@@ -447,8 +447,8 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   }
 
   /** Update both forward and reverse index maps. */
-  protected setIndex(name: string, id: string): void {
-    this.setIndexForState(this.getState(), name, id);
+  protected setIndex(name: string, id: string, userId = this.userId): void {
+    this.setIndexForState(this.getState(userId), name, id);
   }
 
   private setIndexForState(state: DatabaseIndexState, name: string, id: string): void {

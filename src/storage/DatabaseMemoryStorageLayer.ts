@@ -27,10 +27,18 @@ import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js'
 import { logger } from '../utils/logger.js';
 import type { ElementIndexEntry } from './types.js';
 import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
+import type { IMemoryHeadStore, MemoryHeadSnapshot, MemoryHeadToken } from './IMemoryHeadStore.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
 const STORE_NAME = 'DatabaseMemoryStorageLayer';
+const MAX_STORAGE_REVISION = 9223372036854775807n;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+interface ExpectedHeadWrite {
+  readonly token: MemoryHeadToken;
+  readonly revision: bigint;
+}
 
 /**
  * Default row cap for {@link DatabaseMemoryStorageLayer.getEntries} when the
@@ -67,7 +75,7 @@ export interface MemoryEntryQueryOptions {
 
 // ── Implementation ──────────────────────────────────────────────────
 
-export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
+export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer implements IMemoryHeadStore {
   constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver) {
     super(db, getCurrentUserId, 'memories');
   }
@@ -127,6 +135,64 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
 
   // ── IWritableStorageLayer ─────────────────────────────────────────
 
+  async readHeadSnapshot(storageLocator: string): Promise<MemoryHeadSnapshot> {
+    const userId = this.userId;
+    if (!UUID_PATTERN.test(storageLocator)) {
+      const error = new Error('Memory head not found') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    }
+    // Content and token come from one row in one RLS-scoped SELECT. A later
+    // identity probe would allow the content and revision to describe different
+    // writes, which is unsafe for a conditional whole-head save.
+    const rows = await withUserRead(this.db, userId, tx => tx
+      .select({
+        id: elements.id,
+        name: elements.name,
+        content: elements.rawContent,
+        revision: elements.storageRevision,
+      })
+      .from(elements)
+      .where(and(
+        eq(elements.userId, userId),
+        eq(elements.elementType, 'memories'),
+        eq(elements.id, storageLocator),
+      ))
+      .limit(1));
+    const row = rows[0];
+    if (!row) {
+      const error = new Error('Memory head not found') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return {
+      content: row.content,
+      token: {
+        backend: 'database', userId, ownerId: row.id, locator: row.id,
+        name: row.name, revision: row.revision.toString(),
+      },
+    };
+  }
+
+  async writeHeadIfCurrent(
+    expected: MemoryHeadToken,
+    nextName: string,
+    content: string,
+    metadata: ElementWriteMetadata,
+  ): Promise<MemoryHeadToken> {
+    const userId = this.userId;
+    const token = { ...expected };
+    const revision = this.parseExpectedRevision(token, userId);
+    const inputMetadata = { ...metadata, tags: [...metadata.tags] };
+    const result = await this.persistMemoryContent(userId, nextName, content, inputMetadata, undefined, {
+      token, revision,
+    });
+    return {
+      backend: 'database', userId, ownerId: result.id, locator: result.id,
+      name: nextName, revision: result.revision!.toString(),
+    };
+  }
+
   async writeContent(
     _elementType: string,
     name: string,
@@ -134,6 +200,24 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     metadata: ElementWriteMetadata,
     options?: WriteContentOptions,
   ): Promise<string> {
+    const userId = this.userId;
+    const inputMetadata = { ...metadata, tags: [...metadata.tags] };
+    const writeOptions = options && {
+      ...options,
+      expectedIdentity: options.expectedIdentity && { ...options.expectedIdentity },
+    };
+    const result = await this.persistMemoryContent(userId, name, content, inputMetadata, writeOptions);
+    return result.id;
+  }
+
+  private async persistMemoryContent(
+    userId: string,
+    name: string,
+    content: string,
+    metadata: ElementWriteMetadata,
+    options?: WriteContentOptions,
+    expectedHead?: ExpectedHeadWrite,
+  ): Promise<{ id: string; revision?: bigint }> {
     const extracted = MemoryMetadataExtractor.extractMetadata(content, name);
     const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
     const byteSize = Buffer.byteLength(content, 'utf8');
@@ -141,8 +225,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     // Use the caller-provided name as authoritative, falling back to extracted
     const elementName = name || extracted.name || 'unnamed';
 
-    const userId = this.userId;
-    const elementId = await withUserContext(this.db, userId, async (tx) => {
+    const saved = await withUserContext(this.db, userId, async (tx) => {
       // Build the column values once; both insert and upsert-SET reuse the
       // same object so adding a column is a one-line change, not two.
       const values = {
@@ -162,7 +245,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
         autoLoad: extracted.autoLoad ?? null,
         priority: extracted.priority ?? null,
       };
-      const rows = await this.writeElementRow(tx, values, options, userId);
+      const rows = await this.writeElementRow(tx, values, options, userId, expectedHead);
 
       const row = rows.at(0);
       if (!row) {
@@ -176,16 +259,32 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       // Sync entries within the same transaction — no race window
       await this.syncEntriesInTx(tx, row.id, content);
 
-      return row.id;
+      if (!expectedHead) return { id: row.id };
+      // Child-entry triggers can advance the revision after the parent UPDATE.
+      // Read the final value inside this transaction, then return it only once
+      // withUserContext has committed the whole head, tags, and entries.
+      const revisionRows = await tx
+        .select({ revision: elements.storageRevision })
+        .from(elements)
+        .where(and(eq(elements.userId, userId), eq(elements.id, row.id)))
+        .limit(1);
+      const revision = revisionRows[0]?.revision;
+      if (revision === undefined) {
+        throw this.createStaleWriteError(elementName, row.id);
+      }
+      return { id: row.id, revision };
     });
 
-    this.setIndex(elementName, elementId);
+    if (expectedHead && expectedHead.token.name !== elementName) {
+      this.removeIndexById(saved.id, userId);
+    }
+    this.setIndex(elementName, saved.id, userId);
 
     this.logPersistEvent('ELEMENT_EDITED', 'LOW', `${STORE_NAME}.writeContent`,
       `Memory persisted to database: ${elementName}`,
-      { elementId, name: elementName });
+      { elementId: saved.id, name: elementName });
 
-    return elementId;
+    return saved;
   }
 
   private async writeElementRow(
@@ -193,11 +292,31 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     values: typeof elements.$inferInsert,
     options: WriteContentOptions | undefined,
     userId: string,
+    expectedHead?: ExpectedHeadWrite,
   ): Promise<Array<{ id: string }>> {
     // SET derives from the inserted values, without identity columns. The
     // guarded path mirrors DatabaseStorageLayer's exact-row lifecycle update.
     const { userId: _u, elementType: _et, name: _n, ...rest } = values;
     const updateSet = { ...rest, updatedAt: sql`NOW()` };
+
+    if (expectedHead) {
+      const { token, revision } = expectedHead;
+      const rows = await tx
+        .update(elements)
+        .set({ ...updateSet, name: values.name })
+        .where(and(
+          eq(elements.userId, userId),
+          eq(elements.elementType, 'memories'),
+          eq(elements.id, token.ownerId),
+          eq(elements.name, token.name),
+          eq(elements.storageRevision, revision),
+        ))
+        .returning({ id: elements.id });
+      if (rows.length !== 1) {
+        throw this.createStaleWriteError(token.name, token.ownerId);
+      }
+      return rows;
+    }
 
     if (options?.expectedIdentity) {
       const expected = options.expectedIdentity;
@@ -249,6 +368,24 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     ) as NodeJS.ErrnoException;
     error.code = 'ESTALE';
     return error;
+  }
+
+  private parseExpectedRevision(token: MemoryHeadToken, userId: string): bigint {
+    if (
+      token.backend !== 'database' || token.userId !== userId ||
+      typeof token.ownerId !== 'string' || typeof token.locator !== 'string' ||
+      token.locator !== token.ownerId || !UUID_PATTERN.test(token.ownerId) ||
+      typeof token.name !== 'string' || !token.name ||
+      typeof token.revision !== 'string' || token.revision.length > 19 ||
+      !/^[1-9][0-9]*$/u.test(token.revision)
+    ) {
+      throw this.createStaleWriteError(token.name, token.ownerId);
+    }
+    const revision = BigInt(token.revision);
+    if (revision > MAX_STORAGE_REVISION) {
+      throw this.createStaleWriteError(token.name, token.ownerId);
+    }
+    return revision;
   }
 
   async deleteContent(_elementType: string, name: string): Promise<void> {
