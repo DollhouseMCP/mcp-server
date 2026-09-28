@@ -141,6 +141,21 @@ describe('MemoryManager save size limits (#2329)', () => {
       expect((await loaded.search({})).length).toBeGreaterThan(0);
     });
 
+    it('loads a frontmatter memory with a 1–2 MB markdown body for read-only recovery', async () => {
+      const body = 'legacy body '.repeat(110_000);
+      const filename = 'legacy-frontmatter-body-2864.yaml';
+      const file = `---\nmetadata:\n  name: Legacy Frontmatter Body\n---\n\n${body}`;
+      expect(file.length).toBeGreaterThan(1024 * 1024);
+      expect(file.length).toBeLessThan(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE);
+      await fs.writeFile(path.join(memoriesDir, filename), file, 'utf-8');
+
+      const loaded = await manager.load(filename);
+      const bodyEntry = loaded.getAllEntries().find(entry => entry.source === 'file');
+      expect(bodyEntry?.content).toBe(body.trim());
+      expect(bodyEntry?.trustLevel).toBe(TRUST_LEVELS.UNTRUSTED);
+      await expect(manager.assertPersistable(loaded)).rejects.toThrow('maximum serialized size');
+    });
+
     it('keeps a loaded legacy memory read-only: it still cannot be saved', async () => {
       await writeLegacyMemory('Legacy Read Only 2864', 'legacy-read-only-2864.yaml',
         MEMORY_CONSTANTS.MAX_YAML_SIZE + 64 * 1024);

@@ -923,8 +923,8 @@ export class Memory extends BaseElement implements IElement {
     const queryLower = sanitizedQuery?.toLowerCase();
     const searchTags = options.tags && options.tags.length > 0 ? this.sanitizeTags(options.tags) : null;
 
-    // Single iteration through entries with all filters applied
-    for (const entry of this.entries.values()) {
+    // Use the same timestamp/insertion ordering as serialization and display.
+    for (const entry of this.getEntriesNewestFirst()) {
       // Privacy level check
       if (options.privacyLevel && 
           !this.canAccessPrivacyLevel(entry.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL, options.privacyLevel)) {
@@ -956,17 +956,6 @@ export class Memory extends BaseElement implements IElement {
       // Entry passes all filters
       results.push(entry);
     }
-    
-    // Sort by timestamp (newest first) - using string comparison for IDs as secondary sort
-    results.sort((a, b) => {
-      // FIX #1069: Ensure timestamps are Date objects for sorting
-      const bTime = this.ensureDateObject(b.timestamp).getTime();
-      const aTime = this.ensureDateObject(a.timestamp).getTime();
-      const timeDiff = bTime - aTime;
-      if (timeDiff !== 0) return timeDiff;
-      // If timestamps are exactly the same, sort by ID (which contains timestamp)
-      return b.id.localeCompare(a.id);
-    });
     
     // Apply limit
     if (options.limit && options.limit > 0) {
@@ -1028,13 +1017,7 @@ export class Memory extends BaseElement implements IElement {
     }
 
     // Format entries as readable content (newest first)
-    const sortedEntries = Array.from(this.entries.values())
-      .sort((a, b) => {
-        // FIX #1069: Ensure timestamps are Date objects for sorting
-        const aTime = this.ensureDateObject(a.timestamp).getTime();
-        const bTime = this.ensureDateObject(b.timestamp).getTime();
-        return bTime - aTime;
-      });
+    const sortedEntries = this.getEntriesNewestFirst();
 
     return sortedEntries.map(entry => this.formatEntryForDisplay(entry)).join('\n\n');
   }
