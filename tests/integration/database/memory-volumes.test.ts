@@ -77,6 +77,7 @@ describePg('immutable PostgreSQL memory volumes', () => {
     expect(first.sha256).toBe(createHash('sha256').update(content).digest('hex'));
     expect((await store.read(owner, 1))?.rawContent).toBe(content);
     expect((await store.list(owner)).map(row => row.id)).toEqual([first.id]);
+    expect((await store.list(owner))[0]).not.toHaveProperty('rawContent');
 
     // No live-head index exists in this slice; listing must still find the row.
     const second = await store.createExclusive(owner, input);
@@ -153,6 +154,19 @@ describePg('immutable PostgreSQL memory volumes', () => {
     const row = await captured;
     expect(row.userId).toBe(userA);
     expect(row.memoryId).toBe(memoryId);
+  });
+
+  it('preserves valid entry timestamp bounds and rejects a reversed range', async () => {
+    const store = storeFor(userA);
+    const owner = { userId: userA, memoryId };
+    const firstEntryAt = new Date('2026-09-01T00:00:00Z');
+    const lastEntryAt = new Date('2026-09-02T00:00:00Z');
+    await expect(store.createExclusive(owner, { ...input, firstEntryAt: lastEntryAt, lastEntryAt: firstEntryAt }))
+      .rejects.toThrow(/first entry timestamp is after/);
+    expect(await store.list(owner)).toEqual([]);
+    const archive = await store.createExclusive(owner, { ...input, firstEntryAt, lastEntryAt });
+    expect(archive.firstEntryAt).toEqual(firstEntryAt);
+    expect(archive.lastEntryAt).toEqual(lastEntryAt);
   });
 
   it('rejects unsafe numbers and stops at the safe boundary on a collision', async () => {
