@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence, FileMemoryFenceTimeoutError } from '../../../src/storage/FileMemoryFence.js';
-import { FileMemoryOwnerSnapshots, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
+import {
+  FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMemoryToken,
+} from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import {
   FileMemoryTransactionCoordinator,
   type FileMemoryLeaseContext,
+  type FileMemoryOperationScope,
 } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -95,6 +99,127 @@ describe('FileMemoryTransactionCoordinator', () => {
     });
     expect(adopted.ownership).toBe('owned');
     expect((await owner.readHeadSnapshot(LOCATOR)).token).toEqual(adopted);
+  });
+
+  it('proves only a current ACTIVE owner token inside its issuing operation', async () => {
+    const { tenantRoot, coordinator, owner } = await fixture();
+    const legacy = await owner.readHeadSnapshot(LOCATOR);
+    const owned = await owner.adoptUnowned(legacy.token as UnownedFileMemoryToken);
+    const outside = await owner.readHeadSnapshot(LOCATOR);
+    expect(outside.token).toEqual(owned);
+    const before = await fs.readdir(tenantRoot);
+    await coordinator.withTenantTransaction(async context => {
+      await coordinator.perform(context, async scope => {
+        expect(await owner.requireOwnedAtScope(scope, owned)).toEqual(owned);
+        await expect(owner.requireOwnedAtScope(scope, legacy.token as OwnedFileMemoryToken))
+          .rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+        const wrongUser = { ...owned, userId: '22222222-2222-4222-8222-222222222222' };
+        await expect(owner.requireOwnedAtScope(scope, wrongUser)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+        const wrongRoot = { ...owned, tenantRoot: `${tenantRoot}-other` };
+        await expect(owner.requireOwnedAtScope(scope, wrongRoot)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+        const stale = { ...owned, revision: '0' };
+        await expect(owner.requireOwnedAtScope(scope, stale)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      });
+    });
+    expect(await fs.readdir(tenantRoot)).toEqual(before);
+    expect(() => coordinator.requireActiveOperationScope(outside.token as FileMemoryOperationScope))
+      .toThrow('Active file-memory operation authority is required');
+    expect(() => coordinator.requireActiveOperationScope({
+      tenantRoot, userId: USER_ID,
+    } as FileMemoryOperationScope)).toThrow('Active file-memory operation authority is required');
+  });
+
+  it('rejects RESERVED ownership and a mismatched registry before owner proof', async () => {
+    const { tenantRoot, coordinator, owner } = await fixture();
+    const legacy = await owner.readHeadSnapshot(LOCATOR);
+    const owned = await owner.adoptUnowned(legacy.token as UnownedFileMemoryToken);
+    const hash = createHash('sha256').update(path.basename(LOCATOR)).digest('hex');
+    const sidecar = path.join(tenantRoot, 'Notes', `.${hash}.memory-owner.json`);
+    const record = JSON.parse(await fs.readFile(sidecar, 'utf8')) as { state: string };
+    await fs.writeFile(sidecar, JSON.stringify({ ...record, state: 'RESERVED' }), { mode: 0o600 });
+    await expect(coordinator.withTenantTransaction(context =>
+      coordinator.perform(context, scope => owner.requireOwnedAtScope(scope, owned))))
+      .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    await fs.writeFile(sidecar, JSON.stringify(record), { mode: 0o600 });
+    const registry = path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`);
+    await fs.writeFile(registry, JSON.stringify({ ...record, revision: '0' }), { mode: 0o600 });
+    await expect(coordinator.withTenantTransaction(context =>
+      coordinator.perform(context, scope => owner.requireOwnedAtScope(scope, owned))))
+      .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+  });
+
+  it('expires each operation authority on settlement even while its lease stays open', async () => {
+    const { coordinator } = await fixture();
+    await coordinator.withTenantTransaction(async context => {
+      let expired!: FileMemoryOperationScope;
+      await coordinator.perform(context, scope => {
+        expired = scope;
+        expect(coordinator.requireActiveOperationScope(scope).userId).toBe(USER_ID);
+      });
+      expect(() => coordinator.requireActiveOperationScope(expired))
+        .toThrow('Active file-memory operation authority is required');
+      await coordinator.perform(context, scope => {
+        expect(() => coordinator.requireActiveOperationScope(expired))
+          .toThrow('Active file-memory operation authority is required');
+        expect(coordinator.requireActiveOperationScope(scope).userId).toBe(USER_ID);
+      });
+    });
+  });
+
+  it('rejects an escaped async child after its issuing operation settles', async () => {
+    const { coordinator } = await fixture();
+    const releaseChild = deferred();
+    const observed = deferred<unknown>();
+    await coordinator.withTenantTransaction(async context => {
+      await coordinator.perform(context, scope => {
+        // This detached task inherits AsyncLocalStorage, but not authority
+        // after the audited operation's returned promise has settled.
+        void (async () => {
+          await releaseChild.promise;
+          try {
+            coordinator.requireActiveOperationScope(scope);
+            observed.resolve('unexpected authority');
+          } catch (error) { observed.resolve(error); }
+        })();
+      });
+      releaseChild.resolve();
+      await expect(observed.promise).resolves.toMatchObject({ code: 'EINVALIDOPERATION' });
+    });
+  });
+
+  it('allows accepted tracked work to prove authority while the outer lease drains', async () => {
+    const { coordinator } = await fixture();
+    const result = await coordinator.withTenantTransaction(context => {
+      void coordinator.perform(context, scope => {
+        expect(coordinator.requireActiveOperationScope(scope).userId).toBe(USER_ID);
+      });
+      return 'callback finished';
+    });
+    expect(result).toBe('callback finished');
+  });
+
+  it('rejects authority borrowed from another active operation or coordinator', async () => {
+    const { coordinator: first, owner } = await fixture();
+    const { coordinator: second } = await fixture();
+    const legacy = await owner.readHeadSnapshot(LOCATOR);
+    const owned = await owner.adoptUnowned(legacy.token as UnownedFileMemoryToken);
+    const ready = deferred();
+    const release = deferred();
+    let firstScope!: FileMemoryOperationScope;
+    const firstTransaction = first.withTenantTransaction(context =>
+      first.perform(context, async scope => {
+        firstScope = scope;
+        ready.resolve();
+        await release.promise;
+      }));
+    await ready.promise;
+    await second.withTenantTransaction(context => second.perform(context, async scope => {
+      expect(() => first.requireActiveOperationScope(firstScope))
+        .toThrow('Active file-memory operation authority is required');
+      await expect(owner.requireOwnedAtScope(scope, owned)).rejects.toMatchObject({ code: 'EINVALIDOPERATION' });
+    }));
+    release.resolve();
+    await firstTransaction;
   });
 
   it('drains an unawaited public store method before releasing the tenant fence', async () => {
