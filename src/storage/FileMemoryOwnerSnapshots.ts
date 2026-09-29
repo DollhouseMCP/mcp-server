@@ -410,15 +410,16 @@ export class FileMemoryOwnerSnapshots {
     }
     const names = evidence.artifactNames.filter(name => name !== path.basename(resolved.journalPath));
     const phase = classifyFileMemoryWrite({ ...evidence, unexpectedArtifacts: false }).kind;
-    const target = phase === 'published-before-registry' ? registryPath :
-      phase === 'registry-advanced' ? resolved.sidecarPath : undefined;
+    let target: string | undefined;
+    if (phase === 'published-before-registry') target = registryPath;
+    else if (phase === 'registry-advanced') target = resolved.sidecarPath;
     const expectedPath = target ? `${target}.update-${journal.operationId}.tmp` : undefined;
     if (!names.length) return undefined;
     if (names.length !== 1 || !expectedPath || names[0] !== path.basename(expectedPath)) {
       throw headError('EOWNERRECOVERY', 'Memory repair contains unexpected stages');
     }
     const stage = await this.readRecord(expectedPath);
-    if (!stage || stage.raw !== serializedRecord(this.publishedRecord(journal))) {
+    if (stage?.raw !== serializedRecord(this.publishedRecord(journal))) {
       throw headError('EOWNERRECOVERY', 'Memory repair stage is incomplete or mismatched');
     }
     return { path: expectedPath, raw: stage.raw, identity: stage.identity };
@@ -529,6 +530,10 @@ export class FileMemoryOwnerSnapshots {
     return this.runPublishedMaintenance(request, true);
   }
 
+  /**
+   * One tracked maintenance operation under the caller's fresh, live lease.
+   * Callers retain known-committed results if their outer transaction later fails.
+   */
   forwardPublishedOwnedUpdateInTransaction(
     context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest,
   ): Promise<FinalizeOwnedUpdateResult> {
@@ -556,28 +561,30 @@ export class FileMemoryOwnerSnapshots {
 
   private async forwardAtScope(
     operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+    expectedEvidence?: DiagnosticEvidenceRead, metadataSteps = 0,
   ): Promise<FinalizeOwnedUpdateResult> {
     const coordinator = this.requiredCoordinator();
     const scope = coordinator.requireActiveOperationScope(operation);
-    let advancedEvidence: DiagnosticEvidenceRead | undefined;
-    // At most two metadata publications precede the existing exact-unlink finalizer.
-    for (let step = 0; step < 3; step++) {
-      const first = await this.readDiagnosticEvidence(scope, request.locator, true);
-      coordinator.requireActiveOperationScope(operation);
-      if (advancedEvidence && advancedEvidence.signature !== first.signature) {
-        throw headError('EOWNERRECOVERY', 'Memory evidence changed between repair steps');
-      }
-      const phase = classifyFileMemoryWrite(first.evidence).kind;
-      if (phase === 'clean-consistent' || phase === 'metadata-advanced-before-unlink') {
-        return this.finalizeAtScope(operation, request, first);
-      }
-      const journal = this.requireForwardJournal(first, request, scope, phase);
-      if (phase !== 'published-before-registry' && phase !== 'registry-advanced') {
-        throw headError('EOWNERRECOVERY', 'Memory write is not an ordered PUBLISHED repair');
-      }
-      advancedEvidence = await this.advancePublishedMetadata(operation, request, first, journal, phase);
+    const first = await this.readDiagnosticEvidence(scope, request.locator, true);
+    coordinator.requireActiveOperationScope(operation);
+    if (expectedEvidence && expectedEvidence.signature !== first.signature) {
+      throw headError('EOWNERRECOVERY', 'Memory evidence changed between repair steps');
     }
-    throw headError('EOWNERRECOVERY', 'Memory repair did not reach metadata agreement');
+    const phase = classifyFileMemoryWrite(first.evidence).kind;
+    if (phase === 'clean-consistent' || phase === 'metadata-advanced-before-unlink') {
+      return this.finalizeAtScope(operation, request, first);
+    }
+    const journal = this.requireForwardJournal(first, request, scope, phase);
+    if (phase !== 'published-before-registry' && phase !== 'registry-advanced') {
+      throw headError('EOWNERRECOVERY', 'Memory write is not an ordered PUBLISHED repair');
+    }
+    if (metadataSteps >= 2) {
+      throw headError('EOWNERRECOVERY', 'Memory repair did not reach metadata agreement');
+    }
+    const advanced = await this.advancePublishedMetadata(operation, request, first, journal, phase);
+    // At most registry then sidecar advance; recurse privately in the same
+    // operation so each publication completes before the next evidence read.
+    return this.forwardAtScope(operation, request, advanced, metadataSteps + 1);
   }
 
   private requireForwardJournal(
@@ -585,7 +592,7 @@ export class FileMemoryOwnerSnapshots {
     scope: FileMemoryTransactionScope, phase: string,
   ): WriteJournal {
     const journal = first.evidence.journal as WriteJournal | undefined;
-    if (!journal || journal.state !== 'PUBLISHED_WRITE' || journal.ownerId !== request.ownerId ||
+    if (journal?.state !== 'PUBLISHED_WRITE' || journal.ownerId !== request.ownerId ||
       journal.operationId !== request.operationId || journal.userId !== scope.userId ||
       journal.locator !== request.locator || first.resolved.locator !== request.locator ||
       !first.journalRaw || !first.journalIdentity ||
