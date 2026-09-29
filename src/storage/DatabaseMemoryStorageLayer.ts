@@ -18,7 +18,7 @@ import { withUserContext, withUserRead } from '../database/rls.js';
 import { elements } from '../database/schema/elements.js';
 import { memoryEntries } from '../database/schema/memories.js';
 import type { UserIdResolver } from '../database/UserContext.js';
-import { isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
+import { getErrorCode, isSerializationFailure, isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
@@ -34,6 +34,12 @@ import type { IMemoryHeadStore, MemoryHeadSnapshot, MemoryHeadToken } from './IM
 const STORE_NAME = 'DatabaseMemoryStorageLayer';
 const MAX_STORAGE_REVISION = 9223372036854775807n;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const ENTRY_FIELD_LIMITS = [
+  ['privacyLevel', 32], ['trustLevel', 32], ['source', 64],
+] as const;
+// Known candidate-value failures only. Do not blanket-map class 22: revision
+// overflow, malformed owner IDs, and other infrastructure faults stay distinct.
+const CANDIDATE_VALUE_SQLSTATES = new Set(['22001', '22007', '22008', '22021', '22P05']);
 
 interface ExpectedHeadWrite {
   readonly token: MemoryHeadToken;
@@ -198,13 +204,18 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
         token, revision,
       });
     } catch (cause) {
-      if (!isSerializationFailure(cause)) throw cause;
-      // PostgreSQL rolled back the whole transaction. The caller must retain
-      // its unsaved head and reread before deciding whether to retry.
-      const error = new Error('Memory head save conflicted; keep the pending changes and reload before retrying',
-        { cause }) as NodeJS.ErrnoException;
-      error.code = 'EHEADCONFLICT';
-      throw error;
+      if (isSerializationFailure(cause)) {
+        // PostgreSQL rolled back the whole transaction. The caller must
+        // retain its unsaved head and reread before deciding to retry.
+        const error = new Error('Memory head save conflicted; keep the pending changes and reload before retrying',
+          { cause }) as NodeJS.ErrnoException;
+        error.code = 'EHEADCONFLICT';
+        throw error;
+      }
+      if (CANDIDATE_VALUE_SQLSTATES.has(getErrorCode(cause) ?? '')) {
+        throw this.createInvalidHeadError('Memory head has an unsupported field value; check length, date, and text encoding', cause);
+      }
+      throw cause;
     }
     return {
       backend: 'database', userId, ownerId: result.id, locator: result.id,
@@ -596,12 +607,15 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       if (strict) throw this.createInvalidHeadError('Memory head entries must be an array');
       return false;
     }
-    const qualifiable = entries.every(DatabaseMemoryStorageLayer.isQualifiableEntry);
+    const firstEntryProblem = entries
+      .map((entry, index) => DatabaseMemoryStorageLayer.entryQualificationProblem(entry, index))
+      .find(problem => problem !== undefined);
+    const qualifiable = firstEntryProblem === undefined;
     // Legacy writes may still project id-less entries using synthetic child
     // IDs, but such YAML cannot round-trip through a strict conditional save.
 
     const rows = this.buildSyncEntryRows(entries, memoryElementId, userId);
-    if (strict) this.assertStrictSyncEntries(qualifiable, entries.length, rows.map(row => row.entryId));
+    if (strict) this.assertStrictSyncEntries(firstEntryProblem, entries.length, rows.map(row => row.entryId));
 
     // Defense-in-depth: include userId alongside the RLS context. Every other
     // DELETE in this module does the same — syncEntriesInTx is the last one
@@ -647,13 +661,32 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     }
   }
 
-  private static isQualifiableEntry(entry: unknown): boolean {
-    if (!entry || typeof entry !== 'object') return false;
+  private static entryQualificationProblem(entry: unknown, index: number): string | undefined {
+    if (!entry || typeof entry !== 'object') return `Entry ${index + 1} must be an object`;
     const value = entry as Record<string, unknown>;
-    return typeof value.id === 'string' && !!value.id &&
-      typeof value.content === 'string' && !!value.content &&
-      DatabaseMemoryStorageLayer.isValidOptionalEntryDate(value.timestamp) &&
-      DatabaseMemoryStorageLayer.isValidOptionalEntryDate(value.expiresAt);
+    if (typeof value.id !== 'string' || !value.id) return `Entry ${index + 1} needs a nonempty ID`;
+    if (Array.from(value.id).length > 255) return `Entry ${index + 1} ID exceeds 255 characters`;
+    if (typeof value.content !== 'string' || !value.content) return `Entry ${index + 1} needs content`;
+    if (!DatabaseMemoryStorageLayer.isValidOptionalEntryDate(value.timestamp)) {
+      return `Entry ${index + 1} has an invalid timestamp`;
+    }
+    if (!DatabaseMemoryStorageLayer.isValidOptionalEntryDate(value.expiresAt)) {
+      return `Entry ${index + 1} has an invalid expiresAt`;
+    }
+    for (const [field, limit] of ENTRY_FIELD_LIMITS) {
+      const problem = DatabaseMemoryStorageLayer.optionalBoundedFieldProblem(value[field], field, limit, index);
+      if (problem) return problem;
+    }
+    return undefined;
+  }
+
+  private static optionalBoundedFieldProblem(
+    value: unknown, field: string, limit: number, index: number,
+  ): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'string') return `Entry ${index + 1} ${field} must be a string`;
+    if (Array.from(value).length > limit) return `Entry ${index + 1} ${field} exceeds ${limit} characters`;
+    return undefined;
   }
 
   private static isValidOptionalEntryDate(value: unknown): boolean {
@@ -663,9 +696,9 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     return false;
   }
 
-  private assertStrictSyncEntries(qualifiable: boolean, entryCount: number, entryIds: readonly string[]): void {
-    if (!qualifiable || entryIds.length !== entryCount) {
-      throw this.createInvalidHeadError('Memory head contains an invalid entry');
+  private assertStrictSyncEntries(problem: string | undefined, entryCount: number, entryIds: readonly string[]): void {
+    if (problem || entryIds.length !== entryCount) {
+      throw this.createInvalidHeadError(problem ?? 'Memory head contains an invalid entry');
     }
     if (new Set(entryIds).size !== entryIds.length) {
       throw this.createInvalidHeadError('Memory head contains duplicate entry IDs');
