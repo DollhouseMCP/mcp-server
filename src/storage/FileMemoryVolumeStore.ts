@@ -381,7 +381,8 @@ export class FileMemoryVolumeStore {
       await notify('verified-after-marker');
       return receipt;
     } catch (cause) {
-      if (knownCommitted && receipt) throw committed(cause, [receipt]);
+      // Receipt construction precedes marker invocation; knownCommitted implies receipt exists.
+      if (knownCommitted) throw committed(cause, [receipt!]);
       if (!residualPath) throw cause;
       throw Object.assign(error(markerAttempted ? 'EARCHIVECOMMITUNKNOWN' : 'EARCHIVEUNCOMMITTED',
         markerAttempted ? 'Archive marker outcome is unknown' : 'Archive remains uncommitted', cause), {
