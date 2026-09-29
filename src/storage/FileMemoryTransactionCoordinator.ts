@@ -191,8 +191,8 @@ export class FileMemoryTransactionCoordinator {
   /** @internal Only an audited store already inside this tracked operation may use this authority. */
   requireActiveOperationScope(scope: FileMemoryOperationScope): FileMemoryTransactionScope {
     const operation = operations.get(scope);
-    if (!operation || operation.coordinator !== this ||
-      operationFlow.getStore() !== scope || !operation.active || operation.lease.phase === 'closed') {
+    if (!operation?.active || operation.coordinator !== this ||
+      operationFlow.getStore() !== scope || operation.lease.phase === 'closed') {
       throw leaseError('EINVALIDOPERATION', 'Active file-memory operation authority is required');
     }
     // Accepted FIFO work may run while the outer callback has returned and

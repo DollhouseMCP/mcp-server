@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence, FileMemoryFenceTimeoutError } from '../../../src/storage/FileMemoryFence.js';
 import {
-  FileMemoryOwnerSnapshots, type UnownedFileMemoryToken,
+  FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMemoryToken,
 } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import {
   FileMemoryTransactionCoordinator,
@@ -111,6 +111,8 @@ describe('FileMemoryTransactionCoordinator', () => {
     await coordinator.withTenantTransaction(async context => {
       await coordinator.perform(context, async scope => {
         expect(await owner.requireOwnedAtScope(scope, owned)).toEqual(owned);
+        await expect(owner.requireOwnedAtScope(scope, legacy.token as OwnedFileMemoryToken))
+          .rejects.toMatchObject({ code: 'EHEADCONFLICT' });
         const wrongUser = { ...owned, userId: '22222222-2222-4222-8222-222222222222' };
         await expect(owner.requireOwnedAtScope(scope, wrongUser)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
         const wrongRoot = { ...owned, tenantRoot: `${tenantRoot}-other` };
