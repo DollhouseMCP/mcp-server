@@ -299,6 +299,31 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     expect((await fs.stat(owners)).mode & 0o777).toBe(0o755);
   });
 
+  it('finds registry replacement artifacts for accepted uppercase owner UUIDs', async () => {
+    const { tenantRoot, headPath, locator, makeStore } = await fixture();
+    const store = makeStore();
+    const snapshot = await store.readHeadSnapshot(locator);
+    const owned = await store.adoptUnowned(snapshot.token as UnownedFileMemoryToken);
+    const upperOwner = owned.ownerId.toUpperCase();
+    const sidecar = sidecarPath(headPath);
+    const owners = path.join(tenantRoot, '.memory-owners', 'owners');
+    const lowerRegistry = path.join(owners, `${owned.ownerId}.json`);
+    const upperRegistry = path.join(owners, `${upperOwner}.json`);
+    const sidecarRecord = JSON.parse(await fs.readFile(sidecar, 'utf8')) as Record<string, unknown>;
+    const registryRecord = JSON.parse(await fs.readFile(lowerRegistry, 'utf8')) as Record<string, unknown>;
+    await fs.writeFile(sidecar, JSON.stringify({ ...sidecarRecord, ownerId: upperOwner }), { mode: 0o600 });
+    await fs.rename(lowerRegistry, upperRegistry);
+    await fs.writeFile(upperRegistry, JSON.stringify({ ...registryRecord, ownerId: upperOwner }), { mode: 0o600 });
+    expect((await store.readHeadSnapshot(locator)).token).toMatchObject({ ownerId: upperOwner });
+
+    const temp = path.join(owners, `${upperOwner}.json.22222222-2222-4222-8222-222222222222.tmp`);
+    await fs.writeFile(temp, 'partial', { mode: 0o600 });
+    await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    expect(await store.inspectInterruptedOwnedHead(locator)).toMatchObject({
+      kind: 'unknown-manual-review', artifactCount: 1, evidenceComplete: true,
+    });
+  });
+
   it('checks metadata size before publishing even the RESERVED sidecar', async () => {
     const { tenantRoot, headPath, locator } = await fixture();
     const longUserId = 'u'.repeat(5_000);
