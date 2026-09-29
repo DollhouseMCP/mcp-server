@@ -268,17 +268,17 @@ export class FileMemoryVolumeStore {
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
   }
-  private async verify(volumePath: string, owner: OwnedFileMemoryToken, volume: number, expected?: FileMemoryVolumeReceipt, expectedBytes?: Buffer, expectedMetadata?: Buffer, markerProof: { required: boolean; identity?: ArchiveDirectoryIdentity } = { required: !expected }): Promise<{ metadata: Metadata; payloadIdentity: ArchiveFileIdentity; metadataIdentity: ArchiveFileIdentity; generationIdentity: ArchiveDirectoryIdentity; volumeIdentity: ArchiveDirectoryIdentity }> {
+  private async verify(volumePath: string, owner: OwnedFileMemoryToken, volume: number, expected?: FileMemoryVolumeReceipt, expectedBytes?: Buffer, expectedMetadata?: Buffer, markerProof?: { required: boolean; identity?: ArchiveDirectoryIdentity }): Promise<{ metadata: Metadata; payloadIdentity: ArchiveFileIdentity; metadataIdentity: ArchiveFileIdentity; generationIdentity: ArchiveDirectoryIdentity; volumeIdentity: ArchiveDirectoryIdentity }> {
     const volumeIdentity = await directory(volumePath, expected?.volumeIdentity);
     const names = await namesAt(volumePath, 2);
     const generationNames = names.filter(name => GENERATION.test(name));
     if (generationNames.length !== 1 || names.some(name => name !== generationNames[0] && name !== 'COMMITTED') ||
-      (markerProof.required && !names.includes('COMMITTED'))) throw error('EARCHIVEBLOCKED', 'Partial or unexpected archive slot blocks allocation');
+      ((markerProof?.required ?? !expected) && !names.includes('COMMITTED'))) throw error('EARCHIVEBLOCKED', 'Partial or unexpected archive slot blocks allocation');
     const generationPath = path.join(volumePath, generationNames[0]);
     const generationIdentity = await directory(generationPath, expected?.generationIdentity);
     if ((await namesAt(generationPath, 2)).sort((left, right) => left.localeCompare(right)).join('|') !== 'metadata.json|payload.yaml') throw error('EARCHIVEBLOCKED', 'Archive generation has unexpected contents');
     if (names.includes('COMMITTED')) {
-      await directory(path.join(volumePath, 'COMMITTED'), markerProof.identity);
+      await directory(path.join(volumePath, 'COMMITTED'), markerProof?.identity);
       if ((await namesAt(path.join(volumePath, 'COMMITTED'), 0)).length) throw error('EARCHIVEUNSAFE', 'Archive marker is not empty');
     }
     const meta = await readFile(path.join(generationPath, 'metadata.json'), MAX_METADATA_BYTES, expected?.metadataIdentity);
@@ -292,12 +292,12 @@ export class FileMemoryVolumeStore {
   private async verifyPublication(
     namespace: { root: string; paths: readonly string[]; identities: readonly ArchiveDirectoryIdentity[] },
     volumePath: string, owner: OwnedFileMemoryToken, receipt: FileMemoryVolumeReceipt,
-    payload: Buffer, metadata: Buffer, markerProof: { required: boolean; identity?: ArchiveDirectoryIdentity } = { required: false },
+    payload: Buffer, metadata: Buffer, markerProof?: { required: boolean; identity?: ArchiveDirectoryIdentity },
   ): Promise<void> {
     await this.revalidateNamespace(namespace);
     await this.revalidateNamespaceSpelling(namespace);
     await this.requireVolumeSpelling(namespace.root, receipt.volume);
-    await this.verify(volumePath, owner, receipt.volume, receipt, payload, metadata, markerProof);
+    await this.verify(volumePath, owner, receipt.volume, receipt, payload, metadata, markerProof ?? { required: false });
     await this.revalidateNamespace(namespace);
     await this.revalidateNamespaceSpelling(namespace);
     await this.requireVolumeSpelling(namespace.root, receipt.volume);
