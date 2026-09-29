@@ -63,6 +63,10 @@ function hasUnrepresentableDate(value: unknown): boolean {
   const fraction = /\.(\d+)/u.exec(value)?.[1];
   return fraction !== undefined && /[1-9]/u.test(fraction.slice(3));
 }
+function hasUnrepresentableChildDate(child: ChildSnapshot): boolean {
+  return child.timestampUnrepresentable || child.expiryUnrepresentable ||
+    dateValue(child.entry.timestamp) === undefined || dateValue(child.entry.expiresAt) === undefined;
+}
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
@@ -238,21 +242,38 @@ export class DatabaseMemoryReconciliationInspector {
       ambiguous ||= result.ambiguous;
       mismatch ||= result.mismatch;
     }
+    const unmatchedAmbiguous = this.checkUnmatchedChildDates(children, seen, add);
+    ambiguous ||= unmatchedAmbiguous;
     // A child row has no persisted sequence and the current loader orders
-    // only by timestamp. Even a raw order matching our ID tie-break is not
-    // proof of the loader's equal-time order.
-    if (this.hasTimestampTies(rawEntries)) {
+    // only by timestamp. Equal-time order cannot be proven; otherwise a
+    // difference from descending timestamp order is a definite mismatch.
+    const unprovenOrder = this.hasTimestampTies(rawEntries) ||
+      this.hasTimestampTies(children.map(child => child.entry));
+    if (unprovenOrder) {
       add('unproven_equal_time_order', 'entries');
       ambiguous = true;
     }
     if (rawEntries.length === children.length &&
       !isDeepStrictEqual(rawEntries.map(entry => objectValue(entry)?.id), children.map(child => child.entry.entryId))) {
       add('raw_order_differs_from_loader', 'entries');
-      ambiguous = true;
+      if (unprovenOrder) ambiguous = true;
+      else mismatch = true;
     }
     if (ambiguous) return 'ambiguous';
     if (mismatch || rawEntries.length !== children.length) return 'divergent';
     return 'equivalent';
+  }
+
+  private checkUnmatchedChildDates(
+    children: ChildSnapshot[], seen: Set<string>, add: (code: string, path: string) => void,
+  ): boolean {
+    let ambiguous = false;
+    for (const child of children) {
+      if (seen.has(child.entry.entryId) || !hasUnrepresentableChildDate(child)) continue;
+      add('unrepresentable_child_timestamp', 'entries');
+      ambiguous = true;
+    }
+    return ambiguous;
   }
 
   private compareEntry(
@@ -281,8 +302,7 @@ export class DatabaseMemoryReconciliationInspector {
     }
     seen.add(id);
     const child = byId.get(id);
-    if (child && (child.timestampUnrepresentable || child.expiryUnrepresentable ||
-      dateValue(child.entry.timestamp) === undefined || dateValue(child.entry.expiresAt) === undefined)) {
+    if (child && hasUnrepresentableChildDate(child)) {
       add('unrepresentable_child_timestamp', path);
       ambiguous = true;
     }

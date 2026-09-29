@@ -139,6 +139,42 @@ describePg('read-only database memory reconciliation inspection', () => {
     expect(tiedResult.diagnostics).toContainEqual({ code: 'unproven_equal_time_order', path: 'entries' });
   });
 
+  it('classifies a distinct-timestamp entry order mismatch as divergence', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const raw = buildMemoryContent('order', [
+      { id: 'older', content: 'Older', timestamp: '2026-09-28T11:00:00.000Z' },
+      { id: 'newer', content: 'Newer', timestamp: '2026-09-28T12:00:00.000Z' },
+    ]);
+    const id = await layer.writeContent('memories', 'order', raw, writeMetadata);
+    expect((await layer.getEntries(id)).map(entry => entry.entryId)).toEqual(['newer', 'older']);
+    const result = await inspector.inspect({ userId, memoryId: id });
+    expect(result.status).toBe('divergent');
+    expect(result.diagnostics).toContainEqual({ code: 'raw_order_differs_from_loader', path: 'entries' });
+  });
+
+  it('checks unmatched authoritative children for ties and unrepresentable dates', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const id = await layer.writeContent('memories', 'extra-children', buildMemoryContent('extra-children', [
+      { id: 'raw', content: 'Raw', timestamp: '2026-09-28T12:00:00.000Z' },
+    ]), writeMetadata);
+    await layer.addEntry(id, { entryId: 'tied', content: 'Tied', timestamp: new Date('2026-09-28T12:00:00.000Z') });
+    await layer.addEntry(id, { entryId: 'infinite', content: 'Infinite', timestamp: new Date('2026-09-28T13:00:00.000Z') });
+    await withUserContext(db, userId, tx => tx.update(memoryEntries)
+      .set({ timestamp: sql`'infinity'::timestamptz` })
+      .where(and(eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, id), eq(memoryEntries.entryId, 'infinite'))));
+    const result = await inspector.inspect({ userId, memoryId: id });
+    expect(result.status).toBe('ambiguous');
+    expect(result.counts).toMatchObject({ rawEntries: 1, childEntries: 3 });
+    expect(result.diagnostics).toContainEqual({ code: 'unrepresentable_child_timestamp', path: 'entries' });
+    expect(result.diagnostics).toContainEqual({ code: 'unproven_equal_time_order', path: 'entries' });
+  });
+
   it('does not call missing or unrepresented metadata equivalent', async () => {
     const userId = await ensureTestUser();
     const db = getTestDb();
