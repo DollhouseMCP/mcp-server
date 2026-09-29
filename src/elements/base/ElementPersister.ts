@@ -203,7 +203,11 @@ export class ElementPersister<T extends IElement> {
             source: `${this.host.constructor.name}.save`,
           });
           if (!created) {
-            throw new Error(`${this.host.getElementLabelCapitalized()} '${element.metadata.name}' already exists`);
+            const error = new Error(
+              `${this.host.getElementLabelCapitalized()} '${element.metadata.name}' already exists`,
+            ) as NodeJS.ErrnoException;
+            error.code = 'EEXIST';
+            throw error;
           }
         } else {
           if (!options?.updateOnly) {

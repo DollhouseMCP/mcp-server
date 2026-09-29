@@ -371,6 +371,12 @@ In addition to the `IWritableStorageLayer` methods, `DatabaseMemoryStorageLayer`
 
 The default limit for `getEntries` is 1,000 rows. Pass an explicit `limit` for hot paths that only need a small window.
 
+**Versioned memory-head storage contract (migration 0056):** `readHeadSnapshot(rowId)` reads the YAML and an owner-, tenant-, name-, and revision-bound token from one row. `writeHeadIfCurrent(token, nextName, content, metadata)` compares that token inside a transaction, synchronizes tags and child entries, and returns the final revision only after commit. PostgreSQL advances the revision on parent updates and direct child mutations, including an A→B→A content cycle. A stale token fails with `ESTALE`; checked malformed YAML, invalid entry IDs/dates, and oversized or mistyped bounded entry fields fail with `EINVALIDHEAD` without changing the stored head. Candidate-value SQLSTATEs `22001`, `22007`, `22008`, `22021`, and `22P05` also become `EINVALIDHEAD` with the database cause retained; ownership/integrity failures do not. A deadlock or serialization abort fails with `EHEADCONFLICT` and retains its original cause. The caller must keep its unsaved content and reload before deciding whether to retry a conflict. Legacy `writeContent()` retains its existing raw database-error behavior.
+
+The `memory_entries_out_of_sync` flag defaults to true, including for pre-existing memories. A snapshot fails with `EHEADOUTOFSYNC` until a full-head sync qualifies the row. Qualification requires entries with explicit nonempty IDs and content; legacy writes may still project id-less entries using fallback child IDs, but those heads remain unqualified. Direct child writes or external raw-content edits mark the head out of sync again. Existing rows need explicit reconciliation before this API can be activated for production saves. Legacy `writeContent()` remains a name-keyed upsert and can overwrite a newer child projection even after the flag is set; routing all production memory writers through conditional head saves is a remaining #2870 integration requirement. This storage contract alone does not make direct child writes and whole-head writers interchangeable. Concurrent child/head transactions can deadlock; PostgreSQL aborts one transaction rather than committing a stale head.
+
+`DatabaseMemoryReconciliationInspector.inspect({ userId, memoryId })` is a read-only planning primitive for those dirty legacy rows. It uses an owner-scoped, repeatable-read transaction and reports `equivalent`, `divergent`, `ambiguous`, or `ineligible`, always with `canApply: false`. It reads all child entries after a 10,000-row/16 MiB projected-data guard; it does not use the normal 1,000-entry query limit. Raw YAML uses the existing 2 × 1024 × 1024 JavaScript-string-unit recovery limit, with separate transfer bounds. Diagnostics include codes and field paths, not entry text, and signal when the 20-item report is truncated. Equivalence requires the raw entry projection, indexed fields, JSON metadata, tags, and archive references to agree with their stored counterparts. Equal-timestamp entry order, raw or PostgreSQL timestamps with sub-millisecond precision, mixed metadata sources, unrepresented fields, and volume-index disagreements remain ambiguous. This inspector does not clear the dirty flag, produce an apply token, or authorize a normal save; reconciliation and all-writer integration remain in #2870.
+
 ---
 
 ## Schema design
@@ -418,6 +424,8 @@ One row per user. Configuration fields are JSONB to allow schema evolution witho
 #### elements
 
 The central table. All element types (personas, skills, templates, agents, ensembles, memories) share one table, discriminated by `element_type`.
+
+Migration 0055 adds a unique `(id, user_id, element_type)` index so sealed memory archives can use a composite foreign key that binds the durable parent, tenant, and `memories` type together. This index does not change element identity or existing content.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -504,6 +512,14 @@ Individual time-series entries within a memory element.
 | `source` | varchar(64) | |
 | `expires_at` | timestamptz | For TTL-based purging |
 | UNIQUE | `(memory_id, entry_id)` | Upsert conflict target |
+
+#### memory_volumes (foundation only)
+
+Migration 0055 adds immutable, sealed archive rows outside `memory_entries`, whose rows are replaced by ordinary live-memory saves. Each archive has a row UUID, a parent `elements.id`, owner `user_id`, safe positive `volume` number, YAML content, SHA-256 digest, entry count, and sealing timestamps. `(memory_id, volume)` is unique. A composite foreign key requires the parent to be the same user's memory and cascades on parent deletion. Forced row-level security allows only the owner to select, insert, or delete archive rows; there is no update policy, including when a parent memory is public.
+
+`DatabaseMemoryVolumeStore` accepts a durable owner snapshot and binds it to the active user context once at operation entry. It validates bounded YAML and entry count, inserts without overwriting, verifies SHA-256 and entry count on read, lists metadata for even unindexed orphan rows without loading archive YAML, and can remove only the row named by an exact create receipt. It is not connected to rollover or head persistence yet; #2870 and the remaining #2871 file-store/lifecycle work must qualify before that wiring is enabled.
+
+The migration is additive and empty on upgrade: existing live memory rows are not rewritten. Rollback to the previous application binary can leave the table in place because that binary does not use it. Once archives contain data, do not drop the table on code rollback; preserve and back up its rows. Migration and rollback qualification must run against an isolated database before hosted rollout.
 
 #### sessions
 

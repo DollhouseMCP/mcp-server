@@ -447,8 +447,8 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   }
 
   /** Update both forward and reverse index maps. */
-  protected setIndex(name: string, id: string): void {
-    this.setIndexForState(this.getState(), name, id);
+  protected setIndex(name: string, id: string, userId = this.userId): void {
+    this.setIndexForState(this.getState(userId), name, id);
   }
 
   private setIndexForState(state: DatabaseIndexState, name: string, id: string): void {
@@ -572,11 +572,12 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     tx: DrizzleTx,
     elementId: string,
     tags: string[],
+    userId = this.userId,
   ): Promise<void> {
     await tx.delete(elementTags).where(eq(elementTags.elementId, elementId));
     if (tags.length > 0) {
       await tx.insert(elementTags).values(
-        tags.map(tag => ({ elementId, userId: this.userId, tag })),
+        tags.map(tag => ({ elementId, userId, tag })),
       );
     }
   }

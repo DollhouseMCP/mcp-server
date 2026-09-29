@@ -106,7 +106,16 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       throw new PortfolioElementAlreadyExistsError();
     }
     const element = await manager.importElement(rawContentFromInput(input, input.type), managerFormatForType(input.type));
-    await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
+    try {
+      await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
+    } catch (error) {
+      // Preserve the console's 409 contract when storage detects a collision
+      // after the preflight findElement check.
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new PortfolioElementAlreadyExistsError();
+      }
+      throw error;
+    }
     // Re-read the persisted element so the returned record (and its ETag) match
     // what a subsequent GET produces — the persist/reload round-trip can
     // normalize content, so hashing the pre-save in-memory element would yield

@@ -1,4 +1,3 @@
-import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
  * Handles CRUD operations and lifecycle management for memories implementing IElement
@@ -21,7 +20,7 @@ import { BaseElementManager } from '../base/BaseElementManager.js';
 import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
-import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer, type ElementSaveOptions } from '../../storage/IStorageLayer.js';
 import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 

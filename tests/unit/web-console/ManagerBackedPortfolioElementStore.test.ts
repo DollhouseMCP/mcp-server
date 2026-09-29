@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from '@jest/globals';
+import type { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 
 import type { ElementValidationResult, IElement } from '../../../src/types/elements/IElement.js';
 import { ElementStatus } from '../../../src/types/elements/IElement.js';
 import type { ElementType } from '../../../src/portfolio/types.js';
 import {
   ManagerBackedPortfolioElementStore,
+  PortfolioElementAlreadyExistsError,
   PortfolioElementVersionConflictError,
   type ConsolePortfolioElementType,
   type ManagerBackedPortfolioManagers,
@@ -139,6 +141,21 @@ describe('ManagerBackedPortfolioElementStore', () => {
     })).resolves.toMatchObject({ canonicalName: 'valid skill' });
   });
 
+  it('does not translate an unrelated manager save failure into a conflict', async () => {
+    const manager = new FakeManager(SKILLS_TYPE);
+    const failure = new Error('storage unavailable') as NodeJS.ErrnoException;
+    failure.code = 'EIO';
+    manager.save = async () => { throw failure; };
+    const store = new ManagerBackedPortfolioElementStore({
+      managers: managersWith(manager, SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID,
+    });
+
+    await expect(store.create(elementInput(SKILLS_TYPE, 'Unwritten Skill', 'body', {
+      description: 'Should remain unwritten',
+    }))).rejects.toBe(failure);
+  });
+
   it('uses content-hash ETags for mutation preconditions', async () => {
     const manager = new FakeManager(SKILLS_TYPE, [{
       metadata: { name: MUTABLE_SKILL, description: 'Before' },
@@ -212,6 +229,37 @@ describe('ManagerBackedPortfolioElementStore', () => {
     expect(created.content).toContain(codeLikeContent);
   });
 
+  it('does not replace an existing file-backed memory on console create', async () => {
+    const { store } = createRealStoreWithMemoryManager(cleanupDirs);
+    const original = elementInput('memories', 'Existing Memory', 'original entry', { description: 'Original' });
+    await store.create(original);
+
+    await expect(store.create({ ...original, content: 'replacement entry' })).rejects.toThrow();
+    const persisted = await store.findByName(USER_ID, 'memories', 'existing-memory');
+    expect(persisted?.content).toContain('original entry');
+    expect(persisted?.content).not.toContain('replacement entry');
+  });
+
+  it('allows exactly one concurrent file-backed console memory create', async () => {
+    const { store, memoryManager } = createRealStoreWithMemoryManager(cleanupDirs);
+    releaseFirstTwoListsTogether(memoryManager);
+    const input = elementInput('memories', 'Racing Memory', 'first entry', { description: 'Race' });
+    const results = await Promise.allSettled([
+      store.create(input),
+      store.create({ ...input, content: 'second entry' }),
+    ]);
+
+    expect(results.map(result => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const winner = results.find(result => result.status === 'fulfilled');
+    const loser = results.find(result => result.status === 'rejected');
+    expect(loser?.status === 'rejected' && loser.reason).toBeInstanceOf(PortfolioElementAlreadyExistsError);
+    const expectedContent = winner === results[0] ? 'first entry' : 'second entry';
+    const rejectedContent = winner === results[0] ? 'second entry' : 'first entry';
+    const persisted = await store.findByName(USER_ID, 'memories', 'racing-memory');
+    expect(persisted?.content).toContain(expectedContent);
+    expect(persisted?.content).not.toContain(rejectedContent);
+  });
+
   it('updates and deletes real manager-backed elements for all console portfolio types', async () => {
     const store = createRealStore(cleanupDirs);
     const inputs = [
@@ -261,20 +309,45 @@ describe('ManagerBackedPortfolioElementStore', () => {
 });
 
 function createRealStore(cleanupDirs: string[]): ManagerBackedPortfolioElementStore {
+  return createRealStoreWithMemoryManager(cleanupDirs).store;
+}
+
+function createRealStoreWithMemoryManager(cleanupDirs: string[]): {
+  store: ManagerBackedPortfolioElementStore;
+  memoryManager: MemoryManager;
+} {
   const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-backed-portfolio-'));
   cleanupDirs.push(portfolioDir);
   const suite = createRealManagerSuite(portfolioDir);
-  return new ManagerBackedPortfolioElementStore({
-    managers: {
-      personas: suite.personaManager,
-      skills: suite.skillManager,
-      templates: suite.templateManager,
-      agents: suite.agentManager,
-      memories: suite.memoryManager,
-      ensembles: suite.ensembleManager,
-    },
-    getCurrentUserId: () => USER_ID,
-  });
+  return {
+    memoryManager: suite.memoryManager,
+    store: new ManagerBackedPortfolioElementStore({
+      managers: {
+        personas: suite.personaManager,
+        skills: suite.skillManager,
+        templates: suite.templateManager,
+        agents: suite.agentManager,
+        memories: suite.memoryManager,
+        ensembles: suite.ensembleManager,
+      },
+      getCurrentUserId: () => USER_ID,
+    }),
+  };
+}
+
+function releaseFirstTwoListsTogether(manager: MemoryManager): void {
+  const originalList = manager.list.bind(manager);
+  let waiting = 0;
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  manager.list = async options => {
+    const result = await originalList(options);
+    if (++waiting <= 2) {
+      if (waiting === 2) release();
+      await barrier;
+    }
+    return result;
+  };
 }
 
 function elementInput(
