@@ -7,6 +7,7 @@ import type { UserIdResolver } from '../database/UserContext.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
+import { getGatekeeperAuthoringErrors } from '../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { FileMemoryFence } from './FileMemoryFence.js';
 import {
   FileMemoryTransactionCoordinator,
@@ -388,6 +389,11 @@ export class FileMemoryOwnerSnapshots {
         maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE, contentPolicy: 'structure-only',
       });
       if (!validateMemoryControlFields(parsed)) throw new Error('Invalid memory control fields');
+      const nested = parsed.metadata && typeof parsed.metadata === 'object' && !Array.isArray(parsed.metadata)
+        ? parsed.metadata as Record<string, unknown> : undefined;
+      if (getGatekeeperAuthoringErrors(parsed).length || getGatekeeperAuthoringErrors(nested).length) {
+        throw new Error('Invalid gatekeeper authoring fields');
+      }
     } catch {
       throw headError('EINVALIDHEAD', 'Memory update YAML is invalid');
     }

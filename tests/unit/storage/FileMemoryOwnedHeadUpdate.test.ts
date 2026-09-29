@@ -143,6 +143,28 @@ describe('dormant owned file head conditional UPDATE', () => {
     }
   });
 
+  it.each([
+    'name: Bad\ngatekeeper: invalid\nentries: []\n',
+    'name: Bad\nexternalRestrictions:\n  denyPatterns:\n    - Bash:rm *\nentries: []\n',
+    'name: Bad\nmetadata:\n  gatekeeper:\n    externalRestrictions:\n      denyPatterns:\n        - Bash:rm *\nentries: []\n',
+  ])('rejects invalid or misplaced gatekeeper policy before creating an artifact', async content => {
+    const { store, owned, headPath, hash } = await fixture();
+    await expect(store.updateOwnedHead(owned, content))
+      .rejects.toMatchObject({ code: 'EINVALIDHEAD' });
+    expect((await fs.readdir(path.dirname(headPath))).filter(name =>
+      name.startsWith(`.${hash}.memory-write.`))).toHaveLength(0);
+    expect(await fs.readFile(headPath, 'utf8')).toBe('name: Original\nentries: []\n');
+  });
+
+  it('accepts an authored gatekeeper policy that normal memory saves accept', async () => {
+    const { store, owned, locator } = await fixture();
+    const content = 'name: Valid\nmetadata:\n  gatekeeper:\n    externalRestrictions:\n' +
+      '      description: Block removal\n      denyPatterns:\n        - "Bash:rm *"\nentries: []\n';
+    const updated = await store.updateOwnedHead(owned, content);
+    expect(updated.revision).toBe('2');
+    expect((await store.readHeadSnapshot(locator)).content).toBe(content);
+  });
+
   it.each<UpdatePublication>([
     'prepared-temp', 'prepared-journal', 'renamed-head', 'published-journal',
     'updated-registry', 'updated-sidecar',
