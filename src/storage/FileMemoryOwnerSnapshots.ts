@@ -97,6 +97,15 @@ interface WriteJournal {
   readonly publishedHeadIdentity?: FileIdentity;
 }
 
+interface DiagnosticEvidenceRead {
+  readonly evidence: FileMemoryWriteEvidence;
+  readonly signature: string;
+  readonly headContent: string;
+  readonly journalRaw?: string;
+  readonly journalIdentity?: FileIdentity;
+  readonly resolved: { headPath: string; sidecarPath: string; journalPath: string; basenameHash: string; locator: string };
+}
+
 export type UpdatePublication = 'prepared-temp' | 'prepared-journal' | 'renamed-head' |
   'published-journal' | 'updated-registry' | 'updated-sidecar' | 'unlinked-journal';
 
@@ -104,6 +113,18 @@ export interface CommittedFileHeadError extends NodeJS.ErrnoException {
   readonly committed: true;
   readonly token: OwnedFileMemoryToken;
 }
+
+export interface FinalizeOwnedUpdateRequest {
+  readonly locator: string;
+  readonly ownerId: string;
+  readonly operationId: string;
+}
+
+export type FinalizeOwnedUpdateResult =
+  | { readonly status: 'known-committed'; readonly token: OwnedFileMemoryToken }
+  | { readonly status: 'already-clean-no-attribution' };
+
+export type FinalizePublication = 'before-unlink' | 'after-unlink' | 'after-read';
 
 export type AdoptionPublication =
   | 'reserved-sidecar'
@@ -116,6 +137,8 @@ interface FileMemoryOwnerSnapshotsBaseOptions {
   readonly afterPublication?: (phase: AdoptionPublication) => void | Promise<void>;
   /** Fault injection for conditional UPDATE; no production caller is wired. */
   readonly afterUpdatePublication?: (phase: UpdatePublication) => void | Promise<void>;
+  /** Fault injection for dormant, operator-controlled finalization tests. */
+  readonly afterFinalizePublication?: (phase: FinalizePublication) => void | Promise<void>;
 }
 
 export interface FileMemoryOwnerSnapshotsLegacyOptions extends FileMemoryOwnerSnapshotsBaseOptions {
@@ -273,8 +296,8 @@ export class FileMemoryOwnerSnapshots {
       }
       return this.lockDiagnostic(firstLock, secondLock);
     }
-    let first: { evidence: FileMemoryWriteEvidence; signature: string } | undefined;
-    let second: { evidence: FileMemoryWriteEvidence; signature: string } | undefined;
+    let first: DiagnosticEvidenceRead | undefined;
+    let second: DiagnosticEvidenceRead | undefined;
     try {
       first = await this.readDiagnosticEvidence(scope, locator);
       second = await this.readDiagnosticEvidence(scope, locator);
@@ -310,7 +333,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async readDiagnosticEvidence(
     scope: FileMemoryTransactionScope, locator: string,
-  ): Promise<{ evidence: FileMemoryWriteEvidence; signature: string }> {
+  ): Promise<DiagnosticEvidenceRead> {
     const resolved = await this.resolveHead(scope.tenantRoot, locator);
     const head = await this.readHeadBytes(resolved.headPath);
     const sidecar = await this.readRecord(resolved.sidecarPath);
@@ -348,7 +371,8 @@ export class FileMemoryOwnerSnapshots {
       registryRaw: registry?.raw, registryIdentity: registry?.identity,
       journalRaw: journal?.raw, journalIdentity: journal?.identity,
     });
-    return { evidence, signature };
+    return { evidence, signature, headContent: head.value,
+      journalRaw: journal?.raw, journalIdentity: journal?.identity, resolved };
   }
 
   private async collectDiagnosticArtifacts(
@@ -403,6 +427,132 @@ export class FileMemoryOwnerSnapshots {
   ): Promise<FileMemorySnapshot> {
     return this.requiredCoordinator().perform(context, scope =>
       this.readAtRoot(scope.tenantRoot, scope.userId, locator));
+  }
+
+  /**
+   * Dormant operator-maintenance entry point. This never clears an orphan fence:
+   * callers must first establish quiescence and handle the lease separately.
+   */
+  async finalizePublishedOwnedUpdate(request: FinalizeOwnedUpdateRequest): Promise<FinalizeOwnedUpdateResult> {
+    const captured = { ...request };
+    this.validateFinalizeRequest(captured);
+    let committedToken: OwnedFileMemoryToken | undefined;
+    try {
+      return await this.requiredCoordinator().withTenantTransaction(async context => {
+        try {
+          const result = await this.finalizePublishedOwnedUpdateInTransaction(context, captured);
+          if (result.status === 'known-committed') committedToken = result.token;
+          return result;
+        } catch (cause) {
+          const outcome = cause as Partial<CommittedFileHeadError>;
+          if (outcome.committed && outcome.token) committedToken = outcome.token;
+          throw cause;
+        }
+      });
+    } catch (cause) {
+      if (committedToken) {
+        if ((cause as Partial<CommittedFileHeadError>)?.committed) throw cause;
+        throw committedError(cause, committedToken);
+      }
+      throw cause;
+    }
+  }
+
+  /** A single tracked operation under the caller's fresh tenant lease. */
+  finalizePublishedOwnedUpdateInTransaction(
+    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    const captured = { ...request };
+    this.validateFinalizeRequest(captured);
+    return this.requiredCoordinator().perform(context, operation => this.finalizeAtScope(operation, captured));
+  }
+
+  private validateFinalizeRequest(request: FinalizeOwnedUpdateRequest): void {
+    validateLocator(request.locator);
+    if (!UUID_PATTERN.test(request.ownerId) || !UUID_PATTERN.test(request.operationId)) {
+      throw new TypeError('Finalization requires an owner and operation UUID');
+    }
+  }
+
+  private async finalizeAtScope(
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    const first = await this.readDiagnosticEvidence(scope, request.locator);
+    coordinator.requireActiveOperationScope(operation);
+    const phase = classifyFileMemoryWrite(first.evidence);
+    if (!first.evidence.journal && phase.kind === 'clean-consistent' &&
+      first.evidence.sidecar?.ownerId === request.ownerId && first.evidence.userId === scope.userId) {
+      return { status: 'already-clean-no-attribution' };
+    }
+    this.requireFinalizableEvidence(first, request, scope);
+    this.validateHeadForSave(first.headContent);
+    const snapshot = await this.readAtRoot(
+      scope.tenantRoot, scope.userId, first.resolved.locator, path.basename(first.resolved.journalPath));
+    coordinator.requireActiveOperationScope(operation);
+    const token = this.requireMatchingFinalToken(snapshot, first, request, scope);
+    await this.options.afterFinalizePublication?.('before-unlink');
+    coordinator.requireActiveOperationScope(operation);
+    const last = await this.readDiagnosticEvidence(scope, request.locator);
+    if (first.signature !== last.signature) {
+      throw headError('EOWNERRECOVERY', 'Memory write evidence changed before finalization');
+    }
+    this.requireFinalizableEvidence(last, request, scope);
+    const journal = await this.readJournalEvidence(last.resolved.journalPath);
+    coordinator.requireActiveOperationScope(operation);
+    if (!journal || journal.raw !== last.journalRaw || !last.journalIdentity ||
+      !sameIdentity(journal.identity, last.journalIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Memory write journal changed before finalization');
+    }
+    try {
+      await fs.unlink(last.resolved.journalPath);
+    } catch (cause) {
+      const error = headError('EHEADCOMMITUNKNOWN', 'Memory write journal unlink outcome is unknown');
+      Object.assign(error, { cause, operationId: request.operationId, residual: true });
+      throw error;
+    }
+    try {
+      await this.options.afterFinalizePublication?.('after-unlink');
+      const clean = await this.readAtRoot(scope.tenantRoot, scope.userId, last.resolved.locator);
+      coordinator.requireActiveOperationScope(operation);
+      if (clean.token.ownership !== 'owned' || !sameOwnedToken(clean.token, token)) {
+        throw headError('EOWNERRECOVERY', 'Committed memory head changed after finalization');
+      }
+      await this.options.afterFinalizePublication?.('after-read');
+    } catch (cause) {
+      throw committedError(cause, token);
+    }
+    return { status: 'known-committed', token };
+  }
+
+  private requireFinalizableEvidence(
+    read: DiagnosticEvidenceRead, request: FinalizeOwnedUpdateRequest, scope: FileMemoryTransactionScope,
+  ): void {
+    const { evidence } = read;
+    if (classifyFileMemoryWrite(evidence).kind !== 'metadata-advanced-before-unlink' ||
+      evidence.journal?.state !== 'PUBLISHED_WRITE' || evidence.journal.ownerId !== request.ownerId ||
+      evidence.journal.operationId !== request.operationId || evidence.journal.userId !== scope.userId ||
+      evidence.journal.locator !== read.resolved.locator || read.resolved.locator !== request.locator ||
+      !read.journalRaw || !read.journalIdentity) {
+      throw headError('EOWNERRECOVERY', 'Memory write is not in the exact finalizable phase');
+    }
+  }
+
+  private requireMatchingFinalToken(
+    snapshot: FileMemorySnapshot, read: DiagnosticEvidenceRead,
+    request: FinalizeOwnedUpdateRequest, scope: FileMemoryTransactionScope,
+  ): OwnedFileMemoryToken {
+    const token = snapshot.token;
+    const journal = read.evidence.journal;
+    if (token.ownership !== 'owned' || !journal || snapshot.content !== read.headContent ||
+      token.ownerId !== request.ownerId || token.revision !== journal.newRevision ||
+      token.contentHash !== journal.newContentHash || token.userId !== scope.userId ||
+      token.tenantRoot !== scope.tenantRoot || token.locator !== read.resolved.locator ||
+      !journal.publishedHeadIdentity || !sameIdentity(token.fileIdentity, journal.publishedHeadIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Published memory head token disagrees with journal');
+    }
+    return token;
   }
 
   /**
@@ -549,25 +699,7 @@ export class FileMemoryOwnerSnapshots {
       !UUID_PATTERN.test(expected.ownerId)) {
       throw headError('EHEADCONFLICT', 'Memory update token belongs to another head or tenant');
     }
-    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
-      throw headError('EINVALIDHEAD', 'Memory update exceeds the save limit');
-    }
-    if (Buffer.from(content, 'utf8').toString('utf8') !== content) {
-      throw headError('EINVALIDHEAD', 'Memory update cannot round-trip through UTF-8');
-    }
-    try {
-      const parsed = SecureYamlParser.parseRawYaml(content, {
-        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE, contentPolicy: 'structure-only',
-      });
-      if (!validateMemoryControlFields(parsed)) throw new Error('Invalid memory control fields');
-      const nested = parsed.metadata && typeof parsed.metadata === 'object' && !Array.isArray(parsed.metadata)
-        ? parsed.metadata as Record<string, unknown> : undefined;
-      if (getGatekeeperAuthoringErrors(parsed).length || getGatekeeperAuthoringErrors(nested).length) {
-        throw new Error('Invalid gatekeeper authoring fields');
-      }
-    } catch {
-      throw headError('EINVALIDHEAD', 'Memory update YAML is invalid');
-    }
+    this.validateHeadForSave(content);
     const current = await this.readAtRoot(scope.tenantRoot, scope.userId, expected.locator);
     if (current.token.ownership !== 'owned' || !sameOwnedToken(expected, current.token)) {
       throw headError('EHEADCONFLICT', 'Memory head changed before conditional update');
@@ -599,6 +731,28 @@ export class FileMemoryOwnerSnapshots {
       contentHash: newContentHash, fileIdentity: placeholderIdentity,
     });
     return { resolved, operationId, newRevision, newContentHash, tempName, tempPath };
+  }
+
+  private validateHeadForSave(content: string): void {
+    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+      throw headError('EINVALIDHEAD', 'Memory update exceeds the save limit');
+    }
+    if (Buffer.from(content, 'utf8').toString('utf8') !== content) {
+      throw headError('EINVALIDHEAD', 'Memory update cannot round-trip through UTF-8');
+    }
+    try {
+      const parsed = SecureYamlParser.parseRawYaml(content, {
+        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE, contentPolicy: 'structure-only',
+      });
+      if (!validateMemoryControlFields(parsed)) throw new Error('Invalid memory control fields');
+      const nested = parsed.metadata && typeof parsed.metadata === 'object' && !Array.isArray(parsed.metadata)
+        ? parsed.metadata as Record<string, unknown> : undefined;
+      if (getGatekeeperAuthoringErrors(parsed).length || getGatekeeperAuthoringErrors(nested).length) {
+        throw new Error('Invalid gatekeeper authoring fields');
+      }
+    } catch {
+      throw headError('EINVALIDHEAD', 'Memory update YAML is invalid');
+    }
   }
 
   private async updateAtRoot(
