@@ -299,7 +299,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       }
 
       if (!expectedHead) return { id: row.id };
-      // Child-entry triggers can advance the revision after the parent UPDATE.
+      // Tag and child-entry triggers advance the revision after the parent UPDATE.
       // Read the final value inside this transaction, then return it only once
       // withUserContext has committed the whole head, tags, and entries.
       const revisionRows = await tx
