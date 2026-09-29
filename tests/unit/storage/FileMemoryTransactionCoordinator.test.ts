@@ -262,6 +262,39 @@ describe('FileMemoryTransactionCoordinator', () => {
     }).catch(error => expect(error).toMatchObject({ code: 'ENESTEDOPERATION' }));
   });
 
+  it('rejects cross-coordinator operations from either active operation context', async () => {
+    const { coordinator: first } = await fixture();
+    const { coordinator: second } = await fixture();
+    const ready = deferred();
+    const bothActive = deferred();
+    let firstContext!: FileMemoryLeaseContext;
+    let secondContext!: FileMemoryLeaseContext;
+    let activeCount = 0;
+    const assertNestedRejected = async (
+      own: FileMemoryTransactionCoordinator,
+      context: FileMemoryLeaseContext,
+      other: FileMemoryTransactionCoordinator,
+      otherContext: () => FileMemoryLeaseContext,
+    ) => own.perform(context, async () => {
+      if (++activeCount === 2) bothActive.resolve();
+      await bothActive.promise;
+      expect(() => other.perform(otherContext(), () => 'must not run'))
+        .toThrow('Nested file-memory store operations are not supported');
+    });
+    const firstTransaction = first.withTenantTransaction(async context => {
+      firstContext = context;
+      await ready.promise;
+      await assertNestedRejected(first, context, second, () => secondContext);
+    });
+    const secondTransaction = second.withTenantTransaction(async context => {
+      secondContext = context;
+      await ready.promise;
+      await assertNestedRejected(second, context, first, () => firstContext);
+    });
+    ready.resolve();
+    await expect(Promise.all([firstTransaction, secondTransaction])).resolves.toEqual([undefined, undefined]);
+  });
+
   it('drains an accepted operation when the callback throws and preserves both errors', async () => {
     const { coordinator } = await fixture();
     const entered = deferred();
