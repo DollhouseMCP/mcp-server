@@ -317,14 +317,14 @@ export class FileMemoryOwnerSnapshots {
     const journal = await this.readJournalEvidence(resolved.journalPath);
     const owner = sidecar?.record;
     const write = journal?.record;
-    if (!owner || owner.userId !== scope.userId || owner.locator !== resolved.locator ||
+    if (owner?.userId !== scope.userId || owner.locator !== resolved.locator ||
       (write && (write.userId !== scope.userId || write.locator !== resolved.locator ||
         write.ownerId !== owner.ownerId))) {
       throw headError('EOWNERRECOVERY', 'Memory diagnostic owner does not bind to the requested head');
     }
     const ownerId = owner.ownerId;
     const registry = await this.readRegistry(scope.tenantRoot, ownerId);
-    if (!registry || registry.record.userId !== scope.userId ||
+    if (registry?.record.userId !== scope.userId ||
       registry.record.locator !== resolved.locator || registry.record.ownerId !== ownerId) {
       throw headError('EOWNERRECOVERY', 'Memory diagnostic registry does not bind to the requested head');
     }
