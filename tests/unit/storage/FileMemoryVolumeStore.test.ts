@@ -382,3 +382,29 @@ it.each(['modified-payload', 'replaced-metadata', 'extra-generation'] as const)(
   await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEUNCOMMITTED', committed: false });
   await expect(fs.stat(path.join(f.ownerPath, 'v1', 'COMMITTED'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+it.each(['replaced-payload', 'replaced-metadata', 'removed-payload', 'removed-metadata', 'removed-marker'] as const)(
+  'retains exact committed receipt when final hook changes archive: %s', async mutation => {
+    let originalInode = '';
+    const filename = mutation.includes('metadata') ? 'metadata.json' : 'payload.yaml';
+    const f = await fixture(async (phase, v) => {
+      if (phase !== 'verified-after-marker') return;
+      const g = (await fs.readdir(v)).find(name => name.startsWith('g-'))!;
+      const p = path.join(v, g, filename);
+      originalInode = String((await fs.stat(p, { bigint: true })).ino);
+      if (mutation === 'removed-marker') await fs.rmdir(path.join(v, 'COMMITTED'));
+      else if (mutation.startsWith('removed')) await fs.unlink(p);
+      else {
+        const bytes = await fs.readFile(p);
+        await fs.rename(p, `${p}.old`);
+        await fs.writeFile(p, bytes, { mode: 0o600 });
+        await fs.unlink(`${p}.old`);
+      }
+    });
+    let outcome: CommittedFileArchiveError | undefined;
+    try { await f.store.createExclusive(f.token, input); }
+    catch (cause) { outcome = cause as CommittedFileArchiveError; }
+    expect(outcome).toMatchObject({ code: 'EARCHIVECOMMITTED', committed: true, receipt: { volume: 1 } });
+    const identity = filename === 'metadata.json' ? outcome?.receipt.metadataIdentity : outcome?.receipt.payloadIdentity;
+    expect(identity?.inode).toBe(originalInode);
+  });

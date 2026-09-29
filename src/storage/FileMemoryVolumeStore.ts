@@ -380,6 +380,7 @@ export class FileMemoryVolumeStore {
       await notify('committed-marker');
       await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes, true);
       await notify('verified-after-marker');
+      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes, true);
       return receipt;
     } catch (cause) {
       // Receipt construction precedes marker invocation; knownCommitted implies receipt exists.
