@@ -4,6 +4,7 @@ import type { UserIdResolver } from '../database/UserContext.js';
 import type { FileMemoryFence } from './FileMemoryFence.js';
 
 const leaseBrand: unique symbol = Symbol('FileMemoryLeaseContext');
+const operationBrand: unique symbol = Symbol('FileMemoryOperationScope');
 
 /** Runtime ownership is checked with a private WeakMap, not this TypeScript shape. */
 export interface FileMemoryLeaseContext {
@@ -13,6 +14,11 @@ export interface FileMemoryLeaseContext {
 export interface FileMemoryTransactionScope {
   readonly tenantRoot: string;
   readonly userId: string;
+}
+
+/** Runtime authority is private to the currently executing tracked operation. */
+export interface FileMemoryOperationScope extends FileMemoryTransactionScope {
+  readonly [operationBrand]: true;
 }
 
 export interface FileMemoryTransactionCoordinatorOptions {
@@ -33,10 +39,17 @@ interface LeaseState {
   poisonReason?: unknown;
 }
 
+interface OperationState {
+  readonly coordinator: FileMemoryTransactionCoordinator;
+  readonly lease: LeaseState;
+  active: boolean;
+}
+
 const states = new WeakMap<FileMemoryLeaseContext, LeaseState>();
+const operations = new WeakMap<FileMemoryOperationScope, OperationState>();
 // Module-wide contexts reject nested work even across separate coordinators.
 const transactionFlow = new AsyncLocalStorage<LeaseState>();
-const operationFlow = new AsyncLocalStorage<FileMemoryLeaseContext>();
+const operationFlow = new AsyncLocalStorage<FileMemoryOperationScope>();
 
 function leaseError(code: string, message: string, cause?: unknown): NodeJS.ErrnoException {
   const error = new Error(message, { cause }) as NodeJS.ErrnoException;
@@ -123,7 +136,7 @@ export class FileMemoryTransactionCoordinator {
    */
   perform<T>(
     context: FileMemoryLeaseContext,
-    operation: (scope: FileMemoryTransactionScope) => Promise<T> | T,
+    operation: (scope: FileMemoryOperationScope) => Promise<T> | T,
   ): Promise<T> {
     const state = states.get(context);
     if (!state) throw leaseError('EINVALIDLEASE', 'Invalid file-memory lease context');
@@ -146,7 +159,16 @@ export class FileMemoryTransactionCoordinator {
         throw leaseError('ELEASEABORTED', 'Earlier file-memory operation failed; queued operation was not started',
           state.poisonReason);
       }
-      return operationFlow.run(context, () => operation(state.scope));
+      const scope = Object.freeze({ ...state.scope, [operationBrand]: true }) as FileMemoryOperationScope;
+      const active: OperationState = { coordinator: this, lease: state, active: true };
+      operations.set(scope, active);
+      return operationFlow.run(scope, async () => {
+        try {
+          return await operation(scope);
+        } finally {
+          active.active = false;
+        }
+      });
     });
     const tracked = task.then(
       () => undefined,
@@ -164,5 +186,17 @@ export class FileMemoryTransactionCoordinator {
     // the transaction still fails after draining state.errors.
     void task.catch(() => undefined);
     return task;
+  }
+
+  /** @internal Only an audited store already inside this tracked operation may use this authority. */
+  requireActiveOperationScope(scope: FileMemoryOperationScope): FileMemoryTransactionScope {
+    const operation = operations.get(scope);
+    if (!operation?.active || operation.coordinator !== this ||
+      operationFlow.getStore() !== scope || operation.lease.phase === 'closed') {
+      throw leaseError('EINVALIDOPERATION', 'Active file-memory operation authority is required');
+    }
+    // Accepted FIFO work may run while the outer callback has returned and
+    // the lease is closing; it remains protected until this operation settles.
+    return operation.lease.scope;
   }
 }

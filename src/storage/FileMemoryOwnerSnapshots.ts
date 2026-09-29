@@ -17,6 +17,7 @@ import {
 import {
   FileMemoryTransactionCoordinator,
   type FileMemoryLeaseContext,
+  type FileMemoryOperationScope,
   type FileMemoryTransactionScope,
 } from './FileMemoryTransactionCoordinator.js';
 
@@ -391,6 +392,29 @@ export class FileMemoryOwnerSnapshots {
   ): Promise<FileMemorySnapshot> {
     return this.requiredCoordinator().perform(context, scope =>
       this.readAtRoot(scope.tenantRoot, scope.userId, locator));
+  }
+
+  /**
+   * @internal Revalidate a same-read ACTIVE owner token inside the caller's
+   * tracked operation. This helper never acquires another fence or enqueues a
+   * nested operation; future archive stores must await it before publication.
+   */
+  async requireOwnedAtScope(
+    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken,
+  ): Promise<OwnedFileMemoryToken> {
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
+    if (token.backend !== 'file' || token.ownership !== 'owned' ||
+      token.tenantRoot !== scope.tenantRoot || token.userId !== scope.userId) {
+      throw headError('EHEADCONFLICT', 'Memory owner token belongs to another tenant or head');
+    }
+    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator);
+    coordinator.requireActiveOperationScope(operation);
+    if (current.token.ownership !== 'owned' || !sameOwnedToken(current.token, token)) {
+      throw headError('EHEADCONFLICT', 'Memory owner changed before guarded operation');
+    }
+    return current.token;
   }
 
   private async readAtRoot(
