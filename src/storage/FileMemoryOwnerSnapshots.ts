@@ -86,6 +86,8 @@ function hasCode(error: unknown, code: string): boolean {
 }
 
 function validateLocator(locator: string): void {
+  // Existing heads can have uppercase/Unicode names; the older per-head fence
+  // restricts new lock keys, while this module uses the tenant-wide fence.
   if (
     typeof locator !== 'string' || !locator || locator.includes('\0') || locator.includes('\\') ||
     path.posix.isAbsolute(locator) || path.win32.isAbsolute(locator) ||
@@ -150,6 +152,8 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
  * commit. A later callback failure does not roll it back. Multi-step lifecycle
  * operations must pass one tenant lease context; nested withTenantFence calls
  * would deadlock. No scanner/writer may ignore RESERVED or ACTIVE sidecars.
+ * A process stopped before a record rename can leave an unreferenced private
+ * temp record for manual cleanup while writers are stopped.
  */
 export class FileMemoryOwnerSnapshots {
   constructor(private readonly options: FileMemoryOwnerSnapshotsOptions) {
@@ -194,7 +198,7 @@ export class FileMemoryOwnerSnapshots {
       }
       const owner = before.record;
       if (
-        !registry || registry.record.state !== 'ACTIVE' ||
+        registry?.record.state !== 'ACTIVE' ||
         owner.userId !== userId || owner.locator !== resolved.locator ||
         owner.contentHash !== content.hash || !sameIdentity(owner.fileIdentity, content.identity) ||
         registry.record.userId !== owner.userId || registry.record.ownerId !== owner.ownerId ||
@@ -231,9 +235,10 @@ export class FileMemoryOwnerSnapshots {
       }
       const { sidecarPath } = await this.resolveHead(root, token.locator);
       const ownerId = randomUUID();
+      const rechecked = current.token;
       const record: OwnerRecord = {
         schema: 1, state: 'RESERVED', userId, ownerId, locator: token.locator,
-        revision: '1', contentHash: token.contentHash, fileIdentity: token.fileIdentity,
+        revision: '1', contentHash: rechecked.contentHash, fileIdentity: rechecked.fileIdentity,
       };
       const active = { ...record, state: 'ACTIVE' as const };
       // Reject oversized metadata before the first owner publication.
@@ -305,7 +310,7 @@ export class FileMemoryOwnerSnapshots {
       if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(limit)) {
         throw headError('EINVALIDHEAD', 'Memory head exceeds the read-only legacy limit or is linked');
       }
-      const bytes = Buffer.alloc(limit + 1);
+      const bytes = Buffer.alloc(Number(before.size) + 1);
       let used = 0;
       while (used < bytes.length) {
         const read = await handle.read(bytes, used, bytes.length - used, used);
