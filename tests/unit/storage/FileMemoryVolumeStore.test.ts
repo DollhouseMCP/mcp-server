@@ -16,10 +16,10 @@ async function fixture(hook?: (phase: ArchivePublicationPhase, location: string)
   roots.push(root);
   await fs.writeFile(path.join(root, 'ÜberNote.yaml'), 'entries: []\n');
   let failRelease = false;
-  const fence = new FileMemoryFence({ timeoutMs: 100 });
+  const fence = new FileMemoryFence();
   const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER,
     fence: { withTenantFence: async (tenant, callback) => {
-      const result = await fence.withTenantFence(tenant, callback);
+      const result = await fence.withTenantFence(tenant, callback, { timeoutMs: 100 });
       if (failRelease) throw new Error('release failure');
       return result;
     } } });
@@ -75,7 +75,7 @@ describe('dormant file archive publication', () => {
       await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEUNCOMMITTED', outcome: 'uncommitted' });
       const children = await fs.readdir(path.join(f.ownerPath, 'v1'));
       expect(children).not.toContain('COMMITTED');
-      expect(children.length).toBe(phase === 'reserved-volume' ? 0 : 1);
+      expect(children).toHaveLength(phase === 'reserved-volume' ? 0 : 1);
     });
   it.each(['committed-marker', 'verified-after-marker'] as const)('preserves receipt through %s failure', async phase => {
     const f = await fixture(p => { if (p === phase) throw new Error('injected'); });
@@ -157,15 +157,16 @@ it.each(['reserved-volume', 'reserved-generation', 'partial-payload', 'partial-m
       import { FileMemoryTransactionCoordinator } from ${JSON.stringify(moduleUrl('FileMemoryTransactionCoordinator'))};
       import { FileMemoryOwnerSnapshots } from ${JSON.stringify(moduleUrl('FileMemoryOwnerSnapshots'))};
       import { FileMemoryVolumeStore } from ${JSON.stringify(moduleUrl('FileMemoryVolumeStore'))};
-      const coordinator = new FileMemoryTransactionCoordinator({tenantRoot: ${JSON.stringify(f.root)}, getCurrentUserId: () => ${JSON.stringify(USER)}, fence: new FileMemoryFence()});
+      const [tenantRoot, userId, barrierPhase] = process.argv.slice(1);
+      const coordinator = new FileMemoryTransactionCoordinator({tenantRoot, getCurrentUserId: () => userId, fence: new FileMemoryFence()});
       const owners = new FileMemoryOwnerSnapshots({coordinator});
       const snapshot = await owners.readHeadSnapshot('ÜberNote.yaml');
       const store = new FileMemoryVolumeStore({coordinator, owners, afterPublication: async phase => {
-        if (phase === ${JSON.stringify(phase)}) { process.stdout.write('BARRIER\\n'); process.stdin.resume(); await new Promise(() => {}); }
+        if (phase === barrierPhase) { process.stdout.write('BARRIER\\n'); process.stdin.resume(); await new Promise(() => {}); }
       }});
       await store.createExclusive(snapshot.token, {minimumVolume:1,rawContent:'entries: []\\n',entryCount:0,sealedAt:new Date('2026-09-29')});
     `;
-    const child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', script, f.root, USER, phase], { stdio: ['pipe', 'pipe', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', chunk => { stderr += String(chunk); });
     const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -181,7 +182,7 @@ it.each(['reserved-volume', 'reserved-generation', 'partial-payload', 'partial-m
       const before = await fs.readdir(v);
       const marker = before.includes('COMMITTED');
       expect(marker).toBe(phase === 'committed-marker');
-      expect(before.filter(name => name.startsWith('g-')).length).toBe(phase === 'reserved-volume' ? 0 : 1);
+      expect(before.filter(name => name.startsWith('g-'))).toHaveLength(phase === 'reserved-volume' ? 0 : 1);
       if (phase === 'reserved-generation') expect(await fs.readdir(path.join(v, before[0]))).toEqual([]);
       if (phase === 'partial-payload' || phase === 'partial-metadata') {
         const g = before.find(name => name.startsWith('g-'))!;

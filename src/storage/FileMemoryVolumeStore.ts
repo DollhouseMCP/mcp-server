@@ -71,8 +71,27 @@ function error(code: string, message: string, cause?: unknown): NodeJS.ErrnoExce
 }
 function committed(cause: unknown, receipts: readonly FileMemoryVolumeReceipt[]): CommittedFileArchiveError {
   return Object.assign(error('EARCHIVECOMMITTED', 'Archive publication committed; a later operation failed', cause), {
-    committed: true as const, receipts: Object.freeze([...receipts]), receipt: receipts[receipts.length - 1],
+    committed: true as const, receipts: Object.freeze([...receipts]), receipt: receipts.at(-1)!,
   });
+}
+function appendCommittedReceipts(value: unknown, receipts: FileMemoryVolumeReceipt[]): void {
+  const outcome = value as Partial<CommittedFileArchiveError> | null;
+  if (!outcome?.committed || !outcome.receipts) return;
+  for (const receipt of outcome.receipts) {
+    if (!receipts.includes(receipt)) receipts.push(receipt);
+  }
+}
+function discoverCommittedReceipts(cause: unknown, receipts: FileMemoryVolumeReceipt[]): void {
+  const visited = new Set<unknown>();
+  const pending: unknown[] = [cause];
+  while (pending.length) {
+    const value = pending.pop();
+    if (visited.has(value)) continue;
+    visited.add(value);
+    appendCommittedReceipts(value, receipts);
+    if (value instanceof AggregateError) pending.push(...value.errors);
+    if (value instanceof Error && value.cause) pending.push(value.cause);
+  }
 }
 /** Retain each receipt immediately after create returns, across the OUTER transaction boundary. */
 export async function retainCommittedFileArchives<T>(
@@ -81,19 +100,7 @@ export async function retainCommittedFileArchives<T>(
   const receipts: FileMemoryVolumeReceipt[] = [];
   try { return await callback(receipt => { receipts.push(receipt); }); }
   catch (cause) {
-    const visited = new Set<unknown>();
-    const pending: unknown[] = [cause];
-    while (pending.length) {
-      const value = pending.pop();
-      if (visited.has(value)) continue;
-      visited.add(value);
-      const outcome = value as Partial<CommittedFileArchiveError> | null;
-      if (outcome?.committed && outcome.receipts) {
-        for (const receipt of outcome.receipts) if (!receipts.includes(receipt)) receipts.push(receipt);
-      }
-      if (value instanceof AggregateError) pending.push(...value.errors);
-      if (value instanceof Error && value.cause) pending.push(value.cause);
-    }
+    discoverCommittedReceipts(cause, receipts);
     if (receipts.length) throw committed(cause, receipts);
     throw cause;
   }
@@ -219,26 +226,31 @@ export class FileMemoryVolumeStore {
     if (!UUID.test(token.ownerId)) throw new TypeError('Archive requires a durable owner UUID');
     return Object.freeze(token);
   }
-  private async namespace(operation: FileMemoryOperationScope, ownerId: string): Promise<{ root: string; identities: readonly ArchiveDirectoryIdentity[] }> {
-    const scope = this.options.coordinator.requireActiveOperationScope(operation);
-    const identities: ArchiveDirectoryIdentity[] = [];
-    let root = scope.tenantRoot;
-    identities.push(await directory(root, undefined, false));
-    for (const component of ['volumes', 'by-id', ownerId]) {
-      const siblings = await namesAt(root, 100_000);
-      if (siblings.some(name => name.toLowerCase() === component.toLowerCase() && name !== component)) {
-        throw error('EARCHIVEUNSAFE', 'Archive namespace case alias is unsafe');
-      }
-      root = path.join(root, component);
-      try { await fs.mkdir(root, { mode: 0o700 }); }
-      catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; }
-      identities.push(await directory(root));
+  private async namespaceComponent(parent: string, component: string): Promise<{ path: string; identity: ArchiveDirectoryIdentity }> {
+    const siblings = await namesAt(parent, 100_000);
+    if (siblings.some(name => name.toLowerCase() === component.toLowerCase() && name !== component)) {
+      throw error('EARCHIVEUNSAFE', 'Archive namespace case alias is unsafe');
     }
-    return { root, identities };
+    const componentPath = path.join(parent, component);
+    try { await fs.mkdir(componentPath, { mode: 0o700 }); }
+    catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; }
+    return { path: componentPath, identity: await directory(componentPath) };
   }
-  private async revalidateNamespace(root: string, identities: readonly ArchiveDirectoryIdentity[]): Promise<void> {
-    const paths = [path.dirname(path.dirname(path.dirname(root))), path.dirname(path.dirname(root)), path.dirname(root), root];
-    for (let index = 0; index < paths.length; index++) await directory(paths[index], identities[index], index !== 0);
+  private async namespace(operation: FileMemoryOperationScope, ownerId: string): Promise<{ root: string; paths: readonly string[]; identities: readonly ArchiveDirectoryIdentity[] }> {
+    const scope = this.options.coordinator.requireActiveOperationScope(operation);
+    const tenantIdentity = await directory(scope.tenantRoot, undefined, false);
+    // Each child is inspected only after its parent has been created/validated.
+    const volumes = await this.namespaceComponent(scope.tenantRoot, 'volumes');
+    const byId = await this.namespaceComponent(volumes.path, 'by-id');
+    const owner = await this.namespaceComponent(byId.path, ownerId);
+    return { root: owner.path, paths: [scope.tenantRoot, volumes.path, byId.path, owner.path],
+      identities: [tenantIdentity, volumes.identity, byId.identity, owner.identity] };
+  }
+  private async revalidateNamespace(namespace: { paths: readonly string[]; identities: readonly ArchiveDirectoryIdentity[] }): Promise<void> {
+    // Independent read-only identity comparisons; every result must settle before publication.
+    const results = await Promise.allSettled(namespace.paths.map((componentPath, index) => directory(componentPath, namespace.identities[index], index !== 0)));
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
   }
   private async verify(volumePath: string, owner: OwnedFileMemoryToken, volume: number, expected?: FileMemoryVolumeReceipt, expectedBytes?: Buffer, expectedMetadata?: Buffer, requireMarker = !expected): Promise<{ metadata: Metadata; payloadIdentity: ArchiveFileIdentity; metadataIdentity: ArchiveFileIdentity; generationIdentity: ArchiveDirectoryIdentity; volumeIdentity: ArchiveDirectoryIdentity }> {
     const volumeIdentity = await directory(volumePath, expected?.volumeIdentity);
@@ -248,30 +260,62 @@ export class FileMemoryVolumeStore {
       (requireMarker && !names.includes('COMMITTED'))) throw error('EARCHIVEBLOCKED', 'Partial or unexpected archive slot blocks allocation');
     const generationPath = path.join(volumePath, generationNames[0]);
     const generationIdentity = await directory(generationPath, expected?.generationIdentity);
-    if ((await namesAt(generationPath, 2)).sort().join('|') !== 'metadata.json|payload.yaml') throw error('EARCHIVEBLOCKED', 'Archive generation has unexpected contents');
+    if ((await namesAt(generationPath, 2)).sort((left, right) => left.localeCompare(right)).join('|') !== 'metadata.json|payload.yaml') throw error('EARCHIVEBLOCKED', 'Archive generation has unexpected contents');
     if (names.includes('COMMITTED')) {
       await directory(path.join(volumePath, 'COMMITTED'));
       if ((await namesAt(path.join(volumePath, 'COMMITTED'), 0)).length) throw error('EARCHIVEUNSAFE', 'Archive marker is not empty');
     }
     const meta = await readFile(path.join(generationPath, 'metadata.json'), MAX_METADATA_BYTES, expected?.metadataIdentity);
     const payload = await readFile(path.join(generationPath, 'payload.yaml'), MAX_FILE_MEMORY_VOLUME_BYTES, expected?.payloadIdentity);
-    if (expectedBytes && !payload.bytes.equals(expectedBytes) || expectedMetadata && !meta.bytes.equals(expectedMetadata)) throw error('EARCHIVEUNSAFE', 'Archive readback bytes disagree');
-    const metadata = JSON.parse(meta.bytes.toString('utf8')) as Metadata;
-    const keys = ['schema', 'userId', 'ownerId', 'volume', 'generationId', 'sha256', 'byteLength', 'entryCount', 'firstEntryAt', 'lastEntryAt', 'sealedAt'].sort();
-    if (!metadata || Object.keys(metadata).sort().join('|') !== keys.join('|') || metadata.schema !== 1 || metadata.userId !== owner.userId ||
-      metadata.ownerId !== owner.ownerId || metadata.volume !== volume || `g-${metadata.generationId}` !== generationNames[0] ||
-      metadata.byteLength !== payload.bytes.length || metadata.sha256 !== createHash('sha256').update(payload.bytes).digest('hex')) throw error('EARCHIVEUNSAFE', 'Archive metadata disagrees');
-    const canonicalDate = (value: unknown): boolean => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
-    if (!canonicalDate(metadata.sealedAt) || (metadata.firstEntryAt !== null && !canonicalDate(metadata.firstEntryAt)) ||
-      (metadata.lastEntryAt !== null && !canonicalDate(metadata.lastEntryAt))) throw error('EARCHIVEUNSAFE', 'Archive metadata dates are not canonical');
-    const rawContent = payload.bytes.toString('utf8');
-    const validated = capture({ minimumVolume: volume, rawContent, entryCount: metadata.entryCount, sealedAt: new Date(metadata.sealedAt),
-      ...(metadata.firstEntryAt === null ? {} : { firstEntryAt: new Date(metadata.firstEntryAt) }),
-      ...(metadata.lastEntryAt === null ? {} : { lastEntryAt: new Date(metadata.lastEntryAt) }) });
-    if (!validated.bytes.equals(payload.bytes)) throw error('EARCHIVEUNSAFE', 'Archive UTF-8 is invalid');
+    if ((expectedBytes && !payload.bytes.equals(expectedBytes)) || (expectedMetadata && !meta.bytes.equals(expectedMetadata))) throw error('EARCHIVEUNSAFE', 'Archive readback bytes disagree');
+    const metadata = this.verifyMetadata(meta.bytes, payload.bytes, owner, volume, generationNames[0]);
     await directory(volumePath, volumeIdentity);
     await directory(generationPath, generationIdentity);
     return { metadata, payloadIdentity: payload.identity, metadataIdentity: meta.identity, volumeIdentity, generationIdentity };
+  }
+  private verifyMetadata(metadataBytes: Buffer, payloadBytes: Buffer, owner: OwnedFileMemoryToken, volume: number, generationName: string): Metadata {
+    const metadata = JSON.parse(metadataBytes.toString('utf8')) as Metadata;
+    const keys = ['schema', 'userId', 'ownerId', 'volume', 'generationId', 'sha256', 'byteLength', 'entryCount', 'firstEntryAt', 'lastEntryAt', 'sealedAt'].sort((left, right) => left.localeCompare(right));
+    if (!metadata || Object.keys(metadata).sort((left, right) => left.localeCompare(right)).join('|') !== keys.join('|') || metadata.schema !== 1 || metadata.userId !== owner.userId ||
+      metadata.ownerId !== owner.ownerId || metadata.volume !== volume || `g-${metadata.generationId}` !== generationName ||
+      metadata.byteLength !== payloadBytes.length || metadata.sha256 !== createHash('sha256').update(payloadBytes).digest('hex')) throw error('EARCHIVEUNSAFE', 'Archive metadata disagrees');
+    const canonicalDate = (value: unknown): boolean => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+    if (!canonicalDate(metadata.sealedAt) || (metadata.firstEntryAt !== null && !canonicalDate(metadata.firstEntryAt)) ||
+      (metadata.lastEntryAt !== null && !canonicalDate(metadata.lastEntryAt))) throw error('EARCHIVEUNSAFE', 'Archive metadata dates are not canonical');
+    const rawContent = payloadBytes.toString('utf8');
+    const validated = capture({ minimumVolume: volume, rawContent, entryCount: metadata.entryCount, sealedAt: new Date(metadata.sealedAt),
+      ...(metadata.firstEntryAt === null ? {} : { firstEntryAt: new Date(metadata.firstEntryAt) }),
+      ...(metadata.lastEntryAt === null ? {} : { lastEntryAt: new Date(metadata.lastEntryAt) }) });
+    if (!validated.bytes.equals(payloadBytes)) throw error('EARCHIVEUNSAFE', 'Archive UTF-8 is invalid');
+    return metadata;
+  }
+  private async reserveSlot(root: string, token: OwnedFileMemoryToken, volume: number, operationId: string,
+    reserved: (candidate: string) => void, probe = 0): Promise<{ path: string; volume: number; identity: ArchiveDirectoryIdentity }> {
+    if (probe === MAX_FILE_MEMORY_VOLUME_COLLISION_PROBES) throw error('EARCHIVEEXHAUSTED', 'Archive collision limit exhausted');
+    const candidate = path.join(root, `v${volume}`);
+    const siblings = await namesAt(root, 100_000);
+    if (siblings.some(name => /^v\d+$/iu.test(name) && BigInt(name.slice(1)) === BigInt(volume) && name !== `v${volume}`)) {
+      throw error('EARCHIVEUNSAFE', 'Archive volume number alias is unsafe');
+    }
+    try {
+      await fs.mkdir(candidate, { mode: 0o700 });
+      reserved(candidate);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
+      await this.requireCommittedCollision(candidate, token, volume, operationId);
+      if (volume === Number.MAX_SAFE_INTEGER) throw error('EARCHIVEEXHAUSTED', 'Archive numbers exhausted');
+      // Awaited filesystem proof precedes the next probe; no concurrent reservation or synchronous recursion.
+      return this.reserveSlot(root, token, volume + 1, operationId, reserved, probe + 1);
+    }
+    return { path: candidate, volume, identity: await directory(candidate) };
+  }
+  private async requireCommittedCollision(candidate: string, token: OwnedFileMemoryToken, volume: number, operationId: string): Promise<void> {
+    try { await this.verify(candidate, token, volume); }
+    catch (cause) {
+      throw Object.assign(error((cause as NodeJS.ErrnoException).code ?? 'EARCHIVEBLOCKED',
+        'Existing archive slot cannot be qualified; allocation is blocked', cause),
+      { outcome: 'blocked', operationId, residualPath: candidate });
+    }
   }
   private async publish(operation: FileMemoryOperationScope, token: OwnedFileMemoryToken, input: CapturedInput): Promise<FileMemoryVolumeReceipt> {
     const scope = this.options.coordinator.requireActiveOperationScope(operation);
@@ -283,47 +327,25 @@ export class FileMemoryVolumeStore {
     let knownCommitted = false;
     try {
       const namespace = await this.namespace(operation, token.ownerId);
-      let volume = input.minimumVolume;
-      let volumeIdentity: ArchiveDirectoryIdentity | undefined;
-      for (let probe = 0; probe < MAX_FILE_MEMORY_VOLUME_COLLISION_PROBES; probe++) {
-        const candidate = path.join(namespace.root, `v${volume}`);
-        const siblings = await namesAt(namespace.root, 100_000);
-        if (siblings.some(name => /^v[0-9]+$/iu.test(name) && BigInt(name.slice(1)) === BigInt(volume) && name !== `v${volume}`)) {
-          throw error('EARCHIVEUNSAFE', 'Archive volume number alias is unsafe');
-        }
-        try {
-          await fs.mkdir(candidate, { mode: 0o700 });
-          residualPath = candidate;
-          volumeIdentity = await directory(candidate);
-          break;
-        } catch (cause) {
-          if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause;
-          try { await this.verify(candidate, token, volume); }
-          catch (cause) {
-            throw Object.assign(error((cause as NodeJS.ErrnoException).code ?? 'EARCHIVEBLOCKED',
-              'Existing archive slot cannot be qualified; allocation is blocked', cause),
-            { outcome: 'blocked', operationId, residualPath: candidate });
-          }
-          if (volume === Number.MAX_SAFE_INTEGER) throw error('EARCHIVEEXHAUSTED', 'Archive numbers exhausted');
-          volume++;
-        }
-      }
-      if (!residualPath || !volumeIdentity) throw error('EARCHIVEEXHAUSTED', 'Archive collision limit exhausted');
+      const slot = await this.reserveSlot(namespace.root, token, input.minimumVolume, operationId, candidate => { residualPath = candidate; });
+      residualPath = slot.path;
+      const volume = slot.volume;
+      const volumeIdentity = slot.identity;
       const notify = async (phase: ArchivePublicationPhase): Promise<void> => { await this.options.afterPublication?.(phase, residualPath!); };
       await notify('reserved-volume');
-      await this.revalidateNamespace(namespace.root, namespace.identities);
+      await this.revalidateNamespace(namespace);
       await directory(residualPath, volumeIdentity);
       const generationId = randomUUID();
       const generationPath = path.join(residualPath, `g-${generationId}`);
       await fs.mkdir(generationPath, { mode: 0o700 });
       const generationIdentity = await directory(generationPath);
       await notify('reserved-generation');
-      await this.revalidateNamespace(namespace.root, namespace.identities);
+      await this.revalidateNamespace(namespace);
       await directory(residualPath, volumeIdentity);
       await directory(generationPath, generationIdentity);
       const payloadIdentity = await writeFile(path.join(generationPath, 'payload.yaml'), input.bytes, () => notify('partial-payload'));
       await notify('payload-written');
-      await this.revalidateNamespace(namespace.root, namespace.identities);
+      await this.revalidateNamespace(namespace);
       await directory(residualPath, volumeIdentity);
       await directory(generationPath, generationIdentity);
       const sha256 = createHash('sha256').update(input.bytes).digest('hex');
@@ -343,13 +365,13 @@ export class FileMemoryVolumeStore {
       await notify('before-marker');
       await this.options.owners.requireOwnedAtScope(operation, token);
       this.options.coordinator.requireActiveOperationScope(operation);
-      await this.revalidateNamespace(namespace.root, namespace.identities);
+      await this.revalidateNamespace(namespace);
       await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes);
       if ((await namesAt(residualPath, 1)).join('|') !== `g-${generationId}`) throw error('EARCHIVEUNSAFE', 'Archive slot changed before marker');
       markerAttempted = true;
       await notify('invoking-marker');
       await this.options.owners.requireOwnedAtScope(operation, token);
-      await this.revalidateNamespace(namespace.root, namespace.identities);
+      await this.revalidateNamespace(namespace);
       await directory(residualPath, volumeIdentity);
       await directory(generationPath, generationIdentity);
       await fs.mkdir(path.join(residualPath, 'COMMITTED'), { recursive: false, mode: 0o700 });
