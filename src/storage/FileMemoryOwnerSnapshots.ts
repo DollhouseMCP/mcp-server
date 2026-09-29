@@ -109,6 +109,9 @@ interface DiagnosticEvidenceRead {
 export type UpdatePublication = 'prepared-temp' | 'prepared-journal' | 'renamed-head' |
   'published-journal' | 'updated-registry' | 'updated-sidecar' | 'unlinked-journal';
 
+export type UpdateMetadataStage = 'published-journal' | 'active-registry' | 'active-sidecar';
+export type UpdateMetadataStagePoint = 'partial-write' | 'verified-before-rename';
+
 export interface CommittedFileHeadError extends NodeJS.ErrnoException {
   readonly committed: true;
   readonly token: OwnedFileMemoryToken;
@@ -139,6 +142,10 @@ interface FileMemoryOwnerSnapshotsBaseOptions {
   readonly afterUpdatePublication?: (phase: UpdatePublication) => void | Promise<void>;
   /** Fault injection for dormant, operator-controlled finalization tests. */
   readonly afterFinalizePublication?: (phase: FinalizePublication) => void | Promise<void>;
+  /** Fault injection only; a staged UPDATE artifact is never resumed or removed automatically. */
+  readonly duringUpdateMetadataStage?: (
+    stage: UpdateMetadataStage, point: UpdateMetadataStagePoint,
+  ) => void | Promise<void>;
 }
 
 export interface FileMemoryOwnerSnapshotsLegacyOptions extends FileMemoryOwnerSnapshotsBaseOptions {
@@ -801,7 +808,8 @@ export class FileMemoryOwnerSnapshots {
       if (!preparedAtPublication || !isDeepStrictEqual(preparedAtPublication, journal)) {
         throw headError('EOWNERRECOVERY', 'Prepared memory write journal changed before publication');
       }
-      await this.replaceRawRecord(resolved.journalPath, this.serializedJournal(publishedJournal));
+      await this.replaceUpdateMetadata(
+        resolved.journalPath, this.serializedJournal(publishedJournal), operationId, 'published-journal');
       await this.options.afterUpdatePublication?.('published-journal');
       const nextRecord: OwnerRecord = {
         schema: 1, state: 'ACTIVE', userId: scope.userId, ownerId: expected.ownerId,
@@ -809,9 +817,12 @@ export class FileMemoryOwnerSnapshots {
         contentHash: newContentHash, fileIdentity: published.identity,
       };
       serializedRecord(nextRecord);
-      await this.replaceRecord(this.registryPath(scope.tenantRoot, expected.ownerId), nextRecord);
+      await this.replaceUpdateMetadata(
+        this.registryPath(scope.tenantRoot, expected.ownerId), serializedRecord(nextRecord),
+        operationId, 'active-registry');
       await this.options.afterUpdatePublication?.('updated-registry');
-      await this.replaceRecord(resolved.sidecarPath, nextRecord);
+      await this.replaceUpdateMetadata(
+        resolved.sidecarPath, serializedRecord(nextRecord), operationId, 'active-sidecar');
       await this.options.afterUpdatePublication?.('updated-sidecar');
       const final = await this.readAtRoot(
         scope.tenantRoot, scope.userId, resolved.locator, path.basename(resolved.journalPath));
@@ -1191,9 +1202,52 @@ export class FileMemoryOwnerSnapshots {
     }
   }
 
-  private async replaceRawRecord(filePath: string, raw: string): Promise<void> {
-    const tempPath = `${filePath}.${randomUUID()}.tmp`;
-    await this.writeExclusiveRaw(tempPath, raw);
+  /** UPDATE-only staging. Adoption keeps its separate generic replacement protocol. */
+  private async replaceUpdateMetadata(
+    filePath: string, raw: string, operationId: string, stage: UpdateMetadataStage,
+  ): Promise<void> {
+    if (!UUID_PATTERN.test(operationId)) {
+      throw headError('EOWNERRECOVERY', 'Memory update operation ID is invalid');
+    }
+    const tempPath = `${filePath}.update-${operationId}.tmp`;
+    const targetName = path.basename(filePath);
+    const foldedTarget = targetName.toLowerCase();
+    // Any earlier or aliased replacement in this target namespace blocks a
+    // fresh UPDATE. The ordinary writer never interprets or removes it.
+    await this.scanDirectory(path.dirname(filePath), name => {
+      const folded = name.toLowerCase();
+      return (folded === foldedTarget && name !== targetName) ||
+        folded.startsWith(`${foldedTarget}.`);
+    });
+    const bytes = Buffer.from(raw, 'utf8');
+    const handle = await fs.open(tempPath, 'wx', 0o600);
+    let stagedIdentity: FileIdentity;
+    try {
+      const split = Math.max(1, Math.floor(bytes.length / 2));
+      await handle.writeFile(bytes.subarray(0, split));
+      await this.options.duringUpdateMetadataStage?.(stage, 'partial-write');
+      await handle.writeFile(bytes.subarray(split));
+      await handle.sync();
+      const stat = await handle.stat({ bigint: true });
+      if (!stat.isFile() || stat.nlink !== 1n || stat.size !== BigInt(bytes.length) ||
+        (stat.mode & 0o077n) !== 0n || (process.getuid && stat.uid !== BigInt(process.getuid()))) {
+        throw headError('EOWNERRECOVERY', 'Staged memory metadata is not a private regular file');
+      }
+      stagedIdentity = identityOf(stat);
+    } finally {
+      await handle.close();
+    }
+    const readback = async () => stage === 'published-journal'
+      ? this.readJournalEvidence(tempPath) : this.readRecord(tempPath);
+    const first = await readback();
+    if (first?.raw !== raw || !sameIdentity(first.identity, stagedIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Staged memory metadata changed before publication');
+    }
+    await this.options.duringUpdateMetadataStage?.(stage, 'verified-before-rename');
+    const beforeRename = await readback();
+    if (beforeRename?.raw !== raw || !sameIdentity(beforeRename.identity, stagedIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Staged memory metadata changed before rename');
+    }
     await fs.rename(tempPath, filePath);
   }
 
