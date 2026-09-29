@@ -5,6 +5,11 @@ import * as path from 'node:path';
 import type { UserIdResolver } from '../database/UserContext.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import type { FileMemoryFence } from './FileMemoryFence.js';
+import {
+  FileMemoryTransactionCoordinator,
+  type FileMemoryLeaseContext,
+  type FileMemoryTransactionScope,
+} from './FileMemoryTransactionCoordinator.js';
 
 const SIDECAR_SUFFIX = '.memory-owner.json';
 const OWNER_DIRECTORY = '.memory-owners';
@@ -68,13 +73,24 @@ export type AdoptionPublication =
   | 'active-registry'
   | 'active-sidecar';
 
-export interface FileMemoryOwnerSnapshotsOptions {
-  readonly tenantRoot: string;
-  readonly getCurrentUserId: UserIdResolver;
-  readonly fence: Pick<FileMemoryFence, 'withTenantFence'>;
+interface FileMemoryOwnerSnapshotsBaseOptions {
   /** Fault injection for process-interruption tests; never performs recovery. */
   readonly afterPublication?: (phase: AdoptionPublication) => void | Promise<void>;
 }
+
+export interface FileMemoryOwnerSnapshotsLegacyOptions extends FileMemoryOwnerSnapshotsBaseOptions {
+  readonly tenantRoot: string;
+  readonly getCurrentUserId: UserIdResolver;
+  readonly fence: Pick<FileMemoryFence, 'withTenantFence'>;
+}
+
+export interface FileMemoryOwnerSnapshotsCoordinatedOptions extends FileMemoryOwnerSnapshotsBaseOptions {
+  readonly coordinator: FileMemoryTransactionCoordinator;
+}
+
+export type FileMemoryOwnerSnapshotsOptions =
+  | FileMemoryOwnerSnapshotsLegacyOptions
+  | FileMemoryOwnerSnapshotsCoordinatedOptions;
 
 function headError(code: string, message: string): NodeJS.ErrnoException {
   const error = new Error(message) as NodeJS.ErrnoException;
@@ -160,17 +176,30 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
  * temp record for manual cleanup while writers are stopped.
  */
 export class FileMemoryOwnerSnapshots {
-  constructor(private readonly options: FileMemoryOwnerSnapshotsOptions) {
+  private readonly options: FileMemoryOwnerSnapshotsOptions;
+
+  constructor(options: FileMemoryOwnerSnapshotsOptions) {
     if (process.platform === 'win32') {
       throw new Error('FileMemoryOwnerSnapshots requires POSIX filesystem ownership and mode checks');
     }
+    if ('coordinator' in options &&
+      ('tenantRoot' in options || 'getCurrentUserId' in options || 'fence' in options)) {
+      throw new TypeError('Coordinated owner snapshots cannot override coordinator scope or fence');
+    }
+    this.options = Object.freeze({ ...options });
   }
 
   async readHeadSnapshot(locator: string): Promise<FileMemorySnapshot> {
-    const userId = this.options.getCurrentUserId();
-    if (typeof userId !== 'string' || !userId) throw new TypeError('Current user ID is required');
-    const tenantRoot = await fs.realpath(this.options.tenantRoot);
-    return this.readAtRoot(tenantRoot, userId, locator);
+    const scope = await this.captureStandaloneScope();
+    return this.readAtRoot(scope.tenantRoot, scope.userId, locator);
+  }
+
+  /** Tracked, read-only operation under an existing tenant lease. */
+  readHeadSnapshotInTransaction(
+    context: FileMemoryLeaseContext, locator: string,
+  ): Promise<FileMemorySnapshot> {
+    return this.requiredCoordinator().perform(context, scope =>
+      this.readAtRoot(scope.tenantRoot, scope.userId, locator));
   }
 
   private async readAtRoot(tenantRoot: string, userId: string, locator: string): Promise<FileMemorySnapshot> {
@@ -222,50 +251,87 @@ export class FileMemoryOwnerSnapshots {
 
   async adoptUnowned(expected: UnownedFileMemoryToken): Promise<OwnedFileMemoryToken> {
     const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
+    if ('coordinator' in this.options) {
+      return this.options.coordinator.withTenantTransaction(context =>
+        this.adoptUnownedInTransaction(context, token));
+    }
     if (token.backend !== 'file' || token.ownership !== 'unowned') {
       throw new TypeError('Adoption requires an unowned file snapshot');
     }
     const userId = this.options.getCurrentUserId();
     const root = await fs.realpath(this.options.tenantRoot);
+    return this.options.fence.withTenantFence(root, () =>
+      this.adoptAtRoot({ tenantRoot: root, userId }, token));
+  }
+
+  /** Tracked adoption under the caller's existing lease; never reacquires it. */
+  adoptUnownedInTransaction(
+    context: FileMemoryLeaseContext, expected: UnownedFileMemoryToken,
+  ): Promise<OwnedFileMemoryToken> {
+    const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
+    return this.requiredCoordinator().perform(context, scope => this.adoptAtRoot(scope, token));
+  }
+
+  private async captureStandaloneScope(): Promise<FileMemoryTransactionScope> {
+    if ('coordinator' in this.options) return this.options.coordinator.captureReadScope();
+    const userId = this.options.getCurrentUserId();
+    if (typeof userId !== 'string' || !userId) throw new TypeError('Current user ID is required');
+    const suppliedRoot = this.options.tenantRoot;
+    const tenantRoot = await fs.realpath(suppliedRoot);
+    return { tenantRoot, userId };
+  }
+
+  private requiredCoordinator(): FileMemoryTransactionCoordinator {
+    if (!('coordinator' in this.options)) {
+      throw new TypeError('Owner snapshot store is not bound to a transaction coordinator');
+    }
+    return this.options.coordinator;
+  }
+
+  private async adoptAtRoot(
+    scope: FileMemoryTransactionScope, token: UnownedFileMemoryToken,
+  ): Promise<OwnedFileMemoryToken> {
+    if (token.backend !== 'file' || token.ownership !== 'unowned') {
+      throw new TypeError('Adoption requires an unowned file snapshot');
+    }
+    const { tenantRoot: root, userId } = scope;
     if (token.userId !== userId || token.tenantRoot !== root) {
       throw headError('EHEADCONFLICT', 'Memory snapshot belongs to a different tenant');
     }
-    return this.options.fence.withTenantFence(root, async () => {
-      const current = await this.readAtRoot(root, userId, token.locator);
-      if (current.token.ownership !== 'unowned' ||
-        current.token.locator !== token.locator || current.token.contentHash !== token.contentHash ||
-        !sameIdentity(current.token.fileIdentity, token.fileIdentity)) {
-        throw headError('EHEADCONFLICT', 'Unowned memory changed before adoption');
-      }
-      const { sidecarPath } = await this.resolveHead(root, token.locator);
-      const ownerId = randomUUID();
-      const rechecked = current.token;
-      const record: OwnerRecord = {
-        schema: 1, state: 'RESERVED', userId, ownerId, locator: token.locator,
-        revision: '1', contentHash: rechecked.contentHash, fileIdentity: rechecked.fileIdentity,
-      };
-      const active = { ...record, state: 'ACTIVE' as const };
-      // Reject oversized metadata before the first owner publication.
-      serializedRecord(record);
-      serializedRecord(active);
+    const current = await this.readAtRoot(root, userId, token.locator);
+    if (current.token.ownership !== 'unowned' ||
+      current.token.locator !== token.locator || current.token.contentHash !== token.contentHash ||
+      !sameIdentity(current.token.fileIdentity, token.fileIdentity)) {
+      throw headError('EHEADCONFLICT', 'Unowned memory changed before adoption');
+    }
+    const { sidecarPath } = await this.resolveHead(root, token.locator);
+    const ownerId = randomUUID();
+    const rechecked = current.token;
+    const record: OwnerRecord = {
+      schema: 1, state: 'RESERVED', userId, ownerId, locator: token.locator,
+      revision: '1', contentHash: rechecked.contentHash, fileIdentity: rechecked.fileIdentity,
+    };
+    const active = { ...record, state: 'ACTIVE' as const };
+    // Reject oversized metadata before the first owner publication.
+    serializedRecord(record);
+    serializedRecord(active);
 
-      // A pre-existing legacy head becomes blocked before any owner registry
-      // is published. A crash here leaves RESERVED, never a fake unowned head.
-      await this.writeExclusiveRecord(sidecarPath, record);
-      await this.options.afterPublication?.('reserved-sidecar');
-      const ownerDirectory = path.dirname(this.registryPath(root, ownerId));
-      await this.ensurePrivateDirectory(path.dirname(ownerDirectory));
-      await this.ensurePrivateDirectory(ownerDirectory);
-      const registryPath = this.registryPath(root, ownerId);
-      await this.writeExclusiveRecord(registryPath, record);
-      await this.options.afterPublication?.('reserved-registry');
-      await this.replaceRecord(registryPath, active);
-      await this.options.afterPublication?.('active-registry');
-      await this.replaceRecord(sidecarPath, active);
-      // ACTIVE sidecar plus agreeing ACTIVE registry is the adoption commit.
-      await this.options.afterPublication?.('active-sidecar');
-      return { ...token, ownership: 'owned', ownerId, revision: '1' };
-    });
+    // A pre-existing legacy head becomes blocked before any owner registry
+    // is published. A crash here leaves RESERVED, never a fake unowned head.
+    await this.writeExclusiveRecord(sidecarPath, record);
+    await this.options.afterPublication?.('reserved-sidecar');
+    const ownerDirectory = path.dirname(this.registryPath(root, ownerId));
+    await this.ensurePrivateDirectory(path.dirname(ownerDirectory));
+    await this.ensurePrivateDirectory(ownerDirectory);
+    const registryPath = this.registryPath(root, ownerId);
+    await this.writeExclusiveRecord(registryPath, record);
+    await this.options.afterPublication?.('reserved-registry');
+    await this.replaceRecord(registryPath, active);
+    await this.options.afterPublication?.('active-registry');
+    await this.replaceRecord(sidecarPath, active);
+    // ACTIVE sidecar plus agreeing ACTIVE registry is the adoption commit.
+    await this.options.afterPublication?.('active-sidecar');
+    return { ...token, ownership: 'owned', ownerId, revision: '1' };
   }
 
   private async resolveHead(tenantRoot: string, locator: string): Promise<{
