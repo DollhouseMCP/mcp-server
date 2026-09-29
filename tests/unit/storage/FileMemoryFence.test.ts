@@ -10,13 +10,19 @@ const sourceExtension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
 const childModuleUrl = new URL(`../../../src/storage/FileMemoryFence.${sourceExtension}`, import.meta.url).href;
 const childScript = `
   import { FileMemoryFence } from ${JSON.stringify(childModuleUrl)};
-  const [tenantRoot, memoryLocator] = process.argv.slice(1);
+  import * as fs from 'node:fs/promises';
+  import * as path from 'node:path';
+  const [tenantRoot, memoryLocator, scope] = process.argv.slice(1);
   try {
-    await new FileMemoryFence().withFence({ tenantRoot, memoryLocator }, async () => {
+    const fence = new FileMemoryFence();
+    const operation = async () => {
+      if (scope === 'tenant') await fs.readFile(path.join(tenantRoot, memoryLocator), 'utf8');
       process.stdout.write('READY\\n');
       process.stdin.resume();
       await new Promise(resolve => process.stdin.once('end', resolve));
-    });
+    };
+    if (scope === 'tenant') await fence.withTenantFence(tenantRoot, operation);
+    else await fence.withFence({ tenantRoot, memoryLocator }, operation);
   } catch (error) {
     process.stderr.write(String(error?.stack ?? error) + '\\n');
     process.exitCode = 1;
@@ -39,10 +45,10 @@ function childExit(child: ChildProcessWithoutNullStreams): Promise<number | null
   });
 }
 
-async function holdingChild(tenantRoot: string, memoryLocator = 'notes/example.yaml'):
+async function holdingChild(tenantRoot: string, memoryLocator = 'notes/example.yaml', scope = 'memory'):
 Promise<ChildProcessWithoutNullStreams> {
   const child = spawn(process.execPath, [
-    '--import', 'tsx', '--input-type=module', '--eval', childScript, tenantRoot, memoryLocator,
+    '--import', 'tsx', '--input-type=module', '--eval', childScript, tenantRoot, memoryLocator, scope,
   ], {
     cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -81,6 +87,8 @@ describe('FileMemoryFence local POSIX primitive', () => {
   if (process.platform === 'win32') {
     it('fails closed on a platform without POSIX mode and owner checks', async () => {
       await expect(new FileMemoryFence().withFence({ tenantRoot: 'C:\\', memoryLocator: 'a.yaml' }, () => 1))
+        .rejects.toThrow('requires POSIX');
+      await expect(new FileMemoryFence().withTenantFence('C:\\', () => 1))
         .rejects.toThrow('requires POSIX');
     });
     return;
@@ -177,5 +185,50 @@ describe('FileMemoryFence local POSIX primitive', () => {
     await fs.symlink(path.join(tenantRoot, 'notes'), path.join(anotherRoot, '.memory-fences'));
     await expect(fence.withFence({ tenantRoot: anotherRoot, memoryLocator: 'a.yaml' }, () => 1))
       .rejects.toThrow('private, non-symlink');
+  });
+
+  it('serializes separate processes across uppercase and Unicode legacy head names', async () => {
+    const tenantRoot = await root();
+    const legacyDir = path.join(tenantRoot, 'Legacy');
+    await fs.mkdir(legacyDir);
+    await fs.writeFile(path.join(legacyDir, 'RÉSUMÉ.yaml'), 'first');
+    await fs.writeFile(path.join(legacyDir, '日本語.yaml'), 'second');
+
+    const child = await holdingChild(tenantRoot, 'Legacy/RÉSUMÉ.yaml', 'tenant');
+    const fence = new FileMemoryFence();
+    expect(await fs.readdir(path.join(tenantRoot, '.memory-fences'))).toEqual(['tenant.lock']);
+    const tenantLock = path.join(tenantRoot, '.memory-fences', 'tenant.lock');
+    expect((await fs.stat(tenantLock)).mode & 0o777).toBe(0o700);
+    expect((await fs.stat(path.join(tenantLock, 'owner'))).mode & 0o777).toBe(0o600);
+    const rootAlias = `${tenantRoot}-alias`;
+    await fs.symlink(tenantRoot, rootAlias);
+    try {
+      await expect(fence.withTenantFence(rootAlias, () => fs.readFile(
+        path.join(legacyDir, '日本語.yaml'), 'utf8',
+      ), { timeoutMs: 80 })).rejects.toBeInstanceOf(FileMemoryFenceTimeoutError);
+    } finally {
+      await fs.unlink(rootAlias);
+    }
+
+    const separateTenant = await root();
+    await expect(fence.withTenantFence(separateTenant, () => 'independent'))
+      .resolves.toBe('independent');
+    child.stdin.end();
+    await expect(childExit(child)).resolves.toBe(0);
+    await expect(fence.withTenantFence(tenantRoot, () => fs.readFile(
+      path.join(legacyDir, '日本語.yaml'), 'utf8',
+    ))).resolves.toBe('second');
+    expect(await fs.readdir(path.join(tenantRoot, '.memory-fences'))).toHaveLength(0);
+  });
+
+  it('keeps a crashed tenant lease fail closed without stale-lock stealing', async () => {
+    const tenantRoot = await root();
+    await fs.writeFile(path.join(tenantRoot, 'Legacy.yaml'), 'head');
+    const child = await holdingChild(tenantRoot, 'Legacy.yaml', 'tenant');
+    child.kill('SIGKILL');
+    await childExit(child);
+    await expect(new FileMemoryFence().withTenantFence(tenantRoot, () => 'unsafe', { timeoutMs: 50 }))
+      .rejects.toBeInstanceOf(FileMemoryFenceTimeoutError);
+    expect(await fs.readdir(path.join(tenantRoot, '.memory-fences'))).toEqual(['tenant.lock']);
   });
 });

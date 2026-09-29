@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 
 /**
- * A local-filesystem exclusion primitive for a single tenant memory locator.
+ * Local-filesystem exclusion primitives for one memory locator or a tenant.
  * It does not implement version-checked persistence or archive ownership.
  * Every file-memory writer must participate before it can protect a head.
  */
@@ -28,6 +28,7 @@ interface Lease {
 }
 
 const LOCK_DIRECTORY = '.memory-fences';
+const TENANT_LOCK_NAME = 'tenant.lock';
 const OWNER_FILE = 'owner';
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 60_000;
@@ -73,11 +74,33 @@ export class FileMemoryFence {
     operation: () => Promise<T> | T,
     options: FileMemoryFenceOptions = {},
   ): Promise<T> {
+    const capturedTarget = { ...target };
+    return this.withResolvedFence(() => this.resolveLockPath(capturedTarget), operation, options);
+  }
+
+  /**
+   * One lease per physical tenant root, independent of head filename. Future
+   * file-memory writers must all use this scope before validating or mutating
+   * actual head/archive paths; mixing scopes does not provide exclusion.
+   */
+  async withTenantFence<T>(
+    tenantRoot: string,
+    operation: () => Promise<T> | T,
+    options: FileMemoryFenceOptions = {},
+  ): Promise<T> {
+    return this.withResolvedFence(() => this.resolveTenantLockPath(tenantRoot), operation, options);
+  }
+
+  private async withResolvedFence<T>(
+    resolvePath: () => Promise<string>,
+    operation: () => Promise<T> | T,
+    options: FileMemoryFenceOptions,
+  ): Promise<T> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
       throw new RangeError(`timeoutMs must be finite and between 0 and ${MAX_TIMEOUT_MS}`);
     }
-    const lockPath = await this.resolveLockPath(target);
+    const lockPath = await resolvePath();
     const lease = await this.acquire(lockPath, timeoutMs);
 
     let result!: T;
@@ -109,20 +132,31 @@ export class FileMemoryFence {
     // Capture caller-owned values before the first asynchronous boundary.
     const suppliedRoot = target.tenantRoot;
     const locator = target.memoryLocator;
-    if (process.platform === 'win32') {
-      throw new Error('FileMemoryFence requires POSIX filesystem ownership and mode checks');
-    }
-    if (typeof suppliedRoot !== 'string' || !suppliedRoot) {
-      throw new TypeError('tenantRoot must be a directory path');
-    }
     const normalized = validateLocator(locator);
-    const root = await fs.realpath(suppliedRoot);
+    const root = await this.canonicalTenantRoot(suppliedRoot);
     const relative = await this.resolveExistingComponents(root, normalized);
     const lockRoot = await this.ensureLockRoot(root);
     // The directory is already tenant-root scoped. Hashing only the locator
     // keeps bind-mount aliases of that same directory on one lease name.
     const key = createHash('sha256').update(relative.split(path.sep).join('/')).digest('hex');
     return path.join(lockRoot, `${key}.lock`);
+  }
+
+  private async resolveTenantLockPath(suppliedRoot: string): Promise<string> {
+    // This lease excludes cooperating writers; callers must validate actual
+    // head/archive path confinement and links while holding it.
+    const root = await this.canonicalTenantRoot(suppliedRoot);
+    return path.join(await this.ensureLockRoot(root), TENANT_LOCK_NAME);
+  }
+
+  private async canonicalTenantRoot(suppliedRoot: string): Promise<string> {
+    if (process.platform === 'win32') {
+      throw new Error('FileMemoryFence requires POSIX filesystem ownership and mode checks');
+    }
+    if (typeof suppliedRoot !== 'string' || !suppliedRoot) {
+      throw new TypeError('tenantRoot must be a directory path');
+    }
+    return fs.realpath(suppliedRoot);
   }
 
   private async resolveExistingComponents(root: string, locator: string): Promise<string> {
