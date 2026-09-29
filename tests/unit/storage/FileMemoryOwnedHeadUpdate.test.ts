@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -23,7 +23,7 @@ const updateChild = `
   import { FileMemoryOwnerSnapshots } from ${JSON.stringify(new URL(`FileMemoryOwnerSnapshots.${sourceExtension}`, moduleRoot).href)};
   import { FileMemoryTransactionCoordinator } from ${JSON.stringify(new URL(`FileMemoryTransactionCoordinator.${sourceExtension}`, moduleRoot).href)};
   import { FileMemoryFence } from ${JSON.stringify(new URL(`FileMemoryFence.${sourceExtension}`, moduleRoot).href)};
-  const [tenantRoot, userId, tokenJson, stopPhase] = process.argv.slice(1);
+  const [tenantRoot, userId, tokenJson, stopPhase, stopStage, stopPoint] = process.argv.slice(1);
   const coordinator = new FileMemoryTransactionCoordinator({
     tenantRoot, getCurrentUserId: () => userId, fence: new FileMemoryFence(),
   });
@@ -35,8 +35,31 @@ const updateChild = `
         return new Promise(() => {});
       }
     },
+    duringUpdateMetadataStage: (stage, point) => {
+      if (stage === stopStage && point === stopPoint) {
+        process.stdout.write('STOPPED\\n');
+        process.stdin.resume();
+        return new Promise(() => {});
+      }
+    },
   });
   await store.updateOwnedHead(JSON.parse(tokenJson), 'name: Child update\\nentries: []\\n');
+`;
+const inspectChild = `
+  import { FileMemoryOwnerSnapshots } from ${JSON.stringify(new URL(`FileMemoryOwnerSnapshots.${sourceExtension}`, moduleRoot).href)};
+  import { FileMemoryTransactionCoordinator } from ${JSON.stringify(new URL(`FileMemoryTransactionCoordinator.${sourceExtension}`, moduleRoot).href)};
+  import { FileMemoryFence } from ${JSON.stringify(new URL(`FileMemoryFence.${sourceExtension}`, moduleRoot).href)};
+  const [tenantRoot, userId, locator] = process.argv.slice(1);
+  const coordinator = new FileMemoryTransactionCoordinator({
+    tenantRoot, getCurrentUserId: () => userId, fence: new FileMemoryFence(),
+  });
+  const store = new FileMemoryOwnerSnapshots({ coordinator });
+  let readCode = 'clean';
+  try { await store.readHeadSnapshot(locator); } catch (error) { readCode = error.code ?? 'unknown'; }
+  const diagnostic = await store.inspectInterruptedOwnedHead(locator);
+  process.stdout.write(JSON.stringify({ readCode, kind: diagnostic.kind,
+    evidenceComplete: diagnostic.evidenceComplete, artifactCount: diagnostic.artifactCount,
+    artifactNamesRedacted: diagnostic.artifactNamesRedacted }));
 `;
 
 async function fixture(afterUpdatePublication?: (phase: UpdatePublication) => void | Promise<void>) {
@@ -157,6 +180,95 @@ describe('dormant owned file head conditional UPDATE', () => {
     expect(await fs.readFile(headPath, 'utf8')).toBe('name: Original\nentries: []\n');
   });
 
+  it.each([
+    ['published-journal', 'existing'], ['published-journal', 'malformed'],
+    ['published-journal', 'wrong-operation'], ['active-registry', 'case-alias'],
+    ['active-registry', 'non-private'], ['active-registry', 'symlink'],
+    ['active-registry', 'wrong-owner'],
+    ['active-sidecar', 'hardlink'], ['active-sidecar', 'legacy-random'],
+  ] as const)('preserves a %s %s collision without replacing metadata', async (stage, variant) => {
+    const { tenantRoot, owned, locator, headPath, hash, store } = await fixture();
+    let artifact = '';
+    let target = '';
+    let targetBefore = Buffer.alloc(0);
+    const coordinator = new FileMemoryTransactionCoordinator({
+      tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence(),
+    });
+    const colliding = new FileMemoryOwnerSnapshots({
+      coordinator,
+      afterUpdatePublication: async phase => {
+        const beforeStage = stage === 'published-journal' ? 'renamed-head'
+          : stage === 'active-registry' ? 'published-journal' : 'updated-registry';
+        if (phase !== beforeStage) return;
+        const journal = JSON.parse(await fs.readFile(
+          path.join(path.dirname(headPath), `.${hash}.memory-write.json`), 'utf8',
+        )) as { operationId: string };
+        target = stage === 'published-journal'
+          ? path.join(path.dirname(headPath), `.${hash}.memory-write.json`)
+          : stage === 'active-registry'
+            ? path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`)
+            : path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+        targetBefore = await fs.readFile(target);
+        artifact = `${target}.update-${journal.operationId}.tmp`;
+        if (variant === 'wrong-operation') artifact = `${target}.update-${randomUUID()}.tmp`;
+        if (variant === 'legacy-random') artifact = `${target}.${randomUUID()}.tmp`;
+        if (variant === 'case-alias') artifact = artifact.replace('.update-', '.UPDATE-');
+        if (variant === 'symlink') await fs.symlink(target, artifact);
+        else if (variant === 'hardlink') await fs.link(target, artifact);
+        else {
+          let content: string | Buffer = variant === 'malformed' ? '{broken' : targetBefore;
+          if (variant === 'wrong-owner') {
+            const wrong = JSON.parse(targetBefore.toString('utf8')) as Record<string, unknown>;
+            wrong.ownerId = randomUUID();
+            content = JSON.stringify(wrong);
+          }
+          await fs.writeFile(artifact, content,
+            { mode: variant === 'non-private' ? 0o644 : 0o600, flag: 'wx' });
+        }
+      },
+    });
+    await expect(colliding.updateOwnedHead(owned, 'name: Collision\nentries: []\n'))
+      .rejects.toMatchObject({ residual: true });
+    expect(await fs.readFile(target)).toEqual(targetBefore);
+    expect(await fs.lstat(artifact)).toBeDefined();
+    await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+  });
+
+  it('accepts an uppercase owner UUID yet catches its case-folded registry stage alias', async () => {
+    const { tenantRoot, store, owned, locator, headPath, hash } = await fixture();
+    const upperId = owned.ownerId.toUpperCase();
+    const registry = path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`);
+    const upperRegistry = path.join(tenantRoot, '.memory-owners', 'owners', `${upperId}.json`);
+    const sidecar = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+    for (const recordPath of [registry, sidecar]) {
+      const record = JSON.parse(await fs.readFile(recordPath, 'utf8')) as Record<string, unknown>;
+      record.ownerId = upperId;
+      await fs.writeFile(recordPath, JSON.stringify(record), { mode: 0o600 });
+    }
+    await fs.rename(registry, upperRegistry);
+    const upperToken = (await store.readHeadSnapshot(locator)).token as OwnedFileMemoryToken;
+    expect(upperToken.ownerId).toBe(upperId);
+    let alias = '';
+    const coordinator = new FileMemoryTransactionCoordinator({
+      tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence(),
+    });
+    const colliding = new FileMemoryOwnerSnapshots({
+      coordinator,
+      afterUpdatePublication: async phase => {
+        if (phase !== 'published-journal') return;
+        const journal = JSON.parse(await fs.readFile(
+          path.join(path.dirname(headPath), `.${hash}.memory-write.json`), 'utf8',
+        )) as { operationId: string };
+        alias = `${upperRegistry}.UPDATE-${journal.operationId}.TMP`;
+        await fs.writeFile(alias, '{broken', { mode: 0o600, flag: 'wx' });
+      },
+    });
+    await expect(colliding.updateOwnedHead(upperToken, 'name: New\nentries: []\n'))
+      .rejects.toMatchObject({ residual: true });
+    expect(await fs.readFile(alias, 'utf8')).toBe('{broken');
+    await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+  });
+
   it('accepts an authored gatekeeper policy that normal memory saves accept', async () => {
     const { store, owned, locator } = await fixture();
     const content = 'name: Valid\nmetadata:\n  gatekeeper:\n    externalRestrictions:\n' +
@@ -164,6 +276,164 @@ describe('dormant owned file head conditional UPDATE', () => {
     const updated = await store.updateOwnedHead(owned, content);
     expect(updated.revision).toBe('2');
     expect((await store.readHeadSnapshot(locator)).content).toBe(content);
+  });
+
+  it('stages only the three UPDATE metadata replacements at operation-bound names', async () => {
+    const { tenantRoot, store, owned, headPath, hash } = await fixture();
+    const observed: string[] = [];
+    const coordinator = new FileMemoryTransactionCoordinator({
+      tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence(),
+    });
+    const inspected = new FileMemoryOwnerSnapshots({
+      coordinator,
+      duringUpdateMetadataStage: async (stage, point) => {
+        if (point !== 'verified-before-rename') return;
+        const journal = JSON.parse(await fs.readFile(
+          path.join(path.dirname(headPath), `.${hash}.memory-write.json`), 'utf8',
+        )) as { operationId: string };
+        const target = stage === 'published-journal'
+          ? path.join(path.dirname(headPath), `.${hash}.memory-write.json`)
+          : stage === 'active-registry'
+            ? path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`)
+            : path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+        const staged = `${target}.update-${journal.operationId}.tmp`;
+        const siblings = (await fs.readdir(path.dirname(target)))
+          .filter(name => name.toLowerCase().startsWith(`${path.basename(target).toLowerCase()}.`));
+        expect(siblings).toEqual([path.basename(staged)]);
+        const raw = await fs.readFile(staged, 'utf8');
+        const parsed = JSON.parse(raw) as { state: string; operationId?: string; revision?: string };
+        expect(parsed.state).toBe(stage === 'published-journal' ? 'PUBLISHED_WRITE' : 'ACTIVE');
+        expect(parsed.operationId ?? journal.operationId).toBe(journal.operationId);
+        if (stage !== 'published-journal') expect(parsed.revision).toBe('2');
+        const stat = await fs.stat(staged);
+        expect(stat.isFile()).toBe(true);
+        expect(stat.nlink).toBe(1);
+        expect(stat.mode & 0o077).toBe(0);
+        observed.push(staged);
+      },
+    });
+    await inspected.updateOwnedHead(owned, 'name: Staged\nentries: []\n');
+    expect(observed).toHaveLength(3);
+    for (const staged of observed) await expect(fs.stat(staged)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await store.readHeadSnapshot('Notes/ÜberNote.yaml')).token).toMatchObject({ revision: '2' });
+  });
+
+  it.each(['published-journal', 'active-registry', 'active-sidecar'] as const)(
+    'rejects a same-byte replacement inode before %s rename', async stage => {
+      const { tenantRoot, store, owned, headPath, hash, locator } = await fixture();
+      const coordinator = new FileMemoryTransactionCoordinator({
+        tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence(),
+      });
+      const swapping = new FileMemoryOwnerSnapshots({
+        coordinator,
+        duringUpdateMetadataStage: async (current, point) => {
+          if (current !== stage || point !== 'verified-before-rename') return;
+          const journal = JSON.parse(await fs.readFile(
+            path.join(path.dirname(headPath), `.${hash}.memory-write.json`), 'utf8',
+          )) as { operationId: string };
+          const target = stage === 'published-journal'
+            ? path.join(path.dirname(headPath), `.${hash}.memory-write.json`)
+            : stage === 'active-registry'
+              ? path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`)
+              : path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+          const staged = `${target}.update-${journal.operationId}.tmp`;
+          const bytes = await fs.readFile(staged);
+          const replacement = `${staged}.replacement`;
+          await fs.writeFile(replacement, bytes, { mode: 0o600, flag: 'wx' });
+          await fs.rename(replacement, staged);
+        },
+      });
+      await expect(swapping.updateOwnedHead(owned, 'name: Swapped\nentries: []\n'))
+        .rejects.toMatchObject({ residual: true, cause: { code: 'EOWNERRECOVERY' } });
+      await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    },
+  );
+
+  it.each([
+    ['published-journal', 'partial-write'], ['published-journal', 'verified-before-rename'],
+    ['active-registry', 'partial-write'], ['active-registry', 'verified-before-rename'],
+    ['active-sidecar', 'partial-write'], ['active-sidecar', 'verified-before-rename'],
+  ] as const)('preserves %s %s stage after a real SIGKILL', async (stage, point) => {
+    const { tenantRoot, store, owned, locator, headPath, hash } = await fixture();
+    const child = spawn(process.execPath, [
+      '--import', 'tsx', '--input-type=module', '--eval', updateChild,
+      tenantRoot, USER, JSON.stringify(owned), 'none', stage, point,
+    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let output = '';
+        let errors = '';
+        const timeout = setTimeout(() => reject(new Error(`Child did not stage ${stage}/${point}: ${errors}`)), 8_000);
+        child.stdout.on('data', (data: Buffer) => {
+          output += data.toString();
+          if (output.includes('STOPPED\n')) { clearTimeout(timeout); resolve(); }
+        });
+        child.stderr.on('data', (data: Buffer) => { errors += data.toString(); });
+        child.once('error', error => { clearTimeout(timeout); reject(error); });
+        child.once('exit', code => { clearTimeout(timeout); reject(new Error(`Writer exited ${code}: ${errors}`)); });
+      });
+      const exit = new Promise(resolve => child.once('exit', resolve));
+      child.kill('SIGKILL');
+      await exit;
+      const journal = JSON.parse(await fs.readFile(
+        path.join(path.dirname(headPath), `.${hash}.memory-write.json`), 'utf8',
+      )) as { operationId: string };
+      const target = stage === 'published-journal'
+        ? path.join(path.dirname(headPath), `.${hash}.memory-write.json`)
+        : stage === 'active-registry'
+          ? path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`)
+          : path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+      const staged = `${target}.update-${journal.operationId}.tmp`;
+      const beforeBytes = await fs.readFile(staged);
+      const beforeStat = await fs.stat(staged, { bigint: true });
+      const beforeHead = await fs.readFile(headPath);
+      const beforeTarget = await fs.readFile(target);
+      if (point === 'partial-write') {
+        expect(() => JSON.parse(beforeBytes.toString('utf8'))).toThrow();
+      } else {
+        expect(JSON.parse(beforeBytes.toString('utf8'))).toMatchObject({
+          state: stage === 'published-journal' ? 'PUBLISHED_WRITE' : 'ACTIVE',
+        });
+      }
+      const probe = JSON.parse(execFileSync(process.execPath, [
+        '--import', 'tsx', '--input-type=module', '--eval', inspectChild,
+        tenantRoot, USER, locator,
+      ], { cwd: process.cwd(), encoding: 'utf8', timeout: 8_000 })) as {
+        readCode: string; kind: string; evidenceComplete: boolean; artifactCount: number | null;
+        artifactNamesRedacted: boolean;
+      };
+      expect(probe.readCode).toBe('EOWNERRECOVERY');
+      expect(probe.kind).toBe('blocked-by-fence');
+      // Operator-controlled test teardown after the child is confirmed dead;
+      // no production reader or writer removes an abandoned lease.
+      const lease = path.join(tenantRoot, '.memory-fences', 'tenant.lock');
+      expect(await fs.readdir(lease)).toEqual(['owner']);
+      await fs.unlink(path.join(lease, 'owner'));
+      await fs.rmdir(lease);
+      const afterQuiescence = JSON.parse(execFileSync(process.execPath, [
+        '--import', 'tsx', '--input-type=module', '--eval', inspectChild,
+        tenantRoot, USER, locator,
+      ], { cwd: process.cwd(), encoding: 'utf8', timeout: 8_000 })) as typeof probe;
+      expect(afterQuiescence).toMatchObject({
+        readCode: 'EOWNERRECOVERY', kind: 'unknown-manual-review',
+        evidenceComplete: true, artifactNamesRedacted: true,
+      });
+      expect(afterQuiescence.artifactCount).toBeGreaterThan(0);
+      await expect(store.updateOwnedHead(owned, 'name: Retry\nentries: []\n'))
+        .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+      expect(await fs.readFile(staged)).toEqual(beforeBytes);
+      expect(await fs.readFile(headPath)).toEqual(beforeHead);
+      expect(await fs.readFile(target)).toEqual(beforeTarget);
+      const afterStat = await fs.stat(staged, { bigint: true });
+      expect(afterStat.mtimeNs).toBe(beforeStat.mtimeNs);
+      expect(afterStat.ino).toBe(beforeStat.ino);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exit = new Promise(resolve => child.once('exit', resolve));
+        child.kill('SIGKILL');
+        await exit;
+      }
+    }
   });
 
   it.each<UpdatePublication>([
