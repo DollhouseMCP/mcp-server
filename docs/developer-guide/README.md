@@ -15,3 +15,4 @@ This directory contains documentation for developers contributing to the Dollhou
 *   [Manual Element Construction](manual-element-construction.md) - When and how to hand-craft elements.
 *   [Testing Strategy](testing-strategy.md) - Current test suites, coverage expectations, and release checks.
 *   [ES Module Testing Strategy](testing-strategy-es-modules.md) - Jest / ESM specifics and workarounds.
+*   [Database Memory Tag Invalidation](database-memory-tag-invalidation.md) - Tenant safeguards, conflict handling and preactivation backfill gate.
