@@ -279,13 +279,177 @@ describe('dormant owned file head conditional UPDATE', () => {
       const exit = new Promise(resolve => child.once('exit', resolve));
       child.kill('SIGKILL');
       await exit;
+      expect(await store.inspectInterruptedOwnedHead(locator)).toMatchObject({ kind: 'blocked-by-fence' });
       if (phase === 'unlinked-journal') {
         expect((await store.readHeadSnapshot(locator)).token).toMatchObject({ revision: '2' });
       } else {
         await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
       }
+      // Only the test harness removes a confirmed orphan lease, after its writer is dead.
+      await fs.rm(path.join(tenantRoot, '.memory-fences', 'tenant.lock'), { recursive: true });
+      const diagnostic = await store.inspectInterruptedOwnedHead(locator);
+      const expected = {
+        'prepared-temp': 'pre-journal-orphan-candidate',
+        'prepared-journal': 'prepared-not-published',
+        'renamed-head': 'renamed-before-published-journal',
+        'published-journal': 'published-before-registry',
+        'updated-registry': 'registry-advanced',
+        'updated-sidecar': 'metadata-advanced-before-unlink',
+        'unlinked-journal': 'clean-consistent',
+      } satisfies Record<UpdatePublication, string>;
+      expect(diagnostic.kind).toBe(expected[phase]);
+      expect(diagnostic).not.toHaveProperty('token');
+      expect(diagnostic).not.toHaveProperty('content');
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }
+  });
+
+  it('does not create a lock directory or alter head and metadata when diagnosing a clean owner', async () => {
+    const { tenantRoot, store, locator, headPath, hash } = await fixture();
+    await fs.rmdir(path.join(tenantRoot, '.memory-fences'));
+    const sidecar = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+    const before = await Promise.all([headPath, sidecar].map(async name => ({
+      bytes: await fs.readFile(name), mtimeMs: (await fs.stat(name)).mtimeMs,
+    })));
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('clean-consistent');
+    await expect(fs.lstat(path.join(tenantRoot, '.memory-fences'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const after = await Promise.all([headPath, sidecar].map(async name => ({
+      bytes: await fs.readFile(name), mtimeMs: (await fs.stat(name)).mtimeMs,
+    })));
+    expect(after).toEqual(before);
+  });
+
+  it('leaves malformed metadata and a missing head unknown without fabricating ownership', async () => {
+    const { store, locator, headPath, hash } = await fixture();
+    const journal = path.join(path.dirname(headPath), `.${hash}.memory-write.json`);
+    await fs.writeFile(journal, '{broken', { mode: 0o600 });
+    expect(await store.inspectInterruptedOwnedHead(locator)).toMatchObject({
+      kind: 'unknown-manual-review', artifactCount: null, evidenceComplete: false,
+    });
+    await fs.unlink(journal);
+    await fs.unlink(headPath);
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+  });
+
+  it('treats an extra owner field or unsafe temporary mode as unknown', async () => {
+    const { store, locator, headPath, hash, owned } = await fixture();
+    const sidecar = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+    const original = await fs.readFile(sidecar, 'utf8');
+    await fs.writeFile(sidecar, JSON.stringify({ ...JSON.parse(original), unexpected: true }), { mode: 0o600 });
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+    await fs.writeFile(sidecar, original, { mode: 0o600 });
+    const temp = path.join(path.dirname(headPath),
+      `.${hash}.memory-write.${owned.ownerId}.22222222-2222-4222-8222-222222222222.tmp`);
+    await fs.writeFile(temp, 'name: partial\n', { mode: 0o644 });
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+  });
+
+  it('rejects an extra journal field and an equal-content replacement inode as proof', async () => {
+    const { store, locator, headPath, hash, owned } = await fixture(phase => {
+      if (phase === 'prepared-journal') throw new Error('pause');
+    });
+    const journal = path.join(path.dirname(headPath), `.${hash}.memory-write.json`);
+    await expect(store.updateOwnedHead(owned, 'name: New\nentries: []\n')).rejects.toMatchObject({
+      code: 'EOWNERRECOVERY', residual: true,
+    });
+    const otherwiseValid = JSON.parse(await fs.readFile(journal, 'utf8'));
+    await fs.writeFile(journal, JSON.stringify({ ...otherwiseValid, unexpected: true }), { mode: 0o600 });
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+    await fs.unlink(journal);
+    const [temp] = (await fs.readdir(path.dirname(headPath))).filter(name =>
+      name.startsWith(`.${hash}.memory-write.`));
+    await fs.unlink(path.join(path.dirname(headPath), temp));
+    const replacement = `${headPath}.replacement`;
+    await fs.copyFile(headPath, replacement);
+    await fs.rename(replacement, headPath);
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+  });
+
+  it('detects exact metadata changes between passes and bounds artifact-name disclosure', async () => {
+    const { store, locator, headPath, hash } = await fixture();
+    const sidecar = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+    const diagnosticStore = store as unknown as {
+      readDiagnosticEvidence: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = diagnosticStore.readDiagnosticEvidence.bind(store);
+    let reads = 0;
+    diagnosticStore.readDiagnosticEvidence = async (...args) => {
+      const evidence = await original(...args);
+      if (++reads === 1) {
+        const replacement = `${sidecar}.replacement`;
+        await fs.copyFile(sidecar, replacement);
+        await fs.rename(replacement, sidecar);
+      }
+      return evidence;
+    };
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unstable-or-unknown');
+    diagnosticStore.readDiagnosticEvidence = original;
+    for (let index = 0; index < 40; index++) {
+      await fs.writeFile(path.join(path.dirname(headPath), `.${hash}.memory-write.unknown-${index}`), 'x');
+    }
+    const result = await store.inspectInterruptedOwnedHead(locator);
+    expect(result.kind).toBe('unknown-manual-review');
+    expect(result.artifactCount).toBe(40);
+    expect(result.artifactNames).toHaveLength(32);
+    expect(result.artifactNamesTruncated).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('name: Original');
+  });
+
+  it('reports a fence appearing between evidence passes as unstable', async () => {
+    const { tenantRoot, store, locator } = await fixture();
+    const diagnosticStore = store as unknown as {
+      readDiagnosticEvidence: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = diagnosticStore.readDiagnosticEvidence.bind(store);
+    let reads = 0;
+    diagnosticStore.readDiagnosticEvidence = async (...args) => {
+      const evidence = await original(...args);
+      if (++reads === 1) await fs.mkdir(path.join(tenantRoot, '.memory-fences', 'tenant.lock'));
+      return evidence;
+    };
+    expect(await store.inspectInterruptedOwnedHead(locator)).toMatchObject({
+      kind: 'unstable-or-unknown', artifactCount: null, evidenceComplete: false,
+    });
+  });
+
+  it('rejects invalid UTF-8 in a matching pre-journal temporary file', async () => {
+    const { store, locator, headPath, hash, owned } = await fixture();
+    const temp = path.join(path.dirname(headPath),
+      `.${hash}.memory-write.${owned.ownerId}.22222222-2222-4222-8222-222222222222.tmp`);
+    await fs.writeFile(temp, Buffer.from([0xff]), { mode: 0o600 });
+    expect(await store.inspectInterruptedOwnedHead(locator)).toMatchObject({
+      kind: 'unknown-manual-review', artifactCount: null, evidenceComplete: false,
+    });
+  });
+
+  it('keeps out-of-order owner metadata and a mismatched journal user unknown', async () => {
+    const { tenantRoot, store, locator, headPath, hash, owned } = await fixture(phase => {
+      if (phase === 'updated-sidecar') throw new Error('pause');
+    });
+    const registry = path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`);
+    const oldRegistry = await fs.readFile(registry);
+    await expect(store.updateOwnedHead(owned, 'name: New\nentries: []\n')).rejects.toMatchObject({
+      code: 'EHEADCOMMITUNKNOWN', residual: true,
+    });
+    await fs.writeFile(registry, oldRegistry, { mode: 0o600 });
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+    const journalPath = path.join(path.dirname(headPath), `.${hash}.memory-write.json`);
+    const journal = JSON.parse(await fs.readFile(journalPath, 'utf8'));
+    await fs.writeFile(journalPath, JSON.stringify({ ...journal, userId: 'another-user' }), { mode: 0o600 });
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+  });
+
+  it('does not diagnose a symlink or hard-linked alias as an owned head', async () => {
+    const { tenantRoot, store, locator, headPath } = await fixture();
+    const symlink = path.join(path.dirname(headPath), 'Sym.yaml');
+    await fs.symlink(headPath, symlink);
+    expect((await store.inspectInterruptedOwnedHead('Notes/Sym.yaml')).kind).toBe('unknown-manual-review');
+    await fs.unlink(symlink);
+    const hardlink = path.join(path.dirname(headPath), 'Hard.yaml');
+    await fs.link(headPath, hardlink);
+    expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+    expect((await store.inspectInterruptedOwnedHead(path.relative(tenantRoot, hardlink))).kind)
+      .toBe('unknown-manual-review');
   });
 });

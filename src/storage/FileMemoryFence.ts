@@ -34,6 +34,39 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 25;
 
+export interface TenantFenceObservation {
+  readonly present: boolean;
+  /** Detect replacement between diagnostic passes; this is not an owner token. */
+  readonly identity?: string;
+}
+
+/** Observe the tenant lease without creating its directory or acquiring/releasing it. */
+export async function observeTenantFence(tenantRoot: string): Promise<TenantFenceObservation> {
+  if (process.platform === 'win32') {
+    throw new Error('FileMemoryFence requires POSIX filesystem ownership and mode checks');
+  }
+  const root = await fs.realpath(tenantRoot);
+  const lockRoot = path.join(root, LOCK_DIRECTORY);
+  let directory;
+  try { directory = await fs.lstat(lockRoot); } catch (error) {
+    if (hasCode(error, 'ENOENT')) return { present: false };
+    throw error;
+  }
+  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0 ||
+    (process.getuid && directory.uid !== process.getuid())) {
+    throw new Error('Memory fence directory is not private');
+  }
+  let lease;
+  try { lease = await fs.lstat(path.join(lockRoot, TENANT_LOCK_NAME), { bigint: true }); } catch (error) {
+    if (hasCode(error, 'ENOENT')) return { present: false };
+    throw error;
+  }
+  return {
+    present: true,
+    identity: `${lease.dev}:${lease.ino}:${lease.ctimeNs}:${lease.mtimeNs}`,
+  };
+}
+
 function hasCode(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException)?.code === code;
 }

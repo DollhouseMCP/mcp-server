@@ -8,7 +8,12 @@ import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import { getGatekeeperAuthoringErrors } from '../handlers/mcp-aql/policies/ElementPolicies.js';
-import type { FileMemoryFence } from './FileMemoryFence.js';
+import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
+import {
+  classifyFileMemoryWrite,
+  type FileMemoryWriteDiagnostic,
+  type FileMemoryWriteEvidence,
+} from './FileMemoryWriteClassification.js';
 import {
   FileMemoryTransactionCoordinator,
   type FileMemoryLeaseContext,
@@ -247,6 +252,137 @@ export class FileMemoryOwnerSnapshots {
   async readHeadSnapshot(locator: string): Promise<FileMemorySnapshot> {
     const scope = await this.captureStandaloneScope();
     return this.readAtRoot(scope.tenantRoot, scope.userId, locator);
+  }
+
+  /**
+   * Read-only diagnostic, not a snapshot token or repair permission. Repeated
+   * observations are not atomic against active writers; operators must first
+   * quiesce every writer before relying on a phase for separately reviewed repair.
+   */
+  async inspectInterruptedOwnedHead(locator: string): Promise<FileMemoryWriteDiagnostic> {
+    const scope = await this.captureStandaloneScope();
+    let firstLock;
+    try { firstLock = await observeTenantFence(scope.tenantRoot); } catch {
+      return this.unknownDiagnostic('Tenant fence cannot be safely observed');
+    }
+    if (firstLock.present) {
+      let secondLock;
+      try { secondLock = await observeTenantFence(scope.tenantRoot); } catch {
+        return this.unknownDiagnostic('Tenant fence changed during inspection', 'unstable-or-unknown');
+      }
+      return this.lockDiagnostic(firstLock, secondLock);
+    }
+    let first: { evidence: FileMemoryWriteEvidence; signature: string } | undefined;
+    let second: { evidence: FileMemoryWriteEvidence; signature: string } | undefined;
+    try {
+      first = await this.readDiagnosticEvidence(scope, locator);
+      second = await this.readDiagnosticEvidence(scope, locator);
+    } catch {
+      // Unsafe paths, malformed/partial metadata and missing heads stay unknown.
+    }
+    let lastLock;
+    try { lastLock = await observeTenantFence(scope.tenantRoot); } catch {
+      return this.unknownDiagnostic('Tenant fence changed during inspection', 'unstable-or-unknown');
+    }
+    if (lastLock.present) return this.unknownDiagnostic('Evidence or tenant fence changed', 'unstable-or-unknown');
+    if (!first || !second) return this.unknownDiagnostic('Memory evidence is unsafe or incomplete');
+    if (first.signature !== second.signature) {
+      return this.unknownDiagnostic('Memory evidence changed between reads', 'unstable-or-unknown');
+    }
+    return classifyFileMemoryWrite(second.evidence);
+  }
+
+  private lockDiagnostic(
+    first: { present: boolean; identity?: string }, second: { present: boolean; identity?: string },
+  ): FileMemoryWriteDiagnostic {
+    return first.present === second.present && first.identity === second.identity
+      ? this.unknownDiagnostic('Tenant fence is present; stop writers before review', 'blocked-by-fence')
+      : this.unknownDiagnostic('Tenant fence changed during inspection', 'unstable-or-unknown');
+  }
+
+  private unknownDiagnostic(
+    reason: string, kind: 'unknown-manual-review' | 'unstable-or-unknown' | 'blocked-by-fence' = 'unknown-manual-review',
+  ): FileMemoryWriteDiagnostic {
+    return { kind, reason, artifactNames: [], artifactCount: null,
+      artifactNamesTruncated: false, evidenceComplete: false };
+  }
+
+  private async readDiagnosticEvidence(
+    scope: FileMemoryTransactionScope, locator: string,
+  ): Promise<{ evidence: FileMemoryWriteEvidence; signature: string }> {
+    const resolved = await this.resolveHead(scope.tenantRoot, locator);
+    const head = await this.readHeadBytes(resolved.headPath);
+    const sidecar = await this.readRecord(resolved.sidecarPath);
+    const journal = await this.readJournalEvidence(resolved.journalPath);
+    const ownerId = sidecar?.record.ownerId ?? journal?.record.ownerId;
+    const registry = ownerId ? await this.readRegistry(scope.tenantRoot, ownerId) : undefined;
+    const artifacts = await this.collectDiagnosticArtifacts(
+      scope.tenantRoot, resolved, sidecar?.record, journal?.record, ownerId);
+    const temp = artifacts.exactTemp
+      ? await this.readHeadBytes(path.join(path.dirname(resolved.headPath), artifacts.exactTemp), true) : undefined;
+    const evidence: FileMemoryWriteEvidence = {
+      userId: scope.userId, locator: resolved.locator,
+      head: { hash: head.hash, identity: head.identity },
+      sidecar: sidecar?.record, registry: registry?.record, journal: journal?.record,
+      temp: temp ? { hash: temp.hash, identity: temp.identity } : undefined,
+      artifactNames: artifacts.names,
+      unexpectedArtifacts: artifacts.unexpected ||
+        !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record),
+    };
+    // Preserve exact raw bytes and filename code units, plus descriptor identities.
+    const signature = JSON.stringify({
+      evidence, headRaw: head.value, tempRaw: temp?.value,
+      sidecarRaw: sidecar?.raw, sidecarIdentity: sidecar?.identity,
+      registryRaw: registry?.raw, registryIdentity: registry?.identity,
+      journalRaw: journal?.raw, journalIdentity: journal?.identity,
+    });
+    return { evidence, signature };
+  }
+
+  private async collectDiagnosticArtifacts(
+    tenantRoot: string,
+    resolved: { headPath: string; sidecarPath: string; journalPath: string; basenameHash: string },
+    sidecar: OwnerRecord | undefined, journal: WriteJournal | undefined, ownerId: string | undefined,
+  ): Promise<{ names: string[]; exactTemp?: string; unexpected: boolean }> {
+    const names = await this.listMatchingArtifacts(path.dirname(resolved.headPath), name => {
+      const folded = name.toLowerCase();
+      const prefix = `.${resolved.basenameHash}.`;
+      return folded.startsWith(`${prefix}memory-write`) || folded.startsWith(`${prefix}memory-owner.json`);
+    });
+    const registryTemps = ownerId ? await this.listMatchingArtifacts(
+      path.dirname(this.registryPath(tenantRoot, ownerId)),
+      name => name.toLowerCase().startsWith(`${ownerId}.json.`),
+    ) : [];
+    const expectedSidecar = path.basename(resolved.sidecarPath);
+    const expectedJournal = path.basename(resolved.journalPath);
+    const candidates = names.filter(name => name !== expectedSidecar && name !== expectedJournal);
+    const exactTemp = journal?.preparedTempName ??
+      (sidecar && candidates.length === 1 && this.isOwnerWriteTemp(candidates[0], resolved.basenameHash, sidecar.ownerId)
+        ? candidates[0] : undefined);
+    const unexpected = registryTemps.length > 0 || candidates.some(name => name !== exactTemp) ||
+      names.some(name => name.toLowerCase() === expectedSidecar && name !== expectedSidecar) ||
+      names.some(name => name.toLowerCase() === expectedJournal && name !== expectedJournal);
+    return { names: [...names.filter(name => name !== expectedSidecar), ...registryTemps],
+      exactTemp: exactTemp && candidates.includes(exactTemp) ? exactTemp : undefined, unexpected };
+  }
+
+  private isOwnerWriteTemp(name: string, basenameHash: string, ownerId: string): boolean {
+    const prefix = `.${basenameHash}.memory-write.${ownerId}.`;
+    return name.startsWith(prefix) && name.endsWith('.tmp') &&
+      UUID_PATTERN.test(name.slice(prefix.length, -'.tmp'.length));
+  }
+
+  private strictDiagnosticRecord(record: OwnerRecord | undefined): boolean {
+    if (!record) return false;
+    const fields = new Set(['schema', 'state', 'userId', 'ownerId', 'locator', 'revision',
+      'contentHash', 'fileIdentity']);
+    const identityFields = new Set(['device', 'inode', 'size', 'ctimeNs', 'mtimeNs']);
+    const names = Object.keys(record);
+    const identityNames = Object.keys(record.fileIdentity);
+    return names.length === fields.size && names.every(name => fields.has(name)) &&
+      identityNames.length === identityFields.size && identityNames.every(name => identityFields.has(name)) &&
+      ['device', 'inode', 'size'].every(key => /^(?:0|[1-9]\d*)$/u.test(record.fileIdentity[key as keyof FileIdentity])) &&
+      ['ctimeNs', 'mtimeNs'].every(key => /^(?:0|[1-9]\d*|-[1-9]\d*)$/u.test(record.fileIdentity[key as keyof FileIdentity]));
   }
 
   /** Tracked, read-only operation under an existing tenant lease. */
@@ -627,6 +763,24 @@ export class FileMemoryOwnerSnapshots {
     }
   }
 
+  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean): Promise<string[]> {
+    const handle = await fs.opendir(directory);
+    let seen = 0;
+    const names: string[] = [];
+    for await (const entry of handle) {
+      if (++seen > MAX_SCAN_ENTRIES) {
+        throw headError('EHEADRESOURCE', 'Memory metadata directory exceeds scan limit');
+      }
+      if (matches(entry.name)) names.push(entry.name);
+    }
+    // Code-unit ordering preserves distinct Unicode spellings and gives exact two-pass comparison.
+    return names.sort((left, right) => {
+      if (left < right) return -1;
+      if (left > right) return 1;
+      return 0;
+    });
+  }
+
   private async checkWriteArtifacts(
     tenantRoot: string,
     resolved: { headPath: string; journalPath: string; basenameHash: string }, ownerId?: string,
@@ -654,7 +808,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readRegistry(tenantRoot: string, ownerId: string): Promise<{
-    raw: string; record: OwnerRecord;
+    raw: string; record: OwnerRecord; identity: FileIdentity;
   } | undefined> {
     const ownerRoot = path.join(tenantRoot, OWNER_DIRECTORY);
     await this.checkPrivateDirectory(ownerRoot);
@@ -662,10 +816,16 @@ export class FileMemoryOwnerSnapshots {
     return this.readRecord(this.registryPath(tenantRoot, ownerId));
   }
 
-  private async readHeadBytes(headPath: string): Promise<{ value: string; hash: string; identity: FileIdentity }> {
+  private async readHeadBytes(
+    headPath: string, requirePrivate = false,
+  ): Promise<{ value: string; hash: string; identity: FileIdentity }> {
     const handle = await fs.open(headPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const before = await handle.stat({ bigint: true });
+      if (requirePrivate && ((before.mode & 0o077n) !== 0n ||
+        (process.getuid && before.uid !== BigInt(process.getuid())))) {
+        throw headError('EOWNERRECOVERY', 'Memory write artifact is not private');
+      }
       const limit = MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE;
       // The legacy loader limits UTF-16 string units. Three UTF-8 bytes per
       // unit is the largest valid expansion; enforce that same limit after decode.
@@ -698,7 +858,9 @@ export class FileMemoryOwnerSnapshots {
     }
   }
 
-  private async readRecord(filePath: string): Promise<{ raw: string; record: OwnerRecord } | undefined> {
+  private async readRecord(filePath: string): Promise<{
+    raw: string; record: OwnerRecord; identity: FileIdentity;
+  } | undefined> {
     let handle;
     try {
       handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -728,7 +890,7 @@ export class FileMemoryOwnerSnapshots {
       let parsed: unknown;
       try { parsed = JSON.parse(raw); } catch { throw headError('EOWNERRECOVERY', 'Memory owner record is invalid JSON'); }
       if (!validRecord(parsed)) throw headError('EOWNERRECOVERY', 'Memory owner record is malformed');
-      return { raw, record: parsed };
+      return { raw, record: parsed, identity: identityOf(after) };
     } finally {
       await handle.close();
     }
@@ -743,6 +905,12 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readJournal(filePath: string): Promise<WriteJournal | undefined> {
+    return (await this.readJournalEvidence(filePath))?.record;
+  }
+
+  private async readJournalEvidence(filePath: string): Promise<{
+    raw: string; record: WriteJournal; identity: FileIdentity;
+  } | undefined> {
     let handle;
     try {
       handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -767,12 +935,13 @@ export class FileMemoryOwnerSnapshots {
       if (BigInt(used) !== after.size || !sameIdentity(identityOf(before), identityOf(after))) {
         throw headError('EOWNERRECOVERY', 'Memory write journal changed during read');
       }
+      const raw = decodeUtf8(bytes.subarray(0, used), 'EOWNERRECOVERY');
       let parsed: unknown;
-      try { parsed = JSON.parse(decodeUtf8(bytes.subarray(0, used), 'EOWNERRECOVERY')); } catch {
+      try { parsed = JSON.parse(raw); } catch {
         throw headError('EOWNERRECOVERY', 'Memory write journal is malformed');
       }
       if (!this.validJournal(parsed)) throw headError('EOWNERRECOVERY', 'Memory write journal is invalid');
-      return parsed;
+      return { raw, record: parsed, identity: identityOf(after) };
     } finally {
       await handle.close();
     }
