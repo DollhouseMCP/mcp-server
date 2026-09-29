@@ -364,3 +364,21 @@ if (process.platform === 'win32' || !process.getuid) {
     expect(() => new FileMemoryVolumeStore({ coordinator: {} as never, owners: {} as never })).toThrow('requires local POSIX');
   });
 }
+
+it.each(['modified-payload', 'replaced-metadata', 'extra-generation'] as const)('reverifies exact files after final barrier: %s', async mutation => {
+  const f = await fixture(async (phase, v) => {
+    if (phase !== 'invoking-marker') return;
+    const [g] = await fs.readdir(v);
+    if (mutation === 'modified-payload') await fs.appendFile(path.join(v, g, 'payload.yaml'), 'changed: true\n');
+    if (mutation === 'replaced-metadata') {
+      const p = path.join(v, g, 'metadata.json');
+      const bytes = await fs.readFile(p);
+      await fs.rename(p, `${p}.old`);
+      await fs.writeFile(p, bytes, { mode: 0o600 });
+      await fs.unlink(`${p}.old`);
+    }
+    if (mutation === 'extra-generation') await fs.mkdir(path.join(v, 'g-22222222-2222-4222-8222-222222222222'), { mode: 0o700 });
+  });
+  await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEUNCOMMITTED', committed: false });
+  await expect(fs.stat(path.join(f.ownerPath, 'v1', 'COMMITTED'))).rejects.toMatchObject({ code: 'ENOENT' });
+});

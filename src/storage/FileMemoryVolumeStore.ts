@@ -368,12 +368,13 @@ export class FileMemoryVolumeStore {
       await this.revalidateNamespace(namespace);
       await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes);
       if ((await namesAt(residualPath, 1)).join('|') !== `g-${generationId}`) throw error('EARCHIVEUNSAFE', 'Archive slot changed before marker');
-      markerAttempted = true;
       await notify('invoking-marker');
       await this.options.owners.requireOwnedAtScope(operation, token);
       await this.revalidateNamespace(namespace);
       await directory(residualPath, volumeIdentity);
       await directory(generationPath, generationIdentity);
+      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes);
+      markerAttempted = true;
       await fs.mkdir(path.join(residualPath, 'COMMITTED'), { recursive: false, mode: 0o700 });
       knownCommitted = true;
       await notify('committed-marker');
