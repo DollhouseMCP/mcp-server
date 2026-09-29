@@ -52,6 +52,8 @@ describe('dormant file archive publication', () => {
     { entryCount: 2_147_483_648 }, { entryCount: 1 }, { rawContent: 'entries: ["\ud800"]\n', entryCount: 1 },
     { sealedAt: new Date(NaN) }, { firstEntryAt: new Date('2026-09-30'), lastEntryAt: new Date('2026-09-29') },
     { rawContent: 'x'.repeat(262145) },
+    { firstEntryAt: new Date('+010000-01-01T00:00:00.000Z'), lastEntryAt: new Date('9999-01-01T00:00:00.000Z') },
+    { firstEntryAt: new Date('-000001-01-01T00:00:00.000Z'), lastEntryAt: new Date('-000002-01-01T00:00:00.000Z') },
   ])('rejects invalid captured input before archive artifacts: %p', async patch => {
     const f = await fixture();
     expect(() => f.store.createExclusive(f.token, { ...input, ...patch })).toThrow();
@@ -451,3 +453,13 @@ it.each(['before-marker', 'invoking-marker', 'committed-marker', 'verified-after
       });
     }
   });
+
+it('accepts chronological finite extended-year dates using numeric epochs', async () => {
+  const f = await fixture();
+  const firstEntryAt = new Date('-000002-01-01T00:00:00.000Z');
+  const lastEntryAt = new Date('-000001-01-01T00:00:00.000Z');
+  const receipt = await f.store.createExclusive(f.token, { ...input, firstEntryAt, lastEntryAt });
+  const metadata = JSON.parse(await fs.readFile(path.join(f.ownerPath, 'v1', `g-${receipt.generationId}`, 'metadata.json'), 'utf8'));
+  expect(metadata.firstEntryAt).toBe(firstEntryAt.toISOString());
+  expect(metadata.lastEntryAt).toBe(lastEntryAt.toISOString());
+});

@@ -130,7 +130,7 @@ function capture(input: FileMemoryVolumeInput): CapturedInput {
   const sealedAt = date(input.sealedAt);
   const firstEntryAt = input.firstEntryAt === undefined ? null : date(input.firstEntryAt);
   const lastEntryAt = input.lastEntryAt === undefined ? null : date(input.lastEntryAt);
-  if (firstEntryAt && lastEntryAt && firstEntryAt > lastEntryAt) throw new RangeError('Archive timestamps are reversed');
+  if (firstEntryAt && lastEntryAt && Date.parse(firstEntryAt) > Date.parse(lastEntryAt)) throw new RangeError('Archive timestamps are reversed');
   verifyYaml(rawContent, entryCount);
   return Object.freeze({ minimumVolume, bytes, entryCount, firstEntryAt, lastEntryAt, sealedAt });
 }
