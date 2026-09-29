@@ -226,11 +226,21 @@ export class FileMemoryVolumeStore {
     if (!UUID.test(token.ownerId)) throw new TypeError('Archive requires a durable owner UUID');
     return Object.freeze(token);
   }
-  private async namespaceComponent(parent: string, component: string): Promise<{ path: string; identity: ArchiveDirectoryIdentity }> {
+  private async requireNamespaceComponent(parent: string, component: string, requirePresent = true): Promise<void> {
     const siblings = await namesAt(parent, 100_000);
-    if (siblings.some(name => name.toLowerCase() === component.toLowerCase() && name !== component)) {
-      throw error('EARCHIVEUNSAFE', 'Archive namespace case alias is unsafe');
+    if ((requirePresent && !siblings.includes(component)) ||
+      siblings.some(name => name.toLowerCase() === component.toLowerCase() && name !== component)) {
+      throw error('EARCHIVEUNSAFE', 'Archive namespace spelling or case alias is unsafe');
     }
+  }
+  private async requireVolumeSpelling(root: string, volume: number): Promise<void> {
+    const siblings = await namesAt(root, 100_000);
+    if (siblings.some(name => /^v\d+$/iu.test(name) && BigInt(name.slice(1)) === BigInt(volume) && name !== `v${volume}`)) {
+      throw error('EARCHIVEUNSAFE', 'Archive volume number alias is unsafe');
+    }
+  }
+  private async namespaceComponent(parent: string, component: string): Promise<{ path: string; identity: ArchiveDirectoryIdentity }> {
+    await this.requireNamespaceComponent(parent, component, false);
     const componentPath = path.join(parent, component);
     try { await fs.mkdir(componentPath, { mode: 0o700 }); }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; }
@@ -249,6 +259,12 @@ export class FileMemoryVolumeStore {
   private async revalidateNamespace(namespace: { paths: readonly string[]; identities: readonly ArchiveDirectoryIdentity[] }): Promise<void> {
     // Independent read-only identity comparisons; every result must settle before publication.
     const results = await Promise.allSettled(namespace.paths.map((componentPath, index) => directory(componentPath, namespace.identities[index], index !== 0)));
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  }
+  private async revalidateNamespaceSpelling(namespace: { paths: readonly string[] }): Promise<void> {
+    const results = await Promise.allSettled(namespace.paths.slice(1).map((componentPath, index) =>
+      this.requireNamespaceComponent(namespace.paths[index], path.basename(componentPath))));
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
   }
@@ -273,6 +289,19 @@ export class FileMemoryVolumeStore {
     await directory(generationPath, generationIdentity);
     return { metadata, payloadIdentity: payload.identity, metadataIdentity: meta.identity, volumeIdentity, generationIdentity };
   }
+  private async verifyPublication(
+    namespace: { root: string; paths: readonly string[]; identities: readonly ArchiveDirectoryIdentity[] },
+    volumePath: string, owner: OwnedFileMemoryToken, receipt: FileMemoryVolumeReceipt,
+    payload: Buffer, metadata: Buffer, requireMarker = false,
+  ): Promise<void> {
+    await this.revalidateNamespace(namespace);
+    await this.revalidateNamespaceSpelling(namespace);
+    await this.requireVolumeSpelling(namespace.root, receipt.volume);
+    await this.verify(volumePath, owner, receipt.volume, receipt, payload, metadata, requireMarker);
+    await this.revalidateNamespace(namespace);
+    await this.revalidateNamespaceSpelling(namespace);
+    await this.requireVolumeSpelling(namespace.root, receipt.volume);
+  }
   private verifyMetadata(metadataBytes: Buffer, payloadBytes: Buffer, owner: OwnedFileMemoryToken, volume: number, generationName: string): Metadata {
     const metadata = JSON.parse(metadataBytes.toString('utf8')) as Metadata;
     const keys = ['schema', 'userId', 'ownerId', 'volume', 'generationId', 'sha256', 'byteLength', 'entryCount', 'firstEntryAt', 'lastEntryAt', 'sealedAt'].sort((left, right) => left.localeCompare(right));
@@ -293,10 +322,7 @@ export class FileMemoryVolumeStore {
     reserved: (candidate: string) => void, probe = 0): Promise<{ path: string; volume: number; identity: ArchiveDirectoryIdentity }> {
     if (probe === MAX_FILE_MEMORY_VOLUME_COLLISION_PROBES) throw error('EARCHIVEEXHAUSTED', 'Archive collision limit exhausted');
     const candidate = path.join(root, `v${volume}`);
-    const siblings = await namesAt(root, 100_000);
-    if (siblings.some(name => /^v\d+$/iu.test(name) && BigInt(name.slice(1)) === BigInt(volume) && name !== `v${volume}`)) {
-      throw error('EARCHIVEUNSAFE', 'Archive volume number alias is unsafe');
-    }
+    await this.requireVolumeSpelling(root, volume);
     try {
       await fs.mkdir(candidate, { mode: 0o700 });
       reserved(candidate);
@@ -359,28 +385,28 @@ export class FileMemoryVolumeStore {
       receipt = Object.freeze({ schema: 1, tenantRoot: scope.tenantRoot, userId: scope.userId, ownerId: token.ownerId,
         volume, generationId, operationId, sha256, byteLength: input.bytes.length, entryCount: input.entryCount,
         volumeIdentity, generationIdentity, payloadIdentity, metadataIdentity });
-      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes);
+      await this.verifyPublication(namespace, residualPath, token, receipt, input.bytes, metadataBytes);
       await notify('verified-before-marker');
       await this.options.owners.requireOwnedAtScope(operation, token);
       await notify('before-marker');
       await this.options.owners.requireOwnedAtScope(operation, token);
       this.options.coordinator.requireActiveOperationScope(operation);
       await this.revalidateNamespace(namespace);
-      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes);
+      await this.verifyPublication(namespace, residualPath, token, receipt, input.bytes, metadataBytes);
       if ((await namesAt(residualPath, 1)).join('|') !== `g-${generationId}`) throw error('EARCHIVEUNSAFE', 'Archive slot changed before marker');
       await notify('invoking-marker');
       await this.options.owners.requireOwnedAtScope(operation, token);
       await this.revalidateNamespace(namespace);
       await directory(residualPath, volumeIdentity);
       await directory(generationPath, generationIdentity);
-      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes);
+      await this.verifyPublication(namespace, residualPath, token, receipt, input.bytes, metadataBytes);
       markerAttempted = true;
       await fs.mkdir(path.join(residualPath, 'COMMITTED'), { recursive: false, mode: 0o700 });
       knownCommitted = true;
       await notify('committed-marker');
-      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes, true);
+      await this.verifyPublication(namespace, residualPath, token, receipt, input.bytes, metadataBytes, true);
       await notify('verified-after-marker');
-      await this.verify(residualPath, token, volume, receipt, input.bytes, metadataBytes, true);
+      await this.verifyPublication(namespace, residualPath, token, receipt, input.bytes, metadataBytes, true);
       return receipt;
     } catch (cause) {
       // Receipt construction precedes marker invocation; knownCommitted implies receipt exists.

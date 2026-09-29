@@ -23,7 +23,11 @@ exclusive/no-follow flags and mode 0600. Writer handles are fsynced and their fu
 identities captured; bounded reopened descriptors must match those original
 writer identities, exact bytes, SHA, YAML, count and strict metadata. The captured canonical tenant root retains the existing root mode contract (0755
 is accepted); archive namespace directories require private current-UID modes.
-Ancestor identities are revalidated; symlinks, hardlinks, aliases, extra children
+The complete publication proof checks ancestor identities and exact namespace
+spelling plus aliases of the actual volume number before and after readback. It
+runs after the final premarker barrier and after each postcommit callback; the
+final complete proof is the last awaited operation before return. Symlinks,
+hardlinks, aliases, extra children
 and replacement fail closed. Directory iteration has explicit limits: 100000
 namespace siblings, two slot/generation children, zero marker children.
 

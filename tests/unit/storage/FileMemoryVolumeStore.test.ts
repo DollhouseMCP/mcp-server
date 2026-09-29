@@ -408,3 +408,46 @@ it.each(['replaced-payload', 'replaced-metadata', 'removed-payload', 'removed-me
     const identity = filename === 'metadata.json' ? outcome?.receipt.metadataIdentity : outcome?.receipt.payloadIdentity;
     expect(identity?.inode).toBe(originalInode);
   });
+
+it.each(['committed-marker', 'verified-after-marker'] as const)(
+  'retains committed receipt after %s ancestor substitution', async barrier => {
+    for (const ancestor of ['owner', 'by-id', 'volumes', 'tenant-root'] as const) {
+      let originalPayloadInode = '';
+      const f = await fixture(async (phase, v) => {
+        if (phase !== barrier) return;
+        const g = (await fs.readdir(v)).find(name => name.startsWith('g-'))!;
+        originalPayloadInode = String((await fs.stat(path.join(v, g, 'payload.yaml'), { bigint: true })).ino);
+        const owner = path.dirname(v);
+        const byId = path.dirname(owner);
+        const volumes = path.dirname(byId);
+        const target = { owner, 'by-id': byId, volumes, 'tenant-root': path.dirname(volumes) }[ancestor];
+        const moved = `${target}-old`;
+        if (ancestor === 'tenant-root') roots.push(moved);
+        await fs.rename(target, moved);
+        await fs.symlink(moved, target);
+      });
+      let outcome: CommittedFileArchiveError | undefined;
+      try { await f.store.createExclusive(f.token, input); }
+      catch (cause) { outcome = cause as CommittedFileArchiveError; }
+      expect(outcome).toMatchObject({ code: 'EARCHIVECOMMITTED', committed: true });
+      expect(outcome?.receipt.payloadIdentity.inode).toBe(originalPayloadInode);
+    }
+  });
+
+it.each(['before-marker', 'invoking-marker', 'committed-marker', 'verified-after-marker'] as const)(
+  'rechecks numeric and namespace case aliases at %s', async barrier => {
+    for (const alias of ['numeric', 'fixed-case'] as const) {
+      const f = await fixture(async (phase, v) => {
+        if (phase !== barrier) return;
+        if (alias === 'numeric') await fs.mkdir(path.join(path.dirname(v), 'v01'), { mode: 0o700 });
+        else {
+          const volumes = path.dirname(path.dirname(path.dirname(v)));
+          await fs.rename(volumes, path.join(path.dirname(volumes), 'Volumes'));
+        }
+      });
+      const committed = barrier === 'committed-marker' || barrier === 'verified-after-marker';
+      await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({
+        code: committed ? 'EARCHIVECOMMITTED' : 'EARCHIVEUNCOMMITTED', committed,
+      });
+    }
+  });
