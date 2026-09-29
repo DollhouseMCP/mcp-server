@@ -1,5 +1,4 @@
-import type { VersionedElement } from '../../storage/IStorageLayer.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import yaml from 'js-yaml';
 import type { IElement } from '../../types/elements/IElement.js';
 import type { BaseElementManager } from '../../elements/base/BaseElementManager.js';
@@ -12,8 +11,8 @@ import {
   CONSOLE_PORTFOLIO_ELEMENT_TYPES,
   PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
   PortfolioElementAlreadyExistsError,
-  PortfolioElementUnreadableError,
   PortfolioElementVersionConflictError,
+  PortfolioElementUnreadableError,
   type ConsolePortfolioElementCreateInput,
   type ConsolePortfolioElementDeleteInput,
   type ConsolePortfolioElementDetailRecord,
@@ -26,7 +25,8 @@ import {
 } from './IPortfolioElementStore.js';
 
 type PortfolioElementManager = Pick<BaseElementManager<IElement>,
-  | 'readVersioned'
+  | 'findByName'
+  | 'findForUpdate'
   | 'getFileExtension'
   | 'importElement'
   | 'list'
@@ -35,6 +35,10 @@ type PortfolioElementManager = Pick<BaseElementManager<IElement>,
   | 'exportElement'
   | 'validate'
 >;
+
+interface StorageSerializationCapable {
+  readonly serializeElement?: (element: IElement) => Promise<string>;
+}
 
 export type ManagerBackedPortfolioManagers = Readonly<Record<ConsolePortfolioElementType, PortfolioElementManager>>;
 
@@ -61,7 +65,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       for (const element of await this.manager(type).list()) {
         let record: ConsolePortfolioElementSummaryRecord;
         try {
-          record = await this.toSummary(userId, type, element);
+          record = await this.toRecord(userId, type, element);
         } catch (error) {
           // Listing is inert — no element is activated here — so a single
           // element whose body fails content parsing/validation (e.g. a
@@ -89,9 +93,9 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     canonicalName: string,
   ): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(userId);
-    const observation = await this.observe(type, canonicalName);
-    if (!observation) return null;
-    return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, observation, true));
+    const element = await this.findElement(type, canonicalName);
+    if (!element) return null;
+    return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element, true));
   }
 
   async create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord> {
@@ -102,14 +106,20 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       throw new PortfolioElementAlreadyExistsError();
     }
     const element = await manager.importElement(rawContentFromInput(input, input.type), managerFormatForType(input.type));
-    const receipt = await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
-    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, receipt));
+    await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
+    // Re-read the persisted element so the returned record (and its ETag) match
+    // what a subsequent GET produces — the persist/reload round-trip can
+    // normalize content, so hashing the pre-save in-memory element would yield
+    // an ETag the next conditional write rejects with 412.
+    const persisted = (await this.findElement(input.type, canonicalName)) ?? element;
+    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
   }
 
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
-    const existing = await this.observe(input.type, input.canonicalName);
+    const target = input.type === 'skills' ? await manager.findForUpdate(input.canonicalName) : undefined;
+    const existing = input.type === 'skills' ? target?.element : await this.findElement(input.type, input.canonicalName);
     if (!existing) return null;
     const existingRecord = await this.toRecord(input.userId, input.type, existing);
     this.assertExpectedHash(input.expectedContentHash, existingRecord);
@@ -122,22 +132,26 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       tags: input.tags ?? existingRecord.tags,
     }, input.type);
     const updated = await manager.importElement(updatedRaw, managerFormatForType(input.type));
-    const receipt = await this.mapStale(() => manager.save(updated, existing.relativePath, {
-      expected: { identity: existing.identity, version: existing.version },
-    }));
-    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, receipt));
+    try {
+      await manager.save(updated, target?.path ?? elementPath(manager, existingRecord.canonicalName), target?.options);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (target && (code === 'ENOENT' || code === 'ESTALE')) return null;
+      throw error;
+    }
+    // Re-read so the returned record/ETag match a subsequent GET (see create()).
+    const persisted = (await this.findElement(input.type, existingRecord.canonicalName)) ?? updated;
+    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
   }
 
   async delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
-    const existing = await this.observe(input.type, input.canonicalName);
+    const existing = await this.findElement(input.type, input.canonicalName);
     if (!existing) return null;
     const existingRecord = await this.toRecord(input.userId, input.type, existing);
     this.assertExpectedHash(input.expectedContentHash, existingRecord);
-    await this.mapStale(() => manager.delete(existing.relativePath, {
-      expected: { identity: existing.identity, version: existing.version },
-    }));
+    await manager.delete(elementPath(manager, existingRecord.canonicalName));
     return clonePortfolioElementDetailRecord({
       ...existingRecord,
       updatedAt: input.now,
@@ -173,64 +187,32 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     }
   }
 
-  private async observe(type: ConsolePortfolioElementType, name: string): Promise<VersionedElement | null> {
-    try {
-      return await this.manager(type).readVersioned(name);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
-    }
-  }
-
-  private async mapStale<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESTALE') throw new PortfolioElementVersionConflictError();
-      throw error;
-    }
-  }
-
-  private async toSummary(userId: string, type: ConsolePortfolioElementType, element: IElement): Promise<ConsolePortfolioElementSummaryRecord> {
-    parseRawContent(type, await this.manager(type).exportElement(element, managerFormatForType(type)));
-    return {
-      userId, type, name: element.metadata.name,
-      canonicalName: canonicalizePortfolioElementName(element.metadata.name),
-      displayName: element.metadata.name, version: 1,
-      updatedAt: parseUpdatedAt(element.metadata.modified),
-      validationStatus: this.manager(type).validate(element).valid ? 'valid' : 'invalid',
-      tags: element.metadata.tags ?? [],
-    };
-  }
-
   private async toRecord(
     userId: string,
     type: ConsolePortfolioElementType,
-    observation: VersionedElement,
+    element: IElement,
     classifyUnreadable = false,
   ): Promise<ConsolePortfolioElementDetailRecord> {
-    const manager = this.manager(type);
+    const rawContent = await this.rawContentFor(type, element);
     let parsed: ReturnType<typeof parseRawContent>;
-    let element: IElement;
     try {
-      parsed = parseRawContent(type, observation.raw);
-      element = await manager.importElement(observation.raw, managerFormatForType(type));
+      parsed = parseRawContent(type, rawContent);
     } catch (error) {
       if (classifyUnreadable) throw new PortfolioElementUnreadableError(error);
       throw error;
     }
     const validation = this.manager(type).validate(element);
     const metadata = parsed.metadata;
-    const name = typeof metadata.name === 'string' ? metadata.name : element.metadata.name;
-    // Hash-only ETags cannot distinguish identical-byte delete/recreate across requests.
-    // The database identity additionally protects an in-flight conditional write.
+    const name = element.metadata.name;
     const record: ConsolePortfolioElementDetailRecord = {
-      userId, type, name,
+      userId,
+      type,
+      name,
       canonicalName: canonicalizePortfolioElementName(name),
-      displayName: name,
+      displayName: typeof metadata.name === 'string' ? metadata.name : name,
       version: 1,
-      contentHash: observation.version,
-      updatedAt: parseUpdatedAt(typeof metadata.modified === 'string' ? metadata.modified : undefined),
+      contentHash: sha256(stableContentProjection(type, metadata, parsed.content)),
+      updatedAt: parseUpdatedAt(element.metadata.modified),
       validationStatus: validation.valid ? 'valid' : 'invalid',
       tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [],
       metadata,
@@ -277,7 +259,13 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     };
   }
 
-
+  private async rawContentFor(type: ConsolePortfolioElementType, element: IElement): Promise<string> {
+    const manager = this.manager(type) as PortfolioElementManager & StorageSerializationCapable;
+    if (typeof manager.serializeElement === 'function') {
+      return manager.serializeElement(element);
+    }
+    return manager.exportElement(element, managerFormatForType(type));
+  }
 }
 
 function rawContentFromInput(input: {
@@ -476,4 +464,31 @@ function jsonClone(value: Readonly<Record<string, unknown>>): Readonly<Record<st
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stableContentProjection(
+  type: ConsolePortfolioElementType,
+  metadata: Readonly<Record<string, unknown>>,
+  content: string,
+): string {
+  return JSON.stringify({
+    type,
+    metadata: stableJson(metadata),
+    content,
+  });
+}
+
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== 'modified')
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, stableJson(entry)]),
+  );
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }

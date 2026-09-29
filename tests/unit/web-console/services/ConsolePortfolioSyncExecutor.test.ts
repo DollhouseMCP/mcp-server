@@ -33,8 +33,8 @@ afterEach(() => {
 });
 
 describe('ConsolePortfolioSyncExecutor', () => {
-  it.each(CONSOLE_PORTFOLIO_ELEMENT_TYPES)('pushes and pulls %s using versioned manager details', async type => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'versioned-sync-'));
+  it.each(CONSOLE_PORTFOLIO_ELEMENT_TYPES)('pushes and pulls %s using ordinary manager details', async type => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'portfolio-sync-'));
     const suite = createRealManagerSuite(directory);
     const managers = { personas: suite.personaManager, skills: suite.skillManager, templates: suite.templateManager,
       agents: suite.agentManager, memories: suite.memoryManager, ensembles: suite.ensembleManager };
@@ -64,11 +64,6 @@ describe('ConsolePortfolioSyncExecutor', () => {
       integrationStore: new InMemoryUserIntegrationStore([integrationRecord()]), fetch: fetchMock, now: () => NOW });
     await expect(executor.execute(syncJob({ direction: 'push', conflictPolicy: 'prefer_local' })))
       .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pushed: 1 } });
-    managers[type].clearCache();
-    await expect(executor.execute(syncJob({ direction: 'push', conflictPolicy: 'fail' })))
-      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pushed: 0, skipped: 1 } });
-    await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'fail' })))
-      .resolves.toMatchObject({ status: 'succeeded', resultSummary: { pulled: 0, skipped: 1 } });
     await portfolioStore.delete({ userId: USER_ID, type, canonicalName: created.canonicalName,
       expectedVersion: 1, expectedContentHash: created.contentHash, now: NOW });
     await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'prefer_remote' })))

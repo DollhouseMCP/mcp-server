@@ -57,8 +57,6 @@ import {
   isWritableStorageLayer,
   type DatabaseStorageIdentity,
   type ElementSaveOptions,
-  type ElementDeleteOptions,
-  type VersionedElement,
   type IWritableStorageLayer,
   type StorageScanOptions,
 } from '../../storage/IStorageLayer.js';
@@ -938,7 +936,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Override BaseElementManager.save to persist state when required.
    */
-  override async save(agent: Agent, filePath: string, options?: ElementSaveOptions): Promise<VersionedElement> {
+  override async save(agent: Agent, filePath: string, options?: ElementSaveOptions): Promise<void> {
     // In DB mode, filePath is a UUID — pass it through unchanged. Appending
     // `.md` would break storage-layer lookups which index by UUID, not path.
     // In file mode, normalize to a `<name>.md` filename for on-disk storage.
@@ -947,7 +945,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       ? sanitizeInput(filePath, 255)
       : this.normalizeAgentFilePath(filePath);
 
-    const receipt = await super.save(agent, sanitizedPath, options);
+    await super.save(agent, sanitizedPath, options);
 
     // State persistence uses the agent's logical name (not path/UUID) so that
     // .state.yaml sidecar files stay stable across file/DB mode.
@@ -960,7 +958,6 @@ export class AgentManager extends BaseElementManager<Agent> {
       agent.markStatePersisted();
       this.hydratedAgents.add(agent);
     }
-    return receipt;
   }
 
   /**
@@ -997,7 +994,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * FIX: Uses normalizeFilename() to ensure state file deletion matches
    * the normalized filename used for state file creation/loading.
    */
-  override async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
+  override async delete(filePath: string): Promise<void> {
     // DB mode: filePath is a UUID, don't force `.md` extension.
     const isDb = isWritableStorageLayer(this.storageLayer);
     const sanitizedPath = isDb
@@ -1008,7 +1005,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       // identity before validation/deletion. agent_states has an ON DELETE
       // CASCADE foreign key, so a second state deletion here would create a
       // dangerous partial-success path if definition deletion affected no row.
-      await super.delete(sanitizedPath, options);
+      await super.delete(sanitizedPath);
       return;
     }
 
@@ -1017,7 +1014,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     const stateKey = existing
       ? this.getAgentStateKey(existing, name)
       : { name, agentElementId: sanitizedPath };
-    await super.delete(sanitizedPath, options);
+    await super.delete(sanitizedPath);
 
     await this.stateStore.delete(stateKey);
   }

@@ -5,15 +5,13 @@
 
 import { IElement, ElementValidationResult } from './IElement.js';
 import { ElementType } from '../../portfolio/types.js';
-import type { ElementSaveOptions, ElementDeleteOptions, VersionedElement } from '../../storage/IStorageLayer.js';
 
 // Generic element manager interface
 export interface IElementManager<T extends IElement> {
   // CRUD operations
   load(path: string): Promise<T>;
-  readVersioned(name: string): Promise<VersionedElement>;
-  save(element: T, path: string, options?: ElementSaveOptions): Promise<VersionedElement>;
-  delete(path: string, options?: ElementDeleteOptions): Promise<void>;
+  save(element: T, path: string): Promise<void>;
+  delete(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   
   // Collection operations

@@ -41,8 +41,6 @@ import { type ElementValidator } from '../../services/validation/ElementValidato
 import {
   type IStorageLayer,
   type ElementSaveOptions,
-  type ElementDeleteOptions,
-  type VersionedElement,
   type StorageScanOptions,
   isWritableStorageLayer,
 } from '../../storage/IStorageLayer.js';
@@ -63,13 +61,20 @@ import { ElementCache } from './ElementCache.js';
 import { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import { ElementLoader } from './ElementLoader.js';
 import { ElementPersister } from './ElementPersister.js';
-import { ElementListOperations, type ElementScanOptions } from './ElementListOperations.js';
+import { ElementListOperations } from './ElementListOperations.js';
 import { ElementResolver } from './ElementResolver.js';
 
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
 
 export type BackupServiceProvider = () => BackupService | undefined;
+
+/** A resolved update target; identity is carried unchanged into the save. */
+export interface ElementUpdateTarget<T extends IElement> {
+  readonly element: T;
+  readonly path: string;
+  readonly options: ElementSaveOptions;
+}
 
 export interface BaseElementManagerOptions {
   elementDirOverride?: string;
@@ -387,6 +392,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       createBackupBeforeDelete: (ap: string) => this.createBackupBeforeDelete(ap),
       getElementLabel: () => this.getElementLabel(),
       getElementLabelCapitalized: () => this.getElementLabelCapitalized(),
+      getElementFilename: (name: string) => this.getElementFilename(name),
+      scanAndEvict: () => this.scanAndEvict(),
       extractNameFromPath: (rp: string) => this.extractNameFromPath(rp),
       normalizeAndValidatePath: (fp: string) => this.normalizeAndValidatePath(fp),
       get constructor() { return self.constructor as { name: string }; },
@@ -474,36 +481,25 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._loader.loadDefinition(filePath);
   }
 
-  /** Fresh stored bytes and token; bypasses and never publishes to the element cache. */
-  async readVersioned(name: string): Promise<VersionedElement> {
-    if (isWritableStorageLayer(this.storageLayer)) {
-      const identity = await this.storageLayer.resolveContentIdentity(this.elementType, this.extractNameFromPath(name));
-      if (!identity) {
-        const error = new Error(`Element not found: ${name}`) as NodeJS.ErrnoException;
-        error.code = 'ENOENT';
-        throw error;
-      }
-      return this._persister.readVersioned(identity.id);
-    }
-    return this._persister.readVersioned(await this.resolveVersionedPath(name));
-  }
-
-  protected async resolveVersionedPath(name: string): Promise<string> {
-    await this.scanAndEvict({ respectCooldown: true });
-    return this.storageLayer.getPathByName(name) ?? this.resolveUnindexedVersionedPath(name);
-  }
-
-  /** Legacy filename fallback, used only when no indexed identity exists. */
-  protected async resolveUnindexedVersionedPath(name: string): Promise<string> {
-    return name.endsWith(this.getFileExtension()) ? name : this.getElementFilename(name);
-  }
-
-  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<VersionedElement> {
+  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
     return this._persister.save(element, filePath, options);
   }
 
-  async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
-    return this._persister.delete(filePath, options);
+  /** Resolve once so an update cannot silently insert or retarget a replacement row. */
+  async findForUpdate(name: string): Promise<ElementUpdateTarget<T> | undefined> {
+    const target = await this._persister.resolveUpdateTarget(name);
+    if (!target) return undefined;
+    try {
+      const element = await this.findByStorageIdentity(target.path);
+      return element ? { element, ...target } : undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }
+
+  async delete(filePath: string): Promise<void> {
+    return this._persister.delete(filePath);
   }
 
   async exists(filePath: string): Promise<boolean> {
@@ -713,7 +709,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    * Fixes #1895 (ensemble activation serving stale cached element list).
    */
-  protected async scanAndEvict(options?: ElementScanOptions): Promise<void> {
+  protected async scanAndEvict(options?: StorageScanOptions): Promise<void> {
     return this._listOps.scanAndEvict(options);
   }
 

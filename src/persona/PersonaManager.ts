@@ -1,4 +1,3 @@
-import type { ElementDeleteOptions } from '../storage/IStorageLayer.js';
 /**
  * Core persona management operations
  */
@@ -1575,28 +1574,15 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    *
    * @param filePath - The filename of the persona to delete
    */
-  override async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
+  override async delete(filePath: string): Promise<void> {
     // Issue #281: Auto-deactivate before deletion
     // This allows deleting active personas without requiring explicit deactivation
-    const activationSet = this.getActivationSet();
-    const originalOrder = [...activationSet];
-    const wasActive = activationSet.has(filePath);
+    const wasActive = this.getActivationSet().has(filePath);
     if (wasActive) {
       this.getActivationSet().delete(filePath);
     }
 
-    try {
-      await super.delete(filePath, options);
-    } catch (error) {
-      if (wasActive) {
-        activationSet.add(filePath);
-        // Restore primary-persona order while retaining unrelated activation changes.
-        const restoredOrder = [...originalOrder.filter(id => activationSet.has(id)), ...activationSet];
-        activationSet.clear();
-        for (const id of restoredOrder) activationSet.add(id);
-      }
-      throw error;
-    }
+    await super.delete(filePath);
     await this.reload();
 
     // SECURITY: Log persona deletion event (BaseElementManager also logs, but with different details)

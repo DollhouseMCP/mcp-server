@@ -34,7 +34,7 @@ import {
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
 
 type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
-  save(element: T, filePath: string): Promise<unknown>;
+  save(element: T, filePath: string): Promise<void>;
   delete?(filePath: string): Promise<void>;
 };
 

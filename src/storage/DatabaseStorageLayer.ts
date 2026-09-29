@@ -13,7 +13,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import { StaleElementWriteError, validateConditionalWrite } from './ElementVersion.js';
 import { and, eq, sql } from 'drizzle-orm';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext } from '../database/rls.js';
@@ -85,7 +84,6 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     metadata: ElementWriteMetadata,
     options?: WriteContentOptions,
   ): Promise<string> {
-    validateConditionalWrite(options);
     const frontmatter = FrontmatterParser.extractMetadata(content);
     const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
     const byteSize = Buffer.byteLength(content, 'utf8');
@@ -189,7 +187,7 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     options?: WriteContentOptions,
   ): Promise<ElementIdRow[]> {
     if (options?.expectedIdentity) {
-      return this.updateExpectedElementRow(tx, values, options.expectedIdentity, options.expectedVersion);
+      return this.updateExpectedElementRow(tx, values, options.expectedIdentity);
     }
     if (options?.exclusive) {
       return this.insertElementRowExclusive(tx, values, options.elementLabel);
@@ -208,7 +206,6 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     tx: DrizzleTx,
     values: ElementWriteValues,
     expected: NonNullable<WriteContentOptions['expectedIdentity']>,
-    expectedVersion?: string,
   ): Promise<ElementIdRow[]> {
     if (expected.name !== values.name) {
       throw this.createStaleWriteError(values.elementType, values.name, expected);
@@ -221,11 +218,9 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
         eq(elements.elementType, values.elementType),
         eq(elements.id, expected.id),
         eq(elements.name, expected.name),
-        expectedVersion === undefined ? undefined : eq(elements.contentHash, expectedVersion),
       ))
       .returning({ id: elements.id });
     if (rows.length !== 1) {
-      if (expectedVersion !== undefined) throw new StaleElementWriteError();
       throw this.createStaleWriteError(values.elementType, values.name, expected);
     }
     return rows;
@@ -261,10 +256,11 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     cause?: unknown,
   ): NodeJS.ErrnoException {
     const expected = expectedIdentity ? `; expected row ${expectedIdentity.id}` : '';
-    const error = new StaleElementWriteError(
+    const error = new Error(
       `Element not found or identity changed during save: ${elementType}/${name}${expected}`,
       { cause: cause instanceof Error ? cause : undefined },
-    );
+    ) as NodeJS.ErrnoException;
+    error.code = 'ESTALE';
     return error;
   }
 

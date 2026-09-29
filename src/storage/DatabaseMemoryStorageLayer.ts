@@ -12,9 +12,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { StaleElementWriteError, validateConditionalWrite } from './ElementVersion.js';
 import { eq, and, gt, lt, sql, desc, inArray, arrayOverlaps } from 'drizzle-orm';
-import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
 import { elements } from '../database/schema/elements.js';
@@ -136,7 +134,6 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     metadata: ElementWriteMetadata,
     options?: WriteContentOptions,
   ): Promise<string> {
-    validateConditionalWrite(options);
     const extracted = MemoryMetadataExtractor.extractMetadata(content, name);
     const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
     const byteSize = Buffer.byteLength(content, 'utf8');
@@ -173,9 +170,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       };
 
       let rows;
-      if (options?.expectedIdentity) {
-        rows = await this.updateExpectedMemoryRow(tx, values, buildUpdateSet(), options);
-      } else if (options?.exclusive) {
+      if (options?.exclusive) {
         // Atomic create-or-fail — mirrors file-mode createFileExclusive semantics.
         try {
           rows = await tx.insert(elements).values(values).returning({ id: elements.id });
@@ -219,23 +214,6 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       { elementId, name: elementName });
 
     return elementId;
-  }
-
-  private async updateExpectedMemoryRow(
-    tx: DrizzleTx,
-    values: typeof elements.$inferInsert,
-    updates: PgUpdateSetSource<typeof elements>,
-    options: WriteContentOptions,
-  ): Promise<{ id: string }[]> {
-    const expected = options.expectedIdentity;
-    if (expected?.name !== values.name) throw new StaleElementWriteError();
-    const rows = await tx.update(elements).set(updates).where(and(
-      eq(elements.userId, values.userId), eq(elements.elementType, 'memories'),
-      eq(elements.id, expected.id), eq(elements.name, expected.name),
-      options.expectedVersion === undefined ? undefined : eq(elements.contentHash, options.expectedVersion),
-    )).returning({ id: elements.id });
-    if (rows.length !== 1) throw new StaleElementWriteError();
-    return rows;
   }
 
   async deleteContent(_elementType: string, name: string): Promise<void> {

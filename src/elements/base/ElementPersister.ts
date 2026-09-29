@@ -26,13 +26,9 @@ import type { FileOperationsService } from '../../services/FileOperationsService
 import { ElementTransactionScope } from './ElementTransactionScope.js';
 import {
   type ElementSaveOptions,
-  type ElementDeleteOptions,
-  type ExpectedElementVersion,
-  type VersionedElement,
   type IStorageLayer,
   isWritableStorageLayer,
 } from '../../storage/IStorageLayer.js';
-import { StaleElementWriteError, storedContentVersion } from '../../storage/ElementVersion.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { ElementCache } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
@@ -62,6 +58,8 @@ export interface ElementPersisterHost<T extends IElement> {
   createBackupBeforeDelete(absolutePath: string): Promise<boolean>;
   getElementLabel(): string;
   getElementLabelCapitalized(): string;
+  getElementFilename(name: string): string;
+  scanAndEvict(): Promise<void>;
   extractNameFromPath(relativePath: string): string;
   normalizeAndValidatePath(filePath: string): Promise<{ relativePath: string; absolutePath: string }>;
   readonly constructor: { name: string };
@@ -99,21 +97,30 @@ export class ElementPersister<T extends IElement> {
     this.elementTypeToContext = deps.elementTypeToContext;
   }
 
-  /** Read fresh stored bytes and their digest without parsing or cache publication. */
-  async readVersioned(filePath: string): Promise<VersionedElement> {
-    const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
-    if (isWritableStorageLayer(this.storageLayer)) return this.storageLayer.readVersioned(relativePath);
-    const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
-      source: `${this.host.constructor.name}.readVersioned`,
-    });
-    return { identity: { kind: 'file', path: relativePath }, relativePath, raw, version: storedContentVersion(raw) };
+  /** Resolve a database row identity or a file path without introducing a version token. */
+  async resolveUpdateTarget(name: string): Promise<{ path: string; options: ElementSaveOptions } | undefined> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      const identity = await this.storageLayer.resolveContentIdentity(this.host.elementType, name);
+      return identity ? { path: identity.id, options: { expectedIdentity: identity } } : undefined;
+    }
+    await this.host.scanAndEvict();
+    return {
+      path: this.storageLayer.getPathByName(name) ?? this.host.getElementFilename(name),
+      options: { updateOnly: true },
+    };
   }
 
-  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<VersionedElement> {
-    if (options?.exclusive && options.expected) throw new Error('Exclusive creation cannot have an expected version');
+  /**
+   * Save an element to file or database.
+   * Identical to the former BaseElementManager.save() body.
+   */
+  async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
+    if (options?.updateOnly && options.exclusive) {
+      throw new Error('An update-only save cannot also create exclusively');
+    }
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
-    return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+    await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
       const correlationId = randomUUID();
       const transaction = new ElementTransactionScope(this.host.getElementLabel(), correlationId);
 
@@ -137,8 +144,6 @@ export class ElementPersister<T extends IElement> {
 
       const isDbMode = isWritableStorageLayer(this.storageLayer);
       let savedRelativePath = relativePath;
-      let committedRaw = '';
-      let committedName = element.metadata.name;
 
       transaction.addCommit(async () => {
         this.cache.cacheElement(element, savedRelativePath);
@@ -171,13 +176,10 @@ export class ElementPersister<T extends IElement> {
         }
 
         const content = await this.host.serializeElement(element);
-        committedRaw = content;
-        committedName = element.metadata.name;
         // Dispatch through the host so subclass overrides (e.g. MemoryManager) are called.
         this.host.validateSerializedContent(content);
 
         if (isDbMode) {
-          if (options?.expected && options.expected.identity.kind !== 'database') throw new StaleElementWriteError();
           const elementId = await this.storageLayer.writeContent(
             this.host.elementType,
             element.metadata.name,
@@ -191,8 +193,7 @@ export class ElementPersister<T extends IElement> {
             {
               exclusive: options?.exclusive ?? false,
               elementLabel: this.host.getElementLabelCapitalized(),
-              expectedIdentity: options?.expected?.identity.kind === 'database' ? options.expected.identity : options?.expectedIdentity,
-              expectedVersion: options?.expected?.version,
+              expectedIdentity: options?.expectedIdentity,
             },
           );
           savedRelativePath = elementId;
@@ -205,9 +206,14 @@ export class ElementPersister<T extends IElement> {
             throw new Error(`${this.host.getElementLabelCapitalized()} '${element.metadata.name}' already exists`);
           }
         } else {
-          await this.assertFileVersion(relativePath, options?.expected);
-          await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          if (!options?.updateOnly) {
+            await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          }
           await this.host.createBackupBeforeSave(absolutePath);
+          // Under this process-local lock, updateOnly never inserts after deletion.
+          // It cannot detect same-path recreation: a replacement will be overwritten.
+          // External writers are not coordinated; retain atomic temp-file + rename.
+          if (options?.updateOnly) await this.fileOperations.stat(absolutePath);
           await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
         }
 
@@ -217,33 +223,14 @@ export class ElementPersister<T extends IElement> {
       });
 
       logger.info(`${this.host.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
-      return { relativePath: savedRelativePath, raw: committedRaw, version: storedContentVersion(committedRaw),
-        identity: isDbMode ? { kind: 'database', id: savedRelativePath, name: committedName } : { kind: 'file', path: relativePath } };
     });
-  }
-
-  /**
-   * Called under the existing FileLockManager element:<path> save/delete lock.
-   * Its process-local limit is temporary, pending #2870: replacing that lock with
-   * cross-process coordination must not change this conditional-write contract.
-   */
-  private async assertFileVersion(relativePath: string, expected?: ExpectedElementVersion): Promise<void> {
-    if (!expected) return;
-    if (expected.identity.kind !== 'file' || expected.identity.path !== relativePath) throw new StaleElementWriteError();
-    try {
-      const current = await this.readVersioned(relativePath);
-      if (current.version !== expected.version) throw new StaleElementWriteError();
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new StaleElementWriteError();
-      throw error;
-    }
   }
 
   /**
    * Delete an element from file or database.
    * Identical to the former BaseElementManager.delete() body.
    */
-  async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
+  async delete(filePath: string): Promise<void> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -288,9 +275,8 @@ export class ElementPersister<T extends IElement> {
 
       await transaction.run(async () => {
         if (isDbMode) {
-          deletedStorageIdentity = await this.deleteFromDatabase(relativePath, options?.expected);
+          deletedStorageIdentity = await this.deleteFromDatabase(relativePath);
         } else {
-          await this.assertFileVersion(relativePath, options?.expected);
           if (this.host.canDelete) {
             const elementForValidation = await this.loader.loadElementSnapshot(absolutePath, relativePath);
             await this.assertDeleteAllowed(elementForValidation);
@@ -312,12 +298,11 @@ export class ElementPersister<T extends IElement> {
     });
   }
 
-  private async deleteFromDatabase(relativePath: string, expected?: ExpectedElementVersion): Promise<string> {
+  private async deleteFromDatabase(relativePath: string): Promise<string> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       throw new Error('Database deletion requires a writable storage layer');
     }
     const storage = this.storageLayer;
-    if (expected && expected.identity.kind !== 'database') throw new StaleElementWriteError();
     const dbIdentifier = DATABASE_STORAGE_IDENTITY_PATTERN.test(relativePath)
       ? relativePath
       : this.host.extractNameFromPath(relativePath);
@@ -325,33 +310,20 @@ export class ElementPersister<T extends IElement> {
       this.host.elementType,
       dbIdentifier,
     );
-    if (!resolvedIdentity) {
-      if (expected) throw new StaleElementWriteError();
-      throw this.createNotFoundError(relativePath);
-    }
+    if (!resolvedIdentity) throw this.createNotFoundError(relativePath);
     const dbId = resolvedIdentity.id;
 
-    await this.validateDatabaseDeletion(dbId, expected);
+    if (this.host.canDelete) {
+      const elementForValidation = await this.loader.loadElementSnapshotFromDb(dbId);
+      await this.assertDeleteAllowed(elementForValidation);
+    }
 
     const deleted = await storage.deleteContentByIdentity(
       this.host.elementType,
       dbIdentifier,
-      expected?.identity.kind === 'database' ? expected.identity : resolvedIdentity,
-      expected?.version,
+      resolvedIdentity,
     );
     return deleted.id;
-  }
-
-  private async validateDatabaseDeletion(dbId: string, expected?: ExpectedElementVersion): Promise<void> {
-    if (!this.host.canDelete) return;
-    try {
-      const elementForValidation = await this.loader.loadElementSnapshotFromDb(dbId);
-      await this.assertDeleteAllowed(elementForValidation);
-    } catch (error) {
-      // A row can disappear after identity resolution but before validation reads it.
-      if (expected && (error as NodeJS.ErrnoException).code === 'ENOENT') throw new StaleElementWriteError();
-      throw error;
-    }
   }
 
   private async assertDeleteAllowed(element: T): Promise<void> {

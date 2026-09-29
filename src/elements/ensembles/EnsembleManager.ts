@@ -1,4 +1,4 @@
-import type { ElementSaveOptions, ElementDeleteOptions, VersionedElement } from '../../storage/IStorageLayer.js';
+import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * EnsembleManager - Implementation of IElementManager for Ensemble elements
  *
@@ -841,7 +841,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   /**
    * Override save to validate before persisting
    */
-  override async save(element: Ensemble, filePath: string, options?: ElementSaveOptions): Promise<VersionedElement> {
+  override async save(element: Ensemble, filePath: string, options?: ElementSaveOptions): Promise<void> {
     // Validate ensemble before saving
     const validationResult = this.validate(element);
     if (!validationResult.valid) {
@@ -850,13 +850,13 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     }
 
     // Call base implementation
-    return super.save(element, filePath, options);
+    await super.save(element, filePath, options);
   }
 
   /**
    * Override delete to add ensemble-specific logging
    */
-  override async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
+  override async delete(filePath: string): Promise<void> {
     SecurityMonitor.logSecurityEvent({
       type: ENSEMBLE_SECURITY_EVENTS.DELETED,
       severity: 'MEDIUM',
@@ -864,7 +864,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       details: `Deleting ensemble: ${filePath}`
     });
 
-    await super.delete(filePath, options);
+    await super.delete(filePath);
 
     SecurityMonitor.logSecurityEvent({
       type: ENSEMBLE_SECURITY_EVENTS.DELETED,

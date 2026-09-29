@@ -1,4 +1,4 @@
-import type { ElementSaveOptions, ElementDeleteOptions, VersionedElement } from '../../storage/IStorageLayer.js';
+import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * TemplateManager - Refactored to extend BaseElementManager, keeping
  * template-specific validation, import/export logic, and analytics helpers.
@@ -68,7 +68,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     return template;
   }
 
-  override async save(template: Template, filePath: string, options?: ElementSaveOptions): Promise<VersionedElement> {
+  override async save(template: Template, filePath: string, options?: ElementSaveOptions): Promise<void> {
     // Auto-derive variables from content (#1896): ensures every {{placeholder}}
     // has a matching schema entry so render() never silently returns unfilled text.
     // Existing entries are never overwritten — user-set descriptions, types, and
@@ -80,7 +80,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       );
     }
 
-    const receipt = await super.save(template, filePath, options);
+    await super.save(template, filePath, options);
 
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_SAVED',
@@ -90,11 +90,10 @@ export class TemplateManager extends BaseElementManager<Template> {
     });
 
     logger.info(`Template saved: ${template.metadata.name}`);
-    return receipt;
   }
 
-  override async delete(filePath: string, options?: ElementDeleteOptions): Promise<void> {
-    await super.delete(filePath, options);
+  override async delete(filePath: string): Promise<void> {
+    await super.delete(filePath);
 
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_DELETED',

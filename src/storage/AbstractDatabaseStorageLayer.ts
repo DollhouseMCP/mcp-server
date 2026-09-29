@@ -20,14 +20,12 @@ import type { UserIdResolver } from '../database/UserContext.js';
 import { isSerializationFailure, type DrizzleTx } from '../database/db-utils.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 import type {
-  VersionedElement,
   DatabaseStorageIdentity,
   IWritableStorageLayer,
   ElementWriteMetadata,
   StorageScanOptions,
   WriteContentOptions,
 } from './IStorageLayer.js';
-import { StaleElementWriteError } from './ElementVersion.js';
 
 /**
  * Canonical key for case/format-insensitive name resolution: lowercase, with
@@ -306,9 +304,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     elementType: string,
     identifier: string,
     expectedIdentity?: DatabaseStorageIdentity,
-    expectedVersion?: string,
   ): Promise<DatabaseStorageIdentity> {
-    if (expectedVersion !== undefined && !expectedIdentity) throw new Error('Expected version requires identity');
     const userId = this.userId;
     let attempt = 0;
     while (attempt < SERIALIZABLE_DELETE_ATTEMPTS) {
@@ -317,14 +313,15 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
         const deleted = await this.db.transaction(async (tx) => {
           await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId}, true)`);
           const identity = await this.resolveIdentityInTransaction(tx, userId, elementType, identifier);
-          if (!identity) {
-            if (expectedVersion !== undefined) throw new StaleElementWriteError();
-            throw this.createNotFoundError(elementType, identifier);
-          }
+          if (!identity) throw this.createNotFoundError(elementType, identifier);
           if (expectedIdentity !== undefined && (
             identity.id !== expectedIdentity.id || identity.name !== expectedIdentity.name
           )) {
-            throw new StaleElementWriteError();
+            const error = new Error(
+              `Element not found or identity changed during deletion: ${identifier}`,
+            ) as NodeJS.ErrnoException;
+            error.code = 'ESTALE';
+            throw error;
           }
 
           const rows = await tx
@@ -333,14 +330,9 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
               eq(elements.userId, userId),
               eq(elements.elementType, elementType),
               eq(elements.id, identity.id),
-              eq(elements.name, identity.name),
-              expectedVersion === undefined ? undefined : eq(elements.contentHash, expectedVersion),
             ))
             .returning({ id: elements.id });
-          if (rows.length !== 1) {
-            if (expectedVersion !== undefined) throw new StaleElementWriteError();
-            throw this.createNotFoundError(elementType, identifier);
-          }
+          if (rows.length !== 1) throw this.createNotFoundError(elementType, identifier);
           return identity;
         }, { isolationLevel: 'serializable' });
 
@@ -402,19 +394,6 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     }
 
     return row.rawContent;
-  }
-
-  /**
-   * One RLS-scoped observation. Until the AD1 trigger, hashes are application-maintained:
-   * direct SQL changing raw_content without content_hash cannot be detected.
-   */
-  async readVersioned(relativePath: string): Promise<VersionedElement> {
-    const rows = await withUserRead(this.db, this.userId, tx => tx
-      .select({ id: elements.id, name: elements.name, raw: elements.rawContent, version: elements.contentHash })
-      .from(elements).where(and(eq(elements.id, relativePath), eq(elements.elementType, this.elementType))).limit(1));
-    const row = rows.at(0);
-    if (!row) throw this.createNotFoundError(this.elementType, relativePath);
-    return { identity: { kind: 'database', id: row.id, name: row.name }, relativePath: row.id, raw: row.raw, version: row.version };
   }
 
   // ── Protected helpers for subclasses ──────────────────────────────

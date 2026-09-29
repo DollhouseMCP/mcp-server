@@ -692,7 +692,7 @@ describe('AgentManager DB-backed runtime state', () => {
           return { allowed: true };
         };
 
-        await expect(manager.delete(targetId)).rejects.toMatchObject({ code: 'ESTALE' });
+        await expect(manager.delete(targetId)).rejects.toThrow(/not found/iu);
 
         const remainingDefinitions = await withUserRead(getTestDb(), userId, tx =>
           tx.select({ id: elements.id, name: elements.name })

@@ -33,8 +33,7 @@ export interface IPortfolioActivityEventSink {
 
 /**
  * Metadata-only, content-free summary line for the activity log. `contentHash` is the portfolio
- * store's SHA-256 of the stored bytes (64 lowercase hex). Historical logged hashes retain their
- * original meaning and are not recomputed.
+ * store's SHA-256 hex digest (validated as 64 lowercase hex), so the `sha256:` prefix is accurate.
  */
 export function portfolioDeletionActivityMessage(event: PortfolioElementDeletedEvent): string {
   const target = `${event.elementType}/${event.canonicalName}`;
