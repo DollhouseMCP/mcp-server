@@ -463,3 +463,30 @@ it('accepts chronological finite extended-year dates using numeric epochs', asyn
   expect(metadata.firstEntryAt).toBe(firstEntryAt.toISOString());
   expect(metadata.lastEntryAt).toBe(lastEntryAt.toISOString());
 });
+
+
+it.each(['committed-marker', 'verified-after-marker'] as const)(
+  'retains original committed receipt after %s marker replacement', async barrier => {
+    let originalPayloadInode = '';
+    let originalMarkerInode = '';
+    let replacementMarkerInode = '';
+    const f = await fixture(async (phase, v) => {
+      if (phase !== barrier) return;
+      const g = (await fs.readdir(v)).find(name => name.startsWith('g-'))!;
+      originalPayloadInode = String((await fs.stat(path.join(v, g, 'payload.yaml'), { bigint: true })).ino);
+      const marker = path.join(v, 'COMMITTED');
+      originalMarkerInode = String((await fs.stat(marker, { bigint: true })).ino);
+      // Keep the old inode allocated so removal/recreation cannot reuse it.
+      await fs.rename(marker, path.join(f.root, 'held-marker'));
+      await fs.mkdir(marker, { mode: 0o700 });
+      replacementMarkerInode = String((await fs.stat(marker, { bigint: true })).ino);
+    });
+    let outcome: CommittedFileArchiveError | undefined;
+    try { await f.store.createExclusive(f.token, input); }
+    catch (cause) { outcome = cause as CommittedFileArchiveError; }
+    expect(replacementMarkerInode).not.toBe(originalMarkerInode);
+    expect(outcome).toMatchObject({ code: 'EARCHIVECOMMITTED', committed: true, receipt: { volume: 1 } });
+    expect(outcome?.cause).toMatchObject({ code: 'EARCHIVECOMMITTED', cause: { code: 'EARCHIVEUNSAFE', message: 'Archive directory was replaced' } });
+    expect(outcome?.receipt.payloadIdentity.inode).toBe(originalPayloadInode);
+    expect(await fs.readdir(path.join(f.ownerPath, 'v1', 'COMMITTED'))).toEqual([]);
+  });

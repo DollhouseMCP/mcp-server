@@ -33,6 +33,10 @@ namespace siblings, two slot/generation children, zero marker children.
 
 The exact frozen receipt is prepared before publication. **Successful return from
 non-recursive exclusive `mkdir(vN/COMMITTED, 0700)` is the sole commit event.**
+Immediately after successful marker creation, the operation captures its private
+directory identity before any callback; both postcommit proofs require that identity.
+This is private postcommit evidence and does not change the precommit receipt.
+Capture failure is already committed and retains the preverified receipt.
 The marker is an empty directory; later verification does not establish a second
 commit point. Receipt directory identities use dev/inode because the marker
 changes volume timestamps. File identities include size/ctime/mtime from original
