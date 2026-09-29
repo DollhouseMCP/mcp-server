@@ -137,7 +137,8 @@ Definitions: a **commit** is the backend's specified commit event (DB transactio
 | **X1 Replicas** | Correctness never depends on local notifications or process-local state. Strict validation reads the authoritative primary (or an equivalent read-after-commit guarantee). |
 
 ### 4.1 Performance targets (measured as counts, not timings; perf never gates on time)
-- **P1** Unchanged warm operation: **0** YAML re-parses for already-known definitions in both modes; **0** `raw_content` reads in **DB mode**. File mode: strict validation digests the bytes (D7), so body reads are expected and counted, not zero.
+P1–P4 are optimization targets for the `versioned` coherence mode. Database/file are backend modes, distinct from `authoritative`/`versioned` coherence modes. The authoritative oracle performs fresh required body reads/parses per operation; measure those separately rather than require cross-request reuse. Both coherence modes retain the same correctness acceptance gate.
+- **P1** Unchanged warm `versioned` operation: **0** YAML re-parses for already-validated definitions in either backend; **0** `raw_content` reads in **DB mode**. File mode: strict validation digests the bytes (D7), so body reads are expected and counted, not zero.
 - **P2** Policy refresh when nothing changed (DB): ≤ 1 batched validation **data query** per refreshed type (first rollout), counted separately from transaction/RLS setup statements; an O(1) per-type revision check is a later optimization (§9.9).
 - **P3** After a change: O(rows of that type for that user) validation; only changed, removed or unknown entries reloaded.
 - **P4** ≥ 80% fewer raw-content bytes and parses on an unchanged warmed DB workload vs. beta; p95 no worse than baseline (thresholds set after the baseline, §13).
@@ -525,8 +526,8 @@ The wider §5 inventory remains a migration checklist: mutable cached instances,
 ## 13. Performance measurement plan
 - Instrument: SQL statements (validation data queries vs transaction/RLS setup), rows, raw-content bytes, file bytes digested, YAML parses, hydration CPU, transaction/connection occupancy, latency p50/p95/p99, memory after churn, in-flight bookkeeping after failures.
 - Matrix: 0/1/10/100 active refs; small/large catalogs; warm/cold; unchanged/edit/delete; one and multiple users; one and two replicas; file portfolios of realistic size for the D7 digest cost, **including list-heavy workloads** (a strict file `list()` of N elements digests N bodies); nested ensemble depth for the in-transaction dependency parsing; export frequency (each export is a fresh acquisition); synchronous activation-persistence latency; publications rejected by the `discardedAt` bound after evictions.
-- Compare **beta (legacy)**, **authoritative**, **versioned**.
-- CI asserts **counts** (P1–P3), never timings (performance is never gated on timings). Latency thresholds are set from the baseline.
+- Compare **beta (legacy)**, **authoritative**, **versioned** separately on each backend. The oracle's fresh-read/parse counts are reference costs, not P1–P4 cache-reuse targets.
+- CI asserts `versioned` optimization **counts** (P1–P3), and records authoritative oracle read/parse counts separately, never timings (performance is never gated on timings). Latency thresholds are set from the baseline.
 
 ---
 
