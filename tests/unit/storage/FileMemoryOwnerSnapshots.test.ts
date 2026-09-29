@@ -121,6 +121,18 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     expect((await fs.stat(path.join(tenantRoot, '.memory-owners'))).mode & 0o777).toBe(0o700);
   });
 
+  it('adopts and re-reads a legacy head with a pre-epoch modification time', async () => {
+    const { headPath, locator, makeStore } = await fixture();
+    const oldTime = new Date('1960-01-01T00:00:00Z');
+    await fs.utimes(headPath, oldTime, oldTime);
+    const store = makeStore();
+    const snapshot = await store.readHeadSnapshot(locator);
+    expect(snapshot.token.fileIdentity.mtimeNs).toMatch(/^-/u);
+
+    const owned = await store.adoptUnowned(snapshot.token as UnownedFileMemoryToken);
+    expect((await store.readHeadSnapshot(locator)).token).toEqual(owned);
+  });
+
   it('rejects stale or changed snapshots before publishing ownership', async () => {
     const { tenantRoot, headPath, locator, makeStore } = await fixture();
     const store = makeStore();
@@ -220,6 +232,22 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     await fs.writeFile(registryPath, original.replace(locator, 'Notes/Another.yaml'), { mode: 0o600 });
     await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+  });
+
+  it('still rejects malformed and negative unsigned file-identity fields', async () => {
+    const { tenantRoot, locator, makeStore } = await fixture();
+    const store = makeStore();
+    const snapshot = await store.readHeadSnapshot(locator);
+    const owned = await store.adoptUnowned(snapshot.token as UnownedFileMemoryToken);
+    const registryPath = path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`);
+    const original = JSON.parse(await fs.readFile(registryPath, 'utf8'));
+    for (const fileIdentity of [
+      { ...original.fileIdentity, device: '-1' },
+      { ...original.fileIdentity, mtimeNs: '--1' },
+    ]) {
+      await fs.writeFile(registryPath, JSON.stringify({ ...original, fileIdentity }));
+      await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    }
   });
 
   it('rejects a copied sidecar whose registry belongs to another head', async () => {
