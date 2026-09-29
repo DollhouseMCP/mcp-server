@@ -103,6 +103,11 @@ interface DiagnosticEvidenceRead {
   readonly headContent: string;
   readonly journalRaw?: string;
   readonly journalIdentity?: FileIdentity;
+  readonly sidecarRaw?: string;
+  readonly sidecarIdentity?: FileIdentity;
+  readonly registryRaw?: string;
+  readonly registryIdentity?: FileIdentity;
+  readonly recoveryStage?: { path: string; raw: string; identity: FileIdentity };
   readonly resolved: { headPath: string; sidecarPath: string; journalPath: string; basenameHash: string; locator: string };
 }
 
@@ -142,7 +147,7 @@ interface FileMemoryOwnerSnapshotsBaseOptions {
   readonly afterUpdatePublication?: (phase: UpdatePublication) => void | Promise<void>;
   /** Fault injection for dormant, operator-controlled finalization tests. */
   readonly afterFinalizePublication?: (phase: FinalizePublication) => void | Promise<void>;
-  /** Fault injection only; a staged UPDATE artifact is never resumed or removed automatically. */
+  /** Fault injection for UPDATE staging, including explicit dormant forward recovery. */
   readonly duringUpdateMetadataStage?: (
     stage: UpdateMetadataStage, point: UpdateMetadataStagePoint,
   ) => void | Promise<void>;
@@ -339,7 +344,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readDiagnosticEvidence(
-    scope: FileMemoryTransactionScope, locator: string,
+    scope: FileMemoryTransactionScope, locator: string, recovery = false,
   ): Promise<DiagnosticEvidenceRead> {
     const resolved = await this.resolveHead(scope.tenantRoot, locator);
     const head = await this.readHeadBytes(resolved.headPath);
@@ -362,7 +367,7 @@ export class FileMemoryOwnerSnapshots {
       scope.tenantRoot, resolved, sidecar?.record, journal?.record, ownerId);
     const temp = artifacts.exactTemp
       ? await this.readHeadBytes(path.join(path.dirname(resolved.headPath), artifacts.exactTemp), true) : undefined;
-    const evidence: FileMemoryWriteEvidence = {
+    let evidence: FileMemoryWriteEvidence = {
       userId: scope.userId, locator: resolved.locator,
       head: { hash: head.hash, identity: head.identity },
       sidecar: sidecar?.record, registry: registry?.record, journal: journal?.record,
@@ -371,15 +376,53 @@ export class FileMemoryOwnerSnapshots {
       unexpectedArtifacts: artifacts.unexpected ||
         !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record),
     };
+    let recoveryStage: DiagnosticEvidenceRead['recoveryStage'];
+    if (recovery && write?.state === 'PUBLISHED_WRITE') {
+      recoveryStage = await this.readRecoveryStage(scope, resolved, write, evidence);
+      evidence = { ...evidence, unexpectedArtifacts:
+        !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record) };
+    }
     // Preserve exact raw bytes and filename code units, plus descriptor identities.
     const signature = JSON.stringify({
       evidence, headRaw: head.value, tempRaw: temp?.value,
       sidecarRaw: sidecar?.raw, sidecarIdentity: sidecar?.identity,
       registryRaw: registry?.raw, registryIdentity: registry?.identity,
-      journalRaw: journal?.raw, journalIdentity: journal?.identity,
+      journalRaw: journal?.raw, journalIdentity: journal?.identity, recoveryStage,
     });
     return { evidence, signature, headContent: head.value,
-      journalRaw: journal?.raw, journalIdentity: journal?.identity, resolved };
+      journalRaw: journal?.raw, journalIdentity: journal?.identity,
+      sidecarRaw: sidecar?.raw, sidecarIdentity: sidecar?.identity,
+      registryRaw: registry?.raw, registryIdentity: registry?.identity, recoveryStage, resolved };
+  }
+
+  private async readRecoveryStage(
+    scope: FileMemoryTransactionScope, resolved: DiagnosticEvidenceRead['resolved'],
+    journal: WriteJournal, evidence: FileMemoryWriteEvidence,
+  ): Promise<DiagnosticEvidenceRead['recoveryStage']> {
+    const registryPath = this.registryPath(scope.tenantRoot, journal.ownerId);
+    const registryName = path.basename(registryPath);
+    const registryNames = await this.listMatchingArtifacts(path.dirname(registryPath), name =>
+      name.toLowerCase() === registryName.toLowerCase() ||
+      name.toLowerCase().startsWith(`${registryName.toLowerCase()}.`));
+    if (!registryNames.includes(registryName) || registryNames.some(name =>
+      name.toLowerCase() === registryName.toLowerCase() && name !== registryName)) {
+      throw headError('EOWNERRECOVERY', 'Memory registry namespace is ambiguous');
+    }
+    const names = evidence.artifactNames.filter(name => name !== path.basename(resolved.journalPath));
+    const phase = classifyFileMemoryWrite({ ...evidence, unexpectedArtifacts: false }).kind;
+    let target: string | undefined;
+    if (phase === 'published-before-registry') target = registryPath;
+    else if (phase === 'registry-advanced') target = resolved.sidecarPath;
+    const expectedPath = target ? `${target}.update-${journal.operationId}.tmp` : undefined;
+    if (!names.length) return undefined;
+    if (names.length !== 1 || !expectedPath || names[0] !== path.basename(expectedPath)) {
+      throw headError('EOWNERRECOVERY', 'Memory repair contains unexpected stages');
+    }
+    const stage = await this.readRecord(expectedPath);
+    if (stage?.raw !== serializedRecord(this.publishedRecord(journal))) {
+      throw headError('EOWNERRECOVERY', 'Memory repair stage is incomplete or mismatched');
+    }
+    return { path: expectedPath, raw: stage.raw, identity: stage.identity };
   }
 
   private async collectDiagnosticArtifacts(
@@ -441,18 +484,26 @@ export class FileMemoryOwnerSnapshots {
    * callers must first establish quiescence and handle the lease separately.
    */
   async finalizePublishedOwnedUpdate(request: FinalizeOwnedUpdateRequest): Promise<FinalizeOwnedUpdateResult> {
+    return this.runPublishedMaintenance(request, false);
+  }
+
+  private async runPublishedMaintenance(
+    request: FinalizeOwnedUpdateRequest, forward: boolean,
+  ): Promise<FinalizeOwnedUpdateResult> {
     const captured = { ...request };
     this.validateFinalizeRequest(captured);
     let committedToken: OwnedFileMemoryToken | undefined;
     try {
       return await this.requiredCoordinator().withTenantTransaction(async context => {
         try {
-          const result = await this.finalizePublishedOwnedUpdateInTransaction(context, captured);
+          const result = forward
+            ? await this.forwardPublishedOwnedUpdateInTransaction(context, captured)
+            : await this.finalizePublishedOwnedUpdateInTransaction(context, captured);
           if (result.status === 'known-committed') committedToken = result.token;
           return result;
         } catch (cause) {
           const outcome = cause as Partial<CommittedFileHeadError>;
-          if (outcome.committed && outcome.token) committedToken = outcome.token;
+          if (outcome?.committed && outcome.token) committedToken = outcome.token;
           throw cause;
         }
       });
@@ -474,6 +525,171 @@ export class FileMemoryOwnerSnapshots {
     return this.requiredCoordinator().perform(context, operation => this.finalizeAtScope(operation, captured));
   }
 
+  /** Dormant forward completion; all writers must be quiesced before acquisition. */
+  async forwardPublishedOwnedUpdate(request: FinalizeOwnedUpdateRequest): Promise<FinalizeOwnedUpdateResult> {
+    return this.runPublishedMaintenance(request, true);
+  }
+
+  /**
+   * One tracked maintenance operation under the caller's fresh, live lease.
+   * Callers retain known-committed results if their outer transaction later fails.
+   */
+  forwardPublishedOwnedUpdateInTransaction(
+    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    const captured = { ...request };
+    this.validateFinalizeRequest(captured);
+    return this.requiredCoordinator().perform(context, async operation => {
+      try { return await this.forwardAtScope(operation, captured); } catch (cause) {
+        const error = cause as Partial<CommittedFileHeadError>;
+        if (error?.committed || ['EOWNERRECOVERY', 'EINVALIDHEAD', 'EHEADCONFLICT', 'EHEADCOMMITUNKNOWN'].includes(error?.code ?? '')) {
+          throw cause;
+        }
+        const pending = headError('EHEADCOMMITUNKNOWN', 'Published memory repair remains pending; preserve residual evidence');
+        Object.assign(pending, { cause, operationId: captured.operationId, residual: true });
+        throw pending;
+      }
+    });
+  }
+
+  private publishedRecord(journal: WriteJournal): OwnerRecord {
+    if (!journal.publishedHeadIdentity) throw headError('EOWNERRECOVERY', 'Published identity is missing');
+    return { schema: 1, state: 'ACTIVE', userId: journal.userId, ownerId: journal.ownerId,
+      locator: journal.locator, revision: journal.newRevision, contentHash: journal.newContentHash,
+      fileIdentity: journal.publishedHeadIdentity };
+  }
+
+  private async forwardAtScope(
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+    expectedEvidence?: DiagnosticEvidenceRead, metadataSteps = 0,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    const first = await this.readDiagnosticEvidence(scope, request.locator, true);
+    coordinator.requireActiveOperationScope(operation);
+    if (expectedEvidence && expectedEvidence.signature !== first.signature) {
+      throw headError('EOWNERRECOVERY', 'Memory evidence changed between repair steps');
+    }
+    const phase = classifyFileMemoryWrite(first.evidence).kind;
+    if (phase === 'clean-consistent' || phase === 'metadata-advanced-before-unlink') {
+      return this.finalizeAtScope(operation, request, first);
+    }
+    const journal = this.requireForwardJournal(first, request, scope, phase);
+    if (phase !== 'published-before-registry' && phase !== 'registry-advanced') {
+      throw headError('EOWNERRECOVERY', 'Memory write is not an ordered PUBLISHED repair');
+    }
+    if (metadataSteps >= 2) {
+      throw headError('EOWNERRECOVERY', 'Memory repair did not reach metadata agreement');
+    }
+    const advanced = await this.advancePublishedMetadata(operation, request, first, journal, phase);
+    // At most registry then sidecar advance; recurse privately in the same
+    // operation so each publication completes before the next evidence read.
+    return this.forwardAtScope(operation, request, advanced, metadataSteps + 1);
+  }
+
+  private requireForwardJournal(
+    first: DiagnosticEvidenceRead, request: FinalizeOwnedUpdateRequest,
+    scope: FileMemoryTransactionScope, phase: string,
+  ): WriteJournal {
+    const journal = first.evidence.journal as WriteJournal | undefined;
+    if (journal?.state !== 'PUBLISHED_WRITE' || journal.ownerId !== request.ownerId ||
+      journal.operationId !== request.operationId || journal.userId !== scope.userId ||
+      journal.locator !== request.locator || first.resolved.locator !== request.locator ||
+      !first.journalRaw || !first.journalIdentity ||
+      (phase !== 'published-before-registry' && phase !== 'registry-advanced')) {
+      throw headError('EOWNERRECOVERY', 'Memory write is not an exact ordered PUBLISHED repair');
+    }
+    return journal;
+  }
+
+  private async advancePublishedMetadata(
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+    first: DiagnosticEvidenceRead, journal: WriteJournal,
+    phase: 'published-before-registry' | 'registry-advanced',
+  ): Promise<DiagnosticEvidenceRead> {
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    this.validateHeadForSave(first.headContent);
+    const stage: UpdateMetadataStage = phase === 'published-before-registry' ? 'active-registry' : 'active-sidecar';
+    const target = stage === 'active-registry' ? this.registryPath(scope.tenantRoot, request.ownerId) :
+      first.resolved.sidecarPath;
+    const raw = serializedRecord(this.publishedRecord(journal));
+    let proof = first;
+    if (!first.recoveryStage) {
+      const beforeStage = await this.readDiagnosticEvidence(scope, request.locator, true);
+      coordinator.requireActiveOperationScope(operation);
+      if (first.signature !== beforeStage.signature) {
+        throw headError('EOWNERRECOVERY', 'Memory evidence changed before repair staging');
+      }
+      // Exclusive staging retains every partial artifact on error or interruption.
+      const createdIdentity = await this.writeRecoveryStage(`${target}.update-${request.operationId}.tmp`, raw, stage);
+      proof = await this.readDiagnosticEvidence(scope, request.locator, true);
+      // Stage creation is the only permitted evidence change; metadata raw
+      // bytes and descriptor identities must remain exactly bound.
+      if (!this.sameRepairBase(first, proof) ||
+        first.sidecarRaw !== proof.sidecarRaw || first.registryRaw !== proof.registryRaw ||
+        !isDeepStrictEqual(first.sidecarIdentity, proof.sidecarIdentity) ||
+        !isDeepStrictEqual(first.registryIdentity, proof.registryIdentity) ||
+        !isDeepStrictEqual(first.evidence, { ...proof.evidence, artifactNames: first.evidence.artifactNames }) ||
+        !proof.recoveryStage || !sameIdentity(createdIdentity, proof.recoveryStage.identity)) {
+        throw headError('EOWNERRECOVERY', 'Memory evidence changed while staging repair');
+      }
+    }
+    await this.options.duringUpdateMetadataStage?.(stage, 'verified-before-rename');
+    coordinator.requireActiveOperationScope(operation);
+    const last = await this.readDiagnosticEvidence(scope, request.locator, true);
+    if (proof.signature !== last.signature || !last.recoveryStage) {
+      throw headError('EOWNERRECOVERY', 'Memory repair evidence changed before rename');
+    }
+    await fs.rename(last.recoveryStage.path, target);
+    await this.options.afterUpdatePublication?.(stage === 'active-registry' ? 'updated-registry' : 'updated-sidecar');
+    coordinator.requireActiveOperationScope(operation);
+    const advanced = await this.readDiagnosticEvidence(scope, request.locator, true);
+    const nextPhase = classifyFileMemoryWrite(advanced.evidence).kind;
+    this.requireRepairAdvance(last, advanced, stage, nextPhase);
+    return advanced;
+  }
+
+  private sameRepairBase(left: DiagnosticEvidenceRead, right: DiagnosticEvidenceRead): boolean {
+    return left.journalRaw === right.journalRaw && isDeepStrictEqual(left.journalIdentity, right.journalIdentity) &&
+      left.headContent === right.headContent && isDeepStrictEqual(left.evidence.head, right.evidence.head);
+  }
+
+  private requireRepairAdvance(
+    before: DiagnosticEvidenceRead, after: DiagnosticEvidenceRead,
+    stage: UpdateMetadataStage, phase: string,
+  ): void {
+    const registry = stage === 'active-registry';
+    const untouchedRaw = registry ? 'sidecarRaw' : 'registryRaw';
+    const untouchedIdentity = registry ? 'sidecarIdentity' : 'registryIdentity';
+    const publishedRaw = registry ? after.registryRaw : after.sidecarRaw;
+    const publishedIdentity = registry ? after.registryIdentity : after.sidecarIdentity;
+    const staged = before.recoveryStage;
+    if (phase !== (registry ? 'registry-advanced' : 'metadata-advanced-before-unlink') ||
+      after.recoveryStage || !this.sameRepairBase(before, after) ||
+      before[untouchedRaw] !== after[untouchedRaw] ||
+      !isDeepStrictEqual(before[untouchedIdentity], after[untouchedIdentity]) ||
+      !staged || publishedRaw !== staged.raw || !publishedIdentity ||
+      !samePublishedFile(staged.identity, publishedIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Memory evidence changed after repair publication');
+    }
+  }
+
+  private async writeRecoveryStage(filePath: string, raw: string, stage: UpdateMetadataStage): Promise<FileIdentity> {
+    const bytes = Buffer.from(raw, 'utf8');
+    const handle = await fs.open(filePath, 'wx', 0o600);
+    try {
+      const split = Math.max(1, Math.floor(bytes.length / 2));
+      await handle.writeFile(bytes.subarray(0, split));
+      await this.options.duringUpdateMetadataStage?.(stage, 'partial-write');
+      await handle.writeFile(bytes.subarray(split));
+      await handle.sync();
+      return identityOf(await handle.stat({ bigint: true }));
+    } finally {
+      await handle.close();
+    }
+  }
+
   private validateFinalizeRequest(request: FinalizeOwnedUpdateRequest): void {
     validateLocator(request.locator);
     if (!UUID_PATTERN.test(request.ownerId) || !UUID_PATTERN.test(request.operationId)) {
@@ -483,10 +699,14 @@ export class FileMemoryOwnerSnapshots {
 
   private async finalizeAtScope(
     operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+    expectedEvidence?: DiagnosticEvidenceRead,
   ): Promise<FinalizeOwnedUpdateResult> {
     const coordinator = this.requiredCoordinator();
     const scope = coordinator.requireActiveOperationScope(operation);
     const first = await this.readDiagnosticEvidence(scope, request.locator);
+    if (expectedEvidence && first.signature !== expectedEvidence.signature) {
+      throw headError('EOWNERRECOVERY', 'Memory evidence changed before repair finalization');
+    }
     coordinator.requireActiveOperationScope(operation);
     const phase = classifyFileMemoryWrite(first.evidence);
     if (!first.evidence.journal && phase.kind === 'clean-consistent' &&
@@ -1019,7 +1239,7 @@ export class FileMemoryOwnerSnapshots {
   private async readHeadBytes(
     headPath: string, requirePrivate = false,
   ): Promise<{ value: string; hash: string; identity: FileIdentity }> {
-    const handle = await fs.open(headPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const handle = await fs.open(headPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const before = await handle.stat({ bigint: true });
       if (requirePrivate && ((before.mode & 0o077n) !== 0n ||
@@ -1063,7 +1283,7 @@ export class FileMemoryOwnerSnapshots {
   } | undefined> {
     let handle;
     try {
-      handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     } catch (error) {
       if (hasCode(error, 'ENOENT')) return undefined;
       throw error;
@@ -1113,7 +1333,7 @@ export class FileMemoryOwnerSnapshots {
   } | undefined> {
     let handle;
     try {
-      handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     } catch (error) {
       if (hasCode(error, 'ENOENT')) return undefined;
       throw error;
