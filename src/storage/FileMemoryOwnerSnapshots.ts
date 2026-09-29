@@ -501,7 +501,7 @@ export class FileMemoryOwnerSnapshots {
     this.requireFinalizableEvidence(last, request, scope);
     const journal = await this.readJournalEvidence(last.resolved.journalPath);
     coordinator.requireActiveOperationScope(operation);
-    if (!journal || journal.raw !== last.journalRaw || !last.journalIdentity ||
+    if (!journal?.raw || journal.raw !== last.journalRaw || !last.journalIdentity ||
       !sameIdentity(journal.identity, last.journalIdentity)) {
       throw headError('EOWNERRECOVERY', 'Memory write journal changed before finalization');
     }
