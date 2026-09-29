@@ -1,3 +1,4 @@
+import { problemForConsoleError } from '../../../src/web-console/platform/ProblemResponses.js';
 import { storedContentVersion } from '../../../src/storage/ElementVersion.js';
 import type { VersionedElement } from '../../../src/storage/IStorageLayer.js';
 import fs from 'node:fs';
@@ -32,6 +33,21 @@ describe('ManagerBackedPortfolioElementStore', () => {
     }
   });
 
+
+  it('preserves console validation errors and HTTP detail from a real manager-backed read', async () => {
+    const store = createRealStore(cleanupDirs);
+    const dir = path.join(cleanupDirs[0], 'skills');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'oversized-tags.md'), [
+      '---', 'name: oversized-tags', 'description: Valid skill', 'instructions: Review carefully',
+      `tags: ${JSON.stringify(Array.from({ length: 51 }, (_, i) => `tag-${i}`))}`,
+      '---', 'Review carefully',
+    ].join('\n'));
+    const error = await store.findByName(USER_ID, 'skills', 'oversized-tags').catch(error => error);
+    expect(problemForConsoleError(error)).toMatchObject({
+      status: 400, code: 'invalid_request', detail: 'tags must contain at most 50 entries',
+    });
+  });
   it('projects manager elements with content-hash concurrency metadata', async () => {
     const manager = new FakeManager(SKILLS_TYPE, [{
       metadata: {

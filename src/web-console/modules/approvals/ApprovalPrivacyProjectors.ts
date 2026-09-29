@@ -1,3 +1,4 @@
+import { isIntegrationEntryPoint } from '../../../security/IntegrationEntryPoint.js';
 import type {
   ConsoleApprovalScope,
   ConsoleApprovalStatus,
@@ -16,6 +17,7 @@ const APPROVAL_STATUSES = new Set<ConsoleApprovalStatus>([
 export function projectSessionApproval(value: unknown): SessionApprovalDto {
   const input = asRecord(value);
   return {
+    ...(isIntegrationEntryPoint(input.entry_point) ? { entry_point: input.entry_point } : {}),
     approval_id: stringField(input.approval_id),
     session_id: stringField(input.session_id),
     status: approvalStatus(input.status),

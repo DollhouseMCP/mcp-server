@@ -1,4 +1,6 @@
-import { isIntegrationManagementOperation } from './IntegrationManagementOperations.js';
+import { env } from '../../config/env.js';
+import type { IntegrationEntryPoint } from '../../security/IntegrationEntryPoint.js';
+import { isIntegrationPolicyOperation } from './IntegrationManagementOperations.js';
 /**
  * Gatekeeper Policy Engine
  *
@@ -294,12 +296,14 @@ export class Gatekeeper {
         },
       });
 
-      const requiredInputs = operation.endsWith('_spec') ? ', spec' : ' and optional skill_name';
-      const managementGuidance = isIntegrationManagementOperation(operation)
+      let requiredInputs = operation.endsWith('_spec') ? ', spec' : ' and optional skill_name';
+      if (operation === 'integration_request') requiredInputs = ', method, path and optional query/body';
+      const expectedEndpoint = env.MCP_AQL_ENDPOINT_MODE === 'single' ? 'mcp_aql' : `mcp_aql_${route.endpoint.toLowerCase()}`;
+      const managementGuidance = isIntegrationPolicyOperation(operation)
         ? ` Use operation ${operation} with params: provider${requiredInputs}.`
         : '';
       throw new Error(
-        `Security violation: Operation "${operation}" must be called via mcp_aql_${route.endpoint.toLowerCase()} endpoint, ` +
+        `Security violation: Operation "${operation}" must be called via ${expectedEndpoint} endpoint, ` +
           `not mcp_aql_${calledEndpoint.toLowerCase()}. ` +
           `This operation is classified as ${route.endpoint} due to its ${this.getPermissionReason(route.endpoint)}.` +
           managementGuidance
@@ -367,12 +371,12 @@ export class Gatekeeper {
       return decision;
     }
 
-    // Management authorization repeats element policy resolution and owns the
+    // Integration authorization repeats element policy resolution and owns the
     // single input-bound approval. Never consume a generic confirmation here.
-    if (isIntegrationManagementOperation(operation)) {
+    if (isIntegrationPolicyOperation(operation)) {
       const decision: GatekeeperDecision = {
         allowed: true, permissionLevel: policyResult.permissionLevel,
-        reason: 'Input-bound integration management authorization required',
+        reason: 'Input-bound integration authorization required',
       };
       this.logAuditEvent(operation, endpoint, decision, elementType, session);
       return decision;
@@ -512,7 +516,7 @@ export class Gatekeeper {
         severity: 'LOW',
         source: 'Gatekeeper.checkCliApproval',
         details: `CLI approval consumed for ${toolName} (scope: ${record.scope})`,
-        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: session.sessionId },
+        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: session.sessionId, entry_point: record.entry_point },
       });
     }
 
@@ -526,7 +530,7 @@ export class Gatekeeper {
   async checkCliApprovalForInput(
     toolName: string,
     toolInput: Record<string, unknown>,
-    options: { readonly allowToolSession?: boolean; readonly allowInputSession?: boolean } = {},
+    options: { readonly allowToolSession?: boolean; readonly allowInputSession?: boolean; readonly entry_point?: IntegrationEntryPoint } = {},
   ): Promise<CliApprovalRecord | undefined> {
     const session = this.resolveSession();
     const record = await session.checkCliApprovalForInput(toolName, toolInput, options);
@@ -537,7 +541,7 @@ export class Gatekeeper {
         severity: 'LOW',
         source: 'Gatekeeper.checkCliApprovalForInput',
         details: `Input-scoped CLI approval consumed for ${toolName} (scope: ${record.scope})`,
-        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: session.sessionId },
+        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: session.sessionId, entry_point: options.entry_point },
       });
     }
 

@@ -11,3 +11,8 @@ export type IntegrationManagementOperation = keyof typeof INTEGRATION_MANAGEMENT
 export function isIntegrationManagementOperation(operation: string): operation is IntegrationManagementOperation {
   return Object.hasOwn(INTEGRATION_MANAGEMENT_OPERATIONS, operation);
 }
+
+/** These operations own exact-input authorization inside the integration boundary. */
+export function isIntegrationPolicyOperation(operation: string): boolean {
+  return operation === 'integration_request' || isIntegrationManagementOperation(operation);
+}

@@ -1,3 +1,4 @@
+import type { IntegrationEntryPoint } from '../../security/IntegrationEntryPoint.js';
 /**
  * Gatekeeper Type Definitions
  *
@@ -175,6 +176,7 @@ export interface CliApprovalPolicy {
  * approval-policy fields doesn't require breaking every call site.
  */
 export interface CreateCliApprovalArgs {
+  entry_point?: IntegrationEntryPoint;
   toolName: string;
   toolInput: Record<string, unknown>;
   riskLevel: string;
@@ -192,6 +194,7 @@ export interface CreateCliApprovalArgs {
  * Created when permission_prompt encounters a tool that requires approval.
  */
 export interface CliApprovalRecord {
+  entry_point?: IntegrationEntryPoint;
   /** Unique request identifier (format: cli-<UUIDv4>) */
   requestId: string;
   /** The tool that was requested */

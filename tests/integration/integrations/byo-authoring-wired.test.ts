@@ -1,3 +1,4 @@
+import { requestViaExecute } from './wiredIntegrationHarness.js';
 /**
  * WIRED end-to-end proof for issue #2321: a BYO descriptor authored entirely
  * through the console `/api/v1` surface — no store seeding — is immediately
@@ -94,7 +95,7 @@ describe('BYO authoring wired end-to-end', () => {
   });
 
   it('serves integration_request for the authored descriptor with the key injected server-side', async () => {
-    const envelope = await harness.callViaRegistry('integration_request', {
+    const envelope = await requestViaExecute(harness.callViaRegistry, {
       provider: BYO_PROVIDER,
       method: 'GET',
       path: '/things/42',
@@ -146,7 +147,7 @@ describe('BYO authoring wired end-to-end', () => {
 
     await expect(harness.specStore.findByDescriptorId(descriptorId)).resolves.toBeNull();
 
-    const envelope = await harness.callViaRegistry('integration_request', {
+    const envelope = await requestViaExecute(harness.callViaRegistry, {
       provider: BYO_PROVIDER,
       method: 'GET',
       path: '/things/42',
@@ -182,7 +183,7 @@ describe('BYO authoring wired end-to-end', () => {
     expect(connected.status).toBe(200);
     expect(JSON.stringify(connected.body)).not.toContain(password);
 
-    const envelope = await harness.callViaRegistry('integration_request', {
+    const envelope = await requestViaExecute(harness.callViaRegistry, {
       provider: basicProvider,
       method: 'GET',
       path: '/things/7',

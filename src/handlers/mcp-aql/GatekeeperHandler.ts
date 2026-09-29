@@ -1,3 +1,5 @@
+import { integrationRetryGuidance } from '../../security/IntegrationEntryPoint.js';
+import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
 import type { OperationRegistry } from './OperationRegistry.js';
 import { randomUUID } from 'node:crypto';
 import { generateDisplayCode } from '@dollhousemcp/safety';
@@ -894,10 +896,14 @@ export class GatekeeperHandler {
       throw new Error(`No pending approval for "${requestId}". It may have expired or already been approved.`);
     }
 
+    const path = record.toolInputDigest.path;
+    const outbound = record.toolName === 'integration_request' && record.entry_point !== undefined &&
+      typeof path === 'string' && !path.startsWith('_internal:');
+    const retry = outbound ? integrationRetryGuidance(record.entry_point) : 'Retry the original call with the same arguments.';
     const messages: Record<CliApprovalScope, string> = {
       tool_session: `Approved for all uses of '${record.toolName}' this session.`,
-      input_session: `Approved this exact input to '${record.toolName}' for this session. Retry the tool call now.`,
-      single: `Approved single use of '${record.toolName}'. Retry the tool call now.`,
+      input_session: `Approved this exact input to '${record.toolName}' for this session. ${retry}`,
+      single: `Approved single use of '${record.toolName}'. ${retry}`,
     };
     return {
       approved: true,
@@ -909,7 +915,9 @@ export class GatekeeperHandler {
   }
 
   private getPendingCliApprovals(): unknown {
-    const pending = this.deps.gatekeeper.getPendingCliApprovals();
+    const pending = this.deps.gatekeeper.getPendingCliApprovals().map(record => ({
+      ...record, allowedScopes: effectiveCliApprovalScopes(record),
+    }));
     return {
       pending,
       count: pending.length,

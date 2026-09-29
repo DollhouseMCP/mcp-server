@@ -12,6 +12,7 @@ import {
   CONSOLE_PORTFOLIO_ELEMENT_TYPES,
   PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
   PortfolioElementAlreadyExistsError,
+  PortfolioElementUnreadableError,
   PortfolioElementVersionConflictError,
   type ConsolePortfolioElementCreateInput,
   type ConsolePortfolioElementDeleteInput,
@@ -90,7 +91,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     this.assertAmbientUser(userId);
     const observation = await this.observe(type, canonicalName);
     if (!observation) return null;
-    return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, observation));
+    return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, observation, true));
   }
 
   async create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord> {
@@ -206,9 +207,18 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     userId: string,
     type: ConsolePortfolioElementType,
     observation: VersionedElement,
+    classifyUnreadable = false,
   ): Promise<ConsolePortfolioElementDetailRecord> {
-    const parsed = parseRawContent(type, observation.raw);
-    const element = await this.manager(type).importElement(observation.raw, managerFormatForType(type));
+    const manager = this.manager(type);
+    let parsed: ReturnType<typeof parseRawContent>;
+    let element: IElement;
+    try {
+      parsed = parseRawContent(type, observation.raw);
+      element = await manager.importElement(observation.raw, managerFormatForType(type));
+    } catch (error) {
+      if (classifyUnreadable) throw new PortfolioElementUnreadableError(error);
+      throw error;
+    }
     const validation = this.manager(type).validate(element);
     const metadata = parsed.metadata;
     const name = typeof metadata.name === 'string' ? metadata.name : element.metadata.name;

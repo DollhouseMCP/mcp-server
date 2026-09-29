@@ -79,7 +79,7 @@ describe('IntegrationTools', () => {
       path: '/gmail/v1/users/me/messages/send',
       query: undefined,
       body: undefined,
-    });
+    }, undefined, { entry_point: 'discrete_tool' });
     expect(gateway.request).not.toHaveBeenCalled();
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       ok: false,
@@ -294,7 +294,7 @@ describe('IntegrationTools', () => {
       path: '/gmail/v1/users/me%2Fprimary/messages',
       query: { q: 'is:unread' },
       body: undefined,
-    });
+    }, undefined, { entry_point: 'promoted_tool' });
     expect(gateway.request).toHaveBeenCalledWith({
       provider: '---GMAIL Provider---',
       method: 'GET',

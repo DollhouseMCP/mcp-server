@@ -1,3 +1,4 @@
+import { isIntegrationRequestEnvelope, integrationRequestParams, normalizeMcpToolName } from '../../../security/IntegrationRequestEnvelope.js';
 /**
  * Tool Classification for CLI-Level Permission Prompts
  *
@@ -307,13 +308,15 @@ export function classifyTool(
     return classifyBashCommand(toolInput);
   }
 
+  const normalizedName = normalizeMcpToolName(toolName);
+  if (['mcp_aql_execute', 'mcp_aql'].includes(normalizedName) && isIntegrationRequestEnvelope(toolInput)) {
+    return classifyIntegrationRequest(integrationRequestParams(toolInput) ?? {});
+  }
+  if (normalizedName === 'integration_request') return classifyIntegrationRequest(toolInput);
+
   // MCP tool calls: auto-allow gatekeeper-essential and safe read-only operations, evaluate others
   if (toolName.startsWith('mcp__')) {
     return classifyMcpToolCall(toolInput);
-  }
-
-  if (toolName === 'integration_request') {
-    return classifyIntegrationRequest(toolInput);
   }
 
   // Edit, Write, Agent, NotebookEdit, etc.: moderate risk

@@ -1,4 +1,5 @@
-import { AuthorizedIntegrationOperationCatalog } from '../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import type { IntegrationRequestGateway } from '../../../src/web-console/modules/integrations/IntegrationRequestGateway.js';
+import { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalog } from '../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 import type { IntegrationOperationCatalog } from '../../../src/web-console/modules/integrations/IntegrationOperationCatalog.js';
 import { IntegrationRequestPolicyEnforcer } from '../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
 import { BASE_OPERATION_REGISTRY, OperationRegistry } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
@@ -283,6 +284,8 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
     const operations = new OperationRegistry(new AuthorizedIntegrationOperationCatalog({
       catalog: {} as IntegrationOperationCatalog,
       policyEnforcer: new IntegrationRequestPolicyEnforcer({ gatekeeper: new Gatekeeper(), getActiveElements: async () => [] }),
+    }), new AuthorizedIntegrationGateway({ gateway: {} as IntegrationRequestGateway,
+      policyEnforcer: new IntegrationRequestPolicyEnforcer({ gatekeeper: new Gatekeeper(), getActiveElements: async () => [] }),
     }));
     it('every override should reference a valid operation in the router', () => {
       for (const op of Object.keys(OPERATION_POLICY_OVERRIDES)) {
@@ -306,7 +309,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
             // Each should have a clear rationale about why
             expect(policy.rationale).toBeDefined();
             expect(policy.rationale).toMatch(
-              /auto-approved|frictionless|avoid.*confirmation|avoid.*loop|deadlock|out-of-band|integration management policy owns approval/i
+              /auto-approved|frictionless|avoid.*confirmation|avoid.*loop|deadlock|out-of-band|integration (?:management|request) policy owns approval/i
             );
           }
         }

@@ -1,3 +1,4 @@
+import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
 /**
  * Gatekeeper Session Management
  *
@@ -423,6 +424,7 @@ export class GatekeeperSession {
       ? undefined
       : Math.max(MIN_APPROVAL_TTL_MS, Math.min(MAX_APPROVAL_TTL_MS, ttlMs));
     const record: CliApprovalRecord = {
+      ...(args.entry_point ? { entry_point: args.entry_point } : {}),
       requestId,
       toolName,
       toolInputDigest: redacted.digest,
@@ -489,14 +491,16 @@ export class GatekeeperSession {
     if (!record || !isPendingCliApproval(record)) {
       return undefined;
     }
-    if ((record.allowedScopes && !record.allowedScopes.includes(scope)) ||
-      (scope === 'input_session' && !record.allowedScopes?.includes(scope))) {
+    const allowedScopes = effectiveCliApprovalScopes(record);
+    if ((allowedScopes && !allowedScopes.includes(scope)) ||
+      (scope === 'input_session' && !allowedScopes?.includes(scope))) {
       throw new Error(
         `Approval request "${requestId}" does not permit scope "${scope}". ` +
-        `Allowed scopes: ${(record.allowedScopes ?? ['single', 'tool_session']).join(', ')}.`,
+        `Allowed scopes: ${(allowedScopes ?? ['single', 'tool_session']).join(', ')}.`,
       );
     }
 
+    record.allowedScopes = allowedScopes;
     record.approvedAt = approvedAt;
     record.scope = scope;
 

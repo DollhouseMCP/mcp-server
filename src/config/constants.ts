@@ -29,3 +29,5 @@ export const DEPENDENCY_REQUIREMENTS = {
 // Anonymous ID generation
 export const ADJECTIVES = ['clever', 'swift', 'bright', 'bold', 'wise', 'calm', 'keen', 'witty', 'sharp', 'cool'];
 export const ANIMALS = ['fox', 'owl', 'cat', 'wolf', 'bear', 'hawk', 'deer', 'lion', 'eagle', 'tiger'];
+// Installer default and legacy host-side server keys (preserve spelling for host rules).
+export const DOLLHOUSE_MCP_SERVER_NAMES = ['dollhousemcp', 'DollhouseMCP'] as const;

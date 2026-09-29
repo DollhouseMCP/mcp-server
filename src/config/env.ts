@@ -323,6 +323,9 @@ const envSchema = z.object({
    *
    * Default: 'mcpaql' - recommended for token efficiency and cleaner tool discovery
    */
+  /** Optional custom client server key, in addition to dollhousemcp and legacy DollhouseMCP. */
+  DOLLHOUSE_MCP_SERVER_NAME: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/u).optional(),
+
   MCP_INTERFACE_MODE: z.enum(['discrete', 'mcpaql']).default('mcpaql'),
 
   /**
@@ -754,6 +757,9 @@ const envSchema = z.object({
   // ============================================================================
   // Permission Prompt Configuration (Issue #625)
   // ============================================================================
+
+  /** Operator-only opt-out of default single-use approval for real outbound integration writes. */
+  DOLLHOUSE_INTEGRATION_WRITE_APPROVAL: z.enum(['on', 'off']).default('on'),
 
   /** Maximum CLI approval records before LRU eviction (default: 50) */
   DOLLHOUSE_CLI_APPROVAL_MAX: z.coerce.number().default(50),

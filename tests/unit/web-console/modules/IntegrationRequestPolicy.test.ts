@@ -111,7 +111,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     });
   });
 
-  it('allows standing read approvals with tool_session scope', async () => {
+  it('requires single-use approval for pattern-confirmed reads', async () => {
     const gatekeeper = new Gatekeeper(
       undefined,
       undefined,
@@ -135,15 +135,15 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       approvalRequest: { riskLevel: 'safe' },
     });
 
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     await expect(enforcer.authorize({
       provider: 'gmail',
       method: 'GET',
-      path: '/gmail/v1/users/me/profile',
+      path: '/gmail/v1/users/me/messages',
     })).resolves.toMatchObject({
       allowed: true,
-      approvalContext: { scope: 'tool_session' },
+      approvalContext: { scope: 'single' },
     });
   });
 
@@ -166,7 +166,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       path: '/gmail/v1/users/me/messages',
     };
     const first = await enforcer.authorize(request);
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     activeElements = [integrationDenyGuard()];
 
@@ -322,7 +322,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  it('evaluateDiscovery honors standing tool_session read approvals', async () => {
+  it('evaluateDiscovery consumes single-use pattern-confirmed approval', async () => {
     const gatekeeper = new Gatekeeper(
       undefined,
       undefined,
@@ -338,11 +338,12 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     const first = await enforcer.authorize({
       provider: REMOTE_DOCS,
       method: 'GET',
-      path: '/anything',
+      path: '_internal:/integration/remote_mcp_discovery',
     });
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
   });
 
   it('evaluateDiscovery checks newly active deny policies before standing approvals', async () => {
@@ -362,9 +363,9 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     const first = await enforcer.authorize({
       provider: REMOTE_DOCS,
       method: 'GET',
-      path: '/anything',
+      path: '_internal:/integration/remote_mcp_discovery',
     });
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
     activeElements = [integrationDenyGuard()];
 
     await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
@@ -402,7 +403,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     await expect(enforcer.authorize({
       provider: 'gmail',
       method: 'GET',
-      path: '/anything',
+      path: '_internal:/integration/remote_mcp_discovery',
     })).rejects.toBeInstanceOf(IntegrationPolicyUnavailableError);
   });
 

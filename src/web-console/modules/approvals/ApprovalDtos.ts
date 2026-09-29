@@ -1,3 +1,4 @@
+import type { IntegrationEntryPoint } from '../../../security/IntegrationEntryPoint.js';
 export type ConsoleApprovalStatus =
   | 'pending'
   | 'approved'
@@ -8,6 +9,7 @@ export type ConsoleApprovalStatus =
 export type ConsoleApprovalScope = 'once' | 'session' | 'input_session';
 
 export interface SessionApprovalDto {
+  readonly entry_point?: IntegrationEntryPoint;
   readonly approval_id: string;
   readonly session_id: string;
   readonly status: ConsoleApprovalStatus;

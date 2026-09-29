@@ -1,3 +1,6 @@
+import { env } from '../../config/env.js';
+import { describeIntegrationInvocation, describeIntegrationSkillStatus, integrationDescribeToolDescription, integrationCallGuidance, formatIntegrationGuidance } from './IntegrationInvocation.js';
+import { hasIntegrationRequestKeys } from '../../security/IntegrationRequestEnvelope.js';
 import type { OperationRegistry } from '../../handlers/mcp-aql/OperationRegistry.js';
 import { INTEGRATION_MANAGEMENT_OPERATIONS, type IntegrationManagementOperation } from '../../handlers/mcp-aql/IntegrationManagementOperations.js';
 import type { ToolDefinition, ToolHandler } from '../../handlers/types/ToolTypes.js';
@@ -41,7 +44,7 @@ export function getIntegrationTools(
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler }> = [{
     tool: {
       name: 'integration_request',
-      description: 'Call a connected REST integration through the server-side credential gateway. Credentials are injected server-side and never returned.',
+      description: `Call a connected REST integration through ${integrationCallGuidance('integration_request')}${env.MCP_INTERFACE_MODE === 'discrete' ? '' : ' with operation and nested params'}. Writes require exact-input approval by default. Credentials are injected server-side and never returned.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -73,10 +76,10 @@ export function getIntegrationTools(
         destructiveHint: true,
       },
     },
-    handler: async (args: unknown) => {
+    handler: async (args: unknown, context) => {
       try {
         const request = readArgs(args);
-        const outcome = await gateway.request(request);
+        const outcome = await gateway.request(request, context);
         if (!outcome.ok) return policyDenialResponse(outcome);
         return textResponse({
           ok: true,
@@ -116,13 +119,13 @@ export function getIntegrationManagementTools(catalog: AuthorizedIntegrationOper
     if (spec) {
       properties.spec = { type: 'object', description: 'OpenAPI 3.x JSON object. Spec writes never persist a skill.' };
       properties.source_url = { type: 'string', description: 'Optional HTTPS source URL.' };
-      if (update) properties.expected_spec_hash = { type: 'string', description: 'Optional current specHash from mcp_aql_read / list_integration_operations; mismatches fail without writes.' };
+      if (update) properties.expected_spec_hash = { type: 'string', description: formatIntegrationGuidance('Optional current specHash from list_integration_operations; mismatches fail without writes.') };
     } else {
       properties.skill_name = { type: 'string', description: 'Exact target skill name; defaults to the generated name. For a new revision use create_integration_skill with a different name.' };
       if (update) properties.expected_content_hash = { type: 'string', description: 'Optional content_hash from a successful skill write or current_content_hash from a conflict response; mismatches fail without writes.' };
     }
     return {
-      tool: { name, description: `${update ? 'Update an existing' : 'Create a missing'} integration ${spec ? 'specification' : 'generated skill'} using mcp_aql_${definition.action}. Requires provider${spec ? ' and spec' : '; optional skill_name'}. ${update ? 'Never creates a missing resource or revision; preserves edited skills.' : 'Fails on collision; never overwrites or chooses another name.'} Call individually; batches are rejected.`,
+      tool: { name, description: `${update ? 'Update an existing' : 'Create a missing'} integration ${spec ? 'specification' : 'generated skill'} using ${integrationCallGuidance(name)}. Requires provider${spec ? ' and spec' : '; optional skill_name'}. ${update ? 'Never creates a missing resource or revision; preserves edited skills.' : 'Fails on collision; never overwrites or chooses another name.'} Call individually; batches are rejected.`,
         inputSchema: { type: 'object', properties, required: spec ? ['provider', 'spec'] : ['provider'] },
         annotations: { readOnlyHint: false, destructiveHint: update } },
       handler: async (args: unknown) => {
@@ -139,7 +142,7 @@ export function getIntegrationManagementTools(catalog: AuthorizedIntegrationOper
               skillName: readOptionalString(input.skill_name, 'skill_name') ?? undefined,
               ...(input.expected_content_hash === undefined ? {} : { expectedContentHash: input.expected_content_hash as string }),
             }, operations);
-          if (!outcome.ok) return policyDenialResponse(outcome);
+          if (!outcome.ok) return policyDenialResponse(outcome, integrationCallGuidance(name));
           return textResponse({ ok: true, result: outcome.result, approvalContext: outcome.approvalContext });
         } catch (error) {
           if (error instanceof IntegrationOperationCatalogError) return catalogErrorResponse(error);
@@ -237,7 +240,7 @@ function getIntegrationOperationTools(
             sourceUrl: readOptionalString(input.source_url, 'source_url'),
             regenerateSkill: input.regenerate_skill === true,
           });
-          if (!outcome.ok) return policyDenialResponse(outcome);
+          if (!outcome.ok) return policyDenialResponse(outcome, 'ingest_openapi_spec');
           return textResponse({
             ok: true,
             result: outcome.result,
@@ -275,7 +278,7 @@ function getIntegrationOperationTools(
           const outcome = await operationCatalog.regenerateSkill({
             provider: readRequiredString(input.provider, 'provider'),
           });
-          if (!outcome.ok) return policyDenialResponse(outcome);
+          if (!outcome.ok) return policyDenialResponse(outcome, 'regenerate_integration_skill');
           return textResponse({
             ok: true,
             result: outcome.result,
@@ -328,11 +331,11 @@ export function getIntegrationReadTools(
           const input = readObject(args);
           return textResponse({
             ok: true,
-            result: await operationCatalog.listOperations({
+            result: describeIntegrationSkillStatus(await operationCatalog.listOperations({
               provider: readRequiredString(input.provider, 'provider'),
               includeUnavailable: input.include_unavailable === true,
               includeSkill: input.include_skill === true,
-            }),
+            })),
           });
         } catch (error) {
           if (error instanceof IntegrationOperationCatalogError) {
@@ -345,7 +348,7 @@ export function getIntegrationReadTools(
     {
       tool: {
         name: 'describe_operation',
-        description: 'Describe one OpenAPI-derived integration operation and how to call it through integration_request.',
+        description: integrationDescribeToolDescription(),
         inputSchema: {
           type: 'object',
           properties: {
@@ -355,7 +358,7 @@ export function getIntegrationReadTools(
             },
             operation_id: {
               type: 'string',
-              description: 'Operation id from list_operations.',
+              description: `Operation id from ${integrationCallGuidance('list_integration_operations')}.`,
             },
           },
           required: ['provider', 'operation_id'],
@@ -370,10 +373,10 @@ export function getIntegrationReadTools(
           const input = readObject(args);
           return textResponse({
             ok: true,
-            result: await operationCatalog.describeOperation({
+            result: describeIntegrationInvocation(await operationCatalog.describeOperation({
               provider: readRequiredString(input.provider, 'provider'),
               operationId: readRequiredString(input.operation_id, 'operation_id'),
-            }),
+            })),
           });
         } catch (error) {
           if (error instanceof IntegrationOperationCatalogError) {
@@ -388,6 +391,7 @@ export function getIntegrationReadTools(
 
 function readArgs(args: unknown) {
   const input = readObject(args);
+  if (!hasIntegrationRequestKeys(input)) throw new IntegrationRequestError('integration_request_invalid', 'Unknown integration request parameter.', 400);
   return {
     provider: readRequiredString(input.provider, 'provider'),
     method: readRequiredString(input.method, 'method'),
@@ -448,11 +452,11 @@ function promotedToolRegistration(
           query: readOptionalRecord(input.query),
           body: input.body,
         };
-        const outcome = await gateway.request(request);
+        const outcome = await gateway.request(request, { entry_point: 'promoted_tool' });
         if (!outcome.ok) {
           return textResponse({
             ok: false,
-            error: outcome.error,
+            error: approvalRetryError(outcome, toolName),
             approvalRequest: outcome.approvalRequest,
             policyContext: outcome.policyContext,
             promotedTool: {
@@ -512,7 +516,7 @@ function remoteMcpToolRegistration(
           remoteName: remoteTool.remoteName,
           arguments: args,
         });
-        if (!outcome.ok) return policyDenialResponse(outcome);
+        if (!outcome.ok) return policyDenialResponse(outcome, toolName);
         return textResponse({
           ok: true,
           result: outcome.result,
@@ -733,10 +737,18 @@ function readOptionalString(value: unknown, field: string): string | null {
   throw new IntegrationRequestError('invalid_integration_request', `${field} must be a non-empty string.`, 400);
 }
 
-function policyDenialResponse(denial: IntegrationPolicyDenial) {
+function approvalRetryError(denial: IntegrationPolicyDenial, retryCall: string) {
+  if (!denial.approvalRequest) return denial.error;
+  const nesting = retryCall.startsWith('mcp_aql') ? ' nested in params' : '';
+  return { ...denial.error,
+    message: `${denial.error.message} After approval, retry ${retryCall} with the same arguments${nesting}.`,
+  };
+}
+
+function policyDenialResponse(denial: IntegrationPolicyDenial, retryCall = integrationCallGuidance('integration_request')) {
   return textResponse({
     ok: false,
-    error: denial.error,
+    error: approvalRetryError(denial, retryCall),
     approvalRequest: denial.approvalRequest,
     policyContext: denial.policyContext,
   });
@@ -756,7 +768,7 @@ function catalogErrorResponse(error: IntegrationOperationCatalogError) {
     ok: false,
     error: {
       code: error.code,
-      message: error.message,
+      message: formatIntegrationGuidance(error.message),
       status: error.status,
     },
   });

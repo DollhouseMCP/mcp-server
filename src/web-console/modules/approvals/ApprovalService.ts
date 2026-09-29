@@ -1,3 +1,4 @@
+import { effectiveCliApprovalScopes } from '../../../handlers/mcp-aql/CliApprovalScopes.js';
 import type { ConsoleHandlerResult, ConsoleRequest } from '../../platform/ConsolePlatformTypes.js';
 import { requireConsoleRequestContext } from '../../platform/ConsoleRequestContext.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
@@ -45,15 +46,16 @@ export class ApprovalService {
     if (currentStatus !== 'pending') {
       return { status: 200, body: this.toDto(sessionId, record) };
     }
-    const requestedScope = parsed.scope === 'session' && record.allowedScopes?.includes('input_session')
+    const allowedScopes = effectiveCliApprovalScopes(record);
+    const requestedScope = parsed.scope === 'session' && allowedScopes?.includes('input_session')
       ? 'input_session' : toCliApprovalScope(parsed.scope);
     if (decision === 'approved' && (
-      (requestedScope === 'input_session' && !record.allowedScopes?.includes('input_session')) ||
-      (record.allowedScopes && !record.allowedScopes.includes(requestedScope))
+      (requestedScope === 'input_session' && !allowedScopes?.includes('input_session')) ||
+      (allowedScopes && !allowedScopes.includes(requestedScope))
     )) {
       return validationProblem(
         `scope "${parsed.scope}" is not allowed for this approval; use ` +
-        (record.allowedScopes ?? ['single', 'tool_session']).map(scope => `"${toConsoleApprovalScope(scope)}"`).join(' or ') + '.',
+        (allowedScopes ?? ['single', 'tool_session']).map(scope => `"${toConsoleApprovalScope(scope)}"`).join(' or ') + '.',
       );
     }
 
@@ -61,6 +63,7 @@ export class ApprovalService {
     const updated: ConsoleApprovalRecord = decision === 'approved'
       ? {
         ...record,
+        allowedScopes,
         approvedAt: decidedAt,
         scope: requestedScope,
       }
@@ -89,11 +92,13 @@ export class ApprovalService {
 
   private toDto(sessionId: string, record: ConsoleApprovalRecord): SessionApprovalDto {
     const status = this.statusOf(record);
+    const allowedScopes = effectiveCliApprovalScopes(record);
     return {
       approval_id: record.requestId,
       session_id: sessionId,
       status,
       tool_name: record.toolName,
+      ...(record.entry_point ? { entry_point: record.entry_point } : {}),
       tool_input_digest: record.toolInputDigest,
       tool_input_detail: record.toolInputDetail ?? null,
       risk_level: record.riskLevel,
@@ -102,7 +107,7 @@ export class ApprovalService {
       reason: record.denyReason,
       policy_source: record.policySource ?? null,
       scope: toConsoleApprovalScope(record.scope),
-      ...(record.allowedScopes ? { allowed_scopes: record.allowedScopes.map(toConsoleApprovalScope) } : {}),
+      ...(allowedScopes ? { allowed_scopes: allowedScopes.map(toConsoleApprovalScope) } : {}),
       requested_at: record.requestedAt,
       expires_at: this.expiresAt(record).toISOString(),
       decided_at: record.approvedAt ?? record.deniedAt ?? record.expiredAt ?? record.cancelledAt ?? null,

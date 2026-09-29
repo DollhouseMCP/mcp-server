@@ -1,9 +1,9 @@
 import { INTEGRATION_MANAGEMENT_OPERATIONS, isIntegrationManagementOperation } from './IntegrationManagementOperations.js';
 import { OPERATION_ROUTES, getRoute, type CRUDEndpoint, type OperationRoute } from './OperationRouter.js';
 import { ALL_OPERATION_SCHEMAS, getOperationSchema, type OperationDef, type ParamSchema, type ParamType } from './OperationSchema.js';
-import { getIntegrationReadTools, getIntegrationManagementTools } from '../../server/tools/IntegrationTools.js';
+import { getIntegrationTools, getIntegrationReadTools, getIntegrationManagementTools } from '../../server/tools/IntegrationTools.js';
 import type { ToolHandler } from '../types/ToolTypes.js';
-import type { AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import type { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 
 const INTEGRATION_READ_NAMES: Readonly<Record<string, string>> = {
   list_operations: 'list_integration_operations',
@@ -16,12 +16,16 @@ export class OperationRegistry {
   readonly schemas: Readonly<Record<string, OperationDef>>;
   private readonly integrationHandlers = new Map<string, ToolHandler>();
 
-  constructor(catalog?: AuthorizedIntegrationOperationCatalog) {
+  constructor(catalog?: AuthorizedIntegrationOperationCatalog, gateway?: AuthorizedIntegrationGateway) {
     const routes = { ...OPERATION_ROUTES };
     const schemas = { ...ALL_OPERATION_SCHEMAS };
-    for (const { tool, handler } of catalog ? [...getIntegrationReadTools(catalog), ...getIntegrationManagementTools(catalog, this)] : []) {
+    const tools = [
+      ...(catalog ? [...getIntegrationReadTools(catalog), ...getIntegrationManagementTools(catalog, this)] : []),
+      ...(gateway ? getIntegrationTools(gateway, undefined, false) : []),
+    ];
+    for (const { tool, handler } of tools) {
       const name = INTEGRATION_READ_NAMES[tool.name] ?? tool.name;
-      const endpoint = isIntegrationManagementOperation(name) ? INTEGRATION_MANAGEMENT_OPERATIONS[name].endpoint : 'READ';
+      const endpoint = integrationEndpoint(name);
       const description = tool.description ?? name;
       const params: ParamSchema = {};
       for (const [key, value] of Object.entries(tool.inputSchema.properties ?? {})) {
@@ -61,3 +65,9 @@ export class OperationRegistry {
 }
 
 export const BASE_OPERATION_REGISTRY = new OperationRegistry();
+
+function integrationEndpoint(name: string): CRUDEndpoint {
+  if (name === 'integration_request') return 'EXECUTE';
+  if (isIntegrationManagementOperation(name)) return INTEGRATION_MANAGEMENT_OPERATIONS[name].endpoint;
+  return 'READ';
+}

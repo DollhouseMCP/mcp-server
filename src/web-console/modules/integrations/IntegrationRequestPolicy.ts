@@ -1,4 +1,9 @@
-import type { OperationRegistry } from '../../../handlers/mcp-aql/OperationRegistry.js';
+import { DOLLHOUSE_MCP_SERVER_NAMES } from '../../../config/constants.js';
+import { matchesPattern } from '../../../utils/patternMatcher.js';
+import type { IntegrationInvocationContext } from '../../../security/IntegrationEntryPoint.js';
+import { env } from '../../../config/env.js';
+import { logger } from '../../../utils/logger.js';
+import { BASE_OPERATION_REGISTRY, type OperationRegistry } from '../../../handlers/mcp-aql/OperationRegistry.js';
 import { PermissionLevel, type CliApprovalScope } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
 import { resolveElementPolicy } from '../../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { IntegrationManagementOperation } from '../../../handlers/mcp-aql/IntegrationManagementOperations.js';
@@ -66,18 +71,19 @@ export interface IntegrationRequestPolicyEnforcerOptions {
 }
 
 export class IntegrationRequestPolicyEnforcer {
+  private readonly warnedLegacyPatterns = new Set<string>();
   constructor(private readonly options: IntegrationRequestPolicyEnforcerOptions) {}
 
-  async authorize(input: IntegrationRequestPolicyInput, management?: IntegrationManagementPolicyContext): Promise<IntegrationRequestPolicyDecision> {
+  async authorize(input: IntegrationRequestPolicyInput, management?: IntegrationManagementPolicyContext, context?: IntegrationInvocationContext): Promise<IntegrationRequestPolicyDecision> {
     try {
-      return await this.evaluateAuthorization(input, management);
+      return await this.evaluateAuthorization(input, management, context);
     } catch (error) {
       if (error instanceof IntegrationPolicyUnavailableError) throw error;
       throw new IntegrationPolicyUnavailableError(error);
     }
   }
 
-  private async evaluateAuthorization(input: IntegrationRequestPolicyInput, management?: IntegrationManagementPolicyContext): Promise<IntegrationRequestPolicyDecision> {
+  private async evaluateAuthorization(input: IntegrationRequestPolicyInput, management?: IntegrationManagementPolicyContext, context?: IntegrationInvocationContext): Promise<IntegrationRequestPolicyDecision> {
     let toolInput: Record<string, unknown>;
     try {
       toolInput = integrationToolInput(input);
@@ -108,9 +114,12 @@ export class IntegrationRequestPolicyEnforcer {
       };
     }
     const approvalPolicy = resolveCliApprovalPolicy(activeElements);
-    const requiresSingleUse = approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous') === true;
-    const allowInputSession = management?.operation.startsWith('create_') === true && !requiresSingleUse;
-    const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass, allowInputSession);
+    const requiresSingleUse = elementDecision.requiresSingleUse === true ||
+      (!management && readWriteClass === 'read' && elementDecision.behavior === 'confirm') ||
+      approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous') === true;
+    const allowInputSession = !requiresSingleUse &&
+      (management ? management.operation.startsWith('create_') : readWriteClass === 'read');
+    const existingApproval = await this.checkExistingApproval(toolInput, allowInputSession, context);
     if (existingApproval) {
       return {
         allowed: true,
@@ -121,12 +130,15 @@ export class IntegrationRequestPolicyEnforcer {
         policyContext: elementDecision.policyContext,
       };
     }
-    if (management || elementDecision.behavior === 'confirm') {
+    const defaultWriteApproval = !management && readWriteClass === 'write' &&
+      !input.path.startsWith(INTERNAL_INTEGRATION_POLICY_PREFIX) && env.DOLLHOUSE_INTEGRATION_WRITE_APPROVAL !== 'off';
+    if (management || elementDecision.behavior === 'confirm' || defaultWriteApproval) {
       return this.createApprovalRequest(toolInput, classification, activeElements, {
         reason: elementDecision.message ?? 'Integration request requires approval by policy.',
         denyReason: elementDecision.message ?? 'Integration request requires approval by policy.',
-        policySource: elementDecision.confirmSource ?? 'unknown',
+        policySource: elementDecision.confirmSource ?? (defaultWriteApproval ? 'default:integration_write' : 'unknown'),
         policyContext: elementDecision.policyContext,
+        context,
         allowInputSession,
       });
     }
@@ -140,6 +152,7 @@ export class IntegrationRequestPolicyEnforcer {
         reason: classification.reason,
         denyReason: `Tool '${INTEGRATION_TOOL_NAME}' classified as ${classification.riskLevel}: ${classification.reason}`,
         policySource,
+        context,
         policyContext: elementDecision.policyContext,
       });
     }
@@ -149,8 +162,9 @@ export class IntegrationRequestPolicyEnforcer {
 
   private evaluateManagementPolicy(
     toolInput: Record<string, unknown>, activeElements: ActiveElement[], management?: IntegrationManagementPolicyContext,
-  ): ReturnType<typeof evaluateCliToolPolicy> {
-    if (!management) return evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+  ): ReturnType<typeof evaluateCliToolPolicy> & { readonly requiresSingleUse?: boolean } {
+    this.warnLegacyPatterns(activeElements);
+    if (!management) return this.evaluateRequestPolicy(toolInput, activeElements);
     // Only explicit legacy denies carry forward. Old allows/confirmations are
     // deliberately excluded from this compatibility projection.
     const legacyDenies = activeElements.map(element => ({ ...element, metadata: { ...element.metadata,
@@ -169,6 +183,47 @@ export class IntegrationRequestPolicyEnforcer {
       return { ...external, behavior: 'confirm', message: 'Integration management operation requires approval by active element policy.', confirmSource: operation.sourceElement };
     }
     return external;
+  }
+
+  private evaluateRequestPolicy(toolInput: Record<string, unknown>, activeElements: ActiveElement[]):
+    ReturnType<typeof evaluateCliToolPolicy> & { readonly requiresSingleUse?: boolean } {
+    const external = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+    if (external.behavior === 'deny' || (typeof toolInput.path === 'string' && toolInput.path.startsWith(INTERNAL_INTEGRATION_POLICY_PREFIX))) return external;
+    const operation = resolveElementPolicy(INTEGRATION_TOOL_NAME,
+      this.options.gatekeeper.allowsElementPolicyOverrides() ? activeElements : [], undefined, BASE_OPERATION_REGISTRY);
+    if (operation.permissionLevel === PermissionLevel.DENY) {
+      return { ...external, behavior: 'deny', message: 'Integration request denied by active element policy.' };
+    }
+    if (operation.matchedPolicy === 'confirm') {
+      return { ...external, behavior: 'confirm', requiresSingleUse: true,
+        message: 'Integration request requires approval by active element policy.', confirmSource: operation.sourceElement };
+    }
+    return external;
+  }
+
+  private warnLegacyPatterns(activeElements: ActiveElement[]): void {
+    if (env.MCP_INTERFACE_MODE !== 'mcpaql') return;
+    for (const element of activeElements) {
+      const policy = element.metadata.gatekeeper;
+      for (const action of ['deny', 'confirm', 'allow'] as const) {
+        const patterns = [...(policy?.[action] ?? []), ...(policy?.externalRestrictions?.[`${action}Patterns`] ?? [])];
+        for (const pattern of patterns) {
+          this.warnLegacyPattern(element, action, pattern);
+        }
+      }
+    }
+  }
+
+  private warnLegacyPattern(element: ActiveElement, action: 'allow' | 'deny' | 'confirm', pattern: string): void {
+    if (!targetsLegacyIntegrationTool(pattern)) return;
+    const key = JSON.stringify([element.type, element.name, element.metadata.version, action, pattern]);
+    if (this.warnedLegacyPatterns.has(key)) return;
+    if (this.warnedLegacyPatterns.size >= 512) {
+      const oldest = this.warnedLegacyPatterns.values().next().value;
+      if (oldest !== undefined) this.warnedLegacyPatterns.delete(oldest);
+    }
+    this.warnedLegacyPatterns.add(key);
+    logger.warn(`Integration policy on ${element.type}:${element.name} targets the old prefixed integration_request tool name. In MCP-AQL mode use gatekeeper.${action}: ['integration_request']; patterns are not rewritten.`);
   }
 
   /**
@@ -192,7 +247,7 @@ export class IntegrationRequestPolicyEnforcer {
       const activeElements = await this.options.getActiveElements();
       const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
       if (elementDecision.behavior === 'deny') return this.auditDiscovery(provider, false);
-      const existingApproval = await this.checkExistingApproval(toolInput, 'read');
+      const existingApproval = await this.checkExistingApproval(toolInput, elementDecision.behavior !== 'confirm');
       if (existingApproval) return this.auditDiscovery(provider, true);
       if (elementDecision.behavior === 'confirm') return this.auditDiscovery(provider, false);
       const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
@@ -216,10 +271,11 @@ export class IntegrationRequestPolicyEnforcer {
     return allowed;
   }
 
-  private async checkExistingApproval(toolInput: Record<string, unknown>, readWriteClass: 'read' | 'write', allowInputSession = false) {
+  private async checkExistingApproval(toolInput: Record<string, unknown>, allowInputSession = false, context?: IntegrationInvocationContext) {
     try {
       return await this.options.gatekeeper.checkCliApprovalForInput(INTEGRATION_TOOL_NAME, toolInput, {
-        allowToolSession: readWriteClass === 'read',
+        entry_point: context?.entry_point,
+        allowToolSession: false,
         allowInputSession,
       });
     } catch {
@@ -232,6 +288,7 @@ export class IntegrationRequestPolicyEnforcer {
     classification: ReturnType<typeof classifyTool>,
     activeElements: ActiveElement[],
     request: {
+      readonly context?: IntegrationInvocationContext;
       readonly reason: string;
       readonly denyReason: string;
       readonly policySource: string;
@@ -241,9 +298,9 @@ export class IntegrationRequestPolicyEnforcer {
   ): Promise<IntegrationRequestPolicyDecision> {
     const risk = assessRisk(INTEGRATION_TOOL_NAME, toolInput, classification);
     const approvalPolicy = resolveCliApprovalPolicy(activeElements);
-    let allowedScopes: readonly CliApprovalScope[] | undefined = toolInput.read_write_class === 'write' ? ['single'] : undefined;
-    if (request.allowInputSession) allowedScopes = ['single', 'input_session'];
+    const allowedScopes: readonly CliApprovalScope[] = request.allowInputSession ? ['single', 'input_session'] : ['single'];
     const requestId = await this.options.gatekeeper.createCliApprovalRequest({
+      entry_point: request.context?.entry_point,
       toolName: INTEGRATION_TOOL_NAME,
       toolInput,
       riskLevel: classification.riskLevel,
@@ -305,4 +362,15 @@ function canonicalizePolicyPath(path: string): CanonicalIntegrationRequestPath {
     pathname: canonical.pathname.slice(1),
     search: canonical.search,
   };
+}
+
+
+function targetsLegacyIntegrationTool(pattern: string): boolean {
+  if (!pattern.startsWith('mcp__')) return false;
+  const toolPattern = pattern.split(':', 1)[0];
+  const separator = toolPattern.lastIndexOf('__');
+  // Use the existing glob semantics for both a server-wide and global MCP wildcard.
+  const target = separator === 3 ? `mcp__${DOLLHOUSE_MCP_SERVER_NAMES[0]}__integration_request`
+    : toolPattern.slice(0, separator + 2) + 'integration_request';
+  return matchesPattern(target, toolPattern);
 }

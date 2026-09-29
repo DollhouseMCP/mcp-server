@@ -95,6 +95,14 @@ export interface ConsolePortfolioElementDeleteInput {
   readonly now: Date;
 }
 
+/** Raw bytes were read successfully, but could not be decoded as an element. */
+export class PortfolioElementUnreadableError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'Portfolio element could not be decoded.', { cause });
+    this.name = 'PortfolioElementUnreadableError';
+  }
+}
+
 export class PortfolioElementAlreadyExistsError extends Error {
   constructor(message = 'portfolio element already exists') {
     super(message);

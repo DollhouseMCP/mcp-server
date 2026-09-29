@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRealManagerSuite } from '../../../helpers/di-mocks.js';
 import { ManagerBackedPortfolioElementStore } from '../../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
-import type { IPortfolioElementStore } from '../../../../src/web-console/stores/IPortfolioElementStore.js';
+import { PortfolioElementUnreadableError, type IPortfolioElementStore } from '../../../../src/web-console/stores/IPortfolioElementStore.js';
 
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 import {
@@ -31,6 +31,137 @@ const GENERATED_SKILL_NAME = 'using-gmail-integration';
 const TIMESTAMP = '2026-06-18T00:00:00Z';
 
 describe('IntegrationOperationCatalog', () => {
+
+  it('refreshes generated content without a spec or scope change', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, () => f.catalog.createSkill({ provider: 'gmail' }));
+    const renamed = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore, descriptor: descriptor({ displayName: 'Renamed Mail' }) });
+    expect(await runAsUser(renamed.contextTracker, () => renamed.catalog.updateSkill({ provider: 'gmail' }))).toMatchObject({ outcome: 'updated' });
+  });
+
+  it('generates mode-neutral guidance and bounds UTF-8 without breaking characters', async () => {
+    const spec = { openapi: '3.0.0', paths: Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`/items/${i}`, {
+      get: { operationId: `item${i}`, summary: '😀日本語'.repeat(100), responses: {} },
+    }])) };
+    const f = createCatalog({ scopes: [], spec });
+    const result = await runAsUser(f.contextTracker, () => f.catalog.listOperations({ provider: 'gmail', includeSkill: true }));
+    expect(result.generatedSkill?.content).toContain('mcp_aql_execute');
+    expect(result.generatedSkill?.content).toContain('mcp_aql');
+    expect(result.generatedSkill?.byteLength).toBeLessThanOrEqual(12 * 1024);
+    expect(result.generatedSkill?.content).not.toContain('�');
+    expect(result.generatedSkill?.truncated).toBe(true);
+  });
+
+  it('flags each legacy skill read-only and keeps strict regeneration ineligible', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      const existing = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      if (!existing) throw new Error('Missing skill');
+      const integration = { ...(existing.metadata.integration as Record<string, unknown>) };
+      delete integration.generatedProjectionHash;
+      await portfolioStore.update({ userId: USER_ID, type: 'skills', canonicalName: GENERATED_SKILL_NAME, expectedVersion: existing.version,
+        metadata: { ...existing.metadata, integration }, now: new Date(TIMESTAMP) });
+      const before = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      const result = await f.catalog.listOperations({ provider: 'gmail' });
+      expect(result.skillStatus).toContainEqual(expect.objectContaining({ skill_name: GENERATED_SKILL_NAME, status: 'legacy', guidance: expect.stringContaining('create_integration_skill') }));
+      expect(await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME)).toEqual(before);
+      await expect(f.catalog.updateSkill({ provider: 'gmail' })).rejects.toThrow('different skill_name');
+    });
+  });
+  it('names legacy revisions by new content and refuses to skip an edited revision collision', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      const existing = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      if (!existing) throw new Error('Missing generated skill');
+      await portfolioStore.update({ userId: USER_ID, type: 'skills', canonicalName: GENERATED_SKILL_NAME,
+        expectedVersion: existing.version, content: 'User edits', now: new Date(TIMESTAMP) });
+      const revision = await f.catalog.regenerateSkill({ provider: 'gmail' });
+      expect(revision.portfolioAction).toBe('created_revision');
+      const current = await portfolioStore.findByName(USER_ID, 'skills', revision.portfolioName);
+      if (!current) throw new Error('Missing revision');
+      await portfolioStore.update({ userId: USER_ID, type: 'skills', canonicalName: current.canonicalName,
+        expectedVersion: current.version, content: 'Edited revision', now: new Date(TIMESTAMP) });
+      await expect(f.catalog.regenerateSkill({ provider: 'gmail' })).rejects.toThrow('occupied');
+      const renamed = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore, descriptor: descriptor({ displayName: 'Different generated content' }) });
+      const next = await runAsUser(renamed.contextTracker, () => renamed.catalog.regenerateSkill({ provider: 'gmail' }));
+      expect(next.portfolioAction).toBe('created_revision');
+      expect(next.portfolioName).not.toBe(revision.portfolioName);
+    });
+  });
+
+
+  it('preserves beta skill metadata when spec and scopes are unchanged', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      const original = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      if (!original) throw new Error('Missing skill');
+      const integration = { ...(original.metadata.integration as Record<string, unknown>) };
+      delete integration.generatedProjectionHash;
+      await portfolioStore.update({ userId: USER_ID, type: 'skills', canonicalName: GENERATED_SKILL_NAME,
+        expectedVersion: original.version, content: String(original.metadata.instructions),
+        metadata: { ...original.metadata, integration, description: 'User description', custom: 'preserve' },
+        tags: ['user-tag'], now: new Date(TIMESTAMP) });
+      const before = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      expect(await f.catalog.regenerateSkill({ provider: 'gmail' })).toMatchObject({ portfolioAction: 'skipped' });
+      expect(await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME)).toEqual(before);
+    });
+  });
+
+  it('distinguishes revisions when non-rendered spec or scope inputs change', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      const base = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      if (!base) throw new Error('Missing skill');
+      await portfolioStore.update({ userId: USER_ID, type: 'skills', canonicalName: GENERATED_SKILL_NAME,
+        expectedVersion: base.version, content: 'Keep user edits', now: new Date(TIMESTAMP) });
+      const first = await f.catalog.regenerateSkill({ provider: 'gmail' });
+      await f.specStore.upsert({ descriptorId: DESCRIPTOR_ID, spec: { ...openApiSpec(), components: { schemas: { Unused: { type: 'string' } } } },
+        specHash: 'b'.repeat(64), createdAt: new Date(TIMESTAMP), updatedAt: new Date(TIMESTAMP) });
+      const second = await f.catalog.regenerateSkill({ provider: 'gmail' });
+      expect(second.content).toBe(first.content);
+      expect(second.portfolioName).not.toBe(first.portfolioName);
+      expect(second.portfolioAction).toBe('created_revision');
+      const changedScopes = createCatalog({ scopes: [GMAIL_READONLY, 'unrelated.scope'], portfolioStore });
+      const third = await runAsUser(changedScopes.contextTracker, () => changedScopes.catalog.regenerateSkill({ provider: 'gmail' }));
+      expect(third.content).toBe(first.content);
+      expect(third.portfolioName).not.toBe(first.portfolioName);
+    });
+  });
+
+  it('ignores unrelated unreadable skills when listing operations', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    await portfolioStore.create({ userId: USER_ID, type: 'skills', name: 'unrelated', displayName: 'Unrelated',
+      metadata: {}, content: 'invalid', tags: [], now: new Date(TIMESTAMP) });
+    const read = jest.spyOn(portfolioStore, 'findByName').mockRejectedValue(new Error('Unparseable unrelated skill'));
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    const result = await runAsUser(f.contextTracker, () => f.catalog.listOperations({ provider: 'gmail' }));
+    expect(result.operations.length).toBeGreaterThan(0);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('isolates content unreadability but propagates storage failures: unreadable=%s', async unreadable => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      const error = unreadable ? new PortfolioElementUnreadableError(new Error('Invalid content')) : new Error('Storage unavailable');
+      jest.spyOn(portfolioStore, 'findByName').mockRejectedValue(error);
+      const result = f.catalog.listOperations({ provider: 'gmail' });
+      if (unreadable) await expect(result).resolves.toMatchObject({
+        skillStatus: [{ skill_name: GENERATED_SKILL_NAME, status: 'unreadable' }],
+      });
+      else await expect(result).rejects.toBe(error);
+    });
+  });
   it('derives scope-aware operation availability from the stored OpenAPI spec', async () => {
     const { catalog, contextTracker } = createCatalog({ scopes: [GMAIL_READONLY] });
 
@@ -66,7 +197,7 @@ describe('IntegrationOperationCatalog', () => {
       },
     });
     expect(result.generatedSkill?.byteLength).toBeLessThanOrEqual(12 * 1024);
-    expect(result.generatedSkill?.content).toContain('All calls go through integration_request');
+    expect(result.generatedSkill?.content).toContain('Call mcp_aql_execute or mcp_aql');
     expect(result.generatedSkill?.content).toContain('upstream API enforces OAuth scopes');
     expect(result.generatedSkill?.content).not.toContain('sendMessage');
   });
@@ -140,7 +271,6 @@ describe('IntegrationOperationCatalog', () => {
         contentTypes: ['application/json'],
       },
       gatewayRequest: {
-        tool: 'integration_request',
         provider: 'gmail',
         method: 'POST',
         pathTemplate: '/gmail/v1/users/{userId}/messages',
@@ -481,7 +611,7 @@ describe('IntegrationOperationCatalog', () => {
     expect(result.generatedSkill).toMatchObject({
       written: true,
       portfolioAction: 'created_revision',
-      portfolioName: `using-gmail-integration-${result.specHash.slice(0, 8)}`,
+      portfolioName: expect.stringMatching(/^using-gmail-integration-[a-f0-9]{12}$/u),
     });
     await expect(portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME))
       .resolves.toMatchObject({ content: 'my custom instructions' });
@@ -527,7 +657,7 @@ describe('IntegrationOperationCatalog', () => {
     expect(result).toMatchObject({
       written: true,
       portfolioAction: 'created_revision',
-      portfolioName: `${GENERATED_SKILL_NAME}-${SPEC_HASH.slice(0, 8)}`,
+      portfolioName: expect.stringMatching(/^using-gmail-integration-[a-f0-9]{12}$/u),
     });
     await expect(portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME))
       .resolves.toMatchObject({ content: 'user-edited managed instructions' });
@@ -722,9 +852,9 @@ describe('strict integration management', () => {
     const f = strictFixture();
     await runAsUser(f.contextTracker, async () => {
       const input = { provider: 'gmail', spec: openApiSpec() };
-      await expect(f.catalog.createSpec(input)).rejects.toThrow('mcp_aql_update');
+      await expect(f.catalog.createSpec(input)).rejects.toThrow('update_integration_spec');
       await f.specStore.deleteByDescriptorId(DESCRIPTOR_ID);
-      await expect(f.catalog.updateSpec(input)).rejects.toThrow('mcp_aql_create');
+      await expect(f.catalog.updateSpec(input)).rejects.toThrow('create_integration_spec');
       const created = await f.catalog.createSpec(input);
       expect(created).toMatchObject({ outcome: 'created', operationCount: 3 });
       await expect(f.catalog.updateSpec({ ...input, expectedSpecHash: SPEC_HASH })).rejects.toThrow('list_integration_operations');
@@ -737,7 +867,7 @@ describe('strict integration management', () => {
     const f = strictFixture();
     await runAsUser(f.contextTracker, async () => {
       const input = { provider: 'gmail', skillName: 'explicit-revision' };
-      await expect(f.catalog.updateSkill(input)).rejects.toThrow('mcp_aql_create');
+      await expect(f.catalog.updateSkill(input)).rejects.toThrow('create_integration_skill');
       expect(await f.catalog.createSkill(input)).toMatchObject({ outcome: 'created', skill_name: input.skillName });
       await expect(f.catalog.createSkill(input)).rejects.toThrow('update_integration_skill');
       const existing = await f.portfolioStore.findByName(USER_ID, 'skills', input.skillName);

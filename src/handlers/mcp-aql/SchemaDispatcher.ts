@@ -1,3 +1,4 @@
+import type { IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
 /**
  * SchemaDispatcher - Generic dispatcher for schema-driven operations
  *
@@ -1046,12 +1047,13 @@ export class SchemaDispatcher {
     params: Record<string, unknown>,
     registry: HandlerRegistry,
     input: OperationInput | undefined,
-    operations: OperationRegistry
+    operations: OperationRegistry,
+    context?: IntegrationInvocationContext
   ): Promise<unknown> {
     // Get schema definition
     const schema = operations.getDispatchSchema(operation);
     const integrationHandler = operations.getIntegrationHandler(operation);
-    if (integrationHandler) return integrationHandler(params);
+    if (integrationHandler) return integrationHandler(params, context);
     if (!schema) {
       throw new Error(`No schema definition found for operation '${operation}'`);
     }

@@ -1,3 +1,4 @@
+import type { IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
 /**
  * Shared types for MCP tool definitions and handlers
  *
@@ -10,7 +11,7 @@ import { Tool } from "@modelcontextprotocol/sdk/types.js";
 /**
  * Handler function type for MCP tools
  */
-export type ToolHandler = (args: any) => Promise<any>;
+export type ToolHandler = (args: any, context?: IntegrationInvocationContext) => Promise<any>;
 
 /**
  * Extended tool definition that includes the handler function

@@ -1263,6 +1263,7 @@ export class DollhouseContainer {
       handlerDeps.gatekeeper, () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
     );
     handlerDeps.integrationOperationCatalog = integrationServices.authorizedIntegrationOperationCatalog;
+    handlerDeps.integrationRequestGateway = integrationServices.authorizedIntegrationGateway;
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
 
     // Register mcpAqlHandler as a singleton for test access
@@ -1809,6 +1810,7 @@ export class DollhouseContainer {
       handlerDeps.gatekeeper, () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
     );
     handlerDeps.integrationOperationCatalog = integrationServices.authorizedIntegrationOperationCatalog;
+    handlerDeps.integrationRequestGateway = integrationServices.authorizedIntegrationGateway;
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
     return {
       personaHandler,
@@ -2075,7 +2077,7 @@ export class DollhouseContainer {
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
     }
-    if (bundle.authorizedIntegrationGateway) {
+    if (interfaceMode === 'discrete' && bundle.authorizedIntegrationGateway) {
       toolRegistry.registerIntegrationTools(
         bundle.authorizedIntegrationGateway,
         bundle.authorizedIntegrationOperationCatalog,

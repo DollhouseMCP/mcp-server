@@ -1,3 +1,4 @@
+import { requestViaExecute } from './wiredIntegrationHarness.js';
 /**
  * Integrations v2 — connect→agent END-TO-END (end-of-phase verification).
  *
@@ -57,7 +58,8 @@ describe('Integrations v2 — connect→agent end-to-end (real MCP transport)', 
 
   it('lists the integration tools over the MCP protocol', async () => {
     const names = await client.listToolNames();
-    expect(names).toEqual(expect.arrayContaining(['integration_request', 'mcp_aql_read', 'mcp_aql_create', 'mcp_aql_update']));
+    expect(names).toEqual(expect.arrayContaining(['mcp_aql_execute', 'mcp_aql_read', 'mcp_aql_create', 'mcp_aql_update']));
+    expect(names).not.toContain('integration_request');
     expect(names).not.toContain('list_operations');
     expect(names).not.toContain('describe_operation');
     expect(names).not.toContain('ingest_openapi_spec');
@@ -65,7 +67,7 @@ describe('Integrations v2 — connect→agent end-to-end (real MCP transport)', 
   });
 
   it('executes integration_request via tools/call, injecting the credential server-side', async () => {
-    const response = await client.callTool('integration_request', {
+    const response = await requestViaExecute((name, args) => client.callTool(name, args), {
       provider: PROVIDER,
       method: 'GET',
       path: '/things/9',

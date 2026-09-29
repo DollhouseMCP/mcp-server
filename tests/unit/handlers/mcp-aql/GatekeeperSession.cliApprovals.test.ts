@@ -43,6 +43,14 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('createCliApprovalRequest', () => {
+    it('restricts legacy pending integration approvals to exact-input scopes', async () => {
+      const requestId = await session.createCliApprovalRequest(moderateArgs('integration_request', { provider: 'gmail', method: 'GET', path: '/messages' }));
+      await expect(session.approveCliRequest(requestId, 'tool_session')).rejects.toThrow('does not permit');
+      expect(await session.approveCliRequest(requestId, 'input_session')).toMatchObject({
+        scope: 'input_session', allowedScopes: ['single', 'input_session'],
+      });
+    });
+
     it('reuses input_session only for matching input through the opted-in exact-input API', async () => {
       const requestId = await session.createCliApprovalRequest({
         ...dangerousArgs(TOOL_BASH, NPM_INSTALL), allowedScopes: ['single', 'input_session'],

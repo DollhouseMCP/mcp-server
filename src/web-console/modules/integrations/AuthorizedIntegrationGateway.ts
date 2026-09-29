@@ -1,3 +1,4 @@
+import type { IntegrationInvocationContext } from '../../../security/IntegrationEntryPoint.js';
 import type { OperationRegistry } from '../../../handlers/mcp-aql/OperationRegistry.js';
 import { INTEGRATION_MANAGEMENT_OPERATIONS, type IntegrationManagementOperation } from '../../../handlers/mcp-aql/IntegrationManagementOperations.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
@@ -90,18 +91,20 @@ export const INTEGRATION_OPENAPI_SPEC_POLICY_PATH = '_internal:/integration/open
 export const INTEGRATION_GENERATED_SKILL_POLICY_PATH = '_internal:/integration/generated_skill';
 export const INTEGRATION_REMOTE_MCP_POLICY_PATH_PREFIX = '_internal:/integration/remote_mcp/';
 
+const DISCRETE_REQUEST_CONTEXT: IntegrationInvocationContext = Object.freeze({ entry_point: 'discrete_tool' });
+
 export class AuthorizedIntegrationGateway {
   constructor(private readonly options: {
     readonly gateway: IntegrationRequestGateway;
     readonly policyEnforcer: IntegrationRequestPolicyEnforcer;
   }) {}
 
-  async request(input: IntegrationRequestInput): Promise<IntegrationAuthorizedOutcome<IntegrationRequestResult>> {
+  async request(input: IntegrationRequestInput, context: IntegrationInvocationContext = DISCRETE_REQUEST_CONTEXT): Promise<IntegrationAuthorizedOutcome<IntegrationRequestResult>> {
     if (input.path.trim().toLowerCase().startsWith('_internal:')) {
       return { ok: false, error: { code: 'invalid_integration_path',
         message: 'Internal management paths cannot be used for integration requests.', status: 400 } };
     }
-    const decision = await authorizeOrDeny(this.options.policyEnforcer, input);
+    const decision = await authorizeOrDeny(this.options.policyEnforcer, input, undefined, context);
     if (!decision.authorized) return decision.denial;
     const result = await this.options.gateway.request(input);
     return {
@@ -239,25 +242,28 @@ async function authorizeOrDeny(
   policyEnforcer: IntegrationRequestPolicyEnforcer,
   input: Parameters<IntegrationRequestPolicyEnforcer['authorize']>[0],
   management?: IntegrationManagementPolicyContext,
+  context?: IntegrationInvocationContext,
 ): Promise<AuthorizeDecision> {
   let policy: IntegrationRequestPolicyDecision;
   try {
-    policy = management ? await policyEnforcer.authorize(input, management) : await policyEnforcer.authorize(input);
+    if (context) policy = await policyEnforcer.authorize(input, management, context);
+    else if (management) policy = await policyEnforcer.authorize(input, management);
+    else policy = await policyEnforcer.authorize(input);
   } catch (error) {
-    auditAuthorization('unavailable');
+    auditAuthorization('unavailable', context);
     if (error instanceof IntegrationPolicyUnavailableError) {
       return { authorized: false, denial: { ok: false, error: POLICY_UNAVAILABLE_ERROR } };
     }
     throw error;
   }
   if (policy.allowed) {
-    auditAuthorization('allowed');
+    auditAuthorization('allowed', context);
     return {
       authorized: true,
       ...(policy.approvalContext ? { approvalContext: policy.approvalContext } : {}),
     };
   }
-  auditAuthorization(policy.approvalRequest ? 'approval_required' : 'denied');
+  auditAuthorization(policy.approvalRequest ? 'approval_required' : 'denied', context);
   return {
     authorized: false,
     denial: {
@@ -269,11 +275,12 @@ async function authorizeOrDeny(
   };
 }
 
-function auditAuthorization(outcome: 'allowed' | 'denied' | 'approval_required' | 'unavailable'): void {
+function auditAuthorization(outcome: 'allowed' | 'denied' | 'approval_required' | 'unavailable', context?: IntegrationInvocationContext): void {
   SecurityMonitor.logSecurityEvent({
     type: 'INTEGRATION_SECURITY_DECISION',
     severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',
     source: 'AuthorizedIntegrationGateway',
+    additionalData: { toolName: 'integration_request', entry_point: context?.entry_point },
     // This facade runs before descriptor resolution, so provider is still raw
     // caller input and must never be echoed into the audit event.
     details: `Authorized integration decision ${outcome} for provider ${safeIntegrationAuditProvider('<unresolved>')}`,

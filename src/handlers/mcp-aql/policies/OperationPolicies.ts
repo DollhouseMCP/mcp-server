@@ -82,6 +82,7 @@ export function getEndpointDefaultLevel(endpoint: CRUDEndpoint): PermissionLevel
  * Operations NOT listed here inherit their permission level from their endpoint.
  */
 export const OPERATION_POLICY_OVERRIDES: Record<string, OperationPolicy> = {
+  integration_request: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration request policy owns approval' },
   create_integration_spec: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },
   update_integration_spec: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },
   create_integration_skill: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },

@@ -1,4 +1,6 @@
-import { isIntegrationManagementOperation } from './IntegrationManagementOperations.js';
+import { integrationOperationError } from './IntegrationOperationResult.js';
+import { integrationInvocationContext, type IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
+import { isIntegrationPolicyOperation } from './IntegrationManagementOperations.js';
 /**
  * MCPAQLHandler - Unified handler for all MCP-AQL operations
  *
@@ -23,7 +25,7 @@ import { isIntegrationManagementOperation } from './IntegrationManagementOperati
  */
 
 import { OperationRegistry } from './OperationRegistry.js';
-import type { AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import type { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 import { type CRUDEndpoint } from './OperationRouter.js';
 import type { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, canOperationBeElevated } from './policies/index.js';
@@ -379,6 +381,7 @@ class VerificationMetricsTracker {
  */
 export interface HandlerRegistry {
   integrationOperationCatalog?: AuthorizedIntegrationOperationCatalog;
+  integrationRequestGateway?: AuthorizedIntegrationGateway;
   elementCRUD: ElementCRUDHandler;
   memoryManager: MemoryManager;
   agentManager: AgentManager;
@@ -527,7 +530,7 @@ export class MCPAQLHandler {
     private readonly handlers: HandlerRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
   ) {
-    this.operations = new OperationRegistry(handlers.integrationOperationCatalog);
+    this.operations = new OperationRegistry(handlers.integrationOperationCatalog, handlers.integrationRequestGateway);
     // Initialize normalizers for schema-driven operations (Issue #243)
     initializeNormalizers();
     // Issue #452: Store Gatekeeper instance for policy enforcement
@@ -903,11 +906,11 @@ export class MCPAQLHandler {
    * @param input - Operation input with operation name and params, or BatchRequest
    * @returns OperationResult with success/failure status, or BatchResult for batch operations
    */
-  async handleExecute(input: unknown): Promise<OperationResult | BatchResult> {
+  async handleExecute(input: unknown, context?: IntegrationInvocationContext): Promise<OperationResult | BatchResult> {
     if (isBatchRequest(input)) {
       return this.executeBatch(input, 'EXECUTE');
     }
-    return this.executeOperation(input, 'EXECUTE');
+    return this.executeOperation(input, 'EXECUTE', context);
   }
 
   /**
@@ -927,7 +930,8 @@ export class MCPAQLHandler {
    */
   private async executeOperation(
     input: unknown,
-    endpoint: CRUDEndpoint
+    endpoint: CRUDEndpoint,
+    context?: IntegrationInvocationContext
   ): Promise<OperationResult> {
     // Issue #301: Capture start time for response timing metadata
     const startTime = performance.now();
@@ -973,17 +977,19 @@ export class MCPAQLHandler {
         operation,
         elementType,
         params: mergedParams,
-      });
+      }, context ?? integrationInvocationContext(input, 'mcp_aql_execute'));
       this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency
       // Apply field filtering if fields param provided
-      const data = applyFieldSelection(rawData, params);
+      const data = operation === 'integration_request' ? rawData : applyFieldSelection(rawData, params);
 
-      this.logOperationSuccess(endpoint, operation, elementType, params);
+      const integrationError = this.operations.getIntegrationHandler(operation) ? integrationOperationError(rawData) : undefined;
+      if (integrationError) this.logOperationFailure(endpoint, operation, integrationError, false, undefined);
+      else this.logOperationSuccess(endpoint, operation, elementType, params);
       const durationMs = performance.now() - startTime;
-      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
+      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, integrationError === undefined);
       const typeSuffix = elementType ? ':' + elementType : '';
       logger.debug(`[MCP-AQL] ${endpoint} ${operation}${typeSuffix} (${durationMs.toFixed(1)}ms)`);
       return this.success(data, startTime);
@@ -1207,10 +1213,10 @@ export class MCPAQLHandler {
   ): Promise<BatchResult> {
     const normalizedOperations = batch.operations.map(item => parseOperationInput(item));
     if (normalizedOperations.some(item => item !== null &&
-      isIntegrationManagementOperation(item.operation) && this.operations.getIntegrationHandler(item.operation))) {
+      isIntegrationPolicyOperation(item.operation) && this.operations.getIntegrationHandler(item.operation))) {
       return { success: false, results: [],
         summary: { total: batch.operations.length, succeeded: 0, failed: batch.operations.length },
-        error: 'Integration management operations require individual mcp_aql_create or mcp_aql_update calls with operation and params (provider plus spec or skill_name); batches are rejected before dispatch.',
+        error: 'Integration operations require individual calls with operation and params; batches are rejected before dispatch.',
         _meta: this.buildMeta(performance.now()) };
     }
     // Issue #221/#543: Reject oversized batches to prevent resource exhaustion
@@ -1309,7 +1315,8 @@ export class MCPAQLHandler {
    */
   private async dispatch(
     handlerRef: string,
-    input: OperationInput
+    input: OperationInput,
+    context?: IntegrationInvocationContext
   ): Promise<unknown> {
     const { operation, params } = input;
 
@@ -1322,7 +1329,8 @@ export class MCPAQLHandler {
         params || {},
         this.handlers,
         input,
-        this.operations
+        this.operations,
+        context
       );
     }
 

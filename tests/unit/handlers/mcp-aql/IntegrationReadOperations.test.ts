@@ -1,3 +1,4 @@
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
@@ -41,7 +42,8 @@ import { env } from '../../../../src/config/env.js';
 const LIST = 'list_integration_operations';
 const DESCRIBE = 'describe_integration_operation';
 const originalMode = env.MCP_AQL_ENDPOINT_MODE;
-afterEach(() => { env.MCP_AQL_ENDPOINT_MODE = originalMode; jest.restoreAllMocks(); });
+const originalInterface = env.MCP_INTERFACE_MODE;
+afterEach(() => { env.MCP_INTERFACE_MODE = originalInterface; env.MCP_AQL_ENDPOINT_MODE = originalMode; jest.restoreAllMocks(); });
 
 function setup(configured = true, options: Parameters<typeof createCatalog>[0] = { scopes: [GMAIL_READONLY] }, policy: { gatekeeper?: Gatekeeper; elements?: ActiveElement[]; tools?: AgentToolConfig; dbMode?: boolean } = {}) {
   const fixture = createCatalog(options);
@@ -78,7 +80,35 @@ function responseText(data: { content: Array<{ text: string }> }) {
 const MANAGEMENT = ['create_integration_spec', 'update_integration_spec', 'create_integration_skill', 'update_integration_skill'] as const;
 
 describe.each(['crude', 'single'] as const)('strict integration management routing (%s)', mode => {
+
+  it('preserves original-call retry guidance after a real management approval', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup();
+    await invoke(fixture, 'create_integration_spec', { provider: 'gmail', spec: openApiSpec() });
+    const pending = fixture.gatekeeper.getPendingCliApprovals();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].toolInputDigest.path).toMatch(/^_internal:/u);
+    const result = await fixture.handler.handleExecute({ operation: 'approve_cli_permission',
+      params: { request_id: pending[0].requestId, scope: 'single' } });
+    expect(result).toMatchObject({ success: true });
+    expect(JSON.stringify(result)).toContain('Retry the original call');
+    expect(JSON.stringify(result)).not.toContain('with operation integration_request');
+  });
+  it('audits an approval-required management call as failed without changing its response', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
+    env.MCP_AQL_ENDPOINT_MODE = mode;
+    const fixture = setup();
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+    const result = await invoke(fixture, 'create_integration_skill', { provider: 'gmail' });
+    expect(result).toMatchObject({ success: true });
+    expect(responseText(result.data)).toMatchObject({ ok: false, approvalRequest: { allowedScopes: ['single', 'input_session'] } });
+    expect(audit.mock.calls.some(([event]) => event.type === 'OPERATION_COMPLETED')).toBe(false);
+    expect(audit.mock.calls.some(([event]) => event.type === 'OPERATION_FAILED')).toBe(true);
+  });
+
   it.each(MANAGEMENT)('advertises %s only when configured and rejects wrong endpoints', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const endpoint = operation.startsWith('create') ? 'CREATE' : 'UPDATE';
@@ -90,6 +120,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(MANAGEMENT)('blocks whole batches containing %s before dispatch', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const list = jest.spyOn(fixture.catalog, 'listOperations');
@@ -126,6 +157,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(['create_integration_spec', 'update_integration_spec'])('rejects regenerate_skill on %s before catalog writes', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const before = await fixture.specStore.findByDescriptorId(DESCRIPTOR_ID);
@@ -136,6 +168,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(MANAGEMENT)('rejects boundary-changing flags for %s without writes', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const create = jest.spyOn(fixture.specStore, 'create');
@@ -150,6 +183,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(MANAGEMENT)('preserves payload keys and rejects unconfigured calls for %s', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const method = { create_integration_spec: 'createSpec', update_integration_spec: 'updateSpec', create_integration_skill: 'createSkill', update_integration_skill: 'updateSkill' }[operation] as 'createSpec';
     const payload = JSON.parse('{"name":"root","nested":{"constructor":{"name":"retained"},"prototype":42,"__proto__":{"name":"retained"}}}');
@@ -175,6 +209,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(MANAGEMENT)('enforces identity, visibility and connection before writing %s', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     for (const state of ['unauthenticated', 'disconnected', 'invisible', 'non-owner'] as const) {
       if (state === 'non-owner' && operation.endsWith('skill')) continue;
@@ -193,6 +228,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(MANAGEMENT.flatMap(operation => [false, true].map(confirm => ({ operation, confirm }))))('uses one management approval for $operation (element confirm: $confirm)', async ({ operation, confirm }) => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const elements: ActiveElement[] = confirm ? [{ type: 'persona', name: 'guard', metadata: { name: 'guard', gatekeeper: {
       confirm: [operation], externalRestrictions: { description: 'Allow target', allowPatterns: ['integration_request:*'] },
@@ -243,6 +279,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(MANAGEMENT)('never treats element allow or generic confirmation as management approval for %s', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const elements: ActiveElement[] = [{ type: 'persona', name: 'guard', metadata: { name: 'guard', gatekeeper: {
       allow: [operation],
@@ -256,6 +293,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
   });
 
   it.each(['mcp_aql_create', 'mcp_aql_update'])('enforces executing agent restriction %s', async denied => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup(true, undefined, { tools: { allowed: [], denied: [denied] }, dbMode: false });
     await runAsUser(fixture.contextTracker, async () => {
@@ -278,6 +316,7 @@ describe.each(['crude', 'single'] as const)('strict integration management routi
 
 describe.each(['crude', 'single'] as const)('Integration catalog READ operations (%s)', mode => {
   it('preserves standalone results, parameters and in-memory skill previews', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const writeSpec = jest.spyOn(fixture.specStore, 'upsert');
@@ -296,6 +335,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
   });
 
   it('agrees across dispatch, introspection, capabilities and descriptions', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     for (const operation of [LIST, DESCRIBE]) {
@@ -314,6 +354,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
   });
 
   it.each([true, false])('keeps availability per handler with configured-first=%s', async configuredFirst => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const pair = [setup(configuredFirst), setup(!configuredFirst)];
     for (const [index, fixture] of pair.entries()) {
@@ -334,6 +375,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
 
 
   it('preserves arbitrary nested result keys despite a fields parameter', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const payload = JSON.parse('{"name":"root","nested":{"name":"nested","constructor":{"name":"retained"},"prototype":42,"__proto__":{"name":"also retained"}}}');
@@ -344,6 +386,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
   });
 
   it.each(['disconnected', 'invisible'] as const)('preserves %s provider checks', async state => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup(true, {
       scopes: [GMAIL_READONLY],
@@ -360,6 +403,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
   });
 
   it('filters scopes without granting them or writing a preview', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const portfolioStore = new InMemoryPortfolioElementStore();
     const fixture = setup(true, { scopes: [GMAIL_READONLY], portfolioStore });
@@ -389,6 +433,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
     }
   });
   it('retains configured discovery without identity and returns the catalog error', async () => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup();
     const expected = await fixture.standalone.find(tool => tool.tool.name === 'list_operations')!.handler({ provider: 'gmail' });
@@ -401,6 +446,7 @@ describe.each(['crude', 'single'] as const)('Integration catalog READ operations
 });
 describe.each(['crude', 'single'] as const)('Integration READ policy enforcement (%s)', mode => {
   it.each([LIST, DESCRIBE])('confirms %s without leaking through a shared Gatekeeper', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const elements: ActiveElement[] = [{ type: 'persona', name: 'reviewer', metadata: { name: 'reviewer', gatekeeper: { confirm: [operation] } } }];
     const configured = setup(true, undefined, { elements, dbMode: false });
@@ -426,11 +472,13 @@ describe.each(['crude', 'single'] as const)('Integration READ policy enforcement
   });
 
   it.each([LIST, DESCRIBE])('reports %s as already approved with no confirmation policy', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     expect(await invoke(setup(true, undefined, { dbMode: false }), 'confirm_operation', { operation })).toMatchObject({ success: true, data: { confirmed: true } });
   });
 
   it.each([LIST, DESCRIBE])('uses the configured schema description in the %s confirmation summary', async operation => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup(true, undefined, { dbMode: false });
     const confirmation = await invoke(fixture, 'confirm_operation', { operation, provider: 'gmail' });
@@ -448,6 +496,7 @@ describe.each(['crude', 'single'] as const)('Integration READ policy enforcement
   });
 
   it.each([{ allowed: [], denied: ['mcp_aql_read'] }, { allowed: ['mcp_aql_create'] }])('enforces agent tool restrictions %j', async tools => {
+    env.MCP_INTERFACE_MODE = 'mcpaql';
     env.MCP_AQL_ENDPOINT_MODE = mode;
     const fixture = setup(true, undefined, { tools, dbMode: false });
     const catalogCall = jest.spyOn(fixture.catalog, 'listOperations');
