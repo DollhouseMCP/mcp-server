@@ -25,3 +25,30 @@ An existing tenant lease, even without a valid owner file, returns `blocked-by-f
 The first #2900 repair slice accepts only an exact `PUBLISHED_WRITE` journal whose new head and both ACTIVE owner records already agree (`metadata-advanced-before-unlink`). An operator must first stop all cooperating writers and separately handle an orphan tenant lease; the earlier diagnostic is only a hint. `finalizePublishedOwnedUpdate` obtains a **fresh** tenant transaction, re-reads and validates the canonical path, complete journal/head/records/artifacts and normal-save YAML/control/gatekeeper rules under one tracked operation, then rechecks exact bytes and descriptor identities before unlinking only that fixed journal. It never rewrites the head or owner metadata, clears another temp, adopts, or attempts an earlier-phase forward/abort repair.
 
 Successful journal unlink is the repair commit point. The new token is captured before unlink; later verification, hook or fence-release failures retain it in a committed outcome. A failed unlink reports commit-unknown rather than asserting rollback. If a later call sees a clean owner triple with no journal, it reports `already-clean-no-attribution`: it cannot prove that the supplied operation committed. Other phases and any mismatched, partial or unsafe evidence remain fail-closed for manual review. This internal API is not wired to production calls and does not itself authorize live data repair or all-writer activation.
+
+## Dormant forward completion from a fixed PUBLISHED journal
+
+`forwardPublishedOwnedUpdate` extends maintenance recovery to the ordered states
+`old registry / old sidecar` and `new registry / old sidecar`. Under one fresh
+lease and one tracked operation, it verifies the exact bound PUBLISHED journal,
+published head, ACTIVE records, and complete matching artifact namespace. It
+validates the existing YAML with normal-save structure, control-field and
+gatekeeper rules before changing metadata; it preserves the source bytes.
+
+The executor advances only the registry, then the sidecar, through exclusive
+private `update-<operationId>.tmp` staging. It may reuse exactly one complete
+stage for the next ordered record after fresh bounded no-follow descriptor reads
+prove exact serialized bytes and stable full identity. Before each rename it
+rechecks the whole evidence; after rename it rereads the ordered state. Partial,
+malformed, duplicate, aliased, legacy random, foreign, wrong-order, or changing
+stages remain preserved for manual review. Ordinary reads and diagnostics still
+block every stage; a diagnostic label grants no repair authority.
+
+After both records agree, the same tracked operation invokes the private
+finalizer. Exact fixed-journal unlink remains the only commit point; committed
+tokens survive later read, hook and fence-release errors, while clean retries
+have no historical attribution. PREPARED journals (including staged PUBLISHED
+replacements), abort, adoption, create, rename, delete and archive work remain
+outside this slice. All writers must be stopped and any orphan lease separately
+handled before fresh acquisition. This dormant API performs no lock stealing
+and does not authorize production maintenance or ordinary writer activation.
