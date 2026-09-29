@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { withUserContext } from '../../../src/database/rls.js';
 import { elements } from '../../../src/database/schema/elements.js';
 import { memoryEntries } from '../../../src/database/schema/memories.js';
+import { getErrorCode } from '../../../src/database/db-utils.js';
 import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
 import {
   buildMemoryContent, cleanupAllTestData, closeTestDb, ensureTestUser,
@@ -307,5 +308,127 @@ describe('DatabaseMemoryStorageLayer versioned head contract', () => {
     expect(snapshot.content).toBe(reconciled);
     const saved = await layer.writeHeadIfCurrent(snapshot.token, 'legacy-ids', reconciled, metadata);
     expect(saved).toEqual((await layer.readHeadSnapshot(id)).token);
+  });
+
+  it('rejects bounded entry fields with actionable candidate errors and no partial save', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('bounded-fields', [{ id: 'keep', content: 'Keep' }]);
+    const id = await layer.writeContent('memories', 'bounded-fields', original, metadata);
+    const before = await layer.readHeadSnapshot(id);
+    const entry = (field: string, value: string) =>
+      `name: bounded-fields\nentries:\n  - id: next\n    content: Next\n    ${field}: ${value}\n`;
+    const cases = [
+      { content: `name: bounded-fields\nentries:\n  - id: "${'x'.repeat(256)}"\n    content: Next\n`, field: 'ID' },
+      { content: `name: bounded-fields\nentries:\n  - id: "${'😀'.repeat(256)}"\n    content: Next\n`, field: 'ID' },
+      { content: entry('privacyLevel', JSON.stringify('p'.repeat(33))), field: 'privacyLevel' },
+      { content: entry('trustLevel', JSON.stringify('t'.repeat(33))), field: 'trustLevel' },
+      { content: entry('source', JSON.stringify('s'.repeat(65))), field: 'source' },
+      { content: entry('privacyLevel', '42'), field: 'privacyLevel' },
+      { content: entry('source', 'false'), field: 'source' },
+    ];
+    for (const { content, field } of cases) {
+      await expect(layer.writeHeadIfCurrent(before.token, 'bounded-fields', content, metadata))
+        .rejects.toMatchObject({ code: 'EINVALIDHEAD', message: expect.stringContaining(field) });
+      expect(await layer.readHeadSnapshot(id)).toEqual(before);
+      expect((await layer.getEntries(id)).map(row => row.entryId)).toEqual(['keep']);
+    }
+
+    // PostgreSQL varchar(255) counts Unicode characters, not UTF-16 units.
+    const unicodeId = '😀'.repeat(255);
+    const boundary = buildMemoryContent('bounded-fields', [{ id: unicodeId, content: 'Fits' }]);
+    const saved = await layer.writeHeadIfCurrent(before.token, 'bounded-fields', boundary, metadata);
+    expect((await layer.getEntries(id)).map(row => row.entryId)).toEqual([unicodeId]);
+    expect(saved).toEqual((await layer.readHeadSnapshot(id)).token);
+  });
+
+  it('maps only known candidate SQLSTATE value errors while retaining their cause', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('sql-value-error', [{ id: 'keep', content: 'Keep' }]);
+    const id = await layer.writeContent('memories', 'sql-value-error', original, metadata);
+    const before = await layer.readHeadSnapshot(id);
+    const candidate = buildMemoryContent('sql-value-error', [{ id: 'next', content: 'Next' }]);
+    const cases = [
+      { name: 'sql-value-error', metadata: { ...metadata, author: 'a'.repeat(256) } },
+      { name: 'sql-value-error', metadata: { ...metadata, tags: ['t'.repeat(129)] } },
+      { name: 'n'.repeat(256), metadata },
+    ];
+    for (const item of cases) {
+      const failure = await layer.writeHeadIfCurrent(before.token, item.name, candidate, item.metadata)
+        .then(() => null, error => error as NodeJS.ErrnoException);
+      expect(failure).toMatchObject({ code: 'EINVALIDHEAD' });
+      expect(getErrorCode(failure?.cause)).toBe('22001');
+      expect(await layer.readHeadSnapshot(id)).toEqual(before);
+      expect((await layer.getEntries(id)).map(row => row.entryId)).toEqual(['keep']);
+    }
+    for (const code of ['22007', '22008']) {
+      const testLayer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+      const cause = Object.assign(new Error('PostgreSQL rejected a date value'), { code });
+      const internals = testLayer as unknown as { persistMemoryContent: () => Promise<never> };
+      internals.persistMemoryContent = jest.fn().mockRejectedValue(cause);
+      await expect(testLayer.writeHeadIfCurrent(before.token, 'sql-value-error', candidate, metadata))
+        .rejects.toMatchObject({ code: 'EINVALIDHEAD', cause });
+    }
+    for (const code of ['23503', '08006']) {
+      const testLayer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+      const cause = Object.assign(new Error('Integrity or infrastructure failure'), { code });
+      const internals = testLayer as unknown as { persistMemoryContent: () => Promise<never> };
+      internals.persistMemoryContent = jest.fn().mockRejectedValue(cause);
+      await expect(testLayer.writeHeadIfCurrent(before.token, 'sql-value-error', candidate, metadata))
+        .rejects.toBe(cause);
+    }
+    expect(await layer.readHeadSnapshot(id)).toEqual(before);
+  });
+
+  it('does not misclassify an existing-name collision as invalid candidate data', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('rename-source', [{ id: 'keep', content: 'Keep' }]);
+    const id = await layer.writeContent('memories', 'rename-source', original, metadata);
+    const occupied = buildMemoryContent('rename-target', [{ id: 'other', content: 'Other' }]);
+    const otherId = await layer.writeContent('memories', 'rename-target', occupied, metadata);
+    const before = await layer.readHeadSnapshot(id);
+    const otherBefore = await layer.readHeadSnapshot(otherId);
+    const failure = await layer.writeHeadIfCurrent(before.token, 'rename-target', occupied, metadata)
+      .then(() => null, error => error as Error);
+    expect(getErrorCode(failure)).toBe('23505');
+    expect(await layer.readHeadSnapshot(id)).toEqual(before);
+    expect(await layer.readHeadSnapshot(otherId)).toEqual(otherBefore);
+  });
+
+  it('classifies PostgreSQL text and JSONB NUL encoding failures without partial saves', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('nul-values', [{ id: 'keep', content: 'Keep' }]);
+    const id = await layer.writeContent('memories', 'nul-values', original, metadata);
+    const before = await layer.readHeadSnapshot(id);
+    const cases = [
+      { content: 'name: nul-values\nentries:\n  - id: next\n    content: "NUL\\0text"\n', code: '22021' },
+      { content: 'name: nul-values\nmetadata:\n  note: "NUL\\0text"\nentries:\n  - id: next\n    content: Next\n', code: '22P05' },
+    ];
+    for (const item of cases) {
+      const failure = await layer.writeHeadIfCurrent(before.token, 'nul-values', item.content, metadata)
+        .then(() => null, error => error as NodeJS.ErrnoException);
+      expect(failure).toMatchObject({ code: 'EINVALIDHEAD' });
+      expect(getErrorCode(failure?.cause)).toBe(item.code);
+      expect(await layer.readHeadSnapshot(id)).toEqual(before);
+      expect((await layer.getEntries(id)).map(row => row.entryId)).toEqual(['keep']);
+    }
+  });
+
+  it('leaves legacy writeContent database errors unnormalized', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const oversized = buildMemoryContent('legacy-limit', [{ id: 'x'.repeat(256), content: 'Oversized' }]);
+    const failure = await layer.writeContent('memories', 'legacy-limit', oversized, metadata)
+      .then(() => null, error => error as Error);
+    expect(getErrorCode(failure)).toBe('22001');
+    await expect(layer.resolveContentIdentity('memories', 'legacy-limit')).resolves.toBeUndefined();
   });
 });
