@@ -351,7 +351,7 @@ export class FileMemoryOwnerSnapshots {
     });
     const registryTemps = ownerId ? await this.listMatchingArtifacts(
       path.dirname(this.registryPath(tenantRoot, ownerId)),
-      name => name.toLowerCase().startsWith(`${ownerId}.json.`),
+      name => name.toLowerCase().startsWith(`${ownerId.toLowerCase()}.json.`),
     ) : [];
     const expectedSidecar = path.basename(resolved.sidecarPath);
     const expectedJournal = path.basename(resolved.journalPath);
@@ -798,7 +798,7 @@ export class FileMemoryOwnerSnapshots {
     if (ownerId) {
       const registryPath = this.registryPath(tenantRoot, ownerId);
       await this.scanDirectory(path.dirname(registryPath), name =>
-        name.toLowerCase().startsWith(`${ownerId}.json.`));
+        name.toLowerCase().startsWith(`${ownerId.toLowerCase()}.json.`));
     }
   }
 
