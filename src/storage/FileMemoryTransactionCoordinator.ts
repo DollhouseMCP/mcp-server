@@ -34,6 +34,7 @@ interface LeaseState {
 }
 
 const states = new WeakMap<FileMemoryLeaseContext, LeaseState>();
+// Module-wide contexts reject nested work even across separate coordinators.
 const transactionFlow = new AsyncLocalStorage<LeaseState>();
 const operationFlow = new AsyncLocalStorage<FileMemoryLeaseContext>();
 
@@ -130,12 +131,14 @@ export class FileMemoryTransactionCoordinator {
       throw leaseError('EWRONGLEASE', 'File-memory lease belongs to another coordinator');
     }
     if (state.phase !== 'open') throw leaseError('ELEASEEXPIRED', 'File-memory lease is no longer open');
-    if (operationFlow.getStore() === context) {
+    if (operationFlow.getStore()) {
       throw leaseError('ENESTEDOPERATION', 'Nested file-memory store operations are not supported');
     }
 
     // Queue and register rejection handling synchronously before the next
     // await. Accepted operations execute FIFO even after the callback closes.
+    // Only a coordinator-skipped task is omitted from errors; store-thrown
+    // ELEASEABORTED remains a real failure and must poison the queue.
     let skipped = false;
     const task = state.tail.then(() => {
       if (state.poisoned) {

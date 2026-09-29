@@ -195,9 +195,11 @@ function validRecord(value: unknown): value is OwnerRecord {
     typeof record.locator === 'string' && !!record.locator &&
     typeof record.revision === 'string' && /^[1-9]\d*$/u.test(record.revision) &&
     typeof record.contentHash === 'string' && HASH_PATTERN.test(record.contentHash) &&
-    !!identity && ['device', 'inode', 'size', 'ctimeNs', 'mtimeNs']
+    !!identity && ['device', 'inode', 'size']
       .every(key => typeof identity[key as keyof FileIdentity] === 'string' &&
-        /^\d+$/u.test(identity[key as keyof FileIdentity]));
+        /^\d+$/u.test(identity[key as keyof FileIdentity])) &&
+    ['ctimeNs', 'mtimeNs'].every(key => typeof identity[key as keyof FileIdentity] === 'string' &&
+      /^-?\d+$/u.test(identity[key as keyof FileIdentity]));
 }
 
 function serializedRecord(record: OwnerRecord): string {
