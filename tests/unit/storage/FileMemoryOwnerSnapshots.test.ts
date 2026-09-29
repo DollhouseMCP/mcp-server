@@ -5,6 +5,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence, FileMemoryFenceTimeoutError } from '../../../src/storage/FileMemoryFence.js';
+import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
 import {
   FileMemoryOwnerSnapshots,
   type AdoptionPublication,
@@ -83,6 +84,23 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     expect(await fs.readdir(tenantRoot)).toEqual(before);
     expect(await fs.readdir(path.dirname(headPath))).toEqual([path.basename(headPath)]);
     expect((await fs.stat(headPath)).mtimeMs).toBe(headBefore.mtimeMs);
+  });
+
+  it('uses the existing UTF-16 character limit for multibyte legacy files', async () => {
+    const content = '中'.repeat(1_000_000);
+    expect(Buffer.byteLength(content)).toBeGreaterThan(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE);
+    const { locator, makeStore } = await fixture(content);
+    const store = makeStore();
+    const snapshot = await store.readHeadSnapshot(locator);
+    expect(snapshot.content).toBe(content);
+    const adopted = await store.adoptUnowned(snapshot.token as UnownedFileMemoryToken);
+    expect(adopted.ownership).toBe('owned');
+    expect((await store.readHeadSnapshot(locator)).content).toBe(content);
+  });
+
+  it('rejects a head past the legacy character limit after bounded decoding', async () => {
+    const { locator, makeStore } = await fixture('a'.repeat(MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE + 1));
+    await expect(makeStore().readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EINVALIDHEAD' });
   });
 
   it('adopts an unchanged legacy head with a durable owner and agreeing registry', async () => {
@@ -214,6 +232,32 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     await fs.copyFile(sidecarPath(headPath), sidecarPath(copyPath));
     await expect(store.readHeadSnapshot('Notes/Copy.yaml'))
       .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+  });
+
+  it('never treats a generated sidecar or replacement temp as a memory head', async () => {
+    const { tenantRoot, headPath, locator, makeStore } = await fixture();
+    const store = makeStore();
+    const snapshot = await store.readHeadSnapshot(locator);
+    await store.adoptUnowned(snapshot.token as UnownedFileMemoryToken);
+    const sidecar = sidecarPath(headPath);
+    const replacement = `${sidecar}.11111111-1111-4111-8111-111111111111.tmp`;
+    await fs.copyFile(sidecar, replacement);
+    for (const metadataPath of [sidecar, replacement]) {
+      const metadataLocator = path.relative(tenantRoot, metadataPath).split(path.sep).join('/');
+      await expect(store.readHeadSnapshot(metadataLocator)).rejects.toThrow('confined relative POSIX path');
+      const caseAlias = path.posix.join(path.posix.dirname(metadataLocator), path.posix.basename(metadataLocator).toUpperCase());
+      await expect(store.readHeadSnapshot(caseAlias)).rejects.toThrow('confined relative POSIX path');
+    }
+    const ownerRootAlias = path.join(tenantRoot, '.MEMORY-OWNERS');
+    try {
+      await fs.realpath(ownerRootAlias);
+      const [ownerFile] = await fs.readdir(path.join(tenantRoot, '.memory-owners', 'owners'));
+      await expect(store.readHeadSnapshot(`.MEMORY-OWNERS/owners/${ownerFile}`))
+        .rejects.toThrow('confined relative POSIX path');
+    } catch (error) {
+      // Case-sensitive hosts do not resolve this alias at all.
+      expect(error).toMatchObject({ code: 'ENOENT' });
+    }
   });
 
   it('rejects unsafe registry ancestors on read without repairing them', async () => {

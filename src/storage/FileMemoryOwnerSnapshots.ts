@@ -9,6 +9,7 @@ import type { FileMemoryFence } from './FileMemoryFence.js';
 const SIDECAR_SUFFIX = '.memory-owner.json';
 const OWNER_DIRECTORY = '.memory-owners';
 const MAX_RECORD_BYTES = 4096;
+const RESERVED_SIDECAR_NAME = /^\.[0-9a-f]{64}\.memory-owner\.json(?:\.[0-9a-f-]{36}\.tmp)?$/iu;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
@@ -92,7 +93,8 @@ function validateLocator(locator: string): void {
     typeof locator !== 'string' || !locator || locator.includes('\0') || locator.includes('\\') ||
     path.posix.isAbsolute(locator) || path.win32.isAbsolute(locator) ||
     locator.split('/').some(part => !part || part === '.' || part === '..') ||
-    locator.split('/')[0] === OWNER_DIRECTORY || locator.split('/')[0] === '.memory-fences'
+    locator.split('/')[0] === OWNER_DIRECTORY || locator.split('/')[0] === '.memory-fences' ||
+    RESERVED_SIDECAR_NAME.test(path.posix.basename(locator))
   ) {
     throw new TypeError('Memory locator must be a confined relative POSIX path');
   }
@@ -283,9 +285,11 @@ export class FileMemoryOwnerSnapshots {
     if (!canonical || canonical === '..' || canonical.startsWith(`..${path.sep}`) || path.isAbsolute(canonical)) {
       throw headError('EHEADCONFLICT', 'Memory path leaves tenant root');
     }
+    const canonicalLocator = canonical.split(path.sep).join('/');
+    validateLocator(canonicalLocator);
     const basenameHash = createHash('sha256').update(path.basename(headPath)).digest('hex');
     const sidecarPath = path.join(path.dirname(headPath), `.${basenameHash}${SIDECAR_SUFFIX}`);
-    return { headPath, sidecarPath, locator: canonical.split(path.sep).join('/') };
+    return { headPath, sidecarPath, locator: canonicalLocator };
   }
 
   private registryPath(tenantRoot: string, ownerId: string): string {
@@ -307,7 +311,10 @@ export class FileMemoryOwnerSnapshots {
     try {
       const before = await handle.stat({ bigint: true });
       const limit = MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE;
-      if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(limit)) {
+      // The legacy loader limits UTF-16 string units. Three UTF-8 bytes per
+      // unit is the largest valid expansion; enforce that same limit after decode.
+      const rawLimit = limit * 3;
+      if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(rawLimit)) {
         throw headError('EINVALIDHEAD', 'Memory head exceeds the read-only legacy limit or is linked');
       }
       const bytes = Buffer.alloc(Number(before.size) + 1);
@@ -318,13 +325,15 @@ export class FileMemoryOwnerSnapshots {
         used += read.bytesRead;
       }
       const after = await handle.stat({ bigint: true });
-      if (used > limit || BigInt(used) !== after.size ||
+      if (used > rawLimit || BigInt(used) !== after.size ||
         !sameIdentity(identityOf(before), identityOf(after))) {
         throw headError('EHEADCONFLICT', 'Memory head changed during read');
       }
       const content = bytes.subarray(0, used);
+      const value = decodeUtf8(content);
+      if (value.length > limit) throw headError('EINVALIDHEAD', 'Memory head exceeds the legacy character limit');
       return {
-        value: decodeUtf8(content),
+        value,
         hash: createHash('sha256').update(content).digest('hex'),
         identity: identityOf(after),
       };
