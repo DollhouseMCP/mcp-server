@@ -115,6 +115,32 @@ describePg('read-only database memory reconciliation inspection', () => {
     expect(unknown.diagnostics).toContainEqual({ code: 'unsupported_raw_entry_field', path: 'entries[0]' });
   });
 
+  it('flags corrupt parent hash/size and created-date columns without changing them', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const raw = buildMemoryContent('parent-integrity');
+    const id = await layer.writeContent('memories', 'parent-integrity', raw, writeMetadata);
+    await withUserContext(db, userId, tx => tx.update(elements).set({
+      contentHash: '0'.repeat(64), byteSize: 1, elementCreated: '2026-01-01',
+    }).where(eq(elements.id, id)));
+    const before = await withUserContext(db, userId, tx => tx.select({
+      contentHash: elements.contentHash, byteSize: elements.byteSize,
+      elementCreated: elements.elementCreated, revision: elements.storageRevision,
+    }).from(elements).where(eq(elements.id, id)));
+    const result = await inspector.inspect({ userId, memoryId: id });
+    const after = await withUserContext(db, userId, tx => tx.select({
+      contentHash: elements.contentHash, byteSize: elements.byteSize,
+      elementCreated: elements.elementCreated, revision: elements.storageRevision,
+    }).from(elements).where(eq(elements.id, id)));
+    expect(result.status).toBe('ambiguous');
+    expect(result.diagnostics).toContainEqual({ code: 'raw_integrity_mismatch', path: 'rawContent' });
+    expect(result.diagnostics).toContainEqual({ code: 'unrepresented_element_created', path: 'elementCreated' });
+    expect(after).toEqual(before);
+    expect(await layer.readContent(id)).toBe(raw);
+  });
+
   it('reports an unindexed durable archive and an over-limit legacy raw head without fetching archives', async () => {
     const userId = await ensureTestUser();
     const db = getTestDb();

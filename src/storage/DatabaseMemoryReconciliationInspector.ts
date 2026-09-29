@@ -14,6 +14,9 @@ import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const MAX_ROWS = 10_000;
+// Row JSON projections can exceed raw YAML. The raw byte prefetch guard is
+// deliberately wider than the 2 MiB UTF-16-unit recovery limit: valid CJK
+// text near that limit can occupy about 6 MiB in UTF-8.
 const MAX_PROJECTED_BYTES = 16 * 1024 * 1024;
 const MAX_DIAGNOSTICS = 20;
 const MAX_RAW_BYTES = 8 * 1024 * 1024;
@@ -29,6 +32,7 @@ export interface MemoryReconciliationInspection {
   readonly name: string;
   readonly revision: string;
   readonly dirty: boolean;
+  /** JavaScript UTF-16 code units, never bytes; null when prefetch bounds prevent reading raw YAML. */
   readonly rawUnits: number | null;
   readonly counts: { readonly rawEntries: number | null; readonly childEntries: number; readonly volumes: number };
   readonly diagnostics: readonly MemoryInspectionDiagnostic[];
@@ -175,7 +179,7 @@ export class DatabaseMemoryReconciliationInspector {
     });
   }
 
-  /** Allows a deterministic concurrent-writer barrier in storage-contract tests. */
+  /** @internal Test-only barrier for deterministic concurrent-writer checks. */
   protected afterParentRead(): Promise<void> { return Promise.resolve(); }
 
   private classify(owner: MemoryInspectionOwner, parent: Parent, children: ChildSnapshot[], tags: string[], volumes: Volume[]): MemoryReconciliationInspection {
@@ -213,6 +217,8 @@ export class DatabaseMemoryReconciliationInspector {
     const ambiguous = this.checkMetadata(raw, parent, tags, volumes, add);
     const entryStatus = this.checkEntries(rawEntries, children, add);
     let status: MemoryInspectionStatus = entryStatus;
+    // Any unresolvable authority/precision question wins over a separately
+    // observed mismatch; callers must not infer that only entries need repair.
     if (ambiguous) status = 'ambiguous';
     return report(status, rawEntries.length);
   }
@@ -259,7 +265,8 @@ export class DatabaseMemoryReconciliationInspector {
       add('unsupported_raw_entry_field', path);
       ambiguous = true;
     }
-    if (raw && (hasUnrepresentableDate(raw.timestamp) || hasUnrepresentableDate(raw.expiresAt))) {
+    if (raw && (raw.timestamp === undefined || raw.timestamp === null ||
+      hasUnrepresentableDate(raw.timestamp) || hasUnrepresentableDate(raw.expiresAt))) {
       add('unrepresentable_raw_timestamp', path);
       ambiguous = true;
     }
@@ -369,11 +376,8 @@ export class DatabaseMemoryReconciliationInspector {
     for (const [index, item] of rawVolumes.entries()) {
       const raw = objectValue(item);
       const volume = byNumber.get(raw?.volume as number);
-      const dates = [raw && dateValue(raw.sealedAt), raw && dateValue(raw.firstEntryAt),
-        raw && dateValue(raw.lastEntryAt), volume && dateValue(volume.sealedAt),
-        volume && dateValue(volume.firstEntryAt), volume && dateValue(volume.lastEntryAt)];
-      if (dates.includes(undefined) || (raw && [raw.sealedAt, raw.firstEntryAt, raw.lastEntryAt].some(hasUnrepresentableDate)) ||
-        volume?.sealedUnrepresentable || volume?.firstUnrepresentable || volume?.lastUnrepresentable) {
+      const dates = this.volumeDates(raw, volume);
+      if (this.volumeDatesUnrepresentable(raw, volume, dates)) {
         add('unrepresentable_volume_timestamp', `metadata.volumes[${index}]`);
         mismatch = true;
       }
@@ -383,6 +387,21 @@ export class DatabaseMemoryReconciliationInspector {
       if (typeof raw?.volume === 'number') seen.add(raw.volume);
     }
     return mismatch;
+  }
+
+  private volumeDates(raw: Record<string, unknown> | undefined, volume: Volume | undefined): (string | null | undefined)[] {
+    return [raw && dateValue(raw.sealedAt), raw && dateValue(raw.firstEntryAt),
+      raw && dateValue(raw.lastEntryAt), volume && dateValue(volume.sealedAt),
+      volume && dateValue(volume.firstEntryAt), volume && dateValue(volume.lastEntryAt)];
+  }
+
+  private volumeDatesUnrepresentable(
+    raw: Record<string, unknown> | undefined, volume: Volume | undefined,
+    dates: (string | null | undefined)[],
+  ): boolean {
+    if (dates.includes(undefined)) return true;
+    if (raw && [raw.sealedAt, raw.firstEntryAt, raw.lastEntryAt].some(hasUnrepresentableDate)) return true;
+    return !!(volume?.sealedUnrepresentable || volume?.firstUnrepresentable || volume?.lastUnrepresentable);
   }
 
   private volumeRecordDiffers(
