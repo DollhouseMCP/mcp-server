@@ -343,9 +343,10 @@ export class DatabaseMemoryReconciliationInspector {
       expiresAt === dateValue(child.expiresAt) && content === child.content &&
       sanitized === child.sanitizedContent && privacy === child.privacyLevel &&
       trust === child.trustLevel && source === child.source &&
-      isDeepStrictEqual(tags, child.tags ?? []) &&
-      isDeepStrictEqual(patterns, child.sanitizedPatterns ?? {}) &&
-      isDeepStrictEqual(metadata, child.entryMetadata ?? {});
+      // The writer stores non-null containers; SQL NULL is a distinct legacy projection.
+      isDeepStrictEqual(tags, child.tags) &&
+      isDeepStrictEqual(patterns, child.sanitizedPatterns) &&
+      isDeepStrictEqual(metadata, child.entryMetadata);
   }
 
   private checkMetadata(
@@ -371,11 +372,13 @@ export class DatabaseMemoryReconciliationInspector {
     const expectedJson = nested ?? rest;
     if (!isDeepStrictEqual(expectedJson, parent.metadata)) { add('metadata_json_mismatch', 'metadata'); ambiguous = true; }
     const extracted = MemoryMetadataExtractor.extractMetadata(parent.rawContent, parent.name);
+    // Default the expected raw projection only. A stored NULL or empty version
+    // is not interchangeable with the non-null values written by normal saves.
     const comparisons: Array<[string, unknown, unknown]> = [
       ['name', extracted.name, parent.name],
-      ['description', extracted.description || '', parent.description || ''],
-      ['version', extracted.version || '1.0.0', parent.version || '1.0.0'],
-      ['author', extracted.author || '', parent.author || ''],
+      ['description', extracted.description || '', parent.description],
+      ['version', extracted.version || '1.0.0', parent.version],
+      ['author', extracted.author || '', parent.author],
       ['memoryType', extracted.memoryType ?? null, parent.memoryType],
       ['autoLoad', extracted.autoLoad ?? null, parent.autoLoad],
       ['priority', extracted.priority ?? null, parent.priority],

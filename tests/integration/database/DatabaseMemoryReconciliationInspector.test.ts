@@ -87,6 +87,56 @@ describePg('read-only database memory reconciliation inspection', () => {
     expect(changedMetadata.diagnostics).toContainEqual({ code: 'entry_projection_mismatch', path: 'entries[0]' });
   });
 
+  it('does not equate nullable child containers with projected empty values', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const id = await layer.writeContent('memories', 'nullable-child', buildMemoryContent('nullable-child', [
+      { id: 'one', content: 'One', timestamp: '2026-09-28T12:00:00.000Z' },
+    ]), writeMetadata);
+    const where = and(eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, id));
+    expect((await inspector.inspect({ userId, memoryId: id })).status).toBe('equivalent');
+
+    await withUserContext(db, userId, tx => tx.update(memoryEntries).set({ tags: null }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).status).toBe('divergent');
+    await withUserContext(db, userId, tx => tx.update(memoryEntries).set({ tags: [] }).where(where));
+
+    await withUserContext(db, userId, tx => tx.update(memoryEntries).set({ sanitizedPatterns: null }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).status).toBe('divergent');
+    await withUserContext(db, userId, tx => tx.update(memoryEntries).set({ sanitizedPatterns: {} }).where(where));
+
+    await withUserContext(db, userId, tx => tx.update(memoryEntries).set({ entryMetadata: null }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).status).toBe('divergent');
+  });
+
+  it('does not normalize nullable or empty indexed parent fields into writer defaults', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const id = await layer.writeContent('memories', 'parent-defaults', buildMemoryContent('parent-defaults'), writeMetadata);
+    const where = eq(elements.id, id);
+    expect((await inspector.inspect({ userId, memoryId: id })).status).toBe('equivalent');
+
+    await withUserContext(db, userId, tx => tx.update(elements).set({ description: null }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).diagnostics)
+      .toContainEqual({ code: 'indexed_field_mismatch', path: 'description' });
+    await withUserContext(db, userId, tx => tx.update(elements).set({ description: 'Test memory parent-defaults' }).where(where));
+
+    await withUserContext(db, userId, tx => tx.update(elements).set({ version: null }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).diagnostics)
+      .toContainEqual({ code: 'indexed_field_mismatch', path: 'version' });
+    await withUserContext(db, userId, tx => tx.update(elements).set({ version: '' }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).diagnostics)
+      .toContainEqual({ code: 'indexed_field_mismatch', path: 'version' });
+    await withUserContext(db, userId, tx => tx.update(elements).set({ version: '1.0.0' }).where(where));
+
+    await withUserContext(db, userId, tx => tx.update(elements).set({ author: null }).where(where));
+    expect((await inspector.inspect({ userId, memoryId: id })).diagnostics)
+      .toContainEqual({ code: 'indexed_field_mismatch', path: 'author' });
+  });
+
   it('reads more than the normal 1,000-entry query cap without truncation', async () => {
     const userId = await ensureTestUser();
     const db = getTestDb();
