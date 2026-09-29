@@ -40,8 +40,11 @@ type Parent = Pick<typeof elements.$inferSelect,
   'metadata' | 'description' | 'version' | 'author' | 'visibility' | 'memoryType' | 'autoLoad' | 'priority'> &
   { hasBodyContent: boolean; elementCreated: string | null };
 type Child = typeof memoryEntries.$inferSelect;
+type ChildSnapshot = { entry: Child; timestampUnrepresentable: boolean; expiryUnrepresentable: boolean };
+type EntryComparison = { ambiguous: boolean; mismatch: boolean };
 type Volume = Pick<typeof memoryVolumes.$inferSelect,
-  'volume' | 'sha256' | 'entryCount' | 'sealedAt' | 'firstEntryAt' | 'lastEntryAt'>;
+  'volume' | 'sha256' | 'entryCount' | 'sealedAt' | 'firstEntryAt' | 'lastEntryAt'> &
+  { sealedUnrepresentable: boolean; firstUnrepresentable: boolean; lastUnrepresentable: boolean };
 
 function diagnostic(code: string, path: string): MemoryInspectionDiagnostic { return { code, path }; }
 function dateValue(value: unknown): string | null | undefined {
@@ -50,19 +53,36 @@ function dateValue(value: unknown): string | null | undefined {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : undefined;
 }
+function hasUnrepresentableDate(value: unknown): boolean {
+  if (dateValue(value) === undefined) return true;
+  if (typeof value !== 'string') return false;
+  const fraction = /\.(\d+)/u.exec(value)?.[1];
+  return fraction !== undefined && /[1-9]/u.test(fraction.slice(3));
+}
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
 }
 function stringOrNull(value: unknown): string | null | undefined {
-  return value === undefined || value === null ? null : typeof value === 'string' ? value : undefined;
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') return value;
+  return undefined;
 }
 function stringsOrEmpty(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return [];
-  return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : undefined;
+  if (Array.isArray(value) && value.every(item => typeof item === 'string')) return value;
+  return undefined;
 }
 function sameStrings(a: readonly string[], b: readonly string[]): boolean {
-  return isDeepStrictEqual([...a].sort(), [...b].sort());
+  if (a.length !== b.length) return false;
+  const counts = new Map<string, number>();
+  for (const value of a) counts.set(value, (counts.get(value) ?? 0) + 1);
+  for (const value of b) {
+    const remaining = counts.get(value);
+    if (!remaining) return false;
+    counts.set(value, remaining - 1);
+  }
+  return true;
 }
 
 /** A conservative inspector: never resolves ambiguity by rewriting or choosing a winner. */
@@ -133,14 +153,22 @@ export class DatabaseMemoryReconciliationInspector {
       }).from(elements).where(and(eq(elements.userId, captured.userId),
         eq(elements.elementType, 'memories'), eq(elements.id, captured.memoryId))).limit(1);
       await this.afterParentRead();
-      const children = await tx.select().from(memoryEntries).where(and(eq(memoryEntries.userId, captured.userId),
+      const children = await tx.select({
+        entry: memoryEntries,
+        timestampUnrepresentable: sql<boolean>`NOT isfinite(${memoryEntries.timestamp}) OR mod(extract(microseconds from ${memoryEntries.timestamp})::numeric, 1000) <> 0`,
+        expiryUnrepresentable: sql<boolean>`${memoryEntries.expiresAt} IS NOT NULL AND (NOT isfinite(${memoryEntries.expiresAt}) OR mod(extract(microseconds from ${memoryEntries.expiresAt})::numeric, 1000) <> 0)`,
+      }).from(memoryEntries).where(and(eq(memoryEntries.userId, captured.userId),
         eq(memoryEntries.memoryId, captured.memoryId)))
         .orderBy(desc(memoryEntries.timestamp), asc(memoryEntries.entryId));
       const tags = await tx.select({ tag: elementTags.tag }).from(elementTags).where(and(
         eq(elementTags.userId, captured.userId), eq(elementTags.elementId, captured.memoryId)));
       const volumes = await tx.select({ volume: memoryVolumes.volume, sha256: memoryVolumes.sha256,
         entryCount: memoryVolumes.entryCount, sealedAt: memoryVolumes.sealedAt,
-        firstEntryAt: memoryVolumes.firstEntryAt, lastEntryAt: memoryVolumes.lastEntryAt })
+        firstEntryAt: memoryVolumes.firstEntryAt, lastEntryAt: memoryVolumes.lastEntryAt,
+        sealedUnrepresentable: sql<boolean>`NOT isfinite(${memoryVolumes.sealedAt}) OR mod(extract(microseconds from ${memoryVolumes.sealedAt})::numeric, 1000) <> 0`,
+        firstUnrepresentable: sql<boolean>`${memoryVolumes.firstEntryAt} IS NOT NULL AND (NOT isfinite(${memoryVolumes.firstEntryAt}) OR mod(extract(microseconds from ${memoryVolumes.firstEntryAt})::numeric, 1000) <> 0)`,
+        lastUnrepresentable: sql<boolean>`${memoryVolumes.lastEntryAt} IS NOT NULL AND (NOT isfinite(${memoryVolumes.lastEntryAt}) OR mod(extract(microseconds from ${memoryVolumes.lastEntryAt})::numeric, 1000) <> 0)`,
+      })
         .from(memoryVolumes).where(and(eq(memoryVolumes.userId, captured.userId),
           eq(memoryVolumes.memoryId, captured.memoryId))).orderBy(asc(memoryVolumes.volume));
       return this.classify(captured, parent, children, tags.map(row => row.tag), volumes);
@@ -150,7 +178,7 @@ export class DatabaseMemoryReconciliationInspector {
   /** Allows a deterministic concurrent-writer barrier in storage-contract tests. */
   protected afterParentRead(): Promise<void> { return Promise.resolve(); }
 
-  private classify(owner: MemoryInspectionOwner, parent: Parent, children: Child[], tags: string[], volumes: Volume[]): MemoryReconciliationInspection {
+  private classify(owner: MemoryInspectionOwner, parent: Parent, children: ChildSnapshot[], tags: string[], volumes: Volume[]): MemoryReconciliationInspection {
     const findings: MemoryInspectionDiagnostic[] = [];
     let findingCount = 0;
     const add = (code: string, path: string) => {
@@ -184,58 +212,86 @@ export class DatabaseMemoryReconciliationInspector {
     }
     const ambiguous = this.checkMetadata(raw, parent, tags, volumes, add);
     const entryStatus = this.checkEntries(rawEntries, children, add);
-    const status: MemoryInspectionStatus = ambiguous || entryStatus === 'ambiguous'
-      ? 'ambiguous' : entryStatus === 'divergent' ? 'divergent' : 'equivalent';
+    let status: MemoryInspectionStatus = entryStatus;
+    if (ambiguous) status = 'ambiguous';
     return report(status, rawEntries.length);
   }
 
-  private checkEntries(rawEntries: unknown[], children: Child[], add: (code: string, path: string) => void): 'equivalent' | 'divergent' | 'ambiguous' {
+  private checkEntries(rawEntries: unknown[], children: ChildSnapshot[], add: (code: string, path: string) => void): 'equivalent' | 'divergent' | 'ambiguous' {
     let ambiguous = false;
     if (rawEntries.length !== children.length) add('entry_count_mismatch', 'entries');
-    const byId = new Map(children.map(child => [child.entryId, child]));
+    const byId = new Map(children.map(child => [child.entry.entryId, child]));
     const seen = new Set<string>();
     let mismatch = false;
     for (const [index, entry] of rawEntries.entries()) {
-      const value = objectValue(entry);
-      const id = value?.id;
-      if (value && Object.keys(value).some(key => ![
-        'id', 'timestamp', 'content', 'sanitizedContent', 'sanitizedPatterns',
-        'tags', 'metadata', 'privacyLevel', 'trustLevel', 'source', 'expiresAt',
-      ].includes(key))) {
-        add('unsupported_raw_entry_field', `entries[${index}]`);
-        ambiguous = true;
-      }
-      if (typeof id !== 'string' || !id || seen.has(id)) { add('unqualified_raw_entry', `entries[${index}]`); mismatch = true; continue; }
-      seen.add(id);
-      const child = byId.get(id);
-      if (child && dateValue(child.timestamp) === undefined) {
-        add('unrepresentable_child_timestamp', `entries[${index}]`);
-        ambiguous = true;
-      }
-      if (!child || !this.sameEntry(value!, child)) { add('entry_projection_mismatch', `entries[${index}]`); mismatch = true; }
+      const result = this.compareEntry(entry, index, byId, seen, add);
+      ambiguous ||= result.ambiguous;
+      mismatch ||= result.mismatch;
     }
     // A child row has no persisted sequence and the current loader orders
     // only by timestamp. Even a raw order matching our ID tie-break is not
     // proof of the loader's equal-time order.
-    const tied = new Map<string, string[]>();
-    for (const entry of rawEntries) {
-      const value = objectValue(entry);
-      const time = dateValue(value?.timestamp);
-      if (!time || typeof value?.id !== 'string') continue;
-      const ids = tied.get(time) ?? [];
-      ids.push(value.id);
-      tied.set(time, ids);
-    }
-    if ([...tied.values()].some(ids => ids.length > 1)) {
+    if (this.hasTimestampTies(rawEntries)) {
       add('unproven_equal_time_order', 'entries');
       ambiguous = true;
     }
     if (rawEntries.length === children.length &&
-      !isDeepStrictEqual(rawEntries.map(entry => objectValue(entry)?.id), children.map(child => child.entryId))) {
+      !isDeepStrictEqual(rawEntries.map(entry => objectValue(entry)?.id), children.map(child => child.entry.entryId))) {
       add('raw_order_differs_from_loader', 'entries');
       ambiguous = true;
     }
-    return ambiguous ? 'ambiguous' : mismatch || rawEntries.length !== children.length ? 'divergent' : 'equivalent';
+    if (ambiguous) return 'ambiguous';
+    if (mismatch || rawEntries.length !== children.length) return 'divergent';
+    return 'equivalent';
+  }
+
+  private compareEntry(
+    entry: unknown, index: number, byId: Map<string, ChildSnapshot>, seen: Set<string>,
+    add: (code: string, path: string) => void,
+  ): EntryComparison {
+    const raw = objectValue(entry);
+    const path = `entries[${index}]`;
+    let ambiguous = false;
+    if (raw && Object.keys(raw).some(key => ![
+      'id', 'timestamp', 'content', 'sanitizedContent', 'sanitizedPatterns',
+      'tags', 'metadata', 'privacyLevel', 'trustLevel', 'source', 'expiresAt',
+    ].includes(key))) {
+      add('unsupported_raw_entry_field', path);
+      ambiguous = true;
+    }
+    if (raw && (hasUnrepresentableDate(raw.timestamp) || hasUnrepresentableDate(raw.expiresAt))) {
+      add('unrepresentable_raw_timestamp', path);
+      ambiguous = true;
+    }
+    const id = raw?.id;
+    if (typeof id !== 'string' || !id || seen.has(id)) {
+      add('unqualified_raw_entry', path);
+      return { ambiguous, mismatch: true };
+    }
+    seen.add(id);
+    const child = byId.get(id);
+    if (child && (child.timestampUnrepresentable || child.expiryUnrepresentable ||
+      dateValue(child.entry.timestamp) === undefined || dateValue(child.entry.expiresAt) === undefined)) {
+      add('unrepresentable_child_timestamp', path);
+      ambiguous = true;
+    }
+    if (!child || !this.sameEntry(raw!, child.entry)) {
+      add('entry_projection_mismatch', path);
+      return { ambiguous, mismatch: true };
+    }
+    return { ambiguous, mismatch: false };
+  }
+
+  private hasTimestampTies(rawEntries: unknown[]): boolean {
+    const counts = new Map<string, number>();
+    for (const entry of rawEntries) {
+      const time = dateValue(objectValue(entry)?.timestamp);
+      if (!time) continue;
+      const count = (counts.get(time) ?? 0) + 1;
+      if (count > 1) return true;
+      counts.set(time, count);
+    }
+    return false;
   }
 
   private sameEntry(raw: Record<string, unknown>, child: Child): boolean {
@@ -313,24 +369,33 @@ export class DatabaseMemoryReconciliationInspector {
     for (const [index, item] of rawVolumes.entries()) {
       const raw = objectValue(item);
       const volume = byNumber.get(raw?.volume as number);
-      const expectedFile = `volumes/${ownerId}/v${String(raw?.volume).padStart(4, '0')}.yaml`;
       const dates = [raw && dateValue(raw.sealedAt), raw && dateValue(raw.firstEntryAt),
         raw && dateValue(raw.lastEntryAt), volume && dateValue(volume.sealedAt),
         volume && dateValue(volume.firstEntryAt), volume && dateValue(volume.lastEntryAt)];
-      if (dates.some(value => value === undefined)) {
+      if (dates.includes(undefined) || (raw && [raw.sealedAt, raw.firstEntryAt, raw.lastEntryAt].some(hasUnrepresentableDate)) ||
+        volume?.sealedUnrepresentable || volume?.firstUnrepresentable || volume?.lastUnrepresentable) {
         add('unrepresentable_volume_timestamp', `metadata.volumes[${index}]`);
         mismatch = true;
       }
-      if (!raw || Object.keys(raw).some(key => ![
-        'volume', 'file', 'sha256', 'entryCount', 'sealedAt', 'firstEntryAt', 'lastEntryAt',
-      ].includes(key)) || typeof raw.volume !== 'number' || seen.has(raw.volume) ||
-        !volume || raw.file !== expectedFile || raw.sha256 !== volume.sha256.trim() ||
-        raw.entryCount !== volume.entryCount || dates[0] !== dates[3] ||
-        dates[1] !== dates[4] || dates[2] !== dates[5]) {
+      if (this.volumeRecordDiffers(raw, volume, ownerId, seen, dates)) {
         add('volume_record_mismatch', `metadata.volumes[${index}]`); mismatch = true;
       }
       if (typeof raw?.volume === 'number') seen.add(raw.volume);
     }
     return mismatch;
+  }
+
+  private volumeRecordDiffers(
+    raw: Record<string, unknown> | undefined, volume: Volume | undefined,
+    ownerId: string, seen: Set<number>, dates: (string | null | undefined)[],
+  ): boolean {
+    if (!raw || !volume || typeof raw.volume !== 'number' || seen.has(raw.volume)) return true;
+    if (Object.keys(raw).some(key => ![
+      'volume', 'file', 'sha256', 'entryCount', 'sealedAt', 'firstEntryAt', 'lastEntryAt',
+    ].includes(key))) return true;
+    const expectedFile = `volumes/${ownerId}/v${String(raw.volume).padStart(4, '0')}.yaml`;
+    return raw.file !== expectedFile || raw.sha256 !== volume.sha256.trim() ||
+      raw.entryCount !== volume.entryCount || dates[0] !== dates[3] ||
+      dates[1] !== dates[4] || dates[2] !== dates[5];
   }
 }

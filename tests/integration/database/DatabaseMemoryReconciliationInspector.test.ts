@@ -8,7 +8,7 @@ import { DatabaseMemoryReconciliationInspector } from '../../../src/storage/Data
 import { DatabaseMemoryVolumeStore } from '../../../src/storage/DatabaseMemoryVolumeStore.js';
 import {
   buildMemoryContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB,
-  fixedUserId, getTestDb,
+  fixedUserId, getTestAdminDb, getTestDb,
 } from './test-db-helpers.js';
 
 const writeMetadata = { author: 'test-author', version: '1.0.0', description: '', tags: [] };
@@ -54,7 +54,7 @@ describePg('read-only database memory reconciliation inspection', () => {
       timestamp: new Date(Date.UTC(2026, 8, 28, 0, 0, index)).toISOString(),
     }));
     const id = await layer.writeContent('memories', 'large', buildMemoryContent('large', entries.reverse()), writeMetadata);
-    expect((await layer.getEntries(id)).length).toBe(1000);
+    expect(await layer.getEntries(id)).toHaveLength(1000);
     const result = await inspector.inspect({ userId, memoryId: id });
     expect(result.status).toBe('equivalent');
     expect(result.counts).toMatchObject({ rawEntries: 1001, childEntries: 1001 });
@@ -154,6 +154,35 @@ describePg('read-only database memory reconciliation inspection', () => {
     expect(result.diagnostics).toContainEqual({ code: 'unrepresentable_child_timestamp', path: 'entries[0]' });
   });
 
+  it('does not declare sub-millisecond child timestamps equivalent after Date conversion', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const id = await layer.writeContent('memories', 'microseconds', buildMemoryContent('microseconds', [
+      { id: 'one', content: 'One', timestamp: '2026-09-28T12:00:00.000Z' },
+    ]), writeMetadata);
+    await withUserContext(db, userId, tx => tx.update(memoryEntries)
+      .set({ timestamp: sql`'2026-09-28 12:00:00.000123+00'::timestamptz` })
+      .where(and(eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, id))));
+    const result = await inspector.inspect({ userId, memoryId: id });
+    expect(result.status).toBe('ambiguous');
+    expect(result.diagnostics).toContainEqual({ code: 'unrepresentable_child_timestamp', path: 'entries[0]' });
+  });
+
+  it('does not declare a raw sub-millisecond timestamp equivalent to its rounded child', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const id = await layer.writeContent('memories', 'raw-microseconds', buildMemoryContent('raw-microseconds', [
+      { id: 'one', content: 'One', timestamp: '2026-09-28T12:00:00.000123Z' },
+    ]), writeMetadata);
+    const result = await inspector.inspect({ userId, memoryId: id });
+    expect(result.status).toBe('ambiguous');
+    expect(result.diagnostics).toContainEqual({ code: 'unrepresentable_raw_timestamp', path: 'entries[0]' });
+  });
+
   it('does not equate invalid raw and persisted archive dates', async () => {
     const userId = await ensureTestUser();
     const db = getTestDb();
@@ -175,12 +204,28 @@ describePg('read-only database memory reconciliation inspection', () => {
       '      firstEntryAt: invalid-date', 'entries: []', '',
     ].join('\n');
     await layer.writeContent('memories', 'volume-dates', indexed, writeMetadata);
-    await withUserContext(db, userId, tx => tx.update(memoryVolumes)
+    // Archive rows are immutable to the application role. Admin-only test
+    // mutation models corrupt/legacy PostgreSQL values the inspector must read.
+    await getTestAdminDb().update(memoryVolumes)
       .set({ firstEntryAt: sql`'infinity'::timestamptz` })
-      .where(and(eq(memoryVolumes.userId, userId), eq(memoryVolumes.memoryId, id))));
+      .where(and(eq(memoryVolumes.userId, userId), eq(memoryVolumes.memoryId, id)));
     const result = await inspector.inspect({ userId, memoryId: id });
     expect(result.status).toBe('ambiguous');
     expect(result.diagnostics).toContainEqual({ code: 'unrepresentable_volume_timestamp', path: 'metadata.volumes[0]' });
+
+    await layer.writeContent('memories', 'volume-dates',
+      indexed.replace('firstEntryAt: invalid-date', 'firstEntryAt: 2026-09-28T11:00:00.000Z'), writeMetadata);
+    await getTestAdminDb().update(memoryVolumes)
+      .set({ firstEntryAt: sql`'2026-09-28 11:00:00.000123+00'::timestamptz` })
+      .where(and(eq(memoryVolumes.userId, userId), eq(memoryVolumes.memoryId, id)));
+    const storedPrecision = await withUserContext(db, userId, tx => tx.select({
+      text: sql<string>`${memoryVolumes.firstEntryAt}::text`,
+      microseconds: sql<string>`extract(microseconds from ${memoryVolumes.firstEntryAt})::text`,
+    }).from(memoryVolumes).where(and(eq(memoryVolumes.userId, userId), eq(memoryVolumes.memoryId, id))));
+    expect(storedPrecision[0]).toEqual({ text: '2026-09-28 11:00:00.000123+00', microseconds: '123' });
+    const precise = await inspector.inspect({ userId, memoryId: id });
+    expect(precise.status).toBe('ambiguous');
+    expect(precise.diagnostics).toContainEqual({ code: 'unrepresentable_volume_timestamp', path: 'metadata.volumes[0]' });
   });
 
   it('reports when bounded diagnostics omit additional mismatches', async () => {
