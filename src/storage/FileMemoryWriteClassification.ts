@@ -71,6 +71,8 @@ export interface FileMemoryWriteDiagnostic {
   /** Null means evidence collection did not complete; zero is a complete empty scan. */
   readonly artifactCount: number | null;
   readonly artifactNamesTruncated: boolean;
+  /** True when unexpected names are withheld because they are not bound to the owner. */
+  readonly artifactNamesRedacted: boolean;
   readonly evidenceComplete: boolean;
 }
 
@@ -95,18 +97,38 @@ function matchingRecord(
 }
 
 function result(kind: FileMemoryWriteKind, evidence: FileMemoryWriteEvidence, reason: string): FileMemoryWriteDiagnostic {
+  const redacted = evidence.unexpectedArtifacts;
   return {
     kind, reason, journalState: evidence.journal?.state,
     operationId: evidence.journal?.operationId,
-    artifactNames: evidence.artifactNames.slice(0, 32),
+    artifactNames: redacted ? [] : evidence.artifactNames.slice(0, 32),
     artifactCount: evidence.artifactNames.length,
-    artifactNamesTruncated: evidence.artifactNames.length > 32,
+    artifactNamesTruncated: !redacted && evidence.artifactNames.length > 32,
+    artifactNamesRedacted: redacted,
     evidenceComplete: true,
   };
 }
 
+function unboundResult(): FileMemoryWriteDiagnostic {
+  return {
+    kind: 'unknown-manual-review', reason: 'Memory evidence does not bind to the requested owner',
+    artifactNames: [], artifactCount: null, artifactNamesTruncated: false,
+    artifactNamesRedacted: true, evidenceComplete: false,
+  };
+}
+
+function boundToRequestedOwner(evidence: FileMemoryWriteEvidence): boolean {
+  const { sidecar, registry, journal } = evidence;
+  if (!sidecar || !registry || sidecar.userId !== evidence.userId ||
+    sidecar.locator !== evidence.locator || registry.userId !== evidence.userId ||
+    registry.locator !== evidence.locator || registry.ownerId !== sidecar.ownerId) return false;
+  return !journal || (journal.userId === evidence.userId &&
+    journal.locator === evidence.locator && journal.ownerId === sidecar.ownerId);
+}
+
 /** Pure phase decision. Callers must first prove stable, bounded, safe evidence. */
 export function classifyFileMemoryWrite(evidence: FileMemoryWriteEvidence): FileMemoryWriteDiagnostic {
+  if (!boundToRequestedOwner(evidence)) return unboundResult();
   const unknown = (reason: string) => result('unknown-manual-review', evidence, reason);
   if (evidence.unexpectedArtifacts || !evidence.sidecar || !evidence.registry) {
     return unknown('Unexpected artifacts or incomplete owner metadata');

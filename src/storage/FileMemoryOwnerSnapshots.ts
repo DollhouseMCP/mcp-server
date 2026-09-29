@@ -305,7 +305,7 @@ export class FileMemoryOwnerSnapshots {
     reason: string, kind: 'unknown-manual-review' | 'unstable-or-unknown' | 'blocked-by-fence' = 'unknown-manual-review',
   ): FileMemoryWriteDiagnostic {
     return { kind, reason, artifactNames: [], artifactCount: null,
-      artifactNamesTruncated: false, evidenceComplete: false };
+      artifactNamesTruncated: false, artifactNamesRedacted: true, evidenceComplete: false };
   }
 
   private async readDiagnosticEvidence(
@@ -315,8 +315,19 @@ export class FileMemoryOwnerSnapshots {
     const head = await this.readHeadBytes(resolved.headPath);
     const sidecar = await this.readRecord(resolved.sidecarPath);
     const journal = await this.readJournalEvidence(resolved.journalPath);
-    const ownerId = sidecar?.record.ownerId ?? journal?.record.ownerId;
-    const registry = ownerId ? await this.readRegistry(scope.tenantRoot, ownerId) : undefined;
+    const owner = sidecar?.record;
+    const write = journal?.record;
+    if (!owner || owner.userId !== scope.userId || owner.locator !== resolved.locator ||
+      (write && (write.userId !== scope.userId || write.locator !== resolved.locator ||
+        write.ownerId !== owner.ownerId))) {
+      throw headError('EOWNERRECOVERY', 'Memory diagnostic owner does not bind to the requested head');
+    }
+    const ownerId = owner.ownerId;
+    const registry = await this.readRegistry(scope.tenantRoot, ownerId);
+    if (!registry || registry.record.userId !== scope.userId ||
+      registry.record.locator !== resolved.locator || registry.record.ownerId !== ownerId) {
+      throw headError('EOWNERRECOVERY', 'Memory diagnostic registry does not bind to the requested head');
+    }
     const artifacts = await this.collectDiagnosticArtifacts(
       scope.tenantRoot, resolved, sidecar?.record, journal?.record, ownerId);
     const temp = artifacts.exactTemp

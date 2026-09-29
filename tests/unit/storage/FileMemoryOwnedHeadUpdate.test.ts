@@ -5,6 +5,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
+import { classifyFileMemoryWrite } from '../../../src/storage/FileMemoryWriteClassification.js';
 import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import {
@@ -366,7 +367,7 @@ describe('dormant owned file head conditional UPDATE', () => {
     expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
   });
 
-  it('detects exact metadata changes between passes and bounds artifact-name disclosure', async () => {
+  it('detects exact metadata changes between passes and redacts unexpected artifact names', async () => {
     const { store, locator, headPath, hash } = await fixture();
     const sidecar = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
     const diagnosticStore = store as unknown as {
@@ -391,8 +392,8 @@ describe('dormant owned file head conditional UPDATE', () => {
     const result = await store.inspectInterruptedOwnedHead(locator);
     expect(result.kind).toBe('unknown-manual-review');
     expect(result.artifactCount).toBe(40);
-    expect(result.artifactNames).toHaveLength(32);
-    expect(result.artifactNamesTruncated).toBe(true);
+    expect(result.artifactNames).toHaveLength(0);
+    expect(result.artifactNamesRedacted).toBe(true);
     expect(JSON.stringify(result)).not.toContain('name: Original');
   });
 
@@ -438,6 +439,121 @@ describe('dormant owned file head conditional UPDATE', () => {
     const journal = JSON.parse(await fs.readFile(journalPath, 'utf8'));
     await fs.writeFile(journalPath, JSON.stringify({ ...journal, userId: 'another-user' }), { mode: 0o600 });
     expect((await store.inspectInterruptedOwnedHead(locator)).kind).toBe('unknown-manual-review');
+  });
+
+  it('does not disclose unbound journal or owner identifiers while diagnosing', async () => {
+    const { tenantRoot, store, locator, headPath, hash, owned } = await fixture(phase => {
+      if (phase === 'prepared-journal') throw new Error('pause');
+    });
+    await expect(store.updateOwnedHead(owned, 'name: New\nentries: []\n')).rejects.toMatchObject({
+      code: 'EOWNERRECOVERY', residual: true,
+    });
+    const journalPath = path.join(path.dirname(headPath), `.${hash}.memory-write.json`);
+    const sidecarPath = path.join(path.dirname(headPath), `.${hash}.memory-owner.json`);
+    const registryPath = path.join(tenantRoot, '.memory-owners', 'owners', `${owned.ownerId}.json`);
+    const originalJournal = JSON.parse(await fs.readFile(journalPath, 'utf8'));
+    const originalSidecar = JSON.parse(await fs.readFile(sidecarPath, 'utf8'));
+    const originalRegistry = JSON.parse(await fs.readFile(registryPath, 'utf8'));
+    const foreignUser = '22222222-2222-4222-8222-222222222222';
+    const foreignOwner = '33333333-3333-4333-8333-333333333333';
+    const foreignOperation = '44444444-4444-4444-8444-444444444444';
+    const foreignLocator = 'Other/ÜberNote.yaml';
+    const originalTemp = path.join(path.dirname(headPath), originalJournal.preparedTempName);
+    const foreignTempName = `.${hash}.memory-write.${foreignOwner}.${originalJournal.operationId}.tmp`;
+    const foreignTemp = path.join(path.dirname(headPath), foreignTempName);
+    await fs.copyFile(originalTemp, foreignTemp);
+    await fs.chmod(foreignTemp, 0o600);
+    const foreignTempStat = await fs.stat(foreignTemp, { bigint: true });
+    const foreignTempIdentity = {
+      device: foreignTempStat.dev.toString(), inode: foreignTempStat.ino.toString(),
+      size: foreignTempStat.size.toString(), ctimeNs: foreignTempStat.ctimeNs.toString(),
+      mtimeNs: foreignTempStat.mtimeNs.toString(),
+    };
+    const cases = [
+      { target: journalPath, record: { ...originalJournal, userId: foreignUser } },
+      { target: journalPath, record: { ...originalJournal, ownerId: foreignOwner,
+        preparedTempName: foreignTempName, preparedTempIdentity: foreignTempIdentity } },
+      { target: journalPath, record: { ...originalJournal, locator: foreignLocator } },
+      { target: sidecarPath, record: { ...originalSidecar, userId: foreignUser } },
+      { target: registryPath, record: { ...originalRegistry, userId: foreignUser } },
+    ];
+    const journalReader = store as unknown as {
+      readJournalEvidence: (name: string) => Promise<{ record: unknown } | undefined>;
+    };
+    for (const { target, record } of cases) {
+      await fs.writeFile(journalPath, JSON.stringify(originalJournal), { mode: 0o600 });
+      await fs.writeFile(sidecarPath, JSON.stringify(originalSidecar), { mode: 0o600 });
+      await fs.writeFile(registryPath, JSON.stringify(originalRegistry), { mode: 0o600 });
+      await fs.writeFile(target, JSON.stringify(record), { mode: 0o600 });
+      // Prove the changed journal passes structural validation; otherwise the
+      // test would merely exercise the malformed-JSON fallback.
+      expect((await journalReader.readJournalEvidence(journalPath))?.record).toBeDefined();
+      const paths = [headPath, journalPath, sidecarPath, registryPath, originalTemp, foreignTemp];
+      const before = await Promise.all(paths.map(async name => ({
+        bytes: await fs.readFile(name), mtimeMs: (await fs.stat(name)).mtimeMs,
+      })));
+      const diagnostic = await store.inspectInterruptedOwnedHead(locator);
+      expect(diagnostic).toMatchObject({
+        kind: 'unknown-manual-review', artifactNames: [], artifactCount: null, evidenceComplete: false,
+      });
+      const output = JSON.stringify(diagnostic);
+      for (const secret of [foreignUser, foreignOwner, foreignOperation, foreignLocator,
+        originalJournal.operationId, foreignTempName]) {
+        expect(output).not.toContain(secret);
+      }
+      const after = await Promise.all(paths.map(async name => ({
+        bytes: await fs.readFile(name), mtimeMs: (await fs.stat(name)).mtimeMs,
+      })));
+      expect(after).toEqual(before);
+    }
+  });
+
+  it('counts but redacts an unexpected foreign-named artifact beside a bound journal', async () => {
+    const { store, locator, headPath, hash, owned } = await fixture(phase => {
+      if (phase === 'prepared-journal') throw new Error('pause');
+    });
+    await expect(store.updateOwnedHead(owned, 'name: New\nentries: []\n')).rejects.toMatchObject({
+      code: 'EOWNERRECOVERY', residual: true,
+    });
+    const foreignOwner = '33333333-3333-4333-8333-333333333333';
+    const foreignOperation = '44444444-4444-4444-8444-444444444444';
+    const extra = path.join(path.dirname(headPath),
+      `.${hash}.memory-write.${foreignOwner}.${foreignOperation}.tmp`);
+    await fs.writeFile(extra, 'foreign residual', { mode: 0o600 });
+    const before = await fs.readFile(extra);
+    const diagnostic = await store.inspectInterruptedOwnedHead(locator);
+    expect(diagnostic).toMatchObject({
+      kind: 'unknown-manual-review', artifactNames: [], artifactNamesRedacted: true,
+      evidenceComplete: true,
+    });
+    expect(diagnostic.artifactCount).toBeGreaterThan(0);
+    expect(JSON.stringify(diagnostic)).not.toContain(foreignOwner);
+    expect(JSON.stringify(diagnostic)).not.toContain(foreignOperation);
+    expect(await fs.readFile(extra)).toEqual(before);
+  });
+
+  it('sanitizes unbound evidence even when the pure classifier is called directly', () => {
+    const identity = { device: '1', inode: '2', size: '3', ctimeNs: '4', mtimeNs: '5' };
+    const foreignOperation = '44444444-4444-4444-8444-444444444444';
+    const foreignOwner = '33333333-3333-4333-8333-333333333333';
+    const diagnostic = classifyFileMemoryWrite({
+      userId: USER, locator: 'Notes/ÜberNote.yaml', head: { hash: 'a', identity },
+      sidecar: { state: 'ACTIVE', userId: USER, ownerId: USER,
+        locator: 'Notes/ÜberNote.yaml', revision: '1', contentHash: 'a', fileIdentity: identity },
+      registry: { state: 'ACTIVE', userId: USER, ownerId: USER,
+        locator: 'Notes/ÜberNote.yaml', revision: '1', contentHash: 'a', fileIdentity: identity },
+      journal: { state: 'PREPARED_WRITE', userId: USER, ownerId: foreignOwner,
+        locator: 'Notes/ÜberNote.yaml', operationId: foreignOperation,
+        oldRevision: '1', newRevision: '2', oldContentHash: 'a', newContentHash: 'b',
+        oldFileIdentity: identity, preparedTempName: `foreign-${foreignOperation}`,
+        preparedTempIdentity: identity },
+      artifactNames: [`foreign-${foreignOperation}`], unexpectedArtifacts: true,
+    });
+    expect(diagnostic).toMatchObject({
+      kind: 'unknown-manual-review', artifactNames: [], artifactCount: null, evidenceComplete: false,
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain(foreignOperation);
+    expect(JSON.stringify(diagnostic)).not.toContain(foreignOwner);
   });
 
   it('does not diagnose a symlink or hard-linked alias as an owned head', async () => {
