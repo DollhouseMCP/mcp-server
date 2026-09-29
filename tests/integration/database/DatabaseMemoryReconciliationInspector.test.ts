@@ -44,6 +44,49 @@ describePg('read-only database memory reconciliation inspection', () => {
     expect(result).not.toHaveProperty('rawContent');
   });
 
+  it('compares persisted array-valued entry JSON exactly', async () => {
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseMemoryStorageLayer(db, fixedUserId(userId));
+    const inspector = new DatabaseMemoryReconciliationInspector(db, fixedUserId(userId));
+    const raw = buildMemoryContent('patterns', [
+      { id: 'one', content: 'One', timestamp: '2026-09-28T12:00:00.000Z' },
+    ]).replace('    timestamp: "2026-09-28T12:00:00.000Z"', [
+      '    timestamp: "2026-09-28T12:00:00.000Z"',
+      '    sanitizedPatterns:',
+      '      - pattern: first',
+      '        replacement: one',
+      '      - pattern: second',
+      '        replacement: two',
+      '    metadata:',
+      '      - source: first',
+      '      - source: second',
+    ].join('\n'));
+    const id = await layer.writeContent('memories', 'patterns', raw, writeMetadata);
+    expect((await inspector.inspect({ userId, memoryId: id })).status).toBe('equivalent');
+
+    await withUserContext(db, userId, tx => tx.update(memoryEntries)
+      .set({ sanitizedPatterns: [
+        { pattern: 'second', replacement: 'two' },
+        { pattern: 'first', replacement: 'one' },
+      ] }).where(and(eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, id))));
+    const changed = await inspector.inspect({ userId, memoryId: id });
+    expect(changed.status).toBe('divergent');
+    expect(changed.diagnostics).toContainEqual({ code: 'entry_projection_mismatch', path: 'entries[0]' });
+
+    await withUserContext(db, userId, tx => tx.update(memoryEntries)
+      .set({
+        sanitizedPatterns: [
+          { pattern: 'first', replacement: 'one' },
+          { pattern: 'second', replacement: 'two' },
+        ],
+        entryMetadata: [{ source: 'second' }, { source: 'first' }],
+      }).where(and(eq(memoryEntries.userId, userId), eq(memoryEntries.memoryId, id))));
+    const changedMetadata = await inspector.inspect({ userId, memoryId: id });
+    expect(changedMetadata.status).toBe('divergent');
+    expect(changedMetadata.diagnostics).toContainEqual({ code: 'entry_projection_mismatch', path: 'entries[0]' });
+  });
+
   it('reads more than the normal 1,000-entry query cap without truncation', async () => {
     const userId = await ensureTestUser();
     const db = getTestDb();

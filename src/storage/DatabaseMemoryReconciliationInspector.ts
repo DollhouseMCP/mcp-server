@@ -67,6 +67,10 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : undefined;
 }
+function jsonContainerOrEmpty(value: unknown): Record<string, unknown> | unknown[] | undefined {
+  if (value === undefined || value === null) return {};
+  return typeof value === 'object' ? value as Record<string, unknown> | unknown[] : undefined;
+}
 function stringOrNull(value: unknown): string | null | undefined {
   if (value === undefined || value === null) return null;
   if (typeof value === 'string') return value;
@@ -312,9 +316,9 @@ export class DatabaseMemoryReconciliationInspector {
     const trust = stringOrNull(raw.trustLevel);
     const source = stringOrNull(raw.source);
     if (sanitized === undefined || privacy === undefined || trust === undefined || source === undefined) return false;
-    const patterns = raw.sanitizedPatterns === undefined || raw.sanitizedPatterns === null ? {} : objectValue(raw.sanitizedPatterns);
-    const metadata = raw.metadata === undefined || raw.metadata === null ? {} : objectValue(raw.metadata);
-    if (!patterns || !metadata) return false;
+    const patterns = jsonContainerOrEmpty(raw.sanitizedPatterns);
+    const metadata = jsonContainerOrEmpty(raw.metadata);
+    if (patterns === undefined || metadata === undefined) return false;
     return timestamp === dateValue(child.timestamp) &&
       expiresAt === dateValue(child.expiresAt) && content === child.content &&
       sanitized === child.sanitizedContent && privacy === child.privacyLevel &&
