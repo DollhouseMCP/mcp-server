@@ -936,7 +936,8 @@ export class DollhouseContainer {
    * Called during preparePortfolio() after auto-load memories.
    *
    * Issue #598: Each element type is restored independently.
-   * Missing elements (deleted since last session) are skipped and pruned.
+   * Results with success: false retain existing pruning behavior.
+   * Exceptions skip further stale-record removal and defer restoration.
    * Auto-loaded memories are deduplicated (not activated twice).
    */
   private async restoreActivations(store: IActivationStateStore): Promise<void> {
