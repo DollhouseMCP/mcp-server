@@ -33,8 +33,8 @@ describe('transactional email with real Nodemailer serialization', () => {
       expect(message).toContain('Content-Type: text/html; charset=utf-8');
       expect(message).toContain('No Dollhouse password.');
 
-      // Published upstream parser advisories remain in 9.1.1. Prove the
-      // invitation boundary rejects their input classes before serialization.
+      // Keep upstream parser-advisory input classes covered at the invitation
+      // boundary even when the installed dependency has patched them.
       const nestedRecipient = Array.from({ length: 100 }, () => 0)
         .reduce<unknown>(value => [value], 'user@example.com');
       for (const to of [
