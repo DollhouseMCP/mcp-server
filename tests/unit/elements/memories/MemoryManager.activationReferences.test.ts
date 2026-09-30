@@ -84,4 +84,42 @@ describe('Memory activation references (#2924)', () => {
     expect([...stateA.memories]).toEqual(['one', 'two', 'three', 'four', 'five']);
     expect([...stateB.memories]).toEqual(['new-memory']);
   });
+  it('explicitly clears an exact absent name only in its current session', async () => {
+    registry.getOrCreate('A').memories.add('Absent');
+    registry.getOrCreate('B').memories.add('Absent');
+    jest.spyOn(manager, 'findByName').mockResolvedValue(null);
+    expect((await inSession('A', () => manager.deactivateMemory('Absent'))).success).toBe(true);
+    expect(registry.getOrCreate('A').memories.has('Absent')).toBe(false);
+    expect(registry.getOrCreate('B').memories.has('Absent')).toBe(true);
+  });
+
+  it('leaves unknown names and aliases unchanged', async () => {
+    registry.getOrCreate('A').memories.add('Absent');
+    jest.spyOn(manager, 'findByName').mockResolvedValue(null);
+    expect((await inSession('A', () => manager.deactivateMemory('absent.yaml'))).success).toBe(false);
+    expect((await inSession('A', () => manager.deactivateMemory('Unknown'))).success).toBe(false);
+    expect([...registry.getOrCreate('A').memories]).toEqual(['Absent']);
+  });
+
+  it('preserves references when explicit deactivation lookup throws', async () => {
+    registry.getOrCreate('A').memories.add('Unreadable');
+    jest.spyOn(manager, 'findByName').mockRejectedValue(new Error('Transient lookup failure'));
+    await expect(inSession('A', () => manager.deactivateMemory('Unreadable'))).rejects.toThrow('Transient lookup failure');
+    expect([...registry.getOrCreate('A').memories]).toEqual(['Unreadable']);
+  });
+
+  it('does not activate a recreated file after explicit absent-name deactivation', async () => {
+    await inSession('A', async () => {
+      await manager.save(memory('Deleted Active'), 'deleted-active.yaml');
+      expect((await manager.activateMemory('Deleted Active')).success).toBe(true);
+      await manager.delete('deleted-active.yaml');
+      manager.clearCache();
+      expect((await manager.deactivateMemory('Deleted Active')).success).toBe(true);
+      await manager.save(memory('Deleted Active'), 'deleted-active.yaml');
+      manager.clearCache();
+      const recreated = (await manager.list()).find(m => m.metadata.name === 'Deleted Active');
+      expect(recreated?.getStatus()).toBe('inactive');
+    });
+  });
+
 });

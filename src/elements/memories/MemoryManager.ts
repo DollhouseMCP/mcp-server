@@ -1064,6 +1064,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const memory = await this.findByName(identifier);
 
     if (!memory) {
+      // Explicit removal needs only the exact current-session reference, not a
+      // readable definition. Never infer aliases or prune from discovery.
+      if (this.getActivationSet().delete(identifier)) {
+        logger.info(`Memory deactivated: ${identifier}`);
+        return { success: true, message: ElementMessages.deactivated(ElementType.MEMORY, identifier) };
+      }
       return {
         success: false,
         // CONSISTENCY FIX: Use standardized error message format
