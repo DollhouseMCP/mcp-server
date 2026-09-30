@@ -225,7 +225,7 @@
     "js-yaml": "4.3.2",
     "jsdom": "^24.1.3",
     "node-fetch": "^3.3.2",
-    "nodemailer": "9.1.1",
+    "nodemailer": "10.0.9",
     "oidc-provider": "^9.8.3",
     "otpauth": "^9.5.0",
     "postgres": "^3.4.9",
@@ -296,8 +296,8 @@
     "lodash": "4.18.1",
     "picomatch@<2.3.2": "2.3.2",
     "picomatch@>=4.0.0 <4.0.4": "4.0.4",
-    "brace-expansion@<1.1.18": "1.1.18",
-    "brace-expansion@>=2.0.0 <2.1.4": "2.1.4",
+    "brace-expansion@<1.1.21": "1.1.21",
+    "brace-expansion@>=2.0.0 <2.1.7": "2.1.7",
     "express": {
       "path-to-regexp": "8.4.2"
     },
