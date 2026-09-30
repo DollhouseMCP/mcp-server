@@ -95,6 +95,38 @@ describe('IntegrationOperationCatalog', () => {
   });
 
 
+  it.each(['regeneration', 'ingestion'] as const)('reports a vanished generated skill during %s without recreating it', async action => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore,
+      descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }) });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      const beforeSpec = await f.specStore.findByDescriptorId(DESCRIPTOR_ID);
+      if (action === 'regeneration') {
+        await f.specStore.upsert({ descriptorId: DESCRIPTOR_ID, spec: openApiSpec(), specHash: 'b'.repeat(64),
+          createdAt: new Date(TIMESTAMP), updatedAt: new Date(TIMESTAMP) });
+      }
+      const original = portfolioStore.update.bind(portfolioStore);
+      const update = jest.spyOn(portfolioStore, 'update').mockImplementationOnce(async input => {
+        expect(await portfolioStore.delete(input)).not.toBeNull();
+        return original(input);
+      });
+      const pending = action === 'regeneration'
+        ? f.catalog.regenerateSkill({ provider: 'gmail' })
+        : f.catalog.ingestOpenApiSpec({ provider: 'gmail', spec: openApiSpec(), regenerateSkill: true });
+      await expect(pending).rejects.toMatchObject({ code: 'integration_skill_missing', status: 404 });
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME)).toBeNull();
+      expect(await portfolioStore.listByUser(USER_ID)).toHaveLength(0);
+      // Spec ingestion commits before optional regeneration; a skill failure is not a spec rollback.
+      if (action === 'ingestion') {
+        const persisted = await f.specStore.findByDescriptorId(DESCRIPTOR_ID);
+        expect(persisted).not.toBeNull();
+        expect(persisted?.specHash).not.toBe(beforeSpec?.specHash);
+      }
+    });
+  });
+
   it('preserves beta skill metadata when spec and scopes are unchanged', async () => {
     const portfolioStore = new InMemoryPortfolioElementStore();
     const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });

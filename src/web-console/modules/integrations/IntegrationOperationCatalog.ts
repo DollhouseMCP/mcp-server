@@ -543,7 +543,7 @@ export class IntegrationOperationCatalog {
     if (isCurrentGeneratedSkill(existing.metadata, metadata)) {
       return { ...skill, written: false, portfolioAction: 'skipped', portfolioName };
     }
-    await this.options.portfolioStore.update({
+    const updated = await this.options.portfolioStore.update({
       userId,
       type: 'skills',
       canonicalName,
@@ -555,6 +555,7 @@ export class IntegrationOperationCatalog {
       tags,
       now: this.now(),
     });
+    if (!updated) throw missingSkillError();
     return { ...skill, written: true, portfolioAction: 'updated', portfolioName };
   }
 
