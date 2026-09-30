@@ -118,3 +118,52 @@ it.each([false, true])('does not insert or overwrite a replacement after deletio
     expect(rows[0].rawContent).not.toContain('Edited reference');
   }
 });
+
+it('keeps persisted skill identity stable across cold reads and conditional updates', async () => {
+  const {store,managers}=fixture();
+  let clock=NOW.getTime();
+  jest.spyOn(Date,'now').mockImplementation(()=>clock++);
+  const created=await store.create({userId:USER_ID,type:'skills',name:'stable-projection',displayName:null,metadata:{description:'Stable projection',instructions:'Review carefully.'},content:'Original reference',tags:[],now:NOW});
+  managers.skills.clearCache();
+  const first=await store.findByName(USER_ID,'skills',created.canonicalName);
+  managers.skills.clearCache();
+  const second=await store.findByName(USER_ID,'skills',created.canonicalName);
+  expect(first?.metadata.unique_id).toBe(created.metadata.unique_id);
+  expect(second).toEqual(first);
+  expect(first?.contentHash).toBe(created.contentHash);
+  const updated = await store.update({userId:USER_ID,type:'skills',canonicalName:created.canonicalName,expectedVersion:1,expectedContentHash:first!.contentHash,content:'Edited reference',now:NOW});
+  managers.skills.clearCache();
+  expect((await store.findByName(USER_ID,'skills',created.canonicalName))?.contentHash).toBe(updated?.contentHash);
+});
+
+it.each(['edit', 'same-content-ABA'] as const)('preserves a DB skill %s committed after its public hash check', async race => {
+  const { store, managers, storageLayers } = fixture();
+  const created = await store.create({ userId: USER_ID, type: 'skills', name: 'public-cas', displayName: null,
+    metadata: { description: 'Public CAS', instructions: 'Review carefully.' }, content: 'Original reference', tags: [], now: NOW });
+  const storage = storageLayers.get('skills')!;
+  const identity = await storage.resolveContentIdentity('skills', created.name);
+  const original = await storage.readContent(identity!.id);
+  let reached!: () => void;
+  let release!: () => void;
+  const atImport = new Promise<void>(resolve => { reached = resolve; });
+  const resumed = new Promise<void>(resolve => { release = resolve; });
+  const importElement = managers.skills.importElement.bind(managers.skills);
+  jest.spyOn(managers.skills, 'importElement').mockImplementationOnce(async (...args) => {
+    reached();
+    await resumed;
+    return importElement(...args);
+  });
+  const pending = store.update({ userId: USER_ID, type: 'skills', canonicalName: created.canonicalName,
+    expectedVersion: 1, expectedContentHash: created.contentHash, content: 'Generated replacement', now: NOW });
+  try {
+    await atImport;
+    const metadata = { author: 'integration-test-user', description: 'Public CAS', version: '1.0.0', tags: [] };
+    await storage.writeContent('skills', created.name, original.replace('Original reference', 'Concurrent reference'), metadata);
+    if (race === 'same-content-ABA') await storage.writeContent('skills', created.name, original, metadata);
+    const accepted = await storage.readContent(identity!.id);
+    expect(accepted).toContain(race === 'edit' ? 'Concurrent reference' : 'Original reference');
+    release();
+    await expect(pending).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+    expect(await storage.readContent(identity!.id)).toBe(accepted);
+  } finally { release(); }
+});

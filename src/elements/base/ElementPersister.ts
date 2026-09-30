@@ -108,7 +108,7 @@ export class ElementPersister<T extends IElement> {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
         throw error;
       });
-      if (!snapshot || snapshot.identity.name !== identity.name) return undefined;
+      if (snapshot?.identity.name !== identity.name) return undefined;
       return { path: snapshot.identity.id, content: snapshot.content, options: {
         expectedIdentity: snapshot.identity, expectedStorageRevision: snapshot.revision,
       } };
@@ -244,15 +244,7 @@ export class ElementPersister<T extends IElement> {
           // checks content and inode identity. External writers are not coordinated.
           // Preserve the existing atomic temp-file + rename publication.
           if (options?.updateOnly) await this.fileOperations.stat(absolutePath);
-          if (options?.expectedFileSnapshot) {
-            const current = await this.fileOperations.stat(absolutePath);
-            const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType);
-            const expected = options.expectedFileSnapshot;
-            if (current.dev !== expected.dev || current.ino !== expected.ino ||
-              createHash('sha256').update(raw).digest('hex') !== expected.sha256) {
-              throw Object.assign(new Error('Element content changed before guarded save'), { code: 'ECONTENTCONFLICT' });
-            }
-          }
+          await this.verifyFileSnapshot(absolutePath, options?.expectedFileSnapshot);
           await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
         }
 
@@ -263,6 +255,16 @@ export class ElementPersister<T extends IElement> {
 
       logger.info(`${this.host.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
     });
+  }
+
+  private async verifyFileSnapshot(absolutePath: string, expected: ElementSaveOptions['expectedFileSnapshot']): Promise<void> {
+    if (!expected) return;
+    const current = await this.fileOperations.stat(absolutePath);
+    const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType);
+    if (current.dev !== expected.dev || current.ino !== expected.ino ||
+      createHash('sha256').update(raw).digest('hex') !== expected.sha256) {
+      throw Object.assign(new Error('Element content changed before guarded save'), { code: 'ECONTENTCONFLICT' });
+    }
   }
 
   /**

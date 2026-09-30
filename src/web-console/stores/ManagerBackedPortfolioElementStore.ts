@@ -95,7 +95,12 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     this.assertAmbientUser(userId);
     const element = await this.findElement(type, canonicalName);
     if (!element) return null;
-    return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element, true));
+    try {
+      return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element, true));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
   }
 
   async create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord> {
@@ -207,6 +212,12 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     classifyUnreadable = false,
     capturedContent?: string,
   ): Promise<ConsolePortfolioElementDetailRecord> {
+    if (type === 'skills' && capturedContent === undefined) {
+      const snapshot = await this.manager(type).findForUpdate(element.metadata.name);
+      if (!snapshot) throw Object.assign(new Error('Skill definition is no longer available'), { code: 'ENOENT' });
+      element = snapshot.element;
+      capturedContent = snapshot.content;
+    }
     const rawContent = capturedContent ?? await this.rawContentFor(type, element);
     let parsed: ReturnType<typeof parseRawContent>;
     try {

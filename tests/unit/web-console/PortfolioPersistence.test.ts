@@ -103,7 +103,9 @@ it('does not recreate a skill deleted after lookup and before the locked save', 
     metadata: { description: 'Deleted skill', instructions: 'Review carefully.' }, content: 'Original reference', tags: [], now: NOW });
   const save = managers.skills.save.bind(managers.skills);
   jest.spyOn(managers.skills, 'save').mockImplementationOnce(async (...args) => {
-    expect(args[2]).toEqual({ updateOnly: true });
+    expect(args[2]).toEqual({ updateOnly: true, expectedFileSnapshot: {
+      dev: expect.any(Number), ino: expect.any(Number), sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    } });
     await managers.skills.delete(args[1]);
     return save(...args);
   });
@@ -113,7 +115,7 @@ it('does not recreate a skill deleted after lookup and before the locked save', 
   expect(await store.findByName(USER_ID, 'skills', created.canonicalName)).toBeNull();
 });
 
-it('pins the known file-mode limit: a stale update overwrites same-path recreation without inserting another skill', async () => {
+it('preserves a same-path recreation against a stale guarded update', async () => {
   const { store, managers, directory } = fixture();
   const input = { userId: USER_ID, type: 'skills' as const, name: 'recreated-skill', displayName: null,
     metadata: { description: 'Recreated skill', instructions: 'Review carefully.' },
@@ -126,12 +128,11 @@ it('pins the known file-mode limit: a stale update overwrites same-path recreati
     expect(fs.readFileSync(path.join(directory, 'skills', args[1]), 'utf8')).toContain('Replacement reference');
     return save(...args);
   });
-  const updated = await store.update({ userId: USER_ID, type: 'skills', canonicalName: created.canonicalName,
-    expectedVersion: 1, expectedContentHash: created.contentHash, content: 'Stale update', now: NOW });
-  expect(updated?.content.trim()).toBe('Stale update');
+  await expect(store.update({ userId: USER_ID, type: 'skills', canonicalName: created.canonicalName,
+    expectedVersion: 1, expectedContentHash: created.contentHash, content: 'Stale update', now: NOW })).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
   expect(fs.readdirSync(path.join(directory, 'skills')).filter(file => file.endsWith('.md'))).toEqual(['recreated-skill.md']);
   const raw = fs.readFileSync(path.join(directory, 'skills', 'recreated-skill.md'), 'utf8');
-  expect(raw).toContain('Stale update');
-  expect(raw).not.toContain('Replacement reference');
+  expect(raw).not.toContain('Stale update');
+  expect(raw).toContain('Replacement reference');
   expect(await store.listByUser(USER_ID, { type: 'skills' })).toHaveLength(1);
 });
