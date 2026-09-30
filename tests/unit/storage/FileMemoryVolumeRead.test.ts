@@ -1,4 +1,4 @@
-import { describe, it as jestIt, expect, afterEach } from '@jest/globals';
+import { describe, it as jestIt, expect, afterEach, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +67,33 @@ describe('dormant verified file archive observation', () => {
     });
     await f.store.createExclusive(f.token, input);
     await expect(f.store.read(f.token, 1)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+  });
+  it.each(['v01', 'V1', 'v0001'])('rejects late absence alias %s observed in the final sibling scan', async alias => {
+    const f = await fixture();
+    await f.store.createExclusive(f.token, { ...input, minimumVolume: 2 });
+    const calls = f.calls();
+    const ownerRoot = path.join(f.root, 'volumes', 'by-id', f.token.ownerId);
+    const aliasPath = path.join(ownerRoot, alias);
+    const spelling = f.store as unknown as { requireVolumeSpelling(root: string, volume: number): Promise<void> };
+    const original = spelling.requireVolumeSpelling.bind(f.store);
+    let proofs = 0;
+    let aliasIdentity: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    const spy = jest.spyOn(spelling, 'requireVolumeSpelling').mockImplementation(async (root, volume) => {
+      await original(root, volume);
+      // Actual between-scan barrier: the final spelling proof succeeded; the
+      // very next enumeration must reject the new alias it observes itself.
+      if (++proofs === 2) {
+        await fs.mkdir(aliasPath, { mode: 0o700 });
+        aliasIdentity = await fs.lstat(aliasPath);
+      }
+    });
+    try {
+      await expect(f.store.read(f.token, 1)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+      expect(proofs).toBe(2);
+      expect(await fs.lstat(aliasPath)).toEqual(aliasIdentity);
+      expect(f.calls()).toBe(calls);
+      expect((await fs.readdir(ownerRoot)).sort()).toEqual([alias, 'v2'].sort());
+    } finally { spy.mockRestore(); }
   });
   it.each(['observed', 'verified'] as const)('rejects same-byte payload replacement after %s', async phase => {
     const f = await fixture(async (p, location) => {

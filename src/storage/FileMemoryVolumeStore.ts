@@ -347,7 +347,9 @@ export class FileMemoryVolumeStore {
     await this.proveReadNamespace(namespace);
     if (!namespace.missing) {
       await this.requireVolumeSpelling(namespace.root, volume);
-      if ((await namesAt(namespace.root, 100_000)).includes(`v${volume}`)) throw error('EARCHIVECHANGED', 'Archive appeared during absence observation');
+      const siblings = await namesAt(namespace.root, 100_000);
+      this.requireCanonicalVolumeSpelling(siblings, volume);
+      if (siblings.includes(`v${volume}`)) throw error('EARCHIVECHANGED', 'Archive appeared during absence observation');
     }
     return Object.freeze({ status: 'absent', owner: token, volume });
   }
@@ -365,6 +367,9 @@ export class FileMemoryVolumeStore {
   }
   private async requireVolumeSpelling(root: string, volume: number): Promise<void> {
     const siblings = await namesAt(root, 100_000);
+    this.requireCanonicalVolumeSpelling(siblings, volume);
+  }
+  private requireCanonicalVolumeSpelling(siblings: readonly string[], volume: number): void {
     if (siblings.some(name => /^v\d+$/iu.test(name) && BigInt(name.slice(1)) === BigInt(volume) && name !== `v${volume}`)) {
       throw error('EARCHIVEUNSAFE', 'Archive volume number alias is unsafe');
     }
