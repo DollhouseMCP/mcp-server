@@ -52,3 +52,28 @@ replacements), abort, adoption, create, rename, delete and archive work remain
 outside this slice. All writers must be stopped and any orphan lease separately
 handled before fresh acquisition. This dormant API performs no lock stealing
 and does not authorize production maintenance or ordinary writer activation.
+
+## Dormant recovery of an already-renamed PREPARED head
+
+`forwardPreparedRenamedOwnedUpdate` accepts the fixed PREPARED journal only
+when the new head retains the prepared temp's exact device/inode/size/mtime
+and digest (rename ctime may differ), that head temp is absent, and both ACTIVE
+owner records still exactly describe the old head. It does not publish a head
+from an old-head/temp state or choose an abort.
+
+Under one fresh lease and one tracked operation, it validates source YAML and
+complete bound evidence, then exclusively stages the exact PUBLISHED journal
+using the existing operation-bound name. Exactly one complete matching journal
+stage may be reused after fresh descriptor and namespace proof. Partial,
+malformed, aliased, foreign or changing evidence is preserved for manual review;
+ordinary reads and diagnostics continue to block every stage. After rename,
+the fixed journal must retain the staged bytes and file identity, allowing only
+rename ctime, while head and old metadata remain unchanged.
+
+Fresh PUBLISHED evidence then enters the existing private forward completion
+and finalizer in the same operation. Only successful exact journal unlink
+commits; later faults retain the committed token, and clean retries have no
+historical attribution. All writers must be stopped and orphan leases handled
+separately. The API is dormant and grants no production maintenance or runtime
+activation authority; old-head forward publication, abort, adoption and other
+lifecycle transitions remain separate work.
