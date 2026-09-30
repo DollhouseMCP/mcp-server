@@ -93,10 +93,18 @@ function locator(memoryId: string, volume: number): string {
 }
 
 type VolumeInfoRow = Pick<typeof memoryVolumes.$inferSelect,
-  'id' | 'userId' | 'memoryId' | 'volume' | 'sha256' | 'entryCount' | 'firstEntryAt' | 'lastEntryAt' | 'sealedAt'>;
+  'id' | 'userId' | 'memoryId' | 'volume' | 'sha256' | 'entryCount' | 'firstEntryAt' | 'lastEntryAt' | 'sealedAt'> & {
+    readonly sealedUnrepresentable: boolean;
+    readonly firstUnrepresentable: boolean;
+    readonly lastUnrepresentable: boolean;
+  };
 
 function toInfo(row: VolumeInfoRow): DatabaseMemoryVolumeInfo {
   requireVolume(row.volume);
+  // Flags are mandatory evidence from PostgreSQL, before Date truncates microseconds.
+  if (row.sealedUnrepresentable !== false || row.firstUnrepresentable !== false || row.lastUnrepresentable !== false) {
+    throw volumeError('EVOLUMEUNSAFE', 'Memory volume timestamps cannot be represented exactly');
+  }
   if (!UUID_PATTERN.test(row.id) || !UUID_PATTERN.test(row.userId) || !UUID_PATTERN.test(row.memoryId) ||
     typeof row.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(row.sha256.trim()) ||
     !Number.isInteger(row.entryCount) || row.entryCount < 0 || row.entryCount > 2_147_483_647 ||
@@ -120,7 +128,7 @@ function toInfo(row: VolumeInfoRow): DatabaseMemoryVolumeInfo {
   };
 }
 
-function toRecord(row: typeof memoryVolumes.$inferSelect): DatabaseMemoryVolumeRecord {
+function toRecord(row: VolumeInfoRow & { rawContent: string }): DatabaseMemoryVolumeRecord {
   return { ...toInfo(row), rawContent: row.rawContent };
 }
 
@@ -174,7 +182,9 @@ export class DatabaseMemoryVolumeStore {
           firstEntryAt,
           lastEntryAt,
           sealedAt,
-        }).onConflictDoNothing({ target: [memoryVolumes.memoryId, memoryVolumes.volume] }).returning();
+        }).onConflictDoNothing({ target: [memoryVolumes.memoryId, memoryVolumes.volume] }).returning({
+          ...this.metadataProjection(), rawContent: memoryVolumes.rawContent,
+        });
         if (rows[0]) return toRecord(rows[0]);
         if (volume === MAX_MEMORY_VOLUME_NUMBER) {
           throw new Error('Memory volume numbers are exhausted');
@@ -220,6 +230,9 @@ export class DatabaseMemoryVolumeStore {
       volume: memoryVolumes.volume, sha256: memoryVolumes.sha256, entryCount: memoryVolumes.entryCount,
       firstEntryAt: memoryVolumes.firstEntryAt, lastEntryAt: memoryVolumes.lastEntryAt,
       sealedAt: memoryVolumes.sealedAt,
+      sealedUnrepresentable: sql<boolean>`NOT isfinite(${memoryVolumes.sealedAt}) OR mod(extract(microseconds from ${memoryVolumes.sealedAt})::numeric, 1000) <> 0`,
+      firstUnrepresentable: sql<boolean>`${memoryVolumes.firstEntryAt} IS NOT NULL AND (NOT isfinite(${memoryVolumes.firstEntryAt}) OR mod(extract(microseconds from ${memoryVolumes.firstEntryAt})::numeric, 1000) <> 0)`,
+      lastUnrepresentable: sql<boolean>`${memoryVolumes.lastEntryAt} IS NOT NULL AND (NOT isfinite(${memoryVolumes.lastEntryAt}) OR mod(extract(microseconds from ${memoryVolumes.lastEntryAt})::numeric, 1000) <> 0)`,
     };
   }
 

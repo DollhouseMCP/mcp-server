@@ -17,7 +17,7 @@ const { DatabaseMemoryVolumeStore, MAX_MEMORY_VOLUME_RAW_BYTES } = await import(
 const owner = { userId: '11111111-1111-4111-8111-111111111111', memoryId: '22222222-2222-4222-8222-222222222222' };
 const store = new DatabaseMemoryVolumeStore(db, () => owner.userId);
 const info = { id: '33333333-3333-4333-8333-333333333333', ...owner, volume: 1,
-  sha256: 'a'.repeat(64), entryCount: 0, firstEntryAt: null, lastEntryAt: null, sealedAt: new Date(0) };
+  sha256: 'a'.repeat(64), entryCount: 0, firstEntryAt: null, lastEntryAt: null, sealedAt: new Date(0), sealedUnrepresentable: false, firstUnrepresentable: false, lastUnrepresentable: false };
 beforeEach(() => { statements.length = 0; rows = []; read.mockClear(); write.mockClear(); });
 
 describe('bounded database archive observations', () => {
@@ -50,6 +50,13 @@ describe('bounded database archive observations', () => {
     expect(await store.list(owner)).toMatchObject({ complete: true, entries: [], totalCount: 0 });
     rows = [];
     await expect(store.list(owner)).rejects.toMatchObject({ code: 'EVOLUMEOWNER' });
+  });
+
+  it('requires projected precision evidence instead of silently accepting omitted flags', async () => {
+    const { sealedUnrepresentable: _sealed, ...missingFlag } = info;
+    rows = [{ ownerId: owner.memoryId, archive: missingFlag }];
+    expect(await store.list(owner)).toMatchObject({ complete: false, entries: [], diagnostics: [{ reason: 'corrupt' }] });
+    expect(statements[0].sql).toContain('extract(microseconds');
   });
 
   it('bounds diagnostic count and never exposes corrupt source fields', async () => {

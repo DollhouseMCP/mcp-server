@@ -225,6 +225,16 @@ describePg('immutable PostgreSQL memory volumes', () => {
     await expect(store.read(owner, row.volume)).rejects.toThrow();
   });
 
+  it.each(['first_entry_at', 'last_entry_at', 'sealed_at'] as const)('rejects sub-millisecond %s metadata before Date coercion', async column => {
+    const store = storeFor(userA);
+    const owner = { userId: userA, memoryId };
+    const row = await store.createExclusive(owner, input);
+    await getTestAdminDb().execute(sql`UPDATE memory_volumes SET ${sql.identifier(column)} = '2026-09-28T12:00:00.000001Z'::timestamptz WHERE id = ${row.id}::uuid`);
+    expect(await store.list(owner)).toMatchObject({ complete: false, entries: [], returnedCount: 0,
+      observedCount: 1, totalCount: null, diagnostics: [{ reason: 'corrupt' }] });
+    await expect(store.read(owner, row.volume)).rejects.toMatchObject({ code: 'EVOLUMEUNSAFE' });
+  });
+
   it('binds archives to the parent user and memory type even when the parent is public', async () => {
     const store = storeFor(userA);
     const otherStore = storeFor(userB);

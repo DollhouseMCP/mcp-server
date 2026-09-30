@@ -28,7 +28,8 @@ export interface MemoryVolumeObservation<T> {
 }
 
 export function captureMemoryVolumeEntryLimit(options: MemoryVolumeListOptions): number {
-  const limit = options.entryLimit === undefined ? MAX_MEMORY_VOLUME_LIST_ENTRIES : options.entryLimit;
+  const limit = options.entryLimit;
+  if (limit === undefined) return MAX_MEMORY_VOLUME_LIST_ENTRIES;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_MEMORY_VOLUME_LIST_ENTRIES) {
     throw new RangeError('Memory volume entry limit must be an integer from 1 through 128');
   }

@@ -28,7 +28,9 @@ within `3 * MAX_YAML_SIZE` bytes. An existing oversized row throws
 then receives exact UTF-8, SHA-256, YAML/code-unit and entry-count checks.
 Creation rejects non-round-tripping UTF-8 and excessive bytes before hashing
 or inserting. Metadata validation rejects invalid UUIDs, digest/count/volume,
-unrepresentable timestamps and reversed date ranges.
+unrepresentable timestamps and reversed date ranges. Server-side precision flags
+reject nonfinite or sub-millisecond PostgreSQL timestamps before driver Date
+coercion; read, list, and create RETURNING all require these flags.
 
 B2a is database safety parity and the shared metadata-observation contract.
 File B1/B2b remain separate work; file owner proofs and database UUID/RLS/FK
