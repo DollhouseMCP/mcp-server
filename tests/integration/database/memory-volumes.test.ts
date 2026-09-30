@@ -167,15 +167,18 @@ describePg('immutable PostgreSQL memory volumes', () => {
       entries: [{ memoryId: canonicalId, id: created.id }] });
   });
 
-  it('canonicalizes the user UUID only after the existing exact active-user check', async () => {
+  it('uses canonical principal identity consistently for casing and returned receipts', async () => {
     const owner = { userId: userA.toUpperCase(), memoryId };
     const store = new DatabaseMemoryVolumeStore(getTestDb(), () => owner.userId);
     const created = await store.createExclusive(owner, input);
     expect(created.userId).toBe(userA);
     expect((await store.read(owner, created.volume))?.id).toBe(created.id);
     expect(await store.list(owner)).toMatchObject({ complete: true, entries: [{ userId: userA }] });
-    // Canonical equivalence must not weaken the prior exact ambient-user check.
-    await expect(storeFor(userA).list(owner)).rejects.toThrow(/active user/);
+    expect(await storeFor(userA).list(owner)).toMatchObject({ complete: true, entries: [{ id: created.id }] });
+    expect((await storeFor(userA).read(owner, created.volume))?.id).toBe(created.id);
+    expect(await store.removeCreated(created)).toBe(true);
+    expect(await store.list(owner)).toMatchObject({ complete: true, entries: [], totalCount: 0 });
+    await expect(storeFor(userB).removeCreated(created)).rejects.toThrow(/active user/);
   });
 
   it('rejects hash-valid excessive UTF-16 content within the raw-byte cap', async () => {

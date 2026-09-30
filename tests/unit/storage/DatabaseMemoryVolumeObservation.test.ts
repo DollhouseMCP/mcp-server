@@ -59,6 +59,16 @@ describe('bounded database archive observations', () => {
     expect(statements[0].sql).toContain('extract(microseconds');
   });
 
+  it.each([null, undefined, '', 'not-a-uuid', '44444444-4444-4444-8444-444444444444'])('denies invalid or foreign active principal %s before I/O', async activeUser => {
+    const denied = new DatabaseMemoryVolumeStore(db, () => activeUser as string);
+    await expect(denied.list(owner)).rejects.toThrow(/active user/);
+    await expect(denied.read(owner, 1)).rejects.toThrow(/active user/);
+    await expect(denied.createExclusive(owner, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date(0) })).rejects.toThrow(/active user/);
+    await expect(denied.removeCreated({ ...owner, id: info.id, volume: 1, sha256: info.sha256 })).rejects.toThrow(/active user/);
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it('bounds diagnostic count and never exposes corrupt source fields', async () => {
     rows = Array.from({ length: 129 }, () => ({ ownerId: owner.memoryId, archive: { ...info, sealedAt: new Date(NaN) } }));
     const result = await store.list(owner);

@@ -53,7 +53,8 @@ export type DatabaseMemoryVolumeReceipt = Pick<
 >;
 
 function requireOwner(owner: DatabaseMemoryVolumeOwner): void {
-  if (!UUID_PATTERN.test(owner.userId) || !UUID_PATTERN.test(owner.memoryId)) {
+  if (typeof owner.userId !== 'string' || typeof owner.memoryId !== 'string' ||
+    !UUID_PATTERN.test(owner.userId) || !UUID_PATTERN.test(owner.memoryId)) {
     throw new TypeError('Memory volume owner requires durable user and memory UUIDs');
   }
 }
@@ -138,7 +139,10 @@ export class DatabaseMemoryVolumeStore {
   private captureOwner(owner: DatabaseMemoryVolumeOwner): DatabaseMemoryVolumeOwner {
     const captured = { userId: owner.userId, memoryId: owner.memoryId };
     requireOwner(captured);
-    if (this.getCurrentUserId() !== captured.userId) {
+    const activeUserId = this.getCurrentUserId();
+    // PostgreSQL UUID identity is case-insensitive, including returned receipts.
+    if (typeof activeUserId !== 'string' || !UUID_PATTERN.test(activeUserId) ||
+      activeUserId.toLowerCase() !== captured.userId.toLowerCase()) {
       throw new Error('Memory volume owner does not match the active user');
     }
     return { userId: captured.userId.toLowerCase(), memoryId: captured.memoryId.toLowerCase() };

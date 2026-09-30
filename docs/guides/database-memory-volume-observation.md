@@ -7,7 +7,11 @@ owner-scoped SQL statement observes the durable memory parent and up to
 `entryLimit + 1` archive metadata rows, ordered by volume. Missing, foreign or
 nonmemory owner authority throws `EVOLUMEOWNER`; an owned empty namespace is
 an explicitly complete empty observation. Public parent visibility does not
-confer archive ownership.
+confer archive ownership. Validated owner and active-user UUIDs are compared
+canonically: hexadecimal case represents the same principal. Returned records
+use canonical UUIDs, including exact-row creation receipts; different, malformed
+or missing active-user identity is denied. This replaces the inconsistent
+spelling-only check without changing cleanup predicates or authority.
 
 `returnedCount` counts returned validated metadata declarations; `observedCount`
 and `scannedCount` count bounded archive candidates, including an overflow
