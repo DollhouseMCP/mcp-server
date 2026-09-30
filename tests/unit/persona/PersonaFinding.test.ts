@@ -226,7 +226,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       matching.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching).toHaveBeenCalledTimes(cachedCount);
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
@@ -264,7 +264,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       matching.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching).toHaveBeenCalledTimes(cachedCount);
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
@@ -302,7 +302,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       matching.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching).toHaveBeenCalledTimes(cachedCount);
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
       expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
@@ -310,20 +310,27 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
   });
 
   it('detects a deliberately regressed repeated scan without timing measurements', () => {
-    const cachedCount = (personaManager as any).getCachedElementsForCurrentNamespace().length;
+    const candidates = (personaManager as any).getCachedElementsForCurrentNamespace() as Persona[];
+    const cachedCount = candidates.length;
     const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
     const assertOneMissScan = (): void => {
       matching.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching).toHaveBeenCalledTimes(cachedCount);
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
     };
     assertOneMissScan();
-    const original = personaManager.findPersona.bind(personaManager);
-    jest.spyOn(personaManager, 'findPersona').mockImplementation(identifier => {
-      original(identifier);
-      return original(identifier);
+    const lookup = jest.spyOn(personaManager, 'findPersona');
+    // A correct index/early miss is allowed to perform zero predicate calls.
+    lookup.mockReturnValueOnce(undefined);
+    assertOneMissScan();
+    lookup.mockImplementation(identifier => {
+      for (let pass = 0; pass < 2; pass++) {
+        candidates.find(candidate => (personaManager as any).matchesIdentifier(candidate, identifier));
+      }
+      return undefined;
     });
     expect(assertOneMissScan).toThrow();
+    expect(matching.mock.calls.length).toBe(2 * cachedCount);
   });
 
   // ============================================================================
