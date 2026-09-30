@@ -1,4 +1,5 @@
-import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
+import type { AuthorizedIntegrationGateway } from '../../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import { OperationRegistry, BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Unit tests for IntrospectionResolver
  *
@@ -11,6 +12,15 @@ import { IntrospectionResolver } from '../../../../src/handlers/mcp-aql/Introspe
 import { getOperationSchema, getAnyOperationSchema } from '../../../../src/handlers/mcp-aql/OperationSchema.js';
 
 describe('IntrospectionResolver', () => {
+  it('introspects an arbitrary integration JSON body as unknown while preserving typed properties', () => {
+    const registry = new OperationRegistry(undefined, {} as AuthorizedIntegrationGateway);
+    const result = IntrospectionResolver.resolve({ query: 'operations', name: 'integration_request' }, registry);
+    expect(JSON.stringify(result)).toContain('unknown');
+    expect(registry.getSchema('integration_request')?.params.body).toMatchObject({ type: 'unknown', required: false });
+    expect(registry.getSchema('integration_request')?.params.provider).toMatchObject({ type: 'string', required: true });
+    expect(registry.getSchema('integration_request')?.params.query).toMatchObject({ type: 'object', required: false });
+  });
+
   describe('resolve()', () => {
     describe('operations query', () => {
       it('should list all operations when query is "operations" with no name', () => {

@@ -29,8 +29,8 @@ export class OperationRegistry {
       const description = tool.description ?? name;
       const params: ParamSchema = {};
       for (const [key, value] of Object.entries(tool.inputSchema.properties ?? {})) {
-        const property = value as { type: ParamType; description?: string };
-        params[key] = { ...property, required: tool.inputSchema.required?.includes(key) ?? false };
+        const property = value as { type?: ParamType; description?: string };
+        params[key] = { ...property, type: property.type ?? 'unknown', required: tool.inputSchema.required?.includes(key) ?? false };
       }
       routes[name] = { endpoint, handler: `Integration.${name}`, description };
       schemas[name] = {
