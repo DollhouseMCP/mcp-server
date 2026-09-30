@@ -14,7 +14,7 @@
  * through the MCP-AQL handler pipeline.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -24,6 +24,9 @@ import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import type { IActivationStateStore } from '../../../src/state/IActivationStateStore.js';
 import { FileActivationStateStore } from '../../../src/state/FileActivationStateStore.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
+import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
+import { Memory } from '../../../src/elements/memories/Memory.js';
+import { ElementCRUDHandler } from '../../../src/handlers/ElementCRUDHandler.js';
 import type { OperationResult } from '../../../src/handlers/mcp-aql/types.js';
 
 describe('Activation Persistence Integration (Issue #598)', () => {
@@ -70,6 +73,29 @@ describe('Activation Persistence Integration (Issue #598)', () => {
     } else {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = originalPersistenceFlag;
     }
+  });
+
+  it.each([false, true])('uses the existing persistence callback for absent memory deactivation (throws: %s)', async throws => {
+    const manager = container.resolve<MemoryManager>('MemoryManager');
+    const handler = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
+    const name = 'deleted-active-memory';
+    await manager.save(new Memory({ name }, container.resolve('MetadataService')), 'deleted-active-memory.yaml');
+    await manager.activateMemory(name);
+    activationStore.recordActivation('memory', name);
+    await manager.delete('deleted-active-memory.yaml');
+    manager.clearCache();
+    const remove = jest.spyOn(activationStore, 'recordDeactivation');
+    if (throws) remove.mockImplementation(() => { throw new Error('Injected persistence failure'); });
+    try {
+      const result = await handler.deactivateElement(name, 'memory');
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(remove).toHaveBeenCalledWith('memories', name, undefined, undefined);
+      expect(activationStore.getActivations('memory').some(a => a.name === name)).toBe(throws);
+      expect(result.content[0].text).toContain(throws ? 'Injected persistence failure' : 'deactivated');
+      // Current handler publication is not atomic: a callback failure is
+      // reported after the runtime reference was cleared, without rollback.
+      expect((await manager.deactivateMemory(name)).success).toBe(false);
+    } finally { remove.mockRestore(); }
   });
 
   describe('DI wiring verification', () => {
