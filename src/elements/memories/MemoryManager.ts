@@ -49,7 +49,7 @@ import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
 // Issue #83: Centralized active element limits (configurable via env vars)
-import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
+import { getActiveElementLimitConfig } from '../../config/active-element-limits.js';
 
 
 /**
@@ -1031,8 +1031,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       };
     }
 
-    // MEMORY LEAK FIX: Check if cleanup is needed before adding
-    this.checkAndCleanupActiveSet();
+    // Warn at the configured limit without treating discovery omissions as absence.
+    this.checkActiveSetLimit();
 
     // Add to active set (by name, which is stable across reloads)
     this.getActivationSet().add(memory.metadata.name);
@@ -1314,11 +1314,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /**
-   * Check if active set cleanup is needed and perform cleanup if necessary
-   * Issue #24 (LOW PRIORITY): Memory leak prevention
+   * Warn when the active set reaches its configured limit.
+   * Automatic pruning requires authoritative absence evidence (#2924).
    * @private
    */
-  private checkAndCleanupActiveSet(): void {
+  private checkActiveSetLimit(): void {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('memories');
 
     // Below threshold — no action needed
@@ -1326,7 +1326,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       return;
     }
 
-    // At or above max — warn before cleanup
+    // At or above max — retain the existing warning
     if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active memories limit reached (${max}). ` +
@@ -1336,65 +1336,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       SecurityMonitor.logSecurityEvent({
         type: 'MEMORY_LOADED',
         severity: 'MEDIUM',
-        source: 'MemoryManager.checkAndCleanupActiveSet',
+        source: 'MemoryManager.checkActiveSetLimit',
         details: `Active memories limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
-    // At or above threshold — proactively clean stale entries
-    void this.cleanupStaleActiveMemories();
-  }
-
-  /**
-   * Clean up stale entries from active memories set
-   * Issue #24 (LOW PRIORITY): Memory leak prevention
-   * @private
-   */
-  private async cleanupStaleActiveMemories(): Promise<void> {
-    try {
-      const startSize = this.getActivationSet().size;
-      const memories = await this.list();
-      const existingMemoryNames = new Set(memories.map(m => m.metadata.name));
-
-      const staleNames: string[] = [];
-      for (const activeName of this.getActivationSet()) {
-        if (!existingMemoryNames.has(activeName)) {
-          this.getActivationSet().delete(activeName);
-          staleNames.push(activeName);
-        }
-      }
-
-      const endSize = this.getActivationSet().size;
-      const removed = startSize - endSize;
-
-      if (removed > 0) {
-        logger.info(
-          `Cleaned up ${removed} stale active memory reference(s). ` +
-          `Active memories: ${endSize}/${getMaxActiveLimit('memories')}`
-        );
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'MEMORY_DELETED',
-          severity: 'LOW',
-          source: 'MemoryManager.cleanupStaleActiveMemories',
-          details: `Removed ${removed} stale active memory references`,
-          additionalData: {
-            removedCount: removed,
-            activeCount: endSize,
-            staleNames: staleNames.join(', ')
-          }
-        });
-      }
-    } catch (error) {
-      logger.error('Failed to cleanup stale active memories:', error);
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'MEMORY_DELETED',
-        severity: 'LOW',
-        source: 'MemoryManager.cleanupStaleActiveMemories',
-        details: `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
   }
   
   /**
