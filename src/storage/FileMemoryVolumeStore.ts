@@ -285,7 +285,12 @@ export class FileMemoryVolumeStore {
     if (namespace.missing) {
       await this.requireNamespaceComponent(path.dirname(namespace.missing), path.basename(namespace.missing), false);
       try { await fs.lstat(namespace.missing); }
-      catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return; throw cause; }
+      catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+          return;
+        }
+        throw cause;
+      }
       throw error('EARCHIVECHANGED', 'Archive namespace appeared during observation');
     }
   }
