@@ -914,6 +914,22 @@ export class FileMemoryOwnerSnapshots {
     return current.token;
   }
 
+  /** @internal Zero-write owner proof using one caller-captured read scope. Not mutation authority. */
+  async requireOwnedAtReadScope(
+    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken,
+  ): Promise<OwnedFileMemoryToken> {
+    const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
+    if (token.backend !== 'file' || token.ownership !== 'owned' ||
+      token.tenantRoot !== scope.tenantRoot || token.userId !== scope.userId) {
+      throw headError('EHEADCONFLICT', 'Memory owner token belongs to another tenant or head');
+    }
+    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator);
+    if (current.token.ownership !== 'owned' || !sameOwnedToken(current.token, token)) {
+      throw headError('EHEADCONFLICT', 'Memory owner changed during archive observation');
+    }
+    return current.token;
+  }
+
   private async readAtRoot(
     tenantRoot: string, userId: string, locator: string, permittedJournal?: string,
   ): Promise<FileMemorySnapshot> {

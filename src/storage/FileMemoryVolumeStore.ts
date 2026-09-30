@@ -1,4 +1,4 @@
-/** Dormant owner-bound archive publication; no public read, cleanup or runtime wiring. */
+/** Dormant owner-bound publication and verified observation; no listing, cleanup or runtime wiring. */
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import * as fs from 'node:fs/promises';
@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
-import { FileMemoryTransactionCoordinator, type FileMemoryLeaseContext, type FileMemoryOperationScope } from './FileMemoryTransactionCoordinator.js';
+import { FileMemoryTransactionCoordinator, type FileMemoryLeaseContext, type FileMemoryOperationScope, type FileMemoryTransactionScope } from './FileMemoryTransactionCoordinator.js';
 
 export const MAX_FILE_MEMORY_VOLUME_BYTES = 3 * MEMORY_CONSTANTS.MAX_YAML_SIZE;
 export const MAX_FILE_MEMORY_VOLUME_COLLISION_PROBES = 1000;
@@ -43,6 +43,12 @@ export interface FileMemoryVolumeReceipt {
   readonly payloadIdentity: ArchiveFileIdentity;
   readonly metadataIdentity: ArchiveFileIdentity;
 }
+/** Verified storage evidence only; never a create receipt, cleanup permission or public history policy. */
+export type FileMemoryVolumeObservation =
+  | { readonly status: 'absent'; readonly owner: OwnedFileMemoryToken; readonly volume: number }
+  | { readonly status: 'found'; readonly owner: OwnedFileMemoryToken; readonly volume: number;
+      readonly rawContent: string; readonly metadata: Readonly<Metadata> };
+
 export interface CommittedFileArchiveError extends NodeJS.ErrnoException {
   readonly committed: true;
   readonly receipts: readonly FileMemoryVolumeReceipt[];
@@ -53,8 +59,16 @@ export type ArchivePublicationPhase = 'reserved-volume' | 'reserved-generation' 
 export interface FileMemoryVolumeStoreOptions {
   readonly coordinator: FileMemoryTransactionCoordinator;
   readonly owners: FileMemoryOwnerSnapshots;
+  /** Read-only deterministic fault barriers; no production callback or repair authority. */
+  readonly afterObservation?: (phase: 'observed' | 'verified', location: string) => void | Promise<void>;
   /** Fault/process barriers only. Never recovery or production activation. */
   readonly afterPublication?: (phase: ArchivePublicationPhase, residualPath: string) => void | Promise<void>;
+}
+interface ReadArchiveNamespace {
+  readonly root: string;
+  readonly paths: readonly string[];
+  readonly identities: readonly ArchiveDirectoryIdentity[];
+  readonly missing?: string;
 }
 interface CapturedInput {
   readonly minimumVolume: number; readonly bytes: Buffer; readonly entryCount: number;
@@ -197,7 +211,7 @@ async function writeFile(filePath: string, bytes: Buffer, partial?: () => Promis
 export class FileMemoryVolumeStore {
   private readonly options: FileMemoryVolumeStoreOptions;
   constructor(options: FileMemoryVolumeStoreOptions) {
-    if (process.platform === 'win32' || !process.getuid) throw new Error('Archive publication requires local POSIX ownership checks');
+    if (process.platform === 'win32' || !process.getuid) throw new Error('File archive storage requires local POSIX ownership checks');
     this.options = Object.freeze({ ...options });
   }
   createExclusive(expected: OwnedFileMemoryToken, input: FileMemoryVolumeInput): Promise<FileMemoryVolumeReceipt> {
@@ -221,8 +235,119 @@ export class FileMemoryVolumeStore {
     const token = this.captureToken(expected);
     return this.publish(operation, token, captured);
   }
+  /** Dormant storage observation: captures one tenant/user scope, never acquires a fence. */
+  read(expected: OwnedFileMemoryToken, volume: number): Promise<FileMemoryVolumeObservation> {
+    const token = this.captureToken(expected);
+    volumeNumber(volume);
+    return this.options.coordinator.captureReadScope().then(scope => this.observe(scope, token, volume));
+  }
+  /** Tracked read under a caller-owned transaction; standalone read does not acquire one. */
+  readInTransaction(context: FileMemoryLeaseContext, expected: OwnedFileMemoryToken, volume: number): Promise<FileMemoryVolumeObservation> {
+    const token = this.captureToken(expected);
+    volumeNumber(volume);
+    return this.options.coordinator.perform(context, operation =>
+      this.observe(this.options.coordinator.requireActiveOperationScope(operation), token, volume, operation));
+  }
+  /** Audited composition inside perform(); no nested operation or lease. */
+  readAtScope(operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken, volume: number): Promise<FileMemoryVolumeObservation> {
+    const token = this.captureToken(expected);
+    volumeNumber(volume);
+    const scope = this.options.coordinator.requireActiveOperationScope(operation);
+    return this.observe(scope, token, volume, operation);
+  }
+  private async observationOwner(scope: FileMemoryTransactionScope, token: OwnedFileMemoryToken,
+    operation?: FileMemoryOperationScope): Promise<void> {
+    if (operation) await this.options.owners.requireOwnedAtScope(operation, token);
+    else await this.options.owners.requireOwnedAtReadScope(scope, token);
+  }
+  private async readNamespace(scope: FileMemoryTransactionScope, ownerId: string): Promise<ReadArchiveNamespace> {
+    const namespace = { root: scope.tenantRoot, paths: [scope.tenantRoot],
+      identities: [await directory(scope.tenantRoot, undefined, false)] };
+    return this.readNamespaceChild(namespace, ['volumes', 'by-id', ownerId], 0);
+  }
+  private async readNamespaceChild(namespace: ReadArchiveNamespace, components: readonly string[], index: number): Promise<ReadArchiveNamespace> {
+    if (index === components.length) return namespace;
+    const component = components[index];
+    await this.requireNamespaceComponent(namespace.root, component, false);
+    const child = path.join(namespace.root, component);
+    let identity: ArchiveDirectoryIdentity;
+    try { identity = await directory(child); }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+      return { ...namespace, root: child, missing: child };
+    }
+    return this.readNamespaceChild({ root: child, paths: [...namespace.paths, child],
+      identities: [...namespace.identities, identity] }, components, index + 1);
+  }
+  private async proveReadNamespace(namespace: ReadArchiveNamespace): Promise<void> {
+    await this.revalidateNamespace(namespace);
+    await this.revalidateNamespaceSpelling(namespace);
+    if (namespace.missing) {
+      await this.requireNamespaceComponent(path.dirname(namespace.missing), path.basename(namespace.missing), false);
+      try { await fs.lstat(namespace.missing); }
+      catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return; throw cause; }
+      throw error('EARCHIVECHANGED', 'Archive namespace appeared during observation');
+    }
+  }
+  private async observe(scope: FileMemoryTransactionScope, token: OwnedFileMemoryToken, volume: number,
+    operation?: FileMemoryOperationScope): Promise<FileMemoryVolumeObservation> {
+    try { return await this.observeCaptured(scope, token, volume, operation); }
+    catch (cause) {
+      const code = (cause as NodeJS.ErrnoException)?.code;
+      if (code?.startsWith('EARCHIVE') || code?.startsWith('EOWNER') || code?.startsWith('EHEAD') || code === 'EINVALIDOPERATION') throw cause;
+      throw error(cause instanceof SyntaxError || cause instanceof TypeError || cause instanceof RangeError
+        ? 'EARCHIVEUNSAFE' : 'EARCHIVEUNAVAILABLE', 'Archive observation could not be proved', cause);
+    }
+  }
+  private async observeCaptured(scope: FileMemoryTransactionScope, token: OwnedFileMemoryToken, volume: number,
+    operation?: FileMemoryOperationScope): Promise<FileMemoryVolumeObservation> {
+    await this.observationOwner(scope, token, operation);
+    const namespace = await this.readNamespace(scope, token.ownerId);
+    const volumePath = path.join(namespace.root, `v${volume}`);
+    if (namespace.missing) return this.absentObservation(scope, token, volume, namespace, operation);
+    await this.requireVolumeSpelling(namespace.root, volume);
+    try { await directory(volumePath); }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+      return this.absentObservation(scope, token, volume, namespace, operation);
+    }
+    // Capture the marker before payload observation; replacement is not a second commit.
+    const marker = await directory(path.join(volumePath, 'COMMITTED'));
+    const first = await this.verify(volumePath, token, volume, undefined, undefined, undefined, { required: true, identity: marker });
+    await this.options.afterObservation?.('observed', volumePath);
+    const proof = { volume, generationId: first.metadata.generationId,
+      volumeIdentity: first.volumeIdentity, generationIdentity: first.generationIdentity,
+      payloadIdentity: first.payloadIdentity, metadataIdentity: first.metadataIdentity };
+    const prove = async (): Promise<void> => {
+      await this.proveReadNamespace(namespace);
+      await this.requireVolumeSpelling(namespace.root, volume);
+      await this.verify(volumePath, token, volume, proof, first.payloadBytes, first.metadataBytes, { required: true, identity: marker });
+      await this.observationOwner(scope, token, operation);
+      await this.proveReadNamespace(namespace);
+      await this.requireVolumeSpelling(namespace.root, volume);
+      await directory(path.join(volumePath, 'COMMITTED'), marker);
+      await namesAt(path.join(volumePath, 'COMMITTED'), 0);
+    };
+    await prove();
+    await this.options.afterObservation?.('verified', volumePath);
+    await prove();
+    return Object.freeze({ status: 'found', owner: token, volume,
+      rawContent: first.payloadBytes.toString('utf8'), metadata: Object.freeze(first.metadata) });
+  }
+  private async absentObservation(scope: FileMemoryTransactionScope, token: OwnedFileMemoryToken, volume: number,
+    namespace: ReadArchiveNamespace,
+    operation?: FileMemoryOperationScope): Promise<FileMemoryVolumeObservation> {
+    await this.options.afterObservation?.('observed', namespace.root);
+    await this.observationOwner(scope, token, operation);
+    await this.proveReadNamespace(namespace);
+    if (!namespace.missing) {
+      await this.requireVolumeSpelling(namespace.root, volume);
+      if ((await namesAt(namespace.root, 100_000)).includes(`v${volume}`)) throw error('EARCHIVECHANGED', 'Archive appeared during absence observation');
+    }
+    return Object.freeze({ status: 'absent', owner: token, volume });
+  }
   private captureToken(expected: OwnedFileMemoryToken): OwnedFileMemoryToken {
-    const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
+    const token = { ...expected, fileIdentity: Object.freeze({ ...expected.fileIdentity }) };
     if (!UUID.test(token.ownerId)) throw new TypeError('Archive requires a durable owner UUID');
     return Object.freeze(token);
   }
@@ -268,7 +393,7 @@ export class FileMemoryVolumeStore {
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
   }
-  private async verify(volumePath: string, owner: OwnedFileMemoryToken, volume: number, expected?: FileMemoryVolumeReceipt, expectedBytes?: Buffer, expectedMetadata?: Buffer, markerProof?: { required: boolean; identity?: ArchiveDirectoryIdentity }): Promise<{ metadata: Metadata; payloadIdentity: ArchiveFileIdentity; metadataIdentity: ArchiveFileIdentity; generationIdentity: ArchiveDirectoryIdentity; volumeIdentity: ArchiveDirectoryIdentity }> {
+  private async verify(volumePath: string, owner: OwnedFileMemoryToken, volume: number, expected?: Pick<FileMemoryVolumeReceipt, 'volume' | 'generationId' | 'volumeIdentity' | 'generationIdentity' | 'payloadIdentity' | 'metadataIdentity'>, expectedBytes?: Buffer, expectedMetadata?: Buffer, markerProof?: { required: boolean; identity?: ArchiveDirectoryIdentity }): Promise<{ metadata: Metadata; payloadBytes: Buffer; metadataBytes: Buffer; payloadIdentity: ArchiveFileIdentity; metadataIdentity: ArchiveFileIdentity; generationIdentity: ArchiveDirectoryIdentity; volumeIdentity: ArchiveDirectoryIdentity }> {
     const volumeIdentity = await directory(volumePath, expected?.volumeIdentity);
     const names = await namesAt(volumePath, 2);
     const generationNames = names.filter(name => GENERATION.test(name));
@@ -287,7 +412,7 @@ export class FileMemoryVolumeStore {
     const metadata = this.verifyMetadata(meta.bytes, payload.bytes, owner, volume, generationNames[0]);
     await directory(volumePath, volumeIdentity);
     await directory(generationPath, generationIdentity);
-    return { metadata, payloadIdentity: payload.identity, metadataIdentity: meta.identity, volumeIdentity, generationIdentity };
+    return { metadata, payloadBytes: payload.bytes, metadataBytes: meta.bytes, payloadIdentity: payload.identity, metadataIdentity: meta.identity, volumeIdentity, generationIdentity };
   }
   private async verifyPublication(
     namespace: { root: string; paths: readonly string[]; identities: readonly ArchiveDirectoryIdentity[] },
