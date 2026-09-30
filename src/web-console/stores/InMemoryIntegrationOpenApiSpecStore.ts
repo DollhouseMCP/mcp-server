@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { assertUuid } from './ConsoleStoreValidation.js';
 import {
+  IntegrationSpecWriteError,
   cloneIntegrationOpenApiSpecRecord,
   type IIntegrationOpenApiSpecStore,
   type IntegrationOpenApiSpecRecord,
@@ -42,6 +43,29 @@ export class InMemoryIntegrationOpenApiSpecStore implements IIntegrationOpenApiS
       createdAt: existing?.createdAt ?? input.createdAt,
       updatedAt: input.updatedAt,
     };
+    this.set(record);
+    return cloneIntegrationOpenApiSpecRecord(record);
+  }
+
+  async create(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord> {
+    await Promise.resolve();
+    validateIntegrationOpenApiSpecInput(input);
+    if (this.byDescriptorId.has(input.descriptorId)) throw new IntegrationSpecWriteError('exists');
+    const record = { ...input, id: randomUUID(), sourceUrl: input.sourceUrl ?? null };
+    this.set(record);
+    return cloneIntegrationOpenApiSpecRecord(record);
+  }
+
+  async update(input: IntegrationOpenApiSpecUpsertInput, expectedSpecHash?: string): Promise<IntegrationOpenApiSpecRecord> {
+    await Promise.resolve();
+    validateIntegrationOpenApiSpecInput(input);
+    const id = this.byDescriptorId.get(input.descriptorId);
+    const existing = id ? this.records.get(id) : undefined;
+    if (!existing) throw new IntegrationSpecWriteError(expectedSpecHash === undefined ? 'missing' : 'conflict');
+    if (expectedSpecHash !== undefined && existing.specHash !== expectedSpecHash) {
+      throw new IntegrationSpecWriteError('conflict');
+    }
+    const record = { ...input, id: existing.id, createdAt: existing.createdAt, sourceUrl: input.sourceUrl ?? null };
     this.set(record);
     return cloneIntegrationOpenApiSpecRecord(record);
   }

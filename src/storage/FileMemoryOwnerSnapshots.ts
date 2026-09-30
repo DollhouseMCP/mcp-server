@@ -101,6 +101,7 @@ interface DiagnosticEvidenceRead {
   readonly evidence: FileMemoryWriteEvidence;
   readonly signature: string;
   readonly headContent: string;
+  readonly preparedTemp?: { path: string; raw: string; identity: FileIdentity };
   readonly journalRaw?: string;
   readonly journalIdentity?: FileIdentity;
   readonly sidecarRaw?: string;
@@ -141,6 +142,8 @@ export type AdoptionPublication =
   | 'active-sidecar';
 
 interface FileMemoryOwnerSnapshotsBaseOptions {
+  /** Fault barrier for dormant PREPARED forward publication; never repair authority. */
+  readonly beforePreparedHeadRename?: () => void | Promise<void>;
   /** Fault injection for process-interruption tests; never performs recovery. */
   readonly afterPublication?: (phase: AdoptionPublication) => void | Promise<void>;
   /** Fault injection for conditional UPDATE; no production caller is wired. */
@@ -344,7 +347,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readDiagnosticEvidence(
-    scope: FileMemoryTransactionScope, locator: string, recovery: boolean | 'prepared' = false,
+    scope: FileMemoryTransactionScope, locator: string, recovery: boolean | 'prepared' | 'old-head' = false,
   ): Promise<DiagnosticEvidenceRead> {
     const resolved = await this.resolveHead(scope.tenantRoot, locator);
     const head = await this.readHeadBytes(resolved.headPath);
@@ -377,8 +380,9 @@ export class FileMemoryOwnerSnapshots {
         !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record),
     };
     let recoveryStage: DiagnosticEvidenceRead['recoveryStage'];
-    if (recovery && (write?.state === 'PUBLISHED_WRITE' || (recovery === 'prepared' && write?.state === 'PREPARED_WRITE'))) {
-      recoveryStage = await this.readRecoveryStage(scope, resolved, write, evidence);
+    if (recovery && (write?.state === 'PUBLISHED_WRITE' ||
+      ((recovery === 'prepared' || recovery === 'old-head') && write?.state === 'PREPARED_WRITE'))) {
+      recoveryStage = await this.readRecoveryStage(scope, resolved, write, evidence, recovery === 'old-head');
       evidence = { ...evidence, unexpectedArtifacts:
         !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record) };
     }
@@ -390,6 +394,9 @@ export class FileMemoryOwnerSnapshots {
       journalRaw: journal?.raw, journalIdentity: journal?.identity, recoveryStage,
     });
     return { evidence, signature, headContent: head.value,
+      preparedTemp: temp && artifacts.exactTemp ? {
+        path: path.join(path.dirname(resolved.headPath), artifacts.exactTemp), raw: temp.value, identity: temp.identity,
+      } : undefined,
       journalRaw: journal?.raw, journalIdentity: journal?.identity,
       sidecarRaw: sidecar?.raw, sidecarIdentity: sidecar?.identity,
       registryRaw: registry?.raw, registryIdentity: registry?.identity, recoveryStage, resolved };
@@ -397,7 +404,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async readRecoveryStage(
     scope: FileMemoryTransactionScope, resolved: DiagnosticEvidenceRead['resolved'],
-    journal: WriteJournal, evidence: FileMemoryWriteEvidence,
+    journal: WriteJournal, evidence: FileMemoryWriteEvidence, permitPreparedTemp = false,
   ): Promise<DiagnosticEvidenceRead['recoveryStage']> {
     const registryPath = this.registryPath(scope.tenantRoot, journal.ownerId);
     const registryName = path.basename(registryPath);
@@ -410,6 +417,8 @@ export class FileMemoryOwnerSnapshots {
     }
     const names = evidence.artifactNames.filter(name => name !== path.basename(resolved.journalPath));
     const phase = classifyFileMemoryWrite({ ...evidence, unexpectedArtifacts: false }).kind;
+    if (permitPreparedTemp && phase === 'prepared-not-published' &&
+      names.length === 1 && names[0] === journal.preparedTempName) return undefined;
     let target: string | undefined;
     if (phase === 'published-before-registry') target = registryPath;
     else if (phase === 'registry-advanced') target = resolved.sidecarPath;
@@ -493,16 +502,17 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async runPublishedMaintenance(
-    request: FinalizeOwnedUpdateRequest, forward: boolean | 'prepared',
+    request: FinalizeOwnedUpdateRequest, forward: boolean | 'prepared' | 'old-head',
   ): Promise<FinalizeOwnedUpdateResult> {
     const captured = { ...request };
     this.validateFinalizeRequest(captured);
+    const preparedMode = forward === 'old-head' ? 'old-head' : forward === 'prepared';
     let committedToken: OwnedFileMemoryToken | undefined;
     try {
       return await this.requiredCoordinator().withTenantTransaction(async context => {
         try {
           const result = forward
-            ? await this.performForwardMaintenance(context, captured, forward === 'prepared')
+            ? await this.performForwardMaintenance(context, captured, preparedMode)
             : await this.finalizePublishedOwnedUpdateInTransaction(context, captured);
           if (result.status === 'known-committed') committedToken = result.token;
           return result;
@@ -557,13 +567,26 @@ export class FileMemoryOwnerSnapshots {
     return this.performForwardMaintenance(context, request, true);
   }
 
+  /** Dormant forward recovery; only an exact original PREPARED temp may publish a head. */
+  forwardPreparedOwnedUpdate(request: FinalizeOwnedUpdateRequest): Promise<FinalizeOwnedUpdateResult> {
+    return this.runPublishedMaintenance(request, 'old-head');
+  }
+
+  /** Caller owns the fresh lease and retains committed results across outer failures. */
+  forwardPreparedOwnedUpdateInTransaction(
+    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    return this.performForwardMaintenance(context, request, 'old-head');
+  }
+
   private performForwardMaintenance(
-    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest, prepared: boolean,
+    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest, prepared: boolean | 'old-head',
   ): Promise<FinalizeOwnedUpdateResult> {
     const captured = { ...request };
     this.validateFinalizeRequest(captured);
     return this.requiredCoordinator().perform(context, async operation => {
       try {
+        if (prepared === 'old-head') return await this.forwardPreparedOldHeadAtScope(operation, captured);
         return prepared ? await this.forwardPreparedAtScope(operation, captured) :
           await this.forwardAtScope(operation, captured);
       } catch (cause) {
@@ -571,19 +594,74 @@ export class FileMemoryOwnerSnapshots {
         if (error?.committed || ['EOWNERRECOVERY', 'EINVALIDHEAD', 'EHEADCONFLICT', 'EHEADCOMMITUNKNOWN'].includes(error?.code ?? '')) {
           throw cause;
         }
-        const pending = headError('EHEADCOMMITUNKNOWN', 'Published memory repair remains pending; preserve residual evidence');
+        const pending = headError('EHEADCOMMITUNKNOWN', 'Owned memory repair remains pending; preserve residual evidence');
         Object.assign(pending, { cause, operationId: captured.operationId, residual: true });
         throw pending;
       }
     });
   }
 
-  private async forwardPreparedAtScope(
+  private async forwardPreparedOldHeadAtScope(
     operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
   ): Promise<FinalizeOwnedUpdateResult> {
     const coordinator = this.requiredCoordinator();
     const scope = coordinator.requireActiveOperationScope(operation);
-    const first = await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
+    const first = await this.readDiagnosticEvidence(scope, request.locator, 'old-head');
+    coordinator.requireActiveOperationScope(operation);
+    if (classifyFileMemoryWrite(first.evidence).kind !== 'prepared-not-published') {
+      return this.forwardPreparedAtScope(operation, request, first);
+    }
+    this.requirePreparedOldHead(first, request, scope);
+    const originalTemp = first.preparedTemp;
+    if (!originalTemp) throw headError('EOWNERRECOVERY', 'Missing prepared head bytes');
+    this.validateHeadForSave(originalTemp.raw);
+    await this.options.beforePreparedHeadRename?.();
+    coordinator.requireActiveOperationScope(operation);
+    const last = await this.readDiagnosticEvidence(scope, request.locator, 'old-head');
+    if (first.signature !== last.signature || !last.preparedTemp) {
+      throw headError('EOWNERRECOVERY', 'Prepared evidence changed before head rename');
+    }
+    await fs.rename(last.preparedTemp.path, last.resolved.headPath);
+    await this.options.afterUpdatePublication?.('renamed-head');
+    coordinator.requireActiveOperationScope(operation);
+    const advanced = await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
+    this.requirePreparedHeadPublication(last, advanced);
+    return this.forwardPreparedAtScope(operation, request, advanced);
+  }
+
+  private requirePreparedOldHead(
+    evidence: DiagnosticEvidenceRead, request: FinalizeOwnedUpdateRequest, scope: FileMemoryTransactionScope,
+  ): void {
+    const journal = evidence.evidence.journal;
+    if (journal?.state !== 'PREPARED_WRITE' || journal.ownerId !== request.ownerId ||
+      journal.operationId !== request.operationId || journal.userId !== scope.userId ||
+      journal.locator !== request.locator || evidence.resolved.locator !== request.locator ||
+      !evidence.journalRaw || !evidence.journalIdentity || !evidence.preparedTemp ||
+      path.basename(evidence.preparedTemp.path) !== journal.preparedTempName ||
+      !sameIdentity(evidence.preparedTemp.identity, journal.preparedTempIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Memory is not an exact original old-head PREPARED repair');
+    }
+  }
+
+  private requirePreparedHeadPublication(before: DiagnosticEvidenceRead, after: DiagnosticEvidenceRead): void {
+    if (!before.preparedTemp || after.preparedTemp || after.recoveryStage ||
+      classifyFileMemoryWrite(after.evidence).kind !== 'renamed-before-published-journal' ||
+      after.headContent !== before.preparedTemp.raw ||
+      !samePublishedFile(before.preparedTemp.identity, after.evidence.head.identity) ||
+      before.journalRaw !== after.journalRaw || !isDeepStrictEqual(before.journalIdentity, after.journalIdentity) ||
+      before.sidecarRaw !== after.sidecarRaw || before.registryRaw !== after.registryRaw ||
+      !isDeepStrictEqual(before.sidecarIdentity, after.sidecarIdentity) ||
+      !isDeepStrictEqual(before.registryIdentity, after.registryIdentity)) {
+      throw headError('EOWNERRECOVERY', 'Prepared head publication changed bound evidence');
+    }
+  }
+
+  private async forwardPreparedAtScope(
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest, captured?: DiagnosticEvidenceRead,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    const first = captured ?? await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
     coordinator.requireActiveOperationScope(operation);
     // A resumed request may have completed the journal transition or commit.
     if (first.evidence.journal?.state !== 'PREPARED_WRITE') {
@@ -910,6 +988,22 @@ export class FileMemoryOwnerSnapshots {
     coordinator.requireActiveOperationScope(operation);
     if (current.token.ownership !== 'owned' || !sameOwnedToken(current.token, token)) {
       throw headError('EHEADCONFLICT', 'Memory owner changed before guarded operation');
+    }
+    return current.token;
+  }
+
+  /** @internal Zero-write owner proof using one caller-captured read scope. Not mutation authority. */
+  async requireOwnedAtReadScope(
+    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken,
+  ): Promise<OwnedFileMemoryToken> {
+    const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
+    if (token.backend !== 'file' || token.ownership !== 'owned' ||
+      token.tenantRoot !== scope.tenantRoot || token.userId !== scope.userId) {
+      throw headError('EHEADCONFLICT', 'Memory owner token belongs to another tenant or head');
+    }
+    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator);
+    if (current.token.ownership !== 'owned' || !sameOwnedToken(current.token, token)) {
+      throw headError('EHEADCONFLICT', 'Memory owner changed during archive observation');
     }
     return current.token;
   }

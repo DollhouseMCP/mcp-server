@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 import { describe, expect, it, jest } from '@jest/globals';
 
 import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
@@ -25,6 +26,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
       new Map(),
       new Set(),
       name => `session-a:${name}`,
+      BASE_OPERATION_REGISTRY,
     );
 
     await expect(handler.dispatch('complete', {
@@ -69,6 +71,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
       executingAgents,
       new Set(),
       name => `session-a:${name}`,
+      BASE_OPERATION_REGISTRY,
     );
 
     await expect(handler.dispatch('complete', {
@@ -106,6 +109,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
       new Map(),
       new Set(),
       name => `session-a:${name}`,
+      BASE_OPERATION_REGISTRY,
     );
 
     await expect(handler.dispatch('execute', { element_name: 'blocked', parameters: {} }))
@@ -136,6 +140,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
       ]),
       new Set(),
       name => `session-a:${name}`,
+      BASE_OPERATION_REGISTRY,
     );
 
     handler.recordGatekeeperBlock('delete_element', 'agents', 'denied', 'deny', firstIdentity);
@@ -154,7 +159,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
         name: 'Policy Agent',
         gatekeeper: { deny: ['delete_element'] },
       },
-    }]);
+    }], undefined, BASE_OPERATION_REGISTRY);
 
     expect(createDecisionFromPolicy('delete_element', result).sourceIdentity).toEqual(identity);
   });
@@ -181,7 +186,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
         executionIdentity: laterIdentity,
         metadata: { name: 'Later Policy Agent', gatekeeper },
       },
-    ], 'personas');
+    ], 'personas', BASE_OPERATION_REGISTRY);
 
     expect(result).toMatchObject({
       sourceElement: 'Scope Blocker',
@@ -245,6 +250,7 @@ describe('AgentExecutionHandler durable execution identity', () => {
       executingAgents,
       new Set<string>(),
       name => `session-a:${name}`,
+      BASE_OPERATION_REGISTRY,
     );
 
     await handler.dispatch('execute', { element_name: FIRST_NAME, parameters: {} });

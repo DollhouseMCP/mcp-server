@@ -1,3 +1,4 @@
+import type { IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
 /**
  * SchemaDispatcher - Generic dispatcher for schema-driven operations
  *
@@ -32,12 +33,11 @@
  * @see Issue #202 - GraphQL field selection for response token optimization
  */
 
+import { type OperationRegistry } from './OperationRegistry.js';
 import yaml from 'js-yaml';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import {
-  getOperationSchema,
-  isSchemaOperation,
   type OperationDef,
   type ParamSchema,
   type ParamDef,
@@ -731,10 +731,11 @@ function buildArgs(
  * Handle introspection operation (uses IntrospectionResolver directly)
  */
 function handleIntrospection(
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  operations: OperationRegistry
 ): Promise<unknown> {
   try {
-    return Promise.resolve(IntrospectionResolver.resolve(params));
+    return Promise.resolve(IntrospectionResolver.resolve(params, operations));
   } catch (error) {
     return Promise.reject(error);
   }
@@ -745,10 +746,11 @@ function handleIntrospection(
  * @see Issue #1760 - get_capabilities operation
  */
 function handleCapabilities(
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  operations: OperationRegistry
 ): Promise<unknown> {
   try {
-    return Promise.resolve(IntrospectionResolver.getCapabilities(params));
+    return Promise.resolve(IntrospectionResolver.getCapabilities(params, operations));
   } catch (error) {
     return Promise.reject(error);
   }
@@ -1026,8 +1028,8 @@ export class SchemaDispatcher {
   /**
    * Check if an operation can be handled by schema dispatch
    */
-  static canDispatch(operation: string): boolean {
-    return isSchemaOperation(operation);
+  static canDispatch(operation: string, operations: OperationRegistry): boolean {
+    return operations.getDispatchSchema(operation) !== undefined;
   }
 
   /**
@@ -1044,10 +1046,14 @@ export class SchemaDispatcher {
     operation: string,
     params: Record<string, unknown>,
     registry: HandlerRegistry,
-    input?: OperationInput
+    input: OperationInput | undefined,
+    operations: OperationRegistry,
+    context?: IntegrationInvocationContext
   ): Promise<unknown> {
     // Get schema definition
-    const schema = getOperationSchema(operation);
+    const schema = operations.getDispatchSchema(operation);
+    const integrationHandler = operations.getIntegrationHandler(operation);
+    if (integrationHandler) return integrationHandler(params, context);
     if (!schema) {
       throw new Error(`No schema definition found for operation '${operation}'`);
     }
@@ -1060,7 +1066,7 @@ export class SchemaDispatcher {
 
     // Handle special operations
     if (schema.method === '__introspect__') {
-      return handleIntrospection(params);
+      return handleIntrospection(params, operations);
     }
 
     if (schema.method === '__buildInfo__') {
@@ -1072,7 +1078,7 @@ export class SchemaDispatcher {
     }
 
     if (schema.method === '__capabilities__') {
-      return handleCapabilities(params);
+      return handleCapabilities(params, operations);
     }
 
     // Map params according to schema (with input context and param style)
@@ -1126,7 +1132,7 @@ export class SchemaDispatcher {
 // Exports
 // ============================================================================
 
-export { isSchemaOperation, getOperationSchema };
+export { isSchemaOperation, getOperationSchema } from './OperationSchema.js';
 
 // Test exports for security boundary verification
 export const __test__ = {

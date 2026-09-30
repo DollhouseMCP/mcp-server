@@ -10,7 +10,7 @@
  * Extracted from BaseElementManager; no behaviour changed.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import type { IElement } from '../../types/elements/IElement.js';
 import type { ElementType } from '../../portfolio/types.js';
@@ -58,6 +58,8 @@ export interface ElementPersisterHost<T extends IElement> {
   createBackupBeforeDelete(absolutePath: string): Promise<boolean>;
   getElementLabel(): string;
   getElementLabelCapitalized(): string;
+  getElementFilename(name: string): string;
+  scanAndEvict(): Promise<void>;
   extractNameFromPath(relativePath: string): string;
   normalizeAndValidatePath(filePath: string): Promise<{ relativePath: string; absolutePath: string }>;
   readonly constructor: { name: string };
@@ -95,11 +97,51 @@ export class ElementPersister<T extends IElement> {
     this.elementTypeToContext = deps.elementTypeToContext;
   }
 
+  /** Capture the exact definition and guarded write evidence together. */
+  async resolveUpdateTarget(name: string): Promise<{ path: string; content: string; options: ElementSaveOptions } | undefined> {
+    if (this.host.elementType === 'memories') throw new Error('Memory updates require the memory head contract');
+    if (isWritableStorageLayer(this.storageLayer)) {
+      const identity = await this.storageLayer.resolveContentIdentity(this.host.elementType, name);
+      if (!identity) return undefined;
+      if (!this.storageLayer.readContentForUpdate) throw new Error('Storage does not support guarded updates');
+      const snapshot = await this.storageLayer.readContentForUpdate(identity.id).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (snapshot?.identity.name !== identity.name) return undefined;
+      return { path: snapshot.identity.id, content: snapshot.content, options: {
+        expectedIdentity: snapshot.identity, expectedStorageRevision: snapshot.revision,
+      } };
+    }
+    await this.host.scanAndEvict();
+    const target = this.storageLayer.getPathByName(name) ?? this.host.getElementFilename(name);
+    const { absolutePath } = await this.host.normalizeAndValidatePath(target);
+    return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+      try {
+        const before = await this.fileOperations.stat(absolutePath);
+        const content = await this.fileOperations.readElementFile(absolutePath, this.host.elementType);
+        const after = await this.fileOperations.stat(absolutePath);
+        if (before.dev !== after.dev || before.ino !== after.ino) {
+          throw Object.assign(new Error('Update target changed during observation'), { code: 'ECONTENTCONFLICT' });
+        }
+        return { path: target, content, options: { updateOnly: true, expectedFileSnapshot: {
+          sha256: createHash('sha256').update(content).digest('hex'), dev: after.dev, ino: after.ino,
+        } } };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    });
+  }
+
   /**
    * Save an element to file or database.
    * Identical to the former BaseElementManager.save() body.
    */
   async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
+    if (options?.updateOnly && options.exclusive) {
+      throw new Error('An update-only save cannot also create exclusively');
+    }
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -176,6 +218,7 @@ export class ElementPersister<T extends IElement> {
               exclusive: options?.exclusive ?? false,
               elementLabel: this.host.getElementLabelCapitalized(),
               expectedIdentity: options?.expectedIdentity,
+              expectedStorageRevision: options?.expectedStorageRevision,
             },
           );
           savedRelativePath = elementId;
@@ -192,8 +235,16 @@ export class ElementPersister<T extends IElement> {
             throw error;
           }
         } else {
-          await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          if (!options?.updateOnly) {
+            await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          }
           await this.host.createBackupBeforeSave(absolutePath);
+          // Under this process-local lock, updateOnly never inserts after deletion.
+          // Unguarded updateOnly checks existence only; expectedFileSnapshot also
+          // checks content and inode identity. External writers are not coordinated.
+          // Preserve the existing atomic temp-file + rename publication.
+          if (options?.updateOnly) await this.fileOperations.stat(absolutePath);
+          await this.verifyFileSnapshot(absolutePath, options?.expectedFileSnapshot);
           await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
         }
 
@@ -204,6 +255,16 @@ export class ElementPersister<T extends IElement> {
 
       logger.info(`${this.host.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
     });
+  }
+
+  private async verifyFileSnapshot(absolutePath: string, expected: ElementSaveOptions['expectedFileSnapshot']): Promise<void> {
+    if (!expected) return;
+    const current = await this.fileOperations.stat(absolutePath);
+    const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType);
+    if (current.dev !== expected.dev || current.ino !== expected.ino ||
+      createHash('sha256').update(raw).digest('hex') !== expected.sha256) {
+      throw Object.assign(new Error('Element content changed before guarded save'), { code: 'ECONTENTCONFLICT' });
+    }
   }
 
   /**

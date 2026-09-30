@@ -1,3 +1,4 @@
+import { isIntegrationRequestEnvelope, integrationRequestParams, normalizeMcpToolName } from './IntegrationRequestEnvelope.js';
 import { createHmac } from 'node:crypto';
 
 import type { AuditHmacKeyMaterial } from './auditHmacKey.js';
@@ -27,7 +28,7 @@ export const TOOL_REDACTION: Partial<Record<string, ToolRedactionSpec>> = {
   mcp_aql_execute: { keepFields: ['operation'], digestFields: ['params'] },
   mcp_aql_read: { keepFields: ['operation', 'element_type', 'element_name'], digestFields: ['params'] },
   mcp_aql_delete: { keepFields: ['operation', 'element_type', 'element_name'] },
-  integration_request: { keepFields: ['provider', 'method', 'path', 'read_write_class'], digestFields: ['query', 'body'] },
+  integration_request: { keepFields: ['provider', 'method', 'path', 'read_write_class'], digestFields: ['query', 'body', 'path_query'] },
   install_collection_content: { keepFields: ['element_type'], digestFields: ['url', 'params'] },
 };
 
@@ -94,11 +95,37 @@ export async function redactToolInput(
   raw: Record<string, unknown>,
   resolver: AuditHmacResolver,
 ): Promise<{ digest: Record<string, unknown>; hash: string; detail: Record<string, unknown> }> {
+  const normalizedName = normalizeMcpToolName(toolName);
   const spec = TOOL_REDACTION[toolName];
-  const digest = spec ? redactWithSpec(raw, spec) : genericRedact(raw);
+  const digest = integrationDigest(normalizedName, raw) ?? (spec ? redactWithSpec(raw, spec) : genericRedact(raw));
   const key = await resolver.resolve();
   const hash = `${key.keyId}:${createHmac('sha256', key.key).update(canonicalJSON(raw)).digest('hex')}`;
   return { digest: capDigest(digest), hash, detail: raw };
+}
+
+/** Digest the nested request, while the approval HMAC still binds the original envelope. */
+function integrationDigest(toolName: string, raw: Record<string, unknown>): Record<string, unknown> | undefined {
+  const envelope = ['mcp_aql_execute', 'mcp_aql'].includes(toolName) && isIntegrationRequestEnvelope(raw);
+  if (!envelope && toolName !== 'integration_request') return undefined;
+  const input = envelope ? integrationRequestParams(raw) : raw;
+  if (!input || typeof input.path !== 'string' || typeof input.method !== 'string' || typeof input.provider !== 'string') {
+    return Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, digestMarker(value)]));
+  }
+  const separator = input.path.search(/[?#]/u);
+  const path = separator < 0 ? input.path : input.path.slice(0, separator);
+  const safeInput = {
+    ...(envelope ? { operation: 'integration_request' } : {}),
+    provider: input.provider, method: input.method, path,
+    read_write_class: input.method.toUpperCase() === 'GET' ? 'read' : 'write',
+    ...((separator < 0 && !Object.hasOwn(input, 'path_query')) ? {} : { path_query: {
+      from_path: separator < 0 ? undefined : input.path.slice(separator), explicit: input.path_query,
+    } }),
+    ...Object.fromEntries(['query', 'body'].filter(key => Object.hasOwn(input, key)).map(key => [key, input[key]])),
+  };
+  return redactWithSpec(safeInput, {
+    keepFields: ['operation', 'provider', 'method', 'path', 'read_write_class'],
+    digestFields: ['query', 'body', 'path_query'],
+  });
 }
 
 /**

@@ -23,11 +23,11 @@ We adopt the **CRUDE protocol** - an extension of CRUD that adds **Execute** as 
 
 | Endpoint | Idempotent | Description | Examples |
 |----------|------------|-------------|----------|
-| **C**reate | No | Create new resources | `create_element`, `import_element`, `addEntry` |
-| **R**ead | Yes | Query without side effects | `list_elements`, `get_element`, `introspect`, `search` |
-| **U**pdate | Yes | Modify existing resources | `edit_element` |
+| **C**reate | No | Create new resources | `create_element`, `import_element`, `addEntry`, `create_integration_spec` |
+| **R**ead | Yes | Query without side effects | `list_elements`, `get_element`, `introspect`, `search`, `list_integration_operations` |
+| **U**pdate | Yes | Modify existing resources | `edit_element`, `update_integration_skill` |
 | **D**elete | Yes | Remove resources | `delete_element`, `clear` |
-| **E**xecute | No | Trigger actions/workflows | `execute_agent`, `get_execution_state` |
+| **E**xecute | No | Trigger actions/workflows | `execute_agent`, `get_execution_state`, `integration_request` |
 
 ### Why Not Pure CRUD?
 

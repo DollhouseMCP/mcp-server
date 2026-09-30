@@ -1,3 +1,4 @@
+import type { IStorageLayerFactory } from '../../src/storage/IStorageLayerFactory.js';
 /**
  * Dependency Injection Mock Utilities
  *
@@ -19,8 +20,8 @@
 // This is the correct pattern for test builders, not production DI code.
 
 import { jest } from '@jest/globals';
-import * as os from 'os';
-import * as path from 'path';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 // Real service imports for integration test factories
 import { FileLockManager } from '../../src/security/fileLockManager.js';
@@ -463,6 +464,7 @@ export function createHandlerMocks() {
  * Common dependencies shared across all managers
  */
 export interface CommonManagerDependencies {
+  storageLayerFactory?: IStorageLayerFactory;
   portfolioManager?: PortfolioManager;
   fileLockManager?: FileLockManager;
   fileOperationsService?: FileOperationsService;
@@ -520,7 +522,7 @@ export function createRealSkillManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
-    storageLayerFactory: createTestStorageFactory(fileOperations),
+    storageLayerFactory: overrides?.storageLayerFactory ?? createTestStorageFactory(fileOperations),
   });
 }
 
@@ -557,7 +559,7 @@ export function createRealTemplateManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
-    storageLayerFactory: createTestStorageFactory(fileOperations),
+    storageLayerFactory: overrides?.storageLayerFactory ?? createTestStorageFactory(fileOperations),
   });
 }
 
@@ -594,7 +596,7 @@ export function createRealMemoryManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
-    storageLayerFactory: createTestStorageFactory(fileOperations),
+    storageLayerFactory: overrides?.storageLayerFactory ?? createTestStorageFactory(fileOperations),
   });
 }
 
@@ -631,7 +633,7 @@ export function createRealEnsembleManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
-    storageLayerFactory: createTestStorageFactory(fileOperations),
+    storageLayerFactory: overrides?.storageLayerFactory ?? createTestStorageFactory(fileOperations),
   });
 }
 
@@ -682,7 +684,7 @@ export function createRealAgentManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
-    storageLayerFactory: createTestStorageFactory(fileOperations),
+    storageLayerFactory: overrides?.storageLayerFactory ?? createTestStorageFactory(fileOperations),
   });
 }
 
@@ -745,7 +747,7 @@ export function createRealPersonaManager(
     fileWatchService,
     personaImporter: overrides?.personaImporter,
     notifier: overrides?.notifier,
-    storageLayerFactory: createTestStorageFactory(fileOperations),
+    storageLayerFactory: overrides?.storageLayerFactory ?? createTestStorageFactory(fileOperations),
   });
 }
 
@@ -756,7 +758,7 @@ export function createRealPersonaManager(
  * @param portfolioDir - Root directory for the portfolio
  * @returns Object containing all real managers and shared dependencies
  */
-export function createRealManagerSuite(portfolioDir: string, options?: { enableFileWatcher?: boolean }) {
+export function createRealManagerSuite(portfolioDir: string, options?: { enableFileWatcher?: boolean; storageLayerFactory?: IStorageLayerFactory }) {
   // Create shared dependencies
   const fileLockManager = new FileLockManager();
   const fileOperationsService = new FileOperationsService(fileLockManager);
@@ -772,6 +774,7 @@ export function createRealManagerSuite(portfolioDir: string, options?: { enableF
   );
 
   const sharedDeps: CommonManagerDependencies = {
+    storageLayerFactory: options?.storageLayerFactory,
     fileLockManager,
     fileOperationsService,
     portfolioManager,

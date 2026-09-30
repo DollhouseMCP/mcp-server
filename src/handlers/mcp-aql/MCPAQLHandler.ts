@@ -1,3 +1,6 @@
+import { integrationOperationError } from './IntegrationOperationResult.js';
+import { integrationInvocationContext, type IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
+import { isIntegrationPolicyOperation } from './IntegrationManagementOperations.js';
 /**
  * MCPAQLHandler - Unified handler for all MCP-AQL operations
  *
@@ -21,7 +24,9 @@
  * - data: never (discriminated union enforces this)
  */
 
-import { type CRUDEndpoint, getRoute } from './OperationRouter.js';
+import { OperationRegistry } from './OperationRegistry.js';
+import type { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import { type CRUDEndpoint } from './OperationRouter.js';
 import type { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, canOperationBeElevated } from './policies/index.js';
 import { isGatekeeperInfraOperation, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
@@ -375,6 +380,8 @@ class VerificationMetricsTracker {
  * Abstracts the concrete handler types for better testability and decoupling.
  */
 export interface HandlerRegistry {
+  integrationOperationCatalog?: AuthorizedIntegrationOperationCatalog;
+  integrationRequestGateway?: AuthorizedIntegrationGateway;
   elementCRUD: ElementCRUDHandler;
   memoryManager: MemoryManager;
   agentManager: AgentManager;
@@ -444,6 +451,7 @@ export interface CorrelationIdProvider extends SaveContextScope {
 }
 
 export class MCPAQLHandler {
+  readonly operations: OperationRegistry;
   private readonly gatekeeper: Gatekeeper;
   private readonly searchHandler: SearchHandler;
   private readonly elementCRUDDispatcher: ElementCRUDDispatcher;
@@ -522,6 +530,7 @@ export class MCPAQLHandler {
     private readonly handlers: HandlerRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
   ) {
+    this.operations = new OperationRegistry(handlers.integrationOperationCatalog, handlers.integrationRequestGateway);
     // Initialize normalizers for schema-driven operations (Issue #243)
     initializeNormalizers();
     // Issue #452: Store Gatekeeper instance for policy enforcement
@@ -541,10 +550,12 @@ export class MCPAQLHandler {
       this.executingAgents,
       this.abortedGoals,
       (name) => this.sessionKey(name),
+      this.operations,
       contextTracker,
     );
     this.gatekeeperHandler = new GatekeeperHandler({
       handlers,
+      operations: this.operations,
       gatekeeper: this.gatekeeper,
       contextTracker,
       executingAgents: this.executingAgents,
@@ -895,11 +906,11 @@ export class MCPAQLHandler {
    * @param input - Operation input with operation name and params, or BatchRequest
    * @returns OperationResult with success/failure status, or BatchResult for batch operations
    */
-  async handleExecute(input: unknown): Promise<OperationResult | BatchResult> {
+  async handleExecute(input: unknown, context?: IntegrationInvocationContext): Promise<OperationResult | BatchResult> {
     if (isBatchRequest(input)) {
       return this.executeBatch(input, 'EXECUTE');
     }
-    return this.executeOperation(input, 'EXECUTE');
+    return this.executeOperation(input, 'EXECUTE', context);
   }
 
   /**
@@ -919,7 +930,8 @@ export class MCPAQLHandler {
    */
   private async executeOperation(
     input: unknown,
-    endpoint: CRUDEndpoint
+    endpoint: CRUDEndpoint,
+    context?: IntegrationInvocationContext
   ): Promise<OperationResult> {
     // Issue #301: Capture start time for response timing metadata
     const startTime = performance.now();
@@ -951,7 +963,7 @@ export class MCPAQLHandler {
       if (gatekeeperFailure) return gatekeeperFailure;
 
       // Step 3: Route operation to handler reference
-      const route = getRoute(operation);
+      const route = this.operations.getRoute(operation);
       if (!route) {
         // This should never happen after PermissionGuard.validate, but guard defensively
         return this.failure(`Unknown operation: ${operation}`, startTime);
@@ -965,17 +977,19 @@ export class MCPAQLHandler {
         operation,
         elementType,
         params: mergedParams,
-      });
+      }, context ?? integrationInvocationContext(input, 'mcp_aql_execute'));
       this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency
       // Apply field filtering if fields param provided
-      const data = applyFieldSelection(rawData, params);
+      const data = operation === 'integration_request' ? rawData : applyFieldSelection(rawData, params);
 
-      this.logOperationSuccess(endpoint, operation, elementType, params);
+      const integrationError = this.operations.getIntegrationHandler(operation) ? integrationOperationError(rawData) : undefined;
+      if (integrationError) this.logOperationFailure(endpoint, operation, integrationError, false, undefined);
+      else this.logOperationSuccess(endpoint, operation, elementType, params);
       const durationMs = performance.now() - startTime;
-      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, true);
+      this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, integrationError === undefined);
       const typeSuffix = elementType ? ':' + elementType : '';
       logger.debug(`[MCP-AQL] ${endpoint} ${operation}${typeSuffix} (${durationMs.toFixed(1)}ms)`);
       return this.success(data, startTime);
@@ -1012,7 +1026,7 @@ export class MCPAQLHandler {
     const { operation, params } = input;
     const elementType = resolveInputElementType(input);
     if (!env.DOLLHOUSE_GATEKEEPER_ENABLED) {
-      this.gatekeeper.validateRoute(operation, endpoint);
+      this.gatekeeper.validateRoute(operation, endpoint, this.operations);
       return null;
     }
 
@@ -1023,7 +1037,7 @@ export class MCPAQLHandler {
       elementType,
       activeElements,
       skipElementPolicies: isGatekeeperInfraOperation(operation),
-    });
+    }, this.operations);
 
     this.recordGatekeeperDecision(decision);
     this.handleDeniedGatekeeperDecision(decision, operation, endpoint, elementType, params);
@@ -1078,7 +1092,7 @@ export class MCPAQLHandler {
 
     this.gatekeeper.recordConfirmation(operation, confirmLevel, elementType);
 
-    const summary = buildOperationSummary(operation, elementType, params);
+    const summary = buildOperationSummary(operation, elementType, params, this.operations);
     const scope = elementType ? ' ['.concat(elementType, ']') : '';
     let riskLabel = 'LOW';
     if (riskScore >= 80) {
@@ -1197,6 +1211,14 @@ export class MCPAQLHandler {
     batch: BatchRequest,
     endpoint: CRUDEndpoint
   ): Promise<BatchResult> {
+    const normalizedOperations = batch.operations.map(item => parseOperationInput(item));
+    if (normalizedOperations.some(item => item !== null &&
+      isIntegrationPolicyOperation(item.operation) && this.operations.getIntegrationHandler(item.operation))) {
+      return { success: false, results: [],
+        summary: { total: batch.operations.length, succeeded: 0, failed: batch.operations.length },
+        error: 'Integration operations require individual calls with operation and params; batches are rejected before dispatch.',
+        _meta: this.buildMeta(performance.now()) };
+    }
     // Issue #221/#543: Reject oversized batches to prevent resource exhaustion
     if (batch.operations.length > SECURITY_LIMITS.MAX_BATCH_OPERATIONS) {
       SecurityMonitor.logSecurityEvent({
@@ -1222,10 +1244,9 @@ export class MCPAQLHandler {
     let failed = 0;
 
     for (let i = 0; i < batch.operations.length; i++) {
-      const op = batch.operations[i];
+      const op = normalizedOperations[i] ?? batch.operations[i];
 
-      // Pass raw operation through — parseOperationInput() in executeOperation()
-      // handles all normalization (element_type vs elementType, legacy formats, etc.)
+      // Dispatch the same normalized operation inspected by the batch preflight.
       const result = await this.executeOperation(op, endpoint);
 
       results.push({
@@ -1294,19 +1315,22 @@ export class MCPAQLHandler {
    */
   private async dispatch(
     handlerRef: string,
-    input: OperationInput
+    input: OperationInput,
+    context?: IntegrationInvocationContext
   ): Promise<unknown> {
     const { operation, params } = input;
 
     // Issue #247: Schema-driven dispatch for configured operations
     // This eliminates the need for manual switch statements
     // Issue #251: Pass full input for operations needing elementType resolution
-    if (SchemaDispatcher.canDispatch(operation)) {
+    if (SchemaDispatcher.canDispatch(operation, this.operations)) {
       return SchemaDispatcher.dispatch(
         operation,
         params || {},
         this.handlers,
-        input
+        input,
+        this.operations,
+        context
       );
     }
 
@@ -1500,7 +1524,7 @@ export class MCPAQLHandler {
     params: Record<string, unknown>
   ): unknown {
     if (method === 'resolve') {
-      return IntrospectionResolver.resolve(params);
+      return IntrospectionResolver.resolve(params, this.operations);
     }
     throw new Error(`Unknown Introspection method: ${method}`);
   }
@@ -2105,7 +2129,7 @@ export class MCPAQLHandler {
    * Used by dispatchGatekeeper to determine the correct endpoint context.
    */
   private getEndpointForOperation(operation: string): CRUDEndpoint {
-    const route = getRoute(operation);
+    const route = this.operations.getRoute(operation);
     if (!route) {
       throw new Error(`Unknown operation: ${operation}`);
     }
@@ -2238,6 +2262,10 @@ export class MCPAQLHandler {
   ]);
 
   private requiresIdentityCheck(operation: string): boolean {
+    // Let route validation reject unavailable operations before identity handling.
+    if (!this.operations.getRoute(operation)) return false;
+    // Integration discovery owns its identity checks through the authorized catalog.
+    if (this.operations.getIntegrationHandler(operation)) return false;
     if (MCPAQLHandler.IDENTITY_EXEMPT_OPS.has(operation)) return false;
     if (!this.handlers.isDbMode) return false;
     // DOLLHOUSE_USER set = operator established identity at startup

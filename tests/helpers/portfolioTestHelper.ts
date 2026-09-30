@@ -1,11 +1,12 @@
+import { BASE_OPERATION_REGISTRY } from '../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Test helper for managing PortfolioManager test environments
  * Ensures proper isolation and cleanup of test directories and environment variables
  */
 
-import { promises as fs } from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../src/services/FileOperationsService.js';
@@ -144,7 +145,7 @@ export function preConfirmAllOperations(container: DollhouseContainer): Gatekeep
       { cause: error }
     );
   }
-  for (const operation of getConfirmationRequiredOperations()) {
+  for (const operation of getConfirmationRequiredOperations(BASE_OPERATION_REGISTRY)) {
     gatekeeper.recordConfirmation(operation, PermissionLevel.CONFIRM_SESSION);
   }
   return gatekeeper;

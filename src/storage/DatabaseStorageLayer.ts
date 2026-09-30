@@ -187,8 +187,9 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     options?: WriteContentOptions,
   ): Promise<ElementIdRow[]> {
     if (options?.expectedIdentity) {
-      return this.updateExpectedElementRow(tx, values, options.expectedIdentity);
+      return this.updateExpectedElementRow(tx, values, options.expectedIdentity, options.expectedStorageRevision);
     }
+    if (options?.expectedStorageRevision !== undefined) throw new Error('A guarded revision requires row identity');
     if (options?.exclusive) {
       return this.insertElementRowExclusive(tx, values, options.elementLabel);
     }
@@ -206,7 +207,11 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     tx: DrizzleTx,
     values: ElementWriteValues,
     expected: NonNullable<WriteContentOptions['expectedIdentity']>,
+    revision?: string,
   ): Promise<ElementIdRow[]> {
+    if (revision !== undefined && (!/^[1-9]\d{0,18}$/u.test(revision) || BigInt(revision) > 9223372036854775807n)) {
+      throw new Error('Invalid guarded storage revision');
+    }
     if (expected.name !== values.name) {
       throw this.createStaleWriteError(values.elementType, values.name, expected);
     }
@@ -218,9 +223,17 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
         eq(elements.elementType, values.elementType),
         eq(elements.id, expected.id),
         eq(elements.name, expected.name),
+        revision === undefined ? undefined : eq(elements.storageRevision, BigInt(revision)),
       ))
       .returning({ id: elements.id });
     if (rows.length !== 1) {
+      if (revision !== undefined) {
+        const current = await tx.select({ id: elements.id }).from(elements).where(and(
+          eq(elements.id, expected.id), eq(elements.userId, values.userId),
+          eq(elements.elementType, values.elementType), eq(elements.name, expected.name),
+        )).limit(1);
+        if (current.length) throw Object.assign(new Error('Element content changed before guarded save'), { code: 'ECONTENTCONFLICT' });
+      }
       throw this.createStaleWriteError(values.elementType, values.name, expected);
     }
     return rows;

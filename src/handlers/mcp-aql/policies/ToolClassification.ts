@@ -1,3 +1,4 @@
+import { isIntegrationRequestEnvelope, integrationRequestParams, normalizeMcpToolName } from '../../../security/IntegrationRequestEnvelope.js';
 /**
  * Tool Classification for CLI-Level Permission Prompts
  *
@@ -77,6 +78,8 @@ const GATEKEEPER_ESSENTIAL_OPERATIONS = new Set([
  * unnecessary 'evaluate' round-trips for operations that can't modify state.
  */
 const SAFE_MCP_OPERATIONS = new Set([
+  'list_integration_operations',
+  'describe_integration_operation',
   'list_elements',
   'get_element',
   'get_element_details',
@@ -305,13 +308,15 @@ export function classifyTool(
     return classifyBashCommand(toolInput);
   }
 
+  const normalizedName = normalizeMcpToolName(toolName);
+  if (['mcp_aql_execute', 'mcp_aql'].includes(normalizedName) && isIntegrationRequestEnvelope(toolInput)) {
+    return classifyIntegrationRequest(integrationRequestParams(toolInput) ?? {});
+  }
+  if (normalizedName === 'integration_request') return classifyIntegrationRequest(toolInput);
+
   // MCP tool calls: auto-allow gatekeeper-essential and safe read-only operations, evaluate others
   if (toolName.startsWith('mcp__')) {
     return classifyMcpToolCall(toolInput);
-  }
-
-  if (toolName === 'integration_request') {
-    return classifyIntegrationRequest(toolInput);
   }
 
   // Edit, Write, Agent, NotebookEdit, etc.: moderate risk
@@ -634,9 +639,7 @@ export function evaluateCliToolPolicy(
     if (evaluation.hasAllowPatterns) {
       anyElementHasAllowPatterns = true;
       elementsWithAllowPatterns.push(`${element.type} '${element.name}'`);
-      if (evaluation.allowed) {
-        toolAllowedByAnyElement = true;
-      }
+      toolAllowedByAnyElement ||= evaluation.allowed;
     }
   }
 

@@ -1,5 +1,8 @@
+import { effectiveCliApprovalScopes } from '../../../handlers/mcp-aql/CliApprovalScopes.js';
+import type { IntegrationEntryPoint } from '../../../security/IntegrationEntryPoint.js';
 import type { CliApprovalRecord, CliApprovalScope } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
+import type { ConsoleApprovalScope } from './ApprovalDtos.js';
 import type { IConfirmationStore } from '../../../state/IConfirmationStore.js';
 
 /**
@@ -10,6 +13,7 @@ import type { IConfirmationStore } from '../../../state/IConfirmationStore.js';
  * value vocabulary.
  */
 export interface ConsoleApprovalRecord {
+  readonly entry_point?: IntegrationEntryPoint;
   readonly requestId: string;
   readonly toolName: string;
   readonly toolInputDigest: Record<string, unknown>;
@@ -39,6 +43,7 @@ export interface ConsoleApprovalRecord {
 // until the console shape and this mapping are consciously updated.
 function copyApprovalRecordFields(record: ConsoleApprovalRecord | CliApprovalRecord): ConsoleApprovalRecord {
   return {
+    ...(record.entry_point ? { entry_point: record.entry_point } : {}),
     requestId: record.requestId,
     toolName: record.toolName,
     toolInputDigest: record.toolInputDigest,
@@ -103,7 +108,16 @@ export class ConfirmationSessionApprovalStore implements SessionApprovalStore {
     record: ConsoleApprovalRecord,
   ): Promise<void> {
     const store = await this.openStore(userId, sessionId);
-    const cliRecord = toCliApprovalRecord(record);
+    const original = store.getCliApproval(approvalId);
+    const allowedScopes = original ? effectiveCliApprovalScopes(original) : undefined;
+    if (record.approvedAt && (
+      (record.scope === 'input_session' && !allowedScopes?.includes('input_session')) ||
+      (allowedScopes && !allowedScopes.includes(record.scope))
+    )) {
+      throw new Error(`Approval scope "${record.scope}" is not allowed for this request.`);
+    }
+    // Scope permissions belong to the original request, not the decision payload.
+    const cliRecord = toCliApprovalRecord({ ...record, allowedScopes });
     store.saveCliApproval(approvalId, cliRecord);
     if (record.scope === 'tool_session' && record.approvedAt) {
       store.saveCliSessionApproval(record.toolName, cliRecord);
@@ -185,6 +199,12 @@ export class GatekeeperSessionApprovalStore implements SessionApprovalStore {
   }
 }
 
-export function toCliApprovalScope(scope: 'once' | 'session'): CliApprovalScope {
+export function toCliApprovalScope(scope: ConsoleApprovalScope): CliApprovalScope {
+  if (scope === 'input_session') return 'input_session';
   return scope === 'session' ? 'tool_session' : 'single';
+}
+
+export function toConsoleApprovalScope(scope: CliApprovalScope): ConsoleApprovalScope {
+  if (scope === 'input_session') return 'input_session';
+  return scope === 'tool_session' ? 'session' : 'once';
 }

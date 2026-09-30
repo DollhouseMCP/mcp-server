@@ -13,6 +13,7 @@
  * surrounding text explicitly directs users to the correct endpoint.
  */
 
+import { OperationRegistry } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 import { OPERATION_ROUTES, getOperationsForEndpoint } from '../../../../src/handlers/mcp-aql/OperationRouter.js';
 import type { CRUDEndpoint } from '../../../../src/handlers/mcp-aql/OperationRouter.js';
 
@@ -79,7 +80,7 @@ async function getToolDescriptions(): Promise<Record<string, string>> {
 
   // Create a minimal mock handler — we only access .tool.description, never call handlers
   const mockHandler = new Proxy({}, {
-    get: () => () => Promise.resolve({ success: true }),
+    get: (_target, key) => key === 'operations' ? new OperationRegistry() : () => Promise.resolve({ success: true }),
   });
 
   // Force CRUDE mode

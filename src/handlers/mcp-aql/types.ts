@@ -1,3 +1,4 @@
+import { isIntegrationRequestEnvelope, integrationRequestParams } from '../../security/IntegrationRequestEnvelope.js';
 /**
  * TypeScript type definitions for MCP-AQL (MCP Agent Query Language)
  * These types match the GraphQL schema defined in schema.graphql
@@ -499,6 +500,7 @@ export class InputFormatMetrics {
  * @returns Normalized OperationInput or null if invalid
  */
 export function parseOperationInput(input: unknown): OperationInput | null {
+  if (isIntegrationRequestEnvelope(input) && !integrationRequestParams(input)) return null;
   // Primary path: proper MCP-AQL format
   if (isOperationInput(input)) {
     InputFormatMetrics.record('proper');

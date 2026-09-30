@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Permission Flow Test Harness (Issue #1669)
  *
@@ -926,7 +927,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       // but the elevation constraint ensures element policies can't silently
       // set it to AUTO_APPROVE (bypassing the auto-confirm recording entirely).
       const route = { operation: 'execute_agent', endpoint: 'EXECUTE' as const };
-      const decision = gatekeeper.enforce(route);
+      const decision = gatekeeper.enforce(route, BASE_OPERATION_REGISTRY);
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
       // The confirmation level should still be CONFIRM_SINGLE_USE
@@ -935,7 +936,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
 
     it('delete_element canBeElevated: false prevents silent auto-approve', async () => {
       const route = { operation: 'delete_element', endpoint: 'DELETE' as const };
-      const decision = gatekeeper.enforce(route);
+      const decision = gatekeeper.enforce(route, BASE_OPERATION_REGISTRY);
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
       expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
@@ -944,7 +945,7 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
     it('unknown operations default to CONFIRM_SINGLE_USE (secure fallback)', async () => {
       // If someone invents a new operation, it's not AUTO_APPROVE
       const route = { operation: 'totally_unknown_operation', endpoint: 'EXECUTE' as const };
-      const decision = gatekeeper.enforce(route);
+      const decision = gatekeeper.enforce(route, BASE_OPERATION_REGISTRY);
       // Unknown operations fail route validation, which is a hard deny
       expect(decision.allowed).toBe(false);
     });
@@ -996,7 +997,15 @@ describe('Permission Flow Test Harness (Issue #1669)', () => {
       // - The user has accepted the risk by moving it from ask to allow
       // - Element policies provide runtime-configurable guardrails
       // - DangerZone provides last-resort OS-level verification
-      expect(true).toBe(true); // Documentation test — always passes
+      const decision = gatekeeper.enforce({
+        operation: 'list_elements',
+        endpoint: 'READ',
+        activeElements: [{
+          type: 'persona', name: 'deny-guard',
+          metadata: { name: 'deny-guard', gatekeeper: { deny: ['list_elements'] } },
+        }],
+      }, BASE_OPERATION_REGISTRY);
+      expect(decision).toMatchObject({ allowed: false, permissionLevel: PermissionLevel.DENY });
     });
   });
 });

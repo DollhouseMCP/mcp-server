@@ -29,9 +29,9 @@ const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_@.]+$/;
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
 export class SkillManager extends BaseElementManager<Skill> {
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActiveSkillNames: Set<string> = new Set();
@@ -104,7 +104,7 @@ export class SkillManager extends BaseElementManager<Skill> {
 
     // FIX: Issue #20 - Check for duplicate before creating
     const existingSkills = await this.list();
-    const duplicate = existingSkills.find(s =>
+    const duplicate = existingSkills.some(s =>
       s.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
     );
 
@@ -150,6 +150,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     try {
       let metadata: any;
       let instructions: string;
+      let content = '';
 
       if (format === 'yaml' || format === 'markdown') {
         // Use SerializationService for YAML frontmatter parsing
@@ -159,21 +160,19 @@ export class SkillManager extends BaseElementManager<Skill> {
           source: 'SkillManager.importElement'
         });
 
-        // Extract metadata and instructions
-        if (result.data.metadata) {
-          metadata = result.data.metadata;
-          instructions = result.data.instructions || result.content || '';
-        } else {
-          metadata = result.data;
-          instructions = result.data.instructions || result.content || '';
-          delete metadata.instructions;
-        }
+        metadata = result.data.metadata ?? result.data;
+        const explicitInstructions = result.data.instructions ?? metadata.instructions;
+        const isV2 = typeof explicitInstructions === 'string';
+        instructions = isV2 ? (explicitInstructions ?? '') : (result.content || '');
+        content = isV2 ? result.content : '';
+        delete metadata.instructions;
       } else {
         // Use SerializationService for JSON parsing
         const parsed = this.serializationService.parseJson(data, {
           source: 'SkillManager.importElement'
         });
 
+        if (typeof parsed.content === 'string') content = parsed.content;
         if (parsed.metadata) {
           metadata = parsed.metadata;
           instructions = parsed.instructions || '';
@@ -184,7 +183,7 @@ export class SkillManager extends BaseElementManager<Skill> {
         }
       }
 
-      return new Skill(metadata, instructions, this.metadataService);
+      return new Skill(metadata, instructions, this.metadataService, content);
     } catch (error) {
       logger.error('Failed to import skill:', error);
       throw error;
@@ -259,16 +258,17 @@ export class SkillManager extends BaseElementManager<Skill> {
    * Dual-field: detects v2 format (instructions in YAML frontmatter) vs v1 (body = instructions).
    */
   protected createElement(metadata: SkillMetadata, bodyContent: string): Skill {
-    // Fix #912: Prefer explicit format_version marker, fall back to instructions-presence check
-    const isV2 = (metadata as any).format_version === 'v2' || !!metadata.instructions;
+    // An explicit instructions field (including empty) separates reference content.
+    // Legacy v2 files without that field still use their body as instructions.
+    const isV2 = typeof metadata.instructions === 'string';
     delete (metadata as any).format_version;  // Strip marker from runtime metadata
     const metadataInstructions = metadata.instructions;
     let instructions: string;
     let content: string;
 
-    if (isV2 && metadataInstructions) {
+    if (isV2) {
       // v2 format: instructions from YAML, body is reference content
-      instructions = metadataInstructions;
+      instructions = metadataInstructions ?? '';
       content = bodyContent;
       delete metadata.instructions;
     } else {
@@ -293,12 +293,10 @@ export class SkillManager extends BaseElementManager<Skill> {
     if (element.version) {
       metadata.version = element.version;
     }
-    // Fix #912: Explicit format marker replaces fragile instructions-presence detection
+    // Mark the dual-field serialization format.
     metadata.format_version = 'v2';
     // Write instructions to YAML frontmatter (v2.0 dual-field format)
-    if (element.instructions) {
-      metadata.instructions = element.instructions;
-    }
+    metadata.instructions = element.instructions;
 
     // Body is the reference content
     const body = element.content || this.buildDefaultBody(element);
@@ -317,8 +315,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     const description = (metadata.description ?? '').trim();
     const lines: string[] = [];
     if (name) {
-      lines.push(`# ${name}`);
-      lines.push('');
+      lines.push(`# ${name}`, '');
     }
     if (description) {
       lines.push(description);

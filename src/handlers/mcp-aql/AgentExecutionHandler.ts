@@ -1,3 +1,4 @@
+import type { OperationRegistry } from './OperationRegistry.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
@@ -36,6 +37,7 @@ export class AgentExecutionHandler {
     private readonly executingAgents: Map<string, ExecutingAgentEntry>,
     private readonly abortedGoals: Set<string>,
     private readonly sessionKey: (name: string) => string,
+    private readonly operations: OperationRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
   ) {}
 
@@ -263,7 +265,7 @@ export class AgentExecutionHandler {
       const agentElement = await manager.read(elementName);
       const agentMeta = agentElement?.metadata as AgentMetadataV2 | undefined;
       const gatekeeperPolicy = agentMeta?.gatekeeper ??
-        (agentMeta?.tools ? translateToolConfigToPolicy(agentMeta.tools) ?? undefined : undefined);
+        (agentMeta?.tools ? translateToolConfigToPolicy(agentMeta.tools, this.operations) ?? undefined : undefined);
       const resiliencePolicy = agentMeta?.resilience;
 
       if (gatekeeperPolicy) {

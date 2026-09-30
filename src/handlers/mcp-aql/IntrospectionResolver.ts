@@ -22,16 +22,14 @@
  * - This ensures single source of truth for schema-driven operations
  */
 
-import { OPERATION_ROUTES, type CRUDEndpoint } from './OperationRouter.js';
+import { type OperationRegistry } from './OperationRegistry.js';
+import { type CRUDEndpoint } from './OperationRouter.js';
 import { PermissionGuard, type EndpointPermissions } from './PermissionGuard.js';
 import { ElementType } from './types.js';
 import { getAllowedGroupByFields } from '../../services/query/AggregationService.js';
 import { VALIDATION_PATTERNS } from '../../security/constants.js';
 import {
-  getOperationSchema,
-  getAnyOperationSchema,
   schemaToParameterInfo,
-  ALL_OPERATION_SCHEMAS,
   type OperationDef,
 } from './OperationSchema.js';
 
@@ -373,7 +371,7 @@ PRIORITIZE defense-in-depth strategies.`,
       'File extension: .md',
       'Frontmatter delimited by --- on its own line',
       'Body text after frontmatter becomes the content field',
-      'category must match: ^[a-zA-Z][a-zA-Z0-9\\-_]{0,20}$',
+      String.raw`category must match: ^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$`,
       SHARED_GATEKEEPER_STRUCTURE_NOTE,
       SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
@@ -433,7 +431,7 @@ FORMAT feedback as actionable bullet points.
       'In section format: only <template> is variable-processed; <style> and <script> are raw passthrough (}} is safe there)',
       'Declare variables in frontmatter: variables: [{ name, type, required, description }]',
       'For lists, tables, or conditional content: pass pre-formatted markdown strings as variables',
-      'category must match: ^[a-zA-Z][a-zA-Z0-9\\-_]{0,20}$',
+      String.raw`category must match: ^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$`,
       SHARED_GATEKEEPER_STRUCTURE_NOTE,
       SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
@@ -560,7 +558,7 @@ You are a thorough code reviewer who prioritizes security.`,
       'Entries are structured YAML objects with timestamp, content, tags, metadata',
       'Use addEntry operation to add entries (not edit_element)',
       'retentionDays controls automatic expiry of entries',
-      'category must match: ^[a-zA-Z][a-zA-Z0-9\\-_]{0,20}$',
+      String.raw`category must match: ^[a-zA-Z][a-zA-Z0-9\-_]{0,20}$`,
       'Naming convention for agent-linked memories: agent-{agent-name}-context',
       'Naming convention for persona-linked memories: persona-{persona-name}-preferences',
       SHARED_GATEKEEPER_STRUCTURE_NOTE,
@@ -777,16 +775,16 @@ const OPERATION_EXAMPLES: Record<string, string[]> = {
     '{ operation: "create_element", elementType: "persona", params: { element_name: "SecurityExpert", description: "Cybersecurity specialist", instructions: "You ARE a cybersecurity expert with 15 years of experience. ALWAYS consider threat models before suggesting solutions. NEVER recommend security through obscurity. PRIORITIZE defense-in-depth strategies." } }',
 
     // SKILL — dual-field: instructions = behavioral directives, content = reference knowledge. Both together is best practice.
-    '{ operation: "create_element", elementType: "skill", params: { element_name: "CodeReview", description: "Reviews code for quality and security", instructions: "When reviewing code: ALWAYS check for security vulnerabilities first. ANALYZE complexity and suggest simplifications. FORMAT feedback as actionable bullet points.", content: "# Code Review Reference\\n\\n## Security Checklist\\n- SQL injection\\n- XSS vulnerabilities\\n- Unvalidated input\\n\\n## Quality Metrics\\n- Cyclomatic complexity < 10\\n- Test coverage > 80%" } }',
+    String.raw`{ operation: "create_element", elementType: "skill", params: { element_name: "CodeReview", description: "Reviews code for quality and security", instructions: "When reviewing code: ALWAYS check for security vulnerabilities first. ANALYZE complexity and suggest simplifications. FORMAT feedback as actionable bullet points.", content: "# Code Review Reference\n\n## Security Checklist\n- SQL injection\n- XSS vulnerabilities\n- Unvalidated input\n\n## Quality Metrics\n- Cyclomatic complexity < 10\n- Test coverage > 80%" } }`,
 
     // TEMPLATE (simple) — content is the template body. Use {{variable_name}} for substitution.
-    '{ operation: "create_element", elementType: "template", params: { element_name: "BugReport", description: "Bug report template", content: "## Bug Report\\n\\n**Summary:** {{summary}}\\n**Steps to Reproduce:** {{steps}}\\n**Expected:** {{expected}}\\n**Actual:** {{actual}}", metadata: { variables: [{ name: "summary", type: "string", required: true }, { name: "steps", type: "string", required: true }, { name: "expected", type: "string", required: false }, { name: "actual", type: "string", required: false }] } } }',
+    String.raw`{ operation: "create_element", elementType: "template", params: { element_name: "BugReport", description: "Bug report template", content: "## Bug Report\n\n**Summary:** {{summary}}\n**Steps to Reproduce:** {{steps}}\n**Expected:** {{expected}}\n**Actual:** {{actual}}", metadata: { variables: [{ name: "summary", type: "string", required: true }, { name: "steps", type: "string", required: true }, { name: "expected", type: "string", required: false }, { name: "actual", type: "string", required: false }] } } }`,
 
     // TEMPLATE (section format) — <template> for HTML+{{vars}}, <style> for CSS, <script> for JS. }} is safe in style/script.
-    '{ operation: "create_element", elementType: "template", params: { element_name: "DashboardPage", description: "Full-page dashboard shell with styles and JS", content: "<template>\\n<!DOCTYPE html>\\n<html><head><title>{{title}}</title></head>\\n<body>{{body}}</body>\\n</html>\\n</template>\\n\\n<style>\\nbody { font-family: sans-serif; }\\n.card { border: 1px solid #ccc; } /* }} safe here */\\n</style>\\n\\n<script>\\nvar state = { status: \\"all\\" };\\nfunction update() { return { bar: baz }; } // }} safe here\\n</script>", metadata: { variables: [{ name: "title", type: "string", required: true }, { name: "body", type: "string", required: false }] } } }',
+    String.raw`{ operation: "create_element", elementType: "template", params: { element_name: "DashboardPage", description: "Full-page dashboard shell with styles and JS", content: "<template>\n<!DOCTYPE html>\n<html><head><title>{{title}}</title></head>\n<body>{{body}}</body>\n</html>\n</template>\n\n<style>\nbody { font-family: sans-serif; }\n.card { border: 1px solid #ccc; } /* }} safe here */\n</style>\n\n<script>\nvar state = { status: \"all\" };\nfunction update() { return { bar: baz }; } // }} safe here\n</script>", metadata: { variables: [{ name: "title", type: "string", required: true }, { name: "body", type: "string", required: false }] } } }`,
 
     // TEMPLATE (CSS theme — style-only section format)
-    '{ operation: "create_element", elementType: "template", params: { element_name: "ThemeDark", description: "Dark color theme — activate to style dashboard with dark palette", content: "<style>\\n:root {\\n  --bg: #0f1117;\\n  --surface: #1a1d27;\\n  --text: #e8eaf6;\\n  --accent: #4a9eff;\\n}\\n.card { background: var(--surface); color: var(--text); }\\n</style>" } }',
+    String.raw`{ operation: "create_element", elementType: "template", params: { element_name: "ThemeDark", description: "Dark color theme — activate to style dashboard with dark palette", content: "<style>\n:root {\n  --bg: #0f1117;\n  --surface: #1a1d27;\n  --text: #e8eaf6;\n  --accent: #4a9eff;\n}\n.card { background: var(--surface); color: var(--text); }\n</style>" } }`,
 
     // AGENT (V2) — goal is an object, activates references elements by name, tools controls access.
     '{ operation: "create_element", elementType: "agent", params: { element_name: "CodeReviewer", description: "Reviews code for quality and security issues", goal: { template: "Review the code at {path} for {focus_area}", parameters: [{ name: "path", type: "string", required: true, description: "File or directory to review" }, { name: "focus_area", type: "string", required: false, description: "security | quality | performance", default: "quality" }], successCriteria: ["All issues documented", "Severity ratings assigned", "Fixes suggested"] }, activates: { skills: ["code-review"], personas: ["security-analyst"] }, tools: { allowed: ["read_file", "list_directory"] }, systemPrompt: "You are a thorough code reviewer. Be specific about line numbers and provide concrete fix suggestions." } }',
@@ -888,16 +886,16 @@ export class IntrospectionResolver {
    * @param params.name - Optional: specific operation or type name
    * @returns IntrospectionResult with requested information
    */
-  static resolve(params: Record<string, unknown>): IntrospectionResult {
+  static resolve(params: Record<string, unknown>, operations: OperationRegistry): IntrospectionResult {
     const query = (params.query as string) || 'operations';
     const name = params.name as string | undefined;
 
     switch (query) {
       case 'operations':
         if (name) {
-          return { operation: this.getOperationDetails(name) };
+          return { operation: this.getOperationDetails(name, operations) };
         }
-        return { operations: this.listOperations() };
+        return { operations: this.listOperations(operations) };
 
       case 'types':
         if (name) {
@@ -926,13 +924,13 @@ export class IntrospectionResolver {
    *
    * @see Issue #254 - Single source of truth from schema
    */
-  private static listOperations(): OperationInfo[] {
+  private static listOperations(registry: OperationRegistry): OperationInfo[] {
     const operations: OperationInfo[] = [];
 
     // Include all operations from OPERATION_ROUTES
-    for (const [opName, route] of Object.entries(OPERATION_ROUTES)) {
+    for (const [opName, route] of Object.entries(registry.routes)) {
       // Prefer schema description from any schema (dispatch-driven or introspection-only)
-      const schema = getAnyOperationSchema(opName);
+      const schema = registry.getSchema(opName);
       operations.push({
         name: opName,
         endpoint: route.endpoint,
@@ -941,7 +939,7 @@ export class IntrospectionResolver {
     }
 
     // Add introspect operation (schema-driven but not in OPERATION_ROUTES)
-    const introspectSchema = getOperationSchema('introspect');
+    const introspectSchema = registry.getSchema('introspect');
     operations.push({
       name: 'introspect',
       endpoint: 'READ',
@@ -965,15 +963,15 @@ export class IntrospectionResolver {
    *
    * @see Issue #254 - Auto-generate introspection from schema
    */
-  private static getOperationDetails(name: string): OperationDetails | null {
+  private static getOperationDetails(name: string, registry: OperationRegistry): OperationDetails | null {
     // Check schema first — includes both dispatch-driven and introspection-only schemas
-    const schema = getAnyOperationSchema(name);
+    const schema = registry.getSchema(name);
     if (schema) {
-      return this.getSchemaOperationDetails(name, schema);
+      return this.getSchemaOperationDetails(name, schema, registry);
     }
 
     // Legacy fallback for non-schema operations
-    const route = OPERATION_ROUTES[name];
+    const route = registry.getRoute(name);
     if (!route) {
       return null;
     }
@@ -997,8 +995,8 @@ export class IntrospectionResolver {
    * @see Issue #254 - Single source of truth from schema
    * @see Issue #594 - Introspection-only schemas for all operations
    */
-  private static getSchemaOperationDetails(name: string, schema?: OperationDef): OperationDetails | null {
-    const resolvedSchema = schema ?? getAnyOperationSchema(name);
+  private static getSchemaOperationDetails(name: string, schema: OperationDef | undefined, registry: OperationRegistry): OperationDetails | null {
+    const resolvedSchema = schema ?? registry.getSchema(name);
     if (!resolvedSchema) {
       return null;
     }
@@ -1008,7 +1006,7 @@ export class IntrospectionResolver {
       ? { name: resolvedSchema.returns.name, kind: resolvedSchema.returns.kind, description: resolvedSchema.returns.description }
       : { name: 'OperationResult', kind: 'union', description: 'Success with data or failure with error' };
 
-    const route = OPERATION_ROUTES[name];
+    const route = registry.getRoute(name);
     return {
       name,
       endpoint: resolvedSchema.endpoint,
@@ -1111,7 +1109,7 @@ export class IntrospectionResolver {
    * Get operations grouped by endpoint
    * Utility method for documentation generation
    */
-  static getOperationsByEndpoint(): Record<CRUDEndpoint, OperationInfo[]> {
+  static getOperationsByEndpoint(registry: OperationRegistry): Record<CRUDEndpoint, OperationInfo[]> {
     const grouped: Record<CRUDEndpoint, OperationInfo[]> = {
       CREATE: [],
       READ: [],
@@ -1120,7 +1118,7 @@ export class IntrospectionResolver {
       EXECUTE: [],
     };
 
-    for (const op of this.listOperations()) {
+    for (const op of this.listOperations(registry)) {
       const endpoint = op.endpoint as CRUDEndpoint;
       if (grouped[endpoint]) {
         grouped[endpoint].push(op);
@@ -1133,8 +1131,8 @@ export class IntrospectionResolver {
   /**
    * Generate a compact summary for token-efficient responses
    */
-  static getSummary(): string {
-    const opsByEndpoint = this.getOperationsByEndpoint();
+  static getSummary(registry: OperationRegistry): string {
+    const opsByEndpoint = this.getOperationsByEndpoint(registry);
     const lines: string[] = ['MCP-AQL Operations:'];
 
     for (const [endpoint, ops] of Object.entries(opsByEndpoint)) {
@@ -1142,8 +1140,10 @@ export class IntrospectionResolver {
       lines.push(`  ${endpoint}: ${opNames}`);
     }
 
-    lines.push(`\nTypes: ${Object.keys(TYPE_DEFINITIONS).join(', ')}`);
-    lines.push('\nUse introspect with name parameter for details.');
+    lines.push(
+      `\nTypes: ${Object.keys(TYPE_DEFINITIONS).join(', ')}`,
+      '\nUse introspect with name parameter for details.',
+    );
 
     return lines.join('\n');
   }
@@ -1163,9 +1163,9 @@ export class IntrospectionResolver {
    * @returns CapabilitiesResult with categorized operations
    * @see Issue #1760 - get_capabilities operation
    */
-  static getCapabilities(params: Record<string, unknown>): Record<string, unknown> {
+  static getCapabilities(params: Record<string, unknown>, registry: OperationRegistry): Record<string, unknown> {
     const filterCategory = params.category as string | undefined;
-    const { categories, sortedCategories, sourceTypes } = this.buildCategoryMap();
+    const { categories, sortedCategories, sourceTypes } = this.buildCategoryMap(registry);
 
     // Apply category filter if requested
     if (filterCategory) {
@@ -1188,13 +1188,13 @@ export class IntrospectionResolver {
    * Build the full category map from all registered capability sources.
    * Returns sorted categories with descriptions and merged entries.
    */
-  private static buildCategoryMap() {
+  private static buildCategoryMap(registry: OperationRegistry) {
     const mergedMap: Record<string, CapabilityEntry[]> = {};
     const sourceTypes: string[] = [];
 
     for (const source of capabilitySources) {
       sourceTypes.push(source.sourceType);
-      const caps = source.getCapabilities();
+      const caps = source.getCapabilities(registry);
       for (const [cat, entries] of Object.entries(caps)) {
         if (!mergedMap[cat]) mergedMap[cat] = [];
         mergedMap[cat].push(...entries);
@@ -1308,7 +1308,7 @@ export interface CapabilityEntry {
  */
 export interface CapabilitySource {
   readonly sourceType: string;
-  getCapabilities(): Record<string, CapabilityEntry[]>;
+  getCapabilities(registry: OperationRegistry): Record<string, CapabilityEntry[]>;
 }
 
 /**
@@ -1318,12 +1318,12 @@ export interface CapabilitySource {
 class ServerOperationsSource implements CapabilitySource {
   readonly sourceType = 'server';
 
-  getCapabilities(): Record<string, CapabilityEntry[]> {
+  getCapabilities(registry: OperationRegistry): Record<string, CapabilityEntry[]> {
     const map: Record<string, CapabilityEntry[]> = {};
 
     // Collect from OPERATION_ROUTES (the complete operation list)
-    for (const [opName, route] of Object.entries(OPERATION_ROUTES)) {
-      const schema = getAnyOperationSchema(opName);
+    for (const [opName, route] of Object.entries(registry.routes)) {
+      const schema = registry.getSchema(opName);
       const category = schema?.category || 'Other';
       const brief = IntrospectionResolver['toBrief'](
         schema?.description || route.description || `${opName} operation`
@@ -1340,8 +1340,8 @@ class ServerOperationsSource implements CapabilitySource {
     }
 
     // Add schema-only operations not in OPERATION_ROUTES (e.g., introspect, get_capabilities)
-    for (const [opName, schema] of Object.entries(ALL_OPERATION_SCHEMAS)) {
-      if (opName in OPERATION_ROUTES) continue;
+    for (const [opName, schema] of Object.entries(registry.schemas)) {
+      if (opName in registry.routes) continue;
       const category = schema.category || 'Other';
       const brief = IntrospectionResolver['toBrief'](schema.description);
 
