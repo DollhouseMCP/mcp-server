@@ -1,3 +1,4 @@
+import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * EnsembleManager - Implementation of IElementManager for Ensemble elements
  *
@@ -840,7 +841,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   /**
    * Override save to validate before persisting
    */
-  override async save(element: Ensemble, filePath: string): Promise<void> {
+  override async save(element: Ensemble, filePath: string, options?: ElementSaveOptions): Promise<void> {
     // Validate ensemble before saving
     const validationResult = this.validate(element);
     if (!validationResult.valid) {
@@ -849,7 +850,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     }
 
     // Call base implementation
-    await super.save(element, filePath);
+    await super.save(element, filePath, options);
   }
 
   /**

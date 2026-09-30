@@ -1,4 +1,4 @@
-import { ALL_OPERATION_SCHEMAS } from './OperationSchema.js';
+import type { OperationRegistry } from './OperationRegistry.js';
 import type { ActiveElement } from './policies/index.js';
 import type { CliApprovalPolicy, CliApprovalScope } from './GatekeeperTypes.js';
 
@@ -8,14 +8,15 @@ function namedAction(name: string, withName: string, withoutName: string): strin
 
 export function buildOperationSummary(
   operation: string,
-  elementType?: string,
-  params?: Record<string, unknown>
+  elementType: string | undefined,
+  params: Record<string, unknown> | undefined,
+  operations: OperationRegistry
 ): string {
   const p = params || {};
   const name = (p.element_name || p.name || '') as string;
   const typeLabel = elementType || (p.element_type as string) || 'element';
   const directSummary = buildKnownOperationSummary(operation, name, typeLabel, p);
-  return directSummary ?? buildFallbackOperationSummary(operation, elementType, p);
+  return directSummary ?? buildFallbackOperationSummary(operation, elementType, p, operations);
 }
 
 function buildKnownOperationSummary(
@@ -54,9 +55,10 @@ function buildInstallSummary(p: Record<string, unknown>): string {
 function buildFallbackOperationSummary(
   operation: string,
   elementType: string | undefined,
-  p: Record<string, unknown>
+  p: Record<string, unknown>,
+  operations: OperationRegistry
 ): string {
-  const schema = ALL_OPERATION_SCHEMAS[operation];
+  const schema = operations.getSchema(operation);
   const paramKeys = Object.keys(p).filter(k => k !== 'operation');
   const paramHint = paramKeys.length > 0 ? ` (${paramKeys.join(', ')})` : '';
   if (schema?.description) {

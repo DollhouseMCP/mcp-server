@@ -295,6 +295,30 @@ describe('ApprovalModule', () => {
     expect(eventSink.listEvents()).toEqual([]);
   });
 
+  it.each(['session', 'input_session'])('maps a permitted exact-input decision from %s without granting tool-wide approval', async scope => {
+    const { module, approvalStore, eventSink } = await fixture();
+    approvalStore.seed(USER_ID, SESSION_ID, approvalRecord(APPROVAL_ID, { allowedScopes: ['single', 'input_session'] }));
+    const approveRoute = findRoute(module.routes, 'POST', APPROVE_PATH);
+    expect(await approveRoute.handler(request({
+      params: { session_id: SESSION_ID, approval_id: APPROVAL_ID }, body: { scope },
+    }))).toMatchObject({ status: 200, body: { scope: 'input_session', allowed_scopes: ['once', 'input_session'] } });
+    expect(eventSink.listEvents()).toEqual([expect.objectContaining({ scope: 'input_session' })]);
+    expect(await approvalStore.find(USER_ID, SESSION_ID, APPROVAL_ID)).toMatchObject({ scope: 'input_session' });
+  });
+
+
+  it.each(['session', 'input_session'])('limits legacy pending integration approvals to exact input for %s', async scope => {
+    const { module, approvalStore } = await fixture();
+    approvalStore.seed(USER_ID, SESSION_ID, approvalRecord(APPROVAL_ID, { toolName: 'integration_request' }));
+    const approveRoute = findRoute(module.routes, 'POST', APPROVE_PATH);
+    expect(await approveRoute.handler(request({
+      params: { session_id: SESSION_ID, approval_id: APPROVAL_ID }, body: { scope },
+    }))).toMatchObject({ status: 200, body: { scope: 'input_session', allowed_scopes: ['once', 'input_session'] } });
+    expect(await approvalStore.find(USER_ID, SESSION_ID, APPROVAL_ID)).toMatchObject({
+      scope: 'input_session', allowedScopes: ['single', 'input_session'],
+    });
+  });
+
   it('privacy projectors use explicit owner-private approval allowlists', () => {
     expect(projectSessionApproval({
       approval_id: APPROVAL_ID,
@@ -336,6 +360,20 @@ describe('ApprovalModule', () => {
       .toEqual({ approvals: [expect.objectContaining({ approval_id: APPROVAL_ID })] });
   });
 
+  it.each(['discrete_tool', 'mcp_aql_execute', 'mcp_aql', 'promoted_tool', 'legacy_tool_args'] as const)('preserves %s attribution through the console DTO and privacy boundary', async entryPoint => {
+    const { module, approvalStore } = await fixture();
+    approvalStore.seed(USER_ID, SESSION_ID, approvalRecord(APPROVAL_ID, { toolName: 'integration_request', entry_point: entryPoint }));
+    const response = await findRoute(module.routes, 'GET', APPROVAL_LIST_PATH).handler(request({ params: { session_id: SESSION_ID } }));
+    expect(JSON.stringify(response)).toContain(`"entry_point":"${entryPoint}"`);
+    expect(projectSessionApproval({ entry_point: entryPoint })).toMatchObject({ entry_point: entryPoint });
+    expect(projectSessionApproval({ entry_point: 'untrusted entry' })).not.toHaveProperty('entry_point');
+  });
+
+  it('preserves exact-input scope through the privacy projector', () => {
+    expect(projectSessionApproval({ scope: 'input_session', allowed_scopes: ['once', 'input_session', 'invalid'] }))
+      .toMatchObject({ scope: 'input_session', allowed_scopes: ['once', 'input_session'] });
+  });
+
   it('bridges decisions to the existing confirmation store and promotes session-scoped approvals', async () => {
     const confirmationStore = new FakeConfirmationStore(SESSION_ID);
     const approval = approvalRecord(APPROVAL_ID);
@@ -359,6 +397,47 @@ describe('ApprovalModule', () => {
       requestId: APPROVAL_ID,
       scope: 'tool_session',
     });
+    expect(confirmationStore.persistCount).toBe(1);
+  });
+
+  it.each([undefined, ['single'], ['single', 'tool_session']] as const)('refuses an unpermitted exact-input scope at the confirmation store: %s', async allowedScopes => {
+    const confirmationStore = new FakeConfirmationStore(SESSION_ID);
+    const approval = approvalRecord(APPROVAL_ID, { allowedScopes });
+    confirmationStore.saveCliApproval(APPROVAL_ID, approval);
+    const approvalStore = new ConfirmationSessionApprovalStore(() => confirmationStore);
+    await expect(approvalStore.save(USER_ID, SESSION_ID, APPROVAL_ID, {
+      ...approval, approvedAt: NOW.toISOString(), scope: 'input_session', allowedScopes: ['single', 'input_session'],
+    })).rejects.toThrow(/scope/i);
+    expect(confirmationStore.getCliApproval(APPROVAL_ID)).toEqual(approval);
+    expect(confirmationStore.getCliSessionApproval('Bash')).toBeUndefined();
+    expect(confirmationStore.persistCount).toBe(0);
+  });
+
+
+  it('enforces legacy integration scopes at the persistent confirmation boundary', async () => {
+    const confirmationStore = new FakeConfirmationStore(SESSION_ID);
+    const approval = approvalRecord(APPROVAL_ID, { toolName: 'integration_request' });
+    confirmationStore.saveCliApproval(APPROVAL_ID, approval);
+    const approvalStore = new ConfirmationSessionApprovalStore(() => confirmationStore);
+    await expect(approvalStore.save(USER_ID, SESSION_ID, APPROVAL_ID, {
+      ...approval, approvedAt: NOW.toISOString(), scope: 'tool_session',
+    })).rejects.toThrow('not allowed');
+    await approvalStore.save(USER_ID, SESSION_ID, APPROVAL_ID, {
+      ...approval, approvedAt: NOW.toISOString(), scope: 'input_session',
+    });
+    expect(confirmationStore.getCliApproval(APPROVAL_ID)).toMatchObject({
+      scope: 'input_session', allowedScopes: ['single', 'input_session'],
+    });
+    expect(confirmationStore.getCliSessionApproval('integration_request')).toBeUndefined();
+  });
+  it('persists permitted exact-input approval without promoting a tool-wide approval', async () => {
+    const confirmationStore = new FakeConfirmationStore(SESSION_ID);
+    const approval = approvalRecord(APPROVAL_ID, { allowedScopes: ['single', 'input_session'] });
+    confirmationStore.saveCliApproval(APPROVAL_ID, approval);
+    const approvalStore = new ConfirmationSessionApprovalStore(() => confirmationStore);
+    await approvalStore.save(USER_ID, SESSION_ID, APPROVAL_ID, { ...approval, approvedAt: NOW.toISOString(), scope: 'input_session' });
+    expect(confirmationStore.getCliApproval(APPROVAL_ID)).toMatchObject({ scope: 'input_session', approvedAt: NOW.toISOString() });
+    expect(confirmationStore.getCliSessionApproval('Bash')).toBeUndefined();
     expect(confirmationStore.persistCount).toBe(1);
   });
 

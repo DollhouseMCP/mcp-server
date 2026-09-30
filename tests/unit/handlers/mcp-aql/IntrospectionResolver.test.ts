@@ -1,3 +1,5 @@
+import type { AuthorizedIntegrationGateway } from '../../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import { OperationRegistry, BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Unit tests for IntrospectionResolver
  *
@@ -10,10 +12,19 @@ import { IntrospectionResolver } from '../../../../src/handlers/mcp-aql/Introspe
 import { getOperationSchema, getAnyOperationSchema } from '../../../../src/handlers/mcp-aql/OperationSchema.js';
 
 describe('IntrospectionResolver', () => {
+  it('introspects an arbitrary integration JSON body as unknown while preserving typed properties', () => {
+    const registry = new OperationRegistry(undefined, {} as AuthorizedIntegrationGateway);
+    const result = IntrospectionResolver.resolve({ query: 'operations', name: 'integration_request' }, registry);
+    expect(JSON.stringify(result)).toContain('unknown');
+    expect(registry.getSchema('integration_request')?.params.body).toMatchObject({ type: 'unknown', required: false });
+    expect(registry.getSchema('integration_request')?.params.provider).toMatchObject({ type: 'string', required: true });
+    expect(registry.getSchema('integration_request')?.params.query).toMatchObject({ type: 'object', required: false });
+  });
+
   describe('resolve()', () => {
     describe('operations query', () => {
       it('should list all operations when query is "operations" with no name', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
 
         expect(result.operations).toBeDefined();
         expect(Array.isArray(result.operations)).toBe(true);
@@ -30,14 +41,14 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should default to "operations" query when no query specified', () => {
-        const result = IntrospectionResolver.resolve({});
+        const result = IntrospectionResolver.resolve({}, BASE_OPERATION_REGISTRY);
 
         expect(result.operations).toBeDefined();
         expect(Array.isArray(result.operations)).toBe(true);
       });
 
       it('should include core CRUD operations', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
         const operationNames = result.operations!.map((op) => op.name);
 
         // CREATE operations
@@ -63,7 +74,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should sort operations by endpoint then name', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
         const ops = result.operations!;
 
         // Find index boundaries for each endpoint
@@ -104,7 +115,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'create_element',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation).not.toBeNull();
@@ -117,7 +128,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'create_element',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const op = result.operation!;
         expect(op.parameters).toBeDefined();
@@ -136,7 +147,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'list_elements',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const op = result.operation!;
         expect(op.permissions).toBeDefined();
@@ -148,7 +159,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'create_element',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const op = result.operation!;
         expect(op.examples).toBeDefined();
@@ -160,7 +171,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'nonexistent_operation',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeNull();
       });
@@ -169,7 +180,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'introspect',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.name).toBe('introspect');
@@ -181,7 +192,7 @@ describe('IntrospectionResolver', () => {
 
     describe('types query', () => {
       it('should list all types when query is "types" with no name', () => {
-        const result = IntrospectionResolver.resolve({ query: 'types' });
+        const result = IntrospectionResolver.resolve({ query: 'types' }, BASE_OPERATION_REGISTRY);
 
         expect(result.types).toBeDefined();
         expect(Array.isArray(result.types)).toBe(true);
@@ -196,7 +207,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should include core types', () => {
-        const result = IntrospectionResolver.resolve({ query: 'types' });
+        const result = IntrospectionResolver.resolve({ query: 'types' }, BASE_OPERATION_REGISTRY);
         const typeNames = result.types!.map((t) => t.name);
 
         expect(typeNames).toContain('ElementType');
@@ -212,7 +223,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'types',
           name: 'ElementType',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.type).toBeDefined();
         expect(result.type!.name).toBe('ElementType');
@@ -230,7 +241,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'types',
           name: 'CRUDEndpoint',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.type).toBeDefined();
         expect(result.type!.kind).toBe('enum');
@@ -241,7 +252,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'types',
           name: 'OperationInput',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.type).toBeDefined();
         expect(result.type!.kind).toBe('object');
@@ -258,7 +269,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'types',
           name: 'OperationResult',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.type).toBeDefined();
         expect(result.type!.kind).toBe('union');
@@ -271,7 +282,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'types',
           name: 'NonexistentType',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.type).toBeNull();
       });
@@ -281,7 +292,7 @@ describe('IntrospectionResolver', () => {
       it('should return empty result for unknown query type', () => {
         const result = IntrospectionResolver.resolve({
           query: 'invalid_query',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result).toEqual({});
       });
@@ -290,7 +301,7 @@ describe('IntrospectionResolver', () => {
 
   describe('getOperationsByEndpoint()', () => {
     it('should return operations grouped by endpoint', () => {
-      const grouped = IntrospectionResolver.getOperationsByEndpoint();
+      const grouped = IntrospectionResolver.getOperationsByEndpoint(BASE_OPERATION_REGISTRY);
 
       expect(grouped).toHaveProperty('CREATE');
       expect(grouped).toHaveProperty('READ');
@@ -318,7 +329,7 @@ describe('IntrospectionResolver', () => {
 
   describe('getSummary()', () => {
     it('should return a compact summary string', () => {
-      const summary = IntrospectionResolver.getSummary();
+      const summary = IntrospectionResolver.getSummary(BASE_OPERATION_REGISTRY);
 
       expect(typeof summary).toBe('string');
       expect(summary.length).toBeGreaterThan(0);
@@ -331,20 +342,20 @@ describe('IntrospectionResolver', () => {
     });
 
     it('should be token-efficient (under 2000 chars)', () => {
-      const summary = IntrospectionResolver.getSummary();
+      const summary = IntrospectionResolver.getSummary(BASE_OPERATION_REGISTRY);
       expect(summary.length).toBeLessThan(2000);
     });
   });
 
   describe('Operation parameter completeness', () => {
     it('should have parameters defined for all operations', () => {
-      const result = IntrospectionResolver.resolve({ query: 'operations' });
+      const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
 
       for (const op of result.operations!) {
         const details = IntrospectionResolver.resolve({
           query: 'operations',
           name: op.name,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // All operations should have a parameters array (may be empty)
         expect(details.operation).not.toBeNull();
@@ -354,13 +365,13 @@ describe('IntrospectionResolver', () => {
     });
 
     it('should have examples defined for all operations', () => {
-      const result = IntrospectionResolver.resolve({ query: 'operations' });
+      const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
 
       for (const op of result.operations!) {
         const details = IntrospectionResolver.resolve({
           query: 'operations',
           name: op.name,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(details.operation).not.toBeNull();
         expect(details.operation!.examples).toBeDefined();
@@ -374,7 +385,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(result.operation!.permissions).toEqual({
         readOnly: false,
@@ -386,7 +397,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'list_elements',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(result.operation!.permissions).toEqual({
         readOnly: true,
@@ -398,7 +409,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'edit_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(result.operation!.permissions).toEqual({
         readOnly: false,
@@ -410,7 +421,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'delete_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(result.operation!.permissions).toEqual({
         readOnly: false,
@@ -429,7 +440,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'browse_collection',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.description).toBe(
@@ -441,7 +452,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'search_collection',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         const params = result.operation!.parameters;
@@ -454,7 +465,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'introspect',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.examples.length).toBeGreaterThan(0);
@@ -465,7 +476,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'render',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.returns.name).toBe('RenderResult');
@@ -488,7 +499,7 @@ describe('IntrospectionResolver', () => {
           const result = IntrospectionResolver.resolve({
             query: 'operations',
             name: opName,
-          });
+          }, BASE_OPERATION_REGISTRY);
 
           expect(result.operation).toBeDefined();
           expect(result.operation!.endpoint).toBe(schema!.endpoint);
@@ -503,7 +514,7 @@ describe('IntrospectionResolver', () => {
           const result = IntrospectionResolver.resolve({
             query: 'operations',
             name: opName,
-          });
+          }, BASE_OPERATION_REGISTRY);
 
           expect(result.operation).toBeDefined();
           expect(result.operation!.description).toBe(schema!.description);
@@ -513,7 +524,7 @@ describe('IntrospectionResolver', () => {
 
     describe('schema operations in operation list', () => {
       it('should include schema-driven operations in list', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
         const opNames = result.operations!.map((o) => o.name);
 
         expect(opNames).toContain('browse_collection');
@@ -524,7 +535,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should use schema descriptions in operation list', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
         const browseOp = result.operations!.find((o) => o.name === 'browse_collection');
 
         expect(browseOp).toBeDefined();
@@ -541,7 +552,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'clear_github_auth',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         // clear_github_auth has explicit returns, so it should use that
@@ -559,7 +570,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       const paramNames = result.operation!.parameters.map(p => p.name);
       expect(paramNames).toContain('instructions');
@@ -569,7 +580,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       const paramNames = result.operation!.parameters.map(p => p.name);
       expect(paramNames).toContain('content');
@@ -580,7 +591,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       const contentParam = result.operation!.parameters.find(p => p.name === 'content');
       expect(contentParam).toBeDefined();
@@ -593,7 +604,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       const goalParam = result.operation!.parameters.find(p => p.name === 'goal');
       expect(goalParam).toBeDefined();
@@ -605,7 +616,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       const personaExample = result.operation!.examples.find(e => e.includes('"persona"'));
       expect(personaExample).toBeDefined();
@@ -616,7 +627,7 @@ describe('IntrospectionResolver', () => {
       const result = IntrospectionResolver.resolve({
         query: 'operations',
         name: 'create_element',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       const agentExample = result.operation!.examples.find(e => e.includes('"agent"'));
       expect(agentExample).toBeDefined();
@@ -641,7 +652,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'record_execution_step',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         const paramNames = result.operation!.parameters.map(p => p.name);
@@ -664,7 +675,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'record_execution_step',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const nextActionHintParam = result.operation!.parameters.find(
           p => p.name === 'nextActionHint'
@@ -677,7 +688,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'record_execution_step',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const riskScoreParam = result.operation!.parameters.find(
           p => p.name === 'riskScore'
@@ -691,7 +702,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'record_execution_step',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const findingsParam = result.operation!.parameters.find(
           p => p.name === 'findings'
@@ -707,7 +718,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'record_execution_step',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // element_name, stepDescription, outcome, findings, confidence, nextActionHint, riskScore
         expect(result.operation!.parameters).toHaveLength(7);
@@ -726,7 +737,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'confirm_operation',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.endpoint).toBe('EXECUTE');
@@ -737,7 +748,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'confirm_operation',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         const paramNames = result.operation!.parameters.map(p => p.name);
         expect(paramNames).toContain('operation');
@@ -751,7 +762,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'confirm_operation',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation!.examples.length).toBeGreaterThan(0);
         expect(result.operation!.returns.name).toBe('ConfirmResult');
@@ -763,7 +774,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'query_logs',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         const paramNames = result.operation!.parameters.map(p => p.name);
@@ -783,7 +794,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'query_logs',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation!.returns.name).toBe('LogQueryResult');
       });
@@ -794,7 +805,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'execute_agent',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         const paramNames = result.operation!.parameters.map(p => p.name);
@@ -812,7 +823,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'execute_agent',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation!.returns.name).toBe('ExecuteAgentResult');
         expect(result.operation!.returns.description).toContain('goalId');
@@ -823,7 +834,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'execute_agent',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation!.description).toContain('record_execution_step');
         expect(result.operation!.description).toContain('mcp_aql_create');
@@ -836,7 +847,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'continue_execution',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.description).toContain('paused');
@@ -851,7 +862,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'addEntry',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         const paramNames = result.operation!.parameters.map(p => p.name);
@@ -879,7 +890,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: opName,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).not.toBeNull();
         // Schema-sourced metadata should match getAnyOperationSchema
@@ -893,7 +904,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: opName,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation!.examples.length).toBeGreaterThan(0);
       });
@@ -907,7 +918,7 @@ describe('IntrospectionResolver', () => {
   describe('Format query (Issue #715)', () => {
     describe('overview (no name)', () => {
       it('should return all 6 format specs when name is omitted', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format' });
+        const result = IntrospectionResolver.resolve({ query: 'format' }, BASE_OPERATION_REGISTRY);
 
         expect(result.formatSpec).toBeDefined();
         expect(Array.isArray(result.formatSpec)).toBe(true);
@@ -928,7 +939,7 @@ describe('IntrospectionResolver', () => {
       const elementTypes = ['persona', 'skill', 'template', 'agent', 'memory', 'ensemble'];
 
       it.each(elementTypes)('should return format spec for %s', (typeName) => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: typeName });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: typeName }, BASE_OPERATION_REGISTRY);
 
         expect(result.formatSpec).toBeDefined();
         expect(result.formatSpec).not.toBeNull();
@@ -948,50 +959,32 @@ describe('IntrospectionResolver', () => {
     });
 
     describe('plural and case normalization', () => {
-      it('should handle plural "templates"', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'templates' });
+      it.each([
+        ['templates', 'template'],
+        ['memories', 'memory'],
+        ['PERSONA', 'persona'],
+        ['Agents', 'agent'],
+        [' skill ', 'skill'],
+      ])('normalizes %s to %s', (name, expected) => {
+        const result = IntrospectionResolver.resolve({ query: 'format', name }, BASE_OPERATION_REGISTRY);
         expect(result.formatSpec).toBeDefined();
-        expect((result.formatSpec as Record<string, unknown>).elementType).toBe('template');
-      });
-
-      it('should handle plural "memories" (not "memorie")', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'memories' });
-        expect(result.formatSpec).toBeDefined();
-        expect((result.formatSpec as Record<string, unknown>).elementType).toBe('memory');
-      });
-
-      it('should handle uppercase "PERSONA"', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'PERSONA' });
-        expect(result.formatSpec).toBeDefined();
-        expect((result.formatSpec as Record<string, unknown>).elementType).toBe('persona');
-      });
-
-      it('should handle mixed case "Agents"', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'Agents' });
-        expect(result.formatSpec).toBeDefined();
-        expect((result.formatSpec as Record<string, unknown>).elementType).toBe('agent');
-      });
-
-      it('should handle whitespace " skill "', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: ' skill ' });
-        expect(result.formatSpec).toBeDefined();
-        expect((result.formatSpec as Record<string, unknown>).elementType).toBe('skill');
+        expect((result.formatSpec as Record<string, unknown>).elementType).toBe(expected);
       });
     });
 
     describe('unknown and invalid input', () => {
       it('should return null for unknown element type', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'widget' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'widget' }, BASE_OPERATION_REGISTRY);
         expect(result.formatSpec).toBeNull();
       });
 
       it('should return null for numeric name', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 42 as unknown as string });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 42 as unknown as string }, BASE_OPERATION_REGISTRY);
         expect(result.formatSpec).toBeNull();
       });
 
       it('should return overview for empty string name', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: '' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: '' }, BASE_OPERATION_REGISTRY);
         // Empty string is falsy, treated as "no name" -> overview
         expect(Array.isArray(result.formatSpec)).toBe(true);
       });
@@ -999,21 +992,21 @@ describe('IntrospectionResolver', () => {
 
     describe('template syntax notes', () => {
       it('should document that Handlebars syntax is NOT supported', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'template' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'template' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         expect(notes.some(n => n.includes('NOT supported') || n.includes('not supported'))).toBe(true);
       });
 
       it('should document section format for page templates', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'template' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'template' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         expect(notes.some(n => n.includes('<template>') && n.includes('<style>'))).toBe(true);
       });
 
       it('should document variable syntax', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'template' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'template' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         expect(notes.some(n => n.includes('{{variable_name}}'))).toBe(true);
@@ -1022,14 +1015,14 @@ describe('IntrospectionResolver', () => {
 
     describe('agent goal structure', () => {
       it('should document goal.template uses single braces', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         expect(notes.some(n => n.includes('{param}') && n.includes('single braces'))).toBe(true);
       });
 
       it('should list goal in optionalFields', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         expect((spec.optionalFields as string[])).toContain('goal');
       });
@@ -1037,14 +1030,14 @@ describe('IntrospectionResolver', () => {
 
     describe('memory naming patterns', () => {
       it('should include agent-linked naming convention', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'memory' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'memory' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const conventions = spec.namingConventions as string[];
         expect(conventions.some(c => c.includes('agent-{agent-name}'))).toBe(true);
       });
 
       it('should include persona-linked naming convention', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'memory' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'memory' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const conventions = spec.namingConventions as string[];
         expect(conventions.some(c => c.includes('persona-{persona-name}'))).toBe(true);
@@ -1053,13 +1046,13 @@ describe('IntrospectionResolver', () => {
 
     describe('ensemble elements array', () => {
       it('should require metadata.elements in requiredFields', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'ensemble' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'ensemble' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         expect((spec.requiredFields as string[])).toContain('metadata.elements');
       });
 
       it('should document role values in syntaxNotes', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'ensemble' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'ensemble' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         expect(notes.some(n => n.includes('primary') && n.includes('support'))).toBe(true);
@@ -1070,20 +1063,20 @@ describe('IntrospectionResolver', () => {
       const elementTypes = ['persona', 'skill', 'template', 'agent', 'memory', 'ensemble'];
 
       it.each(elementTypes)('should include gatekeeper in %s optionalFields', (type) => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: type });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: type }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         expect((spec.optionalFields as string[])).toContain('gatekeeper');
       });
 
       it('should document gatekeeper structure in agent syntaxNotes', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         expect(notes.some(n => n.includes('gatekeeper') && n.includes('allow') && n.includes('deny'))).toBe(true);
       });
 
       it.each(elementTypes)('should explain operation rules versus externalRestrictions in %s syntaxNotes', (type) => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: type });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: type }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = (spec.syntaxNotes as string[]).join('\n');
         expect(notes).toContain('externalRestrictions');
@@ -1092,7 +1085,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should include gatekeeper in agent fullExample with allow/confirm/deny', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const example = spec.fullExample as string;
         expect(example).toContain('gatekeeper:');
@@ -1102,7 +1095,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should include externalRestrictions in skill fullExample', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'skill' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'skill' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const example = spec.fullExample as string;
         expect(example).toContain('externalRestrictions:');
@@ -1113,7 +1106,7 @@ describe('IntrospectionResolver', () => {
 
     describe('resilience and activates documentation (Issue #736)', () => {
       it('should document correct resilience fields in agent syntaxNotes', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         const resilienceNote = notes.find(n => n.startsWith('resilience:'));
@@ -1127,7 +1120,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should document activates lifecycle in agent syntaxNotes', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         const activatesNote = notes.find(n => n.includes('activates lifecycle'));
@@ -1137,7 +1130,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should include autonomy and resilience in agent fullExample', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const example = spec.fullExample as string;
         expect(example).toContain('autonomy:');
@@ -1148,7 +1141,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should use correct autonomy field name in syntaxNotes (maxAutonomousSteps not maxSteps)', () => {
-        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' }, BASE_OPERATION_REGISTRY);
         const spec = result.formatSpec as Record<string, unknown>;
         const notes = spec.syntaxNotes as string[];
         const autonomyNote = notes.find(n => n.startsWith('autonomy:'));
@@ -1160,7 +1153,7 @@ describe('IntrospectionResolver', () => {
 
     describe('category discovery (Issue #631)', () => {
       it('should return category info for query: "categories"', () => {
-        const result = IntrospectionResolver.resolve({ query: 'categories' });
+        const result = IntrospectionResolver.resolve({ query: 'categories' }, BASE_OPERATION_REGISTRY);
         expect(result.categories).toBeDefined();
         const info = result.categories as Record<string, unknown>;
         expect(info.formatRules).toBeDefined();
@@ -1170,7 +1163,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should include category format pattern and examples', () => {
-        const result = IntrospectionResolver.resolve({ query: 'categories' });
+        const result = IntrospectionResolver.resolve({ query: 'categories' }, BASE_OPERATION_REGISTRY);
         const info = result.categories as Record<string, unknown>;
         const rules = info.formatRules as Record<string, unknown>;
         expect(rules.pattern).toContain('^[a-zA-Z]');
@@ -1178,7 +1171,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should list allowed group_by fields from AggregationService', () => {
-        const result = IntrospectionResolver.resolve({ query: 'categories' });
+        const result = IntrospectionResolver.resolve({ query: 'categories' }, BASE_OPERATION_REGISTRY);
         const info = result.categories as Record<string, unknown>;
         const fields = info.allowedGroupByFields as string[];
         expect(fields).toContain('category');
@@ -1187,7 +1180,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should provide query_elements discovery examples', () => {
-        const result = IntrospectionResolver.resolve({ query: 'categories' });
+        const result = IntrospectionResolver.resolve({ query: 'categories' }, BASE_OPERATION_REGISTRY);
         const info = result.categories as Record<string, unknown>;
         const discovery = info.discovery as Record<string, unknown>;
         const examples = discovery.examples as string[];
@@ -1196,7 +1189,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should list supported element types for categories', () => {
-        const result = IntrospectionResolver.resolve({ query: 'categories' });
+        const result = IntrospectionResolver.resolve({ query: 'categories' }, BASE_OPERATION_REGISTRY);
         const info = result.categories as Record<string, unknown>;
         const types = info.supportedTypes as string[];
         expect(types).toContain('persona');
@@ -1206,7 +1199,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should derive format pattern from VALIDATION_PATTERNS.SAFE_CATEGORY (single source of truth)', () => {
-        const result = IntrospectionResolver.resolve({ query: 'categories' });
+        const result = IntrospectionResolver.resolve({ query: 'categories' }, BASE_OPERATION_REGISTRY);
         const info = result.categories as Record<string, unknown>;
         const rules = info.formatRules as Record<string, unknown>;
         // Pattern must match the actual validation regex source — not a hardcoded duplicate
@@ -1219,7 +1212,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'introspect',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         const formatExample = result.operation!.examples.find(e => e.includes('format'));
@@ -1230,7 +1223,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'introspect',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         expect(result.operation!.description).toMatch(/format/i);
@@ -1240,7 +1233,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.resolve({
           query: 'operations',
           name: 'introspect',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(result.operation).toBeDefined();
         // Schema-driven operations expose type as 'string', but the description
@@ -1261,7 +1254,7 @@ describe('IntrospectionResolver', () => {
   describe('getCapabilities()', () => {
     describe('unfiltered results', () => {
       it('should return all categories when no filter specified', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         expect(result.categories).toBeDefined();
         expect(Object.keys(result.categories as object).length).toBeGreaterThan(0);
         expect(result.totalCapabilities).toBeGreaterThan(0);
@@ -1270,7 +1263,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should include all expected categories', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categoryNames = Object.keys(result.categories as object);
 
         const expectedCategories = [
@@ -1296,13 +1289,13 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should not have an "Other" category when all operations are categorized', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categoryNames = Object.keys(result.categories as object);
         expect(categoryNames).not.toContain('Other');
       });
 
       it('every category should have a description and non-empty capabilities array', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, { description: string; capabilities: unknown[] }>;
 
         for (const cat of Object.values(categories)) {
@@ -1312,7 +1305,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('each capability entry should have name, brief, source, and status', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, { capabilities: Array<{ name: string; brief: string; source: string; status: string }> }>;
 
         for (const cat of Object.values(categories)) {
@@ -1327,7 +1320,7 @@ describe('IntrospectionResolver', () => {
       });
 
       it('capabilities within each category should be sorted alphabetically', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, { capabilities: Array<{ name: string }> }>;
 
         for (const cat of Object.values(categories)) {
@@ -1338,14 +1331,14 @@ describe('IntrospectionResolver', () => {
       });
 
       it('categories should be sorted alphabetically', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const names = Object.keys(result.categories as object);
         const sorted = [...names].sort((a, b) => a.localeCompare(b));
         expect(names).toEqual(sorted);
       });
 
       it('get_capabilities should include itself in System Introspection', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, { capabilities: Array<{ name: string }> }>;
         const introspectionCat = categories['System Introspection'];
         expect(introspectionCat).toBeDefined();
@@ -1357,7 +1350,7 @@ describe('IntrospectionResolver', () => {
 
     describe('category filter', () => {
       it('should return only the matching category when filtered', () => {
-        const result = IntrospectionResolver.getCapabilities({ category: 'Memory' });
+        const result = IntrospectionResolver.getCapabilities({ category: 'Memory' }, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, { capabilities: Array<{ name: string }> }>;
         expect(Object.keys(categories)).toEqual(['Memory']);
         const names = categories['Memory'].capabilities.map(c => c.name);
@@ -1366,13 +1359,13 @@ describe('IntrospectionResolver', () => {
       });
 
       it('should be case-insensitive', () => {
-        const result = IntrospectionResolver.getCapabilities({ category: 'memory' });
+        const result = IntrospectionResolver.getCapabilities({ category: 'memory' }, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, unknown>;
         expect(Object.keys(categories)).toEqual(['Memory']);
       });
 
       it('should return empty categories with availableCategories for unknown filter', () => {
-        const result = IntrospectionResolver.getCapabilities({ category: 'Nonexistent' });
+        const result = IntrospectionResolver.getCapabilities({ category: 'Nonexistent' }, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, unknown>;
         expect(Object.keys(categories)).toEqual([]);
         expect(result.availableCategories).toBeDefined();
@@ -1383,7 +1376,7 @@ describe('IntrospectionResolver', () => {
 
     describe('brief descriptions', () => {
       it('should truncate long descriptions to one sentence', () => {
-        const result = IntrospectionResolver.getCapabilities({});
+        const result = IntrospectionResolver.getCapabilities({}, BASE_OPERATION_REGISTRY);
         const categories = result.categories as Record<string, { capabilities: Array<{ brief: string }> }>;
 
         for (const cat of Object.values(categories)) {
@@ -1396,13 +1389,13 @@ describe('IntrospectionResolver', () => {
 
     describe('introspect includes get_capabilities', () => {
       it('should list get_capabilities in the operations list', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const result = IntrospectionResolver.resolve({ query: 'operations' }, BASE_OPERATION_REGISTRY);
         const opNames = result.operations!.map(o => o.name);
         expect(opNames).toContain('get_capabilities');
       });
 
       it('should return valid details for get_capabilities', () => {
-        const result = IntrospectionResolver.resolve({ query: 'operations', name: 'get_capabilities' });
+        const result = IntrospectionResolver.resolve({ query: 'operations', name: 'get_capabilities' }, BASE_OPERATION_REGISTRY);
         expect(result.operation).toBeDefined();
         expect(result.operation!.name).toBe('get_capabilities');
         expect(result.operation!.endpoint).toBe('READ');

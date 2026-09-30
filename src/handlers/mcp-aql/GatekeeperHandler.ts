@@ -1,3 +1,6 @@
+import { integrationRetryGuidance } from '../../security/IntegrationEntryPoint.js';
+import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
+import type { OperationRegistry } from './OperationRegistry.js';
 import { randomUUID } from 'node:crypto';
 import { generateDisplayCode } from '@dollhousemcp/safety';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -57,6 +60,7 @@ interface VerificationLimiter {
 
 export interface GatekeeperHandlerDeps {
   handlers: HandlerRegistry;
+  operations: OperationRegistry;
   gatekeeper: Gatekeeper;
   contextTracker?: CorrelationIdProvider;
   executingAgents: Map<string, ExecutingAgentEntry>;
@@ -127,7 +131,7 @@ export class GatekeeperHandler {
     const elementType = rawElementType
       ? normalizeMCPAQLElementType(rawElementType) ?? rawElementType
       : undefined;
-    const summary = buildOperationSummary(operation, elementType, params);
+    const summary = buildOperationSummary(operation, elementType, params, this.deps.operations);
     const activeElements = await this.deps.getActiveElements();
 
     this.enforceConfirmationSandbox(operation, elementType, activeElements);
@@ -137,7 +141,7 @@ export class GatekeeperHandler {
       endpoint: this.deps.getEndpointForOperation(operation),
       elementType,
       activeElements,
-    });
+    }, this.deps.operations);
 
     if (decision.allowed) {
       return {
@@ -882,8 +886,8 @@ export class GatekeeperHandler {
       'the approval request ID from permission_prompt deny response (format: cli-<UUID>)'
     );
     const rawScope = params.scope ?? 'single';
-    if (rawScope !== 'single' && rawScope !== 'tool_session') {
-      throw new Error(`Invalid scope ${JSON.stringify(rawScope)}. Must be "single" or "tool_session".`);
+    if (rawScope !== 'single' && rawScope !== 'tool_session' && rawScope !== 'input_session') {
+      throw new Error(`Invalid scope ${JSON.stringify(rawScope)}. Must be "single", "tool_session" or "input_session".`);
     }
     const scope: CliApprovalScope = rawScope;
 
@@ -892,19 +896,28 @@ export class GatekeeperHandler {
       throw new Error(`No pending approval for "${requestId}". It may have expired or already been approved.`);
     }
 
+    const path = record.toolInputDigest.path;
+    const outbound = record.toolName === 'integration_request' && record.entry_point !== undefined &&
+      typeof path === 'string' && !path.startsWith('_internal:');
+    const retry = outbound ? integrationRetryGuidance(record.entry_point) : 'Retry the original call with the same arguments.';
+    const messages: Record<CliApprovalScope, string> = {
+      tool_session: `Approved for all uses of '${record.toolName}' this session.`,
+      input_session: `Approved this exact input to '${record.toolName}' for this session. ${retry}`,
+      single: `Approved single use of '${record.toolName}'. ${retry}`,
+    };
     return {
       approved: true,
       requestId,
       toolName: record.toolName,
       scope,
-      message: scope === 'tool_session'
-        ? `Approved for all uses of '${record.toolName}' this session.`
-        : `Approved single use of '${record.toolName}'. Retry the tool call now.`,
+      message: messages[scope],
     };
   }
 
   private getPendingCliApprovals(): unknown {
-    const pending = this.deps.gatekeeper.getPendingCliApprovals();
+    const pending = this.deps.gatekeeper.getPendingCliApprovals().map(record => ({
+      ...record, allowedScopes: effectiveCliApprovalScopes(record),
+    }));
     return {
       pending,
       count: pending.length,

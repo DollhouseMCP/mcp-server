@@ -26,6 +26,8 @@ export interface IntegrationOpenApiSpecUpsertInput {
 
 export interface IIntegrationOpenApiSpecStore {
   findByDescriptorId(descriptorId: string): Promise<IntegrationOpenApiSpecRecord | null>;
+  create(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord>;
+  update(input: IntegrationOpenApiSpecUpsertInput, expectedSpecHash?: string): Promise<IntegrationOpenApiSpecRecord>;
   upsert(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord>;
   /**
    * Delete the stored spec for a descriptor; returns whether one existed.
@@ -33,6 +35,13 @@ export interface IIntegrationOpenApiSpecStore {
    * descriptor (owner-scoped) before touching its spec.
    */
   deleteByDescriptorId(descriptorId: string): Promise<boolean>;
+}
+
+export class IntegrationSpecWriteError extends Error {
+  constructor(readonly reason: 'exists' | 'missing' | 'conflict') {
+    super(`Integration specification write failed: ${reason}`);
+    this.name = 'IntegrationSpecWriteError';
+  }
 }
 
 export function validateIntegrationOpenApiSpecRecord(record: IntegrationOpenApiSpecRecord): void {

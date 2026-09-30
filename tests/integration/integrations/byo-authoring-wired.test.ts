@@ -1,3 +1,4 @@
+import { requestViaExecute } from './wiredIntegrationHarness.js';
 /**
  * WIRED end-to-end proof for issue #2321: a BYO descriptor authored entirely
  * through the console `/api/v1` surface — no store seeding — is immediately
@@ -94,7 +95,7 @@ describe('BYO authoring wired end-to-end', () => {
   });
 
   it('serves integration_request for the authored descriptor with the key injected server-side', async () => {
-    const envelope = await harness.callViaRegistry('integration_request', {
+    const envelope = await requestViaExecute(harness.callViaRegistry, {
       provider: BYO_PROVIDER,
       method: 'GET',
       path: '/things/42',
@@ -117,7 +118,10 @@ describe('BYO authoring wired end-to-end', () => {
   });
 
   it('derives operations from the authored spec for the agent surface', async () => {
-    const operations = await harness.callViaRegistry('list_operations', { provider: BYO_PROVIDER });
+    const envelope = await harness.callViaRegistry('mcp_aql_read', { operation: 'list_integration_operations', params: { provider: BYO_PROVIDER } });
+    expect(envelope).toMatchObject({ success: true });
+    if (!('data' in envelope)) throw new Error('Expected MCP-AQL data envelope');
+    const operations = JSON.parse((envelope.data as { content: { text: string }[] }).content[0].text);
 
     expect(operations.ok).toBe(true);
     expect(operations.result).toMatchObject({
@@ -143,7 +147,7 @@ describe('BYO authoring wired end-to-end', () => {
 
     await expect(harness.specStore.findByDescriptorId(descriptorId)).resolves.toBeNull();
 
-    const envelope = await harness.callViaRegistry('integration_request', {
+    const envelope = await requestViaExecute(harness.callViaRegistry, {
       provider: BYO_PROVIDER,
       method: 'GET',
       path: '/things/42',
@@ -179,7 +183,7 @@ describe('BYO authoring wired end-to-end', () => {
     expect(connected.status).toBe(200);
     expect(JSON.stringify(connected.body)).not.toContain(password);
 
-    const envelope = await harness.callViaRegistry('integration_request', {
+    const envelope = await requestViaExecute(harness.callViaRegistry, {
       provider: basicProvider,
       method: 'GET',
       path: '/things/7',

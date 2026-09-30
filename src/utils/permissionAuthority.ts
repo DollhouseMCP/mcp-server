@@ -1,3 +1,4 @@
+import { getDollhouseMcpServerNames } from '../config/mcpServerNames.js';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -324,12 +325,13 @@ function buildClaudeAuthoritySettings(
   const priorManaged = priorMetadata?.managedPermissions ?? { allow: [], ask: [], deny: [] };
   const permissions = getPermissionsRoot(parsed);
 
+  const requiredAskPatterns = getDollhouseMcpServerNames().map(name => `mcp__${name}__mcp_aql_execute*`);
   const managedAllow = uniquePatterns(
-    (policies.combinedAllowPatterns ?? []).filter((pattern) => !CLAUDE_REQUIRED_ASK_PATTERNS.includes(pattern)),
+    (policies.combinedAllowPatterns ?? []).filter((pattern) => !requiredAskPatterns.includes(pattern)),
   );
   const managedAsk = uniquePatterns([
     ...(policies.combinedConfirmPatterns ?? []),
-    ...CLAUDE_REQUIRED_ASK_PATTERNS,
+    ...requiredAskPatterns,
   ]);
   const managedDeny = uniquePatterns(policies.combinedDenyPatterns ?? []);
 
@@ -405,7 +407,6 @@ function removeManagedEntries(entries: string[], managedEntries: string[]): stri
   return entries.filter((entry) => !managed.has(entry));
 }
 
-const CLAUDE_REQUIRED_ASK_PATTERNS = ['mcp__DollhouseMCP__mcp_aql_execute*'];
 
 function shouldStripClaudeAskEntry(entry: string, allowPatterns: string[]): boolean {
   if (allowPatterns.includes(entry)) {

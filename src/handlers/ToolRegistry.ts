@@ -129,8 +129,9 @@ export class ToolRegistry {
   registerIntegrationTools(
     gateway: AuthorizedIntegrationGateway,
     operationCatalog?: AuthorizedIntegrationOperationCatalog | null,
+    includeCatalogTools = true,
   ): void {
-    this.registerMany(getIntegrationTools(gateway, operationCatalog));
+    this.registerMany(getIntegrationTools(gateway, operationCatalog, includeCatalogTools));
   }
 
   async registerPromotedIntegrationTools(

@@ -1,3 +1,4 @@
+import type { IntegrationEntryPoint } from '../../security/IntegrationEntryPoint.js';
 /**
  * Gatekeeper Type Definitions
  *
@@ -151,8 +152,9 @@ export interface ElementGatekeeperPolicy {
  * Scope for CLI approval records.
  * - 'single': consumed after one use
  * - 'tool_session': all uses of that tool for the session
+ * - 'input_session': exact-input reuse for the session, explicitly permitted by the request
  */
-export type CliApprovalScope = 'single' | 'tool_session';
+export type CliApprovalScope = 'single' | 'tool_session' | 'input_session';
 
 /**
  * Approval policy for CLI tool operations.
@@ -174,6 +176,7 @@ export interface CliApprovalPolicy {
  * approval-policy fields doesn't require breaking every call site.
  */
 export interface CreateCliApprovalArgs {
+  entry_point?: IntegrationEntryPoint;
   toolName: string;
   toolInput: Record<string, unknown>;
   riskLevel: string;
@@ -191,6 +194,7 @@ export interface CreateCliApprovalArgs {
  * Created when permission_prompt encounters a tool that requires approval.
  */
 export interface CliApprovalRecord {
+  entry_point?: IntegrationEntryPoint;
   /** Unique request identifier (format: cli-<UUIDv4>) */
   requestId: string;
   /** The tool that was requested */

@@ -1,9 +1,10 @@
+import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * TemplateManager - Refactored to extend BaseElementManager, keeping
  * template-specific validation, import/export logic, and analytics helpers.
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
@@ -21,9 +22,9 @@ import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/Elemen
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
 export class TemplateManager extends BaseElementManager<Template> {
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
 
   constructor(deps: ElementManagerDeps) {
@@ -67,7 +68,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     return template;
   }
 
-  override async save(template: Template, filePath: string): Promise<void> {
+  override async save(template: Template, filePath: string, options?: ElementSaveOptions): Promise<void> {
     // Auto-derive variables from content (#1896): ensures every {{placeholder}}
     // has a matching schema entry so render() never silently returns unfilled text.
     // Existing entries are never overwritten — user-set descriptions, types, and
@@ -79,7 +80,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       );
     }
 
-    await super.save(template, filePath);
+    await super.save(template, filePath, options);
 
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_SAVED',
@@ -140,7 +141,7 @@ export class TemplateManager extends BaseElementManager<Template> {
 
     // FIX: Issue #20 - Check for duplicate before creating
     const existingTemplates = await this.list();
-    const duplicate = existingTemplates.find(t =>
+    const duplicate = existingTemplates.some(t =>
       t.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
     );
 
@@ -297,9 +298,8 @@ export class TemplateManager extends BaseElementManager<Template> {
     }
 
     const templates = await this.list();
-    return templates
-      .sort((a, b) => (b.metadata.usage_count || 0) - (a.metadata.usage_count || 0))
-      .slice(0, validatedLimit);
+    templates.sort((a, b) => (b.metadata.usage_count || 0) - (a.metadata.usage_count || 0));
+    return templates.slice(0, validatedLimit);
   }
 
   override getFileExtension(): string {
@@ -330,26 +330,14 @@ export class TemplateManager extends BaseElementManager<Template> {
     const description = (template.metadata.description ?? '').trim();
     const lines: string[] = [];
     if (name) {
-      lines.push(`# ${name}`);
-      lines.push('');
+      lines.push(`# ${name}`, '');
     }
     if (description) {
-      lines.push(description);
-      lines.push('');
+      lines.push(description, '');
     }
     // Section format: <template> for Handlebars content, <style>/<script> for raw passthrough.
     // Auto-detection (issue #705): section mode activates when body has a <template> root element.
-    lines.push('<template>');
-    lines.push('<!-- HTML content with {{variable}} substitution -->');
-    lines.push('</template>');
-    lines.push('');
-    lines.push('<style>');
-    lines.push('/* CSS styles (}} is safe here — not Handlebars processed) */');
-    lines.push('</style>');
-    lines.push('');
-    lines.push('<script>');
-    lines.push('// JavaScript (}} is safe here — not Handlebars processed)');
-    lines.push('</script>');
+    lines.push('<template>', '<!-- HTML content with {{variable}} substitution -->', '</template>', '', '<style>', '/* CSS styles (}} is safe here — not Handlebars processed) */', '</style>', '', '<script>', '// JavaScript (}} is safe here — not Handlebars processed)', '</script>');
     return lines.join('\n');
   }
 
@@ -379,6 +367,12 @@ export class TemplateManager extends BaseElementManager<Template> {
     );
   }
 
+  private sanitizeCategory(category: string | undefined): string | undefined {
+    if (!category) return undefined;
+    const result = this.validationService.validateCategory(category);
+    return result.isValid && result.sanitizedValue ? result.sanitizedValue : undefined;
+  }
+
   private async sanitizeMetadata(data: any): Promise<Partial<TemplateMetadata>> {
     const metadata: Partial<TemplateMetadata> = {};
 
@@ -390,13 +384,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       metadata.description = sanitizeInput(UnicodeValidator.normalize(data.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
     }
 
-    if (data.category) {
-      // SECURITY FIX: Use ValidationService for category validation
-      const categoryResult = this.validationService.validateCategory(data.category);
-      if (categoryResult.isValid && categoryResult.sanitizedValue) {
-        metadata.category = categoryResult.sanitizedValue;
-      }
-    }
+    metadata.category = this.sanitizeCategory(data.category);
 
     if (data.output_format) {
       metadata.output_format = sanitizeInput(data.output_format, 20);

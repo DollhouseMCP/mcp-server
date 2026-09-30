@@ -458,3 +458,13 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     },
   };
 }
+
+/** Exercise the public EXECUTE endpoint and unwrap its unchanged integration response. */
+export async function requestViaExecute(
+  call: (name: string, args: unknown) => Promise<ToolEnvelope>,
+  params: Record<string, unknown>,
+): Promise<ToolEnvelope> {
+  const envelope = await call('mcp_aql_execute', { operation: 'integration_request', params });
+  if (!('success' in envelope) || envelope.success !== true || !('data' in envelope) || !envelope.data) throw new Error(`EXECUTE failed: ${JSON.stringify(envelope)}`);
+  return parseToolEnvelope((envelope.data as { content: { text: string }[] }).content[0].text);
+}

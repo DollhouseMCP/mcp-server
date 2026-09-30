@@ -286,6 +286,7 @@ DollhouseMCP uses two hierarchical environment variables to control the tool int
 
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
+| `DOLLHOUSE_MCP_SERVER_NAME` | Client server key (letters, digits, underscores, hyphens; max 128 characters) | unset | Optional additional server name for integration classification/redaction and managed host permission rules |
 | `MCP_INTERFACE_MODE` | `mcpaql`, `discrete` | `mcpaql` | Tool interface style |
 
 - **`mcpaql`** (default): MCP-AQL consolidated interface -- uses `MCP_AQL_ENDPOINT_MODE` for grouping
@@ -297,6 +298,12 @@ DollhouseMCP uses two hierarchical environment variables to control the tool int
 |----------|--------|---------|-------------|
 | `MCP_AQL_ENDPOINT_MODE` | `crude`, `single` | `crude` | MCP-AQL endpoint grouping |
 | `MCP_AQL_MODE` | `crude`, `single` | _(none)_ | DEPRECATED: backward-compatibility alias for `MCP_AQL_ENDPOINT_MODE` |
+
+The installer server name `dollhousemcp` and legacy `DollhouseMCP` are always recognized.
+Set `DOLLHOUSE_MCP_SERVER_NAME` to the exact server key used by your client when it has
+a custom name; this setting does not rename the client configuration. Local host-tool
+classification compares server names case-insensitively. Managed Claude Code forced-ask
+rules are emitted for both built-in spellings and the configured spelling as written.
 
 **Only applies when `MCP_INTERFACE_MODE=mcpaql` (the default)**
 
@@ -860,3 +867,9 @@ jobs:
 - Review test setup: `tests/jest.setup.ts`
 - Consult team documentation in `docs/`
 - See all available options in `.env` file
+
+### Outbound integration write approval
+
+`DOLLHOUSE_INTEGRATION_WRITE_APPROVAL` defaults to `on`. Real outbound POST, PUT, PATCH and DELETE requests require a single-use approval bound to the exact request, across discrete, MCP-AQL and promoted tools. GET requests do not require this default approval. POST-based reads (for example GraphQL queries) also prompt.
+
+An operator may set this variable to `off`; elements and model-supplied parameters cannot opt out. Element deny/confirm rules and additional approval requirements still apply. Internal remote-MCP and legacy management sentinel calls retain their existing policy behavior. This setting does not change Bash/Edit CLI permission policy.
