@@ -976,8 +976,9 @@ export class DollhouseContainer {
             skippedCount++;
           }
         } catch {
-          logger.debug(`[Container] Skipping failed ${elementType} '${activation.name}'`);
-          prune(activation);
+          // A restore/persistence exception is not proof of authoritative absence.
+          // Do not request another stale-record removal after a failed callback.
+          logger.debug(`[Container] Deferring failed ${elementType} '${activation.name}'; skipping further stale-record removal`);
           skippedCount++;
         }
       }
@@ -1019,7 +1020,7 @@ export class DollhouseContainer {
 
     if (restoredCount > 0 || skippedCount > 0) {
       logger.info(
-        `[Container] Restored ${restoredCount} element(s), skipped ${skippedCount} stale for session '${store.getSessionId()}'`
+        `[Container] Restored ${restoredCount} element(s), skipped ${skippedCount} for session '${store.getSessionId()}'`
       );
     }
   }

@@ -415,6 +415,14 @@ Every new component is an interface with implementations registered through DI (
 
 ## 10. Per-element-type design
 
+Track A exception-preservation (#2922): startup restoration does not request
+stale-record removal after activation or its persistence callback throws, and
+continues later records. A callback may already have changed persistence before
+throwing; this fix neither guarantees atomic migration nor rolls it back.
+This narrow fix leaves existing `success: false` pruning unchanged;
+authoritative-absence classification remains required parent work. It does not
+complete activation readiness, fail-closed policy snapshots or AD9 publication.
+
 ### 10.0 Active-identity store (all activatable types)
 - One authoritative in-memory identity set, per session, holding references to **durable storage identities** plus display data for every activatable type (personas, skills, ensembles, memories, agents). It replaces the per-manager activation sets of filenames/names.
 - Sync accessors read the store (non-mutating, best-effort display), never the cache.

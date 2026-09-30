@@ -363,7 +363,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       expect(removeStaleSpy).toHaveBeenCalledWith('persona', 'deleted-persona');
     });
 
-    it('should still prune on thrown exceptions (defensive)', async () => {
+    it('should preserve persisted activations on thrown restore exceptions', async () => {
       const skillManager = container.resolve<any>('SkillManager');
       const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
@@ -385,8 +385,8 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.preparePortfolio();
       await container.completeDeferredSetup();
 
-      // Should still prune the entry
-      expect(removeStaleSpy).toHaveBeenCalledWith('skill', 'crash-skill');
+      // A storage failure is not authoritative evidence that the entry is stale.
+      expect(removeStaleSpy).not.toHaveBeenCalled();
     });
   });
 });
