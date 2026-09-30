@@ -75,5 +75,30 @@ and finalizer in the same operation. Only successful exact journal unlink
 commits; later faults retain the committed token, and clean retries have no
 historical attribution. All writers must be stopped and orphan leases handled
 separately. The API is dormant and grants no production maintenance or runtime
-activation authority; old-head forward publication, abort, adoption and other
-lifecycle transitions remain separate work.
+activation authority; abort, adoption and other lifecycle transitions remain
+separate work. Original old-head forward publication is described below.
+
+## Dormant recovery of an original old-head PREPARED update
+
+`forwardPreparedOwnedUpdate` additionally accepts a fixed PREPARED journal
+whose old head and both ACTIVE owner records retain their original bound
+identities, while its complete prepared head temp retains the original
+journal-bound descriptor identity and exact source bytes. A matching digest
+alone cannot authorize publication. Metadata stages, duplicate or foreign
+artifacts, aliases and changing evidence remain manual-review states.
+
+The method validates YAML, control characters and gatekeeper policy before
+mutation. Under one fresh lease and tracked operation, it rechecks the complete
+evidence immediately before renaming that exact temp to the head. Fresh proof
+must bind the renamed head to the temp's bytes and device/inode/size/mtime
+(only rename ctime may differ), prove the temp absent, and preserve the fixed
+journal and old owner records. The already-renamed PREPARED transition and
+PUBLISHED completion then run in that same operation. Successful exact final
+journal unlink remains the sole commit; earlier runtime failures preserve
+pending evidence, and later failures retain the committed token.
+
+This extends forward completion only. It chooses no abort, steals no lease,
+adds no ownership protocol, and enables no runtime maintenance or activation.
+All writers must be quiescent and orphan handling must occur separately. Clean
+and already-published retries use the existing completion rules and carry no
+historical attribution after an already-clean observation.
