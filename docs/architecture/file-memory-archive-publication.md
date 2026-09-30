@@ -1,7 +1,7 @@
 # Dormant file archive publication (#2902-A)
 
 `FileMemoryVolumeStore` is an unwired local POSIX primitive. It does not activate
-rollover, public archive reads/listing, recovery, deletion, retention or database
+rollover, public archive browsing/listing, recovery, deletion, retention or database
 parity. Those remain #2902-B/C, #2900, #2903 and the shared #2870/#2871 gates.
 
 A caller supplies an exact owned head token. The store obtains fresh agreeing
@@ -87,4 +87,34 @@ generation creation, after it, during payload/metadata bytes, before marker and
 after successful marker. Premarker objects remain partial; committed objects retain
 exact evidence. Read-only observation does not steal an orphan tenant lease;
 operator-controlled recovery remains #2900. No public archive scanner is supplied
-by this slice.
+by the publication slice.
+
+## Dormant verified observation (#2902-B1)
+
+`read(expectedOwnedHead, volume)` captures tenant root and user once, acquires no
+fence and writes nothing. `readAtScope` instead consumes the current tracked
+operation capability without nesting `perform` or acquiring another fence.
+`readInTransaction` queues a tracked read in an existing caller-owned transaction
+and drains accepted work even when its outer callback omits await. All forms
+require an exact clean ACTIVE owner/head/sidecar/registry proof before and
+after observation. RESERVED, DELETING/unsupported lifecycle state, pending write
+artifacts and changed owner/head evidence fail closed.
+
+The result is explicitly `found | absent`. Stable absence of the exact namespace
+or volume is proved with bounded before/after namespace evidence. A partial,
+corrupt, oversized, aliased or changing object is a typed failure, never an absent
+archive. Found content uses bounded no-follow/nonblocking descriptors, raw-byte
+bounds before allocation, exact UTF-8, YAML/code-unit/hash/count/metadata checks,
+and repeated ancestor, generation, marker and file identity proofs. The marker
+identity is captured before reading content; same-byte file replacements and empty
+marker ABA replacements are rejected. Final proof follows the last fault barrier.
+The cooperating local POSIX model remains an observational bound, not a
+transactional multi-file snapshot against arbitrary out-of-band mutation.
+
+These are immutable **storage observations**, not creation receipts, cleanup
+permissions or public archive-history results. Committed but unindexed bytes may
+be observed for diagnostics; future public access still requires fresh visibility,
+current reference, expiry and tombstone policy. There is no cache or automatic
+adoption of archive content. Metadata listing and bounded database read/list parity
+remain B2; exact protected cleanup remains C. Runtime DI, rollover, browsing,
+erasure, retention and production activation remain unwired and gated.
