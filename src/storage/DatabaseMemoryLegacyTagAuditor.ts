@@ -96,7 +96,7 @@ export class DatabaseMemoryLegacyTagAuditor {
       has_table_privilege(current_user, 'public.elements', 'SELECT') AND
         has_table_privilege(current_user, 'public.element_tags', 'SELECT') AS readable
       FROM pg_roles r WHERE r.rolname = current_user`);
-    if (!proof || proof.privileged !== true || proof.readable !== true || proof.global_visibility !== true) throw new AuditRefusal('privilege_unproved');
+    if (proof?.privileged !== true || proof.readable !== true || proof.global_visibility !== true) throw new AuditRefusal('privilege_unproved');
     if (proof.readonly !== true || proof.repeatable !== true) throw new AuditRefusal('scope_unproved');
     const [schema] = await this.query(tx, limits, deadline, sql`SELECT
       (SELECT count(*) = 2 AND bool_and(c.relkind = 'r' AND c.relrowsecurity AND c.relforcerowsecurity)
@@ -121,7 +121,7 @@ export class DatabaseMemoryLegacyTagAuditor {
       EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
         WHERE t.tgrelid = 'public.element_tags'::regclass AND t.tgname = 'element_tags_memory_head_revision_change'
           AND t.tgenabled IN ('O', 'A') AND NOT p.prosecdef) AS trigger`);
-    if (!schema || schema.tables !== true || schema.columns !== true || schema.identities !== true || schema.keys !== true || schema.trigger !== true) throw new AuditRefusal('schema_unproved');
+    if (schema?.tables !== true || schema.columns !== true || schema.identities !== true || schema.keys !== true || schema.trigger !== true) throw new AuditRefusal('schema_unproved');
     if (typeof proof.actor !== 'string') throw new AuditRefusal('scope_unproved');
     return proof.actor;
   }
