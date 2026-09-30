@@ -32,23 +32,21 @@ async function reserveBlockedPortRange(rangeSize: number): Promise<{
   blockers: ReturnType<typeof createServer>[];
 }> {
   for (let attempt = 0; attempt < PORT_RANGE_DISCOVERY_ATTEMPTS; attempt++) {
-    const probe = createServer();
-    const startPort = await new Promise<number>((resolve, reject) => {
-      probe.once('error', reject);
-      probe.listen(0, '127.0.0.1', () => {
-        const address = probe.address();
-        if (typeof address === 'object' && address) {
-          resolve(address.port);
-          return;
-        }
-        reject(new Error('Could not determine probe port'));
-      });
-    });
-    await new Promise<void>(resolve => probe.close(() => resolve()));
-
-    const blockers: ReturnType<typeof createServer>[] = [];
+    const probe = await listenOnPort(0);
+    const address = probe.address();
+    if (typeof address !== 'object' || !address) {
+      await closeServers([probe]);
+      throw new Error('Could not determine probe port');
+    }
+    const startPort = address.port;
+    // Retain the OS-assigned socket and leave room for every discovery attempt.
+    if (startPort + Math.max(rangeSize, MAX_PORT_ATTEMPTS) - 1 > 65535) {
+      await closeServers([probe]);
+      continue;
+    }
+    const blockers: ReturnType<typeof createServer>[] = [probe];
     try {
-      for (let i = 0; i < rangeSize; i++) {
+      for (let i = 1; i < rangeSize; i++) {
         blockers.push(await listenOnPort(startPort + i));
       }
       return { startPort, blockers };
@@ -181,18 +179,15 @@ describe('portDiscovery', () => {
     });
 
     it('should find next available port when default is taken', async () => {
-      const blocker = createServer();
-      const blockerPort = 49180;
-      await new Promise<void>((resolve) => {
-        blocker.listen(blockerPort, '127.0.0.1', () => resolve());
-      });
+      const { startPort: blockerPort, blockers } = await reserveBlockedPortRange(1);
 
       try {
         const port = await discoverAndBindPort(blockerPort);
         expect(port).toBeDefined();
         expect(port).toBeGreaterThan(blockerPort);
+        expect(port).toBeLessThan(blockerPort + MAX_PORT_ATTEMPTS);
       } finally {
-        await new Promise<void>((resolve) => blocker.close(() => resolve()));
+        await closeServers(blockers);
       }
     });
   });
