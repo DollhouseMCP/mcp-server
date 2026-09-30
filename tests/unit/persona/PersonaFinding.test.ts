@@ -194,9 +194,9 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       (personaManager as any).elements.clear();
     });
 
-    it('finds the exact persona among 10 cached personas in one scan', () => {
-      // Generate 10 test personas
-      for (let i = 0; i < 10; i++) {
+    it.each([10, 100, 1000])('finds the exact persona among %i cached personas within one scan', count => {
+      // Preserve the same workload at each scale.
+      for (let i = 0; i < count; i++) {
         const persona: Persona = {
           id: `persona-${i}`,
           type: ElementType.PERSONA,
@@ -219,86 +219,10 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
 
       const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
       const cachedCount = (personaManager as any).getCachedElementsForCurrentNamespace().length;
-      const found = personaManager.findPersona('persona-5');
+      const found = personaManager.findPersona(`persona-${count / 2}`);
 
       expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('persona-5');
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
-      matching.mockClear();
-      expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
-      expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
-      expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
-      expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
-    });
-
-    it('finds the exact persona among 100 cached personas in one scan', () => {
-      // Generate 100 test personas
-      for (let i = 0; i < 100; i++) {
-        const persona: Persona = {
-          id: `persona-${i}`,
-          type: ElementType.PERSONA,
-          version: '1.0',
-          metadata: {
-            name: `Test Persona ${i}`,
-            description: `Test persona number ${i}`,
-            unique_id: `persona-${i}`,
-            category: 'personal',
-            version: '1.0',
-            author: 'test',
-            created_date: '2025-01-01'
-          },
-          content: `Test content for persona ${i}`,
-          filename: `persona-${i}.md`,
-          unique_id: `persona-${i}`
-        } as Persona;
-        seedPersona(persona);
-      }
-
-      const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
-      const cachedCount = (personaManager as any).getCachedElementsForCurrentNamespace().length;
-      const found = personaManager.findPersona('persona-50');
-
-      expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('persona-50');
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
-      matching.mockClear();
-      expect(personaManager.findPersona('absent-persona')).toBeUndefined();
-      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
-      expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
-      expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
-      expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
-    });
-
-    it('finds the exact persona among 1000 cached personas in one scan', () => {
-      // Generate 1000 test personas
-      for (let i = 0; i < 1000; i++) {
-        const persona: Persona = {
-          id: `persona-${i}`,
-          type: ElementType.PERSONA,
-          version: '1.0',
-          metadata: {
-            name: `Test Persona ${i}`,
-            description: `Test persona number ${i}`,
-            unique_id: `persona-${i}`,
-            category: 'personal',
-            version: '1.0',
-            author: 'test',
-            created_date: '2025-01-01'
-          },
-          content: `Test content for persona ${i}`,
-          filename: `persona-${i}.md`,
-          unique_id: `persona-${i}`
-        } as Persona;
-        seedPersona(persona);
-      }
-
-      const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
-      const cachedCount = (personaManager as any).getCachedElementsForCurrentNamespace().length;
-      const found = personaManager.findPersona('persona-500');
-
-      expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('persona-500');
+      expect(found?.unique_id).toBe(`persona-${count / 2}`);
       expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
       matching.mockClear();
       expect(personaManager.findPersona('absent-persona')).toBeUndefined();
@@ -330,7 +254,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       return undefined;
     });
     expect(assertOneMissScan).toThrow();
-    expect(matching.mock.calls.length).toBe(2 * cachedCount);
+    expect(matching.mock.calls).toHaveLength(2 * cachedCount);
   });
 
   // ============================================================================

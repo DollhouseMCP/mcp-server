@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
-import * as os from 'os';
-import * as path from 'path';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { PersonaManager } from '../../src/persona/PersonaManager.js';
 import type { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
 import type { FileLockManager } from '../../src/security/fileLockManager.js';
