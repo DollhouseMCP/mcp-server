@@ -344,7 +344,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readDiagnosticEvidence(
-    scope: FileMemoryTransactionScope, locator: string, recovery = false,
+    scope: FileMemoryTransactionScope, locator: string, recovery: boolean | 'prepared' = false,
   ): Promise<DiagnosticEvidenceRead> {
     const resolved = await this.resolveHead(scope.tenantRoot, locator);
     const head = await this.readHeadBytes(resolved.headPath);
@@ -377,7 +377,7 @@ export class FileMemoryOwnerSnapshots {
         !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record),
     };
     let recoveryStage: DiagnosticEvidenceRead['recoveryStage'];
-    if (recovery && write?.state === 'PUBLISHED_WRITE') {
+    if (recovery && (write?.state === 'PUBLISHED_WRITE' || (recovery === 'prepared' && write?.state === 'PREPARED_WRITE'))) {
       recoveryStage = await this.readRecoveryStage(scope, resolved, write, evidence);
       evidence = { ...evidence, unexpectedArtifacts:
         !this.strictDiagnosticRecord(sidecar?.record) || !this.strictDiagnosticRecord(registry?.record) };
@@ -413,13 +413,18 @@ export class FileMemoryOwnerSnapshots {
     let target: string | undefined;
     if (phase === 'published-before-registry') target = registryPath;
     else if (phase === 'registry-advanced') target = resolved.sidecarPath;
+    else if (phase === 'renamed-before-published-journal') target = resolved.journalPath;
     const expectedPath = target ? `${target}.update-${journal.operationId}.tmp` : undefined;
     if (!names.length) return undefined;
     if (names.length !== 1 || !expectedPath || names[0] !== path.basename(expectedPath)) {
       throw headError('EOWNERRECOVERY', 'Memory repair contains unexpected stages');
     }
-    const stage = await this.readRecord(expectedPath);
-    if (stage?.raw !== serializedRecord(this.publishedRecord(journal))) {
+    const stage = journal.state === 'PREPARED_WRITE'
+      ? await this.readJournalEvidence(expectedPath) : await this.readRecord(expectedPath);
+    const expectedRaw = journal.state === 'PREPARED_WRITE'
+      ? this.serializedJournal({ ...journal, state: 'PUBLISHED_WRITE', publishedHeadIdentity: evidence.head.identity })
+      : serializedRecord(this.publishedRecord(journal));
+    if (stage?.raw !== expectedRaw) {
       throw headError('EOWNERRECOVERY', 'Memory repair stage is incomplete or mismatched');
     }
     return { path: expectedPath, raw: stage.raw, identity: stage.identity };
@@ -488,7 +493,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async runPublishedMaintenance(
-    request: FinalizeOwnedUpdateRequest, forward: boolean,
+    request: FinalizeOwnedUpdateRequest, forward: boolean | 'prepared',
   ): Promise<FinalizeOwnedUpdateResult> {
     const captured = { ...request };
     this.validateFinalizeRequest(captured);
@@ -497,7 +502,7 @@ export class FileMemoryOwnerSnapshots {
       return await this.requiredCoordinator().withTenantTransaction(async context => {
         try {
           const result = forward
-            ? await this.forwardPublishedOwnedUpdateInTransaction(context, captured)
+            ? await this.performForwardMaintenance(context, captured, forward === 'prepared')
             : await this.finalizePublishedOwnedUpdateInTransaction(context, captured);
           if (result.status === 'known-committed') committedToken = result.token;
           return result;
@@ -537,10 +542,31 @@ export class FileMemoryOwnerSnapshots {
   forwardPublishedOwnedUpdateInTransaction(
     context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest,
   ): Promise<FinalizeOwnedUpdateResult> {
+    return this.performForwardMaintenance(context, request, false);
+  }
+
+  /** Dormant recovery of PREPARED evidence whose exact prepared file is already at the head. */
+  forwardPreparedRenamedOwnedUpdate(request: FinalizeOwnedUpdateRequest): Promise<FinalizeOwnedUpdateResult> {
+    return this.runPublishedMaintenance(request, 'prepared');
+  }
+
+  /** Caller owns the fresh live lease and retains committed results across outer failures. */
+  forwardPreparedRenamedOwnedUpdateInTransaction(
+    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    return this.performForwardMaintenance(context, request, true);
+  }
+
+  private performForwardMaintenance(
+    context: FileMemoryLeaseContext, request: FinalizeOwnedUpdateRequest, prepared: boolean,
+  ): Promise<FinalizeOwnedUpdateResult> {
     const captured = { ...request };
     this.validateFinalizeRequest(captured);
     return this.requiredCoordinator().perform(context, async operation => {
-      try { return await this.forwardAtScope(operation, captured); } catch (cause) {
+      try {
+        return prepared ? await this.forwardPreparedAtScope(operation, captured) :
+          await this.forwardAtScope(operation, captured);
+      } catch (cause) {
         const error = cause as Partial<CommittedFileHeadError>;
         if (error?.committed || ['EOWNERRECOVERY', 'EINVALIDHEAD', 'EHEADCONFLICT', 'EHEADCOMMITUNKNOWN'].includes(error?.code ?? '')) {
           throw cause;
@@ -550,6 +576,89 @@ export class FileMemoryOwnerSnapshots {
         throw pending;
       }
     });
+  }
+
+  private async forwardPreparedAtScope(
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+  ): Promise<FinalizeOwnedUpdateResult> {
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    const first = await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
+    coordinator.requireActiveOperationScope(operation);
+    // A resumed request may have completed the journal transition or commit.
+    if (first.evidence.journal?.state !== 'PREPARED_WRITE') {
+      return this.forwardAtScope(operation, request, first);
+    }
+    this.requirePreparedRenamed(first, request, scope);
+    this.validateHeadForSave(first.headContent);
+    const journal = first.evidence.journal as WriteJournal;
+    const raw = this.serializedJournal({ ...journal, state: 'PUBLISHED_WRITE',
+      publishedHeadIdentity: first.evidence.head.identity });
+    const proof = await this.stagePreparedJournal(operation, request, first, raw);
+    await this.options.duringUpdateMetadataStage?.('published-journal', 'verified-before-rename');
+    coordinator.requireActiveOperationScope(operation);
+    const last = await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
+    if (proof.signature !== last.signature || !last.recoveryStage) {
+      throw headError('EOWNERRECOVERY', 'Prepared evidence changed before journal rename');
+    }
+    await fs.rename(last.recoveryStage.path, last.resolved.journalPath);
+    await this.options.afterUpdatePublication?.('published-journal');
+    coordinator.requireActiveOperationScope(operation);
+    const advanced = await this.readDiagnosticEvidence(scope, request.locator, true);
+    if (!this.samePreparedRecords(last, advanced) || advanced.recoveryStage ||
+      advanced.journalRaw !== raw || !advanced.journalIdentity ||
+      !samePublishedFile(last.recoveryStage.identity, advanced.journalIdentity) ||
+      classifyFileMemoryWrite(advanced.evidence).kind !== 'published-before-registry') {
+      throw headError('EOWNERRECOVERY', 'Prepared journal publication changed bound evidence');
+    }
+    return this.forwardAtScope(operation, request, advanced);
+  }
+
+  private async stagePreparedJournal(
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+    first: DiagnosticEvidenceRead, raw: string,
+  ): Promise<DiagnosticEvidenceRead> {
+    if (first.recoveryStage) return first;
+    const coordinator = this.requiredCoordinator();
+    const scope = coordinator.requireActiveOperationScope(operation);
+    const beforeStage = await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
+    if (first.signature !== beforeStage.signature) {
+      throw headError('EOWNERRECOVERY', 'Prepared evidence changed before staging');
+    }
+    coordinator.requireActiveOperationScope(operation);
+    const created = await this.writeRecoveryStage(
+      `${first.resolved.journalPath}.update-${request.operationId}.tmp`, raw, 'published-journal');
+    const proof = await this.readDiagnosticEvidence(scope, request.locator, 'prepared');
+    if (!this.samePreparedBase(first, proof) || !proof.recoveryStage ||
+      !sameIdentity(created, proof.recoveryStage.identity)) {
+      throw headError('EOWNERRECOVERY', 'Prepared evidence changed during staging');
+    }
+    return proof;
+  }
+
+  private requirePreparedRenamed(
+    evidence: DiagnosticEvidenceRead, request: FinalizeOwnedUpdateRequest, scope: FileMemoryTransactionScope,
+  ): void {
+    const journal = evidence.evidence.journal;
+    if (classifyFileMemoryWrite(evidence.evidence).kind !== 'renamed-before-published-journal' ||
+      journal?.state !== 'PREPARED_WRITE' || journal.ownerId !== request.ownerId ||
+      journal.operationId !== request.operationId || journal.userId !== scope.userId ||
+      journal.locator !== request.locator || evidence.resolved.locator !== request.locator ||
+      !evidence.journalRaw || !evidence.journalIdentity) {
+      throw headError('EOWNERRECOVERY', 'Memory is not an exact already-renamed PREPARED repair');
+    }
+  }
+
+  private samePreparedRecords(left: DiagnosticEvidenceRead, right: DiagnosticEvidenceRead): boolean {
+    return left.headContent === right.headContent && isDeepStrictEqual(left.evidence.head, right.evidence.head) &&
+      left.sidecarRaw === right.sidecarRaw && left.registryRaw === right.registryRaw &&
+      isDeepStrictEqual(left.sidecarIdentity, right.sidecarIdentity) &&
+      isDeepStrictEqual(left.registryIdentity, right.registryIdentity);
+  }
+
+  private samePreparedBase(left: DiagnosticEvidenceRead, right: DiagnosticEvidenceRead): boolean {
+    return this.sameRepairBase(left, right) && this.samePreparedRecords(left, right) &&
+      isDeepStrictEqual(left.evidence, { ...right.evidence, artifactNames: left.evidence.artifactNames });
   }
 
   private publishedRecord(journal: WriteJournal): OwnerRecord {
