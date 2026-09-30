@@ -148,6 +148,38 @@ describe('IntegrationOperationCatalog', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it('reads generated skills concurrently while retaining their listed order', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail', skillName: 'first-helper' });
+      await f.catalog.createSkill({ provider: 'gmail', skillName: 'second-helper' });
+      const expected = await f.catalog.listOperations({ provider: 'gmail' });
+      const names = expected.skillStatus.map(skill => skill.skill_name);
+      expect(names).toHaveLength(2);
+      let releaseFirst = () => {};
+      let notifyStarted = () => {};
+      const heldRead = new Promise<void>(resolve => { releaseFirst = resolve; });
+      const started = new Promise<void>(resolve => { notifyStarted = resolve; });
+      const findByName = portfolioStore.findByName.bind(portfolioStore);
+      const read = jest.spyOn(portfolioStore, 'findByName').mockImplementation(async (userId, type, name) => {
+        if (name === names[0]) {
+          notifyStarted();
+          await heldRead;
+        }
+        return findByName(userId, type, name);
+      });
+      const pending = f.catalog.listOperations({ provider: 'gmail' });
+      await started;
+      try {
+        expect(read.mock.calls.map(call => call[2])).toEqual(names);
+      } finally {
+        releaseFirst();
+      }
+      expect((await pending).skillStatus).toEqual(expected.skillStatus);
+    });
+  });
+
   it.each([true, false])('isolates content unreadability but propagates storage failures: unreadable=%s', async unreadable => {
     const portfolioStore = new InMemoryPortfolioElementStore();
     const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });

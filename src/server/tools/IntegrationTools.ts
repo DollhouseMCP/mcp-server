@@ -113,8 +113,6 @@ export function getIntegrationManagementTools(catalog: AuthorizedIntegrationOper
     const definition = INTEGRATION_MANAGEMENT_OPERATIONS[name];
     const spec = definition.resource === 'openapi_spec';
     const update = definition.action === 'update';
-    const specMethod = update ? 'updateSpec' : 'createSpec';
-    const skillMethod = update ? 'updateSkill' : 'createSkill';
     const properties: Record<string, object> = { provider: { type: 'string', description: PROVIDER_DESCRIPTION } };
     if (spec) {
       properties.spec = { type: 'object', description: 'OpenAPI 3.x JSON object. Spec writes never persist a skill.' };
@@ -134,11 +132,11 @@ export function getIntegrationManagementTools(catalog: AuthorizedIntegrationOper
           validateManagementInput(input, name, properties);
           const provider = readRequiredString(input.provider, 'provider');
           const outcome = spec
-            ? await catalog[specMethod]({ provider,
+            ? await catalog[definition.method]({ provider,
               spec: readRequiredRecord(input.spec, 'spec'), sourceUrl: readOptionalString(input.source_url, 'source_url'),
               ...(input.expected_spec_hash === undefined ? {} : { expectedSpecHash: input.expected_spec_hash as string }),
             }, operations)
-            : await catalog[skillMethod]({ provider,
+            : await catalog[definition.method]({ provider,
               skillName: readOptionalString(input.skill_name, 'skill_name') ?? undefined,
               ...(input.expected_content_hash === undefined ? {} : { expectedContentHash: input.expected_content_hash as string }),
             }, operations);

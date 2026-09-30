@@ -351,9 +351,12 @@ export class IntegrationOperationCatalog {
     const userId = this.currentUserId();
     const skills = await store.listByUser(userId, { type: 'skills', tag: `integration:${context.descriptor.provider}` });
     const generated = generateSkill(context.descriptor, context.spec.specHash, operations, context.grantedScopes);
+    const reads = await Promise.all(skills.map(async summary => ({
+      summary,
+      skill: await readGeneratedSkillForStatus(store, userId, summary),
+    })));
     const result: IntegrationSkillStatus[] = [];
-    for (const summary of skills) {
-      const skill = await readGeneratedSkillForStatus(store, userId, summary);
+    for (const { summary, skill } of reads) {
       if (skill === 'unreadable') {
         result.push({ skill_name: summary.canonicalName, status: 'unreadable', guidance: GENERATED_SKILL_STATUS_GUIDANCE.unreadable });
         continue;

@@ -163,6 +163,8 @@ Then retry the original operation.
 
 Individual operations may override their endpoint default. When in doubt, just call the operation — if confirmation is needed, the response will tell you.
 
+Integration operations handle approval themselves: instead of asking for `confirm_operation`, the response says the request needs human approval and gives a request ID. Ask the user, and once they approve, retry the identical call.
+
 Do not try to bypass the Gatekeeper. It is a security feature that protects the user's portfolio.
 
 ---
@@ -269,6 +271,24 @@ mcp_aql_create { "operation": "install_collection_content", "params": { "path": 
 ```
 
 The `path` parameter uses the format `{type}/{filename}` as shown in collection browse results.
+
+---
+
+## Integrations
+
+When integrations are configured, connected REST APIs are available through MCP-AQL. List what a provider offers:
+
+```json
+mcp_aql_read { "operation": "list_integration_operations", "params": { "provider": "github" } }
+```
+
+Then call an operation:
+
+```json
+mcp_aql_execute { "operation": "integration_request", "params": { "provider": "github", "method": "GET", "path": "/user" } }
+```
+
+Use `introspect` for the other integration operations: `describe_integration_operation`, plus creating and updating specs and skills. Writes need the user's approval (see The Gatekeeper).
 
 ---
 
