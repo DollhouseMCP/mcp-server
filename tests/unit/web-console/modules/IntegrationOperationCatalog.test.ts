@@ -874,6 +874,51 @@ describe('strict integration management', () => {
     });
   });
 
+  it.each(['edit', 'same-byte-replacement'] as const)('preserves %s committed after the generated update post-hash check', async race => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'generated-skill-posthash-review-'));
+    cleanupDirs.push(directory);
+    const suite = createRealManagerSuite(directory);
+    const portfolioStore = new ManagerBackedPortfolioElementStore({ getCurrentUserId: () => USER_ID, managers: {
+      personas: suite.personaManager, skills: suite.skillManager, templates: suite.templateManager,
+      agents: suite.agentManager, memories: suite.memoryManager, ensembles: suite.ensembleManager,
+    } });
+    const f = createCatalog({ scopes: [GMAIL_READONLY], portfolioStore });
+    await runAsUser(f.contextTracker, async () => {
+      await f.catalog.createSkill({ provider: 'gmail' });
+      await f.specStore.upsert({ descriptorId: DESCRIPTOR_ID, spec: openApiSpec(), specHash: 'b'.repeat(64),
+        createdAt: new Date(TIMESTAMP), updatedAt: new Date(TIMESTAMP) });
+      let enter!: () => void; let release!: () => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const barrier = new Promise<void>(resolve => { release = resolve; });
+      const originalImport = suite.skillManager.importElement.bind(suite.skillManager);
+      const spy = jest.spyOn(suite.skillManager, 'importElement').mockImplementationOnce(async (...args) => {
+        enter(); await barrier; return originalImport(...args);
+      });
+      const pending = f.catalog.updateSkill({ provider: 'gmail' });
+      await entered; // Store has already accepted the old expectedContentHash.
+      try {
+        const beforeEdit = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+        if (!beforeEdit) throw new Error('Expected generated skill');
+        if (race === 'edit') {
+          await portfolioStore.update({ userId: USER_ID, type: 'skills', canonicalName: beforeEdit.canonicalName,
+            expectedContentHash: beforeEdit.contentHash, content: 'USER EDIT COMMITTED AFTER HASH CHECK',
+            metadata: { ...beforeEdit.metadata, instructions: 'USER EDIT COMMITTED AFTER HASH CHECK' }, now: new Date(TIMESTAMP) });
+          expect((await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME))?.content)
+            .toContain('USER EDIT COMMITTED AFTER HASH CHECK');
+        } else {
+          const skillPath = path.join(directory, 'skills', fs.readdirSync(path.join(directory, 'skills')).find(name => name.endsWith('.md'))!);
+          const originalBytes = fs.readFileSync(skillPath);
+          fs.renameSync(skillPath, path.join(directory, 'held-original-skill'));
+          fs.writeFileSync(skillPath, originalBytes);
+        }
+      } finally { release(); spy.mockRestore(); }
+      await expect(pending).rejects.toThrow('expected_content_hash');
+      const after = await portfolioStore.findByName(USER_ID, 'skills', GENERATED_SKILL_NAME);
+      if (race === 'edit') expect(after?.content).toContain('USER EDIT COMMITTED AFTER HASH CHECK');
+      else expect(after?.metadata.integration).toMatchObject({ specHash: SPEC_HASH });
+    });
+  });
+
   function strictFixture() {
     const portfolioStore = new InMemoryPortfolioElementStore();
     return { ...createCatalog({ scopes: [GMAIL_READONLY], portfolioStore,

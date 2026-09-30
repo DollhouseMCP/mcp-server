@@ -127,10 +127,13 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
-    const target = input.type === 'skills' ? await manager.findForUpdate(input.canonicalName) : undefined;
+    const target = input.type === 'skills' ? await manager.findForUpdate(input.canonicalName).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ECONTENTCONFLICT') throw new PortfolioElementVersionConflictError();
+      throw error;
+    }) : undefined;
     const existing = input.type === 'skills' ? target?.element : await this.findElement(input.type, input.canonicalName);
     if (!existing) return null;
-    const existingRecord = await this.toRecord(input.userId, input.type, existing);
+    const existingRecord = await this.toRecord(input.userId, input.type, existing, false, target?.content);
     this.assertExpectedHash(input.expectedContentHash, existingRecord);
 
     const updatedRaw = rawContentFromInput({
@@ -145,6 +148,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       await manager.save(updated, target?.path ?? elementPath(manager, existingRecord.canonicalName), target?.options);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ECONTENTCONFLICT') throw new PortfolioElementVersionConflictError();
       if (target && (code === 'ENOENT' || code === 'ESTALE')) return null;
       throw error;
     }
@@ -201,8 +205,9 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     type: ConsolePortfolioElementType,
     element: IElement,
     classifyUnreadable = false,
+    capturedContent?: string,
   ): Promise<ConsolePortfolioElementDetailRecord> {
-    const rawContent = await this.rawContentFor(type, element);
+    const rawContent = capturedContent ?? await this.rawContentFor(type, element);
     let parsed: ReturnType<typeof parseRawContent>;
     try {
       parsed = parseRawContent(type, rawContent);

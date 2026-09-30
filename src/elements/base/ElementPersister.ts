@@ -10,7 +10,7 @@
  * Extracted from BaseElementManager; no behaviour changed.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import type { IElement } from '../../types/elements/IElement.js';
 import type { ElementType } from '../../portfolio/types.js';
@@ -97,17 +97,41 @@ export class ElementPersister<T extends IElement> {
     this.elementTypeToContext = deps.elementTypeToContext;
   }
 
-  /** Resolve a database row identity or a file path without introducing a version token. */
-  async resolveUpdateTarget(name: string): Promise<{ path: string; options: ElementSaveOptions } | undefined> {
+  /** Capture the exact definition and guarded write evidence together. */
+  async resolveUpdateTarget(name: string): Promise<{ path: string; content: string; options: ElementSaveOptions } | undefined> {
+    if (this.host.elementType === 'memories') throw new Error('Memory updates require the memory head contract');
     if (isWritableStorageLayer(this.storageLayer)) {
       const identity = await this.storageLayer.resolveContentIdentity(this.host.elementType, name);
-      return identity ? { path: identity.id, options: { expectedIdentity: identity } } : undefined;
+      if (!identity) return undefined;
+      if (!this.storageLayer.readContentForUpdate) throw new Error('Storage does not support guarded updates');
+      const snapshot = await this.storageLayer.readContentForUpdate(identity.id).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (!snapshot || snapshot.identity.name !== identity.name) return undefined;
+      return { path: snapshot.identity.id, content: snapshot.content, options: {
+        expectedIdentity: snapshot.identity, expectedStorageRevision: snapshot.revision,
+      } };
     }
     await this.host.scanAndEvict();
-    return {
-      path: this.storageLayer.getPathByName(name) ?? this.host.getElementFilename(name),
-      options: { updateOnly: true },
-    };
+    const target = this.storageLayer.getPathByName(name) ?? this.host.getElementFilename(name);
+    const { absolutePath } = await this.host.normalizeAndValidatePath(target);
+    return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+      try {
+        const before = await this.fileOperations.stat(absolutePath);
+        const content = await this.fileOperations.readElementFile(absolutePath, this.host.elementType);
+        const after = await this.fileOperations.stat(absolutePath);
+        if (before.dev !== after.dev || before.ino !== after.ino) {
+          throw Object.assign(new Error('Update target changed during observation'), { code: 'ECONTENTCONFLICT' });
+        }
+        return { path: target, content, options: { updateOnly: true, expectedFileSnapshot: {
+          sha256: createHash('sha256').update(content).digest('hex'), dev: after.dev, ino: after.ino,
+        } } };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    });
   }
 
   /**
@@ -194,6 +218,7 @@ export class ElementPersister<T extends IElement> {
               exclusive: options?.exclusive ?? false,
               elementLabel: this.host.getElementLabelCapitalized(),
               expectedIdentity: options?.expectedIdentity,
+              expectedStorageRevision: options?.expectedStorageRevision,
             },
           );
           savedRelativePath = elementId;
@@ -215,9 +240,19 @@ export class ElementPersister<T extends IElement> {
           }
           await this.host.createBackupBeforeSave(absolutePath);
           // Under this process-local lock, updateOnly never inserts after deletion.
-          // It cannot detect same-path recreation: a replacement will be overwritten.
-          // External writers are not coordinated; retain atomic temp-file + rename.
+          // Unguarded updateOnly checks existence only; expectedFileSnapshot also
+          // checks content and inode identity. External writers are not coordinated.
+          // Preserve the existing atomic temp-file + rename publication.
           if (options?.updateOnly) await this.fileOperations.stat(absolutePath);
+          if (options?.expectedFileSnapshot) {
+            const current = await this.fileOperations.stat(absolutePath);
+            const raw = await this.fileOperations.readElementFile(absolutePath, this.host.elementType);
+            const expected = options.expectedFileSnapshot;
+            if (current.dev !== expected.dev || current.ino !== expected.ino ||
+              createHash('sha256').update(raw).digest('hex') !== expected.sha256) {
+              throw Object.assign(new Error('Element content changed before guarded save'), { code: 'ECONTENTCONFLICT' });
+            }
+          }
           await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
         }
 

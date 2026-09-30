@@ -72,6 +72,7 @@ export type BackupServiceProvider = () => BackupService | undefined;
 /** A resolved update target; identity is carried unchanged into the save. */
 export interface ElementUpdateTarget<T extends IElement> {
   readonly element: T;
+  readonly content?: string;
   readonly path: string;
   readonly options: ElementSaveOptions;
 }
@@ -490,7 +491,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     const target = await this._persister.resolveUpdateTarget(name);
     if (!target) return undefined;
     try {
-      const element = await this.findByStorageIdentity(target.path);
+      const element = await this._loader.loadDefinitionFromContent(target.content, target.path);
       return element ? { element, ...target } : undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
