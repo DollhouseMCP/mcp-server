@@ -67,7 +67,21 @@ describe('installed Nodemailer SMTP transport security', () => {
     });
     server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
     server.on('tlsClientError', () => {});
-    const port = await listening(server);
+    const tlsPort = await listening(server);
+    // Observe wire bytes before the TLS server can reject the handshake.
+    // A post-handshake callback cannot detect leaked plaintext AUTH here.
+    const wireChunks: Buffer[] = [];
+    const proxy = net.createServer(socket => {
+      const upstream = net.connect(tlsPort, '127.0.0.1');
+      for (const connection of [socket, upstream]) {
+        sockets.add(connection);
+        connection.on('error', () => {});
+        connection.on('close', () => sockets.delete(connection));
+      }
+      socket.on('data', data => wireChunks.push(Buffer.from(data)));
+      socket.pipe(upstream).pipe(socket);
+    });
+    const port = await listening(proxy);
     const transport = nodemailer.createTransport({ host: '127.0.0.1', port, secure: true,
       auth: { user: 'fixture-user', pass: 'fixture-password' },
       connectionTimeout: 1000, greetingTimeout: 1000, socketTimeout: 1000 });
@@ -76,9 +90,21 @@ describe('installed Nodemailer SMTP transport security', () => {
       expect(failure).toMatchObject({ code: 'ESOCKET' });
       expect(classifySmtpReadinessFailure(failure)).toBe('unknown');
       expect(commands).toEqual([]);
+      const wire = Buffer.concat(wireChunks);
+      expect(wire.length).toBeGreaterThan(5);
+      expect(wire[0]).toBe(22); // ClientHello handshake record, not SMTP.
+      let offset = 0;
+      while (offset < wire.length) {
+        expect(wire.length - offset).toBeGreaterThanOrEqual(5);
+        expect([20, 21, 22, 23]).toContain(wire[offset]);
+        expect(wire[offset + 1]).toBe(3);
+        offset += 5 + wire.readUInt16BE(offset + 3);
+        expect(offset).toBeLessThanOrEqual(wire.length);
+      }
     } finally {
       transport.close();
       sockets.forEach(socket => socket.destroy());
+      await new Promise<void>(resolve => proxy.close(() => resolve()));
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
   });
