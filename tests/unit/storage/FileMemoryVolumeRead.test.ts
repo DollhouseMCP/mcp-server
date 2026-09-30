@@ -122,6 +122,34 @@ describe('dormant verified file archive observation', () => {
     const f = await fixture(async () => { await fs.mkdir(path.join(f.root, 'volumes'), { mode: 0o700 }); });
     await expect(f.store.read(f.token, 1)).rejects.toMatchObject({ code: 'EARCHIVECHANGED' });
   });
+  it.each([{ component: 'volumes', alias: 'Volumes', ancestors: [] },
+    { component: 'by-id', alias: 'By-Id', ancestors: ['volumes'] }])('rejects late missing-namespace alias $alias from the final captured sibling list', async ({ component, alias, ancestors }) => {
+    const f = await fixture();
+    const parent = path.join(f.token.tenantRoot, ...ancestors);
+    if (ancestors.length) await fs.mkdir(parent, { mode: 0o700 });
+    const aliasPath = path.join(parent, alias);
+    const calls = f.calls();
+    const spelling = f.store as unknown as { requireNamespaceComponent(parent: string, component: string, required?: boolean): Promise<void> };
+    const original = spelling.requireNamespaceComponent.bind(f.store);
+    let proofs = 0;
+    let aliasIdentity: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    const spy = jest.spyOn(spelling, 'requireNamespaceComponent').mockImplementation(async (p, c, required) => {
+      await original(p, c, required);
+      if (p === parent && c === component && ++proofs === 2) {
+        await fs.mkdir(aliasPath, { mode: 0o700 });
+        aliasIdentity = await fs.lstat(aliasPath);
+      }
+    });
+    try {
+      const outcome = await f.store.read(f.token, 1).then(result => result, cause => cause);
+      expect(proofs).toBe(2);
+      expect(aliasIdentity).toBeDefined();
+      expect(outcome).toMatchObject({ code: 'EARCHIVEUNSAFE' });
+      expect(await fs.lstat(aliasPath)).toEqual(aliasIdentity);
+      expect(f.calls()).toBe(calls);
+      expect(await fs.readdir(parent)).toContain(alias);
+    } finally { spy.mockRestore(); }
+  });
   it('denies stale and cross-user owner tokens before archive observation', async () => {
     const f = await fixture();
     await expect(f.store.read({ ...f.token, userId: 'other' }, 1)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });

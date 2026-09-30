@@ -283,15 +283,12 @@ export class FileMemoryVolumeStore {
     await this.revalidateNamespace(namespace);
     await this.revalidateNamespaceSpelling(namespace);
     if (namespace.missing) {
-      await this.requireNamespaceComponent(path.dirname(namespace.missing), path.basename(namespace.missing), false);
-      try { await fs.lstat(namespace.missing); }
-      catch (cause) {
-        if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
-          return;
-        }
-        throw cause;
-      }
-      throw error('EARCHIVECHANGED', 'Archive namespace appeared during observation');
+      const parent = path.dirname(namespace.missing);
+      const component = path.basename(namespace.missing);
+      await this.requireNamespaceComponent(parent, component, false);
+      const siblings = await namesAt(parent, 100_000);
+      this.requireCanonicalNamespaceComponent(siblings, component, false);
+      if (siblings.includes(component)) throw error('EARCHIVECHANGED', 'Archive namespace appeared during observation');
     }
   }
   private async observe(scope: FileMemoryTransactionScope, token: OwnedFileMemoryToken, volume: number,
@@ -360,6 +357,9 @@ export class FileMemoryVolumeStore {
   }
   private async requireNamespaceComponent(parent: string, component: string, requirePresent = true): Promise<void> {
     const siblings = await namesAt(parent, 100_000);
+    this.requireCanonicalNamespaceComponent(siblings, component, requirePresent);
+  }
+  private requireCanonicalNamespaceComponent(siblings: readonly string[], component: string, requirePresent: boolean): void {
     if ((requirePresent && !siblings.includes(component)) ||
       siblings.some(name => name.toLowerCase() === component.toLowerCase() && name !== component)) {
       throw error('EARCHIVEUNSAFE', 'Archive namespace spelling or case alias is unsafe');
