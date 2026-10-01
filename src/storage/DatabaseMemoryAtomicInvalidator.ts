@@ -315,8 +315,10 @@ export class DatabaseMemoryAtomicInvalidator {
 
   async resolveRun(input: MemoryAtomicInvalidationRequest, freshConnection: Sql): Promise<MemoryAtomicResolutionOutcome> {
     let request: CapturedRequest;
-    try { request = captureRequest(input); requireRootConnection(freshConnection); }
+    try { request = captureRequest(input); }
     catch { return { status: 'refused', reason: 'invalid-request' }; }
+    try { requireRootConnection(freshConnection); }
+    catch { return { status: 'refused', reason: 'context' }; }
     if (freshConnection === this.connection) return { status: 'refused', reason: 'context' };
     const original = this.#invocations.get(request.runId);
     if (!original) return { status: 'refused', reason: 'context' };

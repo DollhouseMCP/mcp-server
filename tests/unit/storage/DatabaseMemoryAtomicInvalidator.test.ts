@@ -156,6 +156,40 @@ describe('atomic invalidation private operation envelope', () => {
       .toEqual({ status: 'refused', reason: 'context' });
     expect(fresh.calls()).toBe(0);
   });
+
+  it.each(['null', 'missing begin', 'reserved'])('classifies %s resolver connections without changing unknown state', async kind => {
+    const f = fixture(async () => { throw new Error('begin acknowledgement lost'); });
+    const fresh = fixture();
+    const invalidator = new DatabaseMemoryAtomicInvalidator(f.connection);
+    expect(await invalidator.invalidate(request())).toEqual({ status: 'unknown', reason: null });
+    let connection: unknown = null;
+    if (kind === 'missing begin') connection = {};
+    if (kind === 'reserved') connection = { ...fresh.client, savepoint: () => undefined };
+    expect(await invalidator.resolveRun(request(), connection as Sql)).toEqual({ status: 'refused', reason: 'context' });
+    expect(await invalidator.resolveRun(request(), fresh.connection)).toEqual({ status: 'unknown', reason: null });
+    expect(await invalidator.invalidate(request())).toEqual({ status: 'unknown', reason: null });
+    expect(f.calls()).toBe(1);
+    expect(fresh.calls()).toBe(0);
+    expect(f.statements).toEqual([]);
+    expect(fresh.statements).toEqual([]);
+  });
+
+  it('distinguishes resolver request, connection and binding refusals without SQL or state changes', async () => {
+    const f = fixture(async () => { throw new Error('begin acknowledgement lost'); });
+    const fresh = fixture();
+    const invalidator = new DatabaseMemoryAtomicInvalidator(f.connection);
+    expect(await invalidator.invalidate(request())).toEqual({ status: 'unknown', reason: null });
+    expect(await invalidator.resolveRun({ ...request(), databaseOid: '0' }, fresh.connection))
+      .toEqual({ status: 'refused', reason: 'invalid-request' });
+    expect(await invalidator.resolveRun(request(), f.connection)).toEqual({ status: 'refused', reason: 'context' });
+    expect(await invalidator.resolveRun({ ...request(), declaredContextId: 'different' }, fresh.connection))
+      .toEqual({ status: 'refused', reason: 'conflict' });
+    expect(await invalidator.resolveRun(request(), fresh.connection)).toEqual({ status: 'unknown', reason: null });
+    expect(f.calls()).toBe(1);
+    expect(fresh.calls()).toBe(0);
+    expect(f.statements).toEqual([]);
+    expect(fresh.statements).toEqual([]);
+  });
 });
 
 function happyFixture(behavior?: (callback: Callback, client: unknown) => Promise<unknown>) {
