@@ -184,8 +184,10 @@ export type AdoptionRecoveryPublication = 'before-stage' | 'partial-stage' | 've
   'before-rename' | 'after-rename' | 'after-read' | 'before-registry-stage' | 'partial-registry-stage' |
   'verified-registry-stage' | 'before-registry-rename' | 'after-registry-rename' |
   'before-registry-create' | 'partial-registry-create' | 'after-registry-create' |
-  'before-owners-directory-create' | 'after-owners-directory-create';
-type AdoptionProgress = 'owners-directory-creation-unknown' | 'owners-directory-created' |
+  'before-owners-directory-create' | 'after-owners-directory-create' |
+  'before-ownership-parent-create' | 'after-ownership-parent-create';
+type AdoptionProgress = 'ownership-parent-creation-unknown' | 'ownership-parent-created' |
+  'owners-directory-creation-unknown' | 'owners-directory-created' |
   'registry-creation-unknown' | 'registry-created' |
   'registry-publication-unknown' | 'registry-published' | 'sidecar-publication-unknown';
 interface AdoptionEvidence {
@@ -221,6 +223,7 @@ interface PreparedOwnersDirectory {
   readonly reproof: (current: AbsentAdoptionEvidence | AdoptionEvidence) => Promise<void>;
   readonly publicationProof: AdoptionTopologyProof;
 }
+type MissingOwnershipParentEvidence = Omit<MissingOwnersEvidence, 'parentIdentity' | 'parentNames'>;
 type AdoptionTopologyProof = (stage?: { path: string; identity: FileIdentity },
   publishedSidecar?: FileIdentity, transition?: 'registry-create' | 'registry-stage' | 'registry-rename' | 'sidecar-stage' | 'sidecar-rename') => Promise<void>;
 
@@ -938,7 +941,8 @@ export class FileMemoryOwnerSnapshots {
   ): Promise<PreparedOwnersDirectory | undefined> {
     const directory = path.dirname(this.registryPath(operation.tenantRoot, request.ownerId));
     try { await fs.lstat(directory); return undefined; } catch (cause) { if (!hasCode(cause, 'ENOENT')) throw cause; }
-    const first = await this.missingOwnersProof(operation, request, budget);
+    const first = await this.prepareOwnershipParent(operation, request, budget, progress, closeFailure) ??
+      await this.missingOwnersProof(operation, request, budget);
     await this.options.afterAdoptionRecoveryPublication?.('before-owners-directory-create');
     const last = await this.missingOwnersProof(operation, request, budget);
     if (first.signature !== last.signature) throw headError('EOWNERRECOVERY', 'Missing owners evidence changed');
@@ -965,6 +969,65 @@ export class FileMemoryOwnerSnapshots {
     this.requiredCoordinator().requireActiveOperationScope(operation);
     return { evidence, reproof: current => this.requireCreatedOwnersContext(operation, budget, first, evidence, current),
       publicationProof: this.createdOwnersPublicationProof(operation, budget, first, evidence) };
+  }
+
+  private async missingOwnershipParentProof(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+  ): Promise<MissingOwnershipParentEvidence> {
+    const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
+    const original = await this.reservedAdoptionOriginal(scope, request);
+    const stat = await fs.lstat(scope.tenantRoot, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw headError('EOWNERRECOVERY', 'Tenant directory changed');
+    const tenantIdentity = identityOf(stat);
+    const tenantNames = await this.listMatchingArtifacts(scope.tenantRoot, () => true, budget);
+    if (tenantNames.some(name => name.toLowerCase() === OWNER_DIRECTORY)) {
+      throw headError('EOWNERRECOVERY', 'Missing ownership parent namespace is ambiguous');
+    }
+    const prefix = `.${original.resolved.basenameHash}.memory-`;
+    const headNames = await this.listMatchingArtifacts(path.dirname(original.resolved.headPath), name => name.toLowerCase().startsWith(prefix), budget);
+    if (headNames.length !== 1 || headNames[0] !== path.basename(original.resolved.sidecarPath)) {
+      throw headError('EOWNERRECOVERY', 'Missing ownership parent has unbound head artifacts');
+    }
+    await this.requireAdoptionNamedFiles([[original.resolved.headPath, original.head.identity], [original.resolved.sidecarPath, original.sidecar.identity]]);
+    const finalTenantNames = await this.listMatchingArtifacts(scope.tenantRoot, () => true, budget);
+    const finalHeadNames = await this.listMatchingArtifacts(path.dirname(original.resolved.headPath), name => name.toLowerCase().startsWith(prefix), budget);
+    if (!isDeepStrictEqual(tenantNames, finalTenantNames) || !isDeepStrictEqual(headNames, finalHeadNames)) {
+      throw headError('EOWNERRECOVERY', 'Missing ownership parent census changed');
+    }
+    await this.requireAdoptionNamedFiles([[scope.tenantRoot, tenantIdentity],
+      [original.resolved.headPath, original.head.identity], [original.resolved.sidecarPath, original.sidecar.identity]]);
+    this.requiredCoordinator().requireActiveOperationScope(operation);
+    return { original, tenantIdentity, tenantMode: stat.mode, tenantUid: stat.uid, tenantNames,
+      signature: JSON.stringify({ original, tenantIdentity, tenantNames }) };
+  }
+
+  private async prepareOwnershipParent(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    progress: (phase: AdoptionProgress) => void, closeFailure: (cause: unknown) => void,
+  ): Promise<MissingOwnersEvidence | undefined> {
+    const parent = path.dirname(path.dirname(this.registryPath(operation.tenantRoot, request.ownerId)));
+    try { await fs.lstat(parent); return undefined; } catch (cause) { if (!hasCode(cause, 'ENOENT')) throw cause; }
+    const first = await this.missingOwnershipParentProof(operation, request, budget);
+    await this.options.afterAdoptionRecoveryPublication?.('before-ownership-parent-create');
+    const last = await this.missingOwnershipParentProof(operation, request, budget);
+    if (first.signature !== last.signature) throw headError('EOWNERRECOVERY', 'Missing ownership parent evidence changed');
+    this.requiredCoordinator().requireActiveOperationScope(operation);
+    progress('ownership-parent-creation-unknown');
+    await fs.mkdir(parent, { mode: 0o700 });
+    const captured = await this.captureOwnersDirectory(parent, closeFailure);
+    progress('ownership-parent-created');
+    // Capture only the exact own mkdir transition before any callback can mutate it.
+    const created = await this.missingOwnersProof(operation, request, budget);
+    if (!isDeepStrictEqual(first.original, created.original) || !sameIdentity(captured, created.parentIdentity) ||
+      created.parentNames.length || created.tenantMode !== first.tenantMode || created.tenantUid !== first.tenantUid ||
+      !this.sameCreatedDirectory(first.tenantIdentity, created.tenantIdentity, true) ||
+      !isDeepStrictEqual(this.sortArtifactNames([...first.tenantNames, OWNER_DIRECTORY]), created.tenantNames)) {
+      throw headError('EOWNERRECOVERY', 'Created ownership parent changed original evidence');
+    }
+    await this.options.afterAdoptionRecoveryPublication?.('after-ownership-parent-create');
+    const rechecked = await this.missingOwnersProof(operation, request, budget);
+    if (created.signature !== rechecked.signature) throw headError('EOWNERRECOVERY', 'Created ownership parent evidence changed');
+    return created;
   }
 
   private async requireCreatedOwnersContext(

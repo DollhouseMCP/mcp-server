@@ -184,7 +184,8 @@ Token-bound private error identity avoids
 wrapping the same classified failure multiple times through coordinator error
 collection. `adoptUnownedInTransaction` uses the caller's existing lease; callers
 must retain a successful returned receipt across their own later outer failures.
-No earlier RESERVED state is repaired and no head or archive is rewritten.
+The final-sidecar phase itself repairs no earlier RESERVED state. The preparation
+phases below handle their exact supported states; no head or archive is rewritten.
 
 ### Dormant RESERVED adoption recovery
 
@@ -193,7 +194,8 @@ already-existing RESERVED registry, revision 1, under unchanged head evidence.
 They first exclusively stage the exact ACTIVE registry at
 `<registry>.adopt-<ownerId>.tmp`; only a freshly proved complete next stage may
 be reused. Partial, random, aliased, duplicate or wrong-order stages are preserved.
-Missing ancestors remain unsupported; no directories are created.
+The pair-publication phase itself requires existing private ancestors and creates
+no directories. Exact missing-ancestor preparation is described below.
 
 Registry staging/rename changes the owners directory's size/mtime/ctime. The
 transition retains its device/inode and freshly checked private ownership/type,
@@ -270,7 +272,7 @@ Ordinary reads and diagnostics retain their existing behavior.
 
 Recovery also supports a missing `owners` child beneath an existing canonical,
 private `.memory-owners` parent when the original revision-1 RESERVED sidecar
-and head remain exact. Both missing ancestors remain unsupported. Creation uses
+and head remain exact. Creation uses
 exclusive, nonrecursive `mkdir(0700)`; no existing directory permissions change.
 Complete stable tenant and parent sibling sets reject canonical case aliases
 and `owners.*` residue. All observation and later recovery phases share one
@@ -305,3 +307,26 @@ POSIX process-crash model. It does not claim an atomically returned mkdir inode,
 hostile filesystem atomicity or power-loss durability. Unknown directories and
 partial records remain preserved; no cleanup, lease takeover or runtime wiring
 is introduced.
+
+Recovery also supports both ownership ancestors missing after ordinary adoption
+has published its exact revision-1 RESERVED sidecar. It first exclusively creates
+the canonical `.memory-owners` parent, using the same mandatory private descriptor,
+named-identity and successful-close capture. Local
+`ownership-parent-creation-unknown` begins before mkdir;
+`ownership-parent-created` begins immediately after capture and close, before
+fallible root-transition observation. Primary and secondary close causes retain
+the existing direct-cause contract. Neither phase attributes adoption.
+
+Only this own parent mkdir may advance tenant-root metadata at this point;
+device/inode/type/mode/UID and the complete original sibling set plus the exact
+canonical parent remain bound. The new parent must be empty and match its captured
+identity. Fresh full root identity is captured before the post-parent hook, then
+reproved afterward. Original head/sidecar and that captured context pass directly
+into child recovery without a new evidence baseline or scan-budget reset.
+Casefold-equal parent aliases reject; other root siblings, including
+`.memory-owners.*`, remain unchanged and uninterpreted. Tenant-root privacy policy
+is unchanged. Later child/registry progress may supersede the parent phase, but
+only final ACTIVE-sidecar rename commits adoption. A crash leaving the exact
+private empty parent resumes through child recovery with fresh authority and no
+previous-invocation attribution. Existing partial records remain manual; no
+recursive directory creation, normalization, cleanup or lease takeover is added.
