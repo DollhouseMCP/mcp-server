@@ -32,6 +32,31 @@ async function fixture(hook?: (phase: 'observed' | 'verified', location: string)
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 describe('dormant verified file archive observation', () => {
+
+  it.each([1, 2])('rejects depth %i array generation metadata during read without modifying evidence', async depth => {
+    const f = await fixture();
+    const receipt = await f.store.createExclusive(f.token, input);
+    const ownerRoot = path.join(f.root, 'volumes', 'by-id', f.token.ownerId);
+    const slot = path.join(ownerRoot, 'v1');
+    const generation = path.join(slot, `g-${receipt.generationId}`);
+    const metadataPath = path.join(generation, 'metadata.json');
+    const canonical = await f.store.read(f.token, 1);
+    expect(canonical).toMatchObject({ status: 'found', metadata: { generationId: receipt.generationId } });
+    if (canonical.status === 'found') expect(Object.isFrozen(canonical.metadata)).toBe(true);
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+    metadata.generationId = depth === 1 ? [receipt.generationId] : [[receipt.generationId]];
+    await fs.writeFile(metadataPath, JSON.stringify(metadata));
+    const paths = [slot, generation, path.join(slot, 'COMMITTED'), metadataPath, path.join(generation, 'payload.yaml')];
+    const evidence = async () => Promise.all(paths.map(async location => {
+      const stat = await fs.lstat(location, { bigint: true });
+      return { dev: stat.dev, inode: stat.ino, mode: stat.mode, links: stat.nlink,
+        mtime: stat.mtimeNs, ctime: stat.ctimeNs, bytes: stat.isFile() ? await fs.readFile(location) : undefined };
+    }));
+    const before = await evidence();
+    await expect(f.store.read(f.token, 1)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+    expect(await evidence()).toEqual(before);
+    expect(await fs.readdir(ownerRoot)).toEqual(['v1']);
+  });
   it('reads committed unindexed bytes without acquiring a fence or changing any archive inode', async () => {
     const f = await fixture();
     const receipt = await f.store.createExclusive(f.token, { ...input, rawContent: 'entries:\n  - content: 中🙂\n', entryCount: 1 });

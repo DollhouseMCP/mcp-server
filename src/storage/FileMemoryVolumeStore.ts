@@ -632,7 +632,8 @@ export class FileMemoryVolumeStore {
     const metadata = JSON.parse(metadataBytes.toString('utf8')) as Metadata;
     const keys = ['schema', 'userId', 'ownerId', 'volume', 'generationId', 'sha256', 'byteLength', 'entryCount', 'firstEntryAt', 'lastEntryAt', 'sealedAt'].sort((left, right) => left.localeCompare(right));
     if (!metadata || Object.keys(metadata).sort((left, right) => left.localeCompare(right)).join('|') !== keys.join('|') || metadata.schema !== 1 || metadata.userId !== owner.userId ||
-      metadata.ownerId !== owner.ownerId || metadata.volume !== volume || `g-${metadata.generationId}` !== generationName ||
+      metadata.ownerId !== owner.ownerId || metadata.volume !== volume || typeof metadata.generationId !== 'string' ||
+      `g-${metadata.generationId}` !== generationName ||
       metadata.byteLength !== payloadBytes.length || metadata.sha256 !== createHash('sha256').update(payloadBytes).digest('hex')) throw error('EARCHIVEUNSAFE', 'Archive metadata disagrees');
     const canonicalDate = (value: unknown): boolean => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
     if (!canonicalDate(metadata.sealedAt) || (metadata.firstEntryAt !== null && !canonicalDate(metadata.firstEntryAt)) ||
