@@ -119,6 +119,16 @@ supporting index even for `users`; it requires neither a particular users index
 name nor a complete users PK/index inventory. Arbitrary builtin implementation
 changes remain unqualified.
 
+Each scoped FK also requires exactly four internal RI triggers: insert/update
+checks on its child and cascade-delete/no-action-update on its parent. Their
+constraint/index/relation bindings, builtin zero-argument trigger functions,
+normal-origin enablement, nondeferred flags and empty argument/column/WHEN/
+transition-table state are checked and hashed. The observation is capped at
+five triggers per FK. Missing-trigger refusal is unit-qualified; legal CI DDL
+qualifies disabled child and replica-only parent triggers without dropping the
+FK. This does not qualify the caller’s session_replication_role or confer
+execution authority.
+
 The exact positive-check rendering also requires no explicit operator/function
 dependency on its constraint in `pg_depend`: PG17 omits dependencies on pinned
 builtins, while custom operators/functions retain dependencies. This rejects a

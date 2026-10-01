@@ -182,3 +182,21 @@ describe('live partial PG17 memory invalidation structure proof', () => {
     });
   });
 });
+
+describe('actual FK internal trigger enforcement state', () => {
+  it.each([['child', 'DISABLE'], ['parent', 'ENABLE REPLICA']])('refuses %s trigger mode while retaining the FK/index', async (side, action) => {
+    await rolledBack(async tx => {
+      const [trigger] = await tx.execute(sql`SELECT t.tgname,r.relname,c.conindid::text AS index_oid
+        FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_trigger t ON t.tgconstraint=c.oid
+        JOIN pg_catalog.pg_class r ON r.oid=t.tgrelid
+        WHERE c.conname='element_tags_user_id_users_id_fk' AND c.conrelid='public.element_tags'::pg_catalog.regclass
+          AND t.tgrelid=CASE WHEN ${side}='child' THEN c.conrelid ELSE c.confrelid END
+        ORDER BY t.tgtype LIMIT 1`);
+      expect(trigger).toBeDefined();
+      await tx.execute(sql`ALTER TABLE public.${sql.identifier(String(trigger.relname))} ${sql.raw(action)} TRIGGER ${sql.identifier(String(trigger.tgname))}`);
+      const [constraint] = await tx.execute(sql`SELECT convalidated,conindid::text AS index_oid FROM pg_catalog.pg_constraint WHERE conname='element_tags_user_id_users_id_fk' AND conrelid='public.element_tags'::pg_catalog.regclass`);
+      expect(constraint).toMatchObject({ convalidated: true, index_oid: trigger.index_oid });
+      expect(await verify(tx)).toMatchObject({ status: 'refused', reason: 'contract_mismatch' });
+    });
+  });
+});

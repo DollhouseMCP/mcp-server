@@ -24,14 +24,21 @@ const referenceIndex = (table: string) => ({ table, schema: 'public', key: 'id',
   method: 'btree', opclass: 'pg_catalog.uuid_ops', defaultOpclass: true, unique: true, immediate: true,
   valid: true, ready: true, live: true, keyCount: 1, attributeCount: 1, predicateNull: true, expressionsNull: true,
   collation: null, collationResolved: true, option: 0 });
+function riTriggers(table: string, reference: string) {
+  return [['RI_FKey_cascade_del', 9, reference, table], ['RI_FKey_check_ins', 5, table, reference],
+    ['RI_FKey_check_upd', 17, table, reference], ['RI_FKey_noaction_upd', 17, reference, table]]
+    .map(([name, type, relation, other]) => ({ function: `pg_catalog.${name}`, type, relation, other,
+      binding: true, internal: true, enabled: 'O', parent: '0', deferrable: false, deferred: false,
+      argumentsEmpty: true, columnsEmpty: true, qualificationNull: true, transitionsNull: true, functionBinding: true }));
+}
 function observation() {
   return { version: 170010, inheritance: false,
     relations: ['elements', 'element_tags', 'memory_entries', 'users'].map((name, i) => ({ name, oid: String(i + 1), schema: 'public', kind: 'r', persistence: 'p', partition: false })),
     columns: columnSpecs.map(([table, name, type, typmod]) => ({ table, name, typeSchema: 'pg_catalog', type, typmod,
       notNull: true, generated: '', identity: '', dropped: false, collationResolved: true, collation: ['text', 'varchar'].includes(type) ? 'pg_catalog.default' : null })),
-    constraints: [...keys.map(([table, name, keys]) => ({ table, name, keys, type: 'p', referenceIndex: null, equalityOperators: null, referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
+    constraints: [...keys.map(([table, name, keys]) => ({ table, name, keys, type: 'p', riTriggers: null, referenceIndex: null, equalityOperators: null, referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
       update: ' ', delete: ' ', match: ' ', ...flags })), ...foreignKeys.map(([table, name, key, reference]) => ({ table, name, keys: [key], type: 'f', referenceBinding: true,
-      referenceIndex: referenceIndex(reference), equalityOperators: [equality, equality, equality],
+      riTriggers: riTriggers(table, reference), referenceIndex: referenceIndex(reference), equalityOperators: [equality, equality, equality],
       referenceSchema: 'public', reference, referenceKeys: ['id'], update: 'a', delete: 'c', match: 's', ...flags }))],
     indexes: keys.map(([table, name, keys]) => ({ table, name, schema: 'public', keys, method: 'btree', unique: true, primary: true, valid: true, ready: true,
       live: true, predicateNull: true, expressionsNull: true, keyCount: keys.length, attributeCount: keys.length, binding: true,
@@ -176,4 +183,23 @@ describe('partial required memory invalidation structure', () => {
     const result = await verify({ execute } as unknown as DrizzleTx);
     expect(result.reason).toBe('query_failed'); expect(JSON.stringify(result)).not.toContain('private'); expect(result).not.toHaveProperty('cause');
   });
+});
+
+describe('FK internal enforcement trigger contract', () => {
+  it.each(['missing', 'overflow', 'enabled', 'relation', 'other', 'function', 'binding', 'functionBinding', 'argumentsEmpty', 'columnsEmpty', 'qualificationNull', 'transitionsNull', 'parent', 'internal', 'deferrable', 'deferred', 'type'])('refuses %s drift without changing the FK/index', async field => {
+    const value = observation();
+    const triggers = value.constraints[3].riTriggers!;
+    if (field === 'missing') triggers.pop();
+    else if (field === 'overflow') triggers.push({ ...triggers[0] });
+    else (triggers[0] as Record<string, unknown>)[field] = field === 'enabled' ? 'R' : 'invalid';
+    expect(await run([value])).toMatchObject({ status: 'refused', reason: 'contract_mismatch' });
+  });
+});
+
+it('refuses disabled RI triggers and a missing function binding without dropping the FK', async () => {
+  for (const field of ['enabled', 'function']) {
+    const value = observation();
+    (value.constraints[3].riTriggers![0] as Record<string, unknown>)[field] = field === 'enabled' ? 'D' : null;
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+  }
 });

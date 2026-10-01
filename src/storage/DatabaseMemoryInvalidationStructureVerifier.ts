@@ -52,11 +52,18 @@ function referenceIndexDescriptor(table: string): Descriptor {
     keyCount: 1, attributeCount: 1, predicateNull: true, expressionsNull: true,
     collation: null, collationResolved: true, option: 0 };
 }
+function riTriggers(table: string, reference: string): Descriptor[] {
+  return [['RI_FKey_cascade_del', 9, reference, table], ['RI_FKey_check_ins', 5, table, reference],
+    ['RI_FKey_check_upd', 17, table, reference], ['RI_FKey_noaction_upd', 17, reference, table]]
+    .map(([name, type, relation, other]) => ({ function: `pg_catalog.${name}`, type, relation, other,
+      binding: true, internal: true, enabled: 'O', parent: '0', deferrable: false, deferred: false,
+      argumentsEmpty: true, columnsEmpty: true, qualificationNull: true, transitionsNull: true, functionBinding: true }));
+}
 function constraints(): Descriptor[] {
-  return [...KEYS.map(key => ({ ...key, type: 'p', referenceIndex: null, equalityOperators: null, referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
+  return [...KEYS.map(key => ({ ...key, type: 'p', riTriggers: null, referenceIndex: null, equalityOperators: null, referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
     update: ' ', delete: ' ', match: ' ', ...constraintFlags })),
   ...FOREIGN_KEYS.map(([table, name, key, reference]) => ({ table, name, keys: [key], type: 'f', referenceBinding: true,
-    referenceIndex: referenceIndexDescriptor(reference), equalityOperators: [equality, equality, equality], referenceSchema: 'public',
+    riTriggers: riTriggers(table, reference), referenceIndex: referenceIndexDescriptor(reference), equalityOperators: [equality, equality, equality], referenceSchema: 'public',
     reference, referenceKeys: ['id'], update: 'a', delete: 'c', match: 's', ...constraintFlags }))];
 }
 function indexDescriptor(key: typeof KEYS[number]): Descriptor {
@@ -141,6 +148,23 @@ SELECT pg_catalog.current_setting('server_version_num')::integer AS version,
       'collation',CASE WHEN pg_catalog.cardinality(ri.indcollation::oid[])=1 AND ri.indcollation[0]=0 THEN NULL ELSE 'invalid' END,
       'collationResolved',pg_catalog.cardinality(ri.indcollation::oid[])=1 AND ri.indcollation[0]=0,
       'option',CASE WHEN pg_catalog.cardinality(ri.indoption::smallint[])=1 THEN ri.indoption[0] END) END,
+    'riTriggers',CASE WHEN c.contype='f' THEN (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+      'function',pn.nspname||'.'||p.proname,'type',t.tgtype,'relation',tr.relname,'other',tor.relname,
+      'binding',tr.oid IN (c.conrelid,c.confrelid) AND tor.oid IN (c.conrelid,c.confrelid)
+        AND tr.relnamespace=rns.oid AND tor.relnamespace=rns.oid AND rns.nspname='public' AND t.tgconstrindid=c.conindid,
+      'internal',t.tgisinternal,'enabled',t.tgenabled,'parent',t.tgparentid::text,
+      'deferrable',t.tgdeferrable,'deferred',t.tginitdeferred,
+      'argumentsEmpty',t.tgnargs=0 AND pg_catalog.octet_length(t.tgargs)=0,
+      'columnsEmpty',pg_catalog.cardinality(t.tgattr::smallint[])=0,'qualificationNull',t.tgqual IS NULL,
+      'transitionsNull',t.tgoldtable IS NULL AND t.tgnewtable IS NULL,
+      'functionBinding',pn.nspname='pg_catalog' AND p.prokind='f' AND NOT p.proretset AND p.pronargs=0 AND pg_catalog.cardinality(p.proargtypes::oid[])=0
+        AND rt.typname='trigger' AND rtn.nspname='pg_catalog') ORDER BY CASE p.proname WHEN 'RI_FKey_cascade_del' THEN 1 WHEN 'RI_FKey_check_ins' THEN 2
+        WHEN 'RI_FKey_check_upd' THEN 3 WHEN 'RI_FKey_noaction_upd' THEN 4 ELSE 5 END)
+      FROM (SELECT * FROM pg_catalog.pg_trigger WHERE tgconstraint=c.oid LIMIT 5) t
+      LEFT JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid LEFT JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace
+      LEFT JOIN pg_catalog.pg_type rt ON rt.oid=p.prorettype LEFT JOIN pg_catalog.pg_namespace rtn ON rtn.oid=rt.typnamespace
+      LEFT JOIN pg_catalog.pg_class tr ON tr.oid=t.tgrelid LEFT JOIN pg_catalog.pg_class tor ON tor.oid=t.tgconstrrelid
+      LEFT JOIN pg_catalog.pg_namespace rns ON rns.oid=tr.relnamespace) END,
     'referenceSchema',rn.nspname,'reference',rc.relname,
     'referenceKeys',CASE WHEN pg_catalog.cardinality(c.confkey)<=2 THEN (SELECT pg_catalog.jsonb_agg(a.attname ORDER BY k.n)
       FROM pg_catalog.unnest(c.confkey) WITH ORDINALITY k(num,n) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num) END,
