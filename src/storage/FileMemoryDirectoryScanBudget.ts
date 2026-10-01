@@ -15,6 +15,20 @@ export class FileMemoryDirectoryScanLimitError extends Error {
   constructor() { super('Memory directory inspection budget exhausted'); }
 }
 
+/** Close a private inspection while preserving the presence and identity of its primary failure. */
+export async function closeMemoryDirectoryInspection(
+  directory: Dir, primary: { cause: unknown } | undefined, message: string,
+): Promise<void> {
+  try { await directory.close(); }
+  catch (cause) {
+    if (!primary) throw cause;
+    throw Object.assign(new AggregateError([primary.cause, cause], message, { cause: primary.cause }), {
+      code: (primary.cause as NodeJS.ErrnoException | undefined)?.code,
+    });
+  }
+  if (primary) throw primary.cause;
+}
+
 /**
  * Invocation-owned read-attempt budget, not ownership or mutation authority.
  * Reserve before every Dir.read(): entries, EOF and failures each cost one unit.

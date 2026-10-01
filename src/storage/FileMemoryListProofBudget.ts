@@ -2,7 +2,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { FileMemoryDirectoryScanLimitError, type FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
+import { closeMemoryDirectoryInspection, FileMemoryDirectoryScanLimitError, type FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
 
 interface Census {
   readonly identity: readonly string[];
@@ -60,14 +60,7 @@ export class FileMemoryListProofBudget implements FileMemoryDirectoryScanner {
         inspect(entry.name);
       }
     } catch (cause) { primary = { cause }; }
-    try { await directory.close(); }
-    catch (cause) {
-      if (!primary) throw cause;
-      throw Object.assign(new AggregateError([primary.cause, cause], 'Listing namespace inspection and close failed', { cause: primary.cause }), {
-        code: (primary.cause as NodeJS.ErrnoException | undefined)?.code,
-      });
-    }
-    if (primary) throw primary.cause;
+    await closeMemoryDirectoryInspection(directory, primary, 'Listing namespace inspection and close failed');
     return { names, attempts };
   }
   async scan(directoryPath: string, inspect: (name: string) => void): Promise<void> {
