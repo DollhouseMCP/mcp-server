@@ -18,12 +18,16 @@ type Identity = OwnedFileMemoryToken['fileIdentity'];
 interface Child { name: string; identity: Identity; mode: string; uid: string; links: string; directory: boolean }
 interface StableDirectory { locator: string; device: string; inode: string; mode: string; uid: string; names: string[]; children: Child[] }
 interface Directory extends StableDirectory { identity: Identity; directoryLinks: string }
+interface DirectoryCommitment {
+  locator: string; device: string; inode: string; mode: string; uid: string;
+  baselineChildCount: number; commitmentVersion: 1; sha256: string;
+}
 interface Artifact { raw: string; identity: Identity; links: '1' | '2' }
 type State = 'PREPARED_CREATE' | 'LINKED_CREATE' | 'PUBLISHED_CREATE';
 interface Intent {
-  schema: 3; state: State; userId: string; ownerId: string; locator: string; operationId: string;
+  schema: 3 | 5; state: State; userId: string; ownerId: string; locator: string; operationId: string;
   revision: '1'; contentHash: string; contentBytes: number; stageName: string;
-  initialStageIdentity: Identity; namespace: StableDirectory[];
+  initialStageIdentity: Identity; namespace: (StableDirectory | DirectoryCommitment)[];
   currentStageIdentity?: Identity; currentStageNlink?: '1' | '2';
   currentHeadIdentity?: Identity; currentHeadNlink?: '1' | '2';
   priorIntent?: { state: 'PREPARED_CREATE' | 'LINKED_CREATE'; hash: string; identity: Identity };
@@ -50,6 +54,25 @@ function stableChild(child: Child): Child {
 function identity(stat: BigIntStats): Identity {
   return { device: scalar(stat.dev), inode: scalar(stat.ino), size: scalar(stat.size),
     mtimeNs: scalar(stat.mtimeNs), ctimeNs: scalar(stat.ctimeNs) };
+}
+/** Complete canonical baseline commitment; never a replacement for fresh live proof. */
+export function commitCreateDirectory(directory: StableDirectory): DirectoryCommitment {
+  validateNamespace(directory);
+  const children = directory.children.map(stableChild).map(child => [child.name, child.directory,
+    child.identity.device, child.identity.inode, child.identity.size, child.identity.mtimeNs, child.identity.ctimeNs,
+    child.mode, child.uid, child.links]);
+  return { locator: directory.locator, device: directory.device, inode: directory.inode, mode: directory.mode, uid: directory.uid,
+    baselineChildCount: children.length, commitmentVersion: 1,
+    sha256: digest(JSON.stringify(['dollhouse-create-namespace-directory-v1', directory.locator,
+      directory.device, directory.inode, directory.mode, directory.uid, children])) };
+}
+function validateCommitment(directory: DirectoryCommitment): void {
+  if (!directory || !exactKeys(directory, ['locator', 'device', 'inode', 'mode', 'uid', 'baselineChildCount', 'commitmentVersion', 'sha256']) ||
+    typeof directory.locator !== 'string' || !['device', 'inode', 'mode', 'uid'].every(key => {
+      const value = directory[key as keyof DirectoryCommitment];
+      return typeof value === 'string' && value.length <= 32 && /^(?:0|[1-9]\d*)$/u.test(value);
+    }) || directory.commitmentVersion !== 1 || !Number.isSafeInteger(directory.baselineChildCount) ||
+    directory.baselineChildCount < 0 || directory.baselineChildCount > 4095 || typeof directory.sha256 !== 'string' || !HASH.test(directory.sha256)) fail();
 }
 function fail(code = 'EOWNERRECOVERY'): never {
   throw Object.assign(new Error('Exclusive memory creation evidence is unsafe or changed'), { code });
@@ -96,7 +119,7 @@ function parse(raw: string): Intent {
   try { value = JSON.parse(raw) as Intent; } catch { fail(); }
   const common = ['schema', 'state', 'userId', 'ownerId', 'locator', 'operationId', 'revision',
     'contentHash', 'contentBytes', 'stageName', 'initialStageIdentity', 'namespace'];
-  if (!value || typeof value !== 'object' || Array.isArray(value) || value.schema !== 3 ||
+  if (!value || typeof value !== 'object' || Array.isArray(value) || (value.schema !== 3 && value.schema !== 5) ||
     !['PREPARED_CREATE', 'LINKED_CREATE', 'PUBLISHED_CREATE'].includes(value.state)) fail();
   const extra = phaseKeys(value.state);
   if (!exactKeys(value, [...common, ...extra]) || typeof value.userId !== 'string' || !value.userId ||
@@ -108,7 +131,10 @@ function parse(raw: string): Intent {
     !validIdentity(value.initialStageIdentity) || typeof value.stageName !== 'string' ||
     !Array.isArray(value.namespace) || !value.namespace.length) fail();
   validatePhase(value);
-  for (const directory of value.namespace) validateNamespace(directory);
+  for (const directory of value.namespace) {
+    if (value.schema === 3) validateNamespace(directory as StableDirectory);
+    else validateCommitment(directory as DirectoryCommitment);
+  }
   serialize(value);
   return value;
 }
@@ -407,13 +433,13 @@ export class FileMemoryOwnedCreate {
   }
   private async prepareIntent(): Promise<void> {
     const namespace = this.directories.map(({ identity: _identity, directoryLinks: _links, ...directory }) => ({ ...directory, children: directory.children.map(stableChild) }));
-    if (Buffer.byteLength(JSON.stringify(namespace)) >= LIMIT) fail('EHEADRESOURCE');
+    const commitments = namespace.map(commitCreateDirectory);
     await this.barrier('before-content');
     const staged = await this.write(this.stage, this.request.content, 'partial-content');
-    this.intent = { schema: 3, state: 'PREPARED_CREATE', userId: this.scope.userId, ownerId: this.ownerId,
+    this.intent = { schema: 5, state: 'PREPARED_CREATE', userId: this.scope.userId, ownerId: this.ownerId,
       locator: this.request.locator, operationId: this.request.operationId, revision: '1', contentHash: digest(staged.raw),
       contentBytes: Buffer.byteLength(staged.raw), stageName: path.basename(this.stage), initialStageIdentity: staged.identity,
-      currentStageIdentity: staged.identity, currentStageNlink: '1', namespace };
+      currentStageIdentity: staged.identity, currentStageNlink: '1', namespace: commitments };
     parse(serialize(this.intent)); await this.write(this.journal, serialize(this.intent));
     await this.syncDirectory(path.dirname(this.head));
   }
@@ -434,7 +460,7 @@ export class FileMemoryOwnedCreate {
       await this.recover(); // Exact existing artifacts/namespace before even parent fsync.
     }
     const namespace = this.projectNamespace();
-    this.admitPhaseSizes(this.intent?.namespace ?? namespace);
+    this.admitPhaseSizes(this.intent?.namespace ?? namespace.map(commitCreateDirectory));
     const ownNames = new Map<string, string[]>([
       ['.', ['.memory-owners']], ['.memory-owners', ['owners']],
       ['.memory-owners/owners', [path.basename(this.registry)]],
@@ -459,9 +485,9 @@ export class FileMemoryOwnedCreate {
     }
     return namespace;
   }
-  private admitPhaseSizes(namespace: StableDirectory[]): void {
+  private admitPhaseSizes(namespace: (StableDirectory | DirectoryCommitment)[]): void {
     const future: Identity = { device: MAX_NUMBER, inode: MAX_NUMBER, size: String(Buffer.byteLength(this.request.content)), mtimeNs: MAX_NUMBER, ctimeNs: MAX_NUMBER };
-    const common = { schema: 3 as const, userId: this.scope.userId, ownerId: this.ownerId, locator: this.request.locator,
+    const common = { schema: this.intent?.schema ?? 5 as const, userId: this.scope.userId, ownerId: this.ownerId, locator: this.request.locator,
       operationId: this.request.operationId, revision: '1' as const, contentHash: digest(this.request.content), contentBytes: Buffer.byteLength(this.request.content),
       stageName: path.basename(this.stage), initialStageIdentity: this.intent?.initialStageIdentity ?? future, namespace };
     const prior = { state: 'PREPARED_CREATE' as const, hash: 'f'.repeat(64), identity: { ...future, size: String(LIMIT) } };
@@ -527,10 +553,19 @@ export class FileMemoryOwnedCreate {
     if (this.intent.namespace.length !== this.directories.length) fail();
     for (let index = 0; index < this.directories.length; index++) {
       const expected = this.intent.namespace[index], actual = this.directories[index];
-      if (!['locator', 'device', 'inode', 'mode', 'uid'].every(key => expected[key as keyof StableDirectory] === actual[key as keyof Directory])) fail();
+      if (!(['locator', 'device', 'inode', 'mode', 'uid'] as const).every(key => expected[key] === actual[key])) fail();
       const added = [...this.files.keys()].filter(target => path.dirname(target) === this.absolute(actual.locator)).map(target => path.basename(target));
-      if (!isDeepStrictEqual(actual.names, expected.names.concat(added).sort(ordinal))) fail();
-      for (const child of expected.children) {
+      if (new Set(added).size !== added.length || added.some(name => !actual.names.includes(name))) fail();
+      if (this.intent.schema === 5) {
+        const retained = actual.children.filter(child => !added.includes(child.name)).map(stableChild);
+        const baseline = { locator: actual.locator, device: actual.device, inode: actual.inode, mode: actual.mode, uid: actual.uid,
+          names: retained.map(child => child.name), children: retained };
+        if (!isDeepStrictEqual(commitCreateDirectory(baseline), expected)) fail();
+        continue;
+      }
+      const legacy = expected as StableDirectory;
+      if (!isDeepStrictEqual(actual.names, legacy.names.concat(added).sort(ordinal))) fail();
+      for (const child of legacy.children) {
         if (!isDeepStrictEqual(child, stableChild(actual.children.find(item => item.name === child.name)!))) fail();
       }
     }

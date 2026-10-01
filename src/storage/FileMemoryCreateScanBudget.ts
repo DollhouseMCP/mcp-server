@@ -6,7 +6,7 @@ import { FileMemoryDirectoryScanLimitError } from './FileMemoryDirectoryScanBudg
 export interface CreateScanSlot { locator: string; names: string[]; missing: boolean }
 export class FileMemoryCreateScanBudget {
   #consumed = 0;
-  #limit = 1000;
+  #limit = 8192;
   #reserved = false;
   get consumed(): number { return this.#consumed; }
   get limit(): number { return this.#limit; }
@@ -19,7 +19,7 @@ export class FileMemoryCreateScanBudget {
       return value;
     };
     const proof = [...weights.values()].reduce((sum, value) => sum + value, 0);
-    if (proof > 1000) throw new FileMemoryDirectoryScanLimitError();
+    if (proof > 4096) throw new FileMemoryDirectoryScanLimitError();
     const transition = (locator: string) => weight(locator) + (path.posix.dirname(locator) !== locator ? (weights.get(path.posix.dirname(locator)) ?? 0) : 0);
     const head = transition(headParent), owners = transition('.memory-owners/owners');
     // Terminal suffix: published hook + both metadata writes + finalization =23P+3qH+2qOwners.
@@ -33,11 +33,11 @@ export class FileMemoryCreateScanBudget {
       remaining += slot.missing ? 5 * proof + transition(path.posix.dirname(locator)) + weight(locator) : 3 * proof + weight(locator);
     }
     const limit = this.#consumed + remaining;
-    if (!Number.isSafeInteger(limit) || limit > 110000) throw new FileMemoryDirectoryScanLimitError();
+    if (!Number.isSafeInteger(limit) || limit > 454656) throw new FileMemoryDirectoryScanLimitError();
     this.#limit = limit; this.#reserved = true;
   }
   private async read(directory: Dir, localAttempts: number) {
-    if (localAttempts >= 1000 || this.#consumed >= this.#limit) throw new FileMemoryDirectoryScanLimitError();
+    if (localAttempts >= 4096 || this.#consumed >= this.#limit) throw new FileMemoryDirectoryScanLimitError();
     this.#consumed += 1; // Synchronous reservation before the actual read, including EOF/errors.
     return await directory.read();
   }
@@ -50,6 +50,7 @@ export class FileMemoryCreateScanBudget {
       while (true) {
         const entry = await this.read(directory, attempts++);
         if (!entry) break;
+        if (Buffer.byteLength(entry.name) > 255 || Buffer.from(entry.name).toString('utf8') !== entry.name) throw new FileMemoryDirectoryScanLimitError();
         inspect(entry.name);
       }
     } catch (cause) { primary = { cause }; }
