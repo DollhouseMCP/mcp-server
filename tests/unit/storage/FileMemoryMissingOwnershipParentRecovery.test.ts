@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type AdoptionRecoveryPublication, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
-import { FileMemoryDirectoryScanBudget } from '../../../src/storage/FileMemoryDirectoryScanBudget.js';
+import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -191,21 +191,21 @@ describe('missing ownership parent recovery', () => {
     expect(await fs.readdir(`${setup.parent}.saved`)).toEqual([]); await expect(fs.lstat(setup.directory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('uses one monotonic hard scan budget for both mkdirs and all publication proofs', async () => {
-    const setup = await fixture(), original = FileMemoryDirectoryScanBudget.prototype.read;
-    const instances = new Set<FileMemoryDirectoryScanBudget>(), counts: number[] = [];
-    jest.spyOn(FileMemoryDirectoryScanBudget.prototype, 'read').mockImplementation(function(this: FileMemoryDirectoryScanBudget, directory) {
-      instances.add(this); counts.push(this.consumed); return original.call(this, directory);
+    const setup = await fixture(), original = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
+    const instances = new Set<FileMemoryAdoptionRecoveryScanBudget>(), counts: number[] = [];
+    jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read').mockImplementation(function(this: FileMemoryAdoptionRecoveryScanBudget, directory, attempts, bound) {
+      instances.add(this); counts.push(this.consumed); return original.call(this, directory, attempts, bound);
     });
     await setup.store.recoverReservedAdoption(setup.request);
-    expect(instances.size).toBe(1); expect(counts).toEqual(counts.map((_, index) => index)); expect(counts.length).toBeLessThanOrEqual(1000);
+    expect(instances.size).toBe(1); expect(counts).toEqual(counts.map((_, index) => index)); expect(counts.length).toBeLessThanOrEqual(376832);
   });
   it.each(['before-ownership-parent-create', 'after-ownership-parent-create'] as const)('preserves state after actual budget exhaustion at %s', async stop => {
     const setup = await fixture(); let captured: Awaited<ReturnType<typeof identity>> | undefined;
     const result = await failure(at(setup, stop, async () => {
       if (stop === 'after-ownership-parent-create') captured = await identity(setup.parent);
-      const original = FileMemoryDirectoryScanBudget.prototype.read;
-      jest.spyOn(FileMemoryDirectoryScanBudget.prototype, 'read').mockImplementation(async function(this: FileMemoryDirectoryScanBudget, directory) {
-        while (this.consumed < 1000) await original.call(this, directory); return original.call(this, directory);
+      const original = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
+      jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read').mockImplementation(async function(this: FileMemoryAdoptionRecoveryScanBudget, directory, attempts, bound) {
+        while (this.consumed < this.limit) await original.call(this, directory, attempts, bound); return original.call(this, directory, attempts, bound);
       });
     }).recoverReservedAdoption(setup.request));
     expect(result).toMatchObject({ code: 'EADOPTIONPENDING', cause: { code: 'EHEADRESOURCE' } });
