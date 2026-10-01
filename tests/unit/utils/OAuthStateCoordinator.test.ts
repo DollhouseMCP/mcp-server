@@ -13,6 +13,134 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+// Only this fixture emits these bounded records; never include exception messages or paths.
+const liveOwnerChildScript = `
+  import fs from 'node:fs';
+  const [moduleUrl, role, stateFile, readyFile, enteredFile, releaseFile, publication] = process.argv.slice(1);
+  let phase = 'import';
+  const report = (error) => process.stderr.write(JSON.stringify({
+    phase, name: /^[A-Za-z]{1,40}$/.test(error?.name) ? error.name : 'Unknown',
+    code: /^[A-Z0-9_]{1,40}$/.test(error?.code) ? error.code : null
+  }) + '\\n');
+  try {
+    const { withOAuthStateLockSync } = await import(moduleUrl);
+    if (publication === 'directory-fallback') fs.linkSync = () => {
+      const error = new Error('Fixture hard links unsupported');
+      error.code = 'ENOTSUP';
+      throw error;
+    };
+    phase = 'ready';
+    fs.writeFileSync(readyFile, 'ready');
+    phase = 'lock';
+    withOAuthStateLockSync(stateFile, () => {
+      phase = 'entered';
+      fs.writeFileSync(enteredFile, 'entered');
+      if (role === 'owner') while (!fs.existsSync(releaseFile)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    });
+    phase = 'complete';
+  } catch (error) { report(error); process.exitCode = 1; }
+`;
+
+function observedChild(args: string[]) {
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', liveOwnerChildScript, ...args],
+    { stdio: ['ignore', 'ignore', 'pipe'] });
+  const started = performance.now();
+  let diagnostic: { phase: string; name: string; code: string | null } | null = null;
+  let stderr = '';
+  let closed = false;
+  let exited = false;
+  let failed = false;
+  let exitCode: number | null = null;
+  let signal: string | null = null;
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString('utf8')).slice(0, 1_024);
+    for (const line of stderr.split('\n')) {
+      try {
+        const value = JSON.parse(line) as Record<string, unknown>;
+        if (['import', 'ready', 'lock', 'entered', 'complete'].includes(String(value.phase)) &&
+            typeof value.name === 'string' && /^[A-Za-z]{1,40}$/.test(value.name) &&
+            (value.code === null || typeof value.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(value.code))) {
+          diagnostic = { phase: String(value.phase), name: value.name, code: value.code as string | null };
+        }
+      } catch { /* Discard unstructured loader warnings and all raw error text. */ }
+    }
+  });
+  child.once('error', () => { failed = true; });
+  child.once('exit', (code, exitSignal) => { exited = true; exitCode = code; signal = exitSignal; failed ||= code !== 0; });
+  const completion = new Promise<void>(resolve => child.once('close', code => {
+    closed = true;
+    failed ||= code !== 0;
+    resolve();
+  }));
+  const summary = () => JSON.stringify({ role: args[1], exitCode, signal,
+    elapsedMs: Math.round(performance.now() - started), diagnostic });
+  return { child, completion, isClosed: () => closed,
+    assertAlive: () => {
+      if (exited || closed || failed) throw new Error(`Lock fixture child ended: ${summary()}`);
+    },
+    assertSuccess: () => {
+      if (failed) throw new Error(`Lock fixture child failed: ${summary()}`);
+    } };
+}
+
+async function waitForLiveOwnerObservation(check: () => Promise<boolean>, children: ReturnType<typeof observedChild>[],
+  fixtureDeadline = Infinity) {
+  const deadline = Math.min(performance.now() + 5_000, fixtureDeadline);
+  while (performance.now() < deadline) {
+    children.forEach(child => child.assertAlive());
+    const ready = await check();
+    children.forEach(child => child.assertAlive());
+    if (performance.now() >= deadline) break;
+    if (ready) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error('Lock fixture observation timed out');
+}
+
+function transferChildFixtureCleanup(directory: string) {
+  const index = temporaryDirectories.indexOf(directory);
+  if (index >= 0) temporaryDirectories.splice(index, 1);
+}
+
+function requireFixtureTime(deadline: number) {
+  if (performance.now() >= deadline) throw new Error('Lock fixture observation timed out');
+}
+
+async function readFixtureSlotOwner(slotPath: string): Promise<{ id: string; ownerPid: number; ownerIdentity: string }> {
+  // Match the production parser's supported file and directory publication forms.
+  const ownerPath = (await fs.stat(slotPath)).isDirectory() ? path.join(slotPath, 'owner.json') : slotPath;
+  const owner = JSON.parse(await fs.readFile(ownerPath, 'utf8')) as Record<string, unknown>;
+  if (typeof owner.id !== 'string' || owner.id.length === 0 || !Number.isSafeInteger(owner.ownerPid) ||
+      Number(owner.ownerPid) <= 0 || typeof owner.ownerIdentity !== 'string' || owner.ownerIdentity.length === 0) {
+    throw new Error('Lock fixture ticket has no valid owner');
+  }
+  return { id: owner.id, ownerPid: Number(owner.ownerPid), ownerIdentity: owner.ownerIdentity };
+}
+
+async function stopObservedChild(observed: ReturnType<typeof observedChild>) {
+  if (!observed.isClosed()) observed.child.kill('SIGKILL');
+  await boundedChildCompletion(observed.completion, 2_000);
+}
+
+async function boundedChildCompletion(completion: Promise<void>, timeoutMs = 5_000) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([completion, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Lock fixture child completion timed out')), timeoutMs);
+    })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+function throwChildFixtureFailures(primary: { cause: unknown } | undefined, cleanup: unknown[]) {
+  if (cleanup.length > 0) {
+    throw new AggregateError([...(primary ? [primary.cause] : []), ...cleanup],
+      'Lock fixture cleanup incomplete; child directory retained');
+  }
+  if (primary) throw primary.cause;
+}
+
 async function createTemporaryDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-state-coordinator-'));
   temporaryDirectories.push(directory);
@@ -52,6 +180,73 @@ afterEach(async () => {
 });
 
 describe('OAuthStateCoordinator', () => {
+  it.each(['file', 'directory'])('reads the actual owner from a %s ticket representation', async representation => {
+    const directory = await createTemporaryDirectory();
+    const slot = path.join(directory, '1.slot');
+    const owner = { id: 'fixture-ticket', ownerPid: process.pid, ownerIdentity: 'fixture-process-identity' };
+    if (representation === 'directory') await fs.mkdir(slot);
+    await fs.writeFile(representation === 'directory' ? path.join(slot, 'owner.json') : slot, JSON.stringify(owner));
+    expect(await readFixtureSlotOwner(slot)).toEqual(owner);
+  });
+  it.each([undefined, null, new Error('primary assertion')])(
+    'preserves primary %p alongside an incomplete child cleanup', primary => {
+      const cleanup = new Error('Lock fixture child completion timed out');
+      let outcome: { cause: unknown } | undefined;
+      try { throwChildFixtureFailures({ cause: primary }, [cleanup]); } catch (cause) { outcome = { cause }; }
+      expect(outcome?.cause).toBeInstanceOf(AggregateError);
+      expect((outcome?.cause as AggregateError).errors).toEqual([primary, cleanup]);
+      expect((outcome?.cause as AggregateError).errors[0]).toBe(primary);
+      expect((outcome?.cause as AggregateError).errors[1]).toBe(cleanup);
+      let alone: { cause: unknown } | undefined;
+      try { throwChildFixtureFailures({ cause: primary }, []); } catch (cause) { alone = { cause }; }
+      expect(alone).toBeDefined();
+      expect(alone?.cause).toBe(primary);
+    }
+  );
+
+  it('fails cleanup alone and returns only when both paths succeeded', () => {
+    const cleanup = new Error('Lock fixture child completion timed out');
+    let outcome: unknown;
+    try { throwChildFixtureFailures(undefined, [cleanup]); } catch (cause) { outcome = cause; }
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect((outcome as AggregateError).errors).toEqual([cleanup]);
+    expect(() => throwChildFixtureFailures(undefined, [])).not.toThrow();
+  });
+  it('reports sanitized child failures without leaking import paths', async () => {
+    const directory = await createTemporaryDirectory();
+    const missingModule = pathToFileURL(path.join(directory, 'nonexistent-private-fixture-path.mjs')).href;
+    const child = observedChild([missingModule, 'contender', '', '', '', '']);
+    try {
+      await boundedChildCompletion(child.completion);
+      let failure: unknown;
+      try { child.assertSuccess(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      const message = (failure as Error).message;
+      expect(message).toContain('"phase":"import"');
+      expect(message).toContain('"code":"ERR_MODULE_NOT_FOUND"');
+      expect(message).toContain('"role":"contender"');
+      expect(message).toContain('"exitCode":1');
+      expect(message).not.toContain('nonexistent-private-fixture-path');
+      expect(() => child.assertAlive()).toThrow('Lock fixture child ended');
+    } finally { await stopObservedChild(child); }
+  });
+
+  it('kills and observes close of a fixture owner blocked before release', async () => {
+    const directory = await createTemporaryDirectory();
+    const entered = path.join(directory, 'entered');
+    const child = observedChild([pathToFileURL(path.join(process.cwd(), 'oauth-state-coordinator.mjs')).href,
+      'owner', path.join(directory, 'state'), path.join(directory, 'ready'), entered, path.join(directory, 'release')]);
+    transferChildFixtureCleanup(directory);
+    try {
+      await waitForLiveOwnerObservation(() => fs.access(entered).then(() => true, () => false), [child]);
+    } finally { await stopObservedChild(child); await fs.rm(directory, { recursive: true, force: true }); }
+    expect(child.isClosed()).toBe(true);
+    expect(() => child.assertAlive()).toThrow('Lock fixture child ended');
+  });
+
+  it('bounds an incomplete child observation instead of waiting indefinitely', async () => {
+    await expect(boundedChildCompletion(new Promise<void>(() => {}), 20)).rejects.toThrow('child completion timed out');
+  });
   it('compacts completed prefixes while retaining the allocation high-water mark', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
@@ -425,68 +620,80 @@ describe('OAuthStateCoordinator', () => {
     )).toBe(false);
   });
 
-  it('does not reclaim a stale-aged ticket while its original process is alive', async () => {
+  it.each(['native', 'directory-fallback'])(
+    'does not reclaim a stale-aged ticket while its original process is alive (%s)', async publication => {
+    // Leave time for finally cleanup within the existing ten-second Jest timeout.
+    const fixtureDeadline = performance.now() + 7_000;
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
     const ownerEnteredFile = path.join(directory, 'owner-entered');
     const releaseOwnerFile = path.join(directory, 'release-owner');
     const contenderEnteredFile = path.join(directory, 'contender-entered');
+    const ownerReadyFile = path.join(directory, 'owner-ready');
+    const contenderReadyFile = path.join(directory, 'contender-ready');
     const coordinatorUrl = pathToFileURL(
       path.join(process.cwd(), 'oauth-state-coordinator.mjs')
     ).href;
-    const ownerScript = `
-      import fs from 'node:fs';
-      import { withOAuthStateLockSync } from ${JSON.stringify(coordinatorUrl)};
-      const [stateFile, ownerEnteredFile, releaseOwnerFile] = process.argv.slice(1);
-      withOAuthStateLockSync(stateFile, () => {
-        fs.writeFileSync(ownerEnteredFile, 'ready');
-        while (!fs.existsSync(releaseOwnerFile)) {
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-        }
-      });
-    `;
-    const contenderScript = `
-      import fs from 'node:fs';
-      import { withOAuthStateLockSync } from ${JSON.stringify(coordinatorUrl)};
-      const [stateFile, contenderEnteredFile] = process.argv.slice(1);
-      withOAuthStateLockSync(stateFile, () => {
-        fs.writeFileSync(contenderEnteredFile, 'entered');
-      });
-    `;
-
-    const owner = spawn(process.execPath, [
-      '--input-type=module', '--eval', ownerScript, stateFile, ownerEnteredFile, releaseOwnerFile
-    ], { stdio: 'ignore' });
-    const ownerExit = new Promise<void>((resolve, reject) => {
-      owner.once('error', reject);
-      owner.once('exit', code => code === 0 ? resolve() : reject(new Error(`Owner child exited ${code}`)));
-    });
-
-    await waitForFile(ownerEnteredFile);
-    const ownerIdentityMarker = `${stateFile}.lock.process-${owner.pid}.identity`;
+    requireFixtureTime(fixtureDeadline);
+    const owner = observedChild([coordinatorUrl, 'owner', stateFile, ownerReadyFile, ownerEnteredFile, releaseOwnerFile, publication]);
+    // afterEach never deletes a directory that may still belong to a live child.
+    transferChildFixtureCleanup(directory);
+    let contender: ReturnType<typeof observedChild> | undefined;
+    let primary: { cause: unknown } | undefined;
+    let cleanupFailures: unknown[] = [];
+    try {
+    await waitForLiveOwnerObservation(async () => fs.access(ownerEnteredFile).then(() => true, () => false), [owner], fixtureDeadline);
+    const ownerIdentityMarker = `${stateFile}.lock.process-${owner.child.pid}.identity`;
     await expect(fs.access(ownerIdentityMarker)).resolves.toBeUndefined();
     const ownerSlot = path.join(`${stateFile}.lock`, '1.slot');
+    const ownerTicket = await readFixtureSlotOwner(ownerSlot);
+    if (publication === 'directory-fallback') expect((await fs.stat(ownerSlot)).isDirectory()).toBe(true);
+    expect(ownerTicket.ownerPid).toBe(owner.child.pid);
+    const marker = JSON.parse(await fs.readFile(ownerIdentityMarker, 'utf8')) as { identity: string };
+    expect(marker.identity).toBe(ownerTicket.ownerIdentity);
     const staleTime = new Date(Date.now() - 60_000);
     await fs.utimes(ownerSlot, staleTime, staleTime);
 
-    const contender = spawn(process.execPath, [
-      '--input-type=module', '--eval', contenderScript, stateFile, contenderEnteredFile
-    ], { stdio: 'ignore' });
-    const contenderExit = new Promise<void>((resolve, reject) => {
-      contender.once('error', reject);
-      contender.once('exit', code => code === 0
-        ? resolve()
-        : reject(new Error(`Contender child exited ${code}`)));
-    });
-
+    owner.assertAlive();
+    requireFixtureTime(fixtureDeadline);
+    contender = observedChild([coordinatorUrl, 'contender', stateFile, contenderReadyFile, contenderEnteredFile, releaseOwnerFile, publication]);
+    const currentContender = contender;
+    await waitForLiveOwnerObservation(async () => {
+      try {
+        await fs.access(contenderReadyFile);
+        const slot = path.join(`${stateFile}.lock`, '2.slot');
+        const ticket = await readFixtureSlotOwner(slot);
+        if (publication === 'directory-fallback' && !(await fs.stat(slot)).isDirectory()) return false;
+        const identity = JSON.parse(await fs.readFile(`${stateFile}.lock.process-${currentContender.child.pid}.identity`, 'utf8'));
+        return ticket.ownerPid === currentContender.child.pid && typeof ticket.ownerIdentity === 'string' &&
+          ticket.ownerIdentity.length > 0 && identity.identity === ticket.ownerIdentity &&
+          typeof ticket.id === 'string' && ticket.id.length > 0;
+      } catch { return false; }
+    }, [owner, contender], fixtureDeadline);
     await new Promise(resolve => setTimeout(resolve, 150));
+    requireFixtureTime(fixtureDeadline);
+    owner.assertAlive();
+    contender.assertAlive();
     await expect(fs.access(contenderEnteredFile)).rejects.toMatchObject({ code: 'ENOENT' });
     await fs.writeFile(releaseOwnerFile, 'release', 'utf8');
-    await Promise.all([ownerExit, contenderExit]);
+    await boundedChildCompletion(Promise.all([owner.completion, contender.completion]).then(() => undefined),
+      Math.max(1, Math.min(5_000, fixtureDeadline - performance.now())));
+    owner.assertSuccess();
+    contender.assertSuccess();
 
     await expect(fs.access(contenderEnteredFile)).resolves.toBeUndefined();
     await expect(fs.access(ownerIdentityMarker)).rejects.toMatchObject({ code: 'ENOENT' });
     await expectAllTicketsCompleted(stateFile);
+    } catch (cause) { primary = { cause }; } finally {
+      const cleanup = await Promise.allSettled([owner, ...(contender ? [contender] : [])].map(stopObservedChild));
+      cleanupFailures = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map(result => result.reason);
+      if (cleanupFailures.length === 0) {
+        try { await fs.rm(directory, { recursive: true, force: true }); }
+        catch { cleanupFailures.push(new Error('Lock fixture directory cleanup failed')); }
+      }
+    }
+    throwChildFixtureFailures(primary, cleanupFailures);
   });
 
   it('serializes concurrent processes while they complete the same abandoned ticket', async () => {
