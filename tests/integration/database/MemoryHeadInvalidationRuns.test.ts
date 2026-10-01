@@ -47,7 +47,7 @@ describe('dormant historical memory invalidation receipt schema', () => {
     { postManifestSha256: '' }, { maintenanceEvidenceSha256: 'a'.repeat(65) }, { candidateCommit: 'a'.repeat(39) },
     { maintenanceEvidenceId: '' }, { maintenanceEvidenceId: 'é'.repeat(65) }, { declaredContextId: 'x'.repeat(129) },
     { databaseName: '' }, { databaseName: 'é'.repeat(32) }, { effectiveRole: 'x'.repeat(64) },
-    { databaseOid: -1 }, { databaseOid: 4294967296 }, { serverVersionNum: 0 },
+    { databaseOid: -1 }, { databaseOid: 0 }, { databaseOid: 4294967296 }, { serverVersionNum: 0 },
     { ownerCount: -1 }, { ownerCount: 10001 }, { tagCount: -1 }, { tagCount: 100001 },
     { finishedAt: new Date('2026-09-30T23:59:59Z') },
   ] as Partial<typeof runs.$inferInsert>[])('refuses out-of-contract receipt %j', async overrides => {

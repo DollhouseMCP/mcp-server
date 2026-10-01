@@ -34,7 +34,7 @@ export const memoryHeadInvalidationRuns = pgTable('memory_head_invalidation_runs
   check('memory_head_invalidation_runs_declarations_check', sql`octet_length(${table.maintenanceEvidenceId}) BETWEEN 1 AND 128
     AND octet_length(${table.declaredContextId}) BETWEEN 1 AND 128`),
   check('memory_head_invalidation_runs_attribution_check', sql`octet_length(${table.databaseName}) BETWEEN 1 AND 63
-    AND octet_length(${table.effectiveRole}) BETWEEN 1 AND 63 AND ${table.databaseOid} BETWEEN 0 AND 4294967295
+    AND octet_length(${table.effectiveRole}) BETWEEN 1 AND 63 AND ${table.databaseOid} BETWEEN 1 AND 4294967295
     AND ${table.serverVersionNum} > 0`),
   check('memory_head_invalidation_runs_counts_check', sql`${table.ownerCount} BETWEEN 0 AND 10000 AND ${table.tagCount} BETWEEN 0 AND 100000`),
   check('memory_head_invalidation_runs_times_check', sql`isfinite(${table.startedAt}) AND isfinite(${table.finishedAt})

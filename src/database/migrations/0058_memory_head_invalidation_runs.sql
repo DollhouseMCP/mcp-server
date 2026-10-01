@@ -33,7 +33,7 @@ CREATE TABLE "memory_head_invalidation_runs" (
     AND octet_length(declared_context_id) BETWEEN 1 AND 128),
   CONSTRAINT "memory_head_invalidation_runs_attribution_check" CHECK (
     octet_length(database_name) BETWEEN 1 AND 63 AND octet_length(effective_role) BETWEEN 1 AND 63
-    AND database_oid BETWEEN 0 AND 4294967295 AND server_version_num > 0),
+    AND database_oid BETWEEN 1 AND 4294967295 AND server_version_num > 0),
   CONSTRAINT "memory_head_invalidation_runs_counts_check" CHECK (
     owner_count BETWEEN 0 AND 10000 AND tag_count BETWEEN 0 AND 100000),
   CONSTRAINT "memory_head_invalidation_runs_times_check" CHECK (
