@@ -19,6 +19,7 @@ function failure(action: () => unknown, reason: string) {
     expect(error).toMatchObject({ code: 'EOWNERMANIFEST', reason });
     expect((error as Error).message).not.toContain(TENANT);
     expect((error as Error).message).not.toContain(OWNER);
+    return error;
   }
 }
 const authority = { canBackfill: false, canApply: false, canActivate: false };
@@ -28,6 +29,39 @@ function projection(owners: readonly MemoryTagAuditOwner[]) {
 }
 
 describe('pure database memory owner manifests', () => {
+  it.each(['revoked-array', 'revoked-row', 'ownKeys', 'index', 'hasOwn', 'row-getter', 'length'])('sanitizes input-thrown %s exceptions without retaining their cause', kind => {
+    const thrown = new DatabaseMemoryOwnerManifestError('invalid-input');
+    thrown.message = TENANT;
+    const throwIdentity = () => { throw thrown; };
+    let input: MemoryTagAuditOwner[] = [row()];
+    if (kind.startsWith('revoked')) {
+      const proxy = Proxy.revocable(kind === 'revoked-array' ? input : input[0], {});
+      proxy.revoke();
+      input = kind === 'revoked-array' ? proxy.proxy as MemoryTagAuditOwner[] : [proxy.proxy as MemoryTagAuditOwner];
+    } else if (kind === 'ownKeys') input[0] = new Proxy(input[0], { ownKeys: throwIdentity });
+    else if (kind === 'row-getter') Object.defineProperty(input[0], 'revision', { enumerable: true, get: throwIdentity });
+    else if (kind === 'hasOwn') input = new Proxy(input, { getOwnPropertyDescriptor: throwIdentity });
+    else input = new Proxy(input, { get: (target, key, receiver) => {
+      if (key === (kind === 'index' ? '0' : 'length')) throwIdentity();
+      return Reflect.get(target, key, receiver);
+    } });
+    const error = failure(() => capture(input), 'invalid-input');
+    expect(error).not.toBe(thrown);
+    expect(error).not.toHaveProperty('cause');
+  });
+  it('rejects a proxy length object without coercing it', () => {
+    let coercions = 0;
+    const length = { valueOf: () => { coercions++; throw new Error(TENANT); } };
+    const input = new Proxy([row()], { get: (target, key, receiver) =>
+      key === 'length' ? length : Reflect.get(target, key, receiver) });
+    failure(() => capture(input), 'invalid-input');
+    expect(coercions).toBe(0);
+  });
+  it.each(['1', -1, 0.5, NaN, Infinity])('rejects invalid proxy length %s without coercion', length => {
+    const input = new Proxy([row()], { get: (target, key, receiver) =>
+      key === 'length' ? length : Reflect.get(target, key, receiver) });
+    failure(() => capture(input), 'invalid-input');
+  });
   it.each(['array', 'row'])('bounds capture and rejects %s accessor length drift without inspecting appended rows', kind => {
     const input = [row()];
     let appendedReads = 0;
