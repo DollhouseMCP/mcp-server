@@ -45,15 +45,7 @@ export class FileMemoryListProofBudget implements FileMemoryDirectoryScanner {
     this.#limit = limit;
     this.#reserved = true;
   }
-  async scan(directoryPath: string, inspect: (name: string) => void): Promise<void> {
-    const named = path.resolve(directoryPath);
-    const before = await this.identity(named);
-    const key = `${before[0]}:${before[1]}`;
-    const originalKey = this.#paths.get(named);
-    const original = this.#censuses.get(key);
-    if ((originalKey && originalKey !== key) || (original && !isDeepStrictEqual(original.identity, before)) ||
-      (this.#reserved && !originalKey)) throw Object.assign(new Error('Listing namespace changed'), { code: 'EARCHIVECHANGED' });
-    const directory = await fs.opendir(named);
+  private async readCensus(directory: import('node:fs').Dir, inspect: (name: string) => void): Promise<{ names: string[]; attempts: number }> {
     const names: string[] = [];
     let attempts = 0;
     let primary: { cause: unknown } | undefined;
@@ -76,6 +68,18 @@ export class FileMemoryListProofBudget implements FileMemoryDirectoryScanner {
       });
     }
     if (primary) throw primary.cause;
+    return { names, attempts };
+  }
+  async scan(directoryPath: string, inspect: (name: string) => void): Promise<void> {
+    const named = path.resolve(directoryPath);
+    const before = await this.identity(named);
+    const key = `${before[0]}:${before[1]}`;
+    const originalKey = this.#paths.get(named);
+    const original = this.#censuses.get(key);
+    if ((originalKey && originalKey !== key) || (original && !isDeepStrictEqual(original.identity, before)) ||
+      (this.#reserved && !originalKey)) throw Object.assign(new Error('Listing namespace changed'), { code: 'EARCHIVECHANGED' });
+    const directory = await fs.opendir(named);
+    const { names, attempts } = await this.readCensus(directory, inspect);
     const after = await this.identity(named);
     names.sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
     if (!isDeepStrictEqual(before, after) || (original && !isDeepStrictEqual(original.names, names))) {

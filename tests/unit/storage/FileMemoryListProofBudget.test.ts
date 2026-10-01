@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it as test, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
-import { Dir } from 'node:fs';
+import { Dir, type Dirent } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryListProofBudget } from '../../../src/storage/FileMemoryListProofBudget.js';
@@ -48,7 +48,8 @@ describe('private listing proof accounting', () => {
       if (callback) return original.call(this, callback);
       return Promise.resolve(original.call(this)).then(() => { throw secondary; });
     });
-    jest.spyOn(Dir.prototype, 'read').mockRejectedValue(primary);
+    const reads = Dir.prototype as unknown as { read: () => Promise<Dirent | null> };
+    jest.spyOn(reads, 'read').mockRejectedValue(primary);
     const budget = new FileMemoryListProofBudget();
     const failure = await budget.scan(root, () => {}).catch(cause => ({ cause }));
     expect(failure).toEqual({ cause: expect.any(AggregateError) });
@@ -97,6 +98,6 @@ describe('private listing proof accounting', () => {
     await expect(budget.scan(root, () => { inspected++; })).rejects.toMatchObject({ code: 'EHEADRESOURCE' });
     expect(inspected).toBe(4096); expect(budget.consumed).toBe(4096);
     expect(() => budget.reserve(root, root, [])).toThrow('budget exhausted');
-    expect((await fs.readdir(root)).length).toBe(4096);
+    expect(await fs.readdir(root)).toHaveLength(4096);
   });
 });
