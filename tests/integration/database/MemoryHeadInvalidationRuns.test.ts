@@ -6,7 +6,7 @@ import { closeTestDb, getTestAdminDb, getTestDb } from './test-db-helpers.js';
 
 const ownedIds: string[] = [];
 function receipt(overrides: Partial<typeof runs.$inferInsert> = {}): typeof runs.$inferInsert {
-  const runId = randomUUID(); ownedIds.push(runId);
+  const runId = overrides.runId ?? randomUUID(); ownedIds.push(runId);
   return { runId, formatVersion: 1, claim: 'historical-exact-owner-set-invalidation',
     requestSha256: 'a'.repeat(64), catalogSha256: 'b'.repeat(64), preManifestSha256: 'c'.repeat(64),
     postManifestSha256: 'd'.repeat(64), maintenanceEvidenceSha256: 'e'.repeat(64), candidateCommit: 'f'.repeat(40),
@@ -42,6 +42,7 @@ describe('dormant historical memory invalidation receipt schema', () => {
     }
   });
   it.each([
+    { runId: '00000000-0000-0000-0000-000000000000' },
     { formatVersion: 2 }, { claim: 'current-coverage' }, { canApply: true }, { canActivate: true },
     { requestSha256: 'A'.repeat(64) }, { catalogSha256: 'a'.repeat(63) }, { preManifestSha256: 'g'.repeat(64) },
     { postManifestSha256: '' }, { maintenanceEvidenceSha256: 'a'.repeat(65) }, { candidateCommit: 'a'.repeat(39) },

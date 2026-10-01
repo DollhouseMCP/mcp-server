@@ -21,6 +21,8 @@ CREATE TABLE "memory_head_invalidation_runs" (
   "finished_at" TIMESTAMPTZ NOT NULL,
   "can_apply" BOOLEAN NOT NULL,
   "can_activate" BOOLEAN NOT NULL,
+  CONSTRAINT "memory_head_invalidation_runs_run_id_check" CHECK (
+    run_id <> '00000000-0000-0000-0000-000000000000'::uuid),
   CONSTRAINT "memory_head_invalidation_runs_claim_check" CHECK (
     format_version = 1 AND claim = 'historical-exact-owner-set-invalidation'
     AND can_apply = false AND can_activate = false),

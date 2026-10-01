@@ -25,6 +25,7 @@ export const memoryHeadInvalidationRuns = pgTable('memory_head_invalidation_runs
   canApply: boolean('can_apply').notNull(),
   canActivate: boolean('can_activate').notNull(),
 }, table => [
+  check('memory_head_invalidation_runs_run_id_check', sql`${table.runId} <> '00000000-0000-0000-0000-000000000000'::uuid`),
   check('memory_head_invalidation_runs_claim_check', sql`${table.formatVersion} = 1
     AND ${table.claim} = 'historical-exact-owner-set-invalidation' AND ${table.canApply} = false AND ${table.canActivate} = false`),
   check('memory_head_invalidation_runs_digests_check', sql`${table.requestSha256} ~ '^[a-f0-9]{64}$'

@@ -3,11 +3,13 @@
 ## Dormant historical receipt schema
 
 Migration 0058 adds `memory_head_invalidation_runs` for future operator receipts,
-with a run UUID, versioned historical claim, request/catalog/pre/post manifest and
+with a non-nil run UUID, versioned historical claim, request/catalog/pre/post manifest and
 maintenance digests, bounded declared context and observed database/actor attribution,
 counts and finite ordered timestamps. It stores no owner manifests or payloads.
 `can_apply` and `can_activate` must always be false. Declarations and observed database
 identifiers do not prove restore detection, quiescence or current coverage.
+The schema accepts any PostgreSQL UUID except nil and excludes the Git null
+commit sentinel; it does not prove external run identity or nonzero commit existence.
 
 ENABLE and FORCE RLS with no policies protect rows despite bootstrap DML grants.
 Superuser/BYPASSRLS bypass and whole-table privileges need separate proof; RLS does
