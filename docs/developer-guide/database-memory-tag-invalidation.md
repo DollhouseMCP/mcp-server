@@ -212,6 +212,13 @@ Declarations are attribution; they do not prove quiescence or restore continuity
 The executor configures its transaction with `SET LOCAL`, then acquires ordered
 EXCLUSIVE locks on the receipt, elements, tags and entries tables before its first
 snapshot-producing query. It checks current global visibility, privileges,
+including SELECT and UPDATE on all four locked tables and receipt INSERT.
+UPDATE is the supported lock-capable privilege for every fixed EXCLUSIVE lock;
+the supplied connection's privileges are caller setup, and the executor grants
+nothing. BYPASSRLS or superuser visibility is separately required. PostgreSQL 17
+[LOCK privileges](https://www.postgresql.org/docs/17/sql-lock.html#SQL-LOCK-NOTES)
+permit only ACCESS SHARE with SELECT alone; weakening to SHARE would not fix that.
+It also checks
 replication role, relation/function resolution and absence of elements rewrite
 rules, then invokes the catalog components itself. A fresh global census refuses
 incomplete coverage or malformed tag references. Fixed limits are 10,000 owners,

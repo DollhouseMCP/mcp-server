@@ -150,8 +150,11 @@ async function proveContext(tx: DrizzleTx, invocation: Invocation, request: Capt
     pg_catalog.has_table_privilege(current_user, 'public.elements', 'SELECT') AND
       pg_catalog.has_table_privilege(current_user, 'public.elements', 'UPDATE') AND
       pg_catalog.has_table_privilege(current_user, 'public.element_tags', 'SELECT') AND
+      pg_catalog.has_table_privilege(current_user, 'public.element_tags', 'UPDATE') AND
       pg_catalog.has_table_privilege(current_user, 'public.memory_entries', 'SELECT') AND
+      pg_catalog.has_table_privilege(current_user, 'public.memory_entries', 'UPDATE') AND
       pg_catalog.has_table_privilege(current_user, 'public.memory_head_invalidation_runs', 'SELECT') AND
+      pg_catalog.has_table_privilege(current_user, 'public.memory_head_invalidation_runs', 'UPDATE') AND
       pg_catalog.has_table_privilege(current_user, 'public.memory_head_invalidation_runs', 'INSERT') AS rights,
     pg_catalog.to_regclass('elements') = 'public.elements'::pg_catalog.regclass AND
       pg_catalog.to_regclass('element_tags') = 'public.element_tags'::pg_catalog.regclass AND

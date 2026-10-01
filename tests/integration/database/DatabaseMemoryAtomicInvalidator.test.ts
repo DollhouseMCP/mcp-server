@@ -401,9 +401,25 @@ requiredDescribe('owned CI database atomic maintenance', () => {
     clients.push(ordinary);
     const [role] = await ordinary`SELECT rolname,rolsuper,rolbypassrls FROM pg_catalog.pg_roles WHERE rolname=current_user`;
     expect(role).toMatchObject({ rolsuper: false, rolbypassrls: false });
-    await owned`GRANT SELECT,INSERT,UPDATE,DELETE ON public.elements,public.element_tags,
+    await owned`GRANT SELECT,INSERT ON public.elements,public.element_tags,
       public.memory_entries,public.memory_head_invalidation_runs TO ${owned(role.rolname)}`;
     try {
+      const expectExclusiveDenied = async (table: string) => {
+        const [acl] = await ordinary`SELECT
+          pg_catalog.has_table_privilege(current_user,${`public.${table}`},'SELECT') AS readable,
+          pg_catalog.has_table_privilege(current_user,${`public.${table}`},'INSERT') AS insertable,
+          pg_catalog.has_table_privilege(current_user,${`public.${table}`},'UPDATE') AS writable`;
+        expect(acl).toEqual({ readable: true, insertable: true, writable: false });
+        await expect(ordinary.begin(async tx => {
+          await tx`LOCK TABLE public.${tx(table)} IN EXCLUSIVE MODE`;
+        })).rejects.toMatchObject({ code: '42501' });
+      };
+      await expectExclusiveDenied('memory_head_invalidation_runs');
+      await expectExclusiveDenied('element_tags');
+      await expectExclusiveDenied('memory_entries');
+      expect(await new DatabaseMemoryAtomicInvalidator(ordinary).invalidate(request())).toEqual({ status: 'unknown', reason: null });
+      await owned`GRANT UPDATE,DELETE ON public.elements,public.element_tags,
+        public.memory_entries,public.memory_head_invalidation_runs TO ${owned(role.rolname)}`;
       const [premise] = await ordinary`SELECT
         pg_catalog.has_table_privilege(current_user,'public.elements','SELECT') AS readable,
         pg_catalog.has_table_privilege(current_user,'public.elements','UPDATE') AS writable,
