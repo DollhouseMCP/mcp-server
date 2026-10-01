@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Unit tests for AgentToolPolicyTranslator (Issue #449)
  *
@@ -19,7 +20,7 @@ describe('AgentToolPolicyTranslator', () => {
   describe('translateToolConfigToPolicy()', () => {
     describe('allowed endpoints', () => {
       it('should deny all non-READ operations when only mcp_aql_read is allowed', () => {
-        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_read'] });
+        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_read'] }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         expect(policy!.deny).toBeDefined();
@@ -39,7 +40,7 @@ describe('AgentToolPolicyTranslator', () => {
       it('should return undefined when all endpoints are allowed (no restrictions)', () => {
         const policy = translateToolConfigToPolicy({
           allowed: ['mcp_aql_create', 'mcp_aql_read', 'mcp_aql_update', 'mcp_aql_delete', 'mcp_aql_execute'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeUndefined();
       });
@@ -47,7 +48,7 @@ describe('AgentToolPolicyTranslator', () => {
       it('should deny only DELETE operations when all others are allowed', () => {
         const policy = translateToolConfigToPolicy({
           allowed: ['mcp_aql_create', 'mcp_aql_read', 'mcp_aql_update', 'mcp_aql_execute'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         expect(policy!.deny).toContain('delete_element');
@@ -65,7 +66,7 @@ describe('AgentToolPolicyTranslator', () => {
         const policy = translateToolConfigToPolicy({
           allowed: [],
           denied: ['mcp_aql_delete'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         expect(policy!.deny).toContain('delete_element');
@@ -76,7 +77,7 @@ describe('AgentToolPolicyTranslator', () => {
         const policy = translateToolConfigToPolicy({
           allowed: [],
           denied: ['mcp_aql_delete', 'mcp_aql_update'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         expect(policy!.deny).toContain('delete_element');
@@ -90,7 +91,7 @@ describe('AgentToolPolicyTranslator', () => {
         const policy = translateToolConfigToPolicy({
           allowed: ['mcp_aql_read', 'mcp_aql_create'],
           denied: ['mcp_aql_create'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         // CREATE operations denied by `denied` even though in `allowed`
@@ -106,7 +107,7 @@ describe('AgentToolPolicyTranslator', () => {
 
     describe('lifecycle and safety exemptions', () => {
       it('should never deny execute_agent even when EXECUTE endpoint is not allowed', () => {
-        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_read'] });
+        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_read'] }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         expect(policy!.deny).not.toContain('execute_agent');
@@ -120,7 +121,7 @@ describe('AgentToolPolicyTranslator', () => {
         const policy = translateToolConfigToPolicy({
           allowed: [],
           denied: ['mcp_aql_create', 'mcp_aql_read', 'mcp_aql_update', 'mcp_aql_delete', 'mcp_aql_execute'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         expect(policy!.deny).not.toContain('confirm_operation');
@@ -134,7 +135,7 @@ describe('AgentToolPolicyTranslator', () => {
         const policy = translateToolConfigToPolicy({
           allowed: [],
           denied: ['mcp_aql_execute'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // Lifecycle operations (execute_agent, complete_execution, etc.) are
         // exempt from EXECUTE denial.
@@ -149,14 +150,14 @@ describe('AgentToolPolicyTranslator', () => {
 
     describe('edge cases', () => {
       it('should return undefined for empty allowed array with no denied', () => {
-        const policy = translateToolConfigToPolicy({ allowed: [] });
+        const policy = translateToolConfigToPolicy({ allowed: [] }, BASE_OPERATION_REGISTRY);
         expect(policy).toBeUndefined();
       });
 
       it('should ignore unknown tool names in allowed list', () => {
         const policy = translateToolConfigToPolicy({
           allowed: ['unknown_tool', 'mcp_aql_read'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         // Only READ is recognized as allowed, everything else denied
@@ -169,14 +170,14 @@ describe('AgentToolPolicyTranslator', () => {
         const policy = translateToolConfigToPolicy({
           allowed: [],
           denied: ['unknown_tool', 'nonexistent_endpoint'],
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // Unknown tools produce no deny entries
         expect(policy).toBeUndefined();
       });
 
       it('should produce a sorted deny list for deterministic output', () => {
-        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_read'] });
+        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_read'] }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         const denySorted = [...policy!.deny!].sort();
@@ -185,7 +186,7 @@ describe('AgentToolPolicyTranslator', () => {
 
       it('should handle large-scale synthesis with all endpoints denied except one', () => {
         // Allow only CREATE — should deny all READ, UPDATE, DELETE ops (except lifecycle)
-        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_create'] });
+        const policy = translateToolConfigToPolicy({ allowed: ['mcp_aql_create'] }, BASE_OPERATION_REGISTRY);
 
         expect(policy).toBeDefined();
         // Should have many denied operations

@@ -408,7 +408,7 @@ function isCliApprovalRecord(value: unknown): value is CliApprovalRecord {
     typeof record.riskScore === 'number' &&
     typeof record.irreversible === 'boolean' &&
     typeof record.denyReason === 'string' &&
-    (record.scope === 'single' || record.scope === 'tool_session');
+    (record.scope === 'single' || record.scope === 'tool_session' || record.scope === 'input_session');
 }
 
 function isPendingApproval(record: CliApprovalRecord): boolean {

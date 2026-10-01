@@ -1,5 +1,9 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
+import { OperationRegistry } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
+import { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalog } from '../../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import type { IntegrationRequestGateway } from '../../../../src/web-console/modules/integrations/IntegrationRequestGateway.js';
+import type { IntegrationOperationCatalog } from '../../../../src/web-console/modules/integrations/IntegrationOperationCatalog.js';
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/index.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
@@ -10,6 +14,7 @@ import {
 
 const SEND_PATH = '/gmail/v1/users/me/messages/send';
 const REMOTE_DOCS = 'remote-docs';
+afterEach(() => jest.restoreAllMocks());
 
 function approvalRequestId(decision: { readonly approvalRequest?: { readonly requestId: string } }): string {
   if (!decision.approvalRequest) throw new Error('expected an approval request');
@@ -106,7 +111,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     });
   });
 
-  it('allows standing read approvals with tool_session scope', async () => {
+  it('requires single-use approval for pattern-confirmed reads', async () => {
     const gatekeeper = new Gatekeeper(
       undefined,
       undefined,
@@ -130,15 +135,15 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       approvalRequest: { riskLevel: 'safe' },
     });
 
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     await expect(enforcer.authorize({
       provider: 'gmail',
       method: 'GET',
-      path: '/gmail/v1/users/me/profile',
+      path: '/gmail/v1/users/me/messages',
     })).resolves.toMatchObject({
       allowed: true,
-      approvalContext: { scope: 'tool_session' },
+      approvalContext: { scope: 'single' },
     });
   });
 
@@ -161,7 +166,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       path: '/gmail/v1/users/me/messages',
     };
     const first = await enforcer.authorize(request);
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     activeElements = [integrationDenyGuard()];
 
@@ -317,7 +322,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  it('evaluateDiscovery honors standing tool_session read approvals', async () => {
+  it('evaluateDiscovery consumes single-use pattern-confirmed approval', async () => {
     const gatekeeper = new Gatekeeper(
       undefined,
       undefined,
@@ -333,11 +338,12 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     const first = await enforcer.authorize({
       provider: REMOTE_DOCS,
       method: 'GET',
-      path: '/anything',
+      path: '_internal:/integration/remote_mcp_discovery',
     });
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
   });
 
   it('evaluateDiscovery checks newly active deny policies before standing approvals', async () => {
@@ -357,9 +363,9 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     const first = await enforcer.authorize({
       provider: REMOTE_DOCS,
       method: 'GET',
-      path: '/anything',
+      path: '_internal:/integration/remote_mcp_discovery',
     });
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
     activeElements = [integrationDenyGuard()];
 
     await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
@@ -397,7 +403,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     await expect(enforcer.authorize({
       provider: 'gmail',
       method: 'GET',
-      path: '/anything',
+      path: '_internal:/integration/remote_mcp_discovery',
     })).rejects.toBeInstanceOf(IntegrationPolicyUnavailableError);
   });
 
@@ -488,3 +494,91 @@ function integrationAdminDenyGuard(): ActiveElement {
     },
   };
 }
+
+describe('strict management policy boundaries', () => {
+  it.each(['create_integration_spec', 'update_integration_spec', 'create_integration_skill', 'update_integration_skill'] as const)('requires default input-bound approval for %s', async operation => {
+    jest.replaceProperty(process, 'env', { ...process.env, DOLLHOUSE_CLI_APPROVAL_POLICY: '' });
+    const f = fixture([]);
+    const action = operation.startsWith('create') ? 'create' : 'update';
+    const legacyPath = operation.endsWith('spec') ? oldPath : '_internal:/integration/generated_skill';
+    const request = { ...input, path: `${legacyPath}/${action}` };
+    const management = { operation, operations: f.operations, legacyPath };
+    const pending = await f.enforcer.authorize(request, management);
+    expect(pending).toMatchObject({ allowed: false, error: { code: 'integration_request_approval_required' } });
+    await f.gatekeeper.approveCliRequest(approvalRequestId(pending), action === 'create' ? 'input_session' : 'single');
+    expect(await f.enforcer.authorize({ ...request, body: { changed: true } }, management)).toMatchObject({ allowed: false });
+    expect(await f.enforcer.authorize(request, management)).toMatchObject({ allowed: true });
+    expect(await f.enforcer.authorize(request, management)).toMatchObject({ allowed: action === 'create' });
+  });
+
+  it.each(['allow', 'deny', 'confirm'] as const)('ignores element %s when overrides are disabled but retains default approval', async rule => {
+    const f = fixture([element({ [rule]: ['create_integration_spec'] })], false);
+    const result = await f.enforcer.authorize(input, { operation: 'create_integration_spec', operations: f.operations, legacyPath: oldPath });
+    expect(result).toMatchObject({ allowed: false, error: { code: 'integration_request_approval_required' } });
+  });
+
+  it('applies a newly stricter approval policy before accepting an input-session approval', async () => {
+    jest.replaceProperty(process, 'env', { ...process.env, DOLLHOUSE_CLI_APPROVAL_POLICY: '' });
+    const f = fixture([]);
+    const management = { operation: 'create_integration_spec' as const, operations: f.operations, legacyPath: oldPath };
+    const pending = await f.enforcer.authorize(input, management);
+    await f.gatekeeper.approveCliRequest(approvalRequestId(pending), 'input_session');
+    process.env.DOLLHOUSE_CLI_APPROVAL_POLICY = 'moderate,dangerous';
+    const stricter = await f.enforcer.authorize(input, management);
+    expect(stricter).toMatchObject({ allowed: false, approvalRequest: { allowedScopes: ['single'] } });
+    await expect(f.gatekeeper.approveCliRequest(approvalRequestId(stricter), 'input_session')).rejects.toThrow('does not permit');
+    await f.gatekeeper.approveCliRequest(approvalRequestId(stricter), 'single');
+    expect(await f.enforcer.authorize(input, management)).toMatchObject({ allowed: true });
+    expect(await f.enforcer.authorize(input, management)).toMatchObject({ allowed: false });
+  });
+  it('rejects a sentinel before consuming its exact-input management approval', async () => {
+    const f = fixture([element({ externalRestrictions: { description: 'Confirm management writes', confirmPatterns: ['integration_request:gmail:PUT:*'] } })]);
+    const input = { provider: 'gmail' as const, method: 'PUT', path: '_internal:/integration/generated_skill/update', body: { skillName: 'target' } };
+    const pending = await f.enforcer.authorize(input);
+    await f.gatekeeper.approveCliRequest(approvalRequestId(pending), 'single');
+    const request = jest.fn<IntegrationRequestGateway['request']>();
+    const facade = new AuthorizedIntegrationGateway({ gateway: { request } as unknown as IntegrationRequestGateway, policyEnforcer: f.enforcer });
+    expect(await facade.request(input)).toMatchObject({ ok: false, error: { code: 'invalid_integration_path', status: 400 } });
+    expect(request).not.toHaveBeenCalled();
+    expect(await f.enforcer.authorize(input)).toMatchObject({ allowed: true, approvalContext: { requestId: approvalRequestId(pending) } });
+  });
+  function fixture(elements: ActiveElement[], allowElementPolicyOverrides = true) {
+    const gatekeeper = new Gatekeeper(undefined, { allowElementPolicyOverrides }, undefined, 'strict-policy', new StaticAuditHmacKeyResolver('66'.repeat(32)));
+    const enforcer = new IntegrationRequestPolicyEnforcer({ gatekeeper, getActiveElements: async () => elements });
+    const operations = new OperationRegistry(new AuthorizedIntegrationOperationCatalog({ catalog: {} as IntegrationOperationCatalog, policyEnforcer: enforcer }));
+    return { gatekeeper, enforcer, operations };
+  }
+  const oldPath = '_internal:/integration/openapi_spec';
+  const input = { provider: 'gmail', method: 'PUT', path: `${oldPath}/create`, body: { spec: {} } };
+  function element(gatekeeper: ActiveElement['metadata']['gatekeeper']): ActiveElement {
+    return { name: 'strict', type: 'personas', metadata: { name: 'strict', gatekeeper } };
+  }
+  it.each(['create_integration_spec', 'update_integration_spec', 'create_integration_skill', 'update_integration_skill'] as const)('inherits legacy denies but not legacy allows for %s', async operation => {
+    const legacyPath = operation.endsWith('spec') ? oldPath : '_internal:/integration/generated_skill';
+    const action = operation.startsWith('create') ? 'create' : 'update';
+    for (const field of ['denyPatterns', 'allowPatterns'] as const) {
+      const f = fixture([element({ externalRestrictions: { description: 'Legacy rule', [field]: [`integration_request:gmail:PUT:${legacyPath}`] } })]);
+      expect(await f.enforcer.authorize({ ...input, path: `${legacyPath}/${action}` }, { operation, operations: f.operations, legacyPath })).toMatchObject({ allowed: false, error: { code: 'integration_request_denied_by_policy' } });
+    }
+  });
+  it('carries operation confirm into the sole input-bound approval despite external allow', async () => {
+    const f = fixture([element({ confirm: ['create_integration_spec'], externalRestrictions: { description: 'Allow current target', allowPatterns: ['integration_request:*'] } })]);
+    const management = { operation: 'create_integration_spec' as const, operations: f.operations, legacyPath: oldPath };
+    const first = await f.enforcer.authorize(input, management);
+    expect(first.approvalRequest).toBeDefined();
+    await f.gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
+    expect(await f.enforcer.authorize(input, management)).toMatchObject({ allowed: true });
+    expect((await f.enforcer.authorize(input, management)).approvalRequest).toBeDefined();
+  });
+  it('binds approvals to action, resource, target name and body', async () => {
+    const f = fixture([element({ externalRestrictions: { description: 'Confirm writes', confirmPatterns: ['integration_request:gmail:PUT:*'] } })]);
+    const skill = { ...input, path: '_internal:/integration/generated_skill/create', body: { skillName: 'one' } };
+    const first = await f.enforcer.authorize(skill);
+    await f.gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
+    for (const other of [input, { ...skill, path: '_internal:/integration/generated_skill' }, { ...skill, path: '_internal:/integration/generated_skill/update' },
+      { ...skill, body: { skillName: 'two' } }, { ...skill, path: '/actual-api' }]) {
+      expect((await f.enforcer.authorize(other)).allowed).toBe(false);
+    }
+    expect((await f.enforcer.authorize(skill)).allowed).toBe(true);
+  });
+});

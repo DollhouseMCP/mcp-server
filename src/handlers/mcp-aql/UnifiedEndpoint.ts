@@ -1,3 +1,4 @@
+import { integrationInvocationContext, type IntegrationInvocationContext } from '../../security/IntegrationEntryPoint.js';
 /**
  * UnifiedEndpoint - Single unified MCP-AQL endpoint handler (Issue #196)
  *
@@ -23,7 +24,7 @@
  */
 
 import { MCPAQLHandler } from './MCPAQLHandler.js';
-import { getRoute, CRUDEndpoint } from './OperationRouter.js';
+import { CRUDEndpoint } from './OperationRouter.js';
 import { OperationResult, BatchResult, ResponseMeta, isOperationInput, parseOperationInput, describeInvalidInput } from './types.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -79,7 +80,7 @@ export class UnifiedEndpoint {
       const { operation } = parsedInput;
 
       // Step 2: Determine the correct CRUD endpoint for this operation
-      const route = getRoute(operation);
+      const route = this.mcpAqlHandler.operations.getRoute(operation);
       if (!route) {
         SecurityMonitor.logSecurityEvent({
           type: 'UPDATE_SECURITY_VIOLATION',
@@ -97,7 +98,7 @@ export class UnifiedEndpoint {
       // Step 3: Route to the appropriate handler method
       // The handler will perform its own PermissionGuard validation
       // Pass parsedInput to ensure normalized format is used
-      const result = await this.routeToHandler(route.endpoint, parsedInput);
+      const result = await this.routeToHandler(route.endpoint, parsedInput, integrationInvocationContext(input, 'mcp_aql'));
 
       // Log successful routing
       SecurityMonitor.logSecurityEvent({
@@ -139,7 +140,8 @@ export class UnifiedEndpoint {
    */
   private async routeToHandler(
     endpoint: CRUDEndpoint,
-    input: unknown
+    input: unknown,
+    context: IntegrationInvocationContext
   ): Promise<OperationResult | BatchResult> {
     switch (endpoint) {
       case 'CREATE':
@@ -151,7 +153,7 @@ export class UnifiedEndpoint {
       case 'DELETE':
         return this.mcpAqlHandler.handleDelete(input);
       case 'EXECUTE':
-        return this.mcpAqlHandler.handleExecute(input);
+        return this.mcpAqlHandler.handleExecute(input, context);
       default: {
         // Exhaustive check - TypeScript will error if a case is missing
         const _exhaustive: never = endpoint;
@@ -167,7 +169,7 @@ export class UnifiedEndpoint {
   private buildMeta(startTime: number): ResponseMeta {
     return {
       requestId: this.mcpAqlHandler.getCorrelationId() ?? 'unknown',
-      durationMs: parseFloat((performance.now() - startTime).toFixed(2)),
+      durationMs: Number.parseFloat((performance.now() - startTime).toFixed(2)),
       timestamp: new Date().toISOString(),
     };
   }

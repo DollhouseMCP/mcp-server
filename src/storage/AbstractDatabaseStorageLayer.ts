@@ -396,6 +396,20 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     return row.rawContent;
   }
 
+  async readContentForUpdate(relativePath: string): Promise<{
+    content: string; identity: DatabaseStorageIdentity; revision: string;
+  }> {
+    const userId = this.userId;
+    const rows = await withUserRead(this.db, userId, tx => tx.select({
+      id: elements.id, name: elements.name, content: elements.rawContent,
+      revision: elements.storageRevision,
+    }).from(elements).where(and(eq(elements.id, relativePath),
+      eq(elements.userId, userId), eq(elements.elementType, this.elementType))).limit(1));
+    const row = rows[0];
+    if (!row) throw Object.assign(new Error('Update target not found'), { code: 'ENOENT' });
+    return { content: row.content, identity: { id: row.id, name: row.name }, revision: row.revision.toString() };
+  }
+
   // ── Protected helpers for subclasses ──────────────────────────────
 
   /** Resolve exact identities first, then require a unique canonical match. */

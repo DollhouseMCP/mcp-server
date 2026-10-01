@@ -1,3 +1,4 @@
+import { effectiveCliApprovalScopes } from './CliApprovalScopes.js';
 /**
  * Gatekeeper Session Management
  *
@@ -423,6 +424,7 @@ export class GatekeeperSession {
       ? undefined
       : Math.max(MIN_APPROVAL_TTL_MS, Math.min(MAX_APPROVAL_TTL_MS, ttlMs));
     const record: CliApprovalRecord = {
+      ...(args.entry_point ? { entry_point: args.entry_point } : {}),
       requestId,
       toolName,
       toolInputDigest: redacted.digest,
@@ -489,13 +491,16 @@ export class GatekeeperSession {
     if (!record || !isPendingCliApproval(record)) {
       return undefined;
     }
-    if (record.allowedScopes && !record.allowedScopes.includes(scope)) {
+    const allowedScopes = effectiveCliApprovalScopes(record);
+    if ((allowedScopes && !allowedScopes.includes(scope)) ||
+      (scope === 'input_session' && !allowedScopes?.includes(scope))) {
       throw new Error(
         `Approval request "${requestId}" does not permit scope "${scope}". ` +
-        `Allowed scopes: ${record.allowedScopes.join(', ')}.`,
+        `Allowed scopes: ${(allowedScopes ?? ['single', 'tool_session']).join(', ')}.`,
       );
     }
 
+    record.allowedScopes = allowedScopes;
     record.approvedAt = approvedAt;
     record.scope = scope;
 
@@ -582,7 +587,7 @@ export class GatekeeperSession {
 
     // Check individual approvals
     for (const [, record] of this.state.cliApprovals) {
-      if (record.toolName === toolName && !record.consumed && isUsableCliApproval(record)) {
+      if (record.scope !== 'input_session' && record.toolName === toolName && !record.consumed && isUsableCliApproval(record)) {
         if (record.scope === 'single') {
           record.consumed = true;
           if (this.confirmationStore) {
@@ -600,7 +605,7 @@ export class GatekeeperSession {
   /**
    * Check if a CLI tool call has a valid approval for this exact input.
    *
-   * Session-scoped approvals intentionally remain tool-wide. Single-use
+   * Tool-session approvals remain tool-wide. Single-use and input-session
    * approvals compare the HMAC recorded at approval-request creation so
    * provider/path/body-scoped tools cannot reuse approval for a different
    * request.
@@ -608,7 +613,7 @@ export class GatekeeperSession {
   async checkCliApprovalForInput(
     toolName: string,
     toolInput: Record<string, unknown>,
-    options: { readonly allowToolSession?: boolean } = {},
+    options: { readonly allowToolSession?: boolean; readonly allowInputSession?: boolean } = {},
   ): Promise<CliApprovalRecord | undefined> {
     this.touch();
     this.expireStaleApprovals();
@@ -631,16 +636,17 @@ export class GatekeeperSession {
       );
     }
     const inputHash = (await redactToolInput(toolName, toolInput, this.auditHmacResolver)).hash;
-    return this.matchInputScopedCliApproval(toolName, inputHash, options.allowToolSession !== false);
+    return this.matchInputScopedCliApproval(toolName, inputHash, options);
   }
 
   private matchInputScopedCliApproval(
     toolName: string,
     inputHash: string,
-    allowToolSession: boolean,
+    options: { readonly allowToolSession?: boolean; readonly allowInputSession?: boolean },
   ): CliApprovalRecord | undefined {
     for (const [, record] of this.state.cliApprovals) {
-      if (!allowToolSession && record.scope !== 'single') {
+      if ((record.scope === 'tool_session' && options.allowToolSession === false) ||
+        (record.scope === 'input_session' && options.allowInputSession !== true)) {
         continue;
       }
       if (

@@ -1,3 +1,4 @@
+import { isIntegrationEntryPoint } from '../../../security/IntegrationEntryPoint.js';
 import type {
   ConsoleApprovalScope,
   ConsoleApprovalStatus,
@@ -16,6 +17,7 @@ const APPROVAL_STATUSES = new Set<ConsoleApprovalStatus>([
 export function projectSessionApproval(value: unknown): SessionApprovalDto {
   const input = asRecord(value);
   return {
+    ...(isIntegrationEntryPoint(input.entry_point) ? { entry_point: input.entry_point } : {}),
     approval_id: stringField(input.approval_id),
     session_id: stringField(input.session_id),
     status: approvalStatus(input.status),
@@ -28,6 +30,8 @@ export function projectSessionApproval(value: unknown): SessionApprovalDto {
     reason: stringField(input.reason),
     policy_source: nullableString(input.policy_source),
     scope: approvalScope(input.scope),
+    ...(Array.isArray(input.allowed_scopes)
+      ? { allowed_scopes: input.allowed_scopes.filter(isApprovalScope) } : {}),
     requested_at: stringField(input.requested_at),
     expires_at: stringField(input.expires_at),
     decided_at: nullableString(input.decided_at),
@@ -50,7 +54,11 @@ function approvalStatus(value: unknown): ConsoleApprovalStatus {
 }
 
 function approvalScope(value: unknown): ConsoleApprovalScope {
-  return value === 'session' ? 'session' : 'once';
+  return isApprovalScope(value) ? value : 'once';
+}
+
+function isApprovalScope(value: unknown): value is ConsoleApprovalScope {
+  return value === 'once' || value === 'session' || value === 'input_session';
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

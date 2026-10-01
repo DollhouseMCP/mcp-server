@@ -1568,7 +1568,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     description: 'Approve a pending CLI tool permission request. Used by bridges (Zulip, Slack) to relay human approval for tools that require it.',
     params: {
       request_id: { type: 'string', required: true, description: 'Approval request ID from permission_prompt deny response (format: cli-<UUID>)' },
-      scope: { type: 'string', description: '"single" (default, consumed on use) or "tool_session" (all uses of that tool for the session)' },
+      scope: { type: 'string', description: '"single" (default, consumed on use), "input_session" (this exact input for the session, when permitted), or "tool_session" (all uses of that tool for the session)' },
     },
     returns: { name: 'ApproveResult', kind: 'object', description: '{ approved, requestId, toolName, scope, message }' },
     examples: [

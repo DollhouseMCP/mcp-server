@@ -1,3 +1,4 @@
+import { requestViaExecute } from './wiredIntegrationHarness.js';
 /**
  * Integrations v2 — core-path WIRED integration test (end-of-phase verification).
  *
@@ -24,13 +25,14 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
   });
 
   it('registers integration tools on the per-session registry', () => {
-    expect(harness.hasTool('integration_request')).toBe(true);
-    expect(harness.hasTool('list_operations')).toBe(true);
-    expect(harness.hasTool('describe_operation')).toBe(true);
+    expect(harness.hasTool('integration_request')).toBe(false);
+    expect(harness.hasTool('list_operations')).toBe(false);
+    expect(harness.hasTool('mcp_aql_read')).toBe(true);
+    expect(harness.hasTool('describe_operation')).toBe(false);
   });
 
   it('executes a read through the gateway, injecting the credential server-side', async () => {
-    const response = await harness.callViaRegistry('integration_request', {
+    const response = await requestViaExecute(harness.callViaRegistry, {
       provider: PROVIDER,
       method: 'GET',
       path: '/things/42',
@@ -55,7 +57,7 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
       '//not-allowed.example.com/things/42',
       String.raw`/things/\..\secret`,
     ]) {
-      const response = await harness.callViaRegistry('integration_request', { provider: PROVIDER, method: 'GET', path });
+      const response = await requestViaExecute(harness.callViaRegistry, { provider: PROVIDER, method: 'GET', path });
       expect(response.ok).toBe(false);
       expect((response.error as { code?: string }).code).toBe('invalid_integration_path');
       expect(harness.lastRequest()).toBeUndefined();
@@ -65,7 +67,7 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
   it('isolates credentials between user sessions', async () => {
     const callAsOther = await harness.openSession(randomUUID());
 
-    const response = await callAsOther('integration_request', {
+    const response = await requestViaExecute(callAsOther, {
       provider: PROVIDER,
       method: 'GET',
       path: '/things/1',
@@ -77,24 +79,27 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
     expect(harness.lastRequest()).toBeUndefined();
   });
 
-  it('executes a write through the gateway, forwarding the request body', async () => {
-    const response = await harness.callViaRegistry('integration_request', {
-      provider: PROVIDER,
-      method: 'POST',
-      path: '/things',
-      body: { name: 'widget' },
-    });
-
+  it('executes a write only after exact single-use approval and rejects replay', async () => {
+    const params = { provider: PROVIDER, method: 'POST', path: '/things', body: { name: 'widget' } };
+    const pending = await requestViaExecute(harness.callViaRegistry, params);
+    expect(pending).toMatchObject({ ok: false, approvalRequest: { allowedScopes: ['single'] } });
+    expect(harness.lastRequest()).toBeUndefined();
+    const approvalRequest = pending.approvalRequest as { requestId: string };
+    expect(await harness.callViaRegistry('mcp_aql_execute', { operation: 'approve_cli_permission', params: {
+      request_id: approvalRequest.requestId, scope: 'single',
+    } })).toMatchObject({ success: true });
+    const response = await requestViaExecute(harness.callViaRegistry, params);
     expect(response.ok).toBe(true);
     const captured = harness.lastRequest();
     expect(captured?.method).toBe('POST');
     expect(captured?.url).toBe('/things');
     expect(captured?.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
     expect(JSON.parse(captured?.body ?? '{}')).toEqual({ name: 'widget' });
+    expect(await requestViaExecute(harness.callViaRegistry, params)).toMatchObject({ ok: false });
   });
 
   it('redacts credential-shaped fields in the upstream response body', async () => {
-    const response = await harness.callViaRegistry('integration_request', {
+    const response = await requestViaExecute(harness.callViaRegistry, {
       provider: PROVIDER,
       method: 'GET',
       path: '/redact/thing',
@@ -111,7 +116,7 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
     const previous = process.env.DOLLHOUSE_CLI_APPROVAL_POLICY;
     process.env.DOLLHOUSE_CLI_APPROVAL_POLICY = 'dangerous';
     try {
-      const response = await harness.callViaRegistry('integration_request', {
+      const response = await requestViaExecute(harness.callViaRegistry, {
         provider: PROVIDER,
         method: 'POST',
         path: '/things',
@@ -128,8 +133,11 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
     }
   });
 
-  it('derives operations from the stored OpenAPI spec via list_operations', async () => {
-    const response = await harness.callViaRegistry('list_operations', { provider: PROVIDER });
+  it('derives operations from the stored OpenAPI spec via list_integration_operations', async () => {
+    const envelope = await harness.callViaRegistry('mcp_aql_read', { operation: 'list_integration_operations', params: { provider: PROVIDER } });
+    expect(envelope).toMatchObject({ success: true });
+    if (!('data' in envelope)) throw new Error('Expected MCP-AQL data envelope');
+    const response = JSON.parse((envelope.data as { content: { text: string }[] }).content[0].text);
 
     expect(response.ok).toBe(true);
     const operations = (response.result as { operations: { operationId: string }[] }).operations;
@@ -137,17 +145,20 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
   });
 
   it('describes an operation with gateway-request metadata and spec contract', async () => {
-    const response = await harness.callViaRegistry('describe_operation', {
-      provider: PROVIDER,
-      operation_id: 'getThing',
+    const envelope = await harness.callViaRegistry('mcp_aql_read', {
+      operation: 'describe_integration_operation',
+      params: { provider: PROVIDER, operation_id: 'getThing' },
     });
+    expect(envelope).toMatchObject({ success: true });
+    if (!('data' in envelope)) throw new Error('Expected MCP-AQL data envelope');
+    const response = JSON.parse((envelope.data as { content: { text: string }[] }).content[0].text);
 
     expect(response.ok).toBe(true);
     expect(response.result).toMatchObject({
       operationId: 'getThing',
       method: 'GET',
       path: '/things/{id}',
-      gatewayRequest: { tool: 'integration_request', provider: PROVIDER, method: 'GET', pathTemplate: '/things/{id}' },
+      gatewayRequest: { invocation: { endpoint: 'mcp_aql_execute', operation: 'integration_request' }, provider: PROVIDER, method: 'GET', pathTemplate: '/things/{id}' },
       specContract: { descriptorId: harness.curatedDescriptorId },
     });
   });
