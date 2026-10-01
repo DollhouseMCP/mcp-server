@@ -28,6 +28,21 @@ function projection(owners: readonly MemoryTagAuditOwner[]) {
 }
 
 describe('pure database memory owner manifests', () => {
+  it.each(['array', 'row'])('bounds capture and rejects %s accessor length drift without inspecting appended rows', kind => {
+    const input = [row()];
+    let appendedReads = 0;
+    const append = () => {
+      Object.defineProperty(input, 1, { get: () => { appendedReads++; return row({ ownerId: OTHER }); } });
+    };
+    if (kind === 'array') {
+      Object.defineProperty(input, 0, { get: () => { append(); return row(); } });
+    } else {
+      Object.defineProperty(input[0], 'revision', { enumerable: true, get: () => { append(); return '1'; } });
+    }
+    failure(() => capture(input), 'invalid-input');
+    expect(input).toHaveLength(2);
+    expect(appendedReads).toBe(0);
+  });
   it('accepts empty supplied sets without claiming database completeness or authority', () => {
     expect(capture([])).toMatchObject({ claim: 'validated-supplied-owner-set', ownerCount: 0, owners: [], ...authority });
     const result = verify([], []);

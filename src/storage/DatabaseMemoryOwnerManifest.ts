@@ -58,10 +58,11 @@ function captureRow(row: MemoryTagAuditOwner): MemoryTagAuditOwner {
 
 function captureRows(input: readonly MemoryTagAuditOwner[]): readonly MemoryTagAuditOwner[] {
   if (!Array.isArray(input)) refuse('invalid-input');
-  if (input.length > MAX_MEMORY_OWNER_MANIFEST_OWNERS) refuse('owner-limit');
+  const length = input.length;
+  if (length > MAX_MEMORY_OWNER_MANIFEST_OWNERS) refuse('owner-limit');
   const byOwner = new Map<string, string>();
   const rows: MemoryTagAuditOwner[] = [];
-  for (let index = 0; index < input.length; index++) {
+  for (let index = 0; index < length; index++) {
     if (!Object.hasOwn(input, index)) refuse('invalid-input');
     const row = captureRow(input[index]);
     const priorTenant = byOwner.get(row.ownerId);
@@ -69,6 +70,7 @@ function captureRows(input: readonly MemoryTagAuditOwner[]): readonly MemoryTagA
     byOwner.set(row.ownerId, row.tenantId);
     rows.push(row);
   }
+  if (input.length !== length) refuse('invalid-input');
   rows.sort((left, right) => {
     if (left.ownerId < right.ownerId) return -1;
     if (left.ownerId > right.ownerId) return 1;
