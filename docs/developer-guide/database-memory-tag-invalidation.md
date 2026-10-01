@@ -90,3 +90,44 @@ database completeness, and a matching return set proves neither SQL execution
 nor commit. All results retain `canBackfill:false`, `canApply:false` and
 `canActivate:false`. No database access, durable receipt, catalog attestation,
 runtime wiring or maintenance execution is added; those slices remain held.
+
+## Partial required-structure observation
+
+`verifyDatabaseMemoryInvalidationStructure(tx)` observes the PG17 catalog in one
+statement on a caller-owned transaction. It verifies required columns, two
+revision/dirty defaults, three primary keys and their backing indexes, five
+foreign keys, and the positive revision check on `public.elements`,
+`public.element_tags` and `public.memory_entries`. `public.users.id` is checked
+only as their tenant-reference endpoint. All four relations must be ordinary
+permanent nonpartition tables with no inbound or outbound inheritance edge.
+
+Builtin type namespaces/typmods, nullability, generation/identity flags,
+noninherited constraint semantics, exact ordered keys and cascade actions are
+pinned to migrations 0000/0001/0003/0056. PK indexes must bind their actual
+constraint/table identities, use btree and builtin ordered UUID/text opclasses,
+and have ordinary key options and collations. The four collatable required
+columns use `pg_catalog.default`; all other required attributes have collation
+zero. This does not prove global locale/provider behavior.
+
+Descriptor collections have fixed caps with overflow sentinels. Nested key
+vectors and rendered expressions are bounded before projection; missing join
+targets retain null/refusal evidence rather than disappearing. The immutable
+result contains a deterministic portable contract digest, excluding instance
+OIDs. Refusals expose only fixed codes, never raw SQL, driver errors or causes.
+Ordinary roles may observe this metadata; the helper changes no roles, locks,
+timeouts, isolation settings or database contents.
+
+This is a required-field projection, not full catalog attestation. Unrelated
+columns/indexes/checks, receipt structure, RLS/policies, migration ledger and
+effective relation/function search-path resolution remain unqualified. A single
+snapshot does not protect against later DDL or provide an execution token.
+`canBackfill`, `canApply`, `canActivate`, `provesCompleteCatalog` and
+`provesExecutionResolution` are always false. Global malformed-reference
+qualification, bounded atomic invalidation and historical receipt/replay remain
+separate work; #2904 stays open.
+
+Unit/artifact tests qualify portable matching, bounds and fixed refusals.
+Required PG17 CI tests exercise actual migrations and ordinary-role READ ONLY
+calls plus legal transactionally rolled-back DDL drift. Catalog flags that
+cannot be changed through supported DDL are unit-only observations. This slice
+requires no local database creation or existing service/credential changes.
