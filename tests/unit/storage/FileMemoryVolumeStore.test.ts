@@ -331,13 +331,19 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
   let setupCompleted = 0;
   let collisionProofStarted = 0;
   let collisionProofCompleted = 0;
+  let aliasScanCompleted = 0;
+  let aliasScanMs = 0;
+  let collisionProofMs = 0;
+  let inFlight: { kind: 'alias-scan' | 'collision-proof'; start: bigint } | undefined;
   const report = (resources = false) => {
     const cpu = process.cpuUsage(initialCpu);
     const usage = process.resourceUsage();
     // Direct stderr survives suite console mocks; never include fixture paths or evidence.
     process.stderr.write(`${JSON.stringify({ diagnostic: 'archive-collision', phase,
       elapsedMs: Number(process.hrtime.bigint() - started) / 1e6,
-      setupCompleted, collisionProofStarted, collisionProofCompleted,
+      setupCompleted, collisionProofStarted, collisionProofCompleted, aliasScanCompleted, aliasScanMs, collisionProofMs,
+      inFlight: inFlight ? { kind: inFlight.kind, startMs: Number(inFlight.start - started) / 1e6,
+        elapsedMs: Number(process.hrtime.bigint() - inFlight.start) / 1e6 } : null,
       ...(resources ? { cpuUserUs: cpu.user, cpuSystemUs: cpu.system,
         rssBytes: process.memoryUsage().rss, maxRssKiB: usage.maxRSS,
         fsRead: usage.fsRead, fsWrite: usage.fsWrite,
@@ -368,20 +374,41 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
     }
     // Test-only observation of the unchanged real private proof, without production hooks.
     const observed = f.store as unknown as {
+      requireVolumeSpelling: (root: string, volume: number) => Promise<void>;
       requireCommittedCollision: (...args: [string, OwnedFileMemoryToken, number, string]) => Promise<void>;
     };
     const descriptor = Object.getOwnPropertyDescriptor(observed, 'requireCommittedCollision');
+    const aliasDescriptor = Object.getOwnPropertyDescriptor(observed, 'requireVolumeSpelling');
+    const originalAlias = observed.requireVolumeSpelling;
+    if (typeof originalAlias !== 'function') throw new Error('Archive alias diagnostic target is unavailable');
     const original = observed.requireCommittedCollision;
     if (typeof original !== 'function') throw new Error('Archive collision diagnostic target is unavailable');
     restore = () => {
       if (descriptor) Object.defineProperty(observed, 'requireCommittedCollision', descriptor);
       else delete (observed as Partial<typeof observed>).requireCommittedCollision;
+      if (aliasDescriptor) Object.defineProperty(observed, 'requireVolumeSpelling', aliasDescriptor);
+      else delete (observed as Partial<typeof observed>).requireVolumeSpelling;
     };
+    Object.defineProperty(observed, 'requireVolumeSpelling', { configurable: true, value: async (...args: Parameters<typeof originalAlias>) => {
+      const span = process.hrtime.bigint();
+      inFlight = { kind: 'alias-scan', start: span };
+      try {
+        await originalAlias.apply(f.store, args);
+        aliasScanCompleted++;
+        aliasScanMs += Number(process.hrtime.bigint() - span) / 1e6;
+      } finally { inFlight = undefined; }
+    } });
     Object.defineProperty(observed, 'requireCommittedCollision', { configurable: true, value: async (...args: Parameters<typeof original>) => {
+      const span = process.hrtime.bigint();
+      inFlight = { kind: 'collision-proof', start: span };
       collisionProofStarted++;
-      await original.apply(f.store, args);
-      collisionProofCompleted++;
-      if (collisionProofCompleted % 100 === 0) report();
+      try {
+        await original.apply(f.store, args);
+        collisionProofCompleted++;
+        collisionProofMs += Number(process.hrtime.bigint() - span) / 1e6;
+        inFlight = undefined;
+        if (collisionProofCompleted % 100 === 0) report();
+      } finally { inFlight = undefined; }
     } });
     // Allocation phase includes namespace/alias scans before and between collision proofs.
     milestone('probe');
