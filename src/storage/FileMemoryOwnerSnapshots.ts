@@ -13,6 +13,8 @@ import { parseFileMemoryAbortIntent, serializeFileMemoryAbortIntent,
   type FileMemoryAbortIntent } from './FileMemoryAbortIntentCodec.js';
 import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
 import { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryOwnedCreate, captureCreateRequest, type CreateOwnedRequest, type CreatePublication } from './FileMemoryOwnedCreate.js';
+export type { CreateOwnedRequest, CreatePublication } from './FileMemoryOwnedCreate.js';
 import {
   classifyFileMemoryWrite,
   type FileMemoryWriteDiagnostic,
@@ -228,6 +230,8 @@ type AdoptionTopologyProof = (stage?: { path: string; identity: FileIdentity },
   publishedSidecar?: FileIdentity, transition?: 'registry-create' | 'registry-stage' | 'registry-rename' | 'sidecar-stage' | 'sidecar-rename') => Promise<void>;
 
 interface FileMemoryOwnerSnapshotsBaseOptions {
+  /** Dormant exclusive CREATE barriers; never mutation or retry authority. */
+  readonly afterCreatePublication?: (phase: CreatePublication) => void | Promise<void>;
   /** Dormant adoption-recovery test barriers; never recovery authority. */
   readonly afterAdoptionRecoveryPublication?: (phase: AdoptionRecoveryPublication) => void | Promise<void>;
   /** Isolated abort fault barriers; never authority or automatic orphan handling. */
@@ -367,6 +371,7 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
 export class FileMemoryOwnerSnapshots {
   private readonly options: FileMemoryOwnerSnapshotsOptions;
   private readonly adoptedErrors = new WeakMap<object, OwnedFileMemoryToken>();
+  private readonly createErrors = new WeakMap<object, OwnedFileMemoryToken>();
 
   constructor(options: FileMemoryOwnerSnapshotsOptions) {
     if (process.platform === 'win32') {
@@ -382,6 +387,66 @@ export class FileMemoryOwnerSnapshots {
   async readHeadSnapshot(locator: string): Promise<FileMemorySnapshot> {
     const scope = await this.captureStandaloneScope();
     return this.readAtRoot(scope.tenantRoot, scope.userId, locator);
+  }
+
+  /** Dormant new-owner CREATE or exact persisted-phase forward recovery. */
+  async createOwned(input: CreateOwnedRequest): Promise<OwnedFileMemoryToken> {
+    let committed: OwnedFileMemoryToken | undefined;
+    try {
+      const request = this.captureOwnedCreate(input);
+      return await this.requiredCoordinator().withTenantTransaction(context =>
+        this.performOwnedCreate(context, request, token => { committed = token; }));
+    } catch (cause) {
+      if (!committed) throw this.createPrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.createErrors.get(cause) === committed) throw cause;
+      const error = committedError(cause, committed);
+      this.createErrors.set(error, committed); throw error;
+    }
+  }
+
+  /** Uses exactly one existing tracked operation; never acquires a nested lease. */
+  createOwnedInTransaction(context: FileMemoryLeaseContext, input: CreateOwnedRequest): Promise<OwnedFileMemoryToken> {
+    try { return this.performOwnedCreate(context, this.captureOwnedCreate(input)); }
+    catch (cause) { throw this.createPrecommitError(cause); }
+  }
+
+  private createPrecommitError(cause: unknown): unknown {
+    if (cause === null || (typeof cause !== 'object' && typeof cause !== 'function')) return cause;
+    let marker: boolean;
+    try {
+      const value = cause as { code?: unknown; committed?: unknown; token?: unknown };
+      marker = value.code === 'EHEADCOMMITTED' || value.committed === true || 'token' in value;
+    } catch { marker = true; }
+    if (!marker) return cause;
+    return Object.assign(headError('EOWNERRECOVERY', 'This CREATE has no captured publication outcome'), { cause });
+  }
+
+  private captureOwnedCreate(input: CreateOwnedRequest): CreateOwnedRequest {
+    const request = captureCreateRequest(input);
+    validateLocator(request.locator); this.validateHeadForSave(request.content);
+    return request;
+  }
+
+  private performOwnedCreate(context: FileMemoryLeaseContext, request: CreateOwnedRequest,
+    capture?: (token: OwnedFileMemoryToken) => void): Promise<OwnedFileMemoryToken> {
+    let committed: OwnedFileMemoryToken | undefined;
+    const coordinator = this.requiredCoordinator();
+    const result = coordinator.perform(context, async operation => {
+      try {
+        return await new FileMemoryOwnedCreate(operation, request,
+          () => { coordinator.requireActiveOperationScope(operation); }, this.options.afterCreatePublication,
+          token => { committed = token; capture?.(token); }).run();
+      } catch (cause) {
+        if (committed && cause && typeof cause === 'object') this.createErrors.set(cause, committed);
+        throw cause;
+      }
+    }).catch(cause => {
+      if (!committed) throw this.createPrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.createErrors.get(cause) === committed) throw cause;
+      const error = committedError(cause, committed); this.createErrors.set(error, committed); throw error;
+    });
+    void result.catch(() => undefined);
+    return result;
   }
 
   /**

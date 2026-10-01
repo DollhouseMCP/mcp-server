@@ -330,3 +330,85 @@ only final ACTIVE-sidecar rename commits adoption. A crash leaving the exact
 private empty parent resumes through child recovery with fresh authority and no
 previous-invocation attribution. Existing partial records remain manual; no
 recursive directory creation, normalization, cleanup or lease takeover is added.
+
+## Dormant exclusive CREATE and forward recovery
+
+`FileMemoryOwnerSnapshots.createOwned({ operationId, locator, content })` creates
+a new owned revision-1 head. `createOwnedInTransaction(context, request)` uses
+one existing tracked operation instead of acquiring a nested lease. The request
+has exactly these three fields; its operation ID is a lowercase v4 UUID. Existing
+content validation retains its UTF-16 code-unit limit and UTF-8 round-trip checks.
+No production writer or dependency-injection path invokes these methods.
+
+CREATE exclusively writes a private adjacent content stage, syncs and closes it,
+and persists a bounded schema-3 intent in the existing per-head write-journal
+namespace. Canonical publication uses POSIX `link(stage, head)` with no replacement
+or rename fallback. A real EEXIST conflict preserves the foreign target and own
+residue. Existing targets, even with identical bytes, never yield a reconstructed
+creation receipt; obtain fresh owned evidence and use conditional UPDATE instead.
+
+`PREPARED_CREATE` binds the exact stage identity and nlink=1 with an absent head.
+`LINKED_CREATE` binds persisted post-link full identities at both names and
+nlink=2. `PUBLISHED_CREATE` binds the actual post-unlink head identity and nlink=1,
+with no stage. Exact tenant, owner, locator, operation and content bindings are
+required on every forward retry. Owner metadata completes through exclusive
+private writes; all file and containing-directory sync/close barriers are required.
+Successful final qualified directory sync **and close** commits CREATE. The
+current invocation captures its frozen token synchronously before later hooks,
+audit or lease release can fail. Those later failures retain `EHEADCOMMITTED` and
+that genuine receipt; forged or previous-invocation receipts cannot attribute a
+new commit.
+
+Ordinary reads retain their existing phase-specific refusals: PREPARED has no
+head (ENOENT), LINKED's two-link head fails the existing identity guard
+(EHEADCONFLICT), and the canonical-only pending phases refuse their journal
+(EOWNERRECOVERY). No successful ordinary snapshot is exposed while CREATE is
+pending; no uniform refusal code is promised across these states.
+
+Before commitment, proved residual phases return `EOWNERRECOVERY` with the direct
+original cause; unproved attempted publication/removal or final durability returns
+`EHEADCOMMITUNKNOWN`. A primary null/undefined remains distinguishable from no
+primary failure, and an actual secondary close failure is retained as `closeCause`.
+No caller may interpret either refusal as permission to remove residue.
+
+Recovery deliberately preserves partial/pre-intent content, partial intent,
+exclusive intent-replacement stages, and crashes after link or stage unlink but
+before the corresponding new identity is persisted. Those cases require separately
+qualified manual handling. Intent unlink without proved final directory durability
+does not produce a receipt, and a later clean retry conflicts with the existing head.
+
+CREATE uses a private two-dimensional budget; the shared observation/listing
+budget remains unchanged. Read-only discovery and projected peak census
+cardinality are capped at 1000 attempts including EOF. Every subsequent census
+also has that cap, and all actual reads charge one retained monotonic operation
+counter, including errors. Before CREATE mkdir or head staging, the exact
+remaining phase schedule reserves its full allowance from captured distinct
+slot cardinalities and fixed own-name additions. The full fresh protocol uses
+59P + 15q(head-parent) + 2q(owners), plus ownership-directory preparation, where
+P is the projected full-proof cost and q the primary/optional-ancestor census
+cost. Recovery reserves only its remaining suffix and retains discovery/proof
+consumption. The conservative operation ceiling is 110000 attempts; no refund,
+reset, cached census, truncated proof or first-N absence claim is allowed.
+
+All three complete phase envelopes must fit the unchanged 8 KiB intent cap
+before CREATE mutations. Unknown future identity fields reserve the supported
+32-character numeric width, including fresh-stage mtime/device and timestamp
+signs; actual captured numeric evidence is checked against that width.
+Placeholders grant no authority and are never persisted. Existing ownership
+directories are recaptured against original discovery and their parents synced
+and closed, so retry cannot omit durability of a prior interrupted mkdir.
+Whole child sets, canonical spelling, descriptor identities, private modes and
+live ACTIVE authority remain bound after awaited callbacks. Namespace/complete
+record capacity refusal remains an activation consideration; a representative
+ten-owner fixture exceeds the cap, not a universal maximum-owner count.
+[#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974) tracks this explicit
+activation blocker; dormant implementation does not resolve production capacity.
+
+Unrelated non-directory children retain exact full metadata in persisted evidence.
+Directory children persist stable device/inode/type/mode/UID; size, timestamps and
+nlink are freshly bound during each invocation and may advance only across exact
+own child-set transitions. An isolated APFS observation confirmed directory nlink
+can change when adding a regular file, so no OS-based nlink formula is assumed.
+Cross-invocation same-inode directory timestamp/nlink-only drift is not proved
+absent. This is the existing cooperating-local-filesystem observation model,
+not protection against an arbitrary hostile filesystem or a power-loss guarantee.
