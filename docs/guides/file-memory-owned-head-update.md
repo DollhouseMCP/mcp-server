@@ -193,7 +193,7 @@ already-existing RESERVED registry, revision 1, under unchanged head evidence.
 They first exclusively stage the exact ACTIVE registry at
 `<registry>.adopt-<ownerId>.tmp`; only a freshly proved complete next stage may
 be reused. Partial, random, aliased, duplicate or wrong-order stages are preserved.
-Missing registry or ancestors remain unsupported; no directories are created.
+Missing ancestors remain unsupported; no directories are created.
 
 Registry staging/rename changes the owners directory's size/mtime/ctime. The
 transition retains its device/inode and freshly checked private ownership/type,
@@ -217,7 +217,28 @@ and RESERVED sidecar.
 It captures validated primitive request values before any await, retains exact
 actual locator spelling, and uses one fresh tenant lease and tracked operation.
 All writers must be quiescent; operator handling of orphan leases is separate.
-Absent registry/ancestor phases and ordinary adoption's publication behavior are
+An absent registry is also supported only when the exact revision-one RESERVED
+sidecar, unchanged head and both private owner ancestors already exist. A fresh
+complete absence/alias census and original evidence proof precede direct exclusive
+no-follow registry creation. Complete writes are checked, authority is rechecked
+after awaits before every subsequent mutation, and bounded readback must match
+both exact RESERVED bytes and the created descriptor identity. Expected owners
+directory metadata changes retain its inode/private checks and the parent's full
+identity; exact original evidence is carried into the RESERVED-pair executor.
+No head bytes, missing directories or archives are changed.
+
+An actual creation attempt followed by open/write/sync/close failure is pending
+with `phase: 'registry-creation-unknown'`. Successful complete creation followed
+by later failure uses `phase: 'registry-created'`, until actual registry activation
+advances the existing phase. Both retain the original direct cause without an
+adopted flag/token. A secondary close failure is separately exposed as `closeCause`
+only when a primary failure already occurred. A close-only failure remains the
+direct cause. Phases come from this invocation, never thrown properties.
+Partial final registry files are preserved for manual handling; complete exact
+RESERVED records resume through ordinary pair recovery without attributing the
+previous invocation. Final sidecar publication remains the sole adoption commit.
+
+Missing-ancestor phases and ordinary adoption's publication behavior remain
 outside this API. No runtime caller or automatic repair is enabled.
 
 One invocation-owned 1000-attempt directory budget includes unrelated entries,
