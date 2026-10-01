@@ -255,7 +255,9 @@ heads or later writes can invalidate their relevance. No receipt authorizes
 Unit tests qualify the private outcome/drain envelope and receipt validation.
 Real commit/replay qualification uses a uniquely owned database on the existing
 required CI PG17 service, with exact ownership and cleanup. No local database,
-new role/password or cluster grant is created. Injected publication loss after a
+new role/password or cluster grant is created. Normal nonrequired integration
+runs skip this resource-owning suite; `DOLLHOUSE_REQUIRE_TEST_DATABASE=1` selects
+all cases and fails if the CI harness or PostgreSQL is unavailable. Injected publication loss after a
 real commit is distinguished from an actual network-level lost COMMIT
 acknowledgement.
 The ordinary-role fixture temporarily grants only normal DML privileges on the

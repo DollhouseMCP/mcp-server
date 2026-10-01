@@ -10,7 +10,9 @@ import { observeDatabaseMemoryMaintenanceCatalog } from '../../../src/storage/Da
 import { DatabaseMemoryAtomicInvalidator, type MemoryAtomicInvalidationRequest } from '../../../src/storage/DatabaseMemoryAtomicInvalidator.js';
 import { TEST_DB_ADMIN_URL, TEST_DB_URL } from './test-db-helpers.js';
 
-describe('owned CI database atomic maintenance', () => {
+// Local integration commands never create resources; required CI always selects all cases.
+const requiredDescribe = process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1' ? describe : describe.skip;
+requiredDescribe('owned CI database atomic maintenance', () => {
   const databaseName = `memory_atomic_${randomUUID().replaceAll('-', '')}`;
   let admin: Sql;
   let owned: Sql;
