@@ -844,7 +844,7 @@ export class FileMemoryOwnerSnapshots {
     try {
       let primary: { cause: unknown } | undefined;
       try { if (topology) await topology(undefined, last.stage!.identity, true); } catch (cause) { primary = { cause }; }
-      try { this.auditAdoption('known-adopted', invocationId); } catch (cause) { if (!primary) primary = { cause }; }
+      try { this.auditAdoption('known-adopted', invocationId); } catch (cause) { primary ??= { cause }; }
       if (primary) throw primary.cause;
       await this.options.afterAdoptionRecoveryPublication?.('after-rename');
       const published = await this.adoptionProof(operation, request, budget);
