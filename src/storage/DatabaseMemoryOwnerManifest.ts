@@ -44,6 +44,18 @@ export interface DatabaseMemoryOwnerInvalidationVerification extends NoAuthority
 const NO_AUTHORITY = { canBackfill: false, canApply: false, canActivate: false } as const;
 function refuse(reason: Reason): never { throw new DatabaseMemoryOwnerManifestError(reason); }
 
+function captureRow(row: MemoryTagAuditOwner): MemoryTagAuditOwner {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) refuse('invalid-input');
+  const fields = Reflect.ownKeys(row);
+  if (fields.length !== FIELDS.size || fields.some(key => typeof key !== 'string' || !FIELDS.has(key))) refuse('invalid-input');
+  const { tenantId, ownerId, revision, dirty } = row;
+  if (typeof tenantId !== 'string' || !UUID.test(tenantId) ||
+    typeof ownerId !== 'string' || !UUID.test(ownerId) || typeof dirty !== 'boolean') refuse('invalid-input');
+  if (typeof revision !== 'string' || revision.length > 19 || !/^[1-9]\d*$/u.test(revision) ||
+    BigInt(revision) > MAX_REVISION) refuse('invalid-revision');
+  return Object.freeze({ tenantId: tenantId.toLowerCase(), ownerId: ownerId.toLowerCase(), revision, dirty });
+}
+
 function captureRows(input: readonly MemoryTagAuditOwner[]): readonly MemoryTagAuditOwner[] {
   if (!Array.isArray(input)) refuse('invalid-input');
   if (input.length > MAX_MEMORY_OWNER_MANIFEST_OWNERS) refuse('owner-limit');
@@ -51,21 +63,11 @@ function captureRows(input: readonly MemoryTagAuditOwner[]): readonly MemoryTagA
   const rows: MemoryTagAuditOwner[] = [];
   for (let index = 0; index < input.length; index++) {
     if (!Object.hasOwn(input, index)) refuse('invalid-input');
-    const row = input[index];
-    if (!row || typeof row !== 'object' || Array.isArray(row)) refuse('invalid-input');
-    const fields = Reflect.ownKeys(row);
-    if (fields.length !== FIELDS.size || fields.some(key => typeof key !== 'string' || !FIELDS.has(key))) refuse('invalid-input');
-    const { tenantId, ownerId, revision, dirty } = row;
-    if (typeof tenantId !== 'string' || !UUID.test(tenantId) ||
-      typeof ownerId !== 'string' || !UUID.test(ownerId) || typeof dirty !== 'boolean') refuse('invalid-input');
-    if (typeof revision !== 'string' || revision.length > 19 || !/^[1-9][0-9]*$/u.test(revision) ||
-      BigInt(revision) > MAX_REVISION) refuse('invalid-revision');
-    const tenant = tenantId.toLowerCase();
-    const owner = ownerId.toLowerCase();
-    const priorTenant = byOwner.get(owner);
-    if (priorTenant !== undefined) refuse(priorTenant === tenant ? 'duplicate-owner' : 'conflicting-tenant');
-    byOwner.set(owner, tenant);
-    rows.push(Object.freeze({ tenantId: tenant, ownerId: owner, revision, dirty }));
+    const row = captureRow(input[index]);
+    const priorTenant = byOwner.get(row.ownerId);
+    if (priorTenant !== undefined) refuse(priorTenant === row.tenantId ? 'duplicate-owner' : 'conflicting-tenant');
+    byOwner.set(row.ownerId, row.tenantId);
+    rows.push(row);
   }
   rows.sort((left, right) => {
     if (left.ownerId < right.ownerId) return -1;
