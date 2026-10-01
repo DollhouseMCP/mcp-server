@@ -130,7 +130,10 @@ describe('exact missing-registry adoption recovery', () => {
   });
   it.each(['missing-directory', 'alias', 'random-stage', 'journal', 'invalid-sidecar'] as const)('preserves invalid %s', async kind => {
     const setup = await fixture();
-    if (kind === 'missing-directory') await fs.rmdir(path.dirname(setup.registryPath));
+    if (kind === 'missing-directory') {
+      await fs.rmdir(path.dirname(setup.registryPath));
+      await fs.rmdir(path.dirname(path.dirname(setup.registryPath)));
+    }
     if (kind === 'alias') await fs.writeFile(path.join(path.dirname(setup.registryPath), `${setup.request.ownerId.toUpperCase()}.JSON`), 'foreign');
     if (kind === 'random-stage') await fs.writeFile(`${setup.registryPath}.random.tmp`, 'foreign');
     if (kind === 'journal') await fs.writeFile(setup.sidecarPath.replace('memory-owner', 'memory-write'), 'foreign');

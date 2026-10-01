@@ -267,3 +267,29 @@ all postcommit proofs, and clean-retry audit is also followed by fresh proof.
 Telemetry is bounded rather than durable history. Recovery rewrites no head,
 increments no revision, and touches no archive, reference or unbound artifact.
 Ordinary reads and diagnostics retain their existing behavior.
+
+Recovery also supports a missing `owners` child beneath an existing canonical,
+private `.memory-owners` parent when the original revision-1 RESERVED sidecar
+and head remain exact. Both missing ancestors remain unsupported. Creation uses
+exclusive, nonrecursive `mkdir(0700)`; no existing directory permissions change.
+Complete stable tenant and parent sibling sets reject canonical case aliases
+and `owners.*` residue. All observation and later recovery phases share one
+invocation-owned scan budget.
+
+`owners-directory-creation-unknown` begins immediately before mkdir. A readonly,
+no-follow, nonblocking descriptor must prove the new private directory agrees
+with its named identity, and close successfully, before the local phase becomes
+`owners-directory-created`. Capture/open/close errors preserve the direct cause;
+a secondary close failure is exposed separately as `closeCause`. Neither phase
+attributes adoption. The empty child, original head/sidecar, full tenant identity
+and complete tenant/parent sets remain bound through exclusive registry creation
+and handoff to existing pair recovery. Only the parent metadata caused by this mkdir
+and child metadata caused by subsequent registry writes may advance; private
+ancestry and directory inode bindings remain strict. Final ACTIVE-sidecar rename
+remains the sole adoption commit, with existing known-adopted outcome retention.
+
+This descriptor capture follows mkdir under the cooperating, quiescent local
+POSIX process-crash model. It does not claim an atomically returned mkdir inode,
+hostile filesystem atomicity or power-loss durability. Unknown directories and
+partial records remain preserved; no cleanup, lease takeover or runtime wiring
+is introduced.
