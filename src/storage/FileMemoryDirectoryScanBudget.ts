@@ -31,7 +31,7 @@ export class FileMemoryDirectoryScanBudget {
   async read(directory: Dir): Promise<Dirent | null> {
     if (this.#consumed === this.limit) throw new FileMemoryDirectoryScanLimitError();
     this.#consumed += 1;
-    return directory.read();
+    return await directory.read();
   }
 
   private async inspectEntries(directory: Dir, inspect: (name: string) => void): Promise<void> {
