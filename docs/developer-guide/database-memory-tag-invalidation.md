@@ -90,3 +90,76 @@ database completeness, and a matching return set proves neither SQL execution
 nor commit. All results retain `canBackfill:false`, `canApply:false` and
 `canActivate:false`. No database access, durable receipt, catalog attestation,
 runtime wiring or maintenance execution is added; those slices remain held.
+
+## Partial required-structure observation
+
+`verifyDatabaseMemoryInvalidationStructure(tx)` observes the PG17 catalog in one
+statement on a caller-owned transaction. It verifies required columns, two
+revision/dirty defaults, three primary keys and their backing indexes, five
+foreign keys, and the positive revision check on `public.elements`,
+`public.element_tags` and `public.memory_entries`. `public.users.id` is checked
+only as their tenant-reference endpoint. All four relations must be ordinary
+permanent nonpartition tables with no inbound or outbound inheritance edge.
+
+Builtin type namespaces/typmods, nullability, generation/identity flags,
+noninherited constraint semantics, exact ordered keys and cascade actions are
+pinned to migrations 0000/0001/0003/0056. PK indexes must bind their actual
+constraint/table identities, use btree and builtin ordered UUID/text opclasses,
+and have ordinary key options and collations. The four collatable required
+columns use `pg_catalog.default`; all other required attributes have collation
+zero. This does not prove global locale/provider behavior. Visibility-specific
+collation refusal is unit-qualified because dependent RLS policies prevent an
+isolated ALTER; CI exercises visibility nullability and live collation drift on
+raw_content, element_type (the same varchar width) and tag without changing policies.
+
+Each FK additionally binds its actual selected unique reference index to the
+referenced relation and single UUID key. The index must have immediate, valid,
+ready/live btree uniqueness, default builtin UUID opclass, no includes,
+expressions/predicate, collation zero and ordinary options. All three one-entry
+FK comparison vectors must resolve to builtin UUID equality backed by the exact
+`pg_catalog.uuid_eq(uuid,uuid)` boolean signature. This checks the selected
+supporting index even for `users`; it requires neither a particular users index
+name nor a complete users PK/index inventory. Arbitrary builtin implementation
+changes remain unqualified.
+
+Each scoped FK also requires exactly four internal RI triggers: insert/update
+checks on its child and cascade-delete/no-action-update on its parent. Their
+constraint/index/relation bindings, builtin zero-argument trigger functions,
+normal-origin enablement, nondeferred flags and empty argument/column/WHEN/
+transition-table state are checked and hashed. The observation is capped at
+five triggers per FK. Missing-trigger refusal is unit-qualified; legal CI DDL
+qualifies disabled child and replica-only parent triggers without dropping the
+FK. This does not qualify the caller’s session_replication_role or confer
+execution authority.
+
+The positive CHECK must retain the migrated inheritable semantics (`connoinherit=false`),
+even though current inheritance edges are independently refused. Its exact rendering
+also requires no explicit operator/function
+dependency on its constraint in `pg_depend`: PG17 omits dependencies on pinned
+builtins, while custom operators/functions retain dependencies. This rejects a
+custom same-spelling `>` operator that deparses identically. The helper neither
+changes search_path nor parses expression trees; it does not attest arbitrary
+changes to builtin catalog implementations.
+
+Descriptor collections have fixed caps with overflow sentinels. Nested key
+vectors and rendered expressions are bounded before projection; missing join
+targets retain null/refusal evidence rather than disappearing. The immutable
+result contains a deterministic portable contract digest, excluding instance
+OIDs. Refusals expose only fixed codes, never raw SQL, driver errors or causes.
+Ordinary roles may observe this metadata; the helper changes no roles, locks,
+timeouts, isolation settings or database contents.
+
+This is a required-field projection, not full catalog attestation. Unrelated
+columns/indexes/checks, receipt structure, RLS/policies, migration ledger and
+effective relation/function search-path resolution remain unqualified. A single
+snapshot does not protect against later DDL or provide an execution token.
+`canBackfill`, `canApply`, `canActivate`, `provesCompleteCatalog` and
+`provesExecutionResolution` are always false. Global malformed-reference
+qualification, bounded atomic invalidation and historical receipt/replay remain
+separate work; #2904 stays open.
+
+Unit/artifact tests qualify portable matching, bounds and fixed refusals.
+Required PG17 CI tests exercise actual migrations and ordinary-role READ ONLY
+calls plus legal transactionally rolled-back DDL drift. Catalog flags that
+cannot be changed through supported DDL are unit-only observations. This slice
+requires no local database creation or existing service/credential changes.
