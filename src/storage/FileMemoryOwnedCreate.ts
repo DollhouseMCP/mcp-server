@@ -200,14 +200,22 @@ export class FileMemoryOwnedCreate {
     if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
       ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
     const names = await this.names(target), children: Child[] = [];
-    // Bounded serial observation limits live descriptors and preserves fail-fast rejection.
-    for (const name of names) {
-      const stat = await fs.lstat(path.join(target, name), { bigint: true });
-      children.push({ name, identity: identity(stat), mode: scalar(stat.mode), uid: scalar(stat.uid), links: scalar(stat.nlink), directory: stat.isDirectory() });
+    // Independent readonly observations are bounded to four. Drain the whole
+    // batch and retain ordinal failure precedence before launching any next batch.
+    for (let offset = 0; offset < names.length; offset += 4) {
+      const results = await Promise.allSettled(names.slice(offset, offset + 4).map(name => this.observeChild(target, name)));
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+        children.push(result.value);
+      }
     }
     const after = await fs.lstat(target, { bigint: true });
     if (!isDeepStrictEqual(identity(before), identity(after)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
     return { locator, device: scalar(before.dev), inode: scalar(before.ino), mode: scalar(before.mode), uid: scalar(before.uid), names, children, identity: identity(after), directoryLinks: scalar(after.nlink) };
+  }
+  private async observeChild(target: string, name: string): Promise<Child> {
+    const stat = await fs.lstat(path.join(target, name), { bigint: true });
+    return { name, identity: identity(stat), mode: scalar(stat.mode), uid: scalar(stat.uid), links: scalar(stat.nlink), directory: stat.isDirectory() };
   }
   private async proof(): Promise<void> {
     // All directory observations consume the same monotonic budget in proof order.
@@ -573,12 +581,14 @@ export class FileMemoryOwnedCreate {
         if (!isDeepStrictEqual(commitCreateDirectory(baseline), expected)) fail();
         continue;
       }
-      const legacy = expected as StableDirectory;
-      if (!isDeepStrictEqual(actual.names, legacy.names.concat(added).sort(ordinal))) fail();
-      const children = this.childIndex(actual.children);
-      for (const child of legacy.children) {
-        if (!isDeepStrictEqual(child, stableChild(children.get(child.name)!))) fail();
-      }
+      this.recoverLegacyNamespace(expected as StableDirectory, actual, added);
+    }
+  }
+  private recoverLegacyNamespace(expected: StableDirectory, actual: Directory, added: string[]): void {
+    if (!isDeepStrictEqual(actual.names, expected.names.concat(added).sort(ordinal))) fail();
+    const children = this.childIndex(actual.children);
+    for (const child of expected.children) {
+      if (!isDeepStrictEqual(child, stableChild(children.get(child.name)!))) fail();
     }
   }
   private activeRecord(): string {

@@ -427,6 +427,13 @@ and recovery capacity before lifecycle activation.
 The measured 1000-memory CREATE performs approximately 228000 fresh directory
 read attempts and child observations locally. Fresh child indexing removes
 quadratic descriptor lookup, but it does not reduce any census or I/O barrier.
+Within each fresh directory census, at most four independent readonly child
+lstat observations run concurrently. Names and returned descriptors retain
+ordinal order; every launched batch settles before proceeding. The first
+ordinal rejection is preserved exactly, and no next batch starts after failure.
+A failed batch may perform up to three additional readonly observations compared
+with serial fail-fast behavior. Directory before/after checks, full proofs,
+mutations, hooks and durability operations retain their existing order.
 Local correctness under the existing test timeout is not a hosted throughput,
 concurrency, latency or operation-memory qualification. The explicit practical
 performance gate remains open in [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974#issuecomment-5940492445).
