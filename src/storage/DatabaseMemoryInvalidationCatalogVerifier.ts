@@ -201,7 +201,7 @@ function rows(value: unknown, count: number): value is Record<string, unknown>[]
   return Array.isArray(value) && value.length === count && value.every(record);
 }
 function oid(value: unknown): value is string {
-  return typeof value === 'string' && /^[1-9][0-9]{0,9}$/u.test(value) && Number(value) <= 4294967295;
+  return typeof value === 'string' && /^[1-9]\d{0,9}$/u.test(value) && Number(value) <= 4294967295;
 }
 function matches(actual: Record<string, unknown>, expected: Record<string, unknown>): boolean {
   return Object.entries(expected).every(([key, value]) => isDeepStrictEqual(actual[key], value));
@@ -217,6 +217,17 @@ function functionDescriptor(expected: FunctionContract): Record<string, unknown>
 function triggerDescriptor(expected: typeof TRIGGERS[number]): Record<string, unknown> {
   return { ...expected, enabled: 'O', args: 0, argsEmpty: true, columnsEmpty: true, qualNull: true,
     constraint: '0', constraintRelation: '0', constraintIndex: '0', deferrable: false, initiallyDeferred: false };
+}
+function triggersMatch(triggers: Record<string, unknown>[], relations: Record<string, unknown>[], functions: Record<string, unknown>[]): boolean {
+  for (const expected of TRIGGERS) {
+    const found = triggers.filter(item => item.name === expected.name);
+    const boundFunction = functions.find(item => item.name === expected.function);
+    if (found.length !== 1 || !matches({ ...found[0], function: boundFunction?.name }, {
+      ...triggerDescriptor(expected), tableOid: relations.find(item => item.name === expected.table)?.oid,
+      functionOid: boundFunction?.oid,
+    })) return false;
+  }
+  return true;
 }
 
 /** One statement on the caller transaction; no role, snapshot, timeout or lock changes. */
@@ -251,14 +262,7 @@ export async function verifyDatabaseMemoryInvalidationCatalog(tx: DrizzleTx): Pr
       functionIds.add(actual.oid);
     }
     if (relationIds.size !== 3 || functionIds.size !== 5) return proof('contract_mismatch');
-    for (const expected of TRIGGERS) {
-      const found = triggers.filter(item => item.name === expected.name);
-      const boundFunction = functions.find(item => item.name === expected.function);
-      if (found.length !== 1 || !matches({ ...found[0], function: boundFunction?.name }, {
-        ...triggerDescriptor(expected), tableOid: relations.find(item => item.name === expected.table)?.oid,
-        functionOid: boundFunction?.oid,
-      })) return proof('contract_mismatch');
-    }
+    if (!triggersMatch(triggers, relations, functions)) return proof('contract_mismatch');
     // Only portable reviewed semantics enter this digest, never instance OIDs.
     const encoded = JSON.stringify({ formatVersion: 1, scope: 'memory-invalidation-functions-and-user-triggers',
       relations: TABLES.map(name => ({ name, schema: 'public', kind: 'r' })),
