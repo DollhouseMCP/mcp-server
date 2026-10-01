@@ -419,9 +419,10 @@ remain unchanged. Strict schema3 records continue through schema3 phases; they
 are not reinterpreted as compact records. Schema4 remains reserved for RENAME.
 
 These CREATE-private limits do not change shared APIs: ordinary unbudgeted
-owner scans allow 100000 entries per directory, while supplied shared observation
-budgets (including archive listing and adoption recovery) retain their separate
-1000-attempt cumulative bound. Successful CREATE capacity qualification does not
+owner scans allow 100000 entries per directory. Archive listing and RESERVED
+adoption recovery now use their separate private proof envelopes; archive listing
+retains its 1000-attempt archive-work counter, and other supplied shared observation
+budgets retain their 1000-attempt cumulative bound. Successful CREATE capacity qualification does not
 qualify those operations or establish complete lifecycle activation readiness.
 
 All three complete phase envelopes must fit the unchanged 8 KiB intent cap
