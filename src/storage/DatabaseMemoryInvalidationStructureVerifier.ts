@@ -45,10 +45,18 @@ function columnDescriptor([table, name, type, typmod]: typeof COLUMNS[number]): 
     generated: '', identity: '', dropped: false, collationResolved: true, collation: ['text', 'varchar'].includes(type) ? 'pg_catalog.default' : null };
 }
 const constraintFlags = { validated: true, deferrable: false, deferred: false, local: true, inherited: 0, parent: '0' };
+const equality = 'pg_catalog.=(pg_catalog.uuid,pg_catalog.uuid)->pg_catalog.uuid_eq';
+function referenceIndexDescriptor(table: string): Descriptor {
+  return { table, schema: 'public', key: 'id', binding: true, method: 'btree', opclass: 'pg_catalog.uuid_ops',
+    defaultOpclass: true, unique: true, immediate: true, valid: true, ready: true, live: true,
+    keyCount: 1, attributeCount: 1, predicateNull: true, expressionsNull: true,
+    collation: null, collationResolved: true, option: 0 };
+}
 function constraints(): Descriptor[] {
-  return [...KEYS.map(key => ({ ...key, type: 'p', referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
+  return [...KEYS.map(key => ({ ...key, type: 'p', referenceIndex: null, equalityOperators: null, referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
     update: ' ', delete: ' ', match: ' ', ...constraintFlags })),
-  ...FOREIGN_KEYS.map(([table, name, key, reference]) => ({ table, name, keys: [key], type: 'f', referenceBinding: true, referenceSchema: 'public',
+  ...FOREIGN_KEYS.map(([table, name, key, reference]) => ({ table, name, keys: [key], type: 'f', referenceBinding: true,
+    referenceIndex: referenceIndexDescriptor(reference), equalityOperators: [equality, equality, equality], referenceSchema: 'public',
     reference, referenceKeys: ['id'], update: 'a', delete: 'c', match: 's', ...constraintFlags }))];
 }
 function indexDescriptor(key: typeof KEYS[number]): Descriptor {
@@ -68,7 +76,16 @@ const CHECK = { table: 'elements', name: 'elements_storage_revision_positive', k
 
 // Every projected collection has an overflow sentinel. Expressions and key
 // vectors retain existence but never project unbounded text/arrays to Node.
-const OBSERVE = sql`WITH relations AS MATERIALIZED (
+const OBSERVE = sql`WITH builtin_equality AS MATERIALIZED (
+  SELECT o.oid,u.oid AS uuid_oid FROM pg_catalog.pg_operator o
+  JOIN pg_catalog.pg_namespace n ON n.oid=o.oprnamespace AND n.nspname='pg_catalog'
+  JOIN pg_catalog.pg_type u ON u.oid=o.oprleft AND u.typname='uuid' AND u.typnamespace=n.oid
+  JOIN pg_catalog.pg_type b ON b.oid=o.oprresult AND b.typname='bool' AND b.typnamespace=n.oid
+  JOIN pg_catalog.pg_proc p ON p.oid=o.oprcode AND p.pronamespace=n.oid AND p.proname='uuid_eq'
+  WHERE o.oprname='=' AND o.oprkind='b' AND o.oprright=u.oid AND p.prokind='f' AND NOT p.proretset
+    AND p.prorettype=b.oid AND pg_catalog.cardinality(p.proargtypes::oid[])=2
+    AND p.proargtypes[0]=u.oid AND p.proargtypes[1]=u.oid LIMIT 2
+), relations AS MATERIALIZED (
   SELECT c.oid,c.relnamespace,n.nspname,c.relname,c.relkind,c.relpersistence,c.relispartition
   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
   WHERE n.nspname='public' AND c.relname IN ('elements','element_tags','memory_entries','users') LIMIT 5
@@ -110,12 +127,33 @@ SELECT pg_catalog.current_setting('server_version_num')::integer AS version,
     'keys',CASE WHEN pg_catalog.cardinality(c.conkey)<=2 THEN (SELECT pg_catalog.jsonb_agg(a.attname ORDER BY k.n)
       FROM pg_catalog.unnest(c.conkey) WITH ORDINALITY k(num,n) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num) END,
     'referenceBinding',CASE WHEN c.contype='p' THEN c.confrelid=0 ELSE rc.oid IS NOT NULL AND rn.oid IS NOT NULL END,
+    'equalityOperators',CASE WHEN c.contype='f' THEN pg_catalog.jsonb_build_array(
+      CASE WHEN pg_catalog.cardinality(c.conpfeqop)=1 AND c.conpfeqop[1]=eq.oid THEN 'pg_catalog.=(pg_catalog.uuid,pg_catalog.uuid)->pg_catalog.uuid_eq' END,
+      CASE WHEN pg_catalog.cardinality(c.conppeqop)=1 AND c.conppeqop[1]=eq.oid THEN 'pg_catalog.=(pg_catalog.uuid,pg_catalog.uuid)->pg_catalog.uuid_eq' END,
+      CASE WHEN pg_catalog.cardinality(c.conffeqop)=1 AND c.conffeqop[1]=eq.oid THEN 'pg_catalog.=(pg_catalog.uuid,pg_catalog.uuid)->pg_catalog.uuid_eq' END) END,
+    'referenceIndex',CASE WHEN c.contype='f' THEN pg_catalog.jsonb_build_object(
+      'table',rc.relname,'schema',rin.nspname,'key',ra.attname,
+      'binding',ri.indexrelid=c.conindid AND ri.indrelid=c.confrelid AND ric.relnamespace=rc.relnamespace
+        AND pg_catalog.cardinality(c.confkey)=1 AND pg_catalog.cardinality(ri.indkey::smallint[])=1 AND ri.indkey[0]=c.confkey[1],
+      'method',ram.amname,'opclass',ron.nspname||'.'||rop.opcname,'defaultOpclass',rop.opcdefault,
+      'unique',ri.indisunique,'immediate',ri.indimmediate,'valid',ri.indisvalid,'ready',ri.indisready,'live',ri.indislive,
+      'keyCount',ri.indnkeyatts,'attributeCount',ri.indnatts,'predicateNull',ri.indpred IS NULL,'expressionsNull',ri.indexprs IS NULL,
+      'collation',CASE WHEN pg_catalog.cardinality(ri.indcollation::oid[])=1 AND ri.indcollation[0]=0 THEN NULL ELSE 'invalid' END,
+      'collationResolved',pg_catalog.cardinality(ri.indcollation::oid[])=1 AND ri.indcollation[0]=0,
+      'option',CASE WHEN pg_catalog.cardinality(ri.indoption::smallint[])=1 THEN ri.indoption[0] END) END,
     'referenceSchema',rn.nspname,'reference',rc.relname,
     'referenceKeys',CASE WHEN pg_catalog.cardinality(c.confkey)<=2 THEN (SELECT pg_catalog.jsonb_agg(a.attname ORDER BY k.n)
       FROM pg_catalog.unnest(c.confkey) WITH ORDINALITY k(num,n) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num) END,
     'update',c.confupdtype,'delete',c.confdeltype,'match',c.confmatchtype,'validated',c.convalidated,
     'deferrable',c.condeferrable,'deferred',c.condeferred,'local',c.conislocal,'inherited',c.coninhcount,'parent',c.conparentid::text)), '[]'::jsonb)
-    FROM constraints c LEFT JOIN pg_catalog.pg_class rc ON rc.oid=c.confrelid LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace) AS constraints,
+    FROM constraints c LEFT JOIN pg_catalog.pg_class rc ON rc.oid=c.confrelid LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace
+    LEFT JOIN builtin_equality eq ON true LEFT JOIN pg_catalog.pg_index ri ON ri.indexrelid=c.conindid AND c.contype='f'
+    LEFT JOIN pg_catalog.pg_class ric ON ric.oid=ri.indexrelid LEFT JOIN pg_catalog.pg_namespace rin ON rin.oid=ric.relnamespace
+    LEFT JOIN pg_catalog.pg_am ram ON ram.oid=ric.relam
+    LEFT JOIN pg_catalog.pg_attribute ra ON ra.attrelid=ri.indrelid AND ra.attnum=ri.indkey[0]
+    LEFT JOIN pg_catalog.pg_opclass rop ON pg_catalog.cardinality(ri.indclass::oid[])=1 AND rop.oid=ri.indclass[0]
+      AND rop.opcmethod=ric.relam AND rop.opcintype=eq.uuid_oid
+    LEFT JOIN pg_catalog.pg_namespace ron ON ron.oid=rop.opcnamespace) AS constraints,
   (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('table',i.relname,'name',ic.relname,'schema',ns.nspname,
     'binding',i.conindid=i.indexrelid AND i.indrelid=i.conrelid AND ic.relnamespace=i.relnamespace,
     'keys',CASE WHEN i.vectors_safe AND i.indnatts<=2 THEN (SELECT pg_catalog.jsonb_agg(a.attname ORDER BY k.n)
@@ -130,8 +168,8 @@ SELECT pg_catalog.current_setting('server_version_num')::integer AS version,
       FROM pg_catalog.unnest(i.indcollation::oid[]) k(oid) LEFT JOIN pg_catalog.pg_collation co ON co.oid=k.oid
       LEFT JOIN pg_catalog.pg_namespace n ON n.oid=co.collnamespace WHERE k.oid<>0 AND (co.oid IS NULL OR n.oid IS NULL)) ELSE false END,
     'collationBinding',CASE WHEN i.vectors_safe AND i.indnatts<=2 THEN NOT EXISTS(SELECT 1 FROM ROWS FROM
-      (pg_catalog.unnest(i.indkey::smallint[]),pg_catalog.unnest(i.indcollation::oid[])) AS k(num,collation)
-      LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.num WHERE a.attcollation IS DISTINCT FROM k.collation) ELSE false END,
+      (pg_catalog.unnest(i.indkey::smallint[]),pg_catalog.unnest(i.indcollation::oid[])) AS k(num,collation_oid)
+      LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.num WHERE a.attcollation IS DISTINCT FROM k.collation_oid) ELSE false END,
     'options',CASE WHEN i.vectors_safe AND i.indnatts<=2 THEN pg_catalog.to_jsonb(i.indoption::smallint[]) END)), '[]'::jsonb)
     FROM indexes i JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid JOIN pg_catalog.pg_namespace ns ON ns.oid=ic.relnamespace JOIN pg_catalog.pg_am am ON am.oid=ic.relam) AS indexes,
   (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('table',c.relname,'name',c.conname,

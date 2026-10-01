@@ -19,13 +19,19 @@ const foreignKeys = [['elements', 'elements_user_id_users_id_fk', 'user_id', 'us
   ['memory_entries', 'memory_entries_memory_id_elements_id_fk', 'memory_id', 'elements'],
   ['memory_entries', 'memory_entries_user_id_users_id_fk', 'user_id', 'users']];
 const flags = { validated: true, deferrable: false, deferred: false, local: true, inherited: 0, parent: '0' };
+const equality = 'pg_catalog.=(pg_catalog.uuid,pg_catalog.uuid)->pg_catalog.uuid_eq';
+const referenceIndex = (table: string) => ({ table, schema: 'public', key: 'id', binding: true,
+  method: 'btree', opclass: 'pg_catalog.uuid_ops', defaultOpclass: true, unique: true, immediate: true,
+  valid: true, ready: true, live: true, keyCount: 1, attributeCount: 1, predicateNull: true, expressionsNull: true,
+  collation: null, collationResolved: true, option: 0 });
 function observation() {
   return { version: 170010, inheritance: false,
     relations: ['elements', 'element_tags', 'memory_entries', 'users'].map((name, i) => ({ name, oid: String(i + 1), schema: 'public', kind: 'r', persistence: 'p', partition: false })),
     columns: columnSpecs.map(([table, name, type, typmod]) => ({ table, name, typeSchema: 'pg_catalog', type, typmod,
       notNull: true, generated: '', identity: '', dropped: false, collationResolved: true, collation: ['text', 'varchar'].includes(type) ? 'pg_catalog.default' : null })),
-    constraints: [...keys.map(([table, name, keys]) => ({ table, name, keys, type: 'p', referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
+    constraints: [...keys.map(([table, name, keys]) => ({ table, name, keys, type: 'p', referenceIndex: null, equalityOperators: null, referenceBinding: true, referenceSchema: null, reference: null, referenceKeys: null,
       update: ' ', delete: ' ', match: ' ', ...flags })), ...foreignKeys.map(([table, name, key, reference]) => ({ table, name, keys: [key], type: 'f', referenceBinding: true,
+      referenceIndex: referenceIndex(reference), equalityOperators: [equality, equality, equality],
       referenceSchema: 'public', reference, referenceKeys: ['id'], update: 'a', delete: 'c', match: 's', ...flags }))],
     indexes: keys.map(([table, name, keys]) => ({ table, name, schema: 'public', keys, method: 'btree', unique: true, primary: true, valid: true, ready: true,
       live: true, predicateNull: true, expressionsNull: true, keyCount: keys.length, attributeCount: keys.length, binding: true,
@@ -138,6 +144,30 @@ describe('partial required memory invalidation structure', () => {
   it('refuses explicit custom operator/function dependency despite the same positive-check rendering', async () => {
     const value = observation(); value.checks[0].builtinExpressionOnly = false;
     expect(value.checks[0].expression).toBe('(storage_revision > 0)');
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+  });
+  it('refuses custom FK comparison semantics and the selected custom reference index', async () => {
+    const value = observation(); Object.assign(value.constraints[3], {
+      equalityOperators: ['fixture.=(uuid,uuid)', equality, equality],
+      referenceIndex: { ...referenceIndex('users'), opclass: 'fixture.custom_uuid_ops' },
+    });
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+  });
+  it.each([0, 1, 2])('refuses missing or nonbuiltin FK equality vector %i independently', async index => {
+    const value = observation(); const operators = [equality, equality, equality]; operators[index] = 'fixture.custom_eq';
+    Object.assign(value.constraints[3], { equalityOperators: operators });
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+    Object.assign(value.constraints[3], { equalityOperators: [null, null, null] });
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+  });
+  it.each(Object.keys(referenceIndex('users')))('refuses selected FK supporting-index %s drift independently', async key => {
+    const value = observation(); Object.assign(value.constraints[3], { referenceIndex: { ...referenceIndex('users'), [key]: 'drift' } });
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+  });
+  it('refuses missing/oversized FK equality observations without losing constraint presence', async () => {
+    const value = observation(); Object.assign(value.constraints[3], { equalityOperators: null });
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+    Object.assign(value.constraints[3], { equalityOperators: [equality, equality, equality, equality] });
     expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
   });
   it('refuses incomplete results and strips driver errors', async () => {

@@ -43,7 +43,7 @@ describe('live partial PG17 memory invalidation structure proof', () => {
   });
   it.each([
     'ALTER TABLE public.elements ALTER COLUMN raw_content DROP NOT NULL',
-    'ALTER TABLE public.elements ALTER COLUMN raw_content TYPE varchar(100000)',
+    'ALTER TABLE public.elements ALTER COLUMN raw_content TYPE varchar',
     'ALTER TABLE public.elements ALTER COLUMN raw_content TYPE text COLLATE "C"',
     'ALTER TABLE public.elements ALTER COLUMN element_type TYPE varchar(32) COLLATE "C"',
     'ALTER TABLE public.elements ALTER COLUMN visibility TYPE varchar(32) COLLATE "C"',
@@ -131,6 +131,43 @@ describe('live partial PG17 memory invalidation structure proof', () => {
       expect(actual).toEqual({ expression: '(storage_revision > 0)', custom_dependency: true, validated: true });
       // The first-head unit negative control proves the prior literal-only
       // matcher accepted this otherwise unchanged CHECK descriptor.
+      expect(await verify(tx)).toMatchObject({ reason: 'contract_mismatch', descriptorSha256: null });
+    });
+  });
+  it('rejects custom selected UUID-index/FK equality while preserving all eight subject keys', async () => {
+    await rolledBack(async tx => {
+      await tx.execute(sql`CREATE SCHEMA structural_fk_fixture`);
+      await tx.execute(sql`CREATE FUNCTION structural_fk_fixture.always_true(uuid,uuid)
+        RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'`);
+      await tx.execute(sql`CREATE OPERATOR structural_fk_fixture.= (LEFTARG=uuid, RIGHTARG=uuid,
+        FUNCTION=structural_fk_fixture.always_true)`);
+      await tx.execute(sql`CREATE OPERATOR CLASS structural_fk_fixture.custom_uuid_ops FOR TYPE uuid USING btree AS
+        OPERATOR 1 pg_catalog.< (uuid,uuid), OPERATOR 2 pg_catalog.<= (uuid,uuid),
+        OPERATOR 3 structural_fk_fixture.= (uuid,uuid), OPERATOR 4 pg_catalog.>= (uuid,uuid),
+        OPERATOR 5 pg_catalog.> (uuid,uuid), FUNCTION 1 pg_catalog.uuid_cmp(uuid,uuid)`);
+      // No rows are deleted. CASCADE removes user FKs transactionally; restore
+      // all three required user FKs before testing. Subject PKs are untouched.
+      await tx.execute(sql`ALTER TABLE public.users DROP CONSTRAINT users_pkey CASCADE`);
+      await tx.execute(sql`CREATE UNIQUE INDEX structural_fk_selected_index ON public.users (id structural_fk_fixture.custom_uuid_ops)`);
+      await tx.execute(sql`ALTER TABLE public.elements ADD CONSTRAINT elements_user_id_users_id_fk
+        FOREIGN KEY(user_id) REFERENCES public.users(id) ON DELETE CASCADE ON UPDATE NO ACTION`);
+      await tx.execute(sql`ALTER TABLE public.element_tags ADD CONSTRAINT element_tags_user_id_users_id_fk
+        FOREIGN KEY(user_id) REFERENCES public.users(id) ON DELETE CASCADE ON UPDATE NO ACTION`);
+      await tx.execute(sql`ALTER TABLE public.memory_entries ADD CONSTRAINT memory_entries_user_id_users_id_fk
+        FOREIGN KEY(user_id) REFERENCES public.users(id) ON DELETE CASCADE ON UPDATE NO ACTION`);
+      const [inventory] = await tx.execute(sql`SELECT count(*)::integer AS total,
+        count(*) FILTER (WHERE c.contype='p')::integer AS primary_keys,
+        count(*) FILTER (WHERE c.contype='f')::integer AS foreign_keys FROM pg_catalog.pg_constraint c
+        WHERE c.conrelid IN ('public.elements'::regclass,'public.element_tags'::regclass,'public.memory_entries'::regclass)
+          AND c.contype IN ('p','f')`);
+      expect(inventory).toEqual({ total: 8, primary_keys: 3, foreign_keys: 5 });
+      const [actual] = await tx.execute(sql`SELECT i.indexrelid='public.structural_fk_selected_index'::regclass AS selected_index,
+        c.conpfeqop=ARRAY[o.oid] AND c.conppeqop=ARRAY[o.oid] AND c.conffeqop=ARRAY[o.oid] AS custom_equality,
+        c.convalidated AS validated FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_index i ON i.indexrelid=c.conindid
+        JOIN pg_catalog.pg_operator o ON o.oid=c.conpfeqop[1] JOIN pg_catalog.pg_namespace n ON n.oid=o.oprnamespace
+        WHERE c.conrelid='public.element_tags'::regclass AND c.conname='element_tags_user_id_users_id_fk'
+          AND n.nspname='structural_fk_fixture' AND o.oprname='='`);
+      expect(actual).toEqual({ selected_index: true, custom_equality: true, validated: true });
       expect(await verify(tx)).toMatchObject({ reason: 'contract_mismatch', descriptorSha256: null });
     });
   });

@@ -109,6 +109,16 @@ and have ordinary key options and collations. The four collatable required
 columns use `pg_catalog.default`; all other required attributes have collation
 zero. This does not prove global locale/provider behavior.
 
+Each FK additionally binds its actual selected unique reference index to the
+referenced relation and single UUID key. The index must have immediate, valid,
+ready/live btree uniqueness, default builtin UUID opclass, no includes,
+expressions/predicate, collation zero and ordinary options. All three one-entry
+FK comparison vectors must resolve to builtin UUID equality backed by the exact
+`pg_catalog.uuid_eq(uuid,uuid)` boolean signature. This checks the selected
+supporting index even for `users`; it requires neither a particular users index
+name nor a complete users PK/index inventory. Arbitrary builtin implementation
+changes remain unqualified.
+
 The exact positive-check rendering also requires no explicit operator/function
 dependency on its constraint in `pg_depend`: PG17 omits dependencies on pinned
 builtins, while custom operators/functions retain dependencies. This rejects a
