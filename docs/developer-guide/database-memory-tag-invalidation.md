@@ -49,9 +49,9 @@ The next slice must implement and qualify all of these requirements before execu
 
 1. Quiesce every legacy/cooperating writer for the maintenance window; record candidate version, writer inventory, restore/rollback procedure, expected locks, WAL/space bounds and bounded statement/lock timeouts. Preserve archives on application rollback; no destructive down-migration.
 2. Independently enumerate the complete tenant/owner inventory through an audited operator path. FORCE RLS tenant-local counts are not global coverage proof. Audit mismatched `element_tags` parent tenants, including public and private parents, and separately review their cleanup; do not assign foreign data to a new owner or bypass RLS in the application trigger.
-3. Freeze a durable deployment-specific owner manifest and its counts/hash. Include every preexisting memory owner, including already-dirty rows. A read-only per-tenant count is a dry-run input, never a completion marker. Set explicit row/byte/time caps and resumable pagination; refuse incomplete enumeration.
-4. For each bounded tenant batch, atomically mark manifest owners dirty and bump their revision together with an idempotence ledger keyed by deployment and owner. A ledger-proven completed owner must never be bumped twice on retry. `UPDATE ... WHERE dirty=false` alone is insufficient: ordinary writers can clean rows between retries. Handle deleted/recreated owners explicitly using durable UUIDs; changing inventory invalidates the completion proposal.
-5. Independently verify manifest/ledger and authoritative all-tenant coverage, mismatch cleanup, expected dirty state and revision advancement before writing a durable completion marker tied to candidate/schema/manifest. Counts from a tenant-scoped migration connection cannot prove this. Failures preserve resumable evidence and block activation.
+3. Within one explicitly quiescent, DML-excluding atomic maintenance transaction, freshly capture the complete bounded global owner/tag inventory and audit malformed references. Include every memory owner, including already-dirty rows. The selected first pass caps owners at 10,000, tags at 100,000 and encoded owner projections at 16 MiB; over-cap or incomplete coverage refuses the whole transaction rather than paginating successful mutation. Diagnostic census reports are separate, read-only inputs and never completion authority.
+4. Atomically mark all captured heads dirty and advance every revision exactly once, including already-dirty heads. Compare the exact returned tenant/owner set and +1 revisions against the captured set inside that same transaction. Publish only pre/post manifest digests and counts in the historical receipt, not retained UUID manifests or a per-owner batching ledger. Same-run replay must bind the original request and receipt; unknown commit requires receipt reconciliation before retry, never a blind second revision bump. The executor remains unimplemented.
+5. The atomic receipt records historical invalidation only and always has false apply/activation flags. It cannot prove later inventory, restore continuity, current schema/resolution, malformed-reference coverage or readiness. Fresh locked apply/activation qualification, reviewed mismatch cleanup and shared release gates remain mandatory. Known precommit failure rolls back the attempt; unknown commit requires receipt reconciliation and makes no rollback claim. Incomplete/unknown outcomes block activation. There is no selected resumable paginated backfill or historical completion marker that authorizes current execution.
 6. Keep normal guarded writers disabled until all-writer integration, locked reconciliation, archive phantom protection, rollback and the shared #2870/#2871 release checks are qualified. Merging this foundation does not authorize production migration, backfill, reconciliation, deployment or activation.
 
 The PostgreSQL integration qualification uses a non-superuser, non-BYPASSRLS application role and asserts FORCE RLS, direct I/U/D, ABA, moves, tenant denial, cascades, rollback, final tokens and a controlled lock inversion. It must run with a reachable isolated test database; unavailable PostgreSQL is a failure, not a skipped qualification.
@@ -66,9 +66,42 @@ Explicit positive limits are captured before database access: at most 10,000 mem
 
 Reports distinguish `complete`, `incomplete` and sanitized `unknown`. Row/byte coverage caps yield incomplete coverage with no completed manifest digest. Truncating attribution samples alone does not invalidate otherwise complete aggregate coverage. Query, privilege, schema or deadline failures yield unknown and no counts/digest. Private owner UUID/revision/dirty attribution and mismatch samples require protected handling; they must not enter routine logs. A complete owner-manifest SHA-256 identifies this diagnostic projection only, and is neither a durable deployment marker nor proof that later inventory is unchanged. Every outcome explicitly sets `canBackfill`, `canApply` and `canActivate` to false.
 
-Migration 0057 was installed in the approved September 30 controlled deployment (schema 57; #2461 deployment receipt). That installation did not execute this global census, backfill or completion protocol. The remaining #2904 maintenance slices still require separate protocol review and execution authorization, including quiescence/phantoms, durable provenance, bounded resumability and independently verified completion. This read-only foundation does not settle those decisions.
+Migration 0057 was installed in the approved September 30 controlled deployment (schema 57; #2461 deployment receipt). That installation did not execute this global census or atomic invalidation protocol. The remaining #2904 maintenance slices still require separate execution authorization and qualification of quiescence/phantoms, historical provenance, same-run replay/unknown commits and fresh current-state proof. Diagnostic census completeness does not implement or authorize that executor.
 
 Real isolated PostgreSQL qualification covers privileged and BYPASSRLS visibility, ordinary effective roles/table owners under FORCE RLS, malformed private/public references, deterministic caps, sample truncation, concurrent writes across the single snapshot, real read-only/statement-timeout refusals and unchanged head revisions. No production connection or default integration global setup is required.
+
+## Dormant maintenance receipt, policy and ledger observation
+
+`verifyDatabaseMemoryMaintenanceCatalog(tx)` makes one bounded PG17 metadata
+observation on a caller-owned transaction. It checks the exact 0058 receipt
+columns, seven CHECKs, PK/index, no defaults/triggers/rewrite rules or policies;
+required subject RLS flags and nine operation policies; and the exact hash/time
+declarations for migrations 0056–0058. Expected descriptors come from reviewed
+committed artifacts, never from live values. Ledger hashes use complete UTF-8
+migration bytes before statement-breakpoint splitting; checkout pins those
+three artifacts to LF. Matching ledger rows are historical declarations, not
+proof that a migration executed or that its data coverage remains current.
+
+Policy and receipt CHECK dependencies are inspected before normalization:
+at most 16 raw rows each plus an overflow sentinel. Only exact permitted
+`pg_class` relation/column dependencies qualify; explicit operator, function,
+type, collation or foreign-relation dependencies refuse. Legitimate overlapping
+UPDATE USING/WITH CHECK column dependencies may normalize to their exact union.
+Other bounds are five relations, 21 receipt columns, two ledger columns, eight
+receipt constraints, one index, nine policies and three ledger declarations,
+each with an extra existence sentinel; expression projections cap at 4096
+UTF-8 bytes. Bounds do not promise a hard query-duration/cancellation limit.
+
+`observeDatabaseMemoryMaintenanceCatalog(tx)` invokes the existing function/
+trigger and structure verifiers itself before this observation. Its multiple
+SELECTs do not prove a coherent snapshot under arbitrary READ COMMITTED.
+Both APIs return frozen fixed refusals without raw database errors or payloads,
+and explicitly deny backfill, apply, activation, complete catalog, execution
+resolution and coherent-snapshot authority. No BEGIN, SET, lock, role/grant,
+writer, API, ledger write or executor is introduced. Ordinary roles with the
+existing catalog and ledger permissions can qualify; no superuser gate is
+invented. Locale/provider behavior, effective search path/temp shadowing,
+replication mode and later global coverage/locks remain separate prerequisites.
 
 ## Pure supplied-owner verification
 
@@ -149,9 +182,11 @@ OIDs. Refusals expose only fixed codes, never raw SQL, driver errors or causes.
 Ordinary roles may observe this metadata; the helper changes no roles, locks,
 timeouts, isolation settings or database contents.
 
-This is a required-field projection, not full catalog attestation. Unrelated
-columns/indexes/checks, receipt structure, RLS/policies, migration ledger and
-effective relation/function search-path resolution remain unqualified. A single
+This structure component is a required-field projection, not full catalog
+attestation. Its unrelated columns/indexes/checks and effective relation/function
+search-path resolution remain unqualified. Receipt structure, required RLS/
+policies and the three ledger declarations are observed by the separate dormant
+maintenance component above; composition does not turn them into authority. A single
 snapshot does not protect against later DDL or provide an execution token.
 `canBackfill`, `canApply`, `canActivate`, `provesCompleteCatalog` and
 `provesExecutionResolution` are always false. Global malformed-reference
