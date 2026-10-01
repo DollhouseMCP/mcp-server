@@ -44,7 +44,7 @@ function observation() {
       live: true, predicateNull: true, expressionsNull: true, keyCount: keys.length, attributeCount: keys.length, binding: true,
       opclasses: keys.map(name => name === 'tag' ? 'pg_catalog.text_ops' : 'pg_catalog.uuid_ops'),
       collations: keys.map(name => name === 'tag' ? 'pg_catalog.default' : null), collationBinding: true, collationResolved: true, options: keys.map(() => 0) })),
-    checks: [{ table: 'elements', name: 'elements_storage_revision_positive', keys: ['storage_revision'], expression: '(storage_revision > 0)', safe: true, builtinExpressionOnly: true, ...flags }],
+    checks: [{ table: 'elements', name: 'elements_storage_revision_positive', keys: ['storage_revision'], expression: '(storage_revision > 0)', safe: true, builtinExpressionOnly: true, noInherit: false, ...flags }],
     defaults: [{ table: 'elements', name: 'storage_revision', expression: '1', safe: true },
       { table: 'elements', name: 'memory_entries_out_of_sync', expression: 'true', safe: true }] };
 }
@@ -207,5 +207,10 @@ it('refuses disabled RI triggers and a missing function binding without dropping
 it('refuses visibility-specific collation drift (RLS prevents isolated live ALTER)', async () => {
   const value = observation();
   value.columns.find(row => row.table === 'elements' && row.name === 'visibility')!.collation = 'pg_catalog.C';
+  expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+});
+
+it('refuses CHECK NO INHERIT without changing its expression or current inheritance edges', async () => {
+  const value = observation(); value.checks[0].noInherit = true;
   expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
 });

@@ -132,7 +132,9 @@ qualifies disabled child and replica-only parent triggers without dropping the
 FK. This does not qualify the caller’s session_replication_role or confer
 execution authority.
 
-The exact positive-check rendering also requires no explicit operator/function
+The positive CHECK must retain the migrated inheritable semantics (`connoinherit=false`),
+even though current inheritance edges are independently refused. Its exact rendering
+also requires no explicit operator/function
 dependency on its constraint in `pg_depend`: PG17 omits dependencies on pinned
 builtins, while custom operators/functions retain dependencies. This rejects a
 custom same-spelling `>` operator that deparses identically. The helper neither

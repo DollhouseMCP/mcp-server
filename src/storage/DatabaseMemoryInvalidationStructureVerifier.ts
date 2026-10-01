@@ -79,7 +79,7 @@ const DEFAULTS = [
   { table: 'elements', name: 'memory_entries_out_of_sync', expression: 'true', safe: true },
 ];
 const CHECK = { table: 'elements', name: 'elements_storage_revision_positive', keys: ['storage_revision'],
-  expression: '(storage_revision > 0)', safe: true, builtinExpressionOnly: true, ...constraintFlags };
+  expression: '(storage_revision > 0)', safe: true, builtinExpressionOnly: true, noInherit: false, ...constraintFlags };
 
 // Every projected collection has an overflow sentinel. Expressions and key
 // vectors retain existence but never project unbounded text/arrays to Node.
@@ -204,7 +204,7 @@ SELECT pg_catalog.current_setting('server_version_num')::integer AS version,
     'builtinExpressionOnly',NOT EXISTS(SELECT 1 FROM pg_catalog.pg_depend d
       WHERE d.classid='pg_catalog.pg_constraint'::pg_catalog.regclass AND d.objid=c.oid AND d.objsubid=0
       AND d.refclassid IN ('pg_catalog.pg_operator'::pg_catalog.regclass,'pg_catalog.pg_proc'::pg_catalog.regclass) LIMIT 1),
-    'validated',c.convalidated,'deferrable',c.condeferrable,'deferred',c.condeferred,'local',c.conislocal,'inherited',c.coninhcount,'parent',c.conparentid::text)), '[]'::jsonb) FROM checks c) AS checks,
+    'validated',c.convalidated,'deferrable',c.condeferrable,'deferred',c.condeferred,'local',c.conislocal,'inherited',c.coninhcount,'parent',c.conparentid::text,'noInherit',c.connoinherit)), '[]'::jsonb) FROM checks c) AS checks,
   (SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('table',d.relname,'name',d.attname,
     'expression',CASE WHEN pg_catalog.octet_length(pg_catalog.pg_get_expr(d.adbin,d.adrelid))<=1024 THEN pg_catalog.pg_get_expr(d.adbin,d.adrelid) END,
     'safe',pg_catalog.octet_length(pg_catalog.pg_get_expr(d.adbin,d.adrelid))<=1024)), '[]'::jsonb) FROM defaults d) AS defaults`;

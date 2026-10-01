@@ -200,3 +200,14 @@ describe('actual FK internal trigger enforcement state', () => {
     });
   });
 });
+
+it('refuses a supported NO INHERIT CHECK with the same expression and no inheritance edge', async () => {
+  await rolledBack(async tx => {
+    await tx.execute(sql`ALTER TABLE public.elements DROP CONSTRAINT elements_storage_revision_positive`);
+    await tx.execute(sql`ALTER TABLE public.elements ADD CONSTRAINT elements_storage_revision_positive CHECK(storage_revision > 0) NO INHERIT`);
+    const [check] = await tx.execute(sql`SELECT connoinherit,convalidated,pg_catalog.pg_get_expr(conbin,conrelid) AS expression
+      FROM pg_catalog.pg_constraint WHERE conrelid='public.elements'::pg_catalog.regclass AND conname='elements_storage_revision_positive'`);
+    expect(check).toMatchObject({ connoinherit: true, convalidated: true, expression: '(storage_revision > 0)' });
+    expect(await verify(tx)).toMatchObject({ reason: 'contract_mismatch' });
+  });
+});
