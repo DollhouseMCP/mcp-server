@@ -9,6 +9,7 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import { getGatekeeperAuthoringErrors } from '../handlers/mcp-aql/policies/ElementPolicies.js';
 import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
+import type { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
 import {
   classifyFileMemoryWrite,
   type FileMemoryWriteDiagnostic,
@@ -975,7 +976,7 @@ export class FileMemoryOwnerSnapshots {
    * nested operation; future archive stores must await it before publication.
    */
   async requireOwnedAtScope(
-    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken,
+    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanBudget,
   ): Promise<OwnedFileMemoryToken> {
     const coordinator = this.requiredCoordinator();
     const scope = coordinator.requireActiveOperationScope(operation);
@@ -984,7 +985,7 @@ export class FileMemoryOwnerSnapshots {
       token.tenantRoot !== scope.tenantRoot || token.userId !== scope.userId) {
       throw headError('EHEADCONFLICT', 'Memory owner token belongs to another tenant or head');
     }
-    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator);
+    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator, undefined, budget);
     coordinator.requireActiveOperationScope(operation);
     if (current.token.ownership !== 'owned' || !sameOwnedToken(current.token, token)) {
       throw headError('EHEADCONFLICT', 'Memory owner changed before guarded operation');
@@ -994,14 +995,14 @@ export class FileMemoryOwnerSnapshots {
 
   /** @internal Zero-write owner proof using one caller-captured read scope. Not mutation authority. */
   async requireOwnedAtReadScope(
-    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken,
+    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanBudget,
   ): Promise<OwnedFileMemoryToken> {
     const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
     if (token.backend !== 'file' || token.ownership !== 'owned' ||
       token.tenantRoot !== scope.tenantRoot || token.userId !== scope.userId) {
       throw headError('EHEADCONFLICT', 'Memory owner token belongs to another tenant or head');
     }
-    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator);
+    const current = await this.readAtRoot(scope.tenantRoot, scope.userId, token.locator, undefined, budget);
     if (current.token.ownership !== 'owned' || !sameOwnedToken(current.token, token)) {
       throw headError('EHEADCONFLICT', 'Memory owner changed during archive observation');
     }
@@ -1009,13 +1010,13 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readAtRoot(
-    tenantRoot: string, userId: string, locator: string, permittedJournal?: string,
+    tenantRoot: string, userId: string, locator: string, permittedJournal?: string, budget?: FileMemoryDirectoryScanBudget,
   ): Promise<FileMemorySnapshot> {
     const resolved = await this.resolveHead(tenantRoot, locator);
 
     // No lease, directory creation, or owner publication on this read path.
     for (let attempt = 0; attempt < 3; attempt++) {
-      await this.checkWriteArtifacts(tenantRoot, resolved, undefined, permittedJournal);
+      await this.checkWriteArtifacts(tenantRoot, resolved, undefined, permittedJournal, budget);
       const before = await this.readRecord(resolved.sidecarPath);
       if (before && before.record.state !== 'ACTIVE') {
         throw headError('EOWNERRECOVERY', 'Memory owner publication is incomplete');
@@ -1025,7 +1026,7 @@ export class FileMemoryOwnerSnapshots {
         ? await this.readRegistry(tenantRoot, before.record.ownerId)
         : undefined;
       const after = await this.readRecord(resolved.sidecarPath);
-      await this.checkWriteArtifacts(tenantRoot, resolved, before?.record.ownerId, permittedJournal);
+      await this.checkWriteArtifacts(tenantRoot, resolved, before?.record.ownerId, permittedJournal, budget);
       if (before?.raw !== after?.raw) continue;
 
       const base = {
@@ -1373,7 +1374,12 @@ export class FileMemoryOwnerSnapshots {
     return { headPath, sidecarPath, journalPath, basenameHash, locator: canonicalLocator };
   }
 
-  private async scanDirectory(directory: string, matches: (name: string) => boolean): Promise<void> {
+  private async scanDirectory(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+    if (budget) {
+      return budget.scan(directory, name => {
+        if (matches(name)) throw headError('EOWNERRECOVERY', `Memory update artifact requires recovery: ${name}`);
+      });
+    }
     const handle = await fs.opendir(directory);
     let seen = 0;
     for await (const entry of handle) {
@@ -1408,6 +1414,7 @@ export class FileMemoryOwnerSnapshots {
     tenantRoot: string,
     resolved: { headPath: string; journalPath: string; basenameHash: string }, ownerId?: string,
     permittedJournal?: string,
+    budget?: FileMemoryDirectoryScanBudget,
   ): Promise<void> {
     const prefix = `.${resolved.basenameHash}.`;
     await this.scanDirectory(path.dirname(resolved.headPath), name => {
@@ -1417,11 +1424,11 @@ export class FileMemoryOwnerSnapshots {
       if (folded === sidecarName) return name !== sidecarName;
       return folded.startsWith(`${prefix}memory-write`) ||
         folded.startsWith(`${prefix}memory-owner.json`);
-    });
+    }, budget);
     if (ownerId) {
       const registryPath = this.registryPath(tenantRoot, ownerId);
       await this.scanDirectory(path.dirname(registryPath), name =>
-        name.toLowerCase().startsWith(`${ownerId.toLowerCase()}.json.`));
+        name.toLowerCase().startsWith(`${ownerId.toLowerCase()}.json.`), budget);
     }
   }
 

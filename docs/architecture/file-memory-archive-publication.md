@@ -91,6 +91,27 @@ by the publication slice.
 
 ## Dormant verified observation (#2902-B1)
 
+### Internal inspection-budget prerequisite (#2902-B2b-1)
+
+`FileMemoryDirectoryScanBudget` is a caller-owned, optional resource bound for
+the existing owned-head proof. Its immutable limit is validated before awaits
+(1–1,000). Initial and final head-directory scans, owner-registry artifact scans
+and stability retries spend the same monotonic budget. It adds no list API,
+runtime wiring, fence acquisition, filesystem mutation or ownership authority.
+Omitted-budget callers retain their existing 100,000-entry per-scan path and checks.
+
+One unit is reserved synchronously **before each `Dir.read()` attempt**, including
+an entry, EOF or a read error; reservations are never refunded. Concurrent readers
+share those reservations. After exhaustion no additional read is issued, even to
+probe EOF. Consequently N names require N+1 units to establish a finished scan.
+These are conservative read-attempt units, distinct from observed archive entries
+or a future list's returned count. Exhaustion is `EHEADRESOURCE`, never absence or
+successful owner proof. Directories close on failure; if close also fails, an
+aggregate retains both causes and the primary typed error code.
+
+Metadata listing remains a separate slice. Its future ancestor/archive reproofs
+must use this same budget, without hidden 100,000-entry scans or free EOF probes.
+
 `read(expectedOwnedHead, volume)` captures tenant root and user once, acquires no
 fence and writes nothing. `readAtScope` instead consumes the current tracked
 operation capability without nesting `perform` or acquiring another fence.
