@@ -45,12 +45,12 @@ Stable parent order does not eliminate direct tag-row → parent versus whole-he
 
 This migration installs safeguards only. It contains no all-row UPDATE or backfill. Existing clean memory rows may have already-stale tag projections; installing a trigger cannot qualify their tokens. #2904 stays open for a separately reviewed bounded invalidation slice, and #2907 activation remains blocked. Reconciliation apply belongs to #2905; ordinary writer routing and rollover remain unenabled.
 
-The next slice must implement and qualify all of these requirements before execution:
+The dormant executor and its operational prerequisites must qualify all of these requirements before execution:
 
 1. Quiesce every legacy/cooperating writer for the maintenance window; record candidate version, writer inventory, restore/rollback procedure, expected locks, WAL/space bounds and bounded statement/lock timeouts. Preserve archives on application rollback; no destructive down-migration.
 2. Independently enumerate the complete tenant/owner inventory through an audited operator path. FORCE RLS tenant-local counts are not global coverage proof. Audit mismatched `element_tags` parent tenants, including public and private parents, and separately review their cleanup; do not assign foreign data to a new owner or bypass RLS in the application trigger.
 3. Within one explicitly quiescent, DML-excluding atomic maintenance transaction, freshly capture the complete bounded global owner/tag inventory and audit malformed references. Include every memory owner, including already-dirty rows. The selected first pass caps owners at 10,000, tags at 100,000 and encoded owner projections at 16 MiB; over-cap or incomplete coverage refuses the whole transaction rather than paginating successful mutation. Diagnostic census reports are separate, read-only inputs and never completion authority.
-4. Atomically mark all captured heads dirty and advance every revision exactly once, including already-dirty heads. Compare the exact returned tenant/owner set and +1 revisions against the captured set inside that same transaction. Publish only pre/post manifest digests and counts in the historical receipt, not retained UUID manifests or a per-owner batching ledger. Same-run replay must bind the original request and receipt; unknown commit requires receipt reconciliation before retry, never a blind second revision bump. The executor remains unimplemented.
+4. Atomically mark all captured heads dirty and advance every revision exactly once, including already-dirty heads. Compare the exact returned tenant/owner set and +1 revisions against the captured set inside that same transaction. Publish only pre/post manifest digests and counts in the historical receipt, not retained UUID manifests or a per-owner batching ledger. Same-run replay must bind the original request and receipt; unknown commit requires receipt reconciliation before retry, never a blind second revision bump. The executor is implemented but dormant and unwired; its qualification and operational prerequisites remain pending.
 5. The atomic receipt records historical invalidation only and always has false apply/activation flags. It cannot prove later inventory, restore continuity, current schema/resolution, malformed-reference coverage or readiness. Fresh locked apply/activation qualification, reviewed mismatch cleanup and shared release gates remain mandatory. Known precommit failure rolls back the attempt; unknown commit requires receipt reconciliation and makes no rollback claim. Incomplete/unknown outcomes block activation. There is no selected resumable paginated backfill or historical completion marker that authorizes current execution.
 6. Keep normal guarded writers disabled until all-writer integration, locked reconciliation, archive phantom protection, rollback and the shared #2870/#2871 release checks are qualified. Merging this foundation does not authorize production migration, backfill, reconciliation, deployment or activation.
 
@@ -190,11 +190,87 @@ maintenance component above; composition does not turn them into authority. A si
 snapshot does not protect against later DDL or provide an execution token.
 `canBackfill`, `canApply`, `canActivate`, `provesCompleteCatalog` and
 `provesExecutionResolution` are always false. Global malformed-reference
-qualification, bounded atomic invalidation and historical receipt/replay remain
-separate work; #2904 stays open.
+qualification, bounded atomic invalidation and historical receipt/replay belong
+to the explicit maintenance executor below; #2904 stays open until its remaining
+qualification and operator prerequisites are satisfied.
 
 Unit/artifact tests qualify portable matching, bounds and fixed refusals.
 Required PG17 CI tests exercise actual migrations and ordinary-role READ ONLY
 calls plus legal transactionally rolled-back DDL drift. Catalog flags that
 cannot be changed through supported DDL are unit-only observations. This slice
 requires no local database creation or existing service/credential changes.
+
+## Dormant atomic maintenance executor
+
+`DatabaseMemoryAtomicInvalidator` requires an explicitly supplied top-level
+postgres-js connection. It is not registered in runtime DI, exposed through an
+API, or enabled by configuration. Requests bind the canonical non-nil run UUID,
+candidate commit, expected reviewed catalog digest, declared maintenance evidence
+and context, and intended database name/OID in a versioned deterministic hash.
+Declarations are attribution; they do not prove quiescence or restore continuity.
+
+The executor configures its transaction with `SET LOCAL`, then acquires ordered
+EXCLUSIVE locks on the receipt, elements, tags and entries tables before its first
+snapshot-producing query. It checks current global visibility, privileges,
+including SELECT and UPDATE on all four locked tables and receipt INSERT.
+UPDATE is the supported lock-capable privilege for every fixed EXCLUSIVE lock;
+the supplied connection's privileges are caller setup, and the executor grants
+nothing. BYPASSRLS or superuser visibility is separately required. PostgreSQL 17
+[LOCK privileges](https://www.postgresql.org/docs/17/sql-lock.html#SQL-LOCK-NOTES)
+permit only ACCESS SHARE with SELECT alone; weakening to SHARE would not fix that.
+It also checks
+replication role, relation/function resolution and absence of elements rewrite
+rules, then invokes the catalog components itself. A fresh global census refuses
+incomplete coverage or malformed tag references. Fixed limits are 10,000 owners,
+100,000 tags and 16 MiB of projected metadata. Every captured memory head is made
+dirty with exactly one revision increment, including already-dirty heads. The
+exact returned owner set is verified before inserting the existing historical
+receipt in the same transaction. Content, tags, entries and archives are not
+rewritten. Memory-volume exclusion and current reconciliation authority are not
+claimed.
+
+Matching same-run replay validates all 21 persisted receipt fields and declared
+bindings after fresh context/catalog proof, then performs no invalidation. A
+conflicting request refuses. `committed` is returned only after the outer driver
+transaction acknowledges COMMIT. Deliberate refusal is `aborted` only when the
+private invocation sentinel survives the inspected driver's acknowledged
+ROLLBACK path. Other driver/connection failures remain `unknown`, never automatic
+retry. These semantics are pinned to the reviewed postgres-js/Drizzle versions.
+Raw SQL or transport failures can remain unknown even when the driver attempted
+rollback; the API intentionally returns `reason:null` rather than raw errors or
+unqualified phase diagnostics. A lock timeout is not automatically classified as
+a known abort. Tracked fresh resolution is required to settle such uncertainty.
+
+Unknown resolution requires the same retained private invocation state and an
+independent supplied root connection. Outer rejection marks abandonment; the
+callback checks it before locks and after awaited prewrite barriers. Resolution
+stays unknown until that callback is privately drained, then its exclusion locks
+serialize any outstanding backend finalization. A resolver's own refusal does
+not establish that the original operation aborted. Proven receipt/absence clears
+the local unresolved guard; any retry is a separate explicit call. Cold/untracked
+resolution refuses, so this API does not implement operator restart recovery or
+accept caller assertions that a prior transaction terminated. The executor never
+terminates another backend or waits indefinitely for callback drainage.
+
+Operator maintenance still requires cooperative DML/DDL quiescence: table locks
+do not freeze functions or roles, and legacy child-first writes can deadlock with
+the fixed lock order. Timeouts preserve uncertainty rather than steal locks.
+Historical receipts always have `canApply=false` and `canActivate=false`; new
+heads or later writes can invalidate their relevance. No receipt authorizes
+#2905 apply, #2906 writer integration or #2907 activation.
+
+Unit tests qualify the private outcome/drain envelope and receipt validation.
+Real commit/replay qualification uses a uniquely owned database on the existing
+required CI PG17 service, with exact ownership and cleanup. No local database,
+new role/password or cluster grant is created. Normal nonrequired integration
+runs skip this resource-owning suite; `DOLLHOUSE_REQUIRE_TEST_DATABASE=1` selects
+all cases and fails if the CI harness or PostgreSQL is unavailable. Injected publication loss after a
+real commit is distinguished from an actual network-level lost COMMIT
+acknowledgement.
+The ordinary-role fixture temporarily grants only normal DML privileges on the
+four tables in that exclusively owned database to the existing app role, then
+revokes them. This isolates FORCE RLS/global-visibility refusal from missing ACL
+denial; it changes no shared database, role membership or production access.
+An existing temporary same-name table is safe when the pinned search path still
+resolves the required relation to public; the executor checks effective binding,
+rather than treating every temporary relation as a refusal.
