@@ -39,7 +39,7 @@ export class FileMemoryCreateScanBudget {
   private async read(directory: Dir, localAttempts: number) {
     if (localAttempts >= 1000 || this.#consumed >= this.#limit) throw new FileMemoryDirectoryScanLimitError();
     this.#consumed += 1; // Synchronous reservation before the actual read, including EOF/errors.
-    return directory.read();
+    return await directory.read();
   }
   async scan(directoryPath: string, inspect: (name: string) => void): Promise<void> {
     const directory = await fs.opendir(directoryPath);
