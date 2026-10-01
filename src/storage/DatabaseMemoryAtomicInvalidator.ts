@@ -41,7 +41,7 @@ function captureRequest(input: MemoryAtomicInvalidationRequest): CapturedRequest
     const fields = ['runId', 'candidateCommit', 'expectedCatalogSha256', 'maintenanceEvidenceSha256',
       'maintenanceEvidenceId', 'declaredContextId', 'databaseName', 'databaseOid'] as const;
     if (!input || typeof input !== 'object' || Reflect.ownKeys(input).length !== fields.length ||
-      fields.some(field => !Object.hasOwn(input, field))) throw new Error();
+      fields.some(field => !Object.hasOwn(input, field))) throw new Error('Invalid request fields');
     value = Object.fromEntries(fields.map(field => [field, input[field]])) as unknown as MemoryAtomicInvalidationRequest;
   } catch { throw new Refusal('invalid-request'); }
   if (typeof value.runId !== 'string' || !UUID.test(value.runId) || value.runId.toLowerCase() === NIL ||
@@ -117,9 +117,11 @@ async function lockAndProve(tx: DrizzleTx, invocation: Invocation, request: Capt
   await query(tx, invocation, sql`SET LOCAL lock_timeout = '1000ms'`);
   await query(tx, invocation, sql`SET LOCAL statement_timeout = '5000ms'`);
   // No SELECT precedes these locks: the repeatable-read snapshot starts afterwards.
-  for (const table of ['memory_head_invalidation_runs', 'elements', 'element_tags', 'memory_entries']) {
-    await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier(table)} IN EXCLUSIVE MODE`);
-  }
+  // Acquire each fixed lock sequentially, with invocation checks at every await.
+  await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('memory_head_invalidation_runs')} IN EXCLUSIVE MODE`);
+  await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('elements')} IN EXCLUSIVE MODE`);
+  await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('element_tags')} IN EXCLUSIVE MODE`);
+  await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('memory_entries')} IN EXCLUSIVE MODE`);
   return proveContext(tx, invocation, request);
 }
 async function proveContext(tx: DrizzleTx, invocation: Invocation, request: CapturedRequest): Promise<Context> {
@@ -157,7 +159,7 @@ async function proveContext(tx: DrizzleTx, invocation: Invocation, request: Capt
     NOT EXISTS (SELECT 1 FROM pg_catalog.pg_rewrite WHERE ev_class = 'public.elements'::pg_catalog.regclass) AS no_rules
     FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles r ON r.rolname = current_user
     WHERE d.datname = pg_catalog.current_database()`);
-  if (!row || row.name !== request.databaseName || row.oid !== request.databaseOid ||
+  if (row?.name !== request.databaseName || row.oid !== request.databaseOid ||
     !byteBound(row.actor, 63) || !Number.isInteger(row.version) || Number(row.version) < 170000 ||
     Number(row.version) >= 180000 || ['privileged', 'origin', 'isolation', 'visibility', 'rights', 'resolution', 'no_rules']
       .some(key => row[key] !== true)) throw new Refusal('context');
@@ -228,7 +230,9 @@ const RECEIPT_SELECT = sql`SELECT run_id::text AS "runId", format_version AS "fo
   started_at AS "startedAt", finished_at AS "finishedAt", can_apply AS "canApply", can_activate AS "canActivate"
   FROM public.memory_head_invalidation_runs`;
 function finiteTimestamp(value: unknown): string {
-  const date = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+  let date: Date | null = null;
+  if (value instanceof Date) date = value;
+  else if (typeof value === 'string') date = new Date(value);
   if (!date || !Number.isFinite(date.getTime())) throw new Refusal('invalid-receipt');
   return date.toISOString();
 }
@@ -357,7 +361,7 @@ async function invalidateOwners(tx: DrizzleTx, state: Invocation, request: Captu
       ${context.effectiveRole},${context.databaseOid}::pg_catalog.int8,${context.serverVersionNum},${before.ownerCount},${observed.tags},
       ${startedAt}::pg_catalog.timestamptz,${finishedAt}::pg_catalog.timestamptz,false,false)`);
   const receipt = await lookup(tx, state, request);
-  if (!receipt || receipt.preManifestSha256 !== before.sha256 || receipt.postManifestSha256 !== verified.after.sha256 ||
+  if (receipt?.preManifestSha256 !== before.sha256 || receipt.postManifestSha256 !== verified.after.sha256 ||
     receipt.ownerCount !== before.ownerCount || receipt.tagCount !== observed.tags) throw new Refusal('invalid-receipt');
   return receipt;
 }

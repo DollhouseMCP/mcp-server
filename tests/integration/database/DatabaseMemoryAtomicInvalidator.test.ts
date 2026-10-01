@@ -321,6 +321,42 @@ describe('owned CI database atomic maintenance', () => {
     }
   });
 
+  it('encoded metadata overflow refuses below owner and tag count caps', async () => {
+    const [head] = await owned`SELECT id,user_id FROM public.elements WHERE element_type='memories' LIMIT 1`;
+    const prefix = `bytecap-${randomUUID()}-`;
+    const before = await owned`SELECT id::text,storage_revision::text,memory_entries_out_of_sync FROM public.elements ORDER BY id`;
+    await owned`ALTER TABLE public.element_tags DISABLE TRIGGER USER`;
+    try { await owned`INSERT INTO public.element_tags(element_id,user_id,tag)
+      SELECT ${head.id}::uuid,${head.user_id}::uuid,
+        ${prefix}||pg_catalog.lpad(n::text,6,'0')||pg_catalog.repeat('😀',77)
+      FROM pg_catalog.generate_series(1,40000) n`; }
+    finally { await owned`ALTER TABLE public.element_tags ENABLE TRIGGER USER`; }
+    try {
+      const [premise] = await owned`WITH owners AS MATERIALIZED (
+        SELECT id,user_id,storage_revision,memory_entries_out_of_sync FROM public.elements
+        WHERE element_type='memories' ORDER BY id LIMIT 10001
+      ), tags AS MATERIALIZED (
+        SELECT element_id,user_id,tag FROM public.element_tags
+        ORDER BY element_id,tag COLLATE pg_catalog."C" LIMIT 100001
+      ) SELECT (SELECT count(*)::integer FROM owners) AS owners,
+        (SELECT count(*)::integer FROM tags) AS tags,
+        (SELECT coalesce(sum(pg_catalog.octet_length(pg_catalog.row_to_json(owners)::text)),0) FROM owners)::text AS owner_bytes,
+        (SELECT coalesce(sum(pg_catalog.octet_length(pg_catalog.row_to_json(tags)::text)),0) FROM tags)::text AS tag_bytes`;
+      expect(premise.owners).toBeLessThan(10000);
+      expect(premise.tags).toBeLessThan(100000);
+      expect(BigInt(premise.owner_bytes) + BigInt(premise.tag_bytes)).toBeGreaterThan(16n * 1024n * 1024n);
+      const input = request();
+      expect(await new DatabaseMemoryAtomicInvalidator(owned).invalidate(input)).toEqual({ status: 'aborted', reason: 'incomplete-census' });
+      expect(await owned`SELECT id::text,storage_revision::text,memory_entries_out_of_sync FROM public.elements ORDER BY id`).toEqual(before);
+      const [receipt] = await owned`SELECT count(*)::integer AS n FROM public.memory_head_invalidation_runs WHERE run_id=${input.runId}::uuid`;
+      expect(receipt.n).toBe(0);
+    } finally {
+      await owned`ALTER TABLE public.element_tags DISABLE TRIGGER USER`;
+      try { await owned`DELETE FROM public.element_tags WHERE element_id=${head.id}::uuid AND tag LIKE ${`${prefix}%`}`; }
+      finally { await owned`ALTER TABLE public.element_tags ENABLE TRIGGER USER`; }
+    }
+  });
+
   it('revision overflow refuses before any owner update', async () => {
     const [tenant] = await owned`SELECT id FROM public.users LIMIT 1`;
     const id = randomUUID();
