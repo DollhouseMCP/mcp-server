@@ -9,6 +9,9 @@
 *.mts text eol=lf
 *.mjs text eol=lf
 *.cjs text eol=lf
+# Exact reviewed function bodies must survive platform checkout unchanged.
+src/database/migrations/0056_memory_head_revision.sql text eol=lf
+src/database/migrations/0057_memory_tag_revision.sql text eol=lf
 *.json text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
