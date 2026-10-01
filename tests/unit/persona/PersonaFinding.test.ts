@@ -6,7 +6,7 @@
  * 2. Case-insensitive matching
  * 3. Strategy priority and fallback order
  * 4. Edge cases (special chars, Unicode, emoji)
- * 5. Performance benchmarks with large datasets
+ * 5. Deterministic single-scan work bounds at 10/100/1000 personas
  *
  * Phase 3.3: Day 2/3 of test coverage expansion
  * Target: 150-200 lines with performance testing
@@ -14,157 +14,19 @@
  */
 
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
-import * as os from 'os';
-import * as path from 'path';
-import { PersonaManager } from '../../../src/persona/PersonaManager.js';
-import type { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
-import type { FileLockManager } from '../../../src/security/fileLockManager.js';
-import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
-import { Persona } from '../../../src/types/persona.js';
-import { DEFAULT_INDICATOR_CONFIG } from '../../../src/config/indicator-config.js';
-import { createMockPortfolioManager, createTestMetadataService } from '../../helpers/di-mocks.js';
-import { ValidationRegistry } from '../../../src/services/validation/ValidationRegistry.js';
-import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
-import { ValidationService } from '../../../src/services/validation/ValidationService.js';
+import type { PersonaManager } from '../../../src/persona/PersonaManager.js';
+import type { Persona } from '../../../src/types/persona.js';
 import { ElementType } from '../../../src/portfolio/types.js';
-import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
-import { SerializationService } from '../../../src/services/SerializationService.js';
-import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
+import { createPersonaFindingFixture } from '../../helpers/persona-finding-fixture.js';
 
 describe('PersonaFinding - Multi-Strategy Search', () => {
   let personaManager: PersonaManager;
-  let mockPortfolioManager: ReturnType<typeof createMockPortfolioManager>;
-  let mockFileLockManager: jest.Mocked<FileLockManager>;
-  const mockPersonasDir = path.join(os.tmpdir(), 'test-personas');
-
-  // Test personas with various naming patterns
-  const testPersonas: Persona[] = [
-    {
-      id: 'creative-writer-abc123',
-      type: ElementType.PERSONA,
-      version: '1.0',
-      metadata: {
-        name: 'Creative Writer',
-        description: 'A creative writing assistant',
-        unique_id: 'creative-writer-abc123',
-        category: 'creative',
-        version: '1.0',
-        author: 'test',
-        created_date: '2025-01-01'
-      },
-      content: 'Test content',
-      filename: 'Creative-Writer.md',
-      unique_id: 'creative-writer-abc123'
-    } as Persona,
-    {
-      id: 'test-special-chars-def456',
-      type: ElementType.PERSONA,
-      version: '1.0',
-      metadata: {
-        name: 'Test & Test',
-        description: 'Persona with special characters',
-        unique_id: 'test-special-chars-def456',
-        category: 'personal',
-        version: '1.0',
-        author: 'test',
-        created_date: '2025-01-01'
-      },
-      content: 'Test content',
-      filename: 'Test-And-Test.md',
-      unique_id: 'test-special-chars-def456'
-    } as Persona,
-    {
-      id: 'test-unicode-ghi789',
-      type: ElementType.PERSONA,
-      version: '1.0',
-      metadata: {
-        name: 'Tëst Përsoñä',
-        description: 'Persona with Unicode characters',
-        unique_id: 'test-unicode-ghi789',
-        category: 'personal',
-        version: '1.0',
-        author: 'test',
-        created_date: '2025-01-01'
-      },
-      content: 'Test content',
-      filename: 'Test-Unicode.md',
-      unique_id: 'test-unicode-ghi789'
-    } as Persona,
-    {
-      id: 'test-emoji-jkl012',
-      type: ElementType.PERSONA,
-      version: '1.0',
-      metadata: {
-        name: 'Test 😀 Persona',
-        description: 'Persona with emoji',
-        unique_id: 'test-emoji-jkl012',
-        category: 'personal',
-        version: '1.0',
-        author: 'test',
-        created_date: '2025-01-01'
-      },
-      content: 'Test content',
-      filename: 'Test-Emoji.md',
-      unique_id: 'test-emoji-jkl012'
-    } as Persona
-  ];
-
-  const seedPersona = (persona: Persona): void => {
-    (personaManager as any).cacheElement(persona, persona.filename);
-  };
-
+  let fixture: ReturnType<typeof createPersonaFindingFixture>;
+  const seedPersona = (persona: Persona): void => fixture.seedPersona(persona);
   beforeEach(() => {
     jest.clearAllMocks();
-
-    mockPortfolioManager = createMockPortfolioManager({
-      getElementDir: jest.fn().mockReturnValue(mockPersonasDir)
-    });
-
-    mockFileLockManager = {
-      withLock: jest.fn().mockImplementation(async (_path, callback) => await callback()),
-      acquire: jest.fn().mockResolvedValue({ release: jest.fn() }),
-      release: jest.fn(),
-      atomicWriteFile: jest.fn().mockResolvedValue(undefined),
-      atomicReadFile: jest.fn().mockResolvedValue(''),
-    } as any;
-
-    // Mock FileOperationsService
-    const mockFileOperationsService: jest.Mocked<FileOperationsService> = {
-      readFile: jest.fn().mockResolvedValue(''),
-      readElementFile: jest.fn().mockResolvedValue(''),
-      writeFile: jest.fn().mockResolvedValue(undefined),
-      deleteFile: jest.fn().mockResolvedValue(undefined),
-      exists: jest.fn().mockResolvedValue(false),
-      listDirectory: jest.fn().mockResolvedValue([]),
-      createDirectory: jest.fn().mockResolvedValue(undefined),
-      resolvePath: jest.fn((p: string) => p),
-      validatePath: jest.fn().mockReturnValue(true),
-    } as any;
-
-    // Create service instances for DI
-    const metadataService = createTestMetadataService();
-    const validationRegistry = new ValidationRegistry(
-      new ValidationService(),
-      new TriggerValidationService(),
-      metadataService
-    );
-
-    personaManager = new PersonaManager({
-      portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
-      indicatorConfig: DEFAULT_INDICATOR_CONFIG,
-      fileLockManager: mockFileLockManager,
-      fileOperationsService: mockFileOperationsService,
-      validationRegistry,
-      serializationService: new SerializationService(),
-      metadataService,
-      eventDispatcher: new ElementEventDispatcher(),
-    storageLayerFactory: createTestStorageFactory(),
-    });
-
-    // Populate cache with test personas
-    for (const persona of testPersonas) {
-      seedPersona(persona);
-    }
+    fixture = createPersonaFindingFixture();
+    personaManager = fixture.personaManager;
   });
 
   afterEach(() => {
@@ -323,18 +185,18 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
   });
 
   // ============================================================================
-  // 5. Performance Tests (3 tests)
+  // 5. Deterministic bounded scale tests
   // ============================================================================
 
-  describe('Performance Benchmarks', () => {
+  describe('Bounded scale lookup', () => {
     beforeEach(() => {
       // Clear existing test personas
       (personaManager as any).elements.clear();
     });
 
-    it('should find in 10 personas < 1ms', () => {
-      // Generate 10 test personas
-      for (let i = 0; i < 10; i++) {
+    it.each([10, 100, 1000])('finds the exact persona among %i cached personas within one scan', count => {
+      // Preserve the same workload at each scale.
+      for (let i = 0; i < count; i++) {
         const persona: Persona = {
           id: `persona-${i}`,
           type: ElementType.PERSONA,
@@ -355,78 +217,44 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
         seedPersona(persona);
       }
 
-      const start = performance.now();
-      const found = personaManager.findPersona('persona-5');
-      const duration = performance.now() - start;
+      const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
+      const cachedCount = (personaManager as any).getCachedElementsForCurrentNamespace().length;
+      const found = personaManager.findPersona(`persona-${count / 2}`);
 
       expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('persona-5');
-      expect(duration).toBeLessThan(1);
+      expect(found?.unique_id).toBe(`persona-${count / 2}`);
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
+      matching.mockClear();
+      expect(personaManager.findPersona('absent-persona')).toBeUndefined();
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
+      expect(fixture.mockFileOperationsService.readFile).not.toHaveBeenCalled();
+      expect(fixture.mockFileOperationsService.readElementFile).not.toHaveBeenCalled();
+      expect(fixture.mockFileOperationsService.listDirectory).not.toHaveBeenCalled();
     });
+  });
 
-    it('should find in 100 personas < 5ms', () => {
-      // Generate 100 test personas
-      for (let i = 0; i < 100; i++) {
-        const persona: Persona = {
-          id: `persona-${i}`,
-          type: ElementType.PERSONA,
-          version: '1.0',
-          metadata: {
-            name: `Test Persona ${i}`,
-            description: `Test persona number ${i}`,
-            unique_id: `persona-${i}`,
-            category: 'personal',
-            version: '1.0',
-            author: 'test',
-            created_date: '2025-01-01'
-          },
-          content: `Test content for persona ${i}`,
-          filename: `persona-${i}.md`,
-          unique_id: `persona-${i}`
-        } as Persona;
-        seedPersona(persona);
+  it('detects a deliberately regressed repeated scan without timing measurements', () => {
+    const candidates = (personaManager as any).getCachedElementsForCurrentNamespace() as Persona[];
+    const cachedCount = candidates.length;
+    const matching = jest.spyOn(personaManager as any, 'matchesIdentifier');
+    const assertOneMissScan = (): void => {
+      matching.mockClear();
+      expect(personaManager.findPersona('absent-persona')).toBeUndefined();
+      expect(matching.mock.calls.length).toBeLessThanOrEqual(cachedCount);
+    };
+    assertOneMissScan();
+    const lookup = jest.spyOn(personaManager, 'findPersona');
+    // A correct index/early miss is allowed to perform zero predicate calls.
+    lookup.mockReturnValueOnce(undefined);
+    assertOneMissScan();
+    lookup.mockImplementation(identifier => {
+      for (let pass = 0; pass < 2; pass++) {
+        candidates.find(candidate => (personaManager as any).matchesIdentifier(candidate, identifier));
       }
-
-      const start = performance.now();
-      const found = personaManager.findPersona('persona-50');
-      const duration = performance.now() - start;
-
-      expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('persona-50');
-      expect(duration).toBeLessThan(5);
+      return undefined;
     });
-
-    it('should find in 1000 personas < 20ms', () => {
-      // Generate 1000 test personas
-      for (let i = 0; i < 1000; i++) {
-        const persona: Persona = {
-          id: `persona-${i}`,
-          type: ElementType.PERSONA,
-          version: '1.0',
-          metadata: {
-            name: `Test Persona ${i}`,
-            description: `Test persona number ${i}`,
-            unique_id: `persona-${i}`,
-            category: 'personal',
-            version: '1.0',
-            author: 'test',
-            created_date: '2025-01-01'
-          },
-          content: `Test content for persona ${i}`,
-          filename: `persona-${i}.md`,
-          unique_id: `persona-${i}`
-        } as Persona;
-        seedPersona(persona);
-      }
-
-      const start = performance.now();
-      const found = personaManager.findPersona('persona-500');
-      const duration = performance.now() - start;
-
-      expect(found).toBeDefined();
-      expect(found?.unique_id).toBe('persona-500');
-      expect(duration).toBeLessThan(20);
-    });
+    expect(assertOneMissScan).toThrow();
+    expect(matching.mock.calls).toHaveLength(2 * cachedCount);
   });
 
   // ============================================================================
