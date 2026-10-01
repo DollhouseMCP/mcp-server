@@ -3,7 +3,8 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
@@ -351,7 +352,7 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
     const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
     const moduleRoot = new URL('../../../src/storage/', import.meta.url);
     const worker = fileURLToPath(new URL(`./fixtures/FileMemoryVolumeCollisionWorker.${extension}`, import.meta.url));
-    child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', import.meta.resolve('tsx')] : []), worker,
+    child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : []), worker,
       ...['FileMemoryFence', 'FileMemoryTransactionCoordinator', 'FileMemoryOwnerSnapshots', 'FileMemoryVolumeStore']
         .map(name => new URL(`${name}.${extension}`, moduleRoot).href), f.root, USER],
     { cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
