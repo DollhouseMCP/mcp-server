@@ -644,9 +644,9 @@ describe('exclusive owned CREATE', () => {
     expect(index.childIndex([{ ...a, identity: { ...a.identity, inode: '99' } }]).get('a')?.identity.inode).toBe('99');
     expect(observed.get('a')?.identity.inode).toBe('2');
   });
-  it.each([null, undefined])('drains four readonly child observations and retains ordinal failure %s', async first => {
+  it.each([null, undefined])('drains sixteen readonly child observations and retains ordinal failure %s', async first => {
     const f = await fixture(), parent = await fs.realpath(path.dirname(f.head));
-    for (const name of ['a', 'b', 'c', 'd', 'e']) await fs.writeFile(path.join(parent, name), 'unchanged');
+    for (const name of 'abcdefghijklmnopq') await fs.writeFile(path.join(parent, name), 'unchanged');
     type Child = Parameters<typeof commitCreateDirectory>[0]['children'][number];
     const internals = FileMemoryOwnedCreate.prototype as unknown as { observeChild: (target: string, name: string) => Promise<Child> };
     const original = internals.observeChild, secondary = new Error('second ordinal fails first');
@@ -661,7 +661,7 @@ describe('exclusive owned CREATE', () => {
       let result: Promise<Child>;
       if (name === 'a') result = new Promise((_resolve, reject) => { rejectFirst = () => reject(first); });
       else if (name === 'b') result = Promise.reject(secondary);
-      else result = original.call(this, target, name).then(child => new Promise<Child>(resolve => {
+      else result = original.call(this, target, name).then(child => name !== 'c' && name !== 'd' ? child : new Promise<Child>(resolve => {
         if (name === 'c') releaseC = () => resolve(child);
         if (name === 'd') releaseD = () => resolve(child);
         if (releaseC && releaseD) started();
@@ -671,8 +671,8 @@ describe('exclusive owned CREATE', () => {
     const operation = f.store().createOwned(f.request);
     void operation.then(() => { completed = true; }, () => { completed = true; });
     await batchStarted;
-    expect(calls).toEqual(['a', 'b', 'c', 'd']);
-    expect(maximum).toBe(4);
+    expect(calls).toEqual([...'abcdefghijklmnop']);
+    expect(maximum).toBe(16);
     expect(completed).toBe(false);
     rejectFirst();
     await new Promise<void>(resolve => setImmediate(resolve));
@@ -686,9 +686,9 @@ describe('exclusive owned CREATE', () => {
     expect(Object.hasOwn(failure, 'cause')).toBe(true);
     expect(failure.cause).toBe(first);
     expect(outstanding).toBe(0);
-    expect(calls).toEqual(['a', 'b', 'c', 'd']);
+    expect(calls).toEqual([...'abcdefghijklmnop']);
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
-    for (const name of ['a', 'b', 'c', 'd', 'e']) expect(await fs.readFile(path.join(parent, name), 'utf8')).toBe('unchanged');
+    for (const name of 'abcdefghijklmnopq') expect(await fs.readFile(path.join(parent, name), 'utf8')).toBe('unchanged');
   });
   it('preserves strict schema3 forward recovery instead of reinterpreting legacy evidence', async () => {
     const f = await fixture();

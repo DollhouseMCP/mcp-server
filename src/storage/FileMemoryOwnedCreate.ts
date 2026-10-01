@@ -200,10 +200,10 @@ export class FileMemoryOwnedCreate {
     if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
       ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
     const names = await this.names(target), children: Child[] = [];
-    // Independent readonly observations are bounded to four. Drain the whole
+    // Independent readonly observations are bounded to sixteen. Drain the whole
     // batch and retain ordinal failure precedence before launching any next batch.
-    for (let offset = 0; offset < names.length; offset += 4) {
-      const results = await Promise.allSettled(names.slice(offset, offset + 4).map(name => this.observeChild(target, name)));
+    for (let offset = 0; offset < names.length; offset += 16) {
+      const results = await Promise.allSettled(names.slice(offset, offset + 16).map(name => this.observeChild(target, name)));
       for (const result of results) {
         if (result.status === 'rejected') throw result.reason;
         children.push(result.value);
