@@ -102,3 +102,22 @@ adds no ownership protocol, and enables no runtime maintenance or activation.
 All writers must be quiescent and orphan handling must occur separately. Clean
 and already-published retries use the existing completion rules and carry no
 historical attribution after an already-clean observation.
+
+## Dormant abort-intent codec
+
+`FileMemoryAbortIntentCodec` defines strict schema-2 `ABORTING_WRITE` values.
+It retains the original PREPARED operation, old/new revisions and hashes, exact
+old-head and prepared-temp identities, and hashes plus identities of the
+original PREPARED journal and both old ACTIVE records. Owner and operation UUID
+spelling, Unicode/case-sensitive actual locators, and decimal descriptor fields
+are preserved. Parse and serialization enforce exact UTF-8, exact field sets,
+the operation-bound temp name, and an 8192-byte ceiling.
+
+This pure codec performs no filesystem I/O and grants no deletion, ownership,
+cleanup or recovery authority. Existing schema-1 readers and forward APIs remain
+unchanged and reject the new variant. No abort executor or runtime wiring is
+implemented. The separately reviewed executor must publish and freshly prove
+durable intent before removing the exact original temp; only successful exact
+intent-journal unlink may establish a known-aborted result. Clean retries carry
+no historical attribution. Old head and owner records, archive generations and
+references remain unchanged. All existing activation and operator gates remain.
