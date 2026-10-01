@@ -372,6 +372,7 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
     };
     const descriptor = Object.getOwnPropertyDescriptor(observed, 'requireCommittedCollision');
     const original = observed.requireCommittedCollision;
+    if (typeof original !== 'function') throw new Error('Archive collision diagnostic target is unavailable');
     restore = () => {
       if (descriptor) Object.defineProperty(observed, 'requireCommittedCollision', descriptor);
       else delete (observed as Partial<typeof observed>).requireCommittedCollision;
