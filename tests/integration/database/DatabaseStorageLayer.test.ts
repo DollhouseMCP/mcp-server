@@ -73,6 +73,28 @@ afterAll(async () => {
 });
 
 describe('DatabaseStorageLayer', () => {
+
+  it.each(['edit', 'same-content-ABA'] as const)('rejects guarded skill %s after its same-read snapshot', async race => {
+    const db = getTestDb();
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(db, fixedUserId(userId), 'skills');
+    const otherWriter = new DatabaseStorageLayer(db, fixedUserId(userId), 'skills');
+    const metadata = { author: 'qualification', version: '1.0.0', description: 'CAS', tags: ['original'] };
+    const original = buildSkillContent('guarded-skill');
+    const id = await layer.writeContent('skills', 'guarded-skill', original, metadata);
+    const snapshot = await layer.readContentForUpdate(id);
+    await otherWriter.writeContent('skills', 'guarded-skill', buildSkillContent('guarded-skill') + '\nUser edit', metadata);
+    if (race === 'same-content-ABA') await otherWriter.writeContent('skills', 'guarded-skill', original, metadata);
+    const before = await layer.readContentForUpdate(id);
+    expect(BigInt(before.revision)).toBeGreaterThan(BigInt(snapshot.revision));
+    if (race === 'same-content-ABA') expect(before.content).toBe(snapshot.content);
+    await expect(layer.writeContent('skills', 'guarded-skill', original + '\nGenerated replacement', metadata,
+      { expectedIdentity: snapshot.identity, expectedStorageRevision: snapshot.revision }))
+      .rejects.toMatchObject({ code: 'ECONTENTCONFLICT' });
+    expect(await layer.readContentForUpdate(id)).toEqual(before);
+    await expect(layer.writeContent('skills', 'guarded-skill', before.content, metadata,
+      { expectedIdentity: before.identity, expectedStorageRevision: before.revision })).resolves.toBe(id);
+  });
   // ── writeContent + readContent ────────────────────────────────────
 
   it('should write and read back content with byte-for-byte fidelity', async () => {

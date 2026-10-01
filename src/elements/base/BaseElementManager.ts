@@ -69,6 +69,14 @@ const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
 
 export type BackupServiceProvider = () => BackupService | undefined;
 
+/** A resolved update target; identity is carried unchanged into the save. */
+export interface ElementUpdateTarget<T extends IElement> {
+  readonly element: T;
+  readonly content?: string;
+  readonly path: string;
+  readonly options: ElementSaveOptions;
+}
+
 export interface BaseElementManagerOptions {
   elementDirOverride?: string;
   eventDispatcher: ElementEventDispatcher;
@@ -385,6 +393,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       createBackupBeforeDelete: (ap: string) => this.createBackupBeforeDelete(ap),
       getElementLabel: () => this.getElementLabel(),
       getElementLabelCapitalized: () => this.getElementLabelCapitalized(),
+      getElementFilename: (name: string) => this.getElementFilename(name),
+      scanAndEvict: () => this.scanAndEvict(),
       extractNameFromPath: (rp: string) => this.extractNameFromPath(rp),
       normalizeAndValidatePath: (fp: string) => this.normalizeAndValidatePath(fp),
       get constructor() { return self.constructor as { name: string }; },
@@ -474,6 +484,19 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
   async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
     return this._persister.save(element, filePath, options);
+  }
+
+  /** Resolve once so an update cannot silently insert or retarget a replacement row. */
+  async findForUpdate(name: string): Promise<ElementUpdateTarget<T> | undefined> {
+    const target = await this._persister.resolveUpdateTarget(name);
+    if (!target) return undefined;
+    try {
+      const element = await this._loader.loadDefinitionFromContent(target.content, target.path);
+      return element ? { element, ...target } : undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
   }
 
   async delete(filePath: string): Promise<void> {

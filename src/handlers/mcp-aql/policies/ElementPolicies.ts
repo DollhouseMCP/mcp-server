@@ -12,6 +12,7 @@
  * 4. Operation default permission (fallback)
  */
 
+import { type OperationRegistry } from '../OperationRegistry.js';
 import {
   PermissionLevel,
   type ElementGatekeeperPolicy,
@@ -167,10 +168,11 @@ function optionalConflicts(
 export function resolveElementPolicy(
   operation: string,
   activeElements: ActiveElement[],
-  targetElementType?: string
+  targetElementType: string | undefined,
+  operations: OperationRegistry
 ): ElementPolicyResult {
   const state: ElementPolicyResolutionState = {
-    permissionLevel: getDefaultPermissionLevel(operation),
+    permissionLevel: getDefaultPermissionLevel(operation, operations),
     scopeBlocked: false,
     confirmedByElement: false,
     conflictingElements: [],

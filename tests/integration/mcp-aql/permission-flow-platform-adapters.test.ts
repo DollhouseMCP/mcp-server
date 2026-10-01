@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Permission Flow Platform Adapter Tests (Issue #1669)
  *
@@ -635,28 +636,28 @@ describe('Permission Flow Platform Adapters (Issue #1669)', () => {
 
   describe('MCP-AQL operation permission levels — platform implications', () => {
     it('AUTO_APPROVE operations need no platform-specific handling', () => {
-      const autoOps = getAutoApprovedOperations();
+      const autoOps = getAutoApprovedOperations(BASE_OPERATION_REGISTRY);
       // These just pass through on every platform — no hook needed
       expect(autoOps.length).toBeGreaterThan(20);
     });
 
     it('CONFIRM_SESSION operations map to single-approval on all platforms', () => {
-      const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION);
+      const sessionOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION, BASE_OPERATION_REGISTRY);
       // On Claude Code: currently requires confirm_operation round-trip
       // On other platforms: would map to a single deny/ask on first call
       // After #1653 auto-confirm: would be single-approval everywhere
       for (const op of sessionOps) {
-        expect(getDefaultPermissionLevel(op)).toBe(PermissionLevel.CONFIRM_SESSION);
+        expect(getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SESSION);
       }
     });
 
     it('CONFIRM_SINGLE_USE operations require per-invocation approval on all platforms', () => {
-      const singleOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE);
+      const singleOps = getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE, BASE_OPERATION_REGISTRY);
       // These need approval every time, regardless of platform
       // On Claude Code: confirm_operation (single_use) + retry
       // On hook platforms: deny every time, user must re-invoke
       for (const op of singleOps) {
-        expect(getDefaultPermissionLevel(op)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+        expect(getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
         // These are the operations that remain high-friction on all platforms
       }
       expect(singleOps).toContain('execute_agent');

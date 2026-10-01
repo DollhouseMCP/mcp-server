@@ -34,9 +34,9 @@ const LOCKED_PERSONA_NAME = 'locked-persona';
 function createPermissiveGatekeeper(): Gatekeeper {
   const gk = new Gatekeeper(undefined, { enableAuditLogging: false });
   const originalEnforce = gk.enforce.bind(gk);
-  gk.enforce = (input) => {
+  gk.enforce = (input, operations) => {
     // Still do Layer 1 route validation (catches endpoint mismatches)
-    const result = originalEnforce(input);
+    const result = originalEnforce(input, operations);
     if (result.errorCode === 'ENDPOINT_MISMATCH' || result.errorCode === 'UNKNOWN_OPERATION') {
       return result;
     }

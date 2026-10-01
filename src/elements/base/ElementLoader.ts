@@ -150,6 +150,11 @@ export class ElementLoader<T extends IElement> {
   async loadDefinition(filePath: string): Promise<T> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
     const content = await this.readContent(relativePath, absolutePath);
+    return this.loadDefinitionFromContent(content, relativePath);
+  }
+
+  /** Hydrate the exact bytes paired with a guarded update snapshot. */
+  async loadDefinitionFromContent(content: string, relativePath: string): Promise<T> {
     const parsed = this.host.parseContent(content);
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);

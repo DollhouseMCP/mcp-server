@@ -6,6 +6,7 @@
  * - 'mcpaql': Registers only MCP-AQL tools (1 or 4 depending on MCP_AQL_ENDPOINT_MODE)
  */
 
+import { OperationRegistry } from '../../../src/handlers/mcp-aql/OperationRegistry.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 
 describe('MCP_INTERFACE_MODE Configuration', () => {
@@ -123,6 +124,7 @@ describe('Tool Registration by Interface Mode', () => {
 
       // Create a mock handler
       const mockHandler = {
+        operations: new OperationRegistry(),
         handleCreate: jest.fn(),
         handleRead: jest.fn(),
         handleUpdate: jest.fn(),
@@ -151,6 +153,7 @@ describe('Tool Registration by Interface Mode', () => {
 
       // Create a mock handler
       const mockHandler = {
+        operations: new OperationRegistry(),
         handleCreate: jest.fn(),
         handleRead: jest.fn(),
         handleUpdate: jest.fn(),
@@ -172,6 +175,7 @@ describe('Tool Registration by Interface Mode', () => {
       const { getMCPAQLTools } = await import('../../../src/server/tools/MCPAQLTools.js');
 
       const mockHandler = {
+        operations: new OperationRegistry(),
         handleCreate: jest.fn(),
         handleRead: jest.fn(),
         handleUpdate: jest.fn(),
@@ -224,6 +228,7 @@ describe('Token Estimation', () => {
     const { ToolRegistry } = await import('../../../src/handlers/ToolRegistry.js');
 
     const mockHandler = {
+        operations: new OperationRegistry(),
       handleCreate: jest.fn(),
       handleRead: jest.fn(),
       handleUpdate: jest.fn(),
@@ -249,6 +254,7 @@ describe('Token Estimation', () => {
     const { ToolRegistry } = await import('../../../src/handlers/ToolRegistry.js');
 
     const mockHandler = {
+        operations: new OperationRegistry(),
       handleCreate: jest.fn(),
       handleRead: jest.fn(),
       handleUpdate: jest.fn(),
@@ -288,6 +294,7 @@ describe('Token Estimation', () => {
     const { ToolRegistry } = await import('../../../src/handlers/ToolRegistry.js');
 
     const mockHandler = {
+        operations: new OperationRegistry(),
       handleCreate: jest.fn(),
       handleRead: jest.fn(),
       handleUpdate: jest.fn(),

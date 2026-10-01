@@ -132,12 +132,24 @@ export interface WriteContentOptions {
    * deleted, renamed, or replaced after the caller validated it.
    */
   expectedIdentity?: DatabaseStorageIdentity;
+  /** Same-read monotonic row revision; requires expectedIdentity. */
+  expectedStorageRevision?: string;
 }
 
 /** Options shared by manager and persister save paths. */
 export interface ElementSaveOptions {
   exclusive?: boolean;
   expectedIdentity?: DatabaseStorageIdentity;
+  expectedStorageRevision?: string;
+  /** Compared under the cooperating process-local element lock before writing. */
+  expectedFileSnapshot?: { readonly sha256: string; readonly dev: number; readonly ino: number };
+  /**
+   * File updates never insert after deletion under the process-local element lock.
+   * Alone, existence cannot detect same-path recreation. expectedFileSnapshot
+   * additionally protects content and inode identity under the cooperating
+   * process-local lock. External file writers are not coordinated.
+   */
+  updateOnly?: boolean;
 }
 
 /** Authoritative database identity for a persisted element row. */
@@ -207,6 +219,10 @@ export interface IWritableStorageLayer extends IStorageLayer {
    * Returns the full raw_content (YAML frontmatter + body).
    */
   readContent(relativePath: string): Promise<string>;
+  /** Owner-only content, identity and mutation revision from the same SELECT. */
+  readContentForUpdate?(relativePath: string): Promise<{
+    content: string; identity: DatabaseStorageIdentity; revision: string;
+  }>;
 }
 
 /**

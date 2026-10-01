@@ -43,8 +43,9 @@
  *     This is a runtime override via element activation, not a code change.
  */
 
+import { type OperationRegistry } from '../OperationRegistry.js';
 import { PermissionLevel, type OperationPolicy } from '../GatekeeperTypes.js';
-import { getRoute, OPERATION_ROUTES, type CRUDEndpoint } from '../OperationRouter.js';
+import { type CRUDEndpoint } from '../OperationRouter.js';
 
 /**
  * Map CRUDE endpoints to their default permission levels.
@@ -81,6 +82,11 @@ export function getEndpointDefaultLevel(endpoint: CRUDEndpoint): PermissionLevel
  * Operations NOT listed here inherit their permission level from their endpoint.
  */
 export const OPERATION_POLICY_OVERRIDES: Record<string, OperationPolicy> = {
+  integration_request: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration request policy owns approval' },
+  create_integration_spec: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },
+  update_integration_spec: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },
+  create_integration_skill: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },
+  update_integration_skill: { defaultLevel: PermissionLevel.AUTO_APPROVE, canBeElevated: true, rationale: 'Input-bound integration management policy owns approval' },
   // ===== CREATE endpoint overrides =====
   // These are on CREATE (default CONFIRM_SESSION) but need AUTO_APPROVE
   verify_challenge: {
@@ -203,7 +209,7 @@ export function getOperationPolicy(operation: string): OperationPolicy | undefin
  * @param operation - The operation name
  * @returns The effective default permission level
  */
-export function getDefaultPermissionLevel(operation: string): PermissionLevel {
+export function getDefaultPermissionLevel(operation: string, operations: OperationRegistry): PermissionLevel {
   // 1. Check for explicit override
   const override = OPERATION_POLICY_OVERRIDES[operation];
   if (override) {
@@ -211,7 +217,7 @@ export function getDefaultPermissionLevel(operation: string): PermissionLevel {
   }
 
   // 2. Derive from endpoint routing
-  const route = getRoute(operation);
+  const route = operations.getRoute(operation);
   if (route) {
     return ENDPOINT_DEFAULT_LEVELS[route.endpoint];
   }
@@ -240,11 +246,11 @@ export function canOperationBeElevated(operation: string): boolean {
  * @param level - The permission level to filter by
  * @returns Array of operation names at that level
  */
-export function getOperationsAtLevel(level: PermissionLevel): string[] {
+export function getOperationsAtLevel(level: PermissionLevel, operations: OperationRegistry): string[] {
   const results: string[] = [];
 
-  for (const operation of Object.keys(OPERATION_ROUTES)) {
-    if (getDefaultPermissionLevel(operation) === level) {
+  for (const operation of Object.keys(operations.routes)) {
+    if (getDefaultPermissionLevel(operation, operations) === level) {
       results.push(operation);
     }
   }
@@ -256,17 +262,17 @@ export function getOperationsAtLevel(level: PermissionLevel): string[] {
  * Get all auto-approved operations.
  * These are safe to execute without any confirmation.
  */
-export function getAutoApprovedOperations(): string[] {
-  return getOperationsAtLevel(PermissionLevel.AUTO_APPROVE);
+export function getAutoApprovedOperations(operations: OperationRegistry): string[] {
+  return getOperationsAtLevel(PermissionLevel.AUTO_APPROVE, operations);
 }
 
 /**
  * Get all operations requiring confirmation.
  * These need user approval before execution.
  */
-export function getConfirmationRequiredOperations(): string[] {
+export function getConfirmationRequiredOperations(operations: OperationRegistry): string[] {
   return [
-    ...getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION),
-    ...getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE),
+    ...getOperationsAtLevel(PermissionLevel.CONFIRM_SESSION, operations),
+    ...getOperationsAtLevel(PermissionLevel.CONFIRM_SINGLE_USE, operations),
   ];
 }

@@ -12,6 +12,7 @@ import {
   PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
   PortfolioElementAlreadyExistsError,
   PortfolioElementVersionConflictError,
+  PortfolioElementUnreadableError,
   type ConsolePortfolioElementCreateInput,
   type ConsolePortfolioElementDeleteInput,
   type ConsolePortfolioElementDetailRecord,
@@ -25,6 +26,7 @@ import {
 
 type PortfolioElementManager = Pick<BaseElementManager<IElement>,
   | 'findByName'
+  | 'findForUpdate'
   | 'getFileExtension'
   | 'importElement'
   | 'list'
@@ -93,7 +95,12 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     this.assertAmbientUser(userId);
     const element = await this.findElement(type, canonicalName);
     if (!element) return null;
-    return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element));
+    try {
+      return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element, true));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
   }
 
   async create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord> {
@@ -125,9 +132,13 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
-    const existing = await this.findElement(input.type, input.canonicalName);
+    const target = input.type === 'skills' ? await manager.findForUpdate(input.canonicalName).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ECONTENTCONFLICT') throw new PortfolioElementVersionConflictError();
+      throw error;
+    }) : undefined;
+    const existing = input.type === 'skills' ? target?.element : await this.findElement(input.type, input.canonicalName);
     if (!existing) return null;
-    const existingRecord = await this.toRecord(input.userId, input.type, existing);
+    const existingRecord = await this.toRecord(input.userId, input.type, existing, false, target?.content);
     this.assertExpectedHash(input.expectedContentHash, existingRecord);
 
     const updatedRaw = rawContentFromInput({
@@ -138,7 +149,14 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       tags: input.tags ?? existingRecord.tags,
     }, input.type);
     const updated = await manager.importElement(updatedRaw, managerFormatForType(input.type));
-    await manager.save(updated, elementPath(manager, existingRecord.canonicalName));
+    try {
+      await manager.save(updated, target?.path ?? elementPath(manager, existingRecord.canonicalName), target?.options);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ECONTENTCONFLICT') throw new PortfolioElementVersionConflictError();
+      if (target && (code === 'ENOENT' || code === 'ESTALE')) return null;
+      throw error;
+    }
     // Re-read so the returned record/ETag match a subsequent GET (see create()).
     const persisted = (await this.findElement(input.type, existingRecord.canonicalName)) ?? updated;
     return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
@@ -191,9 +209,23 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     userId: string,
     type: ConsolePortfolioElementType,
     element: IElement,
+    classifyUnreadable = false,
+    capturedContent?: string,
   ): Promise<ConsolePortfolioElementDetailRecord> {
-    const rawContent = await this.rawContentFor(type, element);
-    const parsed = parseRawContent(type, rawContent);
+    if (type === 'skills' && capturedContent === undefined) {
+      const snapshot = await this.manager(type).findForUpdate(element.metadata.name);
+      if (!snapshot) throw Object.assign(new Error('Skill definition is no longer available'), { code: 'ENOENT' });
+      element = snapshot.element;
+      capturedContent = snapshot.content;
+    }
+    const rawContent = capturedContent ?? await this.rawContentFor(type, element);
+    let parsed: ReturnType<typeof parseRawContent>;
+    try {
+      parsed = parseRawContent(type, rawContent);
+    } catch (error) {
+      if (classifyUnreadable) throw new PortfolioElementUnreadableError(error);
+      throw error;
+    }
     const validation = this.manager(type).validate(element);
     const metadata = parsed.metadata;
     const name = element.metadata.name;

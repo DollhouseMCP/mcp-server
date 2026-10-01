@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 import { describe, expect, it, jest } from '@jest/globals';
 
 import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
@@ -66,7 +67,7 @@ function createHarness(
     executingAgents,
     new Set<string>(),
     name => `default:${name}`,
-    contextTracker,
+    BASE_OPERATION_REGISTRY, contextTracker,
   );
 
   return { check, handler, recordAgentStep };

@@ -80,7 +80,7 @@
 
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { UnifiedEndpoint } from '../../handlers/mcp-aql/UnifiedEndpoint.js';
-import { getOperationsForEndpoint, type CRUDEndpoint } from '../../handlers/mcp-aql/OperationRouter.js';
+import { type CRUDEndpoint } from '../../handlers/mcp-aql/OperationRouter.js';
 import { ElementType } from '../../handlers/mcp-aql/types.js';
 import type { ToolDefinition, ToolHandler } from '../../handlers/types/ToolTypes.js';
 import { env } from '../../config/env.js';
@@ -102,8 +102,8 @@ function getElementTypesString(): string {
  * Get operations for an endpoint as a comma-separated string.
  * Derived from OPERATION_ROUTES to ensure consistency.
  */
-function getOperationsString(endpoint: CRUDEndpoint): string {
-  return getOperationsForEndpoint(endpoint).join(', ');
+function getOperationsString(endpoint: CRUDEndpoint, handler: MCPAQLHandler): string {
+  return handler.operations.getOperationsForEndpoint(endpoint).join(', ');
 }
 
 // ============================================================================
@@ -182,11 +182,11 @@ function getUnifiedTools(handler: MCPAQLHandler): Array<{ tool: ToolDefinition; 
   const description = `DollhouseMCP unified API - GraphQL-style query interface for AI element management.
 
 CRUDE Operations:
-- CREATE: ${getOperationsString('CREATE')}
-- READ: ${getOperationsString('READ')}
-- UPDATE: ${getOperationsString('UPDATE')}
-- DELETE: ${getOperationsString('DELETE')}
-- EXECUTE: ${getOperationsString('EXECUTE')}
+- CREATE: ${getOperationsString('CREATE', handler)}
+- READ: ${getOperationsString('READ', handler)}
+- UPDATE: ${getOperationsString('UPDATE', handler)}
+- DELETE: ${getOperationsString('DELETE', handler)}
+- EXECUTE: ${getOperationsString('EXECUTE', handler)}
 
 Element types: ${getElementTypesString()}
 
@@ -256,7 +256,7 @@ function getCRUDETools(handler: MCPAQLHandler): Array<{ tool: ToolDefinition; ha
         name: "mcp_aql_create",
         description: `Additive, non-destructive operations.
 
-Supported operations: ${getOperationsString('CREATE')}
+Supported operations: ${getOperationsString('CREATE', handler)}
 
 Element types: ${elementTypes}
 
@@ -322,9 +322,9 @@ Discover element format specs (required fields, syntax, examples) — use mcp_aq
     {
       tool: {
         name: "mcp_aql_read",
-        description: `Safe, read-only operations.
+        description: String.raw`Safe, read-only operations.
 
-Supported operations: ${getOperationsString('READ')}
+Supported operations: ${getOperationsString('READ', handler)}
 
 Element types: ${elementTypes}
 
@@ -378,9 +378,9 @@ System:
 { operation: "query_logs", params: { level: "error", limit: 10 } }
 { operation: "query_metrics" }
 { operation: "query_metrics", params: { names: ["system.memory.*"], type: "gauge" } }
-{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", agent_skill: { "SKILL.md": "---\\nname: my-skill\\ndescription: test\\n---\\n\\nUse this skill." } } }
-{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", security_mode: "warn", path_mode: "lossless", agent_skill: { "SKILL.md": "---\\nname: my-skill\\ndescription: test\\n---\\n\\nUse this skill." } } }
-{ operation: "convert_skill_format", params: { direction: "dollhouse_to_agent", path_mode: "lossless", dollhouse_markdown: "---\\nname: my-skill\\ndescription: test\\ninstructions: Use this skill.\\n---\\n\\n### binaries/logo.png\\n(binary link: ./skills/binaries/logo.png)" } }
+{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", agent_skill: { "SKILL.md": "---\nname: my-skill\ndescription: test\n---\n\nUse this skill." } } }
+{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", security_mode: "warn", path_mode: "lossless", agent_skill: { "SKILL.md": "---\nname: my-skill\ndescription: test\n---\n\nUse this skill." } } }
+{ operation: "convert_skill_format", params: { direction: "dollhouse_to_agent", path_mode: "lossless", dollhouse_markdown: "---\nname: my-skill\ndescription: test\ninstructions: Use this skill.\n---\n\n### binaries/logo.png\n(binary link: ./skills/binaries/logo.png)" } }
 
 Auth:
 { operation: "check_github_auth" }
@@ -429,7 +429,7 @@ Discover all operations and parameters:
         name: "mcp_aql_update",
         description: `Modifying operations that overwrite data.
 
-Supported operations: ${getOperationsString('UPDATE')}
+Supported operations: ${getOperationsString('UPDATE', handler)}
 
 Element types: ${elementTypes}
 
@@ -470,7 +470,7 @@ Discover required parameters — use mcp_aql_read:
         name: "mcp_aql_delete",
         description: `Destructive operations that remove data.
 
-Supported operations: ${getOperationsString('DELETE')}
+Supported operations: ${getOperationsString('DELETE', handler)}
 
 Element types: ${elementTypes}
 
@@ -510,7 +510,7 @@ Discover required parameters — use mcp_aql_read:
         name: "mcp_aql_execute",
         description: `Execution lifecycle operations for executable elements (agents, workflows, pipelines).
 
-Supported operations: ${getOperationsString('EXECUTE')}
+Supported operations: ${getOperationsString('EXECUTE', handler)}
 
 These operations manage runtime execution state. Unlike CRUD operations (which manage definitions), Execute operations handle the execution lifecycle:
 - execute_agent: Start a new execution (returns goalId and stateVersion for tracking)

@@ -2121,6 +2121,15 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('[redacted]; password=A; [redacted]; note=available');
   });
 
+  it.each(['openapi_spec/create', 'openapi_spec/update', 'generated_skill/create', 'generated_skill/update'])('rejects management sentinel %s as a real request', async target => {
+    const fetch = jest.fn(async () => jsonResponse(200, { ok: true }));
+    const fixture = gatewayFixture({ fetch });
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.request({
+      provider: 'gmail', method: 'PUT', path: `_internal:/integration/${target}`,
+    }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {
     const gateway = gatewayFixture({
       fetch: () => Promise.resolve(jsonResponse(200, { ok: true })),

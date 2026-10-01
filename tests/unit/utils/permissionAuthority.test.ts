@@ -1,3 +1,4 @@
+import { env } from '../../../src/config/env.js';
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,6 +11,8 @@ import {
 } from '../../../src/utils/permissionAuthority.js';
 
 describe('permissionAuthority', () => {
+  const settings = env as unknown as Record<string, unknown>;
+  const previousServerName = settings.DOLLHOUSE_MCP_SERVER_NAME;
   let tempHome: string;
 
   beforeEach(async () => {
@@ -17,6 +20,7 @@ describe('permissionAuthority', () => {
   });
 
   afterEach(async () => {
+    settings.DOLLHOUSE_MCP_SERVER_NAME = previousServerName;
     await rm(tempHome, { recursive: true, force: true });
   });
 
@@ -57,7 +61,7 @@ describe('permissionAuthority', () => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     expect(parsed.permissions).toEqual({
       allow: ['Read', 'Bash:git status*'],
-      ask: ['Write', 'Write:README.md', 'mcp__DollhouseMCP__mcp_aql_execute*'],
+      ask: ['Write', 'Write:README.md', 'mcp__dollhousemcp__mcp_aql_execute*', 'mcp__DollhouseMCP__mcp_aql_execute*'],
       deny: ['Delete', 'Bash:rm -rf*'],
     });
     expect(parsed['_dollhousePermissionAuthority']).toMatchObject({
@@ -65,12 +69,23 @@ describe('permissionAuthority', () => {
       host: 'claude-code',
       managedPermissions: {
         allow: ['Bash:git status*'],
-        ask: ['Write:README.md', 'mcp__DollhouseMCP__mcp_aql_execute*'],
+        ask: ['Write:README.md', 'mcp__dollhousemcp__mcp_aql_execute*', 'mcp__DollhouseMCP__mcp_aql_execute*'],
         deny: ['Bash:rm -rf*'],
       },
     });
   });
 
+
+  it('emits forced ask patterns for default, legacy and configured server names as written', async () => {
+    settings.DOLLHOUSE_MCP_SERVER_NAME = 'PersonalTools';
+    const names = ['dollhousemcp', 'DollhouseMCP', 'PersonalTools'];
+    const patterns = names.map(name => `mcp__${name}__mcp_aql_execute*`);
+    await setPermissionAuthorityMode({ homeDir: tempHome, host: 'claude-code', mode: 'authoritative',
+      policies: { combinedAllowPatterns: patterns } });
+    const written = JSON.parse(await readFile(join(tempHome, '.claude', 'settings.json'), 'utf8'));
+    expect(written.permissions.ask).toEqual(patterns);
+    expect(written.permissions.allow).toEqual([]);
+  });
   it('restores the original Claude Code settings when leaving authoritative mode', async () => {
     const settingsPath = join(tempHome, '.claude', 'settings.json');
     await mkdir(join(tempHome, '.claude'), { recursive: true });

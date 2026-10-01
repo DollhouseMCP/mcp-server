@@ -1,3 +1,4 @@
+import { BASE_OPERATION_REGISTRY } from '../../../../src/handlers/mcp-aql/OperationRegistry.js';
 /**
  * Unit tests for Gatekeeper Policy Engine
  *
@@ -277,19 +278,19 @@ describe('Gatekeeper', () => {
     describe('validateRoute()', () => {
       it('should validate correct route without throwing', () => {
         expect(() => {
-          gatekeeper.validateRoute('list_elements', 'READ');
+          gatekeeper.validateRoute('list_elements', 'READ', BASE_OPERATION_REGISTRY);
         }).not.toThrow();
       });
 
       it('should throw for incorrect route', () => {
         expect(() => {
-          gatekeeper.validateRoute('create_element', 'READ');
+          gatekeeper.validateRoute('create_element', 'READ', BASE_OPERATION_REGISTRY);
         }).toThrow(/Security violation/);
       });
 
       it('should throw for unknown operation', () => {
         expect(() => {
-          gatekeeper.validateRoute('unknown_op', 'READ');
+          gatekeeper.validateRoute('unknown_op', 'READ', BASE_OPERATION_REGISTRY);
         }).toThrow(/Unknown operation/);
       });
     });
@@ -303,7 +304,7 @@ describe('Gatekeeper', () => {
         const decision = gatekeeper.enforce({
           operation,
           endpoint: 'READ',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(true);
         expect(decision.permissionLevel).toBe(PermissionLevel.AUTO_APPROVE);
@@ -313,7 +314,7 @@ describe('Gatekeeper', () => {
         const decision = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'READ',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(false);
         expect(decision.errorCode).toBe(GatekeeperErrorCode.ENDPOINT_MISMATCH);
@@ -323,7 +324,7 @@ describe('Gatekeeper', () => {
         const decision = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(false);
         expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SESSION);
@@ -334,7 +335,7 @@ describe('Gatekeeper', () => {
         const decision = gatekeeper.enforce({
           operation: 'delete_element',
           endpoint: 'DELETE',
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(false);
         expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
@@ -348,7 +349,7 @@ describe('Gatekeeper', () => {
         let decision = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(false);
 
         // Record confirmation
@@ -358,7 +359,7 @@ describe('Gatekeeper', () => {
         decision = gatekeeper.enforce({
           operation: 'create_element',
           endpoint: 'CREATE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(true);
         expect(decision.policySource).toBe('session_confirmation');
       });
@@ -371,14 +372,14 @@ describe('Gatekeeper', () => {
         let decision = gatekeeper.enforce({
           operation: 'delete_element',
           endpoint: 'DELETE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(true);
 
         // Second use should require confirmation again
         decision = gatekeeper.enforce({
           operation: 'delete_element',
           endpoint: 'DELETE',
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(false);
         expect(decision.confirmationPending).toBe(true);
       });
@@ -392,7 +393,7 @@ describe('Gatekeeper', () => {
           operation: 'create_element',
           endpoint: 'CREATE',
           elementType: 'personas',
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(true);
 
         // Should not work for skills (no confirmation for this type)
@@ -400,7 +401,7 @@ describe('Gatekeeper', () => {
           operation: 'create_element',
           endpoint: 'CREATE',
           elementType: 'skills',
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(false);
       });
 
@@ -412,10 +413,10 @@ describe('Gatekeeper', () => {
 
         // Both should require confirmation again
         expect(
-          gatekeeper.enforce({ operation: 'create_element', endpoint: 'CREATE' }).allowed
+          gatekeeper.enforce({ operation: 'create_element', endpoint: 'CREATE' }, BASE_OPERATION_REGISTRY).allowed
         ).toBe(false);
         expect(
-          gatekeeper.enforce({ operation: 'edit_element', endpoint: 'UPDATE' }).allowed
+          gatekeeper.enforce({ operation: 'edit_element', endpoint: 'UPDATE' }, BASE_OPERATION_REGISTRY).allowed
         ).toBe(false);
       });
     });
@@ -439,7 +440,7 @@ describe('Gatekeeper', () => {
           operation: 'delete_element',
           endpoint: 'DELETE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(false);
         expect(decision.errorCode).toBe(GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION);
@@ -464,7 +465,7 @@ describe('Gatekeeper', () => {
           operation: 'create_element',
           endpoint: 'CREATE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(true);
         expect(decision.policySource).toBe('element_policy');
@@ -492,7 +493,7 @@ describe('Gatekeeper', () => {
           endpoint: 'READ',
           elementType: 'skills',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(true);
 
         // Should deny for personas
@@ -501,7 +502,7 @@ describe('Gatekeeper', () => {
           endpoint: 'READ',
           elementType: 'personas',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
         expect(decision.allowed).toBe(false);
         expect(decision.errorCode).toBe(GatekeeperErrorCode.SCOPE_RESTRICTION);
       });
@@ -535,7 +536,7 @@ describe('Gatekeeper', () => {
           operation: 'create_element',
           endpoint: 'CREATE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // confirm from Security Persona must win over allow from Permissive Skill
         expect(decision.allowed).toBe(false);
@@ -571,7 +572,7 @@ describe('Gatekeeper', () => {
           operation: 'create_element',
           endpoint: 'CREATE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // Conflict note should appear in the reason
         expect(decision.reason).toContain('"Permissive Skill"');
@@ -600,7 +601,7 @@ describe('Gatekeeper', () => {
           operation: 'delete_element',
           endpoint: 'DELETE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // delete_element default is CONFIRM_SINGLE_USE — element deny is bypassed
         expect(decision.allowed).toBe(false);
@@ -629,7 +630,7 @@ describe('Gatekeeper', () => {
           operation: 'create_element',
           endpoint: 'CREATE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         // create_element default is CONFIRM_SESSION — element allow is bypassed
         expect(decision.allowed).toBe(false);
@@ -656,7 +657,7 @@ describe('Gatekeeper', () => {
           operation: 'delete_element',
           endpoint: 'DELETE',
           activeElements,
-        });
+        }, BASE_OPERATION_REGISTRY);
 
         expect(decision.allowed).toBe(false);
         expect(decision.errorCode).toBe(GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION);
@@ -777,55 +778,55 @@ describe('Gatekeeper', () => {
   describe('Operation Policies', () => {
     it('should have policies for all routed operations', () => {
       // All auto-approved operations should be read-only
-      const autoApproved = getAutoApprovedOperations();
+      const autoApproved = getAutoApprovedOperations(BASE_OPERATION_REGISTRY);
       expect(autoApproved.length).toBeGreaterThan(0);
 
       autoApproved.forEach(op => {
-        expect(getDefaultPermissionLevel(op)).toBe(PermissionLevel.AUTO_APPROVE);
+        expect(getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
       });
     });
 
     it('should have confirmation-required operations', () => {
-      const confirmRequired = getConfirmationRequiredOperations();
+      const confirmRequired = getConfirmationRequiredOperations(BASE_OPERATION_REGISTRY);
       expect(confirmRequired.length).toBeGreaterThan(0);
 
       confirmRequired.forEach(op => {
-        const level = getDefaultPermissionLevel(op);
+        const level = getDefaultPermissionLevel(op, BASE_OPERATION_REGISTRY);
         expect([PermissionLevel.CONFIRM_SESSION, PermissionLevel.CONFIRM_SINGLE_USE]).toContain(level);
       });
     });
 
     it('should default to CONFIRM_SINGLE_USE for unknown operations', () => {
-      const level = getDefaultPermissionLevel('unknown_operation');
+      const level = getDefaultPermissionLevel('unknown_operation', BASE_OPERATION_REGISTRY);
       expect(level).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
     });
 
     it('should derive AUTO_APPROVE from READ endpoint for operations without overrides', () => {
       // activate_element and deactivate_element are on READ endpoint
       // and have no explicit override, so they should be AUTO_APPROVE
-      expect(getDefaultPermissionLevel('activate_element')).toBe(PermissionLevel.AUTO_APPROVE);
-      expect(getDefaultPermissionLevel('deactivate_element')).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('activate_element', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('deactivate_element', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
     });
 
     it('should derive CONFIRM_SESSION from CREATE endpoint for operations without overrides', () => {
       // create_element is on CREATE endpoint with no override
-      expect(getDefaultPermissionLevel('create_element')).toBe(PermissionLevel.CONFIRM_SESSION);
-      expect(getDefaultPermissionLevel('addEntry')).toBe(PermissionLevel.CONFIRM_SESSION);
+      expect(getDefaultPermissionLevel('create_element', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SESSION);
+      expect(getDefaultPermissionLevel('addEntry', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SESSION);
     });
 
     it('should derive CONFIRM_SINGLE_USE from DELETE endpoint for operations without overrides', () => {
       // delete_element has an override (canBeElevated: false) but same level
-      expect(getDefaultPermissionLevel('delete_element')).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+      expect(getDefaultPermissionLevel('delete_element', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
     });
 
     it('should allow explicit overrides to differ from endpoint default', () => {
       // verify_challenge is on CREATE (default CONFIRM_SESSION) but overridden to AUTO_APPROVE
-      expect(getDefaultPermissionLevel('verify_challenge')).toBe(PermissionLevel.AUTO_APPROVE);
-      expect(getDefaultPermissionLevel('release_deadlock')).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('verify_challenge', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('release_deadlock', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
       // confirm_operation is on EXECUTE (default CONFIRM_SINGLE_USE) but overridden to AUTO_APPROVE
-      expect(getDefaultPermissionLevel('confirm_operation')).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('confirm_operation', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
       // get_execution_state is on EXECUTE but overridden to AUTO_APPROVE
-      expect(getDefaultPermissionLevel('get_execution_state')).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('get_execution_state', BASE_OPERATION_REGISTRY)).toBe(PermissionLevel.AUTO_APPROVE);
     });
   });
 
@@ -862,7 +863,7 @@ describe('Gatekeeper', () => {
       const decision = gatekeeper.enforce({
         operation: 'list_elements',
         endpoint: 'READ',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       // Allowed decisions should NOT generate security events (noise reduction)
       const events = SecurityMonitor.getRecentEvents(10);
@@ -884,7 +885,7 @@ describe('Gatekeeper', () => {
       const decision = gatekeeper.enforce({
         operation: 'delete_element',
         endpoint: 'DELETE',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -896,7 +897,7 @@ describe('Gatekeeper', () => {
       const decision = gatekeeper.enforce({
         operation: 'execute_agent',
         endpoint: 'EXECUTE',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -908,7 +909,7 @@ describe('Gatekeeper', () => {
       const decision = gatekeeper.enforce({
         operation: 'create_element',
         endpoint: 'CREATE',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -929,7 +930,7 @@ describe('Gatekeeper', () => {
         operation: 'create_element',
         endpoint: 'CREATE',
         activeElements,
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -943,7 +944,7 @@ describe('Gatekeeper', () => {
       const decision = gatekeeper.enforce({
         operation: 'record_execution_step',
         endpoint: 'CREATE',
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -965,7 +966,7 @@ describe('Gatekeeper', () => {
         operation: 'delete_element',
         endpoint: 'DELETE',
         activeElements,
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(false);
       expect(decision.confirmationPending).toBe(true);
@@ -990,7 +991,7 @@ describe('Gatekeeper', () => {
         endpoint: 'EXECUTE',
         activeElements,
         skipElementPolicies: true,
-      });
+      }, BASE_OPERATION_REGISTRY);
 
       expect(decision.allowed).toBe(true);
       expect(decision.reason).not.toContain('Blocker');
