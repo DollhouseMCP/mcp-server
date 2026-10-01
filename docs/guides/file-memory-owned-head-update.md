@@ -163,3 +163,40 @@ this bounded telemetry is not durable audit storage. The known-aborted event is
 attempted immediately after receipt capture, before callbacks and final proofs.
 Guarantees cover the current cooperating-process POSIX interruption model,
 without claiming hostile-writer atomicity, multihost safety or power-loss recovery.
+
+### Dormant final RESERVED adoption recovery
+
+`recoverReservedAdoption({ locator, ownerId })` explicitly completes only an
+unchanged revision-1 head with an agreeing ACTIVE registry and RESERVED sidecar.
+It captures validated primitive request values before any await, retains exact
+actual locator spelling, and uses one fresh tenant lease and tracked operation.
+All writers must be quiescent; operator handling of orphan leases is separate.
+Earlier RESERVED phases and ordinary adoption's postcommit error behavior are
+outside this API. No runtime caller or automatic repair is enabled.
+
+One invocation-owned 1000-attempt directory budget includes unrelated entries,
+EOF, failed reads and every reproof. Private owner ancestors and complete relevant
+head/registry namespaces must agree. Exhaustion never proves absence. The exact
+next ACTIVE sidecar is exclusively staged and synced at
+`<sidecar>.adopt-<ownerId>.tmp`. A complete matching stage can be freshly verified
+and reused through a bounded private no-follow/nonblocking one-link descriptor
+plus named identity proof. Partial, random, duplicate, aliased or changing stages
+remain preserved for manual review.
+
+Successful final stage-to-sidecar rename is the sole known-adoption commit. A
+frozen original-head owned token is captured synchronously before audit, hooks
+or readback. Publication must retain exact stage bytes and descriptor identity
+(rename ctime excepted); subsequent proofs retain the fresh full identity and
+unchanged head/registry bytes and identities. ACTIVE authority is checked after
+each final await. Later read, hook, audit, budget or fence-release failures retain
+the genuine captured token as `EHEADADOPTED`. Thrown objects cannot manufacture
+that attribution. A failed attempted rename yields `EADOPTIONCOMMITUNKNOWN`;
+other refusals yield `EADOPTIONPENDING` with cause and preserved residual evidence.
+Clean retries return `already-clean-no-attribution` without a completion token.
+
+Audit outcomes use an independent telemetry-only invocation UUID; they contain
+no owner/user identifiers, locator, token or YAML. Known-adopted audit precedes
+all postcommit proofs, and clean-retry audit is also followed by fresh proof.
+Telemetry is bounded rather than durable history. Recovery rewrites no head,
+increments no revision, and touches no archive, reference or unbound artifact.
+Ordinary reads and diagnostics retain their existing behavior.

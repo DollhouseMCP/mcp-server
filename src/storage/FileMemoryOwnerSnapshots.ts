@@ -12,7 +12,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { parseFileMemoryAbortIntent, serializeFileMemoryAbortIntent,
   type FileMemoryAbortIntent } from './FileMemoryAbortIntentCodec.js';
 import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
-import type { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
 import {
   classifyFileMemoryWrite,
   type FileMemoryWriteDiagnostic,
@@ -172,7 +172,31 @@ export type AdoptionPublication =
   | 'active-registry'
   | 'active-sidecar';
 
+export interface RecoverAdoptionRequest { readonly locator: string; readonly ownerId: string }
+export type RecoverAdoptionResult =
+  | { readonly status: 'known-adopted'; readonly token: OwnedFileMemoryToken }
+  | { readonly status: 'already-clean-no-attribution' };
+export interface AdoptedFileHeadError extends NodeJS.ErrnoException {
+  readonly adopted: true;
+  readonly token: OwnedFileMemoryToken;
+}
+export type AdoptionRecoveryPublication = 'before-stage' | 'partial-stage' | 'verified-stage' |
+  'before-rename' | 'after-rename' | 'after-read';
+interface AdoptionEvidence {
+  readonly resolved: DiagnosticEvidenceRead['resolved'];
+  readonly head: { value: string; hash: string; identity: FileIdentity };
+  readonly sidecar: { raw: string; record: OwnerRecord; identity: FileIdentity };
+  readonly registry: { raw: string; record: OwnerRecord; identity: FileIdentity };
+  readonly stage?: { raw: string; record: OwnerRecord; identity: FileIdentity };
+  readonly stagePath: string;
+  readonly token: OwnedFileMemoryToken;
+  readonly signature: string;
+  readonly ownerDirectories: readonly FileIdentity[];
+}
+
 interface FileMemoryOwnerSnapshotsBaseOptions {
+  /** Dormant adoption-recovery test barriers; never recovery authority. */
+  readonly afterAdoptionRecoveryPublication?: (phase: AdoptionRecoveryPublication) => void | Promise<void>;
   /** Isolated abort fault barriers; never authority or automatic orphan handling. */
   readonly afterAbortPublication?: (phase: AbortPublication) => void | Promise<void>;
   /** Fault barrier for dormant PREPARED forward publication; never repair authority. */
@@ -309,6 +333,7 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
  */
 export class FileMemoryOwnerSnapshots {
   private readonly options: FileMemoryOwnerSnapshotsOptions;
+  private readonly adoptedErrors = new WeakMap<object, OwnedFileMemoryToken>();
 
   constructor(options: FileMemoryOwnerSnapshotsOptions) {
     if (process.platform === 'win32') {
@@ -632,6 +657,256 @@ export class FileMemoryOwnerSnapshots {
         throw pending;
       }
     });
+  }
+
+  private captureAdoptionRequest(request: RecoverAdoptionRequest): RecoverAdoptionRequest {
+    if (!request || typeof request !== 'object' || Array.isArray(request) ||
+      Object.keys(request).length !== 2 || !Object.hasOwn(request, 'locator') || !Object.hasOwn(request, 'ownerId')) {
+      throw new TypeError('Adoption recovery requires exactly locator and ownerId');
+    }
+    const { locator, ownerId } = request;
+    if (typeof locator !== 'string' || typeof ownerId !== 'string' || !UUID_PATTERN.test(ownerId)) {
+      throw new TypeError('Adoption recovery requires primitive locator and ownerId');
+    }
+    validateLocator(locator);
+    return Object.freeze({ locator, ownerId });
+  }
+
+  async recoverReservedAdoption(request: RecoverAdoptionRequest): Promise<RecoverAdoptionResult> {
+    const captured = this.captureAdoptionRequest(request);
+    let token: OwnedFileMemoryToken | undefined;
+    try {
+      return await this.requiredCoordinator().withTenantTransaction(async context => {
+        return this.performAdoptionRecovery(context, captured, committed => { token = committed; });
+      });
+    } catch (cause) {
+      if (token) throw this.adoptedError(cause, token);
+      throw cause;
+    }
+  }
+
+  /** Caller owns the fresh lease and must retain known-adopted tokens across outer failures. */
+  recoverReservedAdoptionInTransaction(
+    context: FileMemoryLeaseContext, request: RecoverAdoptionRequest,
+  ): Promise<RecoverAdoptionResult> {
+    return this.performAdoptionRecovery(context, this.captureAdoptionRequest(request));
+  }
+
+  private performAdoptionRecovery(
+    context: FileMemoryLeaseContext, captured: RecoverAdoptionRequest, capture?: (token: OwnedFileMemoryToken) => void,
+  ): Promise<RecoverAdoptionResult> {
+    return this.requiredCoordinator().perform(context, async operation => {
+      const budget = new FileMemoryDirectoryScanBudget();
+      const invocationId = randomUUID();
+      let committed: OwnedFileMemoryToken | undefined;
+      try {
+        this.auditAdoption('requested', invocationId);
+        return await this.recoverAdoptionAtScope(operation, captured, budget, invocationId, token => {
+          committed = token;
+          capture?.(token);
+        });
+      } catch (cause) {
+        if (committed) throw this.adoptedError(cause, committed);
+        try { this.auditAdoption('pending-unknown', invocationId); } catch { /* retain original refusal */ }
+        if ((cause as NodeJS.ErrnoException)?.code === 'EADOPTIONCOMMITUNKNOWN') throw cause;
+        const error = headError('EADOPTIONPENDING', 'Adoption recovery remains pending; preserve residual evidence');
+        Object.assign(error, { cause, ownerId: captured.ownerId, residual: true });
+        throw error;
+      }
+    });
+  }
+
+  private auditAdoption(
+    outcome: 'requested' | 'pending-unknown' | 'known-adopted' | 'already-clean-no-attribution', invocationId: string,
+  ): void {
+    SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW',
+      source: 'FileMemoryOwnerSnapshots.adoption-recovery',
+      details: `Explicit dormant adoption maintenance: ${outcome} (${invocationId})`, additionalData: { outcome } });
+  }
+
+  private adoptedError(cause: unknown, token: OwnedFileMemoryToken): AdoptedFileHeadError {
+    if (cause !== null && typeof cause === 'object' && this.adoptedErrors.get(cause) === token) {
+      return cause as AdoptedFileHeadError;
+    }
+    const error = headError('EHEADADOPTED', 'Memory adoption committed; a later operation failed') as AdoptedFileHeadError;
+    Object.assign(error, { cause, adopted: true, token });
+    this.adoptedErrors.set(error, token);
+    return error;
+  }
+
+  private async adoptionProof(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+  ): Promise<AdoptionEvidence> {
+    const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
+    const evidence = await this.readAdoptionEvidence(scope, request, budget);
+    this.requiredCoordinator().requireActiveOperationScope(operation);
+    return evidence;
+  }
+
+  private async adoptionReproof(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    first: AdoptionEvidence, phase: AdoptionRecoveryPublication,
+  ): Promise<AdoptionEvidence> {
+    await this.options.afterAdoptionRecoveryPublication?.(phase);
+    const last = await this.adoptionProof(operation, request, budget);
+    if (first.signature !== last.signature) throw headError('EOWNERRECOVERY', 'Adoption evidence changed before publication');
+    return last;
+  }
+
+  private sameAdoptionBase(first: AdoptionEvidence, last: AdoptionEvidence): boolean {
+    return sameOwnedToken(first.token, last.token) && first.head.value === last.head.value &&
+      isDeepStrictEqual(first.ownerDirectories, last.ownerDirectories) &&
+      first.registry.raw === last.registry.raw && sameIdentity(first.registry.identity, last.registry.identity);
+  }
+
+  private async requireAdoptionClean(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    original: AdoptionEvidence, published?: AdoptionEvidence,
+  ): Promise<AdoptionEvidence> {
+    const clean = await this.adoptionProof(operation, request, budget);
+    const expected = published?.sidecar ?? original.sidecar;
+    if (clean.sidecar.record.state !== 'ACTIVE' || clean.stage || !this.sameAdoptionBase(original, clean) ||
+      clean.sidecar.raw !== expected.raw || !sameIdentity(clean.sidecar.identity, expected.identity)) {
+      throw headError('EOWNERRECOVERY', 'Adopted evidence changed after publication');
+    }
+    return clean;
+  }
+
+  private async recoverAdoptionAtScope(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest,
+    budget: FileMemoryDirectoryScanBudget, invocationId: string, capture: (token: OwnedFileMemoryToken) => void,
+  ): Promise<RecoverAdoptionResult> {
+    const first = await this.adoptionProof(operation, request, budget);
+    if (first.sidecar.record.state === 'ACTIVE') {
+      this.auditAdoption('already-clean-no-attribution', invocationId);
+      await this.requireAdoptionClean(operation, request, budget, first);
+      return { status: 'already-clean-no-attribution' };
+    }
+    const staged = await this.stageAdoption(operation, request, budget, first);
+    const last = await this.adoptionReproof(operation, request, budget, staged, 'before-rename');
+    try { await fs.rename(last.stagePath, last.resolved.sidecarPath); }
+    catch (cause) {
+      const error = headError('EADOPTIONCOMMITUNKNOWN', 'Adoption sidecar rename outcome is unknown');
+      Object.assign(error, { cause, ownerId: request.ownerId, residual: true });
+      throw error;
+    }
+    // Sole known-adoption commit: capture before any listener, hook or observation await.
+    const token: OwnedFileMemoryToken = Object.freeze({ ...last.token,
+      fileIdentity: Object.freeze({ ...last.token.fileIdentity }) });
+    capture(token);
+    try {
+      this.auditAdoption('known-adopted', invocationId);
+      await this.options.afterAdoptionRecoveryPublication?.('after-rename');
+      const published = await this.adoptionProof(operation, request, budget);
+      if (!last.stage || published.stage || published.sidecar.record.state !== 'ACTIVE' ||
+        !this.sameAdoptionBase(last, published) || published.sidecar.raw !== last.stage.raw ||
+        !samePublishedFile(published.sidecar.identity, last.stage.identity)) {
+        throw headError('EOWNERRECOVERY', 'Adoption publication does not match the verified stage');
+      }
+      await this.options.afterAdoptionRecoveryPublication?.('after-read');
+      await this.requireAdoptionClean(operation, request, budget, last, published);
+    } catch (cause) { throw this.adoptedError(cause, token); }
+    return { status: 'known-adopted', token };
+  }
+
+  private async stageAdoption(
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest,
+    budget: FileMemoryDirectoryScanBudget, first: AdoptionEvidence,
+  ): Promise<AdoptionEvidence> {
+    let staged = await this.adoptionReproof(operation, request, budget, first, 'before-stage');
+    if (!staged.stage) {
+      const raw = serializedRecord(staged.registry.record);
+      const handle = await fs.open(staged.stagePath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      let created: FileIdentity;
+      try {
+        const split = Math.floor(Buffer.byteLength(raw) / 2);
+        const bytes = Buffer.from(raw);
+        await handle.writeFile(bytes.subarray(0, split));
+        await this.options.afterAdoptionRecoveryPublication?.('partial-stage');
+        this.requiredCoordinator().requireActiveOperationScope(operation);
+        await handle.writeFile(bytes.subarray(split));
+        await handle.sync();
+        created = identityOf(await handle.stat({ bigint: true }));
+      } finally { await handle.close(); }
+      staged = await this.adoptionProof(operation, request, budget);
+      if (!this.sameAdoptionBase(first, staged) || staged.sidecar.raw !== first.sidecar.raw ||
+        !sameIdentity(staged.sidecar.identity, first.sidecar.identity) ||
+        !staged.stage || !sameIdentity(staged.stage.identity, created)) {
+        throw headError('EOWNERRECOVERY', 'Adoption evidence changed during staging');
+      }
+    }
+    return this.adoptionReproof(operation, request, budget, staged, 'verified-stage');
+  }
+
+  private async readAdoptionEvidence(
+    scope: FileMemoryTransactionScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+  ): Promise<AdoptionEvidence> {
+    const resolved = await this.resolveHead(scope.tenantRoot, request.locator);
+    const head = await this.readHeadBytes(resolved.headPath);
+    const sidecar = await this.readRecord(resolved.sidecarPath);
+    const registry = await this.readRegistry(scope.tenantRoot, request.ownerId);
+    if (!sidecar || !registry || !this.strictDiagnosticRecord(sidecar.record) || !this.strictDiagnosticRecord(registry.record) ||
+      registry.record.state !== 'ACTIVE' || registry.record.revision !== '1' ||
+      !isDeepStrictEqual({ ...sidecar.record, state: 'ACTIVE' }, registry.record) ||
+      registry.record.userId !== scope.userId || registry.record.ownerId !== request.ownerId ||
+      registry.record.locator !== request.locator || resolved.locator !== request.locator ||
+      registry.record.contentHash !== head.hash || !sameIdentity(registry.record.fileIdentity, head.identity)) {
+      throw headError('EOWNERRECOVERY', 'Adoption requires the unchanged revision-one owner triple');
+    }
+    const registryPath = this.registryPath(scope.tenantRoot, request.ownerId);
+    const ownerPaths = [path.dirname(path.dirname(registryPath)), path.dirname(registryPath)];
+    const ownerDirectories = await Promise.all(ownerPaths.map(async directory => identityOf(await fs.lstat(directory, { bigint: true }))));
+    const stagePath = `${resolved.sidecarPath}.adopt-${request.ownerId}.tmp`;
+    const names = await this.adoptionNamespace(scope, resolved, request.ownerId, budget);
+    const sidecarName = path.basename(resolved.sidecarPath);
+    const stageName = path.basename(stagePath);
+    if (!names.includes(sidecarName) || names.some(name => name !== sidecarName && name !== stageName) ||
+      (sidecar.record.state === 'ACTIVE' && names.includes(stageName))) {
+      throw headError('EOWNERRECOVERY', 'Adoption namespace contains unbound artifacts');
+    }
+    const stage = names.includes(stageName) ? await this.readRecord(stagePath) : undefined;
+    if (names.includes(stageName) && stage?.raw !== serializedRecord(registry.record)) {
+      throw headError('EOWNERRECOVERY', 'Adoption stage is incomplete or mismatched');
+    }
+    const finalNames = await this.adoptionNamespace(scope, resolved, request.ownerId, budget);
+    if (!isDeepStrictEqual(names, finalNames)) throw headError('EOWNERRECOVERY', 'Adoption namespace changed during observation');
+    await this.requireAdoptionNamedFiles([[resolved.headPath, head.identity], [resolved.sidecarPath, sidecar.identity],
+      [registryPath, registry.identity], ...(stage ? [[stagePath, stage.identity] as [string, FileIdentity]] : [])]);
+    const finalDirectories = await Promise.all(ownerPaths.map(async directory => identityOf(await fs.lstat(directory, { bigint: true }))));
+    if (!isDeepStrictEqual(ownerDirectories, finalDirectories)) throw headError('EOWNERRECOVERY', 'Adoption owner ancestry changed');
+    const token: OwnedFileMemoryToken = { backend: 'file', ownership: 'owned', userId: scope.userId,
+      tenantRoot: scope.tenantRoot, locator: request.locator, ownerId: request.ownerId, revision: '1',
+      contentHash: head.hash, fileIdentity: head.identity };
+    return { resolved, head, sidecar, registry, stage, stagePath, token, ownerDirectories,
+      signature: JSON.stringify({ head, sidecar, registry, stage, names, ownerDirectories }) };
+  }
+
+  private async requireAdoptionNamedFiles(files: readonly [string, FileIdentity][], index = 0): Promise<void> {
+    const current = files[index];
+    if (!current) return;
+    const [file, expected] = current;
+    if (!sameIdentity(identityOf(await fs.lstat(file, { bigint: true })), expected)) {
+      throw headError('EOWNERRECOVERY', 'Adoption named evidence changed during observation');
+    }
+    // The caller supplies only the bounded head/sidecar/registry/optional-stage set.
+    await this.requireAdoptionNamedFiles(files, index + 1);
+  }
+
+  private async adoptionNamespace(
+    scope: FileMemoryTransactionScope, resolved: DiagnosticEvidenceRead['resolved'], ownerId: string,
+    budget: FileMemoryDirectoryScanBudget,
+  ): Promise<string[]> {
+    const prefix = `.${resolved.basenameHash}.memory-`;
+    const names = await this.listMatchingArtifacts(path.dirname(resolved.headPath), name => name.toLowerCase().startsWith(prefix), budget);
+    const registryPath = this.registryPath(scope.tenantRoot, ownerId);
+    await this.checkPrivateDirectory(path.dirname(path.dirname(registryPath)));
+    await this.checkPrivateDirectory(path.dirname(registryPath));
+    const registryNames = await this.listMatchingArtifacts(path.dirname(registryPath), name =>
+      name.toLowerCase().startsWith(`${ownerId.toLowerCase()}.json`), budget);
+    if (!isDeepStrictEqual(registryNames, [path.basename(registryPath)])) {
+      throw headError('EOWNERRECOVERY', 'Adoption registry namespace is ambiguous');
+    }
+    return names;
   }
 
   /** Dormant explicit abort; all writers quiescent and orphan leases separately handled. */
@@ -1773,7 +2048,12 @@ export class FileMemoryOwnerSnapshots {
     }
   }
 
-  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean): Promise<string[]> {
+  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanBudget): Promise<string[]> {
+    if (budget) {
+      const names: string[] = [];
+      await budget.scan(directory, name => { if (matches(name)) names.push(name); });
+      return this.sortArtifactNames(names);
+    }
     const handle = await fs.opendir(directory);
     let seen = 0;
     const names: string[] = [];
@@ -1783,6 +2063,10 @@ export class FileMemoryOwnerSnapshots {
       }
       if (matches(entry.name)) names.push(entry.name);
     }
+    return this.sortArtifactNames(names);
+  }
+
+  private sortArtifactNames(names: string[]): string[] {
     // Code-unit ordering preserves distinct Unicode spellings and gives exact two-pass comparison.
     return names.sort((left, right) => {
       if (left < right) return -1;
