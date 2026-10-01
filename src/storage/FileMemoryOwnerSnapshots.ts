@@ -664,14 +664,15 @@ export class FileMemoryOwnerSnapshots {
     const captured = { ...request };
     this.validateFinalizeRequest(captured);
     return this.requiredCoordinator().perform(context, async operation => {
+      const auditInvocationId = randomUUID();
       try {
-        this.auditAbort('requested');
-        const result = await this.abortAtScope(operation, captured);
+        this.auditAbort('requested', auditInvocationId);
+        const result = await this.abortAtScope(operation, captured, auditInvocationId);
         return result;
       } catch (cause) {
         if ((cause as Partial<AbortedFileHeadError>)?.aborted) throw cause;
         // An audit failure never replaces the original error/evidence classification.
-        try { this.auditAbort('pending-unknown'); } catch { /* retain original cause */ }
+        try { this.auditAbort('pending-unknown', auditInvocationId); } catch { /* retain original cause */ }
         const code = (cause as NodeJS.ErrnoException)?.code;
         if (code === 'EOWNERRECOVERY' || code === 'EHEADCONFLICT' || code === 'EINVALIDHEAD' ||
           code === 'EABORTCOMMITUNKNOWN' || code === 'EABORTPENDING') throw cause;
@@ -682,9 +683,11 @@ export class FileMemoryOwnerSnapshots {
     });
   }
 
-  private auditAbort(outcome: string): void {
+  private auditAbort(
+    outcome: 'requested' | 'pending-unknown' | 'known-aborted' | 'already-clean-no-attribution', invocationId: string,
+  ): void {
     SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW',
-      source: 'FileMemoryOwnerSnapshots.abort', details: 'Explicit dormant memory abort maintenance',
+      source: 'FileMemoryOwnerSnapshots.abort', details: `Explicit dormant memory abort maintenance: ${outcome} (${invocationId})`,
       additionalData: { outcome } });
   }
 
@@ -695,13 +698,13 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async abortAtScope(
-    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest,
+    operation: FileMemoryOperationScope, request: FinalizeOwnedUpdateRequest, auditInvocationId: string,
   ): Promise<AbortOwnedUpdateResult> {
     const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
     let first = await this.readAbortEvidence(scope, request);
     this.requiredCoordinator().requireActiveOperationScope(operation);
     if (!first.journal) {
-      this.auditAbort('already-clean-no-attribution');
+      this.auditAbort('already-clean-no-attribution', auditInvocationId);
       return { status: 'already-clean-no-attribution' };
     }
     if (first.prepared) first = await this.publishAbortIntent(operation, request, first);
@@ -725,7 +728,7 @@ export class FileMemoryOwnerSnapshots {
     if (!last.intent || last.temp) throw headError('EOWNERRECOVERY', 'Abort is not ready for finalization');
     const journal = await this.readAbortRaw(last.resolved.journalPath);
     this.requiredCoordinator().requireActiveOperationScope(operation);
-    if (!journal || journal.raw !== last.journal!.raw || !sameIdentity(journal.identity, last.journal!.identity)) {
+    if (journal?.raw !== last.journal!.raw || !sameIdentity(journal.identity, last.journal!.identity)) {
       throw headError('EOWNERRECOVERY', 'Abort journal changed before finalization');
     }
     try { await fs.unlink(last.resolved.journalPath); }
@@ -738,11 +741,11 @@ export class FileMemoryOwnerSnapshots {
     const receipt: FileMemoryAbortReceipt = Object.freeze({ operationId: request.operationId,
       token: Object.freeze({ ...last.token, fileIdentity: Object.freeze({ ...last.token.fileIdentity }) }) });
     try {
+      this.auditAbort('known-aborted', auditInvocationId);
       await this.options.afterAbortPublication?.('after-journal-unlink');
       await this.requireCleanAbort(operation, request, last);
       await this.options.afterAbortPublication?.('after-abort-read');
       await this.requireCleanAbort(operation, request, last);
-      this.auditAbort('known-aborted');
     } catch (cause) { throw this.abortedError(cause, receipt); }
     return { status: 'known-aborted', receipt };
   }
@@ -847,7 +850,10 @@ export class FileMemoryOwnerSnapshots {
   private async readAbortRaw(filePath: string): Promise<{ raw: string; identity: FileIdentity } | undefined> {
     let handle;
     try { handle = await fs.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
-    catch (cause) { if (hasCode(cause, 'ENOENT')) return undefined; throw cause; }
+    catch (cause) {
+      if (hasCode(cause, 'ENOENT')) return undefined;
+      throw cause;
+    }
     try {
       const before = await handle.stat({ bigint: true });
       if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(MAX_JOURNAL_BYTES) ||
@@ -884,39 +890,66 @@ export class FileMemoryOwnerSnapshots {
       throw headError('EOWNERRECOVERY', 'Abort requires an unchanged agreeing old owner triple');
     }
     const journal = await this.readAbortRaw(resolved.journalPath);
-    let intent: FileMemoryAbortIntent | undefined;
-    let prepared: WriteJournal | undefined;
-    if (journal) {
-      let value: unknown;
-      try { value = JSON.parse(journal.raw); } catch { throw headError('EOWNERRECOVERY', 'Abort journal is malformed'); }
-      if (this.validJournal(value) && value.state === 'PREPARED_WRITE') prepared = value;
-      else {
-        try { intent = parseFileMemoryAbortIntent(journal.raw); }
-        catch { throw headError('EOWNERRECOVERY', 'Journal does not authorize pre-publication abort'); }
-      }
-      const bound = intent ?? prepared!;
-      if (bound.userId !== scope.userId || bound.ownerId !== request.ownerId || bound.operationId !== request.operationId ||
-        bound.locator !== request.locator || bound.oldRevision !== sidecar.record.revision ||
-        bound.oldContentHash !== head.hash || !sameIdentity(bound.oldFileIdentity, head.identity)) {
-        throw headError('EOWNERRECOVERY', 'Abort request does not match original write bindings');
-      }
-      if (intent && (intent.oldSidecarHash !== createHash('sha256').update(sidecar.raw).digest('hex') ||
-        intent.oldRegistryHash !== createHash('sha256').update(registry.raw).digest('hex') ||
-        !sameIdentity(intent.oldSidecarIdentity, sidecar.identity) || !sameIdentity(intent.oldRegistryIdentity, registry.identity))) {
-        throw headError('EOWNERRECOVERY', 'Abort old record bindings changed');
-      }
-    }
+    const { intent, prepared } = this.requireAbortJournal(scope, request, head, sidecar, registry, journal);
     const names = await this.abortNamespace(scope, resolved, request.ownerId);
     const stageName = `${path.basename(resolved.journalPath)}.abort-${request.operationId}.tmp`;
     const bound = intent ?? prepared;
-    const permitted = [path.basename(resolved.journalPath), bound?.preparedTempName, prepared ? stageName : undefined];
-    if (names.some(name => !permitted.includes(name)) || (!!journal !== names.includes(path.basename(resolved.journalPath)))) {
+    const permitted = new Set([path.basename(resolved.journalPath), bound?.preparedTempName, prepared ? stageName : undefined]);
+    if (names.some(name => !permitted.has(name)) || (!!journal !== names.includes(path.basename(resolved.journalPath)))) {
       throw headError('EOWNERRECOVERY', 'Abort namespace contains unbound artifacts');
     }
     const temp = bound && names.includes(bound.preparedTempName)
       ? await this.readHeadBytes(path.join(path.dirname(resolved.headPath), bound.preparedTempName), true) : undefined;
-    if ((prepared && !temp) || (temp && (!bound || temp.hash !== bound.newContentHash ||
-      !sameIdentity(temp.identity, bound.preparedTempIdentity)))) {
+    this.requireAbortTemp(scope, request, { head, sidecar, registry, prepared, bound, temp }, names, stageName);
+    const token: OwnedFileMemoryToken = { backend: 'file', ownership: 'owned', userId: scope.userId,
+      tenantRoot: scope.tenantRoot, locator: request.locator, ownerId: request.ownerId,
+      revision: sidecar.record.revision, contentHash: head.hash, fileIdentity: head.identity };
+    const base = { resolved, token, journal, intent, prepared, temp, sidecar, registry };
+    const stage = names.includes(stageName) ? await this.readAbortRaw(path.join(path.dirname(resolved.headPath), stageName)) : undefined;
+    if (names.includes(stageName) && stage?.raw !== serializeFileMemoryAbortIntent(this.abortIntent({ ...base, signature: '' }))) {
+      throw headError('EOWNERRECOVERY', 'Abort stage is incomplete or mismatched');
+    }
+    return { ...base, stage, signature: JSON.stringify({ base, names, stage, headRaw: head.value }) };
+  }
+
+  private requireAbortJournal(
+    scope: FileMemoryTransactionScope, request: FinalizeOwnedUpdateRequest,
+    head: { hash: string; identity: FileIdentity }, sidecar: AbortEvidence['sidecar'], registry: AbortEvidence['registry'],
+    journal: AbortEvidence['journal'],
+  ): { intent?: FileMemoryAbortIntent; prepared?: WriteJournal } {
+    if (!journal) return {};
+    let intent: FileMemoryAbortIntent | undefined;
+    let prepared: WriteJournal | undefined;
+    let value: unknown;
+    try { value = JSON.parse(journal.raw); } catch { throw headError('EOWNERRECOVERY', 'Abort journal is malformed'); }
+    if (this.validJournal(value) && value.state === 'PREPARED_WRITE') prepared = value;
+    else {
+      try { intent = parseFileMemoryAbortIntent(journal.raw); }
+      catch { throw headError('EOWNERRECOVERY', 'Journal does not authorize pre-publication abort'); }
+    }
+    const bound = intent ?? prepared!;
+    if (bound.userId !== scope.userId || bound.ownerId !== request.ownerId || bound.operationId !== request.operationId ||
+      bound.locator !== request.locator || bound.oldRevision !== sidecar.record.revision ||
+      bound.oldContentHash !== head.hash || !sameIdentity(bound.oldFileIdentity, head.identity)) {
+      throw headError('EOWNERRECOVERY', 'Abort request does not match original write bindings');
+    }
+    if (intent && (intent.oldSidecarHash !== createHash('sha256').update(sidecar.raw).digest('hex') ||
+      intent.oldRegistryHash !== createHash('sha256').update(registry.raw).digest('hex') ||
+      !sameIdentity(intent.oldSidecarIdentity, sidecar.identity) || !sameIdentity(intent.oldRegistryIdentity, registry.identity))) {
+      throw headError('EOWNERRECOVERY', 'Abort old record bindings changed');
+    }
+    return { intent, prepared };
+  }
+
+  private requireAbortTemp(
+    scope: FileMemoryTransactionScope, request: FinalizeOwnedUpdateRequest,
+    evidence: Pick<AbortEvidence, 'sidecar' | 'registry' | 'prepared' | 'temp'> & {
+      head: { hash: string; identity: FileIdentity }; bound?: WriteJournal | FileMemoryAbortIntent;
+    }, names: string[], stageName: string,
+  ): void {
+    const { head, sidecar, registry, prepared, bound, temp } = evidence;
+    if ((prepared && !temp) || (temp && (temp.hash !== bound?.newContentHash ||
+      !sameIdentity(temp.identity, bound!.preparedTempIdentity)))) {
       throw headError('EOWNERRECOVERY', 'Abort prepared temp is absent or changed');
     }
     if (prepared && classifyFileMemoryWrite({ userId: scope.userId, locator: request.locator,
@@ -925,15 +958,6 @@ export class FileMemoryOwnerSnapshots {
       artifactNames: names.filter(name => name !== stageName), unexpectedArtifacts: false }).kind !== 'prepared-not-published') {
       throw headError('EOWNERRECOVERY', 'Abort is not an original old-head PREPARED state');
     }
-    const token: OwnedFileMemoryToken = { backend: 'file', ownership: 'owned', userId: scope.userId,
-      tenantRoot: scope.tenantRoot, locator: request.locator, ownerId: request.ownerId,
-      revision: sidecar.record.revision, contentHash: head.hash, fileIdentity: head.identity };
-    const base = { resolved, token, journal, intent, prepared, temp, sidecar, registry };
-    const stage = names.includes(stageName) ? await this.readAbortRaw(path.join(path.dirname(resolved.headPath), stageName)) : undefined;
-    if (names.includes(stageName) && (!stage || stage.raw !== serializeFileMemoryAbortIntent(this.abortIntent({ ...base, signature: '' })))) {
-      throw headError('EOWNERRECOVERY', 'Abort stage is incomplete or mismatched');
-    }
-    return { ...base, stage, signature: JSON.stringify({ base, names, stage, headRaw: head.value }) };
   }
 
   private async abortNamespace(

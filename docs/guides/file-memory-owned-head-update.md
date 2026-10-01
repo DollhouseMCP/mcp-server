@@ -158,5 +158,8 @@ record, archive generation or reference. It grants no archive cleanup authority.
 Renamed PREPARED and PUBLISHED states require existing forward recovery instead.
 Ordinary readers/diagnostics and schema-1 forward parsing remain unchanged and
 block intent evidence. Audit records contain bounded outcomes, not tokens/YAML.
+An independent audit-only invocation UUID distinguishes same-window attempts;
+this bounded telemetry is not durable audit storage. The known-aborted event is
+attempted immediately after receipt capture, before callbacks and final proofs.
 Guarantees cover the current cooperating-process POSIX interruption model,
 without claiming hostile-writer atomicity, multihost safety or power-loss recovery.

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import * as syncFs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
@@ -314,6 +315,92 @@ describe('dormant explicit original PREPARED abort', () => {
     await expect(setup.store.abortPreparedOwnedUpdate(setup.request)).rejects.toMatchObject({ code: 'EHEADABORTED', aborted: true });
     expect(audit).toHaveBeenCalled();
   });
+
+  it.each(['known-aborted', 'pending-unknown', 'already-clean-no-attribution'] as const)(
+    'records requested and %s outcomes through real same-window audit deduplication', async outcome => {
+      const setup = await fixture();
+      if (outcome === 'already-clean-no-attribution') await setup.store.abortPreparedOwnedUpdate(setup.request);
+      SecurityMonitor.clearAllEventsForTesting();
+      try {
+        const store = new FileMemoryOwnerSnapshots({ coordinator: setup.coordinator, afterAbortPublication: phase => {
+          if (outcome === 'pending-unknown' && phase === 'before-intent-stage') throw new Error('injected refusal');
+        } });
+        if (outcome === 'pending-unknown') {
+          await expect(store.abortPreparedOwnedUpdate(setup.request)).rejects.toMatchObject({ code: 'EABORTPENDING' });
+        } else {
+          expect((await store.abortPreparedOwnedUpdate(setup.request)).status).toBe(outcome);
+        }
+        const events = SecurityMonitor.getRecentEvents().filter(event => event.source === 'FileMemoryOwnerSnapshots.abort');
+        expect(events.map(event => event.additionalData?.outcome)).toEqual(['requested', outcome]);
+        expect(new Set(events.map(event => event.details)).size).toBe(2);
+        expect(JSON.stringify(events)).not.toContain(setup.tenantRoot);
+        expect(JSON.stringify(events)).not.toContain(setup.request.ownerId);
+        expect(JSON.stringify(events)).not.toContain('entries:');
+      } finally { SecurityMonitor.clearAllEventsForTesting(); }
+    });
+
+  it('records both distinct abort invocations without resetting the real monitor between them', async () => {
+    const first = await fixture();
+    const second = await fixture();
+    SecurityMonitor.clearAllEventsForTesting();
+    try {
+      await first.store.abortPreparedOwnedUpdate(first.request);
+      await second.store.abortPreparedOwnedUpdate(second.request);
+      const events = SecurityMonitor.getRecentEvents().filter(event => event.source === 'FileMemoryOwnerSnapshots.abort');
+      expect(events.map(event => event.additionalData?.outcome)).toEqual(['requested', 'known-aborted', 'requested', 'known-aborted']);
+      expect(new Set(events.map(event => event.details)).size).toBe(4);
+      const ids = events.map(event => event.details.match(/\(([0-9a-f-]{36})\)$/u)?.[1]);
+      expect(ids[0]).toBeDefined();
+      expect(ids[0]).toBe(ids[1]);
+      expect(ids[2]).toBe(ids[3]);
+      expect(ids[0]).not.toBe(ids[2]);
+    } finally { SecurityMonitor.clearAllEventsForTesting(); }
+  });
+
+  it.each(['after-journal-unlink', 'after-abort-read'] as const)(
+    'records the known-aborted outcome before a later %s failure', async stop => {
+      const setup = await fixture();
+      SecurityMonitor.clearAllEventsForTesting();
+      try {
+        const store = new FileMemoryOwnerSnapshots({ coordinator: setup.coordinator, afterAbortPublication: phase => {
+          if (phase === stop) throw new Error('later hook failed');
+        } });
+        await expect(store.abortPreparedOwnedUpdate(setup.request)).rejects.toMatchObject({ code: 'EHEADABORTED', aborted: true });
+        expect(SecurityMonitor.getRecentEvents().filter(event => event.source === 'FileMemoryOwnerSnapshots.abort')
+          .map(event => event.additionalData?.outcome)).toEqual(['requested', 'known-aborted']);
+      } finally { SecurityMonitor.clearAllEventsForTesting(); }
+    });
+
+  it.each(['sidecarPath', 'registryPath', 'authority'] as const)(
+    'retains the original receipt after a nonthrowing real audit listener changes %s', async target => {
+      const setup = await fixture();
+      let revoked = false;
+      let injected = false;
+      const original = setup.coordinator.requireActiveOperationScope.bind(setup.coordinator);
+      jest.spyOn(setup.coordinator, 'requireActiveOperationScope').mockImplementation(operation => {
+        if (revoked) throw new Error('listener revoked authority');
+        return original(operation);
+      });
+      SecurityMonitor.clearAllEventsForTesting();
+      const detach = SecurityMonitor.addLogListener(event => {
+        if (event.source !== 'FileMemoryOwnerSnapshots.abort' || event.additionalData?.outcome !== 'known-aborted') return;
+        injected = true;
+        if (target === 'authority') revoked = true;
+        else {
+          const file = setup[target];
+          const raw = syncFs.readFileSync(file);
+          syncFs.renameSync(file, `${file}.saved`);
+          syncFs.writeFileSync(file, raw, { mode: 0o600 });
+          syncFs.unlinkSync(`${file}.saved`);
+        }
+      });
+      try {
+        await expect(setup.store.abortPreparedOwnedUpdate(setup.request)).rejects.toMatchObject({
+          code: 'EHEADABORTED', aborted: true, receipt: { operationId: setup.request.operationId, token: setup.owned },
+        });
+        expect(injected).toBe(true);
+      } finally { detach(); SecurityMonitor.clearAllEventsForTesting(); }
+    });
 
   it.each((['after-journal-unlink', 'after-abort-read'] as const).flatMap(stop =>
     (['headPath', 'sidecarPath', 'registryPath'] as const).map(file => ({ stop, file }))))(
