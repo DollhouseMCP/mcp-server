@@ -16,7 +16,7 @@ const temporaryDirectories: string[] = [];
 // Only this fixture emits these bounded records; never include exception messages or paths.
 const liveOwnerChildScript = `
   import fs from 'node:fs';
-  const [moduleUrl, role, stateFile, readyFile, enteredFile, releaseFile] = process.argv.slice(1);
+  const [moduleUrl, role, stateFile, readyFile, enteredFile, releaseFile, publication] = process.argv.slice(1);
   let phase = 'import';
   const report = (error) => process.stderr.write(JSON.stringify({
     phase, name: /^[A-Za-z]{1,40}$/.test(error?.name) ? error.name : 'Unknown',
@@ -24,6 +24,11 @@ const liveOwnerChildScript = `
   }) + '\\n');
   try {
     const { withOAuthStateLockSync } = await import(moduleUrl);
+    if (publication === 'directory-fallback') fs.linkSync = () => {
+      const error = new Error('Fixture hard links unsupported');
+      error.code = 'ENOTSUP';
+      throw error;
+    };
     phase = 'ready';
     fs.writeFileSync(readyFile, 'ready');
     phase = 'lock';
@@ -103,6 +108,17 @@ function requireFixtureTime(deadline: number) {
   if (performance.now() >= deadline) throw new Error('Lock fixture observation timed out');
 }
 
+async function readFixtureSlotOwner(slotPath: string): Promise<{ id: string; ownerPid: number; ownerIdentity: string }> {
+  // Match the production parser's supported file and directory publication forms.
+  const ownerPath = (await fs.stat(slotPath)).isDirectory() ? path.join(slotPath, 'owner.json') : slotPath;
+  const owner = JSON.parse(await fs.readFile(ownerPath, 'utf8')) as Record<string, unknown>;
+  if (typeof owner.id !== 'string' || owner.id.length === 0 || !Number.isSafeInteger(owner.ownerPid) ||
+      Number(owner.ownerPid) <= 0 || typeof owner.ownerIdentity !== 'string' || owner.ownerIdentity.length === 0) {
+    throw new Error('Lock fixture ticket has no valid owner');
+  }
+  return { id: owner.id, ownerPid: Number(owner.ownerPid), ownerIdentity: owner.ownerIdentity };
+}
+
 async function stopObservedChild(observed: ReturnType<typeof observedChild>) {
   if (!observed.isClosed()) observed.child.kill('SIGKILL');
   await boundedChildCompletion(observed.completion, 2_000);
@@ -164,6 +180,14 @@ afterEach(async () => {
 });
 
 describe('OAuthStateCoordinator', () => {
+  it.each(['file', 'directory'])('reads the actual owner from a %s ticket representation', async representation => {
+    const directory = await createTemporaryDirectory();
+    const slot = path.join(directory, '1.slot');
+    const owner = { id: 'fixture-ticket', ownerPid: process.pid, ownerIdentity: 'fixture-process-identity' };
+    if (representation === 'directory') await fs.mkdir(slot);
+    await fs.writeFile(representation === 'directory' ? path.join(slot, 'owner.json') : slot, JSON.stringify(owner));
+    expect(await readFixtureSlotOwner(slot)).toEqual(owner);
+  });
   it.each([undefined, null, new Error('primary assertion')])(
     'preserves primary %p alongside an incomplete child cleanup', primary => {
       const cleanup = new Error('Lock fixture child completion timed out');
@@ -596,7 +620,8 @@ describe('OAuthStateCoordinator', () => {
     )).toBe(false);
   });
 
-  it('does not reclaim a stale-aged ticket while its original process is alive', async () => {
+  it.each(['native', 'directory-fallback'])(
+    'does not reclaim a stale-aged ticket while its original process is alive (%s)', async publication => {
     // Leave time for finally cleanup within the existing ten-second Jest timeout.
     const fixtureDeadline = performance.now() + 7_000;
     const directory = await createTemporaryDirectory();
@@ -610,7 +635,7 @@ describe('OAuthStateCoordinator', () => {
       path.join(process.cwd(), 'oauth-state-coordinator.mjs')
     ).href;
     requireFixtureTime(fixtureDeadline);
-    const owner = observedChild([coordinatorUrl, 'owner', stateFile, ownerReadyFile, ownerEnteredFile, releaseOwnerFile]);
+    const owner = observedChild([coordinatorUrl, 'owner', stateFile, ownerReadyFile, ownerEnteredFile, releaseOwnerFile, publication]);
     // afterEach never deletes a directory that may still belong to a live child.
     transferChildFixtureCleanup(directory);
     let contender: ReturnType<typeof observedChild> | undefined;
@@ -621,7 +646,8 @@ describe('OAuthStateCoordinator', () => {
     const ownerIdentityMarker = `${stateFile}.lock.process-${owner.child.pid}.identity`;
     await expect(fs.access(ownerIdentityMarker)).resolves.toBeUndefined();
     const ownerSlot = path.join(`${stateFile}.lock`, '1.slot');
-    const ownerTicket = JSON.parse(await fs.readFile(ownerSlot, 'utf8')) as { ownerPid: number; ownerIdentity: string };
+    const ownerTicket = await readFixtureSlotOwner(ownerSlot);
+    if (publication === 'directory-fallback') expect((await fs.stat(ownerSlot)).isDirectory()).toBe(true);
     expect(ownerTicket.ownerPid).toBe(owner.child.pid);
     const marker = JSON.parse(await fs.readFile(ownerIdentityMarker, 'utf8')) as { identity: string };
     expect(marker.identity).toBe(ownerTicket.ownerIdentity);
@@ -630,12 +656,14 @@ describe('OAuthStateCoordinator', () => {
 
     owner.assertAlive();
     requireFixtureTime(fixtureDeadline);
-    contender = observedChild([coordinatorUrl, 'contender', stateFile, contenderReadyFile, contenderEnteredFile, releaseOwnerFile]);
+    contender = observedChild([coordinatorUrl, 'contender', stateFile, contenderReadyFile, contenderEnteredFile, releaseOwnerFile, publication]);
     const currentContender = contender;
     await waitForLiveOwnerObservation(async () => {
       try {
         await fs.access(contenderReadyFile);
-        const ticket = JSON.parse(await fs.readFile(path.join(`${stateFile}.lock`, '2.slot'), 'utf8'));
+        const slot = path.join(`${stateFile}.lock`, '2.slot');
+        const ticket = await readFixtureSlotOwner(slot);
+        if (publication === 'directory-fallback' && !(await fs.stat(slot)).isDirectory()) return false;
         const identity = JSON.parse(await fs.readFile(`${stateFile}.lock.process-${currentContender.child.pid}.identity`, 'utf8'));
         return ticket.ownerPid === currentContender.child.pid && typeof ticket.ownerIdentity === 'string' &&
           ticket.ownerIdentity.length > 0 && identity.identity === ticket.ownerIdentity &&
