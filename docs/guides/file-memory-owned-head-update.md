@@ -282,11 +282,17 @@ with its named identity, and close successfully, before the local phase becomes
 `owners-directory-created`. Capture/open/close errors preserve the direct cause;
 a secondary close failure is exposed separately as `closeCause`. Neither phase
 attributes adoption. The empty child, original head/sidecar, full tenant identity
-and complete tenant/parent sets remain bound through exclusive registry creation
-and handoff to existing pair recovery. Only the parent metadata caused by this mkdir
+and complete tenant/parent sets remain bound through exclusive registry creation,
+pair recovery and final publication. Only the parent metadata caused by this mkdir
 and child metadata caused by subsequent registry writes may advance; private
 ancestry and directory inode bindings remain strict. Final ACTIVE-sidecar rename
 remains the sole adoption commit, with existing known-adopted outcome retention.
+For a head directly in the tenant root, only the exact descriptor-proved sidecar
+stage addition and final rename may advance root metadata. Each own transition
+captures fresh full root identity before hooks or audit listeners; subsequent
+proofs enforce that identity until the next own transition. Committed audit is
+attempted even if immediate postrename topology proof fails, preserving the
+original direct cause if the audit listener also fails.
 
 This descriptor capture follows mkdir under the cooperating, quiescent local
 POSIX process-crash model. It does not claim an atomically returned mkdir inode,

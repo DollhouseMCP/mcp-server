@@ -209,6 +209,8 @@ interface AbsentAdoptionEvidence {
 interface MissingOwnersEvidence {
   readonly original: Pick<AbsentAdoptionEvidence, 'resolved' | 'head' | 'sidecar'>;
   readonly tenantIdentity: FileIdentity;
+  readonly tenantMode: bigint;
+  readonly tenantUid: bigint;
   readonly parentIdentity: FileIdentity;
   readonly tenantNames: readonly string[];
   readonly parentNames: readonly string[];
@@ -217,7 +219,10 @@ interface MissingOwnersEvidence {
 interface PreparedOwnersDirectory {
   readonly evidence: AbsentAdoptionEvidence;
   readonly reproof: (current: AbsentAdoptionEvidence | AdoptionEvidence) => Promise<void>;
+  readonly publicationProof: AdoptionTopologyProof;
 }
+type AdoptionTopologyProof = (stage?: { path: string; identity: FileIdentity },
+  publishedSidecar?: FileIdentity, tenantTransition?: boolean) => Promise<void>;
 
 interface FileMemoryOwnerSnapshotsBaseOptions {
   /** Dormant adoption-recovery test barriers; never recovery authority. */
@@ -778,11 +783,12 @@ export class FileMemoryOwnerSnapshots {
 
   private async adoptionReproof(
     operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
-    first: AdoptionEvidence, phase: AdoptionRecoveryPublication,
+    first: AdoptionEvidence, phase: AdoptionRecoveryPublication, topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
     await this.options.afterAdoptionRecoveryPublication?.(phase);
     const last = await this.adoptionProof(operation, request, budget);
     if (first.signature !== last.signature) throw headError('EOWNERRECOVERY', 'Adoption evidence changed before publication');
+    await topology?.(last.stage && { path: last.stagePath, identity: last.stage.identity });
     return last;
   }
 
@@ -794,7 +800,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async requireAdoptionClean(
     operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
-    original: AdoptionEvidence, published?: AdoptionEvidence,
+    original: AdoptionEvidence, published?: AdoptionEvidence, topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
     const clean = await this.adoptionProof(operation, request, budget);
     const expected = published?.sidecar ?? original.sidecar;
@@ -802,6 +808,7 @@ export class FileMemoryOwnerSnapshots {
       clean.sidecar.raw !== expected.raw || !sameIdentity(clean.sidecar.identity, expected.identity)) {
       throw headError('EOWNERRECOVERY', 'Adopted evidence changed after publication');
     }
+    await topology?.(undefined, clean.sidecar.identity);
     return clean;
   }
 
@@ -811,13 +818,14 @@ export class FileMemoryOwnerSnapshots {
     progress: (phase: AdoptionProgress) => void, closeFailure: (cause: unknown) => void,
   ): Promise<RecoverAdoptionResult> {
     const createdDirectory = await this.prepareOwnersDirectory(operation, request, budget, progress, closeFailure);
+    const topology = createdDirectory?.publicationProof;
     const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
     const registry = createdDirectory ? undefined : await this.readRegistry(scope.tenantRoot, request.ownerId);
     this.requiredCoordinator().requireActiveOperationScope(operation);
     let first = registry ? await this.adoptionProof(operation, request, budget) :
       await this.createAbsentAdoptionRegistry(operation, request, budget, progress, closeFailure, createdDirectory);
     if (first.registry.record.state === 'RESERVED') {
-      first = await this.publishReservedRegistry(operation, request, budget, first, progress);
+      first = await this.publishReservedRegistry(operation, request, budget, first, progress, topology);
     }
     if (first.registry.record.state !== 'ACTIVE') throw headError('EOWNERRECOVERY', 'Final adoption requires an ACTIVE registry');
     if (first.sidecar.record.state === 'ACTIVE') {
@@ -825,8 +833,8 @@ export class FileMemoryOwnerSnapshots {
       await this.requireAdoptionClean(operation, request, budget, first);
       return { status: 'already-clean-no-attribution' };
     }
-    const staged = await this.stageAdoption(operation, request, budget, first);
-    const last = await this.adoptionReproof(operation, request, budget, staged, 'before-rename');
+    const staged = await this.stageAdoption(operation, request, budget, first, topology);
+    const last = await this.adoptionReproof(operation, request, budget, staged, 'before-rename', topology);
     progress('sidecar-publication-unknown');
     await fs.rename(last.stagePath, last.resolved.sidecarPath);
     // Sole known-adoption commit: capture before any listener, hook or observation await.
@@ -834,7 +842,10 @@ export class FileMemoryOwnerSnapshots {
       fileIdentity: Object.freeze({ ...last.token.fileIdentity }) });
     capture(token);
     try {
-      this.auditAdoption('known-adopted', invocationId);
+      let primary: { cause: unknown } | undefined;
+      try { if (topology) await topology(undefined, last.stage!.identity, true); } catch (cause) { primary = { cause }; }
+      try { this.auditAdoption('known-adopted', invocationId); } catch (cause) { if (!primary) primary = { cause }; }
+      if (primary) throw primary.cause;
       await this.options.afterAdoptionRecoveryPublication?.('after-rename');
       const published = await this.adoptionProof(operation, request, budget);
       if (!last.stage || published.stage || published.sidecar.record.state !== 'ACTIVE' ||
@@ -842,8 +853,9 @@ export class FileMemoryOwnerSnapshots {
         !samePublishedFile(published.sidecar.identity, last.stage.identity)) {
         throw headError('EOWNERRECOVERY', 'Adoption publication does not match the verified stage');
       }
+      await topology?.(undefined, published.sidecar.identity);
       await this.options.afterAdoptionRecoveryPublication?.('after-read');
-      await this.requireAdoptionClean(operation, request, budget, last, published);
+      await this.requireAdoptionClean(operation, request, budget, last, published, topology);
     } catch (cause) { throw this.adoptedError(cause, token); }
     return { status: 'known-adopted', token };
   }
@@ -897,7 +909,7 @@ export class FileMemoryOwnerSnapshots {
     await this.requireAdoptionNamedFiles([[scope.tenantRoot, tenantIdentity], [ownerRoot, parentIdentity],
       [original.resolved.headPath, original.head.identity], [original.resolved.sidecarPath, original.sidecar.identity]]);
     this.requiredCoordinator().requireActiveOperationScope(operation);
-    return { original, tenantIdentity, parentIdentity, tenantNames, parentNames,
+    return { original, tenantIdentity, tenantMode: tenantStat.mode, tenantUid: tenantStat.uid, parentIdentity, tenantNames, parentNames,
       signature: JSON.stringify({ original, tenantIdentity, parentIdentity, tenantNames, parentNames }) };
   }
 
@@ -942,7 +954,7 @@ export class FileMemoryOwnerSnapshots {
     if (!isDeepStrictEqual(first.original, { resolved: evidence.resolved, head: evidence.head, sidecar: evidence.sidecar }) ||
       !sameIdentity(evidence.ownerDirectories[1], created) || evidence.ownerDirectories[0].device !== first.parentIdentity.device ||
       evidence.ownerDirectories[0].inode !== first.parentIdentity.inode ||
-      !isDeepStrictEqual(first.tenantNames, tenantNames) || !isDeepStrictEqual([...first.parentNames, 'owners'].sort(), parentNames)) {
+      !isDeepStrictEqual(first.tenantNames, tenantNames) || !isDeepStrictEqual(this.sortArtifactNames([...first.parentNames, 'owners']), parentNames)) {
       throw headError('EOWNERRECOVERY', 'Created owners directory changed original adoption evidence');
     }
     const children = await this.listMatchingArtifacts(directory, () => true, budget);
@@ -951,7 +963,8 @@ export class FileMemoryOwnerSnapshots {
       [path.dirname(directory), evidence.ownerDirectories[0]], [directory, created],
       [evidence.resolved.headPath, evidence.head.identity], [evidence.resolved.sidecarPath, evidence.sidecar.identity]]);
     this.requiredCoordinator().requireActiveOperationScope(operation);
-    return { evidence, reproof: current => this.requireCreatedOwnersContext(operation, budget, first, evidence, current) };
+    return { evidence, reproof: current => this.requireCreatedOwnersContext(operation, budget, first, evidence, current),
+      publicationProof: this.createdOwnersPublicationProof(operation, budget, first, evidence) };
   }
 
   private async requireCreatedOwnersContext(
@@ -962,7 +975,7 @@ export class FileMemoryOwnerSnapshots {
     await this.checkPrivateDirectory(parent);
     const tenantNames = await this.listMatchingArtifacts(operation.tenantRoot, () => true, budget);
     const parentNames = await this.listMatchingArtifacts(parent, () => true, budget);
-    if (!isDeepStrictEqual(original.tenantNames, tenantNames) || !isDeepStrictEqual([...original.parentNames, 'owners'].sort(), parentNames) ||
+    if (!isDeepStrictEqual(original.tenantNames, tenantNames) || !isDeepStrictEqual(this.sortArtifactNames([...original.parentNames, 'owners']), parentNames) ||
       !sameIdentity(created.ownerDirectories[0], current.ownerDirectories[0]) ||
       created.ownerDirectories[1].device !== current.ownerDirectories[1].device ||
       created.ownerDirectories[1].inode !== current.ownerDirectories[1].inode) {
@@ -973,6 +986,56 @@ export class FileMemoryOwnerSnapshots {
       [original.original.resolved.headPath, original.original.head.identity],
       [original.original.resolved.sidecarPath, original.original.sidecar.identity]]);
     this.requiredCoordinator().requireActiveOperationScope(operation);
+  }
+
+  private createdOwnersPublicationProof(
+    operation: FileMemoryOperationScope, budget: FileMemoryDirectoryScanBudget,
+    original: MissingOwnersEvidence, created: AbsentAdoptionEvidence,
+  ): AdoptionTopologyProof {
+    let tenantIdentity = original.tenantIdentity;
+    const root = operation.tenantRoot;
+    const parent = path.dirname(path.dirname(this.registryPath(root, original.original.sidecar.record.ownerId)));
+    const headAtRoot = path.dirname(original.original.resolved.headPath) === root;
+    return async (stage, publishedSidecar, tenantTransition = false) => {
+      const expectedNames = [...original.tenantNames];
+      if (stage && path.dirname(stage.path) === root) expectedNames.push(path.basename(stage.path));
+      const tenantNames = await this.listMatchingArtifacts(root, () => true, budget);
+      const parentNames = await this.listMatchingArtifacts(parent, () => true, budget);
+      if (!isDeepStrictEqual(this.sortArtifactNames(expectedNames), tenantNames) ||
+        !isDeepStrictEqual(this.sortArtifactNames([...original.parentNames, 'owners']), parentNames)) {
+        throw headError('EOWNERRECOVERY', 'Created owners publication namespace changed');
+      }
+      const tenantStat = await fs.lstat(root, { bigint: true });
+      if (!tenantStat.isDirectory() || tenantStat.isSymbolicLink() || tenantStat.mode !== original.tenantMode || tenantStat.uid !== original.tenantUid) {
+        throw headError('EOWNERRECOVERY', 'Created owners tenant properties changed');
+      }
+      const currentTenant = identityOf(tenantStat);
+      if (!(tenantTransition && headAtRoot) ? !sameIdentity(tenantIdentity, currentTenant) :
+        tenantIdentity.device !== currentTenant.device || tenantIdentity.inode !== currentTenant.inode) {
+        throw headError('EOWNERRECOVERY', 'Created owners tenant identity changed');
+      }
+      const sidecarIdentity = publishedSidecar
+        ? identityOf(await fs.lstat(original.original.resolved.sidecarPath, { bigint: true })) : original.original.sidecar.identity;
+      if (publishedSidecar && !(tenantTransition ? samePublishedFile(sidecarIdentity, publishedSidecar) :
+        sameIdentity(sidecarIdentity, publishedSidecar))) throw headError('EOWNERRECOVERY', 'Published sidecar identity changed');
+      await this.checkPrivateDirectory(parent);
+      const childPath = path.join(parent, 'owners');
+      await this.checkPrivateDirectory(childPath);
+      const child = identityOf(await fs.lstat(childPath, { bigint: true }));
+      if (child.device !== created.ownerDirectories[1].device || child.inode !== created.ownerDirectories[1].inode) {
+        throw headError('EOWNERRECOVERY', 'Created owners child identity changed');
+      }
+      if (!isDeepStrictEqual(tenantNames, await this.listMatchingArtifacts(root, () => true, budget)) ||
+        !isDeepStrictEqual(parentNames, await this.listMatchingArtifacts(parent, () => true, budget))) {
+        throw headError('EOWNERRECOVERY', 'Created owners publication census changed');
+      }
+      await this.requireAdoptionNamedFiles([[root, currentTenant], [parent, created.ownerDirectories[0]],
+        [childPath, child],
+        [original.original.resolved.headPath, original.original.head.identity],
+        [original.original.resolved.sidecarPath, sidecarIdentity], ...(stage ? [[stage.path, stage.identity] as [string, FileIdentity]] : [])]);
+      this.requiredCoordinator().requireActiveOperationScope(operation);
+      tenantIdentity = currentTenant;
+    };
   }
 
   private async absentAdoptionProof(
@@ -1073,9 +1136,9 @@ export class FileMemoryOwnerSnapshots {
 
   private async stageAdoption(
     operation: FileMemoryOperationScope, request: RecoverAdoptionRequest,
-    budget: FileMemoryDirectoryScanBudget, first: AdoptionEvidence,
+    budget: FileMemoryDirectoryScanBudget, first: AdoptionEvidence, topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
-    let staged = await this.adoptionReproof(operation, request, budget, first, 'before-stage');
+    let staged = await this.adoptionReproof(operation, request, budget, first, 'before-stage', topology);
     if (!staged.stage) {
       const raw = serializedRecord(staged.registry.record);
       const handle = await fs.open(staged.stagePath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
@@ -1084,7 +1147,10 @@ export class FileMemoryOwnerSnapshots {
         const split = Math.floor(Buffer.byteLength(raw) / 2);
         const bytes = Buffer.from(raw);
         await handle.writeFile(bytes.subarray(0, split));
+        const partial = topology ? { path: staged.stagePath, identity: identityOf(await handle.stat({ bigint: true })) } : undefined;
+        await topology?.(partial, undefined, true);
         await this.options.afterAdoptionRecoveryPublication?.('partial-stage');
+        await topology?.(partial);
         this.requiredCoordinator().requireActiveOperationScope(operation);
         await handle.writeFile(bytes.subarray(split));
         await handle.sync();
@@ -1096,8 +1162,9 @@ export class FileMemoryOwnerSnapshots {
         !staged.stage || !sameIdentity(staged.stage.identity, created)) {
         throw headError('EOWNERRECOVERY', 'Adoption evidence changed during staging');
       }
+      await topology?.({ path: staged.stagePath, identity: staged.stage!.identity });
     }
-    return this.adoptionReproof(operation, request, budget, staged, 'verified-stage');
+    return this.adoptionReproof(operation, request, budget, staged, 'verified-stage', topology);
   }
 
   private sameRegistryTransitionBase(first: AdoptionEvidence, last: AdoptionEvidence): boolean {
@@ -1111,8 +1178,9 @@ export class FileMemoryOwnerSnapshots {
   private async publishReservedRegistry(
     operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
     first: AdoptionEvidence, progress: (phase: 'registry-publication-unknown' | 'registry-published') => void,
+    topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
-    let staged = await this.adoptionReproof(operation, request, budget, first, 'before-registry-stage');
+    let staged = await this.adoptionReproof(operation, request, budget, first, 'before-registry-stage', topology);
     if (!staged.stage) {
       const bytes = Buffer.from(serializedRecord({ ...staged.registry.record, state: 'ACTIVE' }));
       const handle = await fs.open(staged.stagePath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
@@ -1121,6 +1189,7 @@ export class FileMemoryOwnerSnapshots {
         const split = Math.floor(bytes.length / 2);
         await handle.writeFile(bytes.subarray(0, split));
         await this.options.afterAdoptionRecoveryPublication?.('partial-registry-stage');
+        await topology?.();
         this.requiredCoordinator().requireActiveOperationScope(operation);
         await handle.writeFile(bytes.subarray(split));
         await handle.sync();
@@ -1133,8 +1202,8 @@ export class FileMemoryOwnerSnapshots {
         throw headError('EOWNERRECOVERY', 'Registry staging changed bound adoption evidence');
       }
     }
-    staged = await this.adoptionReproof(operation, request, budget, staged, 'verified-registry-stage');
-    const last = await this.adoptionReproof(operation, request, budget, staged, 'before-registry-rename');
+    staged = await this.adoptionReproof(operation, request, budget, staged, 'verified-registry-stage', topology);
+    const last = await this.adoptionReproof(operation, request, budget, staged, 'before-registry-rename', topology);
     progress('registry-publication-unknown');
     await fs.rename(last.stagePath, this.registryPath(operation.tenantRoot, request.ownerId));
     progress('registry-published');
@@ -1145,6 +1214,7 @@ export class FileMemoryOwnerSnapshots {
       !samePublishedFile(published.registry.identity, last.stage.identity)) {
       throw headError('EOWNERRECOVERY', 'Registry publication does not match the verified stage');
     }
+    await topology?.();
     return published;
   }
 

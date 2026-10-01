@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import * as syncFs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
@@ -12,12 +13,11 @@ import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
-async function fixture() {
+async function fixture(locator = 'Notes/ÜberNote.yaml') {
   const tenantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'missing-owners-'));
   roots.push(tenantRoot);
-  const locator = 'Notes/ÜberNote.yaml';
   const headPath = path.join(tenantRoot, locator);
-  await fs.mkdir(path.dirname(headPath));
+  if (path.dirname(headPath) !== tenantRoot) await fs.mkdir(path.dirname(headPath));
   await fs.writeFile(headPath, 'name: Original\nentries: []\n');
   const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
   const store = new FileMemoryOwnerSnapshots({ coordinator });
@@ -286,6 +286,83 @@ describe('existing private parent with missing owners child recovery', () => {
     expect(result).not.toHaveProperty('phase');
     await expect(fs.lstat(setup.directory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  const latePhases = ['before-registry-stage', 'partial-registry-stage', 'verified-registry-stage', 'before-registry-rename',
+    'after-registry-rename', 'before-stage', 'partial-stage', 'verified-stage', 'before-rename', 'after-rename', 'after-read'] as const;
+  it.each(latePhases.flatMap(stop => ['parent-residue', 'root-case-alias'].map(kind => ({ stop, kind }))))(
+    'retains full topology for $kind at $stop', async ({ stop, kind }) => {
+      const setup = await fixture();
+      const original = await proof([setup.headPath, setup.archivePath]);
+      const result = await failure(at(setup, stop, async () => {
+        if (kind === 'parent-residue') await fs.writeFile(path.join(setup.parent, 'owners.partial'), 'foreign');
+        else await fs.rename(setup.parent, path.join(setup.tenantRoot, '.MEMORY-OWNERS'));
+      }).recoverReservedAdoption(setup.request));
+      const committed = stop === 'after-rename' || stop === 'after-read';
+      expect(result.code).toBe(committed ? 'EHEADADOPTED' : 'EADOPTIONPENDING');
+      if (committed) expect(result).toMatchObject({ token: { ownerId: setup.request.ownerId, revision: '1', ownership: 'owned' } });
+      else expect(result).not.toHaveProperty('token');
+      if (kind === 'parent-residue') expect(await fs.readFile(path.join(setup.parent, 'owners.partial'), 'utf8')).toBe('foreign');
+      else expect(await fs.readdir(setup.tenantRoot)).toContain('.MEMORY-OWNERS');
+      expect(await proof([setup.headPath, setup.archivePath])).toEqual(original);
+    });
+  it('allows only its descriptor-bound sidecar stage transition when the head is at tenant root', async () => {
+    const setup = await fixture('ÜberNote.yaml');
+    expect((await setup.store.recoverReservedAdoption(setup.request)).status).toBe('known-adopted');
+  });
+  it('rejects a later root metadata ABA after capturing its own partial stage transition', async () => {
+    const setup = await fixture('ÜberNote.yaml');
+    const result = await failure(at(setup, 'partial-stage', async () => {
+      const transient = path.join(setup.tenantRoot, 'unbound');
+      await fs.writeFile(transient, 'foreign'); await fs.unlink(transient);
+    }).recoverReservedAdoption(setup.request));
+    expect(result).toMatchObject({ code: 'EADOPTIONPENDING', phase: 'registry-published' });
+    const bytes = Buffer.from(await fs.readFile(setup.registryPath, 'utf8'));
+    const stage = `${setup.sidecarPath}.adopt-${setup.request.ownerId}.tmp`;
+    expect(await fs.readFile(stage)).toEqual(bytes.subarray(0, Math.floor(bytes.length / 2)));
+    expect(JSON.parse(await fs.readFile(setup.sidecarPath, 'utf8')).state).toBe('RESERVED');
+  });
+  it.each([null, undefined])('attempts known-adopted audit after postrename proof failure %s without replacing its cause', async primary => {
+    const setup = await fixture('ÜberNote.yaml');
+    type Topology = (...args: unknown[]) => Promise<void>;
+    const internals = setup.store as unknown as { createdOwnersPublicationProof: (...args: unknown[]) => Topology };
+    const factory = internals.createdOwnersPublicationProof;
+    let failed = false;
+    jest.spyOn(internals, 'createdOwnersPublicationProof').mockImplementation(function(...args) {
+      const original = factory.apply(this, args);
+      return async (...proofArgs) => {
+        await original(...proofArgs);
+        if (proofArgs[1] && proofArgs[2] === true) { failed = true; throw primary; }
+      };
+    });
+    let audited = false;
+    const detach = SecurityMonitor.addLogListener(event => {
+      if (event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' && event.additionalData?.outcome === 'known-adopted') {
+        audited = true; throw new Error('secondary audit failure');
+      }
+    });
+    try {
+      const result = await failure(setup.store.recoverReservedAdoption(setup.request));
+      expect(failed).toBe(true); expect(audited).toBe(true);
+      expect(result).toMatchObject({ code: 'EHEADADOPTED', token: { ownerId: setup.request.ownerId } });
+      expect(result.cause).toBe(primary);
+      expect(SecurityMonitor.getRecentEvents().some(event => event.additionalData?.outcome === 'known-adopted')).toBe(true);
+    } finally { detach(); }
+  });
+  it('does not rebaseline a nonthrowing committed audit listener root mutation', async () => {
+    const setup = await fixture('ÜberNote.yaml');
+    let injected = false;
+    const detach = SecurityMonitor.addLogListener(event => {
+      if (event.source !== 'FileMemoryOwnerSnapshots.adoption-recovery' || event.additionalData?.outcome !== 'known-adopted') return;
+      injected = true;
+      const transient = path.join(setup.tenantRoot, 'foreign');
+      syncFs.writeFileSync(transient, 'foreign'); syncFs.unlinkSync(transient);
+    });
+    try {
+      await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({
+        code: 'EHEADADOPTED', token: { ownerId: setup.request.ownerId },
+      });
+      expect(injected).toBe(true);
+    } finally { detach(); }
+  });
   const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
   const moduleRoot = new URL('../../../src/storage/', import.meta.url);
   const childScript = `
@@ -299,8 +376,12 @@ describe('existing private parent with missing owners child recovery', () => {
     }});
     await store.recoverReservedAdoption(JSON.parse(request));
   `;
-  it.each(['after-owners-directory-create', 'after-registry-create', 'after-registry-rename', 'after-rename'] as const)('recovers real SIGKILL at %s', async stop => {
-    const setup = await fixture();
+  it.each([
+    { stop: 'after-owners-directory-create', rootHead: false }, { stop: 'after-registry-create', rootHead: false },
+    { stop: 'after-registry-rename', rootHead: false }, { stop: 'after-rename', rootHead: false },
+    { stop: 'verified-stage', rootHead: true }, { stop: 'after-rename', rootHead: true },
+  ] as const)('recovers real SIGKILL at $stop (root head: $rootHead)', async ({ stop, rootHead }) => {
+    const setup = await fixture(rootHead ? 'ÜberNote.yaml' : undefined);
     const original = await proof([setup.headPath, setup.archivePath]);
     const child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), '--input-type=module', '-e', childScript,
       new URL(`FileMemoryOwnerSnapshots.${extension}`, moduleRoot).href,
