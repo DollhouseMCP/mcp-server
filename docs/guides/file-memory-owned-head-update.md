@@ -330,3 +330,65 @@ only final ACTIVE-sidecar rename commits adoption. A crash leaving the exact
 private empty parent resumes through child recovery with fresh authority and no
 previous-invocation attribution. Existing partial records remain manual; no
 recursive directory creation, normalization, cleanup or lease takeover is added.
+
+## Dormant exclusive CREATE and forward recovery
+
+`FileMemoryOwnerSnapshots.createOwned({ operationId, locator, content })` creates
+a new owned revision-1 head. `createOwnedInTransaction(context, request)` uses
+one existing tracked operation instead of acquiring a nested lease. The request
+has exactly these three fields; its operation ID is a lowercase v4 UUID. Existing
+content validation retains its UTF-16 code-unit limit and UTF-8 round-trip checks.
+No production writer or dependency-injection path invokes these methods.
+
+CREATE exclusively writes a private adjacent content stage, syncs and closes it,
+and persists a bounded schema-3 intent in the existing per-head write-journal
+namespace. Canonical publication uses POSIX `link(stage, head)` with no replacement
+or rename fallback. A real EEXIST conflict preserves the foreign target and own
+residue. Existing targets, even with identical bytes, never yield a reconstructed
+creation receipt; obtain fresh owned evidence and use conditional UPDATE instead.
+
+`PREPARED_CREATE` binds the exact stage identity and nlink=1 with an absent head.
+`LINKED_CREATE` binds persisted post-link full identities at both names and
+nlink=2. `PUBLISHED_CREATE` binds the actual post-unlink head identity and nlink=1,
+with no stage. Exact tenant, owner, locator, operation and content bindings are
+required on every forward retry. Owner metadata completes through exclusive
+private writes; all file and containing-directory sync/close barriers are required.
+Successful final qualified directory sync **and close** commits CREATE. The
+current invocation captures its frozen token synchronously before later hooks,
+audit or lease release can fail. Those later failures retain `EHEADCOMMITTED` and
+that genuine receipt; forged or previous-invocation receipts cannot attribute a
+new commit.
+
+Ordinary reads retain their existing phase-specific refusals: PREPARED has no
+head (ENOENT), LINKED's two-link head fails the existing identity guard
+(EHEADCONFLICT), and the canonical-only pending phases refuse their journal
+(EOWNERRECOVERY). No successful ordinary snapshot is exposed while CREATE is
+pending; no uniform refusal code is promised across these states.
+
+Before commitment, proved residual phases return `EOWNERRECOVERY` with the direct
+original cause; unproved attempted publication/removal or final durability returns
+`EHEADCOMMITUNKNOWN`. A primary null/undefined remains distinguishable from no
+primary failure, and an actual secondary close failure is retained as `closeCause`.
+No caller may interpret either refusal as permission to remove residue.
+
+Recovery deliberately preserves partial/pre-intent content, partial intent,
+exclusive intent-replacement stages, and crashes after link or stage unlink but
+before the corresponding new identity is persisted. Those cases require separately
+qualified manual handling. Intent unlink without proved final directory durability
+does not produce a receipt, and a later clean retry conflicts with the existing head.
+
+One monotonic 1000 directory-read-attempt budget covers all censuses and reproofs,
+including EOF/error attempts. The complete persisted intent is capped at 8 KiB;
+its namespace lower bound is checked before allocating the head stage. Neither
+truncation nor the first N names proves absence or completeness. Whole child sets,
+canonical spelling, descriptor identities, private modes and live ACTIVE authority
+remain bound, including after awaited callbacks.
+
+Unrelated non-directory children retain exact full metadata in persisted evidence.
+Directory children persist stable device/inode/type/mode/UID; size, timestamps and
+nlink are freshly bound during each invocation and may advance only across exact
+own child-set transitions. An isolated APFS observation confirmed directory nlink
+can change when adding a regular file, so no OS-based nlink formula is assumed.
+Cross-invocation same-inode directory timestamp/nlink-only drift is not proved
+absent. This is the existing cooperating-local-filesystem observation model,
+not protection against an arbitrary hostile filesystem or a power-loss guarantee.
