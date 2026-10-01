@@ -96,11 +96,14 @@ describe('dormant final RESERVED adoption recovery', () => {
     expect(await setup.store.readHeadSnapshot(setup.locator)).toMatchObject({ token: result.token });
     expect(await setup.store.recoverReservedAdoption(setup.request)).toEqual({ status: 'already-clean-no-attribution' });
   });
-  it.each(['reserved-sidecar'])('preserves unsupported earlier phase %s', async stop => {
-    const setup = await fixture(stop);
-    const before = await residual(setup);
-    await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', residual: true });
-    expect(await residual(setup)).toEqual(before);
+  it('recovers the earlier reserved-sidecar phase through exact directory preparation', async () => {
+    const setup = await fixture('reserved-sidecar');
+    const before = await proof([setup.headPath, setup.archivePath]);
+    const result = await setup.store.recoverReservedAdoption(setup.request);
+    expect(result).toMatchObject({ status: 'known-adopted', token: { ...setup.legacy.token,
+      ownership: 'owned', ownerId: setup.request.ownerId, revision: '1' } });
+    expect(await proof([setup.headPath, setup.archivePath])).toEqual(before);
+    expect(await setup.store.recoverReservedAdoption(setup.request)).toEqual({ status: 'already-clean-no-attribution' });
   });
   it.each(['ownerId', 'locator'])('preserves evidence for wrong request %s', async field => {
     const setup = await fixture();

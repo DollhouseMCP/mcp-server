@@ -128,12 +128,9 @@ describe('exact missing-registry adoption recovery', () => {
     expect(result).not.toHaveProperty('token');
     expect((await setup.store.recoverReservedAdoption(setup.request)).status).toBe('known-adopted');
   });
-  it.each(['missing-directory', 'alias', 'random-stage', 'journal', 'invalid-sidecar'] as const)('preserves invalid %s', async kind => {
+  it.each(['unsafe-directory', 'alias', 'random-stage', 'journal', 'invalid-sidecar'] as const)('preserves invalid %s', async kind => {
     const setup = await fixture();
-    if (kind === 'missing-directory') {
-      await fs.rmdir(path.dirname(setup.registryPath));
-      await fs.rmdir(path.dirname(path.dirname(setup.registryPath)));
-    }
+    if (kind === 'unsafe-directory') await fs.chmod(path.dirname(path.dirname(setup.registryPath)), 0o755);
     if (kind === 'alias') await fs.writeFile(path.join(path.dirname(setup.registryPath), `${setup.request.ownerId.toUpperCase()}.JSON`), 'foreign');
     if (kind === 'random-stage') await fs.writeFile(`${setup.registryPath}.random.tmp`, 'foreign');
     if (kind === 'journal') await fs.writeFile(setup.sidecarPath.replace('memory-owner', 'memory-write'), 'foreign');

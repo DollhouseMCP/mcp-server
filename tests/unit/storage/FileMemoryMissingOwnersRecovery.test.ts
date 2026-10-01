@@ -82,9 +82,8 @@ describe('existing private parent with missing owners child recovery', () => {
     expect(await proof([setup.headPath, setup.archivePath])).toEqual(original);
     expect(await setup.store.recoverReservedAdoption(setup.request)).toEqual({ status: 'already-clean-no-attribution' });
   });
-  it.each(['both-missing', 'parent-mode', 'parent-alias', 'child-residue'] as const)('preserves unsupported %s', async kind => {
+  it.each(['parent-mode', 'parent-alias', 'child-residue'] as const)('preserves unsupported %s', async kind => {
     const setup = await fixture();
-    if (kind === 'both-missing') await fs.rmdir(setup.parent);
     if (kind === 'parent-mode') await fs.chmod(setup.parent, 0o755);
     if (kind === 'parent-alias') await fs.rename(setup.parent, path.join(setup.tenantRoot, '.MEMORY-OWNERS'));
     if (kind === 'child-residue') await fs.writeFile(path.join(setup.parent, 'owners.partial'), 'foreign');
