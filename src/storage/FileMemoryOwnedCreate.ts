@@ -31,7 +31,11 @@ interface Intent {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const HASH = /^[0-9a-f]{64}$/u;
 const LIMIT = 8192;
-const ordinal = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+function ordinal(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
 const digest = (raw: string) => createHash('sha256').update(raw).digest('hex');
 function stableChild(child: Child): Child {
   // Directory timestamps cannot be persisted across our journal's own rename.
@@ -45,7 +49,8 @@ function fail(code = 'EOWNERRECOVERY'): never {
   throw Object.assign(new Error('Exclusive memory creation evidence is unsafe or changed'), { code });
 }
 function exactKeys(value: object, keys: string[]): boolean {
-  return isDeepStrictEqual(Reflect.ownKeys(value).sort(), [...keys].sort());
+  const actual = Reflect.ownKeys(value), expected = new Set(keys);
+  return actual.length === expected.size && actual.every(key => typeof key === 'string' && expected.has(key));
 }
 function validIdentity(value: unknown): value is Identity {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -56,6 +61,7 @@ function validIdentity(value: unknown): value is Identity {
     ['mtimeNs', 'ctimeNs'].every(key => typeof fields[key as keyof Identity] === 'string' &&
       /^(?:0|-?[1-9]\d*)$/u.test(fields[key as keyof Identity]));
 }
+// Only live, proved link/unlink transitions advance ctime; persisted phase identities remain exact.
 function sameOriginal(a: Identity, b: Identity): boolean {
   return a.device === b.device && a.inode === b.inode && a.size === b.size && a.mtimeNs === b.mtimeNs;
 }
@@ -74,6 +80,11 @@ function serialize(intent: Intent): string {
   if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE');
   return raw;
 }
+function phaseKeys(state: State): string[] {
+  if (state === 'PREPARED_CREATE') return ['currentStageIdentity', 'currentStageNlink'];
+  if (state === 'LINKED_CREATE') return ['currentStageIdentity', 'currentStageNlink', 'currentHeadIdentity', 'currentHeadNlink', 'priorIntent'];
+  return ['currentHeadIdentity', 'currentHeadNlink', 'priorIntent'];
+}
 function parse(raw: string): Intent {
   let value: Intent;
   try { value = JSON.parse(raw) as Intent; } catch { fail(); }
@@ -81,9 +92,7 @@ function parse(raw: string): Intent {
     'contentHash', 'contentBytes', 'stageName', 'initialStageIdentity', 'namespace'];
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.schema !== 3 ||
     !['PREPARED_CREATE', 'LINKED_CREATE', 'PUBLISHED_CREATE'].includes(value.state)) fail();
-  const extra = value.state === 'PREPARED_CREATE' ? ['currentStageIdentity', 'currentStageNlink'] :
-    value.state === 'LINKED_CREATE' ? ['currentStageIdentity', 'currentStageNlink', 'currentHeadIdentity', 'currentHeadNlink', 'priorIntent'] :
-      ['currentHeadIdentity', 'currentHeadNlink', 'priorIntent'];
+  const extra = phaseKeys(value.state);
   if (!exactKeys(value, [...common, ...extra]) || typeof value.userId !== 'string' || !value.userId ||
     Buffer.byteLength(value.userId) > 128 || Buffer.from(value.userId).toString('utf8') !== value.userId ||
     typeof value.ownerId !== 'string' || !UUID.test(value.ownerId) || typeof value.operationId !== 'string' ||
@@ -92,6 +101,13 @@ function parse(raw: string): Intent {
     !Number.isSafeInteger(value.contentBytes) || value.contentBytes < 0 ||
     !validIdentity(value.initialStageIdentity) || typeof value.stageName !== 'string' ||
     !Array.isArray(value.namespace) || !value.namespace.length) fail();
+  validatePhase(value);
+  for (const directory of value.namespace) validateNamespace(directory);
+  serialize(value);
+  return value;
+}
+
+function validatePhase(value: Intent): void {
   if (value.state === 'PREPARED_CREATE') {
     if (value.currentStageNlink !== '1' || !isDeepStrictEqual(value.currentStageIdentity, value.initialStageIdentity)) fail();
   } else {
@@ -103,20 +119,18 @@ function parse(raw: string): Intent {
     if (value.state === 'LINKED_CREATE' && (value.currentStageNlink !== '2' ||
       !isDeepStrictEqual(value.currentStageIdentity, value.currentHeadIdentity))) fail();
   }
-  for (const directory of value.namespace) {
+}
+function validateNamespace(directory: StableDirectory): void {
     if (!directory || !exactKeys(directory, ['locator', 'device', 'inode', 'mode', 'uid', 'names', 'children']) ||
-      typeof directory.locator !== 'string' || !['device', 'inode', 'mode', 'uid'].every(key =>
-        typeof directory[key as keyof StableDirectory] === 'string' && /^(?:0|[1-9]\d*)$/u.test(directory[key as keyof StableDirectory] as string)) ||
-      !Array.isArray(directory.names) || directory.names.some(name => typeof name !== 'string' || !name || name.includes('/') || name.includes('\0')) ||
-      !isDeepStrictEqual(directory.names, [...new Set(directory.names)].sort(ordinal)) ||
-      !Array.isArray(directory.children) || !isDeepStrictEqual(directory.children.map(child => child.name), directory.names)) fail();
+    typeof directory.locator !== 'string' || !['device', 'inode', 'mode', 'uid'].every(key =>
+      typeof directory[key as keyof StableDirectory] === 'string' && /^(?:0|[1-9]\d*)$/u.test(directory[key as keyof StableDirectory] as string)) ||
+    !Array.isArray(directory.names) || directory.names.some(name => typeof name !== 'string' || !name || name.includes('/') || name.includes('\0')) ||
+    !isDeepStrictEqual(directory.names, [...new Set(directory.names)].sort(ordinal)) ||
+    !Array.isArray(directory.children) || !isDeepStrictEqual(directory.children.map(child => child.name), directory.names)) fail();
     for (const child of directory.children) if (!child || !exactKeys(child, ['name', 'identity', 'mode', 'uid', 'links', 'directory']) ||
-      !validIdentity(child.identity) || typeof child.directory !== 'boolean' ||
-      !['mode', 'uid', 'links'].every(key => typeof child[key as keyof Child] === 'string' && /^(?:0|[1-9]\d*)$/u.test(child[key as keyof Child] as string)) ||
-      !isDeepStrictEqual(child, stableChild(child))) fail();
-  }
-  serialize(value);
-  return value;
+    !validIdentity(child.identity) || typeof child.directory !== 'boolean' ||
+    !['mode', 'uid', 'links'].every(key => typeof child[key as keyof Child] === 'string' && /^(?:0|[1-9]\d*)$/u.test(child[key as keyof Child] as string)) ||
+    !isDeepStrictEqual(child, stableChild(child))) fail();
 }
 
 /** One local CREATE invocation, with no connection discovery or generic recovery authority. */
@@ -152,6 +166,7 @@ export class FileMemoryOwnedCreate {
     if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
       ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
     const names = await this.names(target), children: Child[] = [];
+    // Bounded serial observation limits live descriptors and preserves fail-fast rejection.
     for (const name of names) {
       const stat = await fs.lstat(path.join(target, name), { bigint: true });
       children.push({ name, identity: identity(stat), mode: String(stat.mode), uid: String(stat.uid), links: String(stat.nlink), directory: stat.isDirectory() });
@@ -161,7 +176,9 @@ export class FileMemoryOwnedCreate {
     return { locator, device: String(before.dev), inode: String(before.ino), mode: String(before.mode), uid: String(before.uid), names, children, identity: identity(after), directoryLinks: String(after.nlink) };
   }
   private async proof(): Promise<void> {
+    // All directory observations consume the same monotonic budget in proof order.
     for (const before of this.directories) if (!isDeepStrictEqual(await this.directory(before.locator), before)) fail();
+    // Serial artifact reproof bounds descriptor pressure and fails at the first changed file.
     for (const [target, before] of this.files) if (!isDeepStrictEqual(await this.read(target, Buffer.byteLength(before.raw), before.links), before)) fail();
     this.active();
   }
@@ -174,6 +191,10 @@ export class FileMemoryOwnedCreate {
     for (const child of before.children) if (!remove.includes(child.name) && !changed.includes(child.name) &&
       !isDeepStrictEqual(child, after.children.find(item => item.name === child.name))) fail();
     this.directories[index] = after;
+    await this.transitionAncestor(target, after);
+    await this.proof();
+  }
+  private async transitionAncestor(target: string, after: Directory): Promise<void> {
     const ancestor = this.directories.find(directory => this.absolute(directory.locator) === path.dirname(target));
     if (ancestor && ancestor !== after) {
       const recaptured = await this.directory(ancestor.locator), name = path.basename(target);
@@ -185,7 +206,6 @@ export class FileMemoryOwnedCreate {
       }
       this.directories[this.directories.indexOf(ancestor)] = recaptured;
     }
-    await this.proof();
   }
   private async closed<T>(handle: fs.FileHandle, body: () => Promise<T>): Promise<T> {
     let result!: T, primary: { cause: unknown } | undefined;
@@ -208,6 +228,7 @@ export class FileMemoryOwnedCreate {
         (before.mode & 0o777n) !== 0o600n || before.size > BigInt(maximum)) fail();
       const bytes = Buffer.alloc(Number(before.size));
       let offset = 0;
+      // Each read advances the actual returned byte offset; the next read depends on it.
       while (offset < bytes.length) {
         const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
         if (!bytesRead) fail();
@@ -254,6 +275,7 @@ export class FileMemoryOwnedCreate {
   }
   private async writeBytes(handle: fs.FileHandle, bytes: Buffer): Promise<void> {
     let offset = 0;
+    // Partial writes advance one descriptor position and require renewed authority in order.
     while (offset < bytes.length) {
       this.active();
       const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
@@ -301,9 +323,24 @@ export class FileMemoryOwnedCreate {
   private async initialize(): Promise<void> {
     if (!this.scope.userId || Buffer.byteLength(this.scope.userId) > 128 || this.scope.userId.includes('\0') ||
       Buffer.from(this.scope.userId).toString('utf8') !== this.scope.userId) fail('EHEADCONFLICT');
+    const journalExists = await this.admitHeadNamespace();
+    await this.loadIntent(journalExists);
+    // Each ancestor must be captured before its child can be admitted or created.
+    await this.prepareOwnershipDirectory('.memory-owners', journalExists);
+    await this.prepareOwnershipDirectory('.memory-owners/owners', journalExists);
+    if (journalExists) await this.recover();
+    else await this.prepareIntent();
+    this.registry = this.absolute(`.memory-owners/owners/${this.intent.ownerId}.json`);
+    const owners = this.directories.find(directory => directory.locator === '.memory-owners/owners')!;
+    if (owners.names.some(name => name.toLowerCase().startsWith(this.intent.ownerId) &&
+      !(this.intent.state === 'PUBLISHED_CREATE' && name === path.basename(this.registry)))) fail();
+  }
+
+  private async admitHeadNamespace(): Promise<boolean> {
     const segments = this.request.locator.split('/');
     let locator = '.';
     this.directories = [await this.directory(locator)];
+    // Each exact ancestor census admits the next confined directory.
     for (const segment of segments.slice(0, -1)) {
       const parent = this.directories.at(-1)!;
       if (!parent.names.includes(segment) || parent.names.some(name => name !== segment && name.toLowerCase() === segment.toLowerCase())) fail();
@@ -316,15 +353,18 @@ export class FileMemoryOwnedCreate {
     this.sidecar = path.join(path.dirname(this.head), `.${hash}.memory-owner.json`);
     this.stage = `${this.journal}.create-${this.request.operationId}.head.tmp`;
     const parent = this.directories.at(-1)!;
-    const forbidden = [path.basename(this.head).toLowerCase(), path.basename(this.sidecar).toLowerCase()];
+    const forbidden = new Set([path.basename(this.head).toLowerCase(), path.basename(this.sidecar).toLowerCase()]);
     const journalExists = parent.names.includes(path.basename(this.journal));
-    if (parent.names.some(name => forbidden.includes(name.toLowerCase()) &&
+    if (parent.names.some(name => forbidden.has(name.toLowerCase()) &&
       name !== path.basename(this.head) && !(journalExists && name === path.basename(this.sidecar)))) fail('EHEADCONFLICT');
     if (!journalExists && parent.names.some(name => name.toLowerCase() === path.basename(this.head).toLowerCase())) fail('EHEADCONFLICT');
     if (parent.names.some(name => name.toLowerCase().startsWith(`.${hash}.memory-write`) &&
       name !== path.basename(this.journal) && name !== path.basename(this.stage))) fail();
     if (parent.names.some(name => name.toLowerCase().startsWith(`.${hash}.memory-owner`) &&
       !(journalExists && name === path.basename(this.sidecar)))) fail();
+    return journalExists;
+  }
+  private async loadIntent(journalExists: boolean): Promise<void> {
     if (journalExists) {
       const journal = await this.read(this.journal, LIMIT); this.files.set(this.journal, journal);
       this.intent = parse(journal.raw);
@@ -333,38 +373,33 @@ export class FileMemoryOwnedCreate {
         this.intent.contentBytes !== Buffer.byteLength(this.request.content) || this.intent.stageName !== path.basename(this.stage)) fail('EHEADCONFLICT');
       this.residual = true;
     }
-    for (const fixed of ['.memory-owners', '.memory-owners/owners']) {
-      const container = this.directories.find(directory => directory.locator === (fixed.includes('/') ? '.memory-owners' : '.'))!;
-      const basename = path.posix.basename(fixed);
-      if (container.names.some(name => name.toLowerCase() === basename && name !== basename)) fail();
-      if (!container.names.includes(basename)) {
-        if (journalExists) fail();
-        await this.proof(); this.residual = true;
-        this.active(); await fs.mkdir(this.absolute(fixed), { mode: 0o700 });
-        const created = await this.captureCreatedDirectory(fixed);
-        await this.transition(this.absolute(container.locator), [basename]);
-        const added = await this.directory(fixed);
-        if (added.names.length || !isDeepStrictEqual(added.identity, created.identity) || added.directoryLinks !== created.links) fail();
-        this.directories.push(added); await this.syncDirectory(this.absolute(container.locator));
-      } else this.directories.push(await this.directory(fixed));
-    }
-    if (journalExists) await this.recover();
-    else {
-      const namespace = this.directories.map(({ identity: _identity, directoryLinks: _links, ...directory }) => ({ ...directory, children: directory.children.map(stableChild) }));
-      if (Buffer.byteLength(JSON.stringify(namespace)) >= LIMIT) fail('EHEADRESOURCE');
-      await this.barrier('before-content');
-      const staged = await this.write(this.stage, this.request.content, 'partial-content');
-      this.intent = { schema: 3, state: 'PREPARED_CREATE', userId: this.scope.userId, ownerId: randomUUID(),
-        locator: this.request.locator, operationId: this.request.operationId, revision: '1', contentHash: digest(staged.raw),
-        contentBytes: Buffer.byteLength(staged.raw), stageName: path.basename(this.stage), initialStageIdentity: staged.identity,
-        currentStageIdentity: staged.identity, currentStageNlink: '1', namespace };
-      parse(serialize(this.intent)); await this.write(this.journal, serialize(this.intent));
-      await this.syncDirectory(path.dirname(this.head));
-    }
-    this.registry = this.absolute(`.memory-owners/owners/${this.intent.ownerId}.json`);
-    const owners = this.directories.find(directory => directory.locator === '.memory-owners/owners')!;
-    if (owners.names.some(name => name.toLowerCase().startsWith(this.intent.ownerId) &&
-      !(this.intent.state === 'PUBLISHED_CREATE' && name === path.basename(this.registry)))) fail();
+  }
+  private async prepareOwnershipDirectory(fixed: string, journalExists: boolean): Promise<void> {
+    const container = this.directories.find(directory => directory.locator === (fixed.includes('/') ? '.memory-owners' : '.'))!;
+    const basename = path.posix.basename(fixed);
+    if (container.names.some(name => name.toLowerCase() === basename && name !== basename)) fail();
+    if (!container.names.includes(basename)) {
+      if (journalExists) fail();
+      await this.proof(); this.residual = true;
+      this.active(); await fs.mkdir(this.absolute(fixed), { mode: 0o700 });
+      const created = await this.captureCreatedDirectory(fixed);
+      await this.transition(this.absolute(container.locator), [basename]);
+      const added = await this.directory(fixed);
+      if (added.names.length || !isDeepStrictEqual(added.identity, created.identity) || added.directoryLinks !== created.links) fail();
+      this.directories.push(added); await this.syncDirectory(this.absolute(container.locator));
+    } else this.directories.push(await this.directory(fixed));
+  }
+  private async prepareIntent(): Promise<void> {
+    const namespace = this.directories.map(({ identity: _identity, directoryLinks: _links, ...directory }) => ({ ...directory, children: directory.children.map(stableChild) }));
+    if (Buffer.byteLength(JSON.stringify(namespace)) >= LIMIT) fail('EHEADRESOURCE');
+    await this.barrier('before-content');
+    const staged = await this.write(this.stage, this.request.content, 'partial-content');
+    this.intent = { schema: 3, state: 'PREPARED_CREATE', userId: this.scope.userId, ownerId: randomUUID(),
+      locator: this.request.locator, operationId: this.request.operationId, revision: '1', contentHash: digest(staged.raw),
+      contentBytes: Buffer.byteLength(staged.raw), stageName: path.basename(this.stage), initialStageIdentity: staged.identity,
+      currentStageIdentity: staged.identity, currentStageNlink: '1', namespace };
+    parse(serialize(this.intent)); await this.write(this.journal, serialize(this.intent));
+    await this.syncDirectory(path.dirname(this.head));
   }
 
   private async captureCreatedDirectory(locator: string): Promise<{ identity: Identity; links: string }> {
@@ -386,6 +421,27 @@ export class FileMemoryOwnedCreate {
   }
 
   private async recover(): Promise<void> {
+    await this.recoverContent();
+    const registry = this.absolute(`.memory-owners/owners/${this.intent.ownerId}.json`);
+    const activeRaw = this.intent.state === 'PUBLISHED_CREATE' ? this.activeRecord() : undefined;
+    const registryPresent = this.directories.find(item => this.absolute(item.locator) === path.dirname(registry))!.names.includes(path.basename(registry));
+    const sidecarPresent = this.directories.find(item => this.absolute(item.locator) === path.dirname(this.sidecar))!.names.includes(path.basename(this.sidecar));
+    // Registry publication precedes sidecar publication; reverse evidence cannot authorize recreation.
+    if (sidecarPresent && !registryPresent) fail();
+    // Sequential admission bounds descriptor pressure and stops at the first changed artifact.
+    for (const target of [registry, this.sidecar]) {
+      const directory = this.directories.find(item => this.absolute(item.locator) === path.dirname(target))!;
+      if (directory.names.includes(path.basename(target))) {
+        if (!activeRaw) fail();
+        const file = await this.read(target, 4096);
+        if (file.raw !== activeRaw) { fail(); }
+        this.files.set(target, file);
+      }
+    }
+    this.recoverNamespace();
+    await this.proof();
+  }
+  private async recoverContent(): Promise<void> {
     const head = this.intent.state !== 'PREPARED_CREATE', stage = this.intent.state !== 'PUBLISHED_CREATE';
     if (stage) {
       const file = await this.read(this.stage, this.intent.contentBytes, this.intent.currentStageNlink!);
@@ -397,15 +453,8 @@ export class FileMemoryOwnedCreate {
       if (!isDeepStrictEqual(file.identity, this.intent.currentHeadIdentity) || file.raw !== this.request.content) fail();
       this.files.set(this.head, file);
     }
-    const registry = this.absolute(`.memory-owners/owners/${this.intent.ownerId}.json`);
-    const activeRaw = head && !stage ? this.activeRecord() : undefined;
-    for (const target of [registry, this.sidecar]) {
-      const directory = this.directories.find(item => this.absolute(item.locator) === path.dirname(target))!;
-      if (directory.names.includes(path.basename(target))) {
-        if (!activeRaw) fail();
-        const file = await this.read(target, 4096); if (file.raw !== activeRaw) fail(); this.files.set(target, file);
-      }
-    }
+  }
+  private recoverNamespace(): void {
     if (this.intent.namespace.length !== this.directories.length) fail();
     for (let index = 0; index < this.directories.length; index++) {
       const expected = this.intent.namespace[index], actual = this.directories[index];
@@ -416,7 +465,6 @@ export class FileMemoryOwnedCreate {
         if (!isDeepStrictEqual(child, stableChild(actual.children.find(item => item.name === child.name)!))) fail();
       }
     }
-    await this.proof();
   }
   private activeRecord(): string {
     return JSON.stringify({ schema: 1, state: 'ACTIVE', userId: this.scope.userId, ownerId: this.intent.ownerId,
@@ -426,38 +474,57 @@ export class FileMemoryOwnedCreate {
     SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW', source: 'FileMemoryOwnedCreate',
       details: `Exclusive memory CREATE known committed; invocation=${this.invocationId}` });
   }
+  private async linkHead(): Promise<void> {
+    this.phase = 'prepared'; await this.barrier('prepared'); await this.barrier('before-link');
+    this.active(); this.attempted = true;
+    try { await fs.link(this.stage, this.head); }
+    catch (cause) {
+      if (cause && typeof cause === 'object' && (cause as NodeJS.ErrnoException).code === 'EEXIST') {
+        this.linkConflict = true; this.attempted = false;
+      }
+      throw cause;
+    }
+    const stage = await this.read(this.stage, this.intent.contentBytes, '2'), head = await this.read(this.head, this.intent.contentBytes, '2');
+    if (!isDeepStrictEqual(stage, head) || !sameOriginal(stage.identity, this.intent.initialStageIdentity)) fail();
+    this.files.set(this.stage, stage); this.files.set(this.head, head);
+    await this.transition(path.dirname(this.head), [path.basename(this.head)], [], [path.basename(this.stage)]);
+    await this.barrier('linked-before-intent');
+    await this.replaceIntent({ ...this.intent, state: 'LINKED_CREATE', currentStageIdentity: stage.identity,
+      currentStageNlink: '2', currentHeadIdentity: head.identity, currentHeadNlink: '2' });
+  }
+  private async publishHead(): Promise<void> {
+    this.phase = 'linked'; await this.barrier('linked'); this.active(); this.attempted = true;
+    await fs.unlink(this.stage); const head = await this.read(this.head, this.intent.contentBytes);
+    if (!sameOriginal(head.identity, this.intent.currentHeadIdentity!)) fail();
+    this.files.delete(this.stage); this.files.set(this.head, head);
+    await this.transition(path.dirname(this.head), [], [path.basename(this.stage)], [path.basename(this.head)]);
+    await this.barrier('unlinked-stage-before-intent');
+    const { currentStageIdentity: _stage, currentStageNlink: _links, ...published } = this.intent;
+    await this.replaceIntent({ ...published, state: 'PUBLISHED_CREATE', currentHeadIdentity: head.identity, currentHeadNlink: '1' });
+  }
+  private outcomeCode(): string {
+    if (this.committed) return 'EHEADCOMMITTED';
+    if (this.linkConflict) return 'EHEADCONFLICT';
+    if (this.attempted) return 'EHEADCOMMITUNKNOWN';
+    if (this.residual) return 'EOWNERRECOVERY';
+    return 'EHEADCONFLICT';
+  }
+  private outcomeError(cause: unknown): Error {
+    const close = cause && typeof cause === 'object' ? this.closeFailures.get(cause) : undefined;
+    const error = Object.assign(new Error('Exclusive memory CREATE stopped; preserve residual evidence'), {
+      code: this.outcomeCode(), cause: close ? close.cause : cause,
+      operationId: this.request.operationId, phase: this.phase, residual: this.residual });
+    if (close) Object.assign(error, { closeCause: close.closeCause });
+    if (this.committed) Object.assign(error, { committed: true, token: this.committed });
+    return error;
+  }
   async run(): Promise<OwnedFileMemoryToken> {
     try {
       await this.initialize();
-      if (this.intent.state === 'PREPARED_CREATE') {
-        this.phase = 'prepared'; await this.barrier('prepared'); await this.barrier('before-link');
-        this.active(); this.attempted = true;
-        try { await fs.link(this.stage, this.head); }
-        catch (cause) {
-          if (cause && typeof cause === 'object' && (cause as NodeJS.ErrnoException).code === 'EEXIST') {
-            this.linkConflict = true; this.attempted = false;
-          }
-          throw cause;
-        }
-        const stage = await this.read(this.stage, this.intent.contentBytes, '2'), head = await this.read(this.head, this.intent.contentBytes, '2');
-        if (!isDeepStrictEqual(stage, head) || !sameOriginal(stage.identity, this.intent.initialStageIdentity)) fail();
-        this.files.set(this.stage, stage); this.files.set(this.head, head);
-        await this.transition(path.dirname(this.head), [path.basename(this.head)], [], [path.basename(this.stage)]);
-        await this.barrier('linked-before-intent');
-        await this.replaceIntent({ ...this.intent, state: 'LINKED_CREATE', currentStageIdentity: stage.identity,
-          currentStageNlink: '2', currentHeadIdentity: head.identity, currentHeadNlink: '2' });
-      }
-      if (this.intent.state === 'LINKED_CREATE') {
-        this.phase = 'linked'; await this.barrier('linked'); this.active(); this.attempted = true;
-        await fs.unlink(this.stage); const head = await this.read(this.head, this.intent.contentBytes);
-        if (!sameOriginal(head.identity, this.intent.currentHeadIdentity!)) fail();
-        this.files.delete(this.stage); this.files.set(this.head, head);
-        await this.transition(path.dirname(this.head), [], [path.basename(this.stage)], [path.basename(this.head)]);
-        await this.barrier('unlinked-stage-before-intent');
-        const { currentStageIdentity: _stage, currentStageNlink: _links, ...published } = this.intent;
-        await this.replaceIntent({ ...published, state: 'PUBLISHED_CREATE', currentHeadIdentity: head.identity, currentHeadNlink: '1' });
-      }
+      if (this.intent.state === 'PREPARED_CREATE') await this.linkHead();
+      if (this.intent.state === 'LINKED_CREATE') await this.publishHead();
       this.phase = 'published'; await this.barrier('published');
+      // Durable registry publication must precede sidecar publication.
       for (const [target, point] of [[this.registry, 'active-registry'], [this.sidecar, 'active-sidecar']] as const) {
         if (!this.files.has(target)) await this.write(target, this.activeRecord());
         await this.syncDirectory(path.dirname(target)); await this.barrier(point);
@@ -470,14 +537,7 @@ export class FileMemoryOwnedCreate {
       this.audit(); await this.barrier('committed'); await this.barrier('after-read');
       return this.committed!;
     } catch (cause) {
-      const close = cause && typeof cause === 'object' ? this.closeFailures.get(cause) : undefined;
-      const error = Object.assign(new Error('Exclusive memory CREATE stopped; preserve residual evidence'), {
-        code: this.committed ? 'EHEADCOMMITTED' : this.linkConflict ? 'EHEADCONFLICT' : this.attempted ? 'EHEADCOMMITUNKNOWN' : this.residual ? 'EOWNERRECOVERY' :
-          'EHEADCONFLICT', cause: close ? close.cause : cause,
-        operationId: this.request.operationId, phase: this.phase, residual: this.residual });
-      if (close) Object.assign(error, { closeCause: close.closeCause });
-      if (this.committed) Object.assign(error, { committed: true, token: this.committed });
-      throw error;
+      throw this.outcomeError(cause);
     }
   }
 }

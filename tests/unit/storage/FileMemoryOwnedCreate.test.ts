@@ -476,6 +476,28 @@ describe('exclusive owned CREATE', () => {
       expect((await fs.stat(file, { bigint: true })).ino).toBe(record.inode);
     }
   });
+  it('refuses sidecar-only publication evidence without recreating the missing registry', async () => {
+    const f = await fixture();
+    await expect(f.store(phase => { if (phase === 'active-sidecar') throw new Error('interrupted metadata'); }).createOwned(f.request))
+      .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    const names = (await fs.readdir(path.dirname(f.head))).sort();
+    const journal = names.find(name => name.endsWith('.memory-write.json'))!;
+    const { ownerId } = JSON.parse(await fs.readFile(path.join(path.dirname(f.head), journal), 'utf8')) as { ownerId: string };
+    const registry = path.join(f.tenantRoot, '.memory-owners', 'owners', `${ownerId}.json`);
+    await fs.unlink(registry);
+    const before = await Promise.all(names.map(async name => {
+      const file = path.join(path.dirname(f.head), name), stat = await fs.stat(file, { bigint: true });
+      return { name, raw: await fs.readFile(file, 'utf8'), identity: { dev: stat.dev, ino: stat.ino, size: stat.size, mtime: stat.mtimeNs, ctime: stat.ctimeNs } };
+    }));
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    await expect(fs.stat(registry)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await fs.readdir(path.dirname(f.head))).sort()).toEqual(names);
+    for (const record of before) {
+      const file = path.join(path.dirname(f.head), record.name), stat = await fs.stat(file, { bigint: true });
+      expect(await fs.readFile(file, 'utf8')).toBe(record.raw);
+      expect({ dev: stat.dev, ino: stat.ino, size: stat.size, mtime: stat.mtimeNs, ctime: stat.ctimeNs }).toEqual(record.identity);
+    }
+  });
   const crashChild = `
     const [ownersUrl,coordinatorUrl,fenceUrl,root,user,request,stop]=process.argv.slice(1);
     const {FileMemoryOwnerSnapshots}=await import(ownersUrl);
