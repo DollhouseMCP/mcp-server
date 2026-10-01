@@ -630,6 +630,20 @@ describe('exclusive owned CREATE', () => {
     expect(() => commitCreateDirectory({ ...baseline, children: [{ ...directoryChild, links: '1' }] })).toThrow();
     expect(() => commitCreateDirectory({ ...baseline, names: ['a', 'a'], children: [child, child] })).toThrow();
   });
+  it('indexes each fresh child observation without silently collapsing duplicate names', () => {
+    type Child = Parameters<typeof commitCreateDirectory>[0]['children'][number];
+    const index = FileMemoryOwnedCreate.prototype as unknown as { childIndex: (children: Child[]) => Map<string, Child> };
+    const a: Child = { name: 'a', directory: false, identity: { device: '1', inode: '2', size: '3', mtimeNs: '4', ctimeNs: '5' }, mode: '384', uid: '1', links: '1' };
+    const b = { ...a, name: 'b' };
+    const observed = index.childIndex([b, a]);
+    expect([...observed.keys()]).toEqual(['b', 'a']);
+    expect(observed.get('a')).toBe(a);
+    expect(observed.get('missing')).toBeUndefined();
+    expect(() => index.childIndex([a, a])).toThrow(expect.objectContaining({ code: 'EOWNERRECOVERY' }));
+    expect(() => index.childIndex([a, { ...a, identity: { ...a.identity, inode: '99' } }])).toThrow(expect.objectContaining({ code: 'EOWNERRECOVERY' }));
+    expect(index.childIndex([{ ...a, identity: { ...a.identity, inode: '99' } }]).get('a')?.identity.inode).toBe('99');
+    expect(observed.get('a')?.identity.inode).toBe('2');
+  });
   it('preserves strict schema3 forward recovery instead of reinterpreting legacy evidence', async () => {
     const f = await fixture();
     await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });

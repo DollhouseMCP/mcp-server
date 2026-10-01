@@ -424,6 +424,12 @@ Schema5 removes portfolio cardinality from persisted record size while retaining
 bounded fresh filesystem work. [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974)
 still requires representative qualification and separately tracks shared listing
 and recovery capacity before lifecycle activation.
+The measured 1000-memory CREATE performs approximately 228000 fresh directory
+read attempts and child observations locally. Fresh child indexing removes
+quadratic descriptor lookup, but it does not reduce any census or I/O barrier.
+Local correctness under the existing test timeout is not a hosted throughput,
+concurrency, latency or operation-memory qualification. The explicit practical
+performance gate remains open in [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974#issuecomment-5940492445).
 
 Unrelated non-directory children retain exact full metadata in the canonical
 committed baseline and every fresh live proof.

@@ -216,14 +216,23 @@ export class FileMemoryOwnedCreate {
     for (const [target, before] of this.files) if (!isDeepStrictEqual(await this.read(target, Buffer.byteLength(before.raw), before.links), before)) fail();
     this.active();
   }
+  private childIndex(children: Child[]): Map<string, Child> {
+    const indexed = new Map<string, Child>();
+    for (const child of children) {
+      if (indexed.has(child.name)) fail();
+      indexed.set(child.name, child);
+    }
+    return indexed;
+  }
   private async transition(target: string, add: string[], remove: string[] = [], changed: string[] = []): Promise<void> {
     const locator = path.relative(this.scope.tenantRoot, target).split(path.sep).join('/') || '.';
     const index = this.directories.findIndex(directory => directory.locator === locator);
     const before = this.directories[index], after = await this.directory(locator);
     if (!before || !['device', 'inode', 'mode', 'uid'].every(key => before[key as keyof Directory] === after[key as keyof Directory]) ||
       !isDeepStrictEqual(after.names, before.names.filter(name => !remove.includes(name)).concat(add).sort(ordinal))) fail();
+    const children = this.childIndex(after.children);
     for (const child of before.children) if (!remove.includes(child.name) && !changed.includes(child.name) &&
-      !isDeepStrictEqual(child, after.children.find(item => item.name === child.name))) fail();
+      !isDeepStrictEqual(child, children.get(child.name))) fail();
     this.directories[index] = after;
     await this.transitionAncestor(target, after);
     await this.proof();
@@ -233,8 +242,9 @@ export class FileMemoryOwnedCreate {
     if (ancestor && ancestor !== after) {
       const recaptured = await this.directory(ancestor.locator), name = path.basename(target);
       if (!isDeepStrictEqual(ancestor.identity, recaptured.identity) || !isDeepStrictEqual(ancestor.names, recaptured.names)) fail();
+      const children = this.childIndex(recaptured.children);
       for (const child of ancestor.children) {
-        const current = recaptured.children.find(item => item.name === child.name)!;
+        const current = children.get(child.name)!;
         const expected = child.name === name ? stableChild(child) : child;
         if (!isDeepStrictEqual(expected, child.name === name ? stableChild(current) : current)) fail();
       }
@@ -565,8 +575,9 @@ export class FileMemoryOwnedCreate {
       }
       const legacy = expected as StableDirectory;
       if (!isDeepStrictEqual(actual.names, legacy.names.concat(added).sort(ordinal))) fail();
+      const children = this.childIndex(actual.children);
       for (const child of legacy.children) {
-        if (!isDeepStrictEqual(child, stableChild(actual.children.find(item => item.name === child.name)!))) fail();
+        if (!isDeepStrictEqual(child, stableChild(children.get(child.name)!))) fail();
       }
     }
   }
