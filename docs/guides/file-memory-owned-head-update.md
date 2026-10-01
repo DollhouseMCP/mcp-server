@@ -293,6 +293,12 @@ captures fresh full root identity before hooks or audit listeners; subsequent
 proofs enforce that identity until the next own transition. Committed audit is
 attempted even if immediate postrename topology proof fails, preserving the
 original direct cause if the audit listener also fails.
+The created child's complete census remains bound too: initially empty, then
+only the exact registry and its descriptor-proved current stage. Registry
+creation/stage/rename refresh child full identity immediately before hooks;
+sidecar transitions cannot relax it. Registry transitions cannot relax root
+identity. Foreign child files and same-names metadata ABA remain preserved and
+refused, including partial hooks before any subsequent write or sync.
 
 This descriptor capture follows mkdir under the cooperating, quiescent local
 POSIX process-crash model. It does not claim an atomically returned mkdir inode,

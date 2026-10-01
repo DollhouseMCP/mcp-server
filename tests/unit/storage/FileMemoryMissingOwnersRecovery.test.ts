@@ -330,7 +330,7 @@ describe('existing private parent with missing owners child recovery', () => {
       const original = factory.apply(this, args);
       return async (...proofArgs) => {
         await original(...proofArgs);
-        if (proofArgs[1] && proofArgs[2] === true) { failed = true; throw primary; }
+        if (proofArgs[1] && proofArgs[2] === 'sidecar-rename') { failed = true; throw primary; }
       };
     });
     let audited = false;
@@ -363,6 +363,46 @@ describe('existing private parent with missing owners child recovery', () => {
       expect(injected).toBe(true);
     } finally { detach(); }
   });
+  it.each(['partial-registry-create', 'after-registry-create', ...latePhases].flatMap(stop =>
+    ['foreign-file', 'metadata-aba'].map(kind => ({ stop, kind }))))(
+    'retains complete child census and identity for $kind at $stop', async ({ stop, kind }) => {
+      const setup = await fixture();
+      const original = await proof([setup.headPath, setup.archivePath]);
+      const reservedRaw = await fs.readFile(setup.sidecarPath, 'utf8');
+      const target = path.join(setup.directory, 'foreign.json');
+      let foreign: Awaited<ReturnType<typeof proof>> | undefined;
+      let writes = 0, fileWrites = 0, syncs = 0;
+      const probe = await fs.open(setup.parent, 'r');
+      const methods = Object.getPrototypeOf(probe) as { write(...args: unknown[]): Promise<unknown>;
+        writeFile(...args: unknown[]): Promise<void>; sync(): Promise<void> };
+      await probe.close();
+      const write = methods.write, writeFile = methods.writeFile, sync = methods.sync;
+      const result = await failure(at(setup, stop as AdoptionRecoveryPublication, async () => {
+        await fs.writeFile(target, 'foreign', { mode: 0o600 });
+        if (kind === 'metadata-aba') await fs.unlink(target);
+        else foreign = await proof([target]);
+        if (stop.startsWith('partial-')) {
+          jest.spyOn(methods, 'write').mockImplementation(function(...args) { writes++; return write.apply(this, args); });
+          jest.spyOn(methods, 'writeFile').mockImplementation(function(...args) { fileWrites++; return writeFile.apply(this, args); });
+          jest.spyOn(methods, 'sync').mockImplementation(function() { syncs++; return sync.call(this); });
+        }
+      }).recoverReservedAdoption(setup.request));
+      const committed = stop === 'after-rename' || stop === 'after-read';
+      expect(result.code).toBe(committed ? 'EHEADADOPTED' : 'EADOPTIONPENDING');
+      if (committed) expect(result).toMatchObject({ token: { ownerId: setup.request.ownerId, ownership: 'owned' } });
+      else expect(result).not.toHaveProperty('token');
+      if (foreign) expect(await proof([target])).toEqual(foreign);
+      else await expect(fs.lstat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+      if (stop.startsWith('partial-')) {
+        expect(writes).toBe(0); expect(fileWrites).toBe(0); expect(syncs).toBe(0);
+        const creation = stop === 'partial-registry-create';
+        const targetPath = creation ? setup.registryPath :
+          `${stop === 'partial-registry-stage' ? setup.registryPath : setup.sidecarPath}.adopt-${setup.request.ownerId}.tmp`;
+        const bytes = Buffer.from(creation ? reservedRaw : JSON.stringify({ ...JSON.parse(reservedRaw), state: 'ACTIVE' }));
+        expect(await fs.readFile(targetPath)).toEqual(bytes.subarray(0, Math.floor(bytes.length / 2)));
+      }
+      expect(await proof([setup.headPath, setup.archivePath])).toEqual(original);
+    });
   const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
   const moduleRoot = new URL('../../../src/storage/', import.meta.url);
   const childScript = `
