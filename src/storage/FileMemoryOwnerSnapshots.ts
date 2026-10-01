@@ -705,6 +705,7 @@ export class FileMemoryOwnerSnapshots {
     this.requiredCoordinator().requireActiveOperationScope(operation);
     if (!first.journal) {
       this.auditAbort('already-clean-no-attribution', auditInvocationId);
+      await this.requireCleanAbort(operation, request, first);
       return { status: 'already-clean-no-attribution' };
     }
     if (first.prepared) first = await this.publishAbortIntent(operation, request, first);

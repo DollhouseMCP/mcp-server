@@ -402,6 +402,39 @@ describe('dormant explicit original PREPARED abort', () => {
       } finally { detach(); SecurityMonitor.clearAllEventsForTesting(); }
     });
 
+  it.each(['headPath', 'sidecarPath', 'registryPath', 'authority'] as const)(
+    'refuses clean attribution after a nonthrowing real audit listener changes %s', async target => {
+      const setup = await fixture();
+      await setup.store.abortPreparedOwnedUpdate(setup.request);
+      let revoked = false;
+      let injected = false;
+      const original = setup.coordinator.requireActiveOperationScope.bind(setup.coordinator);
+      jest.spyOn(setup.coordinator, 'requireActiveOperationScope').mockImplementation(operation => {
+        if (revoked) throw new Error('listener revoked authority');
+        return original(operation);
+      });
+      SecurityMonitor.clearAllEventsForTesting();
+      const detach = SecurityMonitor.addLogListener(event => {
+        if (event.source !== 'FileMemoryOwnerSnapshots.abort' || event.additionalData?.outcome !== 'already-clean-no-attribution') return;
+        injected = true;
+        if (target === 'authority') revoked = true;
+        else {
+          const file = setup[target];
+          const raw = syncFs.readFileSync(file);
+          syncFs.renameSync(file, `${file}.saved`);
+          syncFs.writeFileSync(file, raw, { mode: 0o600 });
+          syncFs.unlinkSync(`${file}.saved`);
+        }
+      });
+      try {
+        const attempt = setup.store.abortPreparedOwnedUpdate(setup.request);
+        await expect(attempt).rejects.toMatchObject({ code: target === 'authority' ? 'EABORTPENDING' : 'EOWNERRECOVERY' });
+        await expect(attempt).rejects.not.toHaveProperty('receipt');
+        await expect(attempt).rejects.not.toHaveProperty('aborted');
+        expect(injected).toBe(true);
+      } finally { detach(); SecurityMonitor.clearAllEventsForTesting(); }
+    });
+
   it.each((['after-journal-unlink', 'after-abort-read'] as const).flatMap(stop =>
     (['headPath', 'sidecarPath', 'registryPath'] as const).map(file => ({ stop, file }))))(
     'retains the original receipt after nonthrowing $file replacement at $stop', async ({ stop, file }) => {
