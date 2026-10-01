@@ -107,7 +107,10 @@ pinned to migrations 0000/0001/0003/0056. PK indexes must bind their actual
 constraint/table identities, use btree and builtin ordered UUID/text opclasses,
 and have ordinary key options and collations. The four collatable required
 columns use `pg_catalog.default`; all other required attributes have collation
-zero. This does not prove global locale/provider behavior.
+zero. This does not prove global locale/provider behavior. Visibility-specific
+collation refusal is unit-qualified because dependent RLS policies prevent an
+isolated ALTER; CI exercises visibility nullability and live collation drift on
+raw_content, element_type (the same varchar width) and tag without changing policies.
 
 Each FK additionally binds its actual selected unique reference index to the
 referenced relation and single UUID key. The index must have immediate, valid,

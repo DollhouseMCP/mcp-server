@@ -46,7 +46,7 @@ describe('live partial PG17 memory invalidation structure proof', () => {
     'ALTER TABLE public.elements ALTER COLUMN raw_content TYPE varchar',
     'ALTER TABLE public.elements ALTER COLUMN raw_content TYPE text COLLATE "C"',
     'ALTER TABLE public.elements ALTER COLUMN element_type TYPE varchar(32) COLLATE "C"',
-    'ALTER TABLE public.elements ALTER COLUMN visibility TYPE varchar(32) COLLATE "C"',
+    'ALTER TABLE public.elements ALTER COLUMN visibility DROP NOT NULL',
     'ALTER TABLE public.element_tags ALTER COLUMN tag TYPE varchar(128) COLLATE "C"',
     'ALTER TABLE public.elements ALTER COLUMN storage_revision SET DEFAULT 2',
     'ALTER TABLE public.elements ALTER COLUMN memory_entries_out_of_sync SET DEFAULT false',

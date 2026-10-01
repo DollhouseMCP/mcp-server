@@ -203,3 +203,9 @@ it('refuses disabled RI triggers and a missing function binding without dropping
     expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
   }
 });
+
+it('refuses visibility-specific collation drift (RLS prevents isolated live ALTER)', async () => {
+  const value = observation();
+  value.columns.find(row => row.table === 'elements' && row.name === 'visibility')!.collation = 'pg_catalog.C';
+  expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+});
