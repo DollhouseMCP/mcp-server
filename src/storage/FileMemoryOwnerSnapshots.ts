@@ -1024,9 +1024,8 @@ export class FileMemoryOwnerSnapshots {
         throw headError('EOWNERRECOVERY', 'Created owners tenant identity changed');
       }
       const sidecarIdentity = publishedSidecar
-        ? identityOf(await fs.lstat(original.original.resolved.sidecarPath, { bigint: true })) : original.original.sidecar.identity;
-      if (publishedSidecar && !(tenantTransition ? samePublishedFile(sidecarIdentity, publishedSidecar) :
-        sameIdentity(sidecarIdentity, publishedSidecar))) throw headError('EOWNERRECOVERY', 'Published sidecar identity changed');
+        ? await this.requireCreatedFileIdentity({ path: original.original.resolved.sidecarPath, identity: publishedSidecar },
+          tenantTransition, 'Published sidecar identity changed') : original.original.sidecar.identity;
       await this.checkPrivateDirectory(parent);
       await this.checkPrivateDirectory(childPath);
       const child = identityOf(await fs.lstat(childPath, { bigint: true }));
@@ -1043,7 +1042,7 @@ export class FileMemoryOwnerSnapshots {
         [original.original.resolved.headPath, original.original.head.identity],
         [original.original.resolved.sidecarPath, sidecarIdentity]]);
       if (stage) {
-        await this.requireCreatedStageIdentity(stage, transition === 'registry-rename');
+        await this.requireCreatedFileIdentity(stage, transition === 'registry-rename', 'Created owners transition descriptor changed');
       }
       this.requiredCoordinator().requireActiveOperationScope(operation);
       tenantIdentity = currentTenant;
@@ -1057,11 +1056,12 @@ export class FileMemoryOwnerSnapshots {
     return expected.device === current.device && expected.inode === current.inode;
   }
 
-  private async requireCreatedStageIdentity(stage: { path: string; identity: FileIdentity }, renamed: boolean): Promise<void> {
-    const named = identityOf(await fs.lstat(stage.path, { bigint: true }));
-    if (!(renamed ? samePublishedFile(named, stage.identity) : sameIdentity(named, stage.identity))) {
-      throw headError('EOWNERRECOVERY', 'Created owners transition descriptor changed');
+  private async requireCreatedFileIdentity(file: { path: string; identity: FileIdentity }, renamed: boolean, message: string): Promise<FileIdentity> {
+    const named = identityOf(await fs.lstat(file.path, { bigint: true }));
+    if (!(renamed ? samePublishedFile(named, file.identity) : sameIdentity(named, file.identity))) {
+      throw headError('EOWNERRECOVERY', message);
     }
+    return named;
   }
 
   private async absentAdoptionProof(
