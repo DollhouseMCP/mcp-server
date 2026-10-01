@@ -1,5 +1,24 @@
 # Database memory tag invalidation
 
+## Partial function and trigger catalog proof
+
+`verifyDatabaseMemoryInvalidationCatalog(tx)` is a dormant PG17-only helper that
+uses one bounded metadata statement on the caller's transaction. It checks the
+five exact reviewed 0056/0057 function bodies and execution-shape descriptors,
+their three user-trigger attachments, and absence of additional user triggers
+on the three relevant public tables. Expected bodies are pinned in source and
+checked byte-for-byte against migration artifacts; instance OIDs do not enter
+the digest of the complete validated portable descriptors.
+
+Ordinary roles may provide this metadata proof; missing, oversized, ambiguous or
+changed observations refuse without raw database errors. The caller controls
+isolation and timeouts. No own transaction, lock, role or search-path change is
+made. `provesExecutionResolution`, `canBackfill`, `canApply` and `canActivate`
+remain false: unqualified references in those bodies still require a separately
+qualified execution context, including temporary-schema shadowing. This proves
+no table/policy/ledger contract, global inventory, quiescence, commit or current
+maintenance authority. No runtime registration or executor is added.
+
 ## Dormant historical receipt schema
 
 Migration 0058 adds `memory_head_invalidation_runs` for future operator receipts,
