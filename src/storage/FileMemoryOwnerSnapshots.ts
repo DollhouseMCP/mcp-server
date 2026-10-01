@@ -12,7 +12,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { parseFileMemoryAbortIntent, serializeFileMemoryAbortIntent,
   type FileMemoryAbortIntent } from './FileMemoryAbortIntentCodec.js';
 import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
-import { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryDirectoryScanBudget, type FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
 import { FileMemoryOwnedCreate, captureCreateRequest, type CreateOwnedRequest, type CreatePublication } from './FileMemoryOwnedCreate.js';
 export type { CreateOwnedRequest, CreatePublication } from './FileMemoryOwnedCreate.js';
 import {
@@ -2184,7 +2184,7 @@ export class FileMemoryOwnerSnapshots {
    * nested operation; future archive stores must await it before publication.
    */
   async requireOwnedAtScope(
-    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanner,
   ): Promise<OwnedFileMemoryToken> {
     const coordinator = this.requiredCoordinator();
     const scope = coordinator.requireActiveOperationScope(operation);
@@ -2203,7 +2203,7 @@ export class FileMemoryOwnerSnapshots {
 
   /** @internal Zero-write owner proof using one caller-captured read scope. Not mutation authority. */
   async requireOwnedAtReadScope(
-    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanBudget,
+    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanner,
   ): Promise<OwnedFileMemoryToken> {
     const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
     if (token.backend !== 'file' || token.ownership !== 'owned' ||
@@ -2218,7 +2218,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readAtRoot(
-    tenantRoot: string, userId: string, locator: string, permittedJournal?: string, budget?: FileMemoryDirectoryScanBudget,
+    tenantRoot: string, userId: string, locator: string, permittedJournal?: string, budget?: FileMemoryDirectoryScanner,
   ): Promise<FileMemorySnapshot> {
     const resolved = await this.resolveHead(tenantRoot, locator);
 
@@ -2636,7 +2636,7 @@ export class FileMemoryOwnerSnapshots {
     return { headPath, sidecarPath, journalPath, basenameHash, locator: canonicalLocator };
   }
 
-  private async scanDirectory(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+  private async scanDirectory(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanner): Promise<void> {
     if (budget) {
       return budget.scan(directory, name => {
         if (matches(name)) throw headError('EOWNERRECOVERY', `Memory update artifact requires recovery: ${name}`);
@@ -2654,7 +2654,7 @@ export class FileMemoryOwnerSnapshots {
     }
   }
 
-  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanBudget): Promise<string[]> {
+  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanner): Promise<string[]> {
     if (budget) {
       const names: string[] = [];
       await budget.scan(directory, name => { if (matches(name)) names.push(name); });
@@ -2685,7 +2685,7 @@ export class FileMemoryOwnerSnapshots {
     tenantRoot: string,
     resolved: { headPath: string; journalPath: string; basenameHash: string }, ownerId?: string,
     permittedJournal?: string,
-    budget?: FileMemoryDirectoryScanBudget,
+    budget?: FileMemoryDirectoryScanner,
   ): Promise<void> {
     const prefix = `.${resolved.basenameHash}.`;
     await this.scanDirectory(path.dirname(resolved.headPath), name => {

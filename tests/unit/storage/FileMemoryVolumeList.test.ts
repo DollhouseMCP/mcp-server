@@ -125,14 +125,20 @@ describe('bounded dormant file archive metadata observations', () => {
   it.each(['observed', 'verified'] as const)('rejects marker and metadata same-byte ABA at %s', async phase => {
     for (const target of ['marker', 'meta'] as const) {
       let a: Awaited<ReturnType<typeof archive>>;
+      let changed: unknown;
+      let callsAtChange = -1;
+      const declarations = jest.spyOn(FileMemoryVolumeStore.prototype as unknown as { listDeclaration: (...args: unknown[]) => Promise<unknown> }, 'listDeclaration');
       const f = await fixture(async current => {
         if (current !== phase) return;
         const file = a[target]; const held = path.join(f.root, `held-${target}`);
         await fs.rename(file, held);
         if (target === 'marker') await fs.mkdir(file, { mode: 0o700 });
         else await fs.writeFile(file, await fs.readFile(held), { mode: 0o600 });
+        changed = await proof(f.root); callsAtChange = declarations.mock.calls.length;
       });
-      a = await archive(f); await expect(f.store.list(f.token)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+      a = await archive(f); await expect(f.store.list(f.token)).rejects.toMatchObject({ code: 'EARCHIVECHANGED' });
+      expect(callsAtChange).toBeGreaterThan(0); expect(declarations.mock.calls).toHaveLength(callsAtChange);
+      expect(await proof(f.root)).toEqual(changed);
     }
   });
   it('refuses resource exhaustion rather than trusting a first-N owner namespace', async () => {
@@ -219,11 +225,16 @@ describe('bounded dormant file archive metadata observations', () => {
     }
   });
   it.each(['observed', 'verified'] as const)('rejects ancestor symlink substitution after %s', async phase => {
+    let changed: unknown; let callsAtChange = -1;
+    const declarations = jest.spyOn(FileMemoryVolumeStore.prototype as unknown as { listDeclaration: (...args: unknown[]) => Promise<unknown> }, 'listDeclaration');
     const f = await fixture(async current => {
       if (current !== phase) return;
       const held = path.join(f.root, 'held-owner'); await fs.rename(f.ownerRoot, held); await fs.symlink(held, f.ownerRoot);
+      changed = await proof(f.root); callsAtChange = declarations.mock.calls.length;
     });
-    await archive(f); await expect(f.store.list(f.token)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+    await archive(f); await expect(f.store.list(f.token)).rejects.toMatchObject({ code: 'EARCHIVECHANGED' });
+    expect(callsAtChange).toBeGreaterThan(0); expect(declarations.mock.calls).toHaveLength(callsAtChange);
+    expect(await proof(f.root)).toEqual(changed);
   });
   it('captures user, token and entry limit before awaiting the observation', async () => {
     const f = await fixture(); await archive(f); await archive(f, 2);
@@ -242,8 +253,13 @@ describe('bounded dormant file archive metadata observations', () => {
     await archive(f); await expect(f.store.list(f.token)).rejects.toBeDefined();
   });
   it.each(['observed', 'verified'] as const)('rejects missing-namespace case alias at %s', async phase => {
-    const f = await fixture(async current => { if (current === phase) await fs.mkdir(path.join(f.root, 'Volumes'), { mode: 0o700 }); });
-    await expect(f.store.list(f.token)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+    let changed: unknown; let mutated = false;
+    const declarations = jest.spyOn(FileMemoryVolumeStore.prototype as unknown as { listDeclaration: (...args: unknown[]) => Promise<unknown> }, 'listDeclaration');
+    const f = await fixture(async current => {
+      if (current === phase) { await fs.mkdir(path.join(f.root, 'Volumes'), { mode: 0o700 }); mutated = true; changed = await proof(f.root); }
+    });
+    await expect(f.store.list(f.token)).rejects.toMatchObject({ code: 'EARCHIVECHANGED' });
+    expect(mutated).toBe(true); expect(declarations).not.toHaveBeenCalled(); expect(await proof(f.root)).toEqual(changed);
   });
   it('shares the hard attempt budget through both proof rounds and can refuse below the return cap', async () => {
     const phases: string[] = []; const f = await fixture(phase => { phases.push(phase); }); const original = await archive(f);
