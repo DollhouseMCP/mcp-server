@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type CreatePublication } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
+import { FileMemoryCreateScanBudget } from '../../../src/storage/FileMemoryCreateScanBudget.js';
 import { FileMemoryOwnedCreate } from '../../../src/storage/FileMemoryOwnedCreate.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -133,10 +134,11 @@ describe('exclusive owned CREATE', () => {
   it('refuses a namespace whose persisted declaration exceeds 8 KiB without unbounded scanning', async () => {
     const f = await fixture();
     for (let index = 0; index < 20; index++) await fs.writeFile(path.join(path.dirname(f.head), `${index}-${'x'.repeat(190)}`), 'preserved');
-    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause: { code: 'EHEADRESOURCE' } });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' }, residual: false });
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.memory-write.json'))).toEqual([]);
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.head.tmp'))).toEqual([]);
+    await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
     for (let index = 0; index < 20; index++) expect(await fs.readFile(path.join(path.dirname(f.head), `${index}-${'x'.repeat(190)}`), 'utf8')).toBe('preserved');
   });
   it('rejects unrelated same-byte file ABA during its own permitted directory transition', async () => {
@@ -306,6 +308,51 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.stat(path.join(f.tenantRoot, '.memory-owners'))).isDirectory()).toBe(true);
     expect(await fs.readdir(path.join(f.tenantRoot, '.memory-owners'))).toEqual([]);
     expect(await fs.readdir(path.dirname(f.head))).toEqual([]);
+    jest.restoreAllMocks();
+    const syncs: string[] = [], canonicalRoot = await fs.realpath(f.tenantRoot);
+    const durability = FileMemoryOwnedCreate.prototype as unknown as { syncDirectory: (target: string, final?: boolean) => Promise<void> };
+    const sync = durability.syncDirectory;
+    jest.spyOn(durability, 'syncDirectory').mockImplementation(async function(this: typeof durability, target, final) {
+      await sync.call(this, target, final);
+      syncs.push(target); // Only successful sync AND close count as acknowledgement.
+    });
+    const token = await f.store(phase => {
+      if (phase === 'before-content') expect(syncs).toContain(canonicalRoot);
+    }).createOwned(f.request);
+    expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
+  });
+  it.each(['sync', 'close'] as const)('refuses retry until an existing ownership parent directory %s is acknowledged', async fault => {
+    const f = await fixture(), first = new Error('first directory capture failed');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as {
+      captureCreatedDirectory: (locator: string) => Promise<unknown>;
+      closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown>;
+    };
+    jest.spyOn(internals, 'captureCreatedDirectory').mockRejectedValueOnce(first);
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ cause: first });
+    jest.restoreAllMocks();
+    const rootIdentity = await fs.stat(f.tenantRoot, { bigint: true });
+    const secondary = new Error(`retry parent ${fault} failed`), closed = internals.closed;
+    let injected = false, descriptor: fs.FileHandle | undefined;
+    jest.spyOn(internals, 'closed').mockImplementation(async function(this: typeof internals, handle, body) {
+      const stat = await handle.stat({ bigint: true });
+      if (!injected && stat.dev === rootIdentity.dev && stat.ino === rootIdentity.ino) {
+        injected = true; descriptor = handle;
+        if (fault === 'sync') jest.spyOn(handle, 'sync').mockRejectedValueOnce(secondary);
+        else {
+          const close = handle.close.bind(handle);
+          jest.spyOn(handle, 'close').mockImplementation(async () => { await close(); throw secondary; });
+        }
+      }
+      return closed.call(this, handle, body);
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ cause: secondary });
+    expect(injected).toBe(true);
+    await expect(descriptor!.stat()).rejects.toMatchObject({ code: 'EBADF' });
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readdir(path.dirname(f.head))).toEqual([]);
+    jest.restoreAllMocks();
+    const token = await f.store().createOwned(f.request);
+    expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
   });
   it.each(['.memory-owner.json.tmp', '.MEMORY-OWNER.JSON'])('refuses existing per-head %s residue before staging', async suffix => {
     const f = await fixture(), hash = createHash('sha256').update(path.basename(f.head)).digest('hex');
@@ -497,6 +544,114 @@ describe('exclusive owned CREATE', () => {
       expect(await fs.readFile(file, 'utf8')).toBe(record.raw);
       expect({ dev: stat.dev, ino: stat.ino, size: stat.size, mtime: stat.mtimeNs, ctime: stat.ctimeNs }).toEqual(record.identity);
     }
+  });
+  async function seedOwners(f: Awaited<ReturnType<typeof fixture>>, count: number): Promise<void> {
+    for (let index = 0; index < count; index++) {
+      const locator = path.posix.join(path.posix.dirname(f.request.locator), `Existing${index}.yaml`);
+      await fs.writeFile(path.join(f.tenantRoot, locator), 'name: Existing\ncontent: prior\n', { mode: 0o600 });
+      const snapshot = await f.store().readHeadSnapshot(locator);
+      if (snapshot.token.ownership !== 'unowned') throw new Error('Fixture must begin unowned');
+      await f.store().adoptUnowned(snapshot.token);
+    }
+  }
+  function observeAccounting() {
+    const records: { before: number; limit: number; phase?: string; budget: FileMemoryCreateScanBudget }[] = [];
+    const reserve = FileMemoryCreateScanBudget.prototype.reserve;
+    jest.spyOn(FileMemoryCreateScanBudget.prototype, 'reserve').mockImplementation(function(this: FileMemoryCreateScanBudget, slots, headParent, phase) {
+      const before = this.consumed;
+      reserve.call(this, slots, headParent, phase);
+      records.push({ before, limit: this.limit, phase, budget: this });
+      expect(this.consumed).toBe(before);
+    });
+    return { records, budget: () => records.at(-1)!.budget };
+  }
+  it.each([
+    ['Created.yaml', 1], ['Created.yaml', 5], ['Notes/Created.yaml', 1], ['Notes/Created.yaml', 5],
+  ] as const)('completes real %s CREATE with %s existing owners inside its reserved protocol', async (locator, count) => {
+    const f = await fixture(locator);
+    await seedOwners(f, count);
+    const observed = observeAccounting(), progress: number[] = [];
+    const final = FileMemoryOwnedCreate.prototype as unknown as { syncDirectory: (target: string, commit?: boolean) => Promise<void> };
+    const sync = final.syncDirectory; let commitClosed = false;
+    jest.spyOn(final, 'syncDirectory').mockImplementation(async function(this: typeof final, target, commit) {
+      await sync.call(this, target, commit);
+      if (commit) commitClosed = true;
+    });
+    const token = await f.store(() => { progress.push(observed.budget().consumed); }).createOwned(f.request);
+    expect(commitClosed).toBe(true);
+    expect(observed.records).toHaveLength(1);
+    expect(observed.records[0].before).toBeGreaterThan(0);
+    expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
+    expect(observed.budget().limit).toBeLessThanOrEqual(110000);
+    expect(progress).toEqual([...progress].sort((a, b) => a - b));
+    expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
+    expect((await fs.readdir(path.dirname(f.head))).some(name => name.includes('memory-write'))).toBe(false);
+    process.stderr.write(`CREATE accounting ${JSON.stringify({ locator, count, consumed: observed.budget().consumed, reserved: observed.budget().limit })}\n`);
+  });
+  it.each(['prepared', 'linked', 'published'] as const)('retains discovery consumption while reserving only the remaining %s recovery', async stop => {
+    const f = await fixture();
+    await seedOwners(f, 5);
+    const cause = new Error('controlled persisted interruption');
+    await expect(f.store(phase => { if (phase === stop) throw cause; }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
+    const initialCost = (await Promise.all(['.', 'Notes', '.memory-owners', '.memory-owners/owners'].map(async locator =>
+      (await fs.readdir(path.join(f.tenantRoot, locator))).length + 1))).reduce((sum, value) => sum + value, 0);
+    const observed = observeAccounting();
+    const token = await f.store().createOwned(f.request);
+    expect(observed.records).toHaveLength(1);
+    expect(observed.records[0].phase).toBe({ prepared: 'PREPARED_CREATE', linked: 'LINKED_CREATE', published: 'PUBLISHED_CREATE' }[stop]);
+    // Discovery and the pre-reservation recovery proof each census every current slot once.
+    expect(observed.records[0].before).toBe(2 * initialCost);
+    expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
+    expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
+    process.stderr.write(`CREATE recovery accounting ${JSON.stringify({ stop, before: observed.records[0].before, consumed: observed.budget().consumed, reserved: observed.budget().limit })}\n`);
+  });
+  it('cannot rebase a missing ownership slot created after discovery', async () => {
+    const f = await fixture();
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { preflight: () => Promise<void> };
+    const preflight = internals.preflight;
+    let foreign: bigint | undefined;
+    jest.spyOn(internals, 'preflight').mockImplementation(async function(this: typeof internals) {
+      await preflight.call(this);
+      const parent = path.join(f.tenantRoot, '.memory-owners');
+      await fs.mkdir(parent, { mode: 0o700 });
+      await fs.writeFile(path.join(parent, 'foreign'), 'preserved');
+      foreign = (await fs.stat(parent, { bigint: true })).ino;
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+    expect((await fs.stat(path.join(f.tenantRoot, '.memory-owners'), { bigint: true })).ino).toBe(foreign);
+    expect(await fs.readFile(path.join(f.tenantRoot, '.memory-owners', 'foreign'), 'utf8')).toBe('preserved');
+    await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners', 'owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rejects unsupported persisted numeric widths before recovery mutations', async () => {
+    const f = await fixture();
+    await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    const names = await fs.readdir(path.dirname(f.head)), journal = names.find(name => name.endsWith('.memory-write.json'))!;
+    const target = path.join(path.dirname(f.head), journal), value = JSON.parse(await fs.readFile(target, 'utf8'));
+    value.initialStageIdentity.mtimeNs = '9'.repeat(33); value.currentStageIdentity.mtimeNs = '9'.repeat(33);
+    await fs.writeFile(target, JSON.stringify(value));
+    const before = await Promise.all(names.map(async name => ({ name, raw: await fs.readFile(path.join(path.dirname(f.head), name), 'utf8'), ino: (await fs.stat(path.join(path.dirname(f.head), name))).ino })));
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EOWNERRECOVERY' } });
+    for (const entry of before) expect({ raw: await fs.readFile(path.join(path.dirname(f.head), entry.name), 'utf8'), ino: (await fs.stat(path.join(path.dirname(f.head), entry.name))).ino }).toEqual({ raw: entry.raw, ino: entry.ino });
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('preserves one real EOF counter and refuses quota reset or excess projected cardinality', async () => {
+    const f = await fixture(), budget = new FileMemoryCreateScanBudget();
+    await budget.scan(path.dirname(f.head), () => { throw new Error('not empty'); });
+    expect(budget.consumed).toBe(1);
+    const slots = [{ locator: '.', names: ['Notes', '.memory-owners'], missing: false },
+      { locator: 'Notes', names: [], missing: false }, { locator: '.memory-owners', names: ['owners'], missing: true },
+      { locator: '.memory-owners/owners', names: [], missing: true }];
+    budget.reserve(slots, 'Notes'); const reserved = budget.limit;
+    expect(budget.consumed).toBe(1);
+    await budget.scan(path.dirname(f.head), () => { throw new Error('not empty'); });
+    expect(budget.consumed).toBe(2);
+    expect(() => budget.reserve(slots, 'Notes')).toThrow('budget exhausted');
+    expect(budget.limit).toBe(reserved); expect(budget.consumed).toBe(2);
+    const excessive = new FileMemoryCreateScanBudget();
+    expect(() => excessive.reserve([{ ...slots[0], names: Array.from({ length: 1000 }, (_, index) => String(index)) }, ...slots.slice(1)], 'Notes')).toThrow('budget exhausted');
+    expect(excessive.consumed).toBe(0);
+    await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
   const crashChild = `
     const [ownersUrl,coordinatorUrl,fenceUrl,root,user,request,stop]=process.argv.slice(1);

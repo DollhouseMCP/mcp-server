@@ -377,12 +377,32 @@ before the corresponding new identity is persisted. Those cases require separate
 qualified manual handling. Intent unlink without proved final directory durability
 does not produce a receipt, and a later clean retry conflicts with the existing head.
 
-One monotonic 1000 directory-read-attempt budget covers all censuses and reproofs,
-including EOF/error attempts. The complete persisted intent is capped at 8 KiB;
-its namespace lower bound is checked before allocating the head stage. Neither
-truncation nor the first N names proves absence or completeness. Whole child sets,
-canonical spelling, descriptor identities, private modes and live ACTIVE authority
-remain bound, including after awaited callbacks.
+CREATE uses a private two-dimensional budget; the shared observation/listing
+budget remains unchanged. Read-only discovery and projected peak census
+cardinality are capped at 1000 attempts including EOF. Every subsequent census
+also has that cap, and all actual reads charge one retained monotonic operation
+counter, including errors. Before CREATE mkdir or head staging, the exact
+remaining phase schedule reserves its full allowance from captured distinct
+slot cardinalities and fixed own-name additions. The full fresh protocol uses
+59P + 15q(head-parent) + 2q(owners), plus ownership-directory preparation, where
+P is the projected full-proof cost and q the primary/optional-ancestor census
+cost. Recovery reserves only its remaining suffix and retains discovery/proof
+consumption. The conservative operation ceiling is 110000 attempts; no refund,
+reset, cached census, truncated proof or first-N absence claim is allowed.
+
+All three complete phase envelopes must fit the unchanged 8 KiB intent cap
+before CREATE mutations. Unknown future identity fields reserve the supported
+32-character numeric width, including fresh-stage mtime/device and timestamp
+signs; actual captured numeric evidence is checked against that width.
+Placeholders grant no authority and are never persisted. Existing ownership
+directories are recaptured against original discovery and their parents synced
+and closed, so retry cannot omit durability of a prior interrupted mkdir.
+Whole child sets, canonical spelling, descriptor identities, private modes and
+live ACTIVE authority remain bound after awaited callbacks. Namespace/complete
+record capacity refusal remains an activation consideration; a representative
+ten-owner fixture exceeds the cap, not a universal maximum-owner count.
+[#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974) tracks this explicit
+activation blocker; dormant implementation does not resolve production capacity.
 
 Unrelated non-directory children retain exact full metadata in persisted evidence.
 Directory children persist stable device/inode/type/mode/UID; size, timestamps and
