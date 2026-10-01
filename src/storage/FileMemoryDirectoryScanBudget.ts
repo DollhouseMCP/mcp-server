@@ -2,6 +2,13 @@ import type { Dir, Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { MAX_MEMORY_VOLUME_LIST_SCAN } from './MemoryVolumeObservation.js';
 
+/** Internal scan capability; implementations retain their own operation-specific bounds. */
+export interface FileMemoryDirectoryScanner {
+  readonly limit: number;
+  readonly consumed: number;
+  scan(directoryPath: string, inspect: (name: string) => void): Promise<void>;
+}
+
 /** Internal resource failure, never proof that a directory or artifact is absent. */
 export class FileMemoryDirectoryScanLimitError extends Error {
   readonly code = 'EHEADRESOURCE';
