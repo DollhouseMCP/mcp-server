@@ -30,7 +30,7 @@ export const memoryHeadInvalidationRuns = pgTable('memory_head_invalidation_runs
   check('memory_head_invalidation_runs_digests_check', sql`${table.requestSha256} ~ '^[a-f0-9]{64}$'
     AND ${table.catalogSha256} ~ '^[a-f0-9]{64}$' AND ${table.preManifestSha256} ~ '^[a-f0-9]{64}$'
     AND ${table.postManifestSha256} ~ '^[a-f0-9]{64}$' AND ${table.maintenanceEvidenceSha256} ~ '^[a-f0-9]{64}$'
-    AND ${table.candidateCommit} ~ '^[a-f0-9]{40}$'`),
+    AND ${table.candidateCommit} ~ '^[a-f0-9]{40}$' AND ${table.candidateCommit} <> repeat('0', 40)`),
   check('memory_head_invalidation_runs_declarations_check', sql`octet_length(${table.maintenanceEvidenceId}) BETWEEN 1 AND 128
     AND octet_length(${table.declaredContextId}) BETWEEN 1 AND 128`),
   check('memory_head_invalidation_runs_attribution_check', sql`octet_length(${table.databaseName}) BETWEEN 1 AND 63

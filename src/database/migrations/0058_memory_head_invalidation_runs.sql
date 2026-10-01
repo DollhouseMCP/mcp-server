@@ -27,7 +27,8 @@ CREATE TABLE "memory_head_invalidation_runs" (
   CONSTRAINT "memory_head_invalidation_runs_digests_check" CHECK (
     request_sha256 ~ '^[a-f0-9]{64}$' AND catalog_sha256 ~ '^[a-f0-9]{64}$'
     AND pre_manifest_sha256 ~ '^[a-f0-9]{64}$' AND post_manifest_sha256 ~ '^[a-f0-9]{64}$'
-    AND maintenance_evidence_sha256 ~ '^[a-f0-9]{64}$' AND candidate_commit ~ '^[a-f0-9]{40}$'),
+    AND maintenance_evidence_sha256 ~ '^[a-f0-9]{64}$' AND candidate_commit ~ '^[a-f0-9]{40}$'
+    AND candidate_commit <> repeat('0', 40)),
   CONSTRAINT "memory_head_invalidation_runs_declarations_check" CHECK (
     octet_length(maintenance_evidence_id) BETWEEN 1 AND 128
     AND octet_length(declared_context_id) BETWEEN 1 AND 128),

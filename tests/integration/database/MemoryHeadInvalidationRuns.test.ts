@@ -45,6 +45,7 @@ describe('dormant historical memory invalidation receipt schema', () => {
     { formatVersion: 2 }, { claim: 'current-coverage' }, { canApply: true }, { canActivate: true },
     { requestSha256: 'A'.repeat(64) }, { catalogSha256: 'a'.repeat(63) }, { preManifestSha256: 'g'.repeat(64) },
     { postManifestSha256: '' }, { maintenanceEvidenceSha256: 'a'.repeat(65) }, { candidateCommit: 'a'.repeat(39) },
+    { candidateCommit: '0'.repeat(40) },
     { maintenanceEvidenceId: '' }, { maintenanceEvidenceId: 'é'.repeat(65) }, { declaredContextId: 'x'.repeat(129) },
     { databaseName: '' }, { databaseName: 'é'.repeat(32) }, { effectiveRole: 'x'.repeat(64) },
     { databaseOid: -1 }, { databaseOid: 0 }, { databaseOid: 4294967296 }, { serverVersionNum: 0 },
