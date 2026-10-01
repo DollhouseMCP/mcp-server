@@ -334,6 +334,9 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
   let aliasScanCompleted = 0;
   let aliasScanMs = 0;
   let collisionProofMs = 0;
+  let predicateCalls = 0;
+  let predicateMs = 0;
+  let legacyStoreSymbolCount: number | undefined;
   let inFlight: { kind: 'alias-scan' | 'collision-proof'; start: bigint } | undefined;
   const report = (resources = false) => {
     const cpu = process.cpuUsage(initialCpu);
@@ -342,6 +345,7 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
     process.stderr.write(`${JSON.stringify({ diagnostic: 'archive-collision', phase,
       elapsedMs: Number(process.hrtime.bigint() - started) / 1e6,
       setupCompleted, collisionProofStarted, collisionProofCompleted, aliasScanCompleted, aliasScanMs, collisionProofMs,
+      predicateCalls, predicateMs, legacyStoreSymbolCount, nodeVersion: process.version,
       inFlight: inFlight ? { kind: inFlight.kind, startMs: Number(inFlight.start - started) / 1e6,
         elapsedMs: Number(process.hrtime.bigint() - inFlight.start) / 1e6 } : null,
       ...(resources ? { cpuUserUs: cpu.user, cpuSystemUs: cpu.system,
@@ -375,10 +379,14 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
     // Test-only observation of the unchanged real private proof, without production hooks.
     const observed = f.store as unknown as {
       requireVolumeSpelling: (root: string, volume: number) => Promise<void>;
+      requireCanonicalVolumeSpelling: (siblings: readonly string[], volume: number) => void;
       requireCommittedCollision: (...args: [string, OwnedFileMemoryToken, number, string]) => Promise<void>;
     };
     const descriptor = Object.getOwnPropertyDescriptor(observed, 'requireCommittedCollision');
     const aliasDescriptor = Object.getOwnPropertyDescriptor(observed, 'requireVolumeSpelling');
+    const predicateDescriptor = Object.getOwnPropertyDescriptor(observed, 'requireCanonicalVolumeSpelling');
+    const originalPredicate = observed.requireCanonicalVolumeSpelling;
+    if (typeof originalPredicate !== 'function') throw new Error('Archive predicate diagnostic target is unavailable');
     const originalAlias = observed.requireVolumeSpelling;
     if (typeof originalAlias !== 'function') throw new Error('Archive alias diagnostic target is unavailable');
     const original = observed.requireCommittedCollision;
@@ -388,7 +396,15 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
       else delete (observed as Partial<typeof observed>).requireCommittedCollision;
       if (aliasDescriptor) Object.defineProperty(observed, 'requireVolumeSpelling', aliasDescriptor);
       else delete (observed as Partial<typeof observed>).requireVolumeSpelling;
+      if (predicateDescriptor) Object.defineProperty(observed, 'requireCanonicalVolumeSpelling', predicateDescriptor);
+      else delete (observed as Partial<typeof observed>).requireCanonicalVolumeSpelling;
     };
+    Object.defineProperty(observed, 'requireCanonicalVolumeSpelling', { configurable: true, value: (...args: Parameters<typeof originalPredicate>) => {
+      const span = process.hrtime.bigint();
+      predicateCalls++;
+      try { return originalPredicate.apply(f.store, args); }
+      finally { predicateMs += Number(process.hrtime.bigint() - span) / 1e6; }
+    } });
     Object.defineProperty(observed, 'requireVolumeSpelling', { configurable: true, value: async (...args: Parameters<typeof originalAlias>) => {
       const span = process.hrtime.bigint();
       inFlight = { kind: 'alias-scan', start: span };
@@ -411,6 +427,10 @@ it('bounds committed collision probes without allocating beyond the limit', asyn
       } finally { inFlight = undefined; }
     } });
     // Allocation phase includes namespace/alias scans before and between collision proofs.
+    // Runtime-internal legacy ALS diagnostic only: not a public API or active-context count.
+    // Inspect symbol descriptions only, never their stored values; modern runtimes may report zero.
+    legacyStoreSymbolCount = Object.getOwnPropertySymbols(Promise.resolve(undefined))
+      .filter(symbol => symbol.description === 'kResourceStore').length;
     milestone('probe');
     await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEEXHAUSTED' });
     milestone('assertion');
