@@ -333,6 +333,7 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
  */
 export class FileMemoryOwnerSnapshots {
   private readonly options: FileMemoryOwnerSnapshotsOptions;
+  private readonly adoptedErrors = new WeakMap<object, OwnedFileMemoryToken>();
 
   constructor(options: FileMemoryOwnerSnapshotsOptions) {
     if (process.platform === 'win32') {
@@ -724,8 +725,12 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private adoptedError(cause: unknown, token: OwnedFileMemoryToken): AdoptedFileHeadError {
+    if (cause !== null && typeof cause === 'object' && this.adoptedErrors.get(cause) === token) {
+      return cause as AdoptedFileHeadError;
+    }
     const error = headError('EHEADADOPTED', 'Memory adoption committed; a later operation failed') as AdoptedFileHeadError;
     Object.assign(error, { cause, adopted: true, token });
+    this.adoptedErrors.set(error, token);
     return error;
   }
 
@@ -860,17 +865,13 @@ export class FileMemoryOwnerSnapshots {
       throw headError('EOWNERRECOVERY', 'Adoption namespace contains unbound artifacts');
     }
     const stage = names.includes(stageName) ? await this.readRecord(stagePath) : undefined;
-    if (names.includes(stageName) && (!stage || stage.raw !== serializedRecord(registry.record))) {
+    if (names.includes(stageName) && stage?.raw !== serializedRecord(registry.record)) {
       throw headError('EOWNERRECOVERY', 'Adoption stage is incomplete or mismatched');
     }
     const finalNames = await this.adoptionNamespace(scope, resolved, request.ownerId, budget);
     if (!isDeepStrictEqual(names, finalNames)) throw headError('EOWNERRECOVERY', 'Adoption namespace changed during observation');
-    for (const [file, expected] of [[resolved.headPath, head.identity], [resolved.sidecarPath, sidecar.identity],
-      [registryPath, registry.identity], ...(stage ? [[stagePath, stage.identity]] : [])] as [string, FileIdentity][]) {
-      if (!sameIdentity(identityOf(await fs.lstat(file, { bigint: true })), expected)) {
-        throw headError('EOWNERRECOVERY', 'Adoption named evidence changed during observation');
-      }
-    }
+    await this.requireAdoptionNamedFiles([[resolved.headPath, head.identity], [resolved.sidecarPath, sidecar.identity],
+      [registryPath, registry.identity], ...(stage ? [[stagePath, stage.identity] as [string, FileIdentity]] : [])]);
     const finalDirectories = await Promise.all(ownerPaths.map(async directory => identityOf(await fs.lstat(directory, { bigint: true }))));
     if (!isDeepStrictEqual(ownerDirectories, finalDirectories)) throw headError('EOWNERRECOVERY', 'Adoption owner ancestry changed');
     const token: OwnedFileMemoryToken = { backend: 'file', ownership: 'owned', userId: scope.userId,
@@ -878,6 +879,17 @@ export class FileMemoryOwnerSnapshots {
       contentHash: head.hash, fileIdentity: head.identity };
     return { resolved, head, sidecar, registry, stage, stagePath, token, ownerDirectories,
       signature: JSON.stringify({ head, sidecar, registry, stage, names, ownerDirectories }) };
+  }
+
+  private async requireAdoptionNamedFiles(files: readonly [string, FileIdentity][], index = 0): Promise<void> {
+    const current = files[index];
+    if (!current) return;
+    const [file, expected] = current;
+    if (!sameIdentity(identityOf(await fs.lstat(file, { bigint: true })), expected)) {
+      throw headError('EOWNERRECOVERY', 'Adoption named evidence changed during observation');
+    }
+    // The caller supplies only the bounded head/sidecar/registry/optional-stage set.
+    await this.requireAdoptionNamedFiles(files, index + 1);
   }
 
   private async adoptionNamespace(
@@ -2040,7 +2052,7 @@ export class FileMemoryOwnerSnapshots {
     if (budget) {
       const names: string[] = [];
       await budget.scan(directory, name => { if (matches(name)) names.push(name); });
-      return names.sort();
+      return this.sortArtifactNames(names);
     }
     const handle = await fs.opendir(directory);
     let seen = 0;
@@ -2051,6 +2063,10 @@ export class FileMemoryOwnerSnapshots {
       }
       if (matches(entry.name)) names.push(entry.name);
     }
+    return this.sortArtifactNames(names);
+  }
+
+  private sortArtifactNames(names: string[]): string[] {
     // Code-unit ordering preserves distinct Unicode spellings and gives exact two-pass comparison.
     return names.sort((left, right) => {
       if (left < right) return -1;

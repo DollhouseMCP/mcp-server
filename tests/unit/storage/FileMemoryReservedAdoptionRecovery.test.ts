@@ -12,14 +12,14 @@ import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
-async function fixture(stop = 'active-registry') {
-  const tenantRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'adoption-final-'));
-  roots.push(tenantRoot);
-  const locator = 'Notes/ÜberNote.yaml';
+async function fixture(stop = 'active-registry', existing?: { tenantRoot: string; coordinator: FileMemoryTransactionCoordinator }) {
+  const tenantRoot = existing?.tenantRoot ?? await fs.mkdtemp(path.join(os.tmpdir(), 'adoption-final-'));
+  if (!existing) roots.push(tenantRoot);
+  const locator = existing ? 'Notes/Second.yaml' : 'Notes/ÜberNote.yaml';
   const headPath = path.join(tenantRoot, locator);
-  await fs.mkdir(path.dirname(headPath));
+  await fs.mkdir(path.dirname(headPath), { recursive: true });
   await fs.writeFile(headPath, 'name: Original\nentries: []\n');
-  const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
+  const coordinator = existing?.coordinator ?? new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
   const store = new FileMemoryOwnerSnapshots({ coordinator });
   const legacy = await store.readHeadSnapshot(locator);
   const adopter = new FileMemoryOwnerSnapshots({ coordinator, afterPublication: phase => {
@@ -62,6 +62,10 @@ function at(setup: Setup, stop: AdoptionRecoveryPublication, callback: () => voi
   return new FileMemoryOwnerSnapshots({ coordinator: setup.coordinator, afterAdoptionRecoveryPublication: phase => {
     if (phase === stop) return callback();
   } });
+}
+async function failureOf(action: Promise<unknown>): Promise<{ code: string; cause: unknown; token?: unknown }> {
+  try { await action; } catch (cause) { return cause as { code: string; cause: unknown; token?: unknown }; }
+  throw new Error('expected failure');
 }
 afterEach(async () => {
   jest.restoreAllMocks();
@@ -203,9 +207,11 @@ describe('dormant final RESERVED adoption recovery', () => {
   });
   it.each(['after-rename', 'after-read'] as const)('retains original token and committed audit despite throwing %s hook', async stop => {
     const setup = await fixture();
-    await expect(at(setup, stop, () => { throw null; }).recoverReservedAdoption(setup.request)).rejects.toMatchObject({
+    const failure = await failureOf(at(setup, stop, () => { throw null; }).recoverReservedAdoption(setup.request));
+    expect(failure).toMatchObject({
       code: 'EHEADADOPTED', adopted: true, token: { ...setup.legacy.token, ownership: 'owned', ownerId: setup.request.ownerId, revision: '1' },
     });
+    expect(failure.cause).toBeNull();
     expect(SecurityMonitor.getRecentEvents().some(event => event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' &&
       event.additionalData?.outcome === 'known-adopted')).toBe(true);
     expect(await setup.store.recoverReservedAdoption(setup.request)).toEqual({ status: 'already-clean-no-attribution' });
@@ -213,12 +219,50 @@ describe('dormant final RESERVED adoption recovery', () => {
   it('retains genuine commit token across outer fence release failure', async () => {
     const setup = await fixture();
     const original = setup.coordinator.withTenantTransaction.bind(setup.coordinator);
+    const releaseError = new Error('outer release fault');
     jest.spyOn(setup.coordinator, 'withTenantTransaction').mockImplementation(async callback => {
       await original(callback);
-      throw new Error('outer release fault');
+      throw releaseError;
     });
-    await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EHEADADOPTED',
+    const failure = await failureOf(setup.store.recoverReservedAdoption(setup.request));
+    expect(failure).toMatchObject({ code: 'EHEADADOPTED',
       token: { ownerId: setup.request.ownerId, fileIdentity: setup.legacy.token.fileIdentity }, cause: { message: 'outer release fault' } });
+    expect(failure.cause).toBe(releaseError);
+  });
+  it('preserves the original synchronous committed-audit listener error as direct cause', async () => {
+    const setup = await fixture();
+    const auditError = new Error('audit listener failure');
+    const detach = SecurityMonitor.addLogListener(event => {
+      if (event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' && event.additionalData?.outcome === 'known-adopted') throw auditError;
+    });
+    try {
+      const failure = await failureOf(setup.store.recoverReservedAdoption(setup.request));
+      expect(failure.code).toBe('EHEADADOPTED');
+      expect(failure.cause).toBe(auditError);
+    } finally { detach(); }
+  });
+  it('preserves the native readback error as direct cause after genuine publication', async () => {
+    const setup = await fixture();
+    const failure = await failureOf(at(setup, 'after-rename', () => fs.unlink(setup.headPath)).recoverReservedAdoption(setup.request));
+    expect(failure).toMatchObject({ code: 'EHEADADOPTED', cause: { code: 'ENOENT' },
+      token: { ownerId: setup.request.ownerId, fileIdentity: setup.legacy.token.fileIdentity } });
+  });
+  it.each(['before-stage', 'after-rename'] as const)('does not borrow a prior invocation token at %s', async stop => {
+    const first = await fixture();
+    const second = await fixture('active-registry', first);
+    let failurePhase: AdoptionRecoveryPublication = 'after-rename';
+    let thrown: unknown = new Error('first committed failure');
+    const store = new FileMemoryOwnerSnapshots({ coordinator: first.coordinator,
+      afterAdoptionRecoveryPublication: phase => { if (phase === failurePhase) throw thrown; } });
+    const prior = await failureOf(store.recoverReservedAdoption(first.request));
+    expect(prior.code).toBe('EHEADADOPTED');
+    failurePhase = stop;
+    thrown = prior;
+    const failure = await failureOf(store.recoverReservedAdoption(second.request));
+    expect(failure.code).toBe(stop === 'before-stage' ? 'EADOPTIONPENDING' : 'EHEADADOPTED');
+    expect(failure.cause).toBe(prior);
+    if (stop === 'before-stage') expect(failure.token).toBeUndefined();
+    else expect(failure.token).toMatchObject({ ownerId: second.request.ownerId, fileIdentity: second.legacy.token.fileIdentity });
   });
   it.each(['before-stage', 'verified-stage'] as const)('refuses earlier same-byte sidecar replacement at %s', async stop => {
     const setup = await fixture();
