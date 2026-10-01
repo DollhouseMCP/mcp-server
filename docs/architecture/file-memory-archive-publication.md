@@ -139,3 +139,37 @@ current reference, expiry and tombstone policy. There is no cache or automatic
 adoption of archive content. Metadata listing and bounded database read/list parity
 remain B2; exact protected cleanup remains C. Runtime DI, rollover, browsing,
 erasure, retention and production activation remain unwired and gated.
+
+### Dormant bounded file metadata observations
+
+`FileMemoryVolumeStore.list`, `listInTransaction` and `listAtScope` observe
+metadata declarations only. A standalone call captures one tenant/user scope,
+acquires no fence and writes nothing; tracked composition uses one existing
+ACTIVE operation. The exact owned-head and pending-artifact proof remains
+required, including its bounded active-head reads.
+
+Every listing directory read attempt shares one fixed 1000-unit budget, including
+EOF, errors and initial/final/retry proofs. The owner-slot child set is enumerated
+completely and compared again; unchanged directory inode alone is insufficient.
+Global authority/alias proof exhaustion refuses the observation rather than
+trusting first-N names. No public lower-budget option exists.
+
+At most 128 declarations are returned in numeric order. Partial, malformed,
+unsafe or aliased candidates remain untouched and make the report incomplete.
+Returned declarations have their directory/marker/metadata identities and exact
+metadata bytes re-proved after the final observation hook; no later user callback
+runs. This is a bounded observation, not a transactional filesystem snapshot.
+`totalCount` is null whenever incomplete, including entry-limit truncation.
+`observedCount` counts candidate slots, `acceptedCount` initially qualified
+metadata declarations and `returnedCount` returned declarations. `scannedCount`
+reports backend inspection work: file directory-read attempts including EOF,
+errors and reproof versus database candidate rows. These units are neither
+comparable archive counts nor bytes. The 128 return cap does not promise that
+128 declarations fit the conservative proof budget.
+
+Only bounded private metadata descriptors are read. Archived `payload.yaml` is
+never opened or read by listing; metadata digest/count/length/date values are
+unverified payload declarations. They are not publication receipts, public
+history/access/expiry/reference decisions, or cleanup/erasure authority. Existing
+verified reads and publication retain their full payload proof. No runtime DI,
+rollover activation, cleanup protocol or deployment is introduced.

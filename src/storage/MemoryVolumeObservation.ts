@@ -21,6 +21,7 @@ export interface MemoryVolumeObservation<T> {
   /** Candidate entries actually observed, including any overflow sentinel. */
   readonly observedCount: number;
   readonly acceptedCount: number;
+  /** Backend work units: DB candidate rows, or file directory-read attempts (EOF/error/reproof included); not comparable archive counts or bytes. */
   readonly scannedCount: number;
   readonly totalCount: number | null;
   readonly diagnostics: readonly MemoryVolumeListDiagnostic[];
