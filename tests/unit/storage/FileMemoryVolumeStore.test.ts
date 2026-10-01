@@ -33,6 +33,28 @@ async function fixture(hook?: (phase: ArchivePublicationPhase, location: string)
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 describe('dormant file archive publication', () => {
+
+  it.each([1, 2])('rejects depth %i array generation metadata during collision without modifying evidence', async depth => {
+    const f = await fixture();
+    const receipt = await f.store.createExclusive(f.token, input);
+    const ownerRoot = f.ownerPath;
+    const slot = path.join(ownerRoot, 'v1');
+    const generation = path.join(slot, `g-${receipt.generationId}`);
+    const metadataPath = path.join(generation, 'metadata.json');
+    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+    metadata.generationId = depth === 1 ? [receipt.generationId] : [[receipt.generationId]];
+    await fs.writeFile(metadataPath, JSON.stringify(metadata));
+    const paths = [slot, generation, path.join(slot, 'COMMITTED'), metadataPath, path.join(generation, 'payload.yaml')];
+    const evidence = async () => Promise.all(paths.map(async location => {
+      const stat = await fs.lstat(location, { bigint: true });
+      return { dev: stat.dev, inode: stat.ino, mode: stat.mode, links: stat.nlink,
+        mtime: stat.mtimeNs, ctime: stat.ctimeNs, bytes: stat.isFile() ? await fs.readFile(location) : undefined };
+    }));
+    const before = await evidence();
+    await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+    expect(await evidence()).toEqual(before);
+    expect(await fs.readdir(ownerRoot)).toEqual(['v1']);
+  });
   it('commits exact empty and multibyte bytes, advancing only verified committed collisions', async () => {
     const f = await fixture();
     const first = await f.store.createExclusive(f.token, input);
@@ -44,6 +66,8 @@ describe('dormant file archive publication', () => {
     expect(await fs.readdir(path.join(v, 'COMMITTED'))).toEqual([]);
     expect(String((await fs.stat(v, { bigint: true })).ino)).toBe(second.volumeIdentity.inode);
     expect(first.entryCount).toBe(0);
+    expect(typeof first.generationId).toBe('string');
+    expect(typeof second.generationId).toBe('string');
     expect((await fs.stat(generation)).mode & 0o777).toBe(0o700);
     expect((await fs.stat(path.join(generation, 'payload.yaml'))).mode & 0o777).toBe(0o600);
   });
