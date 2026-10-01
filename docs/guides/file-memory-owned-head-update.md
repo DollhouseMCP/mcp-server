@@ -121,3 +121,45 @@ durable intent before removing the exact original temp; only successful exact
 intent-journal unlink may establish a known-aborted result. Clean retries carry
 no historical attribution. Old head and owner records, archive generations and
 references remain unchanged. All existing activation and operator gates remain.
+
+## Dormant explicit pre-publication abort
+
+`abortPreparedOwnedUpdate` accepts only an explicit request bound to an exact
+original old-head PREPARED update, or its exact schema-2 `ABORTING_WRITE` retry.
+It uses a fresh tenant lease and one tracked operation; the InTransaction form
+requires the caller's fresh lease and retention of its result across outer
+failure. All writers must be quiescent, and any orphan lease handled separately.
+No automatic orphan removal or production maintenance is enabled.
+
+Before deleting anything, the executor exclusively stages the exact intent at
+`<fixed-journal>.abort-<operationId>.tmp`, syncs/closes it, and freshly proves its
+bounded private no-follow/nonblocking one-link descriptor and full namespace.
+One complete exact next stage may be reused; partial, malformed, foreign,
+duplicate, aliased or changing artifacts remain preserved. It rechecks the
+whole original evidence before renaming the stage over the fixed journal and
+binds the resulting intent bytes and inode to that stage (rename ctime only).
+Successful rename with failed readback still means pending/unknown, not aborted.
+
+Exact persisted old-head/ACTIVE-record bindings must remain unchanged. Under
+that verified intent, it unlinks only the original descriptor-bound head temp,
+then freshly proves its complete absence. Missing-temp PREPARED does not grant
+this authority. An extra intent stage after fixed-intent publication remains
+unknown evidence; it is never removed opportunistically.
+
+Successful exact final intent-journal unlink is the sole known-aborted commit.
+Its frozen receipt binds the operation to the unchanged old owned token and is
+captured before optional hooks, observation or audit. Later failures retain it
+as `EHEADABORTED`; an uncertain final unlink yields `EABORTCOMMITUNKNOWN`.
+Earlier runtime failures preserve pending evidence and the original cause.
+Clean retries return `already-clean-no-attribution`, without historical proof.
+
+The abort publishes no head, increments no revision, and deletes no owner
+record, archive generation or reference. It grants no archive cleanup authority.
+Renamed PREPARED and PUBLISHED states require existing forward recovery instead.
+Ordinary readers/diagnostics and schema-1 forward parsing remain unchanged and
+block intent evidence. Audit records contain bounded outcomes, not tokens/YAML.
+An independent audit-only invocation UUID distinguishes same-window attempts;
+this bounded telemetry is not durable audit storage. The known-aborted event is
+attempted immediately after receipt capture, before callbacks and final proofs.
+Guarantees cover the current cooperating-process POSIX interruption model,
+without claiming hostile-writer atomicity, multihost safety or power-loss recovery.
