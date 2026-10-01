@@ -393,7 +393,7 @@ export class FileMemoryOwnedCreate {
       name !== path.basename(this.head) && !(journalExists && name === path.basename(this.sidecar)))) fail('EHEADCONFLICT');
     if (!journalExists && parent.names.some(name => name.toLowerCase() === path.basename(this.head).toLowerCase())) fail('EHEADCONFLICT');
     if (parent.names.some(name => name.toLowerCase().startsWith(`.${hash}.memory-write`) &&
-      name !== path.basename(this.journal) && name !== path.basename(this.stage))) fail();
+      name !== path.basename(this.journal) && !(journalExists && name === path.basename(this.stage)))) fail();
     if (parent.names.some(name => name.toLowerCase().startsWith(`.${hash}.memory-owner`) &&
       !(journalExists && name === path.basename(this.sidecar)))) fail();
     return journalExists;

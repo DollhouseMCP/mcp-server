@@ -62,6 +62,25 @@ describe('exclusive owned CREATE', () => {
     expect(await fs.stat(f.head, { bigint: true })).toEqual(before);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
   });
+  it('refuses an orphan content stage before creating ownership directories', async () => {
+    const f = await fixture();
+    const hash = createHash('sha256').update(path.basename(f.head)).digest('hex');
+    const stage = path.join(path.dirname(f.head), `.${hash}.memory-write.json.create-${f.request.operationId}.head.tmp`);
+    await fs.writeFile(stage, 'partial content', { flag: 'wx', mode: 0o600 });
+    expect(await fs.readFile(stage, 'utf8')).toBe('partial content');
+    const before = await fs.stat(stage, { bigint: true });
+    const names = await fs.readdir(path.dirname(f.head));
+    const failure = await f.store().createOwned(f.request).catch(error => error);
+    expect(failure).toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EOWNERRECOVERY' } });
+    expect(failure.token).toBeUndefined();
+    expect(failure.committed).not.toBe(true);
+    expect(await fs.readFile(stage, 'utf8')).toBe('partial content');
+    const after = await fs.stat(stage, { bigint: true });
+    for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink'] as const) expect(after[field]).toBe(before[field]);
+    expect(await fs.readdir(path.dirname(f.head))).toEqual(names);
+    await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
   it('closes the actual exclusively opened stage without writing after authority loss', async () => {
     const f = await fixture();
     const revoked = new Error('controlled authority loss');
@@ -870,7 +889,7 @@ describe('exclusive owned CREATE', () => {
           return { name, raw: await fs.readFile(file, 'utf8'), inode: stat.ino, links: stat.nlink };
         }));
         if (manual) {
-          await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: stop === 'intent-unlinked' ? 'EHEADCONFLICT' : 'EOWNERRECOVERY' });
+          await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: stop === 'intent-unlinked' || stop === 'partial-content' ? 'EHEADCONFLICT' : 'EOWNERRECOVERY' });
           expect((await fs.readdir(path.dirname(f.head))).sort()).toEqual(names);
           for (const artifact of artifacts) {
             const file = path.join(path.dirname(f.head), artifact.name), stat = await fs.stat(file, { bigint: true });
