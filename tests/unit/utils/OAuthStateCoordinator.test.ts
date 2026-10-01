@@ -117,6 +117,14 @@ async function boundedChildCompletion(completion: Promise<void>, timeoutMs = 5_0
   } finally { if (timer) clearTimeout(timer); }
 }
 
+function throwChildFixtureFailures(primary: { cause: unknown } | undefined, cleanup: unknown[]) {
+  if (cleanup.length > 0) {
+    throw new AggregateError([...(primary ? [primary.cause] : []), ...cleanup],
+      'Lock fixture cleanup incomplete; child directory retained');
+  }
+  if (primary) throw primary.cause;
+}
+
 async function createTemporaryDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-state-coordinator-'));
   temporaryDirectories.push(directory);
@@ -156,6 +164,30 @@ afterEach(async () => {
 });
 
 describe('OAuthStateCoordinator', () => {
+  it.each([undefined, null, new Error('primary assertion')])(
+    'preserves primary %p alongside an incomplete child cleanup', primary => {
+      const cleanup = new Error('Lock fixture child completion timed out');
+      let outcome: { cause: unknown } | undefined;
+      try { throwChildFixtureFailures({ cause: primary }, [cleanup]); } catch (cause) { outcome = { cause }; }
+      expect(outcome?.cause).toBeInstanceOf(AggregateError);
+      expect((outcome?.cause as AggregateError).errors).toEqual([primary, cleanup]);
+      expect((outcome?.cause as AggregateError).errors[0]).toBe(primary);
+      expect((outcome?.cause as AggregateError).errors[1]).toBe(cleanup);
+      let alone: { cause: unknown } | undefined;
+      try { throwChildFixtureFailures({ cause: primary }, []); } catch (cause) { alone = { cause }; }
+      expect(alone).toBeDefined();
+      expect(alone?.cause).toBe(primary);
+    }
+  );
+
+  it('fails cleanup alone and returns only when both paths succeeded', () => {
+    const cleanup = new Error('Lock fixture child completion timed out');
+    let outcome: unknown;
+    try { throwChildFixtureFailures(undefined, [cleanup]); } catch (cause) { outcome = cause; }
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect((outcome as AggregateError).errors).toEqual([cleanup]);
+    expect(() => throwChildFixtureFailures(undefined, [])).not.toThrow();
+  });
   it('reports sanitized child failures without leaking import paths', async () => {
     const directory = await createTemporaryDirectory();
     const missingModule = pathToFileURL(path.join(directory, 'nonexistent-private-fixture-path.mjs')).href;
@@ -582,7 +614,8 @@ describe('OAuthStateCoordinator', () => {
     // afterEach never deletes a directory that may still belong to a live child.
     transferChildFixtureCleanup(directory);
     let contender: ReturnType<typeof observedChild> | undefined;
-    let cleanupFailed = false;
+    let primary: { cause: unknown } | undefined;
+    let cleanupFailures: unknown[] = [];
     try {
     await waitForLiveOwnerObservation(async () => fs.access(ownerEnteredFile).then(() => true, () => false), [owner], fixtureDeadline);
     const ownerIdentityMarker = `${stateFile}.lock.process-${owner.child.pid}.identity`;
@@ -623,13 +656,16 @@ describe('OAuthStateCoordinator', () => {
     await expect(fs.access(contenderEnteredFile)).resolves.toBeUndefined();
     await expect(fs.access(ownerIdentityMarker)).rejects.toMatchObject({ code: 'ENOENT' });
     await expectAllTicketsCompleted(stateFile);
-    } finally {
+    } catch (cause) { primary = { cause }; } finally {
       const cleanup = await Promise.allSettled([owner, ...(contender ? [contender] : [])].map(stopObservedChild));
-      if (cleanup.some(result => result.status === 'rejected')) {
-        cleanupFailed = true;
-      } else await fs.rm(directory, { recursive: true, force: true });
+      cleanupFailures = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map(result => result.reason);
+      if (cleanupFailures.length === 0) {
+        try { await fs.rm(directory, { recursive: true, force: true }); }
+        catch { cleanupFailures.push(new Error('Lock fixture directory cleanup failed')); }
+      }
     }
-    if (cleanupFailed) throw new Error('Lock fixture retained directory after incomplete child cleanup');
+    throwChildFixtureFailures(primary, cleanupFailures);
   });
 
   it('serializes concurrent processes while they complete the same abandoned ticket', async () => {
