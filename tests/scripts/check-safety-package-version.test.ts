@@ -57,6 +57,9 @@ describe('check-safety-package-version', () => {
     git(repo, ['init', '--initial-branch=main']);
     git(repo, ['config', 'user.name', 'Safety Check Test']);
     git(repo, ['config', 'user.email', 'safety-check@example.test']);
+    // Prevent detached Git maintenance as a precaution; the macOS cleanup cause is unproven.
+    git(repo, ['config', 'gc.auto', '0']);
+    git(repo, ['config', 'maintenance.auto', 'false']);
 
     await mkdir(join(repo, 'packages', 'safety', 'src'), { recursive: true });
     await writeFile(
@@ -76,7 +79,8 @@ describe('check-safety-package-version', () => {
   });
 
   afterEach(async () => {
-    await rm(repo, { recursive: true, force: true });
+    // Bounded retries tolerate transient ENOTEMPTY; exhaustion still rejects cleanup.
+    await rm(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   it('allows an exact published version when its trusted source tree is identical', () => {
