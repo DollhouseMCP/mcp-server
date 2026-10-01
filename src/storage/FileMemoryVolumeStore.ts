@@ -325,18 +325,7 @@ export class FileMemoryVolumeStore {
     };
     const groups = this.listCandidateGroups(names);
     const declarations: ListedDeclaration[] = [];
-    for (const group of groups) {
-      if (group.names.length !== 1 || group.names[0] !== `v${group.volume}`) {
-        diagnose('alias', 'Archive number spelling is ambiguous');
-        continue;
-      }
-      try { declarations.push(await this.listDeclaration(namespace.root, token, group.volume, budget)); }
-      catch (cause) {
-        if ((cause as NodeJS.ErrnoException)?.code === 'EHEADRESOURCE') throw cause;
-        const code = (cause as NodeJS.ErrnoException)?.code;
-        diagnose(cause instanceof SyntaxError ? 'corrupt' : code === 'EARCHIVEBLOCKED' ? 'partial' : 'unsafe', 'Archive metadata declaration could not be proved');
-      }
-    }
+    await this.collectListDeclarations(groups, namespace.root, token, budget, declarations, diagnose);
     // Unrecognized children are preserved and cannot qualify a complete census.
     if (names.some(name => !/^v\d+$/iu.test(name) || !Number.isSafeInteger(Number(name.slice(1))) || Number(name.slice(1)) < 1)) {
       diagnose('unsafe', 'Archive namespace contains unrecognized children');
@@ -346,7 +335,7 @@ export class FileMemoryVolumeStore {
     const prove = async (): Promise<void> => {
       await this.observationOwner(scope, token, operation, budget);
       await this.proveListCensus(namespace, names, budget);
-      for (const declaration of selected) await this.listDeclaration(namespace.root, token, declaration.metadata.volume, budget, declaration);
+      await this.reproveListDeclarations(selected, namespace.root, token, budget);
       await this.proveListCensus(namespace, names, budget);
     };
     await this.options.afterObservation?.('observed', namespace.root);
@@ -364,6 +353,36 @@ export class FileMemoryVolumeStore {
       totalCount: complete ? declarations.length : null,
       diagnostics: Object.freeze(diagnostics), diagnosticsTruncated });
   }
+  private async collectListDeclarations(groups: readonly { volume: number; names: string[] }[], root: string,
+    token: OwnedFileMemoryToken, budget: FileMemoryDirectoryScanBudget, declarations: ListedDeclaration[],
+    diagnose: (reason: MemoryVolumeListDiagnostic['reason'], message: string) => void, index = 0): Promise<void> {
+    const group = groups[index];
+    if (!group) return;
+    if (group.names.length !== 1 || group.names[0] !== `v${group.volume}`) {
+      diagnose('alias', 'Archive number spelling is ambiguous');
+    } else {
+      try { declarations.push(await this.listDeclaration(root, token, group.volume, budget)); }
+      catch (cause) {
+        const code = (cause as NodeJS.ErrnoException)?.code;
+        if (code === 'EHEADRESOURCE') throw cause;
+        let reason: MemoryVolumeListDiagnostic['reason'] = 'unsafe';
+        if (cause instanceof SyntaxError) reason = 'corrupt';
+        else if (code === 'EARCHIVEBLOCKED') reason = 'partial';
+        diagnose(reason, 'Archive metadata declaration could not be proved');
+      }
+    }
+    await this.collectListDeclarations(groups, root, token, budget, declarations, diagnose, index + 1);
+  }
+  private async reproveListDeclarations(declarations: readonly ListedDeclaration[], root: string,
+    token: OwnedFileMemoryToken, budget: FileMemoryDirectoryScanBudget, index = 0): Promise<void> {
+    const declaration = declarations[index];
+    if (!declaration) return;
+    await this.listDeclaration(root, token, declaration.metadata.volume, budget, declaration);
+    await this.reproveListDeclarations(declarations, root, token, budget, index + 1);
+  }
+  private sortedListNames(names: readonly string[]): string[] {
+    return [...names].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+  }
   private listCandidateGroups(names: readonly string[]): { volume: number; names: string[] }[] {
     const groups = new Map<number, string[]>();
     for (const name of names) {
@@ -380,7 +399,7 @@ export class FileMemoryVolumeStore {
     await this.proveReadNamespace(namespace, budget);
     if (!namespace.missing) {
       const last = await namesAt(namespace.root, budget.limit, budget);
-      if (!isDeepStrictEqual([...first].sort(), last.sort())) throw error('EARCHIVECHANGED', 'Archive child set changed during observation');
+      if (!isDeepStrictEqual(this.sortedListNames(first), this.sortedListNames(last))) throw error('EARCHIVECHANGED', 'Archive child set changed during observation');
     }
   }
   private async listDeclaration(root: string, owner: OwnedFileMemoryToken, volume: number, budget: FileMemoryDirectoryScanBudget,
@@ -394,7 +413,7 @@ export class FileMemoryVolumeStore {
     }
     const generationPath = path.join(volumePath, generation[0]);
     const generationIdentity = await directory(generationPath, expected?.generationIdentity);
-    if ((await namesAt(generationPath, 2, budget)).sort().join('|') !== 'metadata.json|payload.yaml') {
+    if (this.sortedListNames(await namesAt(generationPath, 2, budget)).join('|') !== 'metadata.json|payload.yaml') {
       throw error('EARCHIVEBLOCKED', 'Archive generation has unexpected children');
     }
     const markerIdentity = await directory(path.join(volumePath, 'COMMITTED'), expected?.markerIdentity);
@@ -415,7 +434,7 @@ export class FileMemoryVolumeStore {
     const value = JSON.parse(text) as Metadata;
     const keys = ['schema', 'userId', 'ownerId', 'volume', 'generationId', 'sha256', 'byteLength', 'entryCount', 'firstEntryAt', 'lastEntryAt', 'sealedAt'];
     const date = (input: unknown): boolean => typeof input === 'string' && Number.isFinite(Date.parse(input)) && new Date(input).toISOString() === input;
-    if (!value || !isDeepStrictEqual(Object.keys(value).sort(), keys.sort()) || value.schema !== 1 ||
+    if (!value || !isDeepStrictEqual(this.sortedListNames(Object.keys(value)), this.sortedListNames(keys)) || value.schema !== 1 ||
       value.userId !== owner.userId || value.ownerId !== owner.ownerId || value.volume !== volume ||
       typeof value.generationId !== 'string' || `g-${value.generationId}` !== generation ||
       typeof value.sha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(value.sha256) ||

@@ -47,13 +47,17 @@ async function listInChild(f: Fixture): Promise<string> {
   const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
   const source = new URL('../../../src/storage/', import.meta.url);
   const script = path.join(f.root, 'payload-tripwire.mjs');
+  const input = path.join(f.root, 'payload-tripwire.json');
+  await fs.writeFile(input, JSON.stringify({ root: f.root, user: USER, token: f.token, source: source.href, extension }));
   await fs.writeFile(script, `
     import nativeFs from 'node:fs/promises';
     import { syncBuiltinESMExports } from 'node:module';
-    import { FileMemoryOwnerSnapshots } from ${JSON.stringify(new URL(`FileMemoryOwnerSnapshots.${extension}`, source).href)};
-    import { FileMemoryTransactionCoordinator } from ${JSON.stringify(new URL(`FileMemoryTransactionCoordinator.${extension}`, source).href)};
-    import { FileMemoryFence } from ${JSON.stringify(new URL(`FileMemoryFence.${extension}`, source).href)};
-    import { FileMemoryVolumeStore } from ${JSON.stringify(new URL(`FileMemoryVolumeStore.${extension}`, source).href)};
+    const input = JSON.parse(await nativeFs.readFile(process.argv[2], 'utf8'));
+    const load = name => import(new URL(name + '.' + input.extension, input.source));
+    const { FileMemoryOwnerSnapshots } = await load('FileMemoryOwnerSnapshots');
+    const { FileMemoryTransactionCoordinator } = await load('FileMemoryTransactionCoordinator');
+    const { FileMemoryFence } = await load('FileMemoryFence');
+    const { FileMemoryVolumeStore } = await load('FileMemoryVolumeStore');
     let payloadOpens = 0;
     const originalOpen = nativeFs.open;
     nativeFs.open = function(file, ...arguments_) {
@@ -62,12 +66,12 @@ async function listInChild(f: Fixture): Promise<string> {
     };
     syncBuiltinESMExports();
     if ((await import('node:fs/promises')).open !== nativeFs.open) throw new Error('Payload tripwire was not linked');
-    const coordinator = new FileMemoryTransactionCoordinator({tenantRoot:${JSON.stringify(f.root)},getCurrentUserId:()=>${JSON.stringify(USER)},fence:new FileMemoryFence()});
+    const coordinator = new FileMemoryTransactionCoordinator({tenantRoot:input.root,getCurrentUserId:()=>input.user,fence:new FileMemoryFence()});
     const owners = new FileMemoryOwnerSnapshots({coordinator});
-    const result = await new FileMemoryVolumeStore({coordinator,owners}).list(${JSON.stringify(f.token)});
+    const result = await new FileMemoryVolumeStore({coordinator,owners}).list(input.token);
     console.log(JSON.stringify({complete:result.complete,volumes:result.entries.map(entry=>entry.volume),payloadOpens}));
   `);
-  return execFileSync(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), script],
+  return execFileSync(process.execPath, [...(extension === 'ts' ? ['--import', 'tsx'] : []), script, input],
     { timeout: 8000, encoding: 'utf8', maxBuffer: 16384 });
 }
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
