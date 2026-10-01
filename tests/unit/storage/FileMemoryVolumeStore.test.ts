@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it as jestIt } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
@@ -325,19 +328,113 @@ it('accepts uppercase durable UUID evidence while blocking lowercase namespace a
 });
 
 it('bounds committed collision probes without allocating beyond the limit', async () => {
-  const f = await fixture();
-  const first = await f.store.createExclusive(f.token, input);
-  const source = path.join(f.ownerPath, 'v1');
-  for (let volume = 2; volume <= 1000; volume++) {
-    const v = path.join(f.ownerPath, `v${volume}`);
-    await fs.cp(source, v, { recursive: true, preserveTimestamps: false });
-    const metadataPath = path.join(v, `g-${first.generationId}`, 'metadata.json');
-    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
-    metadata.volume = volume;
-    await fs.writeFile(metadataPath, JSON.stringify(metadata));
+  const started = process.hrtime.bigint();
+  const pastDeadline = () => process.hrtime.bigint() - started >= 57_000_000_000n;
+  let expired = false;
+  let child: ReturnType<typeof spawn> | undefined;
+  let closed: Promise<void> | undefined;
+  let didClose = false;
+  let fixtureRoot: string | undefined;
+  let fail!: (cause: Error) => void;
+  const failure = new Promise<never>((_, reject) => { fail = reject; });
+  const timer = setTimeout(() => {
+    expired = true;
+    if (child && !didClose) child.kill('SIGKILL');
+    fail(new Error('Archive collision supervised deadline exhausted'));
+  }, 57000);
+  const task = (async () => {
+    const f = await fixture();
+    fixtureRoot = f.root;
+    if (expired || pastDeadline()) throw new Error('Archive collision supervised deadline exhausted');
+    // Transfer this root to supervisor-only cleanup; afterEach must never remove a live child fixture.
+    const fixtureIndex = roots.indexOf(f.root);
+    if (fixtureIndex >= 0) roots.splice(fixtureIndex, 1);
+    const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
+    const moduleRoot = new URL('../../../src/storage/', import.meta.url);
+    const worker = fileURLToPath(new URL(`./fixtures/FileMemoryVolumeCollisionWorker.${extension}`, import.meta.url));
+    child = spawn(process.execPath, [...(extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : []), worker,
+      ...['FileMemoryFence', 'FileMemoryTransactionCoordinator', 'FileMemoryOwnerSnapshots', 'FileMemoryVolumeStore']
+        .map(name => new URL(`${name}.${extension}`, moduleRoot).href), f.root, USER],
+    { cwd: f.root, stdio: ['ignore', 'pipe', 'pipe'] });
+    let exitCode: number | null = null;
+    let signal: NodeJS.Signals | null = null;
+    closed = new Promise(resolve => {
+      child!.once('error', () => fail(new Error('Archive collision worker spawn failed')));
+      child!.once('close', (code, receivedSignal) => { exitCode = code; signal = receivedSignal; didClose = true; resolve(); });
+    });
+    let pending = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let records = 0;
+    let result: Record<string, unknown> | undefined;
+    const numericKeys = ['elapsedMs', 'setupCompleted', 'collisionProofStarted', 'collisionProofCompleted',
+      'aliasScanCompleted', 'aliasScanMs', 'collisionProofMs', 'predicateCalls', 'predicateMs', 'legacyStoreSymbolCount',
+      'cpuUserUs', 'cpuSystemUs', 'rssBytes', 'maxRssKiB', 'fsRead', 'fsWrite',
+      'voluntaryContextSwitches', 'involuntaryContextSwitches'];
+    const refuse = () => { child!.kill('SIGKILL'); fail(new Error('Archive collision worker protocol refused')); };
+    child.stdout!.on('data', (bytes: Buffer) => {
+      stdoutBytes += bytes.length;
+      if (stdoutBytes > 65536) { refuse(); return; }
+      pending += bytes.toString('utf8');
+      let newline: number;
+      while ((newline = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
+        try {
+          const value = JSON.parse(line) as Record<string, unknown>;
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+          if (value.result === 'archive-collision') {
+            if (result || JSON.stringify(Object.keys(value).sort()) !== JSON.stringify([
+              'aliasScanCompleted', 'code', 'collisionProofCompleted', 'predicateCalls', 'result', 'setupCompleted'])) throw new Error();
+            result = value;
+          } else {
+            if (result || ++records > 28 || value.diagnostic !== 'archive-collision' ||
+              !['fixture', 'first-publication', 'setup', 'probe', 'assertion', 'done'].includes(value.phase as string) ||
+              typeof value.nodeVersion !== 'string' || !/^v\d+\.\d+\.\d+$/.test(value.nodeVersion) ||
+              Object.keys(value).some(key => ![...numericKeys, 'diagnostic', 'phase', 'nodeVersion', 'inFlight'].includes(key)) ||
+              numericKeys.some(key => value[key] !== undefined && (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || (value[key] as number) < 0)) ||
+              ['setupCompleted', 'collisionProofStarted', 'collisionProofCompleted', 'aliasScanCompleted', 'predicateCalls']
+                .some(key => !Number.isInteger(value[key]) || (value[key] as number) > 1000)) throw new Error();
+            if (value.inFlight !== null) {
+              const flight = value.inFlight as Record<string, unknown>;
+              if (!flight || Object.keys(flight).sort().join('|') !== 'elapsedMs|kind|startMs' ||
+                !['alias-scan', 'collision-proof'].includes(flight.kind as string) ||
+                [flight.elapsedMs, flight.startMs].some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new Error();
+            }
+            process.stderr.write(`${JSON.stringify(value)}\n`);
+          }
+        } catch { refuse(); return; }
+      }
+    });
+    child.stderr!.on('data', (bytes: Buffer) => { stderrBytes += bytes.length; if (stderrBytes > 8192) refuse(); });
+    await closed;
+    if (pending || exitCode !== 0 || signal || !result) throw new Error('Archive collision worker did not complete');
+    expect(result).toEqual({ result: 'archive-collision', code: 'EARCHIVEEXHAUSTED', setupCompleted: 1000,
+      aliasScanCompleted: 1000, collisionProofCompleted: 1000, predicateCalls: 1000 });
+    if (expired || pastDeadline()) throw new Error('Archive collision supervised deadline exhausted');
+    await expect(fs.stat(path.join(f.ownerPath, 'v1001'))).rejects.toMatchObject({ code: 'ENOENT' });
+    if (expired || pastDeadline()) throw new Error('Archive collision supervised deadline exhausted');
+  })();
+  let primary: unknown;
+  let failed = false;
+  try { await Promise.race([task, failure]); }
+  catch (cause) { failed = true; primary = cause; }
+  finally {
+    clearTimeout(timer);
+    expired = true; // A late fixture completion cannot start a child after refusal.
+    if (child && !didClose) child.kill('SIGKILL');
+    if (closed) await closed;
+    try { await task; }
+    catch (cause) {
+      if (!failed) { failed = true; primary = cause; }
+      else if (cause !== primary) primary = new AggregateError([primary, cause], 'Archive collision supervision failed');
+    }
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+      const index = roots.indexOf(fixtureRoot);
+      if (index >= 0) roots.splice(index, 1);
+    }
   }
-  await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEEXHAUSTED' });
-  await expect(fs.stat(path.join(f.ownerPath, 'v1001'))).rejects.toMatchObject({ code: 'ENOENT' });
+  if (failed) throw primary;
 }, 60000);
 
 it('reports unknown rather than unchanged when marker syscall rejects with EEXIST', async () => {
