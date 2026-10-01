@@ -652,7 +652,8 @@ describe('exclusive owned CREATE', () => {
     const original = internals.observeChild, secondary = new Error('second ordinal fails first');
     const calls: string[] = [];
     let outstanding = 0, maximum = 0, completed = false;
-    let rejectFirst!: () => void, releaseC!: () => void, releaseD!: () => void, started!: () => void;
+    let rejectFirst!: () => void, started!: () => void;
+    let releaseC: (() => void) | undefined, releaseD: (() => void) | undefined;
     const batchStarted = new Promise<void>(resolve => { started = resolve; });
     jest.spyOn(internals, 'observeChild').mockImplementation(function(this: typeof internals, target, name) {
       if (target !== parent) return original.call(this, target, name);
@@ -676,10 +677,10 @@ describe('exclusive owned CREATE', () => {
     rejectFirst();
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(completed).toBe(false);
-    releaseC();
+    releaseC!();
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(completed).toBe(false);
-    releaseD();
+    releaseD!();
     const failure = await operation.catch(cause => cause);
     expect(failure.code).toBe('EHEADCONFLICT');
     expect(Object.hasOwn(failure, 'cause')).toBe(true);
@@ -744,11 +745,16 @@ describe('exclusive owned CREATE', () => {
     ['Created.yaml', 100], ['Created.yaml', 250], ['Created.yaml', 1000],
     ['Notes/Created.yaml', 100], ['Notes/Created.yaml', 250], ['Notes/Created.yaml', 1000],
   ] as const)('fits compact phase evidence and completes %s with %s existing memories', async (locator, count) => {
+      const diagnostic = count === 1000 ? capacityDiagnostic(locator) : undefined;
+      diagnostic?.('setup-start');
       const f = await fixture(locator);
       await seedPersistedOwners(f, count);
+      diagnostic?.('setup-complete');
       const observed = observeAccounting(), sizes: Record<string, number> = {};
       const start = performance.now();
+      diagnostic?.('operation-start');
       const token = await f.store(async phase => {
+        diagnostic?.('publication', phase, observed);
         if (['prepared', 'linked', 'published'].includes(phase)) {
           const name = (await fs.readdir(path.dirname(f.head))).find(value => value.endsWith('.memory-write.json'))!;
           const raw = await fs.readFile(path.join(path.dirname(f.head), name), 'utf8');
@@ -760,8 +766,23 @@ describe('exclusive owned CREATE', () => {
       expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
       expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
       expect(observed.budget().limit).toBeLessThanOrEqual(454656);
+      diagnostic?.('operation-complete', undefined, observed);
       process.stderr.write(`CREATE capacity ${JSON.stringify({ locator, count, sizes, consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
   });
+  function capacityDiagnostic(locator: string, stop?: CreatePublication) {
+    const started = performance.now(); let records = 0;
+    return (event: 'setup-start' | 'setup-complete' | 'interrupted-start' | 'interrupted-end' | 'operation-start' | 'publication' | 'operation-complete',
+      phase?: CreatePublication, observed?: ReturnType<typeof observeAccounting>) => {
+      if (records++ >= 64) return;
+      // Runtime-internal symbol descriptions are a diagnostic, not active context
+      // counts or proof of causality. Never inspect the stored context values.
+      const legacyStoreSymbolCount = Object.getOwnPropertySymbols(Promise.resolve())
+        .filter(symbol => symbol.description === 'kResourceStore').length;
+      process.stderr.write(`CREATE qualification ${JSON.stringify({ locator, stop, event, phase, elapsedMs: performance.now() - started,
+        nodeVersion: process.version, pid: process.pid, legacyStoreSymbolCount,
+        consumed: observed?.records.at(-1)?.budget.consumed, completedCensuses: observed?.measured.completedCensuses })}\n`);
+    };
+  }
   function observeAccounting() {
     const records: { before: number; limit: number; phase?: string; budget: FileMemoryCreateScanBudget }[] = [];
     const measured = { completedCensuses: 0, childLstatsInCompletedCensuses: 0, directoryLstatsInCompletedCensuses: 0,
@@ -799,15 +820,22 @@ describe('exclusive owned CREATE', () => {
     ['Created.yaml', 'prepared'], ['Created.yaml', 'linked'], ['Created.yaml', 'published'],
     ['Notes/Created.yaml', 'prepared'], ['Notes/Created.yaml', 'linked'], ['Notes/Created.yaml', 'published'],
   ] as const)('recovers %s at %s with 1000 persisted owners and exact compact evidence', async (locator, stop) => {
+    const diagnostic = capacityDiagnostic(locator, stop);
+    diagnostic('setup-start');
     const f = await fixture(locator);
     await seedPersistedOwners(f, 1000);
+    diagnostic('setup-complete');
     const cause = new Error('target-scale controlled interruption');
-    await expect(f.store(phase => { if (phase === stop) throw cause; }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
+    diagnostic('interrupted-start');
+    await expect(f.store(phase => { diagnostic('publication', phase); if (phase === stop) throw cause; }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
+    diagnostic('interrupted-end');
     const observed = observeAccounting(), start = performance.now();
-    const token = await f.store().createOwned(f.request);
+    diagnostic('operation-start');
+    const token = await f.store(phase => { diagnostic('publication', phase, observed); }).createOwned(f.request);
     expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
     expect(observed.records).toHaveLength(1);
     expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
+    diagnostic('operation-complete', undefined, observed);
     process.stderr.write(`CREATE target recovery ${JSON.stringify({ locator, stop, before: observed.records[0].before,
       consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
   });
