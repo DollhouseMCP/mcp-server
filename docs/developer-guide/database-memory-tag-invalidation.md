@@ -109,6 +109,13 @@ and have ordinary key options and collations. The four collatable required
 columns use `pg_catalog.default`; all other required attributes have collation
 zero. This does not prove global locale/provider behavior.
 
+The exact positive-check rendering also requires no explicit operator/function
+dependency on its constraint in `pg_depend`: PG17 omits dependencies on pinned
+builtins, while custom operators/functions retain dependencies. This rejects a
+custom same-spelling `>` operator that deparses identically. The helper neither
+changes search_path nor parses expression trees; it does not attest arbitrary
+changes to builtin catalog implementations.
+
 Descriptor collections have fixed caps with overflow sentinels. Nested key
 vectors and rendered expressions are bounded before projection; missing join
 targets retain null/refusal evidence rather than disappearing. The immutable

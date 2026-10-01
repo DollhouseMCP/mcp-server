@@ -113,6 +113,27 @@ describe('live partial PG17 memory invalidation structure proof', () => {
       expect(await verify(tx)).toMatchObject({ reason: 'contract_mismatch' });
     });
   });
+  it('rejects a same-spelling custom greater-than operator despite identical deparse', async () => {
+    await rolledBack(async tx => {
+      await tx.execute(sql`CREATE SCHEMA structural_operator_fixture`);
+      await tx.execute(sql`CREATE FUNCTION structural_operator_fixture.always_true(bigint,integer)
+        RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'`);
+      await tx.execute(sql`CREATE OPERATOR structural_operator_fixture.> (LEFTARG=bigint, RIGHTARG=integer,
+        FUNCTION=structural_operator_fixture.always_true)`);
+      await tx.execute(sql`SET LOCAL search_path=structural_operator_fixture,pg_catalog,public`);
+      await tx.execute(sql`ALTER TABLE public.elements DROP CONSTRAINT elements_storage_revision_positive`);
+      await tx.execute(sql`ALTER TABLE public.elements ADD CONSTRAINT elements_storage_revision_positive CHECK(storage_revision > 0)`);
+      const [actual] = await tx.execute(sql`SELECT pg_catalog.pg_get_expr(c.conbin,c.conrelid) AS expression,
+        EXISTS(SELECT 1 FROM pg_catalog.pg_depend d WHERE d.classid='pg_catalog.pg_constraint'::pg_catalog.regclass
+          AND d.objid=c.oid AND d.objsubid=0 AND d.refclassid='pg_catalog.pg_operator'::pg_catalog.regclass) AS custom_dependency,
+        c.convalidated AS validated FROM pg_catalog.pg_constraint c
+        WHERE c.conrelid='public.elements'::pg_catalog.regclass AND c.conname='elements_storage_revision_positive'`);
+      expect(actual).toEqual({ expression: '(storage_revision > 0)', custom_dependency: true, validated: true });
+      // The first-head unit negative control proves the prior literal-only
+      // matcher accepted this otherwise unchanged CHECK descriptor.
+      expect(await verify(tx)).toMatchObject({ reason: 'contract_mismatch', descriptorSha256: null });
+    });
+  });
   it('does not claim unrelated columns/indexes/receipt checks or effective temp resolution', async () => {
     await rolledBack(async tx => {
       const original = await verify(tx);

@@ -31,7 +31,7 @@ function observation() {
       live: true, predicateNull: true, expressionsNull: true, keyCount: keys.length, attributeCount: keys.length, binding: true,
       opclasses: keys.map(name => name === 'tag' ? 'pg_catalog.text_ops' : 'pg_catalog.uuid_ops'),
       collations: keys.map(name => name === 'tag' ? 'pg_catalog.default' : null), collationBinding: true, collationResolved: true, options: keys.map(() => 0) })),
-    checks: [{ table: 'elements', name: 'elements_storage_revision_positive', keys: ['storage_revision'], expression: '(storage_revision > 0)', safe: true, ...flags }],
+    checks: [{ table: 'elements', name: 'elements_storage_revision_positive', keys: ['storage_revision'], expression: '(storage_revision > 0)', safe: true, builtinExpressionOnly: true, ...flags }],
     defaults: [{ table: 'elements', name: 'storage_revision', expression: '1', safe: true },
       { table: 'elements', name: 'memory_entries_out_of_sync', expression: 'true', safe: true }] };
 }
@@ -106,7 +106,7 @@ describe('partial required memory invalidation structure', () => {
   it.each([160000, 180000, '170010', null])('refuses unsupported server %p', async version => {
     expect(await run([{ ...observation(), version }])).toMatchObject({ reason: 'unsupported_server' });
   });
-  it.each(['0', '4294967296', '01', '1.0', 'not-an-oid', 9007199254740992])('refuses invalid or noncanonical relation OID %p', async oid => {
+  it.each(['0', '4294967296', '01', '1.0', 'not-an-oid', '1１', '1١', 9007199254740992])('refuses invalid or noncanonical relation OID %p', async oid => {
     const value = observation(); Object.assign(value.relations[0], { oid });
     expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
   });
@@ -133,6 +133,11 @@ describe('partial required memory invalidation structure', () => {
   it('rejects an independently validated FK with the wrong exact referenced relation', async () => {
     const value = observation(); value.constraints[3].reference = 'elements';
     expect(value.constraints[3].validated).toBe(true);
+    expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
+  });
+  it('refuses explicit custom operator/function dependency despite the same positive-check rendering', async () => {
+    const value = observation(); value.checks[0].builtinExpressionOnly = false;
+    expect(value.checks[0].expression).toBe('(storage_revision > 0)');
     expect(await run([value])).toMatchObject({ reason: 'contract_mismatch' });
   });
   it('refuses incomplete results and strips driver errors', async () => {
