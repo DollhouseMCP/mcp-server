@@ -1020,8 +1020,7 @@ export class FileMemoryOwnerSnapshots {
         throw headError('EOWNERRECOVERY', 'Created owners tenant properties changed');
       }
       const currentTenant = identityOf(tenantStat);
-      if (!(tenantTransition && headAtRoot) ? !sameIdentity(tenantIdentity, currentTenant) :
-        tenantIdentity.device !== currentTenant.device || tenantIdentity.inode !== currentTenant.inode) {
+      if (!this.sameCreatedDirectory(tenantIdentity, currentTenant, tenantTransition && headAtRoot)) {
         throw headError('EOWNERRECOVERY', 'Created owners tenant identity changed');
       }
       const sidecarIdentity = publishedSidecar
@@ -1031,8 +1030,7 @@ export class FileMemoryOwnerSnapshots {
       await this.checkPrivateDirectory(parent);
       await this.checkPrivateDirectory(childPath);
       const child = identityOf(await fs.lstat(childPath, { bigint: true }));
-      if (child.device !== childIdentity.device || child.inode !== childIdentity.inode ||
-        (!childTransition && !sameIdentity(child, childIdentity))) {
+      if (!this.sameCreatedDirectory(childIdentity, child, childTransition)) {
         throw headError('EOWNERRECOVERY', 'Created owners child identity changed');
       }
       if (!isDeepStrictEqual(tenantNames, await this.listMatchingArtifacts(root, () => true, budget)) ||
@@ -1045,16 +1043,25 @@ export class FileMemoryOwnerSnapshots {
         [original.original.resolved.headPath, original.original.head.identity],
         [original.original.resolved.sidecarPath, sidecarIdentity]]);
       if (stage) {
-        const named = identityOf(await fs.lstat(stage.path, { bigint: true }));
-        if (!(transition === 'registry-rename' ? samePublishedFile(named, stage.identity) : sameIdentity(named, stage.identity))) {
-          throw headError('EOWNERRECOVERY', 'Created owners transition descriptor changed');
-        }
+        await this.requireCreatedStageIdentity(stage, transition === 'registry-rename');
       }
       this.requiredCoordinator().requireActiveOperationScope(operation);
       tenantIdentity = currentTenant;
       childIdentity = child;
       registryCreated ||= transition === 'registry-create';
     };
+  }
+
+  private sameCreatedDirectory(expected: FileIdentity, current: FileIdentity, ownTransition: boolean): boolean {
+    if (!ownTransition) return sameIdentity(expected, current);
+    return expected.device === current.device && expected.inode === current.inode;
+  }
+
+  private async requireCreatedStageIdentity(stage: { path: string; identity: FileIdentity }, renamed: boolean): Promise<void> {
+    const named = identityOf(await fs.lstat(stage.path, { bigint: true }));
+    if (!(renamed ? samePublishedFile(named, stage.identity) : sameIdentity(named, stage.identity))) {
+      throw headError('EOWNERRECOVERY', 'Created owners transition descriptor changed');
+    }
   }
 
   private async absentAdoptionProof(
@@ -1107,12 +1114,7 @@ export class FileMemoryOwnerSnapshots {
           if (!result.bytesWritten) throw headError('EOWNERRECOVERY', 'Registry write made no progress');
           used += result.bytesWritten;
         }
-        if (index === 0) {
-          const partial = topology ? { path: file, identity: identityOf(await handle.stat({ bigint: true })) } : undefined;
-          await topology?.(partial, undefined, 'registry-create');
-          await this.options.afterAdoptionRecoveryPublication?.('partial-registry-create');
-          await topology?.(partial);
-        }
+        if (index === 0) await this.proveAbsentRegistryPartial(handle, file, topology);
       }
       this.requiredCoordinator().requireActiveOperationScope(operation);
       await handle.sync();
@@ -1127,6 +1129,13 @@ export class FileMemoryOwnerSnapshots {
     }
     if (primary) throw primary.cause;
     return created!;
+  }
+
+  private async proveAbsentRegistryPartial(handle: fs.FileHandle, file: string, topology?: AdoptionTopologyProof): Promise<void> {
+    const partial = topology ? { path: file, identity: identityOf(await handle.stat({ bigint: true })) } : undefined;
+    await topology?.(partial, undefined, 'registry-create');
+    await this.options.afterAdoptionRecoveryPublication?.('partial-registry-create');
+    await topology?.(partial);
   }
 
   private async createAbsentAdoptionRegistry(
