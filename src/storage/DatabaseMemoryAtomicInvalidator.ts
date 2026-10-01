@@ -1,8 +1,10 @@
 /** Dormant maintenance only. Historical receipts never authorize apply or activation. */
 import { createHash } from 'node:crypto';
-import type { Sql } from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { sql, type SQL } from 'drizzle-orm';
+import type { Sql, TransactionSql } from 'postgres';
+import { PostgresJsSession, PostgresJsTransaction } from 'drizzle-orm/postgres-js';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { sql, type SQL, type ExtractTablesWithRelations } from 'drizzle-orm';
+import type * as schema from '../database/schema/index.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { observeDatabaseMemoryMaintenanceCatalog } from './DatabaseMemoryMaintenanceCatalogVerifier.js';
 import { captureDatabaseMemoryOwnerManifest, verifyDatabaseMemoryOwnerInvalidation } from './DatabaseMemoryOwnerManifest.js';
@@ -69,6 +71,12 @@ interface Invocation {
   refusal: Reason | null;
   readonly deadline: number;
 }
+type ReservedTransaction = PostgresJsTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>;
+// Drizzle 0.45.2's session generic incorrectly requires root Sql, while its own
+// transaction constructor accepts a TransactionSql session. Pin that constructor boundary.
+const ReservedSession = PostgresJsSession as unknown as new (
+  client: TransactionSql, dialect: PgDialect, relationalSchema: undefined
+) => ConstructorParameters<typeof PostgresJsTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>>[1];
 function checkInvocation(invocation: Invocation): void {
   if (invocation.abandoned) throw new Refusal('abandoned');
   if (performance.now() >= invocation.deadline) throw new Refusal('deadline');
@@ -84,8 +92,11 @@ async function transaction<T>(connection: Sql, invocation: Invocation, body: (tx
       invocation.callbackStarted = true;
       try {
         checkInvocation(invocation);
-        // A callback-scoped Drizzle database executes on this reserved transaction connection.
-        return await body(drizzle(client as unknown as Sql) as unknown as DrizzleTx);
+        // Reserved clients omit root-client options; use Drizzle's transaction session directly.
+        const dialect = new PgDialect();
+        const session = new ReservedSession(client, dialect, undefined);
+        const tx: ReservedTransaction = new PostgresJsTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>(dialect, session, undefined);
+        return await body(tx);
       } catch (error) {
         if (!(error instanceof Refusal)) throw error;
         invocation.refusal = error.reason;

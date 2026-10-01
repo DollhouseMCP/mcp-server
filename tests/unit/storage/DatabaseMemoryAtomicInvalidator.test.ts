@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import type { Sql } from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import type { MemoryAtomicInvalidationRequest } from '../../../src/storage/DatabaseMemoryAtomicInvalidator.js';
 // These tests qualify the outcome envelope; real catalog/SQL proof belongs to CI PG.
 jest.unstable_mockModule('../../../src/storage/DatabaseMemoryMaintenanceCatalogVerifier.js', () => ({
@@ -20,7 +21,7 @@ type Callback = (client: unknown) => Promise<unknown>;
 function fixture(behavior?: (callback: Callback, client: unknown) => Promise<unknown>) {
   const statements: string[] = [];
   let calls = 0;
-  const client = { options: { parsers: {}, serializers: {} }, unsafe: async (query: string, _parameters?: unknown[]): Promise<unknown[]> => {
+  const client = { unsafe: async (query: string, _parameters?: unknown[]): Promise<unknown[]> => {
     statements.push(query);
     return []; // A real proof cannot be obtained from an absent context row.
   } };
@@ -41,6 +42,15 @@ describe('atomic invalidation private operation envelope', () => {
     expect(await new DatabaseMemoryAtomicInvalidator(f.connection).invalidate({ ...request(), ...changes }))
       .toEqual({ status: 'aborted', reason: 'invalid-request' });
     expect(f.calls()).toBe(0);
+  });
+
+  it('uses the real Drizzle session on a reserved-shaped client without root options', async () => {
+    const f = fixture();
+    expect(Object.hasOwn(f.client, 'options')).toBe(false);
+    expect(() => drizzle(f.client as unknown as Sql)).toThrow(TypeError);
+    expect(await new DatabaseMemoryAtomicInvalidator(f.connection).invalidate(request()))
+      .toEqual({ status: 'aborted', reason: 'context' });
+    expect(f.statements[0]).toBe('SET LOCAL search_path = pg_catalog, public, pg_temp');
   });
 
   it('uses SET LOCAL and all ordered locks before its first SELECT', async () => {
