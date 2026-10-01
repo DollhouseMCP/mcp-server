@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type AdoptionRecoveryPublication, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
-import { FileMemoryDirectoryScanBudget } from '../../../src/storage/FileMemoryDirectoryScanBudget.js';
+import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -141,11 +141,11 @@ describe('exact missing-registry adoption recovery', () => {
   });
   it('shares a monotonic budget including absent, pair and final proofs', async () => {
     const setup = await fixture();
-    const original = FileMemoryDirectoryScanBudget.prototype.read;
-    const instances = new Set<FileMemoryDirectoryScanBudget>();
+    const original = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
+    const instances = new Set<FileMemoryAdoptionRecoveryScanBudget>();
     const consumed: number[] = [];
-    jest.spyOn(FileMemoryDirectoryScanBudget.prototype, 'read').mockImplementation(function(this: FileMemoryDirectoryScanBudget, directory) {
-      instances.add(this); consumed.push(this.consumed); return original.call(this, directory);
+    jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read').mockImplementation(function(this: FileMemoryAdoptionRecoveryScanBudget, directory, attempts, bound) {
+      instances.add(this); consumed.push(this.consumed); return original.call(this, directory, attempts, bound);
     });
     await setup.store.recoverReservedAdoption(setup.request);
     expect(instances.size).toBe(1);
@@ -305,7 +305,7 @@ describe('exact missing-registry adoption recovery', () => {
   });
   it('never treats exhausted absence proof as authority to create', async () => {
     const setup = await fixture();
-    await Promise.all(Array.from({ length: 1100 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.registryPath), `noise-${index}`), 'x')));
+    await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.registryPath), `noise-${index}`), 'x')));
     const result = await failure(setup.store.recoverReservedAdoption(setup.request));
     expect(result).toMatchObject({ code: 'EADOPTIONPENDING', cause: { code: 'EHEADRESOURCE' } });
     expect(result).not.toHaveProperty('phase');

@@ -6,7 +6,8 @@ import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
-import { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryDirectoryScanBudget, type FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryListProofBudget } from './FileMemoryListProofBudget.js';
 import { captureMemoryVolumeEntryLimit, MAX_MEMORY_VOLUME_LIST_DIAGNOSTICS, type MemoryVolumeListOptions, type MemoryVolumeObservation, type MemoryVolumeListDiagnostic } from './MemoryVolumeObservation.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
 import { FileMemoryTransactionCoordinator, type FileMemoryLeaseContext, type FileMemoryOperationScope, type FileMemoryTransactionScope } from './FileMemoryTransactionCoordinator.js';
@@ -98,6 +99,7 @@ interface ListContext {
   readonly operation?: FileMemoryOperationScope;
   readonly budget: FileMemoryDirectoryScanBudget;
   readonly entryLimit: number;
+  readonly proofBudget: FileMemoryListProofBudget;
 }
 function error(code: string, message: string, cause?: unknown): NodeJS.ErrnoException {
   return Object.assign(new Error(message, { cause }), { code });
@@ -176,7 +178,7 @@ function fileIdentity(stat: BigIntStats): ArchiveFileIdentity {
 function privateObject(stat: BigIntStats): boolean {
   return (stat.mode & 0o077n) === 0n && !!process.getuid && stat.uid === BigInt(process.getuid());
 }
-async function namesAt(directoryPath: string, limit: number, budget?: FileMemoryDirectoryScanBudget): Promise<string[]> {
+async function namesAt(directoryPath: string, limit: number, budget?: FileMemoryDirectoryScanner): Promise<string[]> {
   const names: string[] = [];
   if (budget) {
     await budget.scan(directoryPath, name => {
@@ -286,14 +288,16 @@ export class FileMemoryVolumeStore {
     const token = this.captureToken(expected);
     const entryLimit = captureMemoryVolumeEntryLimit(options);
     const budget = new FileMemoryDirectoryScanBudget();
-    return this.options.coordinator.captureReadScope().then(scope => this.listCaptured({ scope, token, entryLimit, budget }));
+    const proofBudget = new FileMemoryListProofBudget();
+    return this.options.coordinator.captureReadScope().then(scope => this.listCaptured({ scope, token, entryLimit, budget, proofBudget }));
   }
   listInTransaction(context: FileMemoryLeaseContext, expected: OwnedFileMemoryToken, options: MemoryVolumeListOptions = {}): Promise<MemoryVolumeObservation<FileMemoryVolumeInfo>> {
     const token = this.captureToken(expected);
     const entryLimit = captureMemoryVolumeEntryLimit(options);
     const budget = new FileMemoryDirectoryScanBudget();
+    const proofBudget = new FileMemoryListProofBudget();
     return this.options.coordinator.perform(context, operation => this.listCaptured({
-      scope: this.options.coordinator.requireActiveOperationScope(operation), token, entryLimit, budget, operation,
+      scope: this.options.coordinator.requireActiveOperationScope(operation), token, entryLimit, budget, proofBudget, operation,
     }));
   }
   /** Composition already inside perform; never enqueues a nested operation. */
@@ -301,8 +305,9 @@ export class FileMemoryVolumeStore {
     const token = this.captureToken(expected);
     const entryLimit = captureMemoryVolumeEntryLimit(options);
     const budget = new FileMemoryDirectoryScanBudget();
+    const proofBudget = new FileMemoryListProofBudget();
     const scope = this.options.coordinator.requireActiveOperationScope(operation);
-    return this.listCaptured({ scope, token, entryLimit, budget, operation });
+    return this.listCaptured({ scope, token, entryLimit, budget, proofBudget, operation });
   }
   private async listCaptured(context: ListContext): Promise<MemoryVolumeObservation<FileMemoryVolumeInfo>> {
     try { return await this.listCapturedEvidence(context); }
@@ -313,9 +318,12 @@ export class FileMemoryVolumeStore {
     }
   }
   private async listCapturedEvidence(context: ListContext): Promise<MemoryVolumeObservation<FileMemoryVolumeInfo>> {
-    const { scope, token, operation, budget, entryLimit } = context;
-    await this.observationOwner(scope, token, operation, budget);
-    const namespace = await this.readNamespace(scope, token.ownerId, budget);
+    const { scope, token, operation, budget, proofBudget, entryLimit } = context;
+    await this.observationOwner(scope, token, operation, proofBudget);
+    const namespace = await this.readNamespace(scope, token.ownerId, proofBudget);
+    proofBudget.reserve(path.dirname(path.join(scope.tenantRoot, token.locator)),
+      path.join(scope.tenantRoot, '.memory-owners', 'owners'), namespace.paths.slice(0, -1),
+      namespace.missing ? path.dirname(namespace.missing) : undefined);
     const names = namespace.missing ? [] : await namesAt(namespace.root, budget.limit, budget);
     const diagnostics: MemoryVolumeListDiagnostic[] = [];
     let diagnosticsTruncated = false;
@@ -333,10 +341,10 @@ export class FileMemoryVolumeStore {
     const selected = declarations.slice(0, entryLimit);
     if (declarations.length > entryLimit) diagnose('entry-limit', 'Archive declaration return limit reached');
     const prove = async (): Promise<void> => {
-      await this.observationOwner(scope, token, operation, budget);
-      await this.proveListCensus(namespace, names, budget);
+      await this.observationOwner(scope, token, operation, proofBudget);
+      await this.proveListCensus(namespace, names, budget, proofBudget);
       await this.reproveListDeclarations(selected, namespace.root, token, budget);
-      await this.proveListCensus(namespace, names, budget);
+      await this.proveListCensus(namespace, names, budget, proofBudget);
     };
     await this.options.afterObservation?.('observed', namespace.root);
     await prove();
@@ -349,7 +357,7 @@ export class FileMemoryVolumeStore {
     const complete = diagnostics.length === 0 && !diagnosticsTruncated;
     return Object.freeze({ entries: Object.freeze(selected.map(value => value.metadata)), complete,
       returnedCount: selected.length, observedCount: names.filter(name => /^v\d+$/iu.test(name)).length,
-      acceptedCount: declarations.length, scannedCount: budget.consumed,
+      acceptedCount: declarations.length, scannedCount: budget.consumed + proofBudget.consumed,
       totalCount: complete ? declarations.length : null,
       diagnostics: Object.freeze(diagnostics), diagnosticsTruncated });
   }
@@ -395,8 +403,8 @@ export class FileMemoryVolumeStore {
     }
     return [...groups].map(([volume, group]) => ({ volume, names: group })).sort((left, right) => left.volume - right.volume);
   }
-  private async proveListCensus(namespace: ReadArchiveNamespace, first: readonly string[], budget: FileMemoryDirectoryScanBudget): Promise<void> {
-    await this.proveReadNamespace(namespace, budget);
+  private async proveListCensus(namespace: ReadArchiveNamespace, first: readonly string[], budget: FileMemoryDirectoryScanBudget, proofBudget: FileMemoryListProofBudget): Promise<void> {
+    await this.proveReadNamespace(namespace, proofBudget);
     if (!namespace.missing) {
       const last = await namesAt(namespace.root, budget.limit, budget);
       if (!isDeepStrictEqual(this.sortedListNames(first), this.sortedListNames(last))) throw error('EARCHIVECHANGED', 'Archive child set changed during observation');
@@ -447,16 +455,16 @@ export class FileMemoryVolumeStore {
     return value;
   }
   private async observationOwner(scope: FileMemoryTransactionScope, token: OwnedFileMemoryToken,
-    operation?: FileMemoryOperationScope, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+    operation?: FileMemoryOperationScope, budget?: FileMemoryDirectoryScanner): Promise<void> {
     if (operation) await this.options.owners.requireOwnedAtScope(operation, token, budget);
     else await this.options.owners.requireOwnedAtReadScope(scope, token, budget);
   }
-  private async readNamespace(scope: FileMemoryTransactionScope, ownerId: string, budget?: FileMemoryDirectoryScanBudget): Promise<ReadArchiveNamespace> {
+  private async readNamespace(scope: FileMemoryTransactionScope, ownerId: string, budget?: FileMemoryDirectoryScanner): Promise<ReadArchiveNamespace> {
     const namespace = { root: scope.tenantRoot, paths: [scope.tenantRoot],
       identities: [await directory(scope.tenantRoot, undefined, false)] };
     return this.readNamespaceChild(namespace, ['volumes', 'by-id', ownerId], 0, budget);
   }
-  private async readNamespaceChild(namespace: ReadArchiveNamespace, components: readonly string[], index: number, budget?: FileMemoryDirectoryScanBudget): Promise<ReadArchiveNamespace> {
+  private async readNamespaceChild(namespace: ReadArchiveNamespace, components: readonly string[], index: number, budget?: FileMemoryDirectoryScanner): Promise<ReadArchiveNamespace> {
     if (index === components.length) return namespace;
     const component = components[index];
     await this.requireNamespaceComponent(namespace.root, component, false, budget);
@@ -470,7 +478,7 @@ export class FileMemoryVolumeStore {
     return this.readNamespaceChild({ root: child, paths: [...namespace.paths, child],
       identities: [...namespace.identities, identity] }, components, index + 1, budget);
   }
-  private async proveReadNamespace(namespace: ReadArchiveNamespace, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+  private async proveReadNamespace(namespace: ReadArchiveNamespace, budget?: FileMemoryDirectoryScanner): Promise<void> {
     await this.revalidateNamespace(namespace);
     await this.revalidateNamespaceSpelling(namespace, budget);
     if (namespace.missing) {
@@ -546,7 +554,7 @@ export class FileMemoryVolumeStore {
     if (!UUID.test(token.ownerId)) throw new TypeError('Archive requires a durable owner UUID');
     return Object.freeze(token);
   }
-  private async requireNamespaceComponent(parent: string, component: string, requirePresent = true, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+  private async requireNamespaceComponent(parent: string, component: string, requirePresent = true, budget?: FileMemoryDirectoryScanner): Promise<void> {
     const siblings = await namesAt(parent, 100_000, budget);
     this.requireCanonicalNamespaceComponent(siblings, component, requirePresent);
   }
@@ -588,7 +596,7 @@ export class FileMemoryVolumeStore {
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
   }
-  private async revalidateNamespaceSpelling(namespace: { paths: readonly string[] }, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+  private async revalidateNamespaceSpelling(namespace: { paths: readonly string[] }, budget?: FileMemoryDirectoryScanner): Promise<void> {
     const results = await Promise.allSettled(namespace.paths.slice(1).map((componentPath, index) =>
       this.requireNamespaceComponent(namespace.paths[index], path.basename(componentPath), true, budget)));
     const failure = results.find(result => result.status === 'rejected');

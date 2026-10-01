@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type AdoptionRecoveryPublication, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
-import { FileMemoryDirectoryScanBudget } from '../../../src/storage/FileMemoryDirectoryScanBudget.js';
+import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -201,11 +201,11 @@ describe('exact existing RESERVED pair recovery', () => {
   });
   it('uses a single budget instance across both publications without reset', async () => {
     const setup = await fixture();
-    const instances = new Set<FileMemoryDirectoryScanBudget>();
+    const instances = new Set<FileMemoryAdoptionRecoveryScanBudget>();
     const consumed: number[] = [];
-    const read = FileMemoryDirectoryScanBudget.prototype.read;
-    jest.spyOn(FileMemoryDirectoryScanBudget.prototype, 'read').mockImplementation(function (this: FileMemoryDirectoryScanBudget, directory) {
-      instances.add(this); consumed.push(this.consumed); return read.call(this, directory);
+    const read = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
+    jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read').mockImplementation(function (this: FileMemoryAdoptionRecoveryScanBudget, directory, attempts, bound) {
+      instances.add(this); consumed.push(this.consumed); return read.call(this, directory, attempts, bound);
     });
     await setup.store.recoverReservedAdoption(setup.request);
     expect(instances.size).toBe(1);

@@ -9,6 +9,7 @@ import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type AdoptionRecoveryPublication, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
@@ -334,16 +335,24 @@ describe('dormant final RESERVED adoption recovery', () => {
   });
   it('charges unrelated entries against one whole invocation budget, preserving exhaustion evidence', async () => {
     const setup = await fixture();
-    await Promise.all(Array.from({ length: 260 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x')));
+    await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x')));
     const before = await residual(setup);
     await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', cause: { code: 'EHEADRESOURCE' } });
     expect(await residual(setup)).toEqual(before);
     await expect(fs.lstat(setup.stagePath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('retains a known token when the same shared budget exhausts only after publication', async () => {
+  it('retains a known token when the same private budget exhausts only after publication', async () => {
     const setup = await fixture();
-    await Promise.all(Array.from({ length: 70 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x')));
-    await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EHEADADOPTED', adopted: true,
+    const store = new FileMemoryOwnerSnapshots({ coordinator: setup.coordinator, afterAdoptionRecoveryPublication: phase => {
+      if (phase !== 'after-rename') return;
+      const read = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
+      jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read').mockImplementation(async function(this: FileMemoryAdoptionRecoveryScanBudget, directory, attempts, bound) {
+        while (this.consumed < this.limit) await read.call(this, directory, attempts, bound);
+        return read.call(this, directory, attempts, bound);
+      });
+    } });
+    await expect(store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EHEADADOPTED', adopted: true,
+      cause: { code: 'EHEADRESOURCE' },
       token: { ownerId: setup.request.ownerId, fileIdentity: setup.legacy.token.fileIdentity } });
     expect(JSON.parse(await fs.readFile(setup.sidecarPath, 'utf8')).state).toBe('ACTIVE');
   });

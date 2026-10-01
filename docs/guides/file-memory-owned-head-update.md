@@ -240,11 +240,26 @@ Partial final registry files are preserved for manual handling; complete exact
 RESERVED records resume through ordinary pair recovery without attributing the
 previous invocation. Final sidecar publication remains the sole adoption commit.
 
-Missing-ancestor phases and ordinary adoption's publication behavior remain
-outside this API. No runtime caller or automatic repair is enabled.
+Directory preparation for exact missing-ancestor states is described below.
+Ordinary adoption's publication behavior remains separate. No runtime caller or
+automatic repair is enabled.
 
-One invocation-owned 1000-attempt directory budget includes unrelated entries,
-EOF, failed reads and every reproof. Private owner ancestors and complete relevant
+Recovery uses one private resource budget with a read-only discovery pass before
+any repair mutation. Distinct physical directory slots project the complete
+observed names plus only this request's possible parent, child, registry and
+stage names. Each census and aggregate projected peak P are bounded at 4096,
+including EOF. T/O/R must be distinct physical slots; the head parent H may be T
+or separate, but cannot alias O/R. Missing slots supply counts, never authority.
+Discovery D is retained. Every invocation reserves the source-derived maximum
+supported-path suffix `51T + 47O + 40H + 69R`, conservatively covering state or
+directory disappearance before the original first proof. D is at most P and
+the suffix at most 91P, so the hard total ceiling is 376832. There is no refund,
+reset, quota enlargement, cached authority or removed proof. Frozen slot weights
+reject growth at its first observed census; entries, EOF and failed reads all
+consume the same monotonic counter. Local 100/250/1000 root/nested qualification
+does not establish a hosted concurrency or performance ceiling.
+
+Private owner ancestors and complete relevant
 head/registry namespaces must agree. Exhaustion never proves absence. The exact
 next ACTIVE sidecar is exclusively staged and synced at
 `<sidecar>.adopt-<ownerId>.tmp`. A complete matching stage can be freshly verified

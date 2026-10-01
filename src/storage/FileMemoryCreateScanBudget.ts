@@ -2,7 +2,7 @@
 import type { Dir } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { FileMemoryDirectoryScanLimitError } from './FileMemoryDirectoryScanBudget.js';
+import { closeMemoryDirectoryInspection, FileMemoryDirectoryScanLimitError } from './FileMemoryDirectoryScanBudget.js';
 export interface CreateScanSlot { locator: string; names: string[]; missing: boolean }
 export class FileMemoryCreateScanBudget {
   #consumed = 0;
@@ -54,13 +54,6 @@ export class FileMemoryCreateScanBudget {
         inspect(entry.name);
       }
     } catch (cause) { primary = { cause }; }
-    try { await directory.close(); }
-    catch (cause) {
-      if (!primary) throw cause;
-      throw Object.assign(new AggregateError([primary.cause, cause], 'CREATE directory inspection and close failed', { cause: primary.cause }), {
-        code: (primary.cause as NodeJS.ErrnoException | undefined)?.code,
-      });
-    }
-    if (primary) throw primary.cause;
+    await closeMemoryDirectoryInspection(directory, primary, 'CREATE directory inspection and close failed');
   }
 }

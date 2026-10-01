@@ -12,7 +12,8 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { parseFileMemoryAbortIntent, serializeFileMemoryAbortIntent,
   type FileMemoryAbortIntent } from './FileMemoryAbortIntentCodec.js';
 import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
-import { FileMemoryDirectoryScanBudget } from './FileMemoryDirectoryScanBudget.js';
+import type { FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryAdoptionRecoveryScanBudget } from './FileMemoryAdoptionRecoveryScanBudget.js';
 import { FileMemoryOwnedCreate, captureCreateRequest, type CreateOwnedRequest, type CreatePublication } from './FileMemoryOwnedCreate.js';
 export type { CreateOwnedRequest, CreatePublication } from './FileMemoryOwnedCreate.js';
 import {
@@ -794,13 +795,18 @@ export class FileMemoryOwnerSnapshots {
     context: FileMemoryLeaseContext, captured: RecoverAdoptionRequest, capture?: (token: OwnedFileMemoryToken) => void,
   ): Promise<RecoverAdoptionResult> {
     return this.requiredCoordinator().perform(context, async operation => {
-      const budget = new FileMemoryDirectoryScanBudget();
+      const budget = new FileMemoryAdoptionRecoveryScanBudget();
       const invocationId = randomUUID();
       let committed: OwnedFileMemoryToken | undefined;
       let publicationPhase: AdoptionProgress | undefined;
       let closeFailure: { cause: unknown } | undefined;
       try {
         this.auditAdoption('requested', invocationId);
+        const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
+        const resolved = await this.resolveHead(scope.tenantRoot, captured.locator);
+        await budget.discover(scope.tenantRoot, path.dirname(resolved.headPath), path.basename(resolved.sidecarPath), captured.ownerId);
+        budget.reserve();
+        this.requiredCoordinator().requireActiveOperationScope(operation);
         return await this.recoverAdoptionAtScope(operation, captured, budget, invocationId, token => {
           committed = token;
           capture?.(token);
@@ -841,7 +847,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async adoptionProof(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
   ): Promise<AdoptionEvidence> {
     const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
     const evidence = await this.readAdoptionEvidence(scope, request, budget);
@@ -850,7 +856,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async adoptionReproof(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
     first: AdoptionEvidence, phase: AdoptionRecoveryPublication, topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
     await this.options.afterAdoptionRecoveryPublication?.(phase);
@@ -867,7 +873,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async requireAdoptionClean(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
     original: AdoptionEvidence, published?: AdoptionEvidence, topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
     const clean = await this.adoptionProof(operation, request, budget);
@@ -882,7 +888,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async recoverAdoptionAtScope(
     operation: FileMemoryOperationScope, request: RecoverAdoptionRequest,
-    budget: FileMemoryDirectoryScanBudget, invocationId: string, capture: (token: OwnedFileMemoryToken) => void,
+    budget: FileMemoryDirectoryScanner, invocationId: string, capture: (token: OwnedFileMemoryToken) => void,
     progress: (phase: AdoptionProgress) => void, closeFailure: (cause: unknown) => void,
   ): Promise<RecoverAdoptionResult> {
     const createdDirectory = await this.prepareOwnersDirectory(operation, request, budget, progress, closeFailure);
@@ -945,7 +951,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async missingOwnersProof(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
   ): Promise<MissingOwnersEvidence> {
     const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
     const original = await this.reservedAdoptionOriginal(scope, request);
@@ -1001,7 +1007,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async prepareOwnersDirectory(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
     progress: (phase: AdoptionProgress) => void, closeFailure: (cause: unknown) => void,
   ): Promise<PreparedOwnersDirectory | undefined> {
     const directory = path.dirname(this.registryPath(operation.tenantRoot, request.ownerId));
@@ -1037,7 +1043,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async missingOwnershipParentProof(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
   ): Promise<MissingOwnershipParentEvidence> {
     const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
     const original = await this.reservedAdoptionOriginal(scope, request);
@@ -1067,7 +1073,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async prepareOwnershipParent(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
     progress: (phase: AdoptionProgress) => void, closeFailure: (cause: unknown) => void,
   ): Promise<MissingOwnersEvidence | undefined> {
     const parent = path.dirname(path.dirname(this.registryPath(operation.tenantRoot, request.ownerId)));
@@ -1096,7 +1102,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async requireCreatedOwnersContext(
-    operation: FileMemoryOperationScope, budget: FileMemoryDirectoryScanBudget, original: MissingOwnersEvidence,
+    operation: FileMemoryOperationScope, budget: FileMemoryDirectoryScanner, original: MissingOwnersEvidence,
     created: AbsentAdoptionEvidence, current: AbsentAdoptionEvidence | AdoptionEvidence,
   ): Promise<void> {
     const parent = path.dirname(path.dirname(this.registryPath(operation.tenantRoot, created.sidecar.record.ownerId)));
@@ -1117,7 +1123,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private createdOwnersPublicationProof(
-    operation: FileMemoryOperationScope, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, budget: FileMemoryDirectoryScanner,
     original: MissingOwnersEvidence, created: AbsentAdoptionEvidence,
   ): AdoptionTopologyProof {
     let tenantIdentity = original.tenantIdentity;
@@ -1193,7 +1199,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async absentAdoptionProof(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
   ): Promise<AbsentAdoptionEvidence> {
     const scope = this.requiredCoordinator().requireActiveOperationScope(operation);
     const { resolved, head, sidecar } = await this.reservedAdoptionOriginal(scope, request);
@@ -1267,7 +1273,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async createAbsentAdoptionRegistry(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
     progress: (phase: AdoptionProgress) => void, closeFailure: (cause: unknown) => void, carried?: PreparedOwnersDirectory,
   ): Promise<AdoptionEvidence> {
     const first = await this.absentAdoptionProof(operation, request, budget);
@@ -1298,7 +1304,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async stageAdoption(
     operation: FileMemoryOperationScope, request: RecoverAdoptionRequest,
-    budget: FileMemoryDirectoryScanBudget, first: AdoptionEvidence, topology?: AdoptionTopologyProof,
+    budget: FileMemoryDirectoryScanner, first: AdoptionEvidence, topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
     let staged = await this.adoptionReproof(operation, request, budget, first, 'before-stage', topology);
     if (!staged.stage) {
@@ -1338,7 +1344,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async publishReservedRegistry(
-    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
     first: AdoptionEvidence, progress: (phase: 'registry-publication-unknown' | 'registry-published') => void,
     topology?: AdoptionTopologyProof,
   ): Promise<AdoptionEvidence> {
@@ -1384,7 +1390,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readAdoptionEvidence(
-    scope: FileMemoryTransactionScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanBudget,
+    scope: FileMemoryTransactionScope, request: RecoverAdoptionRequest, budget: FileMemoryDirectoryScanner,
   ): Promise<AdoptionEvidence> {
     const resolved = await this.resolveHead(scope.tenantRoot, request.locator);
     const head = await this.readHeadBytes(resolved.headPath);
@@ -1443,7 +1449,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async adoptionNamespace(
     scope: FileMemoryTransactionScope, resolved: DiagnosticEvidenceRead['resolved'], ownerId: string,
-    budget: FileMemoryDirectoryScanBudget, reservedPair: boolean,
+    budget: FileMemoryDirectoryScanner, reservedPair: boolean,
   ): Promise<{ headNames: string[]; registryNames: string[] }> {
     const prefix = `.${resolved.basenameHash}.memory-`;
     const names = await this.listMatchingArtifacts(path.dirname(resolved.headPath), name => name.toLowerCase().startsWith(prefix), budget);
@@ -2184,7 +2190,7 @@ export class FileMemoryOwnerSnapshots {
    * nested operation; future archive stores must await it before publication.
    */
   async requireOwnedAtScope(
-    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanBudget,
+    operation: FileMemoryOperationScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanner,
   ): Promise<OwnedFileMemoryToken> {
     const coordinator = this.requiredCoordinator();
     const scope = coordinator.requireActiveOperationScope(operation);
@@ -2203,7 +2209,7 @@ export class FileMemoryOwnerSnapshots {
 
   /** @internal Zero-write owner proof using one caller-captured read scope. Not mutation authority. */
   async requireOwnedAtReadScope(
-    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanBudget,
+    scope: FileMemoryTransactionScope, expected: OwnedFileMemoryToken, budget?: FileMemoryDirectoryScanner,
   ): Promise<OwnedFileMemoryToken> {
     const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
     if (token.backend !== 'file' || token.ownership !== 'owned' ||
@@ -2218,7 +2224,7 @@ export class FileMemoryOwnerSnapshots {
   }
 
   private async readAtRoot(
-    tenantRoot: string, userId: string, locator: string, permittedJournal?: string, budget?: FileMemoryDirectoryScanBudget,
+    tenantRoot: string, userId: string, locator: string, permittedJournal?: string, budget?: FileMemoryDirectoryScanner,
   ): Promise<FileMemorySnapshot> {
     const resolved = await this.resolveHead(tenantRoot, locator);
 
@@ -2636,7 +2642,7 @@ export class FileMemoryOwnerSnapshots {
     return { headPath, sidecarPath, journalPath, basenameHash, locator: canonicalLocator };
   }
 
-  private async scanDirectory(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanBudget): Promise<void> {
+  private async scanDirectory(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanner): Promise<void> {
     if (budget) {
       return budget.scan(directory, name => {
         if (matches(name)) throw headError('EOWNERRECOVERY', `Memory update artifact requires recovery: ${name}`);
@@ -2654,7 +2660,7 @@ export class FileMemoryOwnerSnapshots {
     }
   }
 
-  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanBudget): Promise<string[]> {
+  private async listMatchingArtifacts(directory: string, matches: (name: string) => boolean, budget?: FileMemoryDirectoryScanner): Promise<string[]> {
     if (budget) {
       const names: string[] = [];
       await budget.scan(directory, name => { if (matches(name)) names.push(name); });
@@ -2685,7 +2691,7 @@ export class FileMemoryOwnerSnapshots {
     tenantRoot: string,
     resolved: { headPath: string; journalPath: string; basenameHash: string }, ownerId?: string,
     permittedJournal?: string,
-    budget?: FileMemoryDirectoryScanBudget,
+    budget?: FileMemoryDirectoryScanner,
   ): Promise<void> {
     const prefix = `.${resolved.basenameHash}.`;
     await this.scanDirectory(path.dirname(resolved.headPath), name => {

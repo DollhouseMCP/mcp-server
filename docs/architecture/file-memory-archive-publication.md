@@ -148,8 +148,22 @@ acquires no fence and writes nothing; tracked composition uses one existing
 ACTIVE operation. The exact owned-head and pending-artifact proof remains
 required, including its bounded active-head reads.
 
-Every listing directory read attempt shares one fixed 1000-unit budget, including
-EOF, errors and initial/final/retry proofs. The owner-slot child set is enumerated
+Listing separates portfolio proof work from archive inspection. The private
+proof counter charges the first owner/ancestor/by-id scan, with at most 4096
+attempts per census and 8192 aggregate distinct physical-slot weights. Existing
+complete initial scans establish evidence without extra admission directory
+reads; discovery is bounded at 81920 attempts. One reservation retains consumed
+work and adds the exact remaining schedule: two owner observations (each up to
+three stability attempts), four namespace reproofs and the missing-parent scans.
+The conservative proof ceiling is 327680 attempts. Full captured directory
+identity/child-set drift refuses immediately; it cannot grant a new baseline or
+quota. The scanner adds two named lstat checks per successful census; these are
+separate from directory-read units and bounded by the finite proof schedule.
+
+A separate unchanged 1000-attempt archive budget includes the initial plus four
+final owner-volume-root censuses, candidate validation and returned declaration
+reproofs. Both counters reserve before each EOF/error/read and never reset or
+refund. Ordinary omitted-budget owner scanners retain their existing semantics. The owner-slot child set is enumerated
 completely and compared again; unchanged directory inode alone is insufficient.
 Global authority/alias proof exhaustion refuses the observation rather than
 trusting first-N names. No public lower-budget option exists.
@@ -162,7 +176,8 @@ runs. This is a bounded observation, not a transactional filesystem snapshot.
 `totalCount` is null whenever incomplete, including entry-limit truncation.
 `observedCount` counts candidate slots, `acceptedCount` initially qualified
 metadata declarations and `returnedCount` returned declarations. `scannedCount`
-reports backend inspection work: file directory-read attempts including EOF,
+reports backend inspection work: the exact sum of file proof and archive
+directory-read attempts including EOF,
 errors and reproof versus database candidate rows. These units are neither
 comparable archive counts nor bytes. The 128 return cap does not promise that
 128 declarations fit the conservative proof budget.
