@@ -1718,25 +1718,74 @@ export class FileMemoryOwnerSnapshots {
 
   async adoptUnowned(expected: UnownedFileMemoryToken): Promise<OwnedFileMemoryToken> {
     const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
-    if ('coordinator' in this.options) {
-      return this.options.coordinator.withTenantTransaction(context =>
-        this.adoptUnownedInTransaction(context, token));
+    let committed: OwnedFileMemoryToken | undefined;
+    const capture = (published: OwnedFileMemoryToken) => { committed = published; };
+    try {
+      if ('coordinator' in this.options) {
+        return await this.options.coordinator.withTenantTransaction(context =>
+          this.performOrdinaryAdoption(context, token, capture));
+      }
+      if (token.backend !== 'file' || token.ownership !== 'unowned') {
+        throw new TypeError('Adoption requires an unowned file snapshot');
+      }
+      const userId = this.options.getCurrentUserId();
+      const root = await fs.realpath(this.options.tenantRoot);
+      return await this.options.fence.withTenantFence(root, async () => {
+        try { return await this.adoptAtRoot({ tenantRoot: root, userId }, token, capture); }
+        catch (cause) {
+          if (committed) throw this.adoptedError(cause, committed);
+          throw this.ordinaryAdoptionPrecommitError(cause);
+        }
+      });
+    } catch (cause) {
+      if (committed) throw this.adoptedError(cause, committed);
+      throw this.ordinaryAdoptionPrecommitError(cause);
     }
-    if (token.backend !== 'file' || token.ownership !== 'unowned') {
-      throw new TypeError('Adoption requires an unowned file snapshot');
-    }
-    const userId = this.options.getCurrentUserId();
-    const root = await fs.realpath(this.options.tenantRoot);
-    return this.options.fence.withTenantFence(root, () =>
-      this.adoptAtRoot({ tenantRoot: root, userId }, token));
   }
 
-  /** Tracked adoption under the caller's existing lease; never reacquires it. */
+  /** Caller owns the lease and retains returned known-adopted tokens across outer failures. */
   adoptUnownedInTransaction(
     context: FileMemoryLeaseContext, expected: UnownedFileMemoryToken,
   ): Promise<OwnedFileMemoryToken> {
     const token = { ...expected, fileIdentity: { ...expected.fileIdentity } };
-    return this.requiredCoordinator().perform(context, scope => this.adoptAtRoot(scope, token));
+    return this.performOrdinaryAdoption(context, token);
+  }
+
+  private performOrdinaryAdoption(
+    context: FileMemoryLeaseContext, token: UnownedFileMemoryToken,
+    capture?: (published: OwnedFileMemoryToken) => void,
+  ): Promise<OwnedFileMemoryToken> {
+    let committed: OwnedFileMemoryToken | undefined;
+    const result = this.requiredCoordinator().perform(context, async scope => {
+      try {
+        return await this.adoptAtRoot(scope, token, published => {
+          committed = published;
+          capture?.(published);
+        });
+      } catch (cause) {
+        if (committed) throw this.adoptedError(cause, committed);
+        throw this.ordinaryAdoptionPrecommitError(cause);
+      }
+    }).catch(cause => {
+      if (committed) throw this.adoptedError(cause, committed);
+      throw this.ordinaryAdoptionPrecommitError(cause);
+    });
+    // Preserve perform's ignored-operation rejection handling for this wrapper too.
+    void result.catch(() => undefined);
+    return result;
+  }
+
+  private ordinaryAdoptionPrecommitError(cause: unknown): unknown {
+    if (cause === null || (typeof cause !== 'object' && typeof cause !== 'function')) return cause;
+    let signalsAdoption: boolean;
+    try {
+      const marker = cause as { code?: unknown; adopted?: unknown };
+      signalsAdoption = marker.code === 'EHEADADOPTED' || marker.adopted === true;
+    } catch { signalsAdoption = true; } // An accessor cannot replace the original refusal.
+    if (!signalsAdoption) return cause;
+    const error = headError('EADOPTIONPENDING', 'This adoption has no captured publication outcome');
+    Object.assign(error, { cause });
+    return error;
   }
 
   /** Dormant same-locator UPDATE. The expected token is copied before the first await. */
@@ -1959,6 +2008,7 @@ export class FileMemoryOwnerSnapshots {
 
   private async adoptAtRoot(
     scope: FileMemoryTransactionScope, token: UnownedFileMemoryToken,
+    capture: (published: OwnedFileMemoryToken) => void,
   ): Promise<OwnedFileMemoryToken> {
     if (token.backend !== 'file' || token.ownership !== 'unowned') {
       throw new TypeError('Adoption requires an unowned file snapshot');
@@ -1999,8 +2049,12 @@ export class FileMemoryOwnerSnapshots {
     await this.options.afterPublication?.('active-registry');
     await this.replaceRecord(sidecarPath, active);
     // ACTIVE sidecar plus agreeing ACTIVE registry is the adoption commit.
+    const published: OwnedFileMemoryToken = Object.freeze({ ...token,
+      fileIdentity: Object.freeze({ ...token.fileIdentity }),
+      ownership: 'owned', ownerId, revision: '1' });
+    capture(published);
     await this.options.afterPublication?.('active-sidecar');
-    return { ...token, ownership: 'owned', ownerId, revision: '1' };
+    return published;
   }
 
   private async resolveHead(tenantRoot: string, locator: string): Promise<{

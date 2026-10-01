@@ -164,6 +164,28 @@ attempted immediately after receipt capture, before callbacks and final proofs.
 Guarantees cover the current cooperating-process POSIX interruption model,
 without claiming hostile-writer atomicity, multihost safety or power-loss recovery.
 
+### Ordinary adoption publication outcomes
+
+`adoptUnowned` retains its existing publication sequence in both legacy-fence
+and coordinator calling modes. Immediately after the final ACTIVE-sidecar
+replacement succeeds, it captures a frozen revision-1 owned token, including
+the nested file identity, before the publication callback. This captures the
+existing publication outcome; it does not establish later usability or add a
+new filesystem revalidation proof.
+
+A later callback, tracked-operation finalization or lease-release failure is
+`EHEADADOPTED` with that genuine invocation's token and original direct cause.
+Only internal synchronous capture authorizes this wrapping; thrown marker
+properties never create a receipt. Before capture, adopted-looking thrown
+values become `EADOPTIONPENDING` with their original direct cause and no outward
+token/adopted flag; ordinary precommit failures retain their existing behavior.
+Throwing marker accessors cannot replace the original cause.
+Token-bound private error identity avoids
+wrapping the same classified failure multiple times through coordinator error
+collection. `adoptUnownedInTransaction` uses the caller's existing lease; callers
+must retain a successful returned receipt across their own later outer failures.
+No earlier RESERVED state is repaired and no head or archive is rewritten.
+
 ### Dormant final RESERVED adoption recovery
 
 `recoverReservedAdoption({ locator, ownerId })` explicitly completes only an

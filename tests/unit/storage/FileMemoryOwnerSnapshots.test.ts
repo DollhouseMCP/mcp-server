@@ -177,10 +177,14 @@ describe('FileMemoryOwnerSnapshots local POSIX primitive', () => {
     const { locator, makeStore } = await fixture();
     const store = makeStore(current => { if (current === phase) throw new Error('crash point'); });
     const snapshot = await store.readHeadSnapshot(locator);
-    await expect(store.adoptUnowned(snapshot.token as UnownedFileMemoryToken)).rejects.toThrow('crash point');
     if (phase === 'active-sidecar') {
+      await expect(store.adoptUnowned(snapshot.token as UnownedFileMemoryToken)).rejects.toMatchObject({
+        code: 'EHEADADOPTED', cause: { message: 'crash point' },
+        token: { ownership: 'owned', revision: '1' },
+      });
       expect((await store.readHeadSnapshot(locator)).token.ownership).toBe('owned');
     } else {
+      await expect(store.adoptUnowned(snapshot.token as UnownedFileMemoryToken)).rejects.toThrow('crash point');
       await expect(store.readHeadSnapshot(locator)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
       await expect(store.adoptUnowned(snapshot.token as UnownedFileMemoryToken))
         .rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
