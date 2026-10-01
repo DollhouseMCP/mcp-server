@@ -40,9 +40,17 @@ npm test                  # Unit tests (~10-30s)
 | `npm run security:rapid` | Critical security tests (injection, path traversal, YAML) | Every commit (part of pre-commit workflow) |
 | `npm run security:all` | Full security regression suite | When touching security-sensitive code or before releases |
 | `npm run test:e2e` | End-to-end flows using fixture repos (requires network) | Feature work that affects user workflows |
-| `npm run test:performance` | Performance benchmarks for indexing/sync | When performance-sensitive areas change |
+| `npm run test:performance` | Performance benchmarks for indexing/sync and persona lookup | When performance-sensitive areas change |
 
 All scripts are defined in `package.json`. CI runs a subset (unit + integration) on every PR; maintainers can add additional jobs when needed.
+
+Persona lookup's unchanged 10/100/1000-item absolute timing thresholds run in
+`tests/performance/persona-finding.performance.test.ts` through the visible Core
+performance step. Core unit checks retain exact lookup results, missing-result
+behavior, no file I/O and a single-scan predicate-call bound, including a
+repeated-scan negative control. Performance outcomes remain visible in the
+existing non-gating step; calibrated enforcement and structured artifacts remain
+separate work in #2561. Security and deterministic complexity checks remain required.
 
 ---
 
