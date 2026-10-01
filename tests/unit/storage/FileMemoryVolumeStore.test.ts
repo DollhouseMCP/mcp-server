@@ -325,19 +325,73 @@ it('accepts uppercase durable UUID evidence while blocking lowercase namespace a
 });
 
 it('bounds committed collision probes without allocating beyond the limit', async () => {
-  const f = await fixture();
-  const first = await f.store.createExclusive(f.token, input);
-  const source = path.join(f.ownerPath, 'v1');
-  for (let volume = 2; volume <= 1000; volume++) {
-    const v = path.join(f.ownerPath, `v${volume}`);
-    await fs.cp(source, v, { recursive: true, preserveTimestamps: false });
-    const metadataPath = path.join(v, `g-${first.generationId}`, 'metadata.json');
-    const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
-    metadata.volume = volume;
-    await fs.writeFile(metadataPath, JSON.stringify(metadata));
+  const started = process.hrtime.bigint();
+  const initialCpu = process.cpuUsage();
+  let phase = 'fixture';
+  let setupCompleted = 0;
+  let collisionProofStarted = 0;
+  let collisionProofCompleted = 0;
+  const report = (resources = false) => {
+    const cpu = process.cpuUsage(initialCpu);
+    const usage = process.resourceUsage();
+    // Direct stderr survives suite console mocks; never include fixture paths or evidence.
+    process.stderr.write(`${JSON.stringify({ diagnostic: 'archive-collision', phase,
+      elapsedMs: Number(process.hrtime.bigint() - started) / 1e6,
+      setupCompleted, collisionProofStarted, collisionProofCompleted,
+      ...(resources ? { cpuUserUs: cpu.user, cpuSystemUs: cpu.system,
+        rssBytes: process.memoryUsage().rss, maxRssKiB: usage.maxRSS,
+        fsRead: usage.fsRead, fsWrite: usage.fsWrite,
+        voluntaryContextSwitches: usage.voluntaryContextSwitches,
+        involuntaryContextSwitches: usage.involuntaryContextSwitches } : {}) })}\n`);
+  };
+  const milestone = (next: string) => { phase = next; report(); };
+  // Observation only: this does not change the test timeout or establish host contention.
+  const timer = setTimeout(() => report(true), 55000);
+  let restore: (() => void) | undefined;
+  try {
+    report();
+    const f = await fixture();
+    milestone('first-publication');
+    const first = await f.store.createExclusive(f.token, input);
+    const source = path.join(f.ownerPath, 'v1');
+    setupCompleted = 1;
+    milestone('setup');
+    for (let volume = 2; volume <= 1000; volume++) {
+      const v = path.join(f.ownerPath, `v${volume}`);
+      await fs.cp(source, v, { recursive: true, preserveTimestamps: false });
+      const metadataPath = path.join(v, `g-${first.generationId}`, 'metadata.json');
+      const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+      metadata.volume = volume;
+      await fs.writeFile(metadataPath, JSON.stringify(metadata));
+      setupCompleted = volume;
+      if (volume % 100 === 0) report();
+    }
+    // Test-only observation of the unchanged real private proof, without production hooks.
+    const observed = f.store as unknown as {
+      requireCommittedCollision: (...args: [string, OwnedFileMemoryToken, number, string]) => Promise<void>;
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(observed, 'requireCommittedCollision');
+    const original = observed.requireCommittedCollision;
+    restore = () => {
+      if (descriptor) Object.defineProperty(observed, 'requireCommittedCollision', descriptor);
+      else delete (observed as Partial<typeof observed>).requireCommittedCollision;
+    };
+    Object.defineProperty(observed, 'requireCommittedCollision', { configurable: true, value: async (...args: Parameters<typeof original>) => {
+      collisionProofStarted++;
+      await original.apply(f.store, args);
+      collisionProofCompleted++;
+      if (collisionProofCompleted % 100 === 0) report();
+    } });
+    // Allocation phase includes namespace/alias scans before and between collision proofs.
+    milestone('probe');
+    await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEEXHAUSTED' });
+    milestone('assertion');
+    await expect(fs.stat(path.join(f.ownerPath, 'v1001'))).rejects.toMatchObject({ code: 'ENOENT' });
+    milestone('done');
+  } finally {
+    clearTimeout(timer);
+    restore?.();
   }
-  await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEEXHAUSTED' });
-  await expect(fs.stat(path.join(f.ownerPath, 'v1001'))).rejects.toMatchObject({ code: 'ENOENT' });
 }, 60000);
 
 it('reports unknown rather than unchanged when marker syscall rejects with EEXIST', async () => {
