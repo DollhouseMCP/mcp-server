@@ -66,8 +66,14 @@ export interface MemoryMaintenanceCatalogProof {
   readonly provesCoherentSnapshot: false;
 }
 const FLAGS = { validated: true, deferrable: false, deferred: false, local: true, inherited: 0, parent: '0', noInherit: false };
+function ordinal(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
 function dependencies(table: string, keys: readonly string[], policy: boolean): Descriptor {
-  const normal = keys.map(key => policy ? key : `${table}.${key}`).sort();
+  const normal = keys.map(key => policy ? key : `${table}.${key}`);
+  normal.sort(ordinal);
   return { safe: true, bounded: true, automatic: policy ? [table] : normal, normal };
 }
 function expected(): Record<string, Descriptor[]> {
@@ -187,20 +193,42 @@ function record(value: unknown): value is Descriptor {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 function rows(value: unknown): value is Descriptor[] { return Array.isArray(value) && value.every(record); }
+function dependencyKey(row: Descriptor, policy: boolean): string | null {
+  if (row.safe !== true || typeof row.relation !== 'string') return null;
+  if (row.column === null) return policy ? row.relation : null;
+  if (typeof row.column !== 'string') return null;
+  return `${row.relation}.${row.column}`;
+}
+function appendDependency(row: Descriptor, key: string, automatic: string[], normal: string[]): boolean {
+  if (row.kind === 'a') automatic.push(key);
+  else if (row.kind === 'n' && row.column !== null) normal.push(key);
+  else return false;
+  return true;
+}
 function normalizeDependencies(value: unknown, policy: boolean): Descriptor | null {
   if (!rows(value) || value.length > 16) return null;
   const automatic: string[] = [], normal: string[] = [];
   for (const row of value) {
-    if (row.safe !== true || typeof row.relation !== 'string') return null;
-    const key = row.column === null ? row.relation : typeof row.column === 'string' ? `${row.relation}.${row.column}` : null;
-    if (key === null || (!policy && row.column === null)) return null;
-    if (row.kind === 'a') automatic.push(key);
-    else if (row.kind === 'n' && row.column !== null) normal.push(key);
-    else return null;
+    const key = dependencyKey(row, policy);
+    if (key === null || !appendDependency(row, key, automatic, normal)) return null;
   }
   if (!policy && new Set(normal).size !== normal.length) return null;
   if (new Set(automatic).size !== automatic.length) return null;
-  return { safe: true, bounded: true, automatic: automatic.sort(), normal: [...new Set(normal)].sort() };
+  automatic.sort(ordinal);
+  const uniqueNormal = [...new Set(normal)];
+  uniqueNormal.sort(ordinal);
+  return { safe: true, bounded: true, automatic, normal: uniqueNormal };
+}
+function collectionRefusal(key: string, value: unknown, descriptors: Descriptor[]): MemoryMaintenanceCatalogProof['reason'] {
+  if (!rows(value) || value.length !== descriptors.length) return 'incomplete_observation';
+  const captured = value.map(row => ({ ...row }));
+  if (key === 'constraints' || key === 'policies') {
+    for (const row of captured) if (row.dependencies !== null) row.dependencies = normalizeDependencies(row.dependencies, key === 'policies');
+  }
+  const valid = key === 'ledger'
+    ? descriptors.every(descriptor => captured.filter(row => isDeepStrictEqual(row, descriptor)).length === 1)
+    : matches(captured, descriptors);
+  return valid ? null : 'contract_mismatch';
 }
 function matches(actual: Descriptor[], wanted: Descriptor[]): boolean {
   return wanted.every(descriptor => {
@@ -218,14 +246,8 @@ export async function verifyDatabaseMemoryMaintenanceCatalog(tx: DrizzleTx): Pro
     if (!Number.isInteger(value.version) || Number(value.version) < 170000 || Number(value.version) >= 180000) return proof('unsupported_server');
     const wanted = expected();
     for (const [key, descriptors] of Object.entries(wanted)) {
-      if (!rows(value[key]) || value[key].length !== descriptors.length) return proof('incomplete_observation');
-      const captured = value[key].map(row => ({ ...row }));
-      if (key === 'constraints' || key === 'policies') {
-        for (const row of captured) if (row.dependencies !== null) row.dependencies = normalizeDependencies(row.dependencies, key === 'policies');
-      }
-      if (key === 'ledger') {
-        if (!descriptors.every(descriptor => captured.filter(row => isDeepStrictEqual(row, descriptor)).length === 1)) return proof('contract_mismatch');
-      } else if (!matches(captured, descriptors)) return proof('contract_mismatch');
+      const reason = collectionRefusal(key, value[key], descriptors);
+      if (reason !== null) return proof(reason);
     }
     if (value.noDefaults !== true || value.noTriggers !== true || value.noRules !== true) return proof('contract_mismatch');
     const encoded = JSON.stringify({ formatVersion: 1, scope: 'memory-maintenance-receipt-policy-ledger', ...wanted,
