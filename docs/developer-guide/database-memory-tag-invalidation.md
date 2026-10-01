@@ -34,3 +34,24 @@ Reports distinguish `complete`, `incomplete` and sanitized `unknown`. Row/byte c
 Migration 0057 was installed in the approved September 30 controlled deployment (schema 57; #2461 deployment receipt). That installation did not execute this global census, backfill or completion protocol. The remaining #2904 maintenance slices still require separate protocol review and execution authorization, including quiescence/phantoms, durable provenance, bounded resumability and independently verified completion. This read-only foundation does not settle those decisions.
 
 Real isolated PostgreSQL qualification covers privileged and BYPASSRLS visibility, ordinary effective roles/table owners under FORCE RLS, malformed private/public references, deterministic caps, sample truncation, concurrent writes across the single snapshot, real read-only/statement-timeout refusals and unchanged head revisions. No production connection or default integration global setup is required.
+
+## Pure supplied-owner verification
+
+`captureDatabaseMemoryOwnerManifest` captures canonical UUID identities, positive
+signed-bigint decimal revisions and boolean dirty flags. Its synchronous result
+is deeply frozen and protected. `verifyDatabaseMemoryOwnerInvalidation` compares
+two independently validated supplied sets: exact tenant/owner membership,
+exactly one revision advance and every returned owner dirty, including already
+dirty inputs. Empty sets are valid; duplicate/rebound identities are refused.
+
+Each set is capped at 10,000 owners; versioned UTF-8 JSON projection envelopes
+(including counts, tuples, delimiters and false authority flags) are capped at
+16 MiB. Their bytes/hash exclude returned hash/byte-count metadata. Fixed UUID
+and revision sizes make the owner cap tighter than the byte cap. Encoding uses
+lowercase UUIDs, owner/tenant code-unit ordering and fixed tuple/key ordering.
+
+These hashes identify supplied values only. A truncated input cannot establish
+database completeness, and a matching return set proves neither SQL execution
+nor commit. All results retain `canBackfill:false`, `canApply:false` and
+`canActivate:false`. No database access, durable receipt, catalog attestation,
+runtime wiring or maintenance execution is added; those slices remain held.
