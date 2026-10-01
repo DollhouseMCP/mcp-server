@@ -1,5 +1,19 @@
 # Database memory tag invalidation
 
+## Dormant historical receipt schema
+
+Migration 0058 adds `memory_head_invalidation_runs` for future operator receipts,
+with a run UUID, versioned historical claim, request/catalog/pre/post manifest and
+maintenance digests, bounded declared context and observed database/actor attribution,
+counts and finite ordered timestamps. It stores no owner manifests or payloads.
+`can_apply` and `can_activate` must always be false. Declarations and observed database
+identifiers do not prove restore detection, quiescence or current coverage.
+
+ENABLE and FORCE RLS with no policies protect rows despite bootstrap DML grants.
+Superuser/BYPASSRLS bypass and whole-table privileges need separate proof; RLS does
+not protect TRUNCATE or REFERENCES. No role/grant change, writer/API, executor,
+backfill or activation is introduced. Installing this schema is not coverage.
+
 Migration 0057 makes direct `element_tags` INSERT/UPDATE/DELETE invalidate each affected memory head: `storage_revision` advances and `memory_entries_out_of_sync` becomes true. Moving a tag invalidates both distinct memory owners once, in `(element_id, user_id)` order. Visible nonmemory parents retain existing behavior; a memory/nonmemory move invalidates only the memory side. Whole-head saves read the final revision after tag and entry triggers and qualification, returning it only after commit.
 
 The trigger uses invoker privileges and FORCE RLS. A memory parent must match the tag tenant and current tenant. INSERT/UPDATE rejects absent or invisible parents because their type and ownership cannot be proved; this tightens legacy behavior for invisible nonmemory targets too. Visible mismatched memory parents fail with SQLSTATE 23503, including DELETE. A missing/invisible parent on DELETE is permitted for parent/account cascades and cleanup of inaccessible legacy references. No foreign head is mutated. Existing malformed references to visible foreign memories can prevent deletion/account erasure until separately reviewed operator cleanup; installing the trigger does not repair them.
