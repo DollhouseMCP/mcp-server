@@ -186,14 +186,38 @@ collection. `adoptUnownedInTransaction` uses the caller's existing lease; caller
 must retain a successful returned receipt across their own later outer failures.
 No earlier RESERVED state is repaired and no head or archive is rewritten.
 
-### Dormant final RESERVED adoption recovery
+### Dormant RESERVED adoption recovery
 
-`recoverReservedAdoption({ locator, ownerId })` explicitly completes only an
-unchanged revision-1 head with an agreeing ACTIVE registry and RESERVED sidecar.
+The existing recovery APIs also accept an exact matching RESERVED sidecar and
+already-existing RESERVED registry, revision 1, under unchanged head evidence.
+They first exclusively stage the exact ACTIVE registry at
+`<registry>.adopt-<ownerId>.tmp`; only a freshly proved complete next stage may
+be reused. Partial, random, aliased, duplicate or wrong-order stages are preserved.
+Missing registry or ancestors remain unsupported; no directories are created.
+
+Registry staging/rename changes the owners directory's size/mtime/ctime. The
+transition retains its device/inode and freshly checked private ownership/type,
+the parent directory's complete identity, exact head/sidecar bindings and complete
+relevant namespaces. Published registry raw bytes and stage inode/size/mtime
+are freshly proved (rename ctime only), then fresh full directory/ACTIVE-registry
+evidence is carried into the unchanged strict final-sidecar executor. No baseline
+is silently recaptured. Both phases share one operation, lease and scan budget.
+
+Registry publication alone is not adoption commit. An attempted registry rename
+without successful return is `EADOPTIONPENDING` with fixed
+`phase: 'registry-publication-unknown'`; successful registry progress followed by
+failure uses `phase: 'registry-published'`. Both retain the original direct cause
+without adopted flag/token, and never claim the original registry is unchanged.
+Phase comes only from actual invocation-local progress, not thrown markers.
+Final-sidecar rename retains the existing commit-unknown/known-adopted boundary.
+
+`recoverReservedAdoption({ locator, ownerId })` explicitly completes an unchanged
+revision-1 head with matching RESERVED records, or an agreeing ACTIVE registry
+and RESERVED sidecar.
 It captures validated primitive request values before any await, retains exact
 actual locator spelling, and uses one fresh tenant lease and tracked operation.
 All writers must be quiescent; operator handling of orphan leases is separate.
-Earlier RESERVED phases and ordinary adoption's postcommit error behavior are
+Absent registry/ancestor phases and ordinary adoption's publication behavior are
 outside this API. No runtime caller or automatic repair is enabled.
 
 One invocation-owned 1000-attempt directory budget includes unrelated entries,

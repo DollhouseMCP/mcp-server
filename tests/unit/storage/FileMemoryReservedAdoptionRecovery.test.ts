@@ -96,7 +96,7 @@ describe('dormant final RESERVED adoption recovery', () => {
     expect(await setup.store.readHeadSnapshot(setup.locator)).toMatchObject({ token: result.token });
     expect(await setup.store.recoverReservedAdoption(setup.request)).toEqual({ status: 'already-clean-no-attribution' });
   });
-  it.each(['reserved-sidecar', 'reserved-registry'])('preserves unsupported earlier phase %s', async stop => {
+  it.each(['reserved-sidecar'])('preserves unsupported earlier phase %s', async stop => {
     const setup = await fixture(stop);
     const before = await residual(setup);
     await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', residual: true });
