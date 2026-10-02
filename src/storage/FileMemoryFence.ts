@@ -241,7 +241,7 @@ export class FileMemoryFence {
       }
     };
     const observe = async () => {
-      const stats = await Promise.all(paths.slice(0, 4).map(optional));
+      const stats = await Promise.all(paths.slice(0, 4).map((target, index) => optional(target, index)));
       const ownerRoot = stats[3];
       // Never traverse an unsafe owner ancestor to observe its registry child.
       if (ownerRoot && (!ownerRoot.isDirectory() || ownerRoot.isSymbolicLink())) fail();
