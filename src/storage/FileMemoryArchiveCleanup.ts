@@ -1,5 +1,5 @@
 /** Dormant exact archive cleanup. Local cooperating-process crash model, never recursive erasure. */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -12,6 +12,7 @@ type Identity = Readonly<{ device: string; inode: string; mode: string; uid: str
   size: string; mtimeNs: string; ctimeNs: string; nlink: string }>;
 type StableDirectory = Pick<Identity, 'device' | 'inode' | 'mode' | 'uid' | 'type'>;
 type Commitment = Readonly<{ identity: StableDirectory; count: number; sha256: string }>;
+// T tenant, H head parent, R registry, V volumes, B by-id, O owner, S slot, G generation, K marker.
 type Role = 'T' | 'H' | 'R' | 'V' | 'B' | 'O' | 'S' | 'G' | 'K';
 const ROLES: readonly Role[] = ['T', 'H', 'R', 'V', 'B', 'O', 'S', 'G', 'K'];
 function causeCode(cause: unknown): string | undefined {
@@ -64,6 +65,19 @@ class CleanupScans implements FileMemoryDirectoryScanner {
     const original = this.#slots.get(key);
     const maximum = this.#reserved ? original?.weight ?? this.#virtual.get(named) : 4096;
     if (!maximum) throw new FileMemoryDirectoryScanLimitError();
+    const { names, attempts } = await this.readCensus(named, maximum, inspect);
+    const after = identity(await fs.lstat(named, { bigint: true }), true, false);
+    if (!isDeepStrictEqual(before, after)) throw failure('Cleanup directory changed during census');
+    this.verify?.(named, names, after);
+    if (!this.#reserved) {
+      if (original && (!isDeepStrictEqual(original.identity, before) || namesHash(original.names) !== namesHash(names))) {
+        throw failure('Cleanup discovery changed between physical roles');
+      }
+      if (!original) this.#slots.set(key, { path: named, key, names, identity: before, weight: attempts });
+      this.#paths.set(named, key);
+    }
+  }
+  private async readCensus(named: string, maximum: number, inspect: (name: string) => void): Promise<{ names: string[]; attempts: number }> {
     const directory = await fs.opendir(named);
     const names: string[] = [];
     let attempts = 0;
@@ -79,16 +93,7 @@ class CleanupScans implements FileMemoryDirectoryScanner {
       }
     } catch (cause) { primary = { cause }; }
     await closeMemoryDirectoryInspection(directory, primary, 'Cleanup directory inspection and close failed');
-    const after = identity(await fs.lstat(named, { bigint: true }), true, false);
-    if (!isDeepStrictEqual(before, after)) throw failure('Cleanup directory changed during census');
-    this.verify?.(named, names, after);
-    if (!this.#reserved) {
-      if (original && (!isDeepStrictEqual(original.identity, before) || namesHash(original.names) !== namesHash(names))) {
-        throw failure('Cleanup discovery changed between physical roles');
-      }
-      if (!original) this.#slots.set(key, { path: named, key, names, identity: before, weight: attempts });
-      this.#paths.set(named, key);
-    }
+    return { names, attempts };
   }
   bindRole(named: string, value: Identity): void {
     const key = `${value.device}:${value.inode}`;
@@ -159,7 +164,6 @@ async function readBoundFile(named: string, limit: number, expected?: Identity):
   return result!;
 }
 
-import { randomUUID } from 'node:crypto';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -200,6 +204,23 @@ function requireScalarIdentity(value: unknown, directory: boolean): asserts valu
     (typeof item !== 'string' || item.length > MAX_NUMERIC_WIDTH || !/^-?\d+$/u.test(item))) ||
     (!directory && value.nlink !== '1')) throw failure('Cleanup identity grammar is invalid');
 }
+function validateLogicalDates(entry: Record<string, unknown>): void {
+  for (const field of ['sealedAt', 'firstEntryAt', 'lastEntryAt']) {
+    const value = entry[field];
+    if (value === null && field !== 'sealedAt') continue;
+    if (!(value instanceof Date) && typeof value !== 'string') throw failure('Cleanup date is invalid');
+    if (typeof value === 'string' && /\.\d{3}0*[1-9]/u.test(value)) throw failure('Cleanup date loses precision');
+    if (!Number.isFinite(new Date(value).getTime())) throw failure('Cleanup date is invalid');
+  }
+}
+function validateLogicalReference(entry: unknown, owner: string, seen: Set<number>): void {
+  exactKeys(entry, ['volume', 'file', 'sha256', 'entryCount', 'sealedAt', 'firstEntryAt', 'lastEntryAt']);
+  if (!Number.isSafeInteger(entry.volume) || Number(entry.volume) < 1 || seen.has(Number(entry.volume)) ||
+    entry.file !== `volumes/${owner}/v${String(entry.volume).padStart(4, '0')}.yaml` ||
+    typeof entry.sha256 !== 'string' || !HASH.test(entry.sha256) || !Number.isInteger(entry.entryCount) ||
+    Number(entry.entryCount) < 0 || Number(entry.entryCount) > 2_147_483_647) throw failure('Cleanup declaration is invalid');
+  validateLogicalDates(entry);
+}
 function references(content: string, owner: string): number[] {
   if (Buffer.byteLength(content) > 8 * 1024 * 1024 || Buffer.from(content).toString('utf8') !== content) {
     throw new FileMemoryDirectoryScanLimitError();
@@ -216,21 +237,18 @@ function references(content: string, owner: string): number[] {
   if (!Array.isArray(source.volumes) || source.volumes.length > 10_000) throw failure('Cleanup references are invalid');
   const seen = new Set<number>();
   for (const entry of source.volumes) {
-    exactKeys(entry, ['volume', 'file', 'sha256', 'entryCount', 'sealedAt', 'firstEntryAt', 'lastEntryAt']);
-    if (!Number.isSafeInteger(entry.volume) || Number(entry.volume) < 1 || seen.has(Number(entry.volume)) ||
-      entry.file !== `volumes/${owner}/v${String(entry.volume).padStart(4, '0')}.yaml` ||
-      typeof entry.sha256 !== 'string' || !HASH.test(entry.sha256) || !Number.isInteger(entry.entryCount) ||
-      Number(entry.entryCount) < 0 || Number(entry.entryCount) > 2_147_483_647) throw failure('Cleanup declaration is invalid');
-    for (const field of ['sealedAt', 'firstEntryAt', 'lastEntryAt']) {
-      const value = entry[field];
-      if (value === null && field !== 'sealedAt') continue;
-      if (!(value instanceof Date) && typeof value !== 'string') throw failure('Cleanup date is invalid');
-      if (typeof value === 'string' && /\.\d{3}0*[1-9]/u.test(value)) throw failure('Cleanup date loses precision');
-      if (!Number.isFinite(new Date(value).getTime())) throw failure('Cleanup date is invalid');
-    }
+    validateLogicalReference(entry, owner, seen);
     seen.add(Number(entry.volume));
   }
   return [...seen];
+}
+
+function cleanupReason(code: string | undefined): FileArchiveCleanupResult['reason'] {
+  if (code === 'EARCHIVEREFERENCED') return 'referenced';
+  if (code === 'EARCHIVEMISMATCH') return 'mismatch';
+  if (code === 'EHEADRESOURCE') return 'resource';
+  if (code?.startsWith('EHEAD') || code?.startsWith('EOWNER')) return 'head';
+  return 'unsafe';
 }
 
 /** One invocation owns its capture, counter and authority; durable intent is provenance only. */
@@ -273,10 +291,35 @@ export class FileMemoryArchiveCleanup {
     return names;
   }
   private selected(role: Role, prefix = this.#prefix): string[] {
-    if (role === 'O') return [...(prefix < 5 ? [`v${this.receipt.volume}`] : []), ...(!this.#retired && this.#intentFile ? [path.basename(this.#intentPath)] : [])];
-    if (role === 'S') return [...(prefix < 4 ? [`g-${this.receipt.generationId}`] : []), ...(prefix < 1 ? ['COMMITTED'] : [])];
-    if (role === 'G') return [...(prefix < 2 ? ['payload.yaml'] : []), ...(prefix < 3 ? ['metadata.json'] : [])];
+    const names: string[] = [];
+    if (role === 'O') return this.ownerSelected(prefix);
+    if (role === 'S') {
+      if (prefix < 4) names.push(`g-${this.receipt.generationId}`);
+      if (prefix < 1) names.push('COMMITTED');
+    }
+    if (role === 'G') {
+      if (prefix < 2) names.push('payload.yaml');
+      if (prefix < 3) names.push('metadata.json');
+    }
+    return names;
+  }
+  private ownerSelected(prefix: number): string[] {
+    const names: string[] = [];
+    if (prefix < 5) names.push(`v${this.receipt.volume}`);
+    if (!this.#retired && this.#intentFile) names.push(path.basename(this.#intentPath));
+    return names;
+  }
+  private exclusionNames(role: Role): string[] {
+    if (role === 'O') return [`v${this.receipt.volume}`, path.basename(this.#intentPath)];
+    if (role === 'S') return [`g-${this.receipt.generationId}`, 'COMMITTED'];
+    if (role === 'G') return ['payload.yaml', 'metadata.json'];
     return [];
+  }
+  private ancestorChild(role: Role): string | undefined {
+    if (role === 'T') return 'volumes';
+    if (role === 'V') return 'by-id';
+    if (role === 'B') return this.expected.ownerId;
+    return undefined;
   }
   private async initializeNames(): Promise<void> {
     const groups = new Map<string, Set<string>>();
@@ -294,29 +337,34 @@ export class FileMemoryArchiveCleanup {
       captured.set(key, names);
       this.#budget.bindRole(this.#paths[role], value);
       const selected = groups.get(key) ?? new Set<string>();
-      const candidates = role === 'O' ? [`v${this.receipt.volume}`, path.basename(this.#intentPath)] :
-        role === 'S' ? [`g-${this.receipt.generationId}`, 'COMMITTED'] : role === 'G' ? ['payload.yaml', 'metadata.json'] : [];
+      const candidates = this.exclusionNames(role);
       candidates.forEach(name => selected.add(name)); groups.set(key, selected);
       this.#exclusions.set(this.#paths[role], selected);
       this.#discovery.set(this.#paths[role], names);
       this.#live.set(this.#paths[role], value);
-      const child = role === 'T' ? 'volumes' : role === 'V' ? 'by-id' : role === 'B' ? this.expected.ownerId : undefined;
-      if (child && (!names.includes(child) || names.some(name => name.toLowerCase() === child.toLowerCase() && name !== child))) {
-        throw failure('Cleanup ancestor spelling is unsafe');
-      }
-      if (role === 'O' && names.some(name => {
-        const match = /^v(\d+)(?:\.cleanup(?:\.|$))?/iu.exec(name);
-        return match && BigInt(match[1]) === BigInt(this.receipt.volume) &&
-          name !== `v${this.receipt.volume}` && name !== path.basename(this.#intentPath);
-      })) throw failure('Cleanup target number or intent has ambiguous residue');
-      if (names.some(name => name.toLowerCase() === path.basename(this.#intentPath).toLowerCase() && name !== path.basename(this.#intentPath))) {
-        throw failure('Cleanup intent spelling alias is unsafe');
-      }
+      this.requireSafeSpelling(role, names);
+    }
+  }
+  private requireSafeSpelling(role: Role, names: readonly string[]): void {
+    const child = this.ancestorChild(role);
+    if (child && (!names.includes(child) || names.some(name => name.toLowerCase() === child.toLowerCase() && name !== child))) {
+      throw failure('Cleanup ancestor spelling is unsafe');
+    }
+    if (role === 'O' && names.some(name => {
+      const match = /^v(\d+)(?:\.cleanup(?:\.|$))?/iu.exec(name);
+      return match && BigInt(match[1]) === BigInt(this.receipt.volume) &&
+        name !== `v${this.receipt.volume}` && name !== path.basename(this.#intentPath);
+    })) throw failure('Cleanup target number or intent has ambiguous residue');
+    if (names.some(name => name.toLowerCase() === path.basename(this.#intentPath).toLowerCase() && name !== path.basename(this.#intentPath))) {
+      throw failure('Cleanup intent spelling alias is unsafe');
     }
   }
   private async present(named: string): Promise<boolean> {
     try { await fs.lstat(named); return true; }
-    catch (cause) { if (causeCode(cause) === 'ENOENT') return false; throw cause; }
+    catch (cause) {
+      if (causeCode(cause) === 'ENOENT') return false;
+      throw cause;
+    }
   }
   private async detectPrefix(): Promise<number> {
     const objects = [this.#paths.K, path.join(this.#paths.G, 'payload.yaml'), path.join(this.#paths.G, 'metadata.json'), this.#paths.G, this.#paths.S];
@@ -330,7 +378,8 @@ export class FileMemoryArchiveCleanup {
     }
     return prefix;
   }
-  private async namespaceCommitments(): Promise<Record<Role, Commitment>> {
+  private namespaceCommitments(): Promise<Record<Role, Commitment>> {
+    return new Promise(resolve => {
     const result = {} as Record<Role, Commitment>;
     for (const role of ROLES) {
       const value = this.#live.get(this.#paths[role]);
@@ -340,13 +389,17 @@ export class FileMemoryArchiveCleanup {
       if (['S', 'G', 'K'].includes(role) && foreign.length) throw failure('Fresh archive contains unexpected children');
       result[role] = { identity: stable(value), count: foreign.length, sha256: namesHash(foreign) };
     }
-    return result;
+    resolve(result);
+    });
   }
   private async bindFresh(): Promise<void> {
     const payload = await readBoundFile(path.join(this.#paths.G, 'payload.yaml'), 3 * MEMORY_CONSTANTS.MAX_YAML_SIZE);
     const metadata = await readBoundFile(path.join(this.#paths.G, 'metadata.json'), 4096);
     for (const [actual, expected] of [[payload.identity, this.receipt.payloadIdentity], [metadata.identity, this.receipt.metadataIdentity]] as const) {
       if (Object.entries(expected).some(([key, value]) => actual[key as keyof Identity] !== value)) throw Object.assign(failure('Cleanup receipt file disagrees'), { code: 'EARCHIVEMISMATCH' });
+    }
+    if (payload.bytes.length !== this.receipt.byteLength) {
+      throw Object.assign(failure('Cleanup receipt payload length disagrees'), { code: 'EARCHIVEMISMATCH' });
     }
     const declaration = JSON.parse(metadata.bytes.toString('utf8')) as Record<string, unknown>;
     exactKeys(declaration, ['schema', 'userId', 'ownerId', 'volume', 'generationId', 'sha256', 'byteLength', 'entryCount', 'firstEntryAt', 'lastEntryAt', 'sealedAt']);
@@ -386,11 +439,26 @@ export class FileMemoryArchiveCleanup {
     exactKeys(record.files, ['payload', 'metadata']);
     requireScalarIdentity(record.files.payload, false); requireScalarIdentity(record.files.metadata, false);
     requireScalarIdentity(record.marker, true);
+    if (record.files.payload.size !== String(this.receipt.byteLength)) {
+      throw Object.assign(failure('Cleanup intent payload length contradicts receipt'), { code: 'EARCHIVEMISMATCH' });
+    }
     for (const [actual, bound] of [[record.files.payload, this.receipt.payloadIdentity], [record.files.metadata, this.receipt.metadataIdentity]] as const) {
       if (Object.entries(bound).some(([key, value]) => actual[key as keyof Identity] !== value)) {
         throw Object.assign(failure('Cleanup intent file contradicts receipt'), { code: 'EARCHIVEMISMATCH' });
       }
     }
+    this.validateNamespace(record);
+    for (const [role, bound] of [['S', this.receipt.volumeIdentity], ['G', this.receipt.generationIdentity]] as const) {
+      const actual = record.namespace[role].identity;
+      if (actual.device !== bound.device || actual.inode !== bound.inode) {
+        throw Object.assign(failure('Cleanup intent directory contradicts receipt'), { code: 'EARCHIVEMISMATCH' });
+      }
+    }
+    if (!isDeepStrictEqual(stable(record.marker), record.namespace.K.identity)) throw failure('Cleanup marker commitment disagrees');
+    this.validateIntentMetadata(record);
+    return record;
+  }
+  private validateNamespace(record: Intent): void {
     exactKeys(record.namespace, ROLES);
     for (const role of ROLES) {
       const item = record.namespace[role];
@@ -400,13 +468,8 @@ export class FileMemoryArchiveCleanup {
         (typeof value !== 'string' || value.length > MAX_NUMERIC_WIDTH || !/^\d+$/u.test(value))) ||
         !Number.isSafeInteger(item.count) || item.count < 0 || item.count > 4095 || !HASH.test(item.sha256)) throw failure('Cleanup namespace commitment is invalid');
     }
-    for (const [role, bound] of [['S', this.receipt.volumeIdentity], ['G', this.receipt.generationIdentity]] as const) {
-      const actual = record.namespace[role].identity;
-      if (actual.device !== bound.device || actual.inode !== bound.inode) {
-        throw Object.assign(failure('Cleanup intent directory contradicts receipt'), { code: 'EARCHIVEMISMATCH' });
-      }
-    }
-    if (!isDeepStrictEqual(stable(record.marker), record.namespace.K.identity)) throw failure('Cleanup marker commitment disagrees');
+  }
+  private validateIntentMetadata(record: Intent): void {
     exactKeys(record.metadata, ['sha256', 'sealedAt', 'firstEntryAt', 'lastEntryAt']);
     for (const field of ['sealedAt', 'firstEntryAt', 'lastEntryAt'] as const) {
       const value = record.metadata[field];
@@ -416,7 +479,6 @@ export class FileMemoryArchiveCleanup {
       }
     }
     if (typeof record.metadata.sha256 !== 'string' || !HASH.test(record.metadata.sha256)) throw failure('Cleanup metadata commitment is invalid');
-    return record;
   }
   private async ownerProof(): Promise<void> {
     // Observe H/R only during the actual owner scans, not during attributable own transitions.
@@ -446,17 +508,26 @@ export class FileMemoryArchiveCleanup {
     }
     this.#live.set(this.#paths[role], value);
   }
+  private roleAbsent(role: Role): boolean {
+    if (role === 'K') return this.#prefix >= 1;
+    if (role === 'G') return this.#prefix >= 4;
+    if (role === 'S') return this.#prefix >= 5;
+    return false;
+  }
+  private async proveRole(role: Role): Promise<void> {
+    const absent = this.roleAbsent(role);
+    if (absent) {
+      if (await this.present(this.#paths[role])) throw failure('Cleanup removed directory reappeared');
+      return;
+    }
+    const value = identity(await fs.lstat(this.#paths[role], { bigint: true }), true, role !== 'T');
+    if (role === 'K' && !isDeepStrictEqual(value, this.#intent.marker)) throw failure('Cleanup marker identity changed');
+    this.checkCensus(role, await this.census(this.#paths[role]), value);
+  }
   private async prove(): Promise<void> {
     await this.ownerProof();
     for (const role of ['T', 'V', 'B', 'O', 'S', 'G', 'K', 'T', 'V', 'B', 'O'] as const) {
-      const absent = role === 'K' ? this.#prefix >= 1 : role === 'G' ? this.#prefix >= 4 : role === 'S' ? this.#prefix >= 5 : false;
-      if (absent) {
-        if (await this.present(this.#paths[role])) throw failure('Cleanup removed directory reappeared');
-        continue;
-      }
-      const value = identity(await fs.lstat(this.#paths[role], { bigint: true }), true, role !== 'T');
-      if (role === 'K' && !isDeepStrictEqual(value, this.#intent.marker)) throw failure('Cleanup marker identity changed');
-      this.checkCensus(role, await this.census(this.#paths[role]), value);
+      await this.proveRole(role);
     }
     if (this.#prefix < 2) {
       const payload = await readBoundFile(path.join(this.#paths.G, 'payload.yaml'), 3 * MEMORY_CONSTANTS.MAX_YAML_SIZE, this.#intent.files.payload);
@@ -512,6 +583,22 @@ export class FileMemoryArchiveCleanup {
       throw failure('Cleanup transition ancestor changed');
     }
   }
+  private async writeIntentPart(handle: Awaited<ReturnType<typeof fs.open>>, bytes: Buffer, offset: number, end: number, partial: boolean): Promise<void> {
+    let used = offset;
+    while (used < end) {
+      this.active(); const value = await handle.write(bytes, used, end - used, used);
+      if (!value.bytesWritten) throw failure('Cleanup intent writer made no progress');
+      used += value.bytesWritten;
+    }
+    const captured = identity(await handle.stat({ bigint: true }), false);
+    const named = identity(await fs.lstat(this.#intentPath, { bigint: true }), false);
+    if (!isDeepStrictEqual(captured, named) || captured.size !== String(end)) throw failure('Cleanup intent writer identity changed');
+    this.#intentFile = { bytes: bytes.subarray(0, end), identity: captured };
+    if (partial) {
+      if (this.options.afterCleanup) await this.options.afterCleanup('partial-intent');
+      await this.prove();
+    }
+  }
   private async publishIntent(): Promise<void> {
     const bytes = Buffer.from(JSON.stringify(this.#intent));
     if (bytes.length > MAX_INTENT) throw new FileMemoryDirectoryScanLimitError();
@@ -523,20 +610,7 @@ export class FileMemoryArchiveCleanup {
       });
       const split = Math.max(1, Math.floor(bytes.length / 2));
       for (const [offset, end] of [[0, split], [split, bytes.length]]) {
-        let used = offset;
-        while (used < end) {
-          this.active(); const value = await handle!.write(bytes, used, end - used, used);
-          if (!value.bytesWritten) throw failure('Cleanup intent writer made no progress');
-          used += value.bytesWritten;
-        }
-        const captured = identity(await handle!.stat({ bigint: true }), false);
-        const named = identity(await fs.lstat(this.#intentPath, { bigint: true }), false);
-        if (!isDeepStrictEqual(captured, named) || captured.size !== String(end)) throw failure('Cleanup intent writer identity changed');
-        this.#intentFile = { bytes: bytes.subarray(0, end), identity: captured };
-        if (end === split) {
-          if (this.options.afterCleanup) await this.options.afterCleanup('partial-intent');
-          await this.prove();
-        }
+        await this.writeIntentPart(handle!, bytes, offset, end, end === split);
       }
       this.active(); await handle!.sync();
       this.#intentFile = { bytes, identity: identity(await handle!.stat({ bigint: true }), false) };
@@ -552,6 +626,40 @@ export class FileMemoryArchiveCleanup {
     if (this.options.afterCleanup) await this.options.afterCleanup('intent-durable');
     await this.prove();
   }
+  private async observeAbsence(): Promise<FileArchiveCleanupResult> {
+    await this.ownerProof();
+    for (const role of ['T', 'V', 'B', 'O'] as const) {
+      const before = this.#live.get(this.#paths[role])!;
+      const names = await this.census(this.#paths[role]);
+      if (!isDeepStrictEqual(identity(await fs.lstat(this.#paths[role], { bigint: true }), true, role !== 'T'), before) ||
+        (role === 'O' && names.includes(`v${this.receipt.volume}`))) throw failure('Cleanup absence changed');
+    }
+    await this.ownerProof(); this.active(); return this.result('absent', 'absent');
+  }
+  private async removeSelectedArtifacts(): Promise<void> {
+    const objects = [this.#paths.K, path.join(this.#paths.G, 'payload.yaml'), path.join(this.#paths.G, 'metadata.json'), this.#paths.G, this.#paths.S];
+    while (this.#prefix < 5) {
+      const action = ORDER[this.#prefix];
+      if (this.options.afterCleanup) await this.barrier(`before-${action}`);
+      const named = objects[this.#prefix]; const parent = path.dirname(named);
+      await this.transition(parent, path.basename(named), false, () => action === 'payload' || action === 'metadata' ? fs.unlink(named) : fs.rmdir(named));
+      this.#prefix++;
+      await this.syncDirectory(parent);
+      // This exact current invocation reaches the chosen durable boundary before later checks/hooks.
+      if (action === 'slot') this.#captured = true;
+      if (this.options.afterCleanup) await this.options.afterCleanup(`after-${action}`);
+      await this.prove();
+    }
+  }
+  private async retireIntent(): Promise<void> {
+    if (this.options.afterCleanup) await this.barrier('before-retire');
+    await this.transition(this.#paths.O, path.basename(this.#intentPath), false, () => fs.unlink(this.#intentPath));
+    this.#retired = true;
+    await this.syncDirectory(this.#paths.O);
+    if (this.options.afterCleanup) await this.options.afterCleanup('after-retire');
+    if (this.#captured) SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW', source: 'FileMemoryArchiveCleanup', details: 'Exact unreferenced archive removal known durable' });
+    await this.prove(); this.active();
+  }
   async run(): Promise<FileArchiveCleanupResult> {
     try {
       await this.initializeNames();
@@ -562,44 +670,18 @@ export class FileMemoryArchiveCleanup {
       }
       this.#budget.reserve(this.#paths, path.basename(this.#intentPath), !this.#intentFile, 5 - this.#prefix);
       if (!this.#intentFile && !(await this.present(this.#paths.S))) {
-        await this.ownerProof();
-        for (const role of ['T', 'V', 'B', 'O'] as const) {
-          const before = this.#live.get(this.#paths[role])!;
-          const names = await this.census(this.#paths[role]);
-          if (!isDeepStrictEqual(identity(await fs.lstat(this.#paths[role], { bigint: true }), true, role !== 'T'), before) ||
-            (role === 'O' && names.includes(`v${this.receipt.volume}`))) throw failure('Cleanup absence changed');
-        }
-        await this.ownerProof(); this.active(); return this.result('absent', 'absent');
+        return await this.observeAbsence();
       }
       if (!this.#intentFile) await this.bindFresh();
       await this.prove();
       if (!this.#intentFile) await this.publishIntent();
-      const objects = [this.#paths.K, path.join(this.#paths.G, 'payload.yaml'), path.join(this.#paths.G, 'metadata.json'), this.#paths.G, this.#paths.S];
-      while (this.#prefix < 5) {
-        const action = ORDER[this.#prefix];
-        if (this.options.afterCleanup) await this.barrier(`before-${action}`);
-        const named = objects[this.#prefix]; const parent = path.dirname(named);
-        await this.transition(parent, path.basename(named), false, () => action === 'payload' || action === 'metadata' ? fs.unlink(named) : fs.rmdir(named));
-        this.#prefix++;
-        await this.syncDirectory(parent);
-        // This exact current invocation reaches the chosen durable boundary before later checks/hooks.
-        if (action === 'slot') this.#captured = true;
-        if (this.options.afterCleanup) await this.options.afterCleanup(`after-${action}`);
-        await this.prove();
-      }
-      if (this.options.afterCleanup) await this.barrier('before-retire');
-      await this.transition(this.#paths.O, path.basename(this.#intentPath), false, () => fs.unlink(this.#intentPath));
-      this.#retired = true;
-      await this.syncDirectory(this.#paths.O);
-      if (this.options.afterCleanup) await this.options.afterCleanup('after-retire');
-      if (this.#captured) SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW', source: 'FileMemoryArchiveCleanup', details: 'Exact unreferenced archive removal known durable' });
-      await this.prove(); this.active();
+      await this.removeSelectedArtifacts();
+      await this.retireIntent();
       return this.result(this.#captured ? 'removed' : 'absent', this.#captured ? 'removed' : 'absent');
     } catch (cause) {
       if (this.#captured) return this.result('removed', 'removed', cause);
       const code = causeCode(cause);
-      return this.result(this.#attempted ? 'unknown' : 'refused', code === 'EARCHIVEREFERENCED' ? 'referenced' :
-        code === 'EARCHIVEMISMATCH' ? 'mismatch' : code === 'EHEADRESOURCE' ? 'resource' : code?.startsWith('EHEAD') || code?.startsWith('EOWNER') ? 'head' : 'unsafe', cause);
+      return this.result(this.#attempted ? 'unknown' : 'refused', cleanupReason(code), cause);
     }
   }
 }

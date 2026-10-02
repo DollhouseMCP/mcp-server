@@ -420,7 +420,7 @@ export class FileMemoryVolumeStore {
   private listCandidateGroups(names: readonly string[]): { volume: number; names: string[] }[] {
     const groups = new Map<number, string[]>();
     for (const name of names) {
-      const match = /^v(\d+)(.*)$/iu.exec(name);
+      const match = /^v(\d+)/iu.exec(name);
       if (!match) continue;
       const volume = Number(match[1]);
       if (!Number.isSafeInteger(volume) || volume < 1) continue;
@@ -597,7 +597,7 @@ export class FileMemoryVolumeStore {
   }
   private requireCanonicalVolumeSpelling(siblings: readonly string[], volume: number): void {
     for (const name of siblings) {
-      const match = /^v(\d+)(.*)$/iu.exec(name);
+      const match = /^v(\d+)/iu.exec(name);
       if (!match || BigInt(match[1]) !== BigInt(volume) || name === `v${volume}`) continue;
       if (name === `v${volume}.cleanup.json`) throw error('EARCHIVEBLOCKED', 'Pending cleanup blocks target archive admission');
       throw error('EARCHIVEUNSAFE', 'Unknown target-derived archive residue is unsafe');

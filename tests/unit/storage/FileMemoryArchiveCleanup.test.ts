@@ -15,13 +15,14 @@ async function fixture(nested = false) {
   const locator = nested ? 'Notes/Memory.yaml' : 'Memory.yaml';
   await fs.mkdir(path.dirname(path.join(root, locator)), { recursive: true });
   await fs.writeFile(path.join(root, locator), 'entries: []\n');
-  const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
+  const fence = new FileMemoryFence();
+  const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER, fence });
   const owners = new FileMemoryOwnerSnapshots({ coordinator });
   const token = await owners.adoptUnowned((await owners.readHeadSnapshot(locator)).token as UnownedFileMemoryToken);
   const store = (afterCleanup?: (phase: ArchiveCleanupPhase) => Promise<void> | void) => new FileMemoryVolumeStore({ coordinator, owners, afterCleanup });
   const receipt = await store().createExclusive(token, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-10-01') });
   const owner = path.join(token.tenantRoot, 'volumes', 'by-id', token.ownerId);
-  return { root, token, owners, coordinator, store, receipt, owner, slot: path.join(owner, 'v1'), intent: path.join(owner, 'v1.cleanup.json') };
+  return { root, token, owners, coordinator, fence, store, receipt, owner, slot: path.join(owner, 'v1'), intent: path.join(owner, 'v1.cleanup.json') };
 }
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 describe('dormant exact protected file archive cleanup', () => {
@@ -33,6 +34,33 @@ describe('dormant exact protected file archive cleanup', () => {
     expect(await fs.readdir(f.owner)).toEqual([]);
     expect(await f.owners.readHeadSnapshot(f.token.locator)).toEqual(before);
     expect(await f.store().removeUnreferenced(f.token, f.receipt)).toMatchObject({ status: 'absent' });
+  });
+  it('does not attribute removal when fence acquisition rejects before the operation', async () => {
+    const f = await fixture(); const cause = new Error('controlled acquisition failure');
+    const before = await fs.readdir(f.owner);
+    const spy = jest.spyOn(f.fence, 'withTenantFence').mockRejectedValueOnce(cause);
+    try {
+      const result = await f.store().removeUnreferenced(f.token, f.receipt);
+      expect(result).toEqual({ status: 'unknown', reason: 'query' });
+      expect(result.cause).toBe(cause); expect(result).not.toHaveProperty('receipt');
+      expect(await fs.readdir(f.owner)).toEqual(before);
+      expect((await f.store().read(f.token, 1)).status).toBe('found');
+    } finally { spy.mockRestore(); }
+  });
+  it('retains genuine removal after the real fence releases and its wrapper rejects', async () => {
+    const f = await fixture(); const cause = new Error('controlled post-release failure');
+    const original = f.fence.withTenantFence.bind(f.fence);
+    const spy = jest.spyOn(f.fence, 'withTenantFence').mockImplementationOnce(async (root, operation) => {
+      await original(root, operation);
+      throw cause;
+    });
+    try {
+      const result = await f.store().removeUnreferenced(f.token, f.receipt);
+      expect(result).toMatchObject({ status: 'removed', reason: 'removed', receipt: f.receipt });
+      expect(result.cause).toBe(cause); expect(await fs.readdir(f.owner)).toEqual([]);
+      expect(await fs.readdir(path.join(f.root, '.memory-fences'))).not.toContain('tenant.lock');
+      expect(await f.store().removeUnreferenced(f.token, f.receipt)).toEqual({ status: 'absent', reason: 'absent' });
+    } finally { spy.mockRestore(); }
   });
   it('blocks target number even when its logical digest differs', async () => {
     const f = await fixture();
@@ -77,6 +105,30 @@ describe('dormant exact protected file archive cleanup', () => {
     expect(await f.store().removeUnreferenced(f.token, f.receipt)).toMatchObject({ status: 'refused', reason: 'mismatch' });
     expect(await fs.readFile(f.intent)).toEqual(before); expect(await fs.readdir(f.slot)).toContain('COMMITTED');
   });
+  it.each([false, true])('rejects an altered receipt byte length before fresh or resumed cleanup (retry=%s)', async retry => {
+    const f = await fixture();
+    if (retry) {
+      await f.store(phase => { if (phase === 'intent-durable') throw new Error('stop'); }).removeUnreferenced(f.token, f.receipt);
+    }
+    const receipt = { ...f.receipt, byteLength: f.receipt.byteLength + 1 };
+    if (retry) {
+      const record = JSON.parse(await fs.readFile(f.intent, 'utf8'));
+      record.receipt.byteLength = receipt.byteLength;
+      await fs.writeFile(f.intent, JSON.stringify(record));
+    }
+    const names = await fs.readdir(f.owner);
+    const payloadPath = path.join(f.slot, `g-${f.receipt.generationId}`, 'payload.yaml');
+    const before = await fs.lstat(payloadPath, { bigint: true });
+    const bytes = await fs.readFile(payloadPath);
+    const result = await f.store().removeUnreferenced(f.token, receipt);
+    expect(result).toEqual({ status: 'refused', reason: 'mismatch' });
+    expect(result).not.toHaveProperty('receipt');
+    expect(await fs.readdir(f.owner)).toEqual(names); expect(await fs.readFile(payloadPath)).toEqual(bytes);
+    const after = await fs.lstat(payloadPath, { bigint: true });
+    expect([after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs, after.nlink]).toEqual(
+      [before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs, before.nlink]);
+    expect(await fs.readdir(f.slot)).toContain('COMMITTED');
+  });
   it('rejects marker metadata ABA across an interrupted invocation', async () => {
     const f = await fixture();
     await f.store(phase => { if (phase === 'intent-durable') throw new Error('stop'); }).removeUnreferenced(f.token, f.receipt);
@@ -86,7 +138,7 @@ describe('dormant exact protected file archive cleanup', () => {
     expect(await f.store().removeUnreferenced(f.token, f.receipt)).toMatchObject({ status: 'refused', reason: 'unsafe' });
     expect(await fs.readdir(f.slot)).toContain('COMMITTED'); expect(await fs.readdir(marker)).toEqual([]);
   });
-  it.each(['v1.cleanupX', 'v1.cleanup.partial', 'v1unknown'])('blocks unknown target residue %s in read, create and list', async residue => {
+  it.each(['v1.cleanupX', 'v1.cleanup.partial', 'v1unknown', 'v1.cleanup\nforeign'])('blocks unknown target residue %s in read, create and list', async residue => {
     const f = await fixture(); await fs.writeFile(path.join(f.owner, residue), 'foreign', { mode: 0o600 });
     await expect(f.store().read(f.token, 1)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
     await expect(f.store().createExclusive(f.token, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-10-01') })).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
