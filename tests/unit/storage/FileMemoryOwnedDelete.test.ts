@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it as jestIt, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -285,6 +286,34 @@ describe('dormant exact head DELETE with owner erasure pending', () => {
       await expect(f.owners.deleteOwned(f.request)).rejects.toThrow('Managed DELETE supports Linux and Darwin only');
       expect(acquire).not.toHaveBeenCalled(); expect(await tree(f.root)).toEqual(before);
     } finally { Object.defineProperty(process, 'platform', descriptor); }
+  });
+
+  it.each(['.memory-owners', '.memory-owners/owners'])('refuses canonical archive identity aliasing captured directory %s', async locator => {
+    const f = await fixture(), before = await tree(f.root);
+    const canonical = await fs.lstat(path.join(f.root, locator), { bigint: true });
+    type Internals = {
+      canonicalVolume(): Promise<BigIntStats | undefined>;
+      validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore?: BigIntStats, volumeAfter?: BigIntStats): void;
+    };
+    const internals = FileMemoryOwnedDelete.prototype as unknown as Internals;
+    const observe = internals.canonicalVolume, validate = internals.validateConfinement;
+    let observations = 0, reached = false, result: unknown;
+    // Observe the real canonical archive first, then model its physical O/R alias using actual directory stats.
+    // No privileged bind mount is created; both canonical observations receive the same disclosed identity.
+    const observer = jest.spyOn(internals, 'canonicalVolume').mockImplementation(async function(this: Internals) {
+      const actual = await observe.call(this); expect(actual?.isDirectory()).toBe(true); observations++;
+      return canonical;
+    });
+    const comparison = jest.spyOn(internals, 'validateConfinement').mockImplementation(function(this: Internals, first, last, volumeBefore, volumeAfter) {
+      reached = true; expect(volumeBefore).toBe(canonical); expect(volumeAfter).toBe(canonical);
+      validate.call(this, first, last, volumeBefore, volumeAfter);
+    });
+    try {
+      await expect(f.owners.deleteOwned(f.request).then(value => { result = value; })).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADCONFLICT' } });
+    } finally { observer.mockRestore(); comparison.mockRestore(); }
+    expect(observations).toBe(2); expect(reached).toBe(true); expect(result).toBeUndefined();
+    expect(await tree(f.root)).toEqual(before);
+    expect((await f.owners.readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
   });
 
   it('refuses a deeper source ancestor colliding with canonical fence identity before mutation', async () => {

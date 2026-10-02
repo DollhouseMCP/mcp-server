@@ -14,6 +14,7 @@ import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdin
   evidenceOriginalIdentity as original, canonicalEvidence, stableEvidenceChild as stable, inspectEvidenceNames,
   withEvidenceFileClose, observeEvidenceDirectory, readEvidenceFile, applyEvidenceDirectoryTransition,
   applyEvidenceAncestorTransition, admitEvidenceAncestor, writeEvidenceFile,
+  observeEvidenceCanonicalVolume, evidenceVolumeIdentity, captureEvidenceAncestors,
   type HeadIdentity as Identity, type HeadArtifact as Artifact, type HeadChild as Child,
   type HeadDirectory as Directory, type HeadDirectoryNames as DirectoryNames } from './FileMemoryOwnedHeadEvidence.js';
 
@@ -205,16 +206,10 @@ export class FileMemoryOwnedDelete {
     const volumeBefore = await this.canonicalVolume();
     const before = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
     for (const stat of before) if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== BigInt(process.getuid!())) fail();
-    const locators = new Set<string>(['.', '.memory-owners', '.memory-owners/owners']);
-    let locator = '.';
-    for (const component of this.request.expectedToken.locator.split('/').slice(0, -1)) { locator = locator === '.' ? component : `${locator}/${component}`; locators.add(locator); }
-    // Ancestors are captured before descendants. No directory is created by DELETE.
-    const ordered = [...locators].sort((a, b) => a.split('/').length - b.split('/').length || ordinal(a, b));
-    this.directories = [];
-    for (const item of ordered) {
-      this.admitAncestor(item);
-      this.directories.push(await this.observe(item, true));
-    }
+    await captureEvidenceAncestors(this.request.expectedToken.locator, {
+      reset: () => { this.directories = []; }, admit: item => this.admitAncestor(item),
+      observe: item => this.observe(item, true), append: directory => { this.directories.push(directory); },
+    });
     const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
     const volumeAfter = await this.canonicalVolume();
     this.validateConfinement(before, after, volumeBefore, volumeAfter);
@@ -222,7 +217,6 @@ export class FileMemoryOwnedDelete {
   private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore?: BigIntStats, volumeAfter?: BigIntStats): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
     if (volumeBefore && this.directories.some(directory =>
-      (directory.locator === '.' || this.request.expectedToken.locator.startsWith(`${directory.locator}/`)) &&
       directory.identity.device === String(volumeBefore.dev) && directory.identity.inode === String(volumeBefore.ino))) fail('EHEADCONFLICT');
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();
     if (before.slice(1).some(stat => stat.dev === before[0].dev && stat.ino === before[0].ino) ||
@@ -239,19 +233,10 @@ export class FileMemoryOwnedDelete {
     if (this.directories.filter(item => item.locator === '.memory-owners' || item.locator === '.memory-owners/owners').some(item =>
       item.identity.device === H.identity.device && item.identity.inode === H.identity.inode)) fail('EHEADCONFLICT');
   }
-  private async canonicalVolume(): Promise<BigIntStats | undefined> {
-    try {
-      const stat = await fs.lstat(this.absolute('volumes'), { bigint: true });
-      if (!stat.isDirectory() || stat.isSymbolicLink()) fail();
-      return stat;
-    } catch (cause) {
-      if (causeCode(cause) === 'ENOENT') return undefined;
-      throw cause;
-    }
+  private canonicalVolume(): Promise<BigIntStats | undefined> {
+    return observeEvidenceCanonicalVolume(this.absolute('volumes'), fail);
   }
-  private volumeIdentity(stat: BigIntStats) {
-    return { identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
-  }
+  private volumeIdentity(stat: BigIntStats) { return evidenceVolumeIdentity(stat, fail); }
   private admitAncestor(item: string): void { admitEvidenceAncestor(item, this.directories, fail); }
   private paths(): void {
     this.source = this.absolute(this.request.expectedToken.locator);

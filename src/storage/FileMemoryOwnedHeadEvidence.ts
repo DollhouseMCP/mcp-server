@@ -34,6 +34,33 @@ export function evidenceScalar(value: bigint, width: number, fail: EvidenceFail)
   return result;
 }
 export function evidenceIdentity(stat: BigIntStats, fail: EvidenceFail): HeadIdentity { return { device: evidenceScalar(stat.dev, 40, fail), inode: evidenceScalar(stat.ino, 40, fail), size: evidenceScalar(stat.size, 40, fail), mtimeNs: evidenceScalar(stat.mtimeNs, 40, fail), ctimeNs: evidenceScalar(stat.ctimeNs, 40, fail) }; }
+export async function observeEvidenceCanonicalVolume(target: string, fail: EvidenceFail): Promise<BigIntStats | undefined> {
+  try {
+    const stat = await fs.lstat(target, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) fail();
+    return stat;
+  } catch (cause) {
+    if (evidenceCauseCode(cause) === 'ENOENT') return undefined;
+    throw cause;
+  }
+}
+export function evidenceVolumeIdentity(stat: BigIntStats, fail: EvidenceFail) {
+  return { identity: evidenceIdentity(stat, fail), mode: evidenceScalar(stat.mode, 20, fail), uid: evidenceScalar(stat.uid, 20, fail), links: evidenceScalar(stat.nlink, 20, fail), directory: stat.isDirectory() };
+}
+export async function captureEvidenceAncestors(sourceLocator: string, context: {
+  reset(): void; admit(locator: string): void; observe(locator: string): Promise<HeadDirectory>; append(directory: HeadDirectory): void;
+}): Promise<void> {
+  const locators = new Set<string>(['.', '.memory-owners', '.memory-owners/owners']);
+  let locator = '.';
+  for (const component of sourceLocator.split('/').slice(0, -1)) { locator = locator === '.' ? component : `${locator}/${component}`; locators.add(locator); }
+  // Ancestors are captured before descendants; callers create no directory here.
+  const ordered = [...locators].sort((a, b) => a.split('/').length - b.split('/').length || evidenceOrdinal(a, b));
+  context.reset();
+  for (const item of ordered) {
+    context.admit(item);
+    context.append(await context.observe(item));
+  }
+}
 export function evidenceKeys(value: unknown, expected: readonly string[]): value is object {
   return !!value && typeof value === 'object' && !Array.isArray(value) && Reflect.ownKeys(value).length === expected.length &&
     Reflect.ownKeys(value).every(key => typeof key === 'string' && expected.includes(key));
