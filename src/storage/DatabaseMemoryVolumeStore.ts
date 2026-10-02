@@ -199,6 +199,13 @@ function cleanupReferences(content: string, indexed: unknown, owner: string): Re
   return references;
 }
 
+/** Validate the materialized head after its locked size admission. */
+function cleanupHeadContent(parent: { raw: string; bytes: number; hash: string } | undefined): asserts parent is { raw: string; bytes: number; hash: string } {
+  if (!parent || Buffer.from(parent.raw, 'utf8').toString('utf8') !== parent.raw ||
+    Buffer.byteLength(parent.raw, 'utf8') !== parent.bytes ||
+    createHash('sha256').update(parent.raw, 'utf8').digest('hex') !== parent.hash.trim()) throw new CleanupRefusal('unsafe');
+}
+
 export class DatabaseMemoryVolumeStore {
   constructor(private readonly db: DatabaseInstance, private readonly getCurrentUserId: UserIdResolver) {}
 
@@ -385,7 +392,7 @@ export class DatabaseMemoryVolumeStore {
             dirty: elements.memoryEntriesOutOfSync, rawBytes: sql<number>`octet_length(${elements.rawContent})`,
             metadataBytes: sql<number>`octet_length(${elements.metadata}::text)`
           }).from(elements).where(condition).for('update').limit(1);
-          if (!bounds || bounds.name !== head.name || bounds.revision.toString() !== head.revision || bounds.dirty !== false) {
+          if (bounds?.name !== head.name || bounds.revision.toString() !== head.revision || bounds.dirty !== false) {
             throw new CleanupRefusal('head');
           }
           if (![bounds.rawBytes, bounds.metadataBytes].every(value => Number.isSafeInteger(value) && value >= 0)) throw new CleanupRefusal('unsafe');
@@ -393,9 +400,7 @@ export class DatabaseMemoryVolumeStore {
           if (bounds.rawBytes > CLEANUP_RAW_BYTES || bounds.metadataBytes > CLEANUP_METADATA_BYTES) throw new CleanupRefusal('resource');
           const [parent] = await tx.select({ raw: elements.rawContent, metadata: elements.metadata,
             hash: elements.contentHash, bytes: elements.byteSize }).from(elements).where(condition).limit(1);
-          if (!parent || Buffer.from(parent.raw, 'utf8').toString('utf8') !== parent.raw ||
-            Buffer.byteLength(parent.raw, 'utf8') !== parent.bytes ||
-            createHash('sha256').update(parent.raw, 'utf8').digest('hex') !== parent.hash.trim()) throw new CleanupRefusal('unsafe');
+          cleanupHeadContent(parent);
           const references = cleanupReferences(parent.raw, parent.metadata, owner.memoryId);
           if (references.some(item => item.volume === target.volume)) throw new CleanupRefusal('referenced');
           const archiveCondition = and(eq(memoryVolumes.userId, owner.userId), eq(memoryVolumes.memoryId, owner.memoryId));
