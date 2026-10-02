@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
+import { deepStrictEqual } from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -299,7 +300,7 @@ describe('dormant same-parent managed RENAME', () => {
       finally { spy.mockRestore(); observation.restore(); }
       expect(reads).toBeGreaterThan(0); expect(eof).toBeGreaterThan(0); expect(reads).toBeLessThanOrEqual(794624);
       expect(moved.revision).toBe(String(BigInt(f.token.revision) + 1n));
-      await fixtureBatch(retained, async item => { expect(await evidence(item.target)).toEqual(item.before); });
+      await fixtureBatch(retained, async item => { deepStrictEqual(await evidence(item.target), item.before, `Retained RENAME evidence changed: ${item.target}`); });
       expect((await fs.readdir(archiveRoot)).sort()).toEqual(archiveNames);
       expect((await archive.read(moved, receipt.volume)).status).toBe('found');
       await expect(archive.read(f.token, receipt.volume)).rejects.toThrow();
@@ -322,7 +323,7 @@ describe('dormant same-parent managed RENAME', () => {
         moved = await f.store().renameOwned(f.request); diagnostic('retry-end', observation.counts);
       } finally { observation.restore(); }
       expect(moved.revision).toBe(String(BigInt(f.token.revision) + 1n));
-      await fixtureBatch(retained, async item => { expect(await evidence(item.target)).toEqual(item.before); });
+      await fixtureBatch(retained, async item => { deepStrictEqual(await evidence(item.target), item.before, `Retained RENAME evidence changed: ${item.target}`); });
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
       diagnostic('assertions-complete');
     });
