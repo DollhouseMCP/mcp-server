@@ -64,6 +64,7 @@ function fixtureModules(
   onChange?: () => void,
   onAdminMutation?: () => void,
   onProtectedCorrelation?: () => void,
+  adminEvents?: AsyncIterable<{ readonly event: string; readonly data: unknown }>,
 ): readonly ConsoleModuleDescriptor[] {
   return [{
     id: 'health_fixture',
@@ -242,7 +243,7 @@ function fixtureModules(
         status: 200,
         stream: {
           init: { visible: true, rawPrivate: 'hidden' },
-          events: delayedStreamEvents([{ event: 'update', data: { visible: true, rawPrivate: 'hidden' } }], 50),
+          events: adminEvents ?? delayedStreamEvents([{ event: 'update', data: { visible: true, rawPrivate: 'hidden' } }], 50),
         },
       }),
     }, {
@@ -337,6 +338,7 @@ async function buildApp(
   protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null = protectedCorrelationLimiter(),
   authPolicyStore = new InMemoryConsoleAuthPolicyStore(),
   nowProvider: () => Date = () => NOW,
+  adminEvents?: AsyncIterable<{ readonly event: string; readonly data: unknown }>,
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
   const runtimeStore = new InMemoryRuntimeSessionControlStore();
@@ -366,7 +368,7 @@ async function buildApp(
     leaseUntil: IDLE_EXPIRY,
   });
   const registry = new ConsoleModuleRegistry();
-  fixtureModules(onChange, onAdminMutation, onProtectedCorrelation).forEach(module => registry.register(module));
+  fixtureModules(onChange, onAdminMutation, onProtectedCorrelation, adminEvents).forEach(module => registry.register(module));
   const adminAuditWriter = new InMemoryAdminAuditWriter();
   const app = express();
   app.use(express.json());
@@ -983,17 +985,45 @@ describe('secured console router elevation', () => {
   });
 
   it('closes administrative SSE streams when periodic revalidation fails', async () => {
-    const { app, sessionStore } = await buildApp(freshlyElevatedAuditSession());
-    setTimeout(() => {
-      void sessionStore.revoke(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE), NOW);
-    }, 25);
-
-    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie()).set('Origin', ORIGIN);
-
-    expect(response.status).toBe(200);
-    expect(response.text).toContain('event: error');
-    expect(response.text).toContain('"code":"unauthenticated"');
-    expect(response.text).not.toContain('"rawPrivate"');
+    let finishEvents!: () => void;
+    const pendingEvent = new Promise<IteratorResult<{ event: string; data: unknown }>>(resolve => {
+      finishEvents = () => resolve({ done: true, value: undefined });
+    });
+    let revoked = false;
+    let returned = false;
+    // Production calls next only after writing init and installing periodic revalidation.
+    // Keep the stream open so normal completion cannot race the authorization check.
+    const events: AsyncIterableIterator<{ event: string; data: unknown }> = {
+      [Symbol.asyncIterator]() { return this; },
+      async next() {
+        await sessionStore.revoke(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE), NOW);
+        revoked = true;
+        return pendingEvent;
+      },
+      async return() {
+        returned = true;
+        finishEvents();
+        return { done: true, value: undefined };
+      },
+    };
+    const { app, sessionStore } = await buildApp(freshlyElevatedAuditSession(), undefined,
+      undefined, undefined, undefined, undefined, events);
+    const call = request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie()).set('Origin', ORIGIN)
+      .timeout({ deadline: 8_000 });
+    try {
+      const response = await call;
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toContain('text/event-stream');
+      expect(response.text).toContain('event: init');
+      expect(response.text).toContain('event: error');
+      expect(response.text).toContain('"code":"unauthenticated"');
+      expect(response.text).not.toContain('"rawPrivate"');
+      expect(revoked).toBe(true);
+      expect(returned).toBe(true);
+    } finally {
+      finishEvents();
+      call.abort();
+    }
   });
 
   it('audit-writes an administrative idempotency replay without executing twice', async () => {
