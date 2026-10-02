@@ -137,6 +137,13 @@ jobs:
         run: npm test
         continue-on-error: true
 
+      # Diagnostic only: a fresh serial process separates worker history/concurrency
+      # from the original failing run. The original outcome remains the required gate.
+      - name: Diagnose CREATE capacity in a fresh serial process
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '20.x' && steps.original_tests.outcome == 'failure'
+        timeout-minutes: 3
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedCreate.test.ts
+
       - name: Run performance tests (separate process)
         id: performance_tests
         run: npm run test:performance
