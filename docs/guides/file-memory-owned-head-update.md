@@ -484,3 +484,54 @@ can change when adding a regular file, so no OS-based nlink formula is assumed.
 Cross-invocation same-inode directory timestamp/nlink-only drift is not proved
 absent. This is the existing cooperating-local-filesystem observation model,
 not protection against an arbitrary hostile filesystem or a power-loss guarantee.
+
+## Dormant exact head DELETE and forward recovery
+
+`FileMemoryOwnerSnapshots.deleteOwned({ operationId, expectedToken })` and
+`deleteOwnedInTransaction(context, request)` delete an exactly owned file head
+under the existing active tenant operation. They are not wired into runtime
+writers. An active operation lease is distinct from the original owner metadata
+being ACTIVE: recovery proves its own exact DELETING artifacts instead of relaxing
+ordinary owned-head reads.
+
+The exclusive canonical per-head journal records BASE, REGISTRY_DELETING,
+PAIR_DELETING, HEAD_REMOVED and TERMINAL. Registry and adjacent metadata become
+DELETING durably before unlinking the original head. The terminal registry is a
+minimal HEAD_DELETED record containing tenant user, old owner UUID and deletion
+operation UUID. Exact adjacent metadata and journal retirement require qualified
+parent-directory sync and successful close. Only this invocation's actual head
+unlink followed by that final boundary yields `head-deleted` evidence with its
+proved locator. Recovery after head absence yields `already-head-deleted`
+observation without locator, content hash or revision; it is not a reconstructed
+historical deletion receipt.
+
+A captured current outcome survives later audit or coordinator-release failure as
+`EHEADDELETED` with the genuine result and exact direct cause. Uncaptured failures
+cannot inherit prior or forged outcome markers. Partial journals, replacement
+stages and mutation-before-next-complete-record gaps are preserved for manual
+recovery; neither absence nor matching terminal JSON advances an incomplete
+phase. A clean terminal retry requires both old head and sidecar absent, or a
+fresh ordinary owned-head read proving a different memory owner UUID. It never
+unlinks that replacement.
+
+All old-owner archive states remain untouched, including committed, unindexed,
+partial, temporary, malformed and pending-cleanup objects. DELETE performs no
+archive census and claims only head deletion with erasure pending. The minimal
+tombstone predates head-artifact retirement and cannot authorize owner erasure
+following restart. [#2903's durable retirement-authority prerequisite](https://github.com/DollhouseMCP/mcp-server/issues/2903#issuecomment-5945940657)
+requires separately proved retirement-complete authority before exhaustive erasure
+and tombstone retirement; current observations are not that capability.
+
+Request capture rejects platforms other than Linux and Darwin before acquiring a
+tenant fence. With the actual canonical scope, admission bounds each absolute generated path plus NUL
+to 4,096 or 1,024 UTF-8 bytes respectively before DELETE artifacts or source
+mutation, bounds components to 255 bytes, and rejects canonical archive
+ancestry or its captured physical aliases without archive enumeration. All five
+complete journal envelopes must fit 8 KiB before the first artifact. The private
+retained read budget reserves `D + 109P + 20qH + 6qR`, at most 130P under the admitted
+physical-role disjointness, with P at most 4,096 and a 532,480-attempt ceiling.
+Every EOF and failed read is charged; recovery retains its discovery charge and
+cannot reset the quota. Fresh names, selected identities, full own artifacts and
+full foreign-baseline checkpoints remain mandatory. Directory evidence has the
+same cooperating-local-filesystem and cross-invocation limitations described
+above. Process-interruption qualification does not prove power-loss durability.

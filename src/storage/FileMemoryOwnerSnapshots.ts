@@ -16,6 +16,8 @@ import type { FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget
 import { FileMemoryAdoptionRecoveryScanBudget } from './FileMemoryAdoptionRecoveryScanBudget.js';
 import { FileMemoryOwnedCreate, captureCreateRequest, type CreateOwnedRequest, type CreatePublication } from './FileMemoryOwnedCreate.js';
 export type { CreateOwnedRequest, CreatePublication } from './FileMemoryOwnedCreate.js';
+import { FileMemoryOwnedDelete, captureDeleteRequest, type DeleteOwnedRequest, type DeleteOwnedResult, type DeletePublication } from './FileMemoryOwnedDelete.js';
+export type { DeleteOwnedRequest, DeleteOwnedResult, DeletePublication } from './FileMemoryOwnedDelete.js';
 import {
   classifyFileMemoryWrite,
   type FileMemoryWriteDiagnostic,
@@ -233,6 +235,7 @@ type AdoptionTopologyProof = (stage?: { path: string; identity: FileIdentity },
 interface FileMemoryOwnerSnapshotsBaseOptions {
   /** Dormant exclusive CREATE barriers; never mutation or retry authority. */
   readonly afterCreatePublication?: (phase: CreatePublication) => void | Promise<void>;
+  readonly afterDeletePublication?: (phase: DeletePublication) => Promise<void> | void;
   /** Dormant adoption-recovery test barriers; never recovery authority. */
   readonly afterAdoptionRecoveryPublication?: (phase: AdoptionRecoveryPublication) => void | Promise<void>;
   /** Isolated abort fault barriers; never authority or automatic orphan handling. */
@@ -372,6 +375,7 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
 export class FileMemoryOwnerSnapshots {
   private readonly options: FileMemoryOwnerSnapshotsOptions;
   private readonly adoptedErrors = new WeakMap<object, OwnedFileMemoryToken>();
+  private readonly deleteErrors = new WeakMap<object, DeleteOwnedResult>();
   private readonly createErrors = new WeakMap<object, OwnedFileMemoryToken>();
 
   constructor(options: FileMemoryOwnerSnapshotsOptions) {
@@ -388,6 +392,53 @@ export class FileMemoryOwnerSnapshots {
   async readHeadSnapshot(locator: string): Promise<FileMemorySnapshot> {
     const scope = await this.captureStandaloneScope();
     return this.readAtRoot(scope.tenantRoot, scope.userId, locator);
+  }
+
+  /** Dormant exact head DELETE; archives remain pending erasure under the retained old UUID. */
+  async deleteOwned(input: DeleteOwnedRequest): Promise<DeleteOwnedResult> {
+    let captured: DeleteOwnedResult | undefined;
+    try {
+      const request = captureDeleteRequest(input); validateLocator(request.expectedToken.locator);
+      return await this.requiredCoordinator().withTenantTransaction(context => this.performOwnedDelete(context, request, value => { captured = value; }));
+    } catch (cause) {
+      if (captured) {
+        if (cause && typeof cause === 'object' && this.deleteErrors.get(cause) === captured) throw cause;
+        const error = Object.assign(headError('EHEADDELETED', 'Head deletion reached its qualified boundary; erasure remains pending'), { cause, headDeleted: true, result: captured });
+        this.deleteErrors.set(error, captured); throw error;
+      }
+      throw this.deletePrecommitError(cause);
+    }
+  }
+  deleteOwnedInTransaction(context: FileMemoryLeaseContext, input: DeleteOwnedRequest): Promise<DeleteOwnedResult> {
+    try { const request = captureDeleteRequest(input); validateLocator(request.expectedToken.locator); return this.performOwnedDelete(context, request); }
+    catch (cause) { throw this.deletePrecommitError(cause); }
+  }
+  private deletePrecommitError(cause: unknown): unknown {
+    if (cause === null || (typeof cause !== 'object' && typeof cause !== 'function')) return cause;
+    let marker = false;
+    try { const value = cause as { code?: unknown; headDeleted?: unknown }; marker = value.code === 'EHEADDELETED' || value.headDeleted === true || 'result' in value; }
+    catch { marker = true; }
+    return marker ? Object.assign(headError('EOWNERRECOVERY', 'This DELETE has no captured head-deletion outcome'), { cause }) : cause;
+  }
+  private performOwnedDelete(context: FileMemoryLeaseContext, request: DeleteOwnedRequest, capture?: (result: DeleteOwnedResult) => void): Promise<DeleteOwnedResult> {
+    let captured: DeleteOwnedResult | undefined; const coordinator = this.requiredCoordinator();
+    return coordinator.perform(context, async operation => {
+      const executor = new FileMemoryOwnedDelete(operation, request, () => { coordinator.requireActiveOperationScope(operation); },
+          budget => this.snapshotOwnedAtScope(operation, request.expectedToken, budget),
+          budget => this.readAtRoot(operation.tenantRoot, operation.userId, request.expectedToken.locator, undefined, budget), this.options.afterDeletePublication,
+          result => { captured = result; capture?.(result); });
+      try { return await executor.run();
+      } catch (cause) {
+        if (!captured) throw this.deletePrecommitError(cause);
+        if (executor.isCapturedError(cause, captured) && cause && typeof cause === 'object') this.deleteErrors.set(cause, captured);
+        throw cause;
+      }
+    }).catch(cause => {
+      if (!captured) throw this.deletePrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.deleteErrors.get(cause) === captured) throw cause;
+      const error = Object.assign(headError('EHEADDELETED', 'Head deletion completed before transaction failure; erasure remains pending'), { cause, headDeleted: true, result: captured });
+      this.deleteErrors.set(error, captured); throw error;
+    });
   }
 
   /** Dormant new-owner CREATE or exact persisted-phase forward recovery. */
