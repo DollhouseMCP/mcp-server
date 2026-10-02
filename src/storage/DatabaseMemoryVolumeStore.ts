@@ -1,5 +1,7 @@
 /** PostgreSQL storage for immutable, owner-bound memory archives. */
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import type { MemoryHeadToken } from './IMemoryHeadStore.js';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
@@ -131,6 +133,84 @@ function toInfo(row: VolumeInfoRow): DatabaseMemoryVolumeInfo {
 
 function toRecord(row: VolumeInfoRow & { rawContent: string }): DatabaseMemoryVolumeRecord {
   return { ...toInfo(row), rawContent: row.rawContent };
+}
+
+export type DatabaseArchiveCleanupResult = Readonly<{
+  status: 'removed' | 'absent' | 'refused' | 'unknown';
+  /** Exact failure object, non-enumerable on returned results; never routine diagnostic output. */
+  cause?: unknown;
+  reason: 'removed' | 'absent' | 'mismatch' | 'referenced' | 'head' | 'unsafe' | 'resource' | 'query';
+}>;
+class CleanupRefusal extends Error {
+  constructor(readonly reason: DatabaseArchiveCleanupResult['reason']) { super(`Archive cleanup refused: ${reason}`); }
+}
+const CLEANUP_ROWS = 10_000;
+const CLEANUP_RAW_BYTES = 8 * 1024 * 1024;
+const CLEANUP_METADATA_BYTES = 2 * 1024 * 1024;
+const CLEANUP_PROJECTED_BYTES = 16 * 1024 * 1024;
+function cleanupObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CleanupRefusal('unsafe');
+  return value as Record<string, unknown>;
+}
+function cleanupDate(value: unknown, nullable: boolean): string | null {
+  if (value === null && nullable) return null;
+  if (!(value instanceof Date) && typeof value !== 'string') throw new CleanupRefusal('unsafe');
+  // Submillisecond source strings cannot be rounded into cleanup evidence.
+  if (typeof value === 'string' && /\.\d{3}[1-9]|\.\d{3}0*[1-9]/u.test(value)) throw new CleanupRefusal('unsafe');
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new CleanupRefusal('unsafe');
+  return date.toISOString();
+}
+function cleanupReferences(content: string, indexed: unknown, owner: string): Record<string, unknown>[] {
+  const raw = cleanupObject(SecureYamlParser.parseRawYaml(content, {
+    maxSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE, contentPolicy: 'structure-only',
+  }));
+  const nested = raw.metadata === undefined ? undefined : cleanupObject(raw.metadata);
+  if (nested && Object.keys(raw).some(key => !['metadata', 'entries', 'stats', 'instructions', 'extensions'].includes(key))) {
+    throw new CleanupRefusal('unsafe');
+  }
+  const source = nested ?? raw;
+  const projection = cleanupObject(indexed);
+  if (source.volumes === undefined) {
+    if (Object.hasOwn(source, 'volumes') || Object.hasOwn(projection, 'volumes')) throw new CleanupRefusal('unsafe');
+    return [];
+  }
+  if (!Array.isArray(source.volumes)) throw new CleanupRefusal('unsafe');
+  if (source.volumes.length > CLEANUP_ROWS) throw new CleanupRefusal('resource');
+  const keys = ['volume', 'file', 'sha256', 'entryCount', 'sealedAt', 'firstEntryAt', 'lastEntryAt'];
+  const seen = new Set<number>();
+  const parse = (values: unknown): Record<string, unknown>[] => {
+    if (!Array.isArray(values) || values.length > CLEANUP_ROWS) throw new CleanupRefusal('unsafe');
+    seen.clear();
+    return values.map(value => {
+    const item = cleanupObject(value);
+    if (Reflect.ownKeys(item).length !== keys.length || keys.some(key => !Object.hasOwn(item, key)) ||
+      !Number.isSafeInteger(item.volume) || Number(item.volume) < 1 || seen.has(Number(item.volume)) ||
+      item.file !== locator(owner, Number(item.volume)) || typeof item.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(item.sha256) || !Number.isInteger(item.entryCount) ||
+      Number(item.entryCount) < 0 || Number(item.entryCount) > 2_147_483_647) throw new CleanupRefusal('unsafe');
+    seen.add(Number(item.volume));
+    return { ...item, sealedAt: cleanupDate(item.sealedAt, false),
+      firstEntryAt: cleanupDate(item.firstEntryAt, true), lastEntryAt: cleanupDate(item.lastEntryAt, true) };
+    });
+  };
+  const references = parse(source.volumes);
+  if (!isDeepStrictEqual(references, parse(projection.volumes))) throw new CleanupRefusal('unsafe');
+  return references;
+}
+
+/** Validate the locked head before admitting content materialization. */
+function cleanupHeadBounds(bounds: { name: string; revision: bigint; dirty: boolean; rawBytes: number; metadataBytes: number } | undefined,
+  head: { name: string; revision: string }): asserts bounds is { name: string; revision: bigint; dirty: boolean; rawBytes: number; metadataBytes: number } {
+  if (bounds?.name !== head.name || bounds.revision.toString() !== head.revision || bounds.dirty !== false) throw new CleanupRefusal('head');
+  if (![bounds.rawBytes, bounds.metadataBytes].every(value => Number.isSafeInteger(value) && value >= 0)) throw new CleanupRefusal('unsafe');
+}
+
+/** Validate the materialized head after its locked size admission. */
+function cleanupHeadContent(parent: { raw: string; bytes: number; hash: string } | undefined): asserts parent is { raw: string; bytes: number; hash: string } {
+  if (!parent || Buffer.from(parent.raw, 'utf8').toString('utf8') !== parent.raw ||
+    Buffer.byteLength(parent.raw, 'utf8') !== parent.bytes ||
+    createHash('sha256').update(parent.raw, 'utf8').digest('hex') !== parent.hash.trim()) throw new CleanupRefusal('unsafe');
 }
 
 export class DatabaseMemoryVolumeStore {
@@ -280,6 +360,101 @@ export class DatabaseMemoryVolumeStore {
     return { entries, complete, returnedCount: entries.length, observedCount: candidates.length,
       acceptedCount, scannedCount: candidates.length, totalCount: complete ? candidates.length : null,
       diagnostics, diagnosticsTruncated: diagnosticCount > diagnostics.length };
+  }
+
+  /** @internal Test-only interleaving barrier; conveys no cleanup authority. */
+  protected cleanupBarrier(_phase: 'parent-locked' | 'before-delete' | 'after-delete'): Promise<void> { return Promise.resolve(); }
+
+  /** Dormant exact cleanup. Snapshot archive metadata is not held-stable inventory authority. */
+  async removeUnreferenced(expected: MemoryHeadToken, receipt: DatabaseMemoryVolumeReceipt): Promise<DatabaseArchiveCleanupResult> {
+    const head = { backend: expected.backend, userId: expected.userId, ownerId: expected.ownerId,
+      locator: expected.locator, name: expected.name, revision: expected.revision };
+    const owner = this.captureOwner(receipt);
+    const target = { ...owner, id: receipt.id, volume: receipt.volume, sha256: receipt.sha256 };
+    requireVolume(target.volume);
+    if (head.backend !== 'database' || typeof head.userId !== 'string' || !UUID_PATTERN.test(head.userId) ||
+      typeof head.ownerId !== 'string' || !UUID_PATTERN.test(head.ownerId) ||
+      typeof head.locator !== 'string' || !UUID_PATTERN.test(head.locator) || head.userId.toLowerCase() !== owner.userId ||
+      head.ownerId.toLowerCase() !== owner.memoryId || head.locator.toLowerCase() !== owner.memoryId ||
+      typeof head.name !== 'string' || typeof head.revision !== 'string' || !/^[1-9]\d{0,18}$/u.test(head.revision) || BigInt(head.revision) > 9_223_372_036_854_775_807n ||
+      typeof target.id !== 'string' || !UUID_PATTERN.test(target.id) || typeof target.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(target.sha256)) throw new TypeError('Archive cleanup requires matching head and receipt');
+    target.id = target.id.toLowerCase();
+    const abort = Object.freeze({});
+    let failure: unknown;
+    let abandoned = false;
+    const result = (status: DatabaseArchiveCleanupResult['status'], reason: DatabaseArchiveCleanupResult['reason'], primary?: { cause: unknown }) => {
+      const value = { status, reason };
+      if (primary) Object.defineProperty(value, 'cause', { value: primary.cause, enumerable: false });
+      return Object.freeze(value);
+    };
+    try {
+      return await this.db.transaction(async tx => {
+        try {
+          await tx.execute(sql`SELECT set_config('app.current_user_id', ${owner.userId}, true)`);
+          await tx.execute(sql`SET LOCAL lock_timeout = '1000ms'`);
+          await tx.execute(sql`SET LOCAL statement_timeout = '5000ms'`);
+          const condition = and(eq(elements.id, owner.memoryId), eq(elements.userId, owner.userId), eq(elements.elementType, 'memories'));
+          const [bounds] = await tx.select({ name: elements.name, revision: elements.storageRevision,
+            dirty: elements.memoryEntriesOutOfSync, rawBytes: sql<number>`octet_length(${elements.rawContent})`,
+            metadataBytes: sql<number>`octet_length(${elements.metadata}::text)`
+          }).from(elements).where(condition).for('update').limit(1);
+          cleanupHeadBounds(bounds, head);
+          await this.cleanupBarrier('parent-locked');
+          if (bounds.rawBytes > CLEANUP_RAW_BYTES || bounds.metadataBytes > CLEANUP_METADATA_BYTES) throw new CleanupRefusal('resource');
+          const [parent] = await tx.select({ raw: elements.rawContent, metadata: elements.metadata,
+            hash: elements.contentHash, bytes: elements.byteSize }).from(elements).where(condition).limit(1);
+          cleanupHeadContent(parent);
+          const references = cleanupReferences(parent.raw, parent.metadata, owner.memoryId);
+          if (references.some(item => item.volume === target.volume)) throw new CleanupRefusal('referenced');
+          const archiveCondition = and(eq(memoryVolumes.userId, owner.userId), eq(memoryVolumes.memoryId, owner.memoryId));
+          const metadataBytes = sql<number>`octet_length(json_build_object('id', ${memoryVolumes.id}, 'volume', ${memoryVolumes.volume},
+            'sha256', ${memoryVolumes.sha256}, 'entryCount', ${memoryVolumes.entryCount}, 'sealedAt', ${memoryVolumes.sealedAt},
+            'firstEntryAt', ${memoryVolumes.firstEntryAt}, 'lastEntryAt', ${memoryVolumes.lastEntryAt})::text)`;
+          const admissionRows = tx.select({ bytes: metadataBytes.as('metadata_bytes') }).from(memoryVolumes)
+            .where(archiveCondition).limit(CLEANUP_ROWS + 1).as('archive_admission');
+          const [archiveBounds] = await tx.select({ count: sql<number>`count(*)::int`,
+            bytes: sql<string>`coalesce(sum(${admissionRows.bytes}), 0)::text` }).from(admissionRows);
+          if (!archiveBounds || !Number.isSafeInteger(archiveBounds.count) || archiveBounds.count < 0 ||
+            typeof archiveBounds.bytes !== 'string' || !/^(0|[1-9]\d*)$/u.test(archiveBounds.bytes)) throw new CleanupRefusal('unsafe');
+          if (archiveBounds.count > CLEANUP_ROWS || BigInt(archiveBounds.bytes) > BigInt(CLEANUP_PROJECTED_BYTES)) throw new CleanupRefusal('resource');
+          // READ COMMITTED may drift after the aggregate. This fetch independently caps
+          // rows, excludes raw payload, and projects only fixed-width UUID/CHAR/numeric/
+          // timestamp columns; at most10001 small records are materialized, never TEXT/JSON.
+          const projection = this.metadataProjection();
+          const rows = await tx.select({ ...projection,
+            projectedBytes: metadataBytes,
+          }).from(memoryVolumes).where(archiveCondition).orderBy(asc(memoryVolumes.volume)).limit(CLEANUP_ROWS + 1);
+          if (rows.length > CLEANUP_ROWS || rows.reduce((sum, row) => sum + row.projectedBytes, 0) > CLEANUP_PROJECTED_BYTES) throw new CleanupRefusal('resource');
+          if (rows.some(row => !Number.isSafeInteger(row.projectedBytes) || row.projectedBytes < 0)) throw new CleanupRefusal('unsafe');
+          const infos = new Map(rows.map(row => { const info = toInfo(row); return [info.volume, info]; }));
+          for (const reference of references) {
+            const info = infos.get(Number(reference.volume));
+            if (!info || info.sha256 !== reference.sha256 || info.entryCount !== reference.entryCount ||
+              cleanupDate(info.sealedAt, false) !== reference.sealedAt || cleanupDate(info.firstEntryAt, true) !== reference.firstEntryAt ||
+              cleanupDate(info.lastEntryAt, true) !== reference.lastEntryAt) throw new CleanupRefusal('unsafe');
+          }
+          const slotCondition = and(archiveCondition, eq(memoryVolumes.volume, target.volume));
+          const [slot] = await tx.select({ id: memoryVolumes.id, sha256: memoryVolumes.sha256 }).from(memoryVolumes).where(slotCondition).limit(1);
+          if (!slot) return result('absent', 'absent');
+          if (slot.id !== target.id || slot.sha256.trim() !== target.sha256) return result('refused', 'mismatch');
+          await this.cleanupBarrier('before-delete');
+          if (abandoned) throw new CleanupRefusal('query');
+          const removed = await tx.delete(memoryVolumes).where(and(slotCondition, eq(memoryVolumes.id, target.id),
+            eq(memoryVolumes.sha256, target.sha256))).returning({ id: memoryVolumes.id });
+          if (removed.length === 1) {
+            await this.cleanupBarrier('after-delete');
+            return result('removed', 'removed');
+          }
+          const [current] = await tx.select({ id: memoryVolumes.id }).from(memoryVolumes).where(slotCondition).limit(1);
+          return current ? result('refused', 'mismatch') : result('absent', 'absent');
+        } catch (cause) { failure = cause; throw abort; }
+      }, { isolationLevel: 'read committed', accessMode: 'read write' });
+    } catch (cause) {
+      abandoned = true;
+      if (cause === abort) return result('refused', failure instanceof CleanupRefusal ? failure.reason : 'query', { cause: failure });
+      return result('unknown', 'query', { cause });
+    }
   }
 
   /** Roll back only the row created by this receipt; never delete by path or number alone. */
