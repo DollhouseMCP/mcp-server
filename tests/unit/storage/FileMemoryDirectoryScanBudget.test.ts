@@ -3,7 +3,7 @@ import { Dir } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { FileMemoryDirectoryScanBudget, FileMemoryDirectoryScanLimitError } from '../../../src/storage/FileMemoryDirectoryScanBudget.js';
+import { FileMemoryDirectoryScanBudget, FileMemoryDirectoryScanLimitError, closeMemoryDirectoryInspection } from '../../../src/storage/FileMemoryDirectoryScanBudget.js';
 
 const roots: string[] = [];
 async function fixture(names: readonly string[] = []) {
@@ -94,4 +94,14 @@ describe('invocation-owned directory read-attempt budget', () => {
     await expect(budget.scan(root, () => {})).rejects.toBe(closeFailure);
     expect(budget.consumed).toBe(1);
   });
+  it.each([{ code: 42 }, Object.defineProperty({}, 'code', { get: () => { throw new Error('code getter'); } }), null, undefined])(
+    'shared close preserves arbitrary primary and actual close failure', async primary => {
+      const directory = await fs.opendir(await fixture());
+      const secondary = new Error('after actual close');
+      jest.spyOn(directory, 'close').mockImplementation(async () => { directory.closeSync(); throw secondary; });
+      const result = await closeMemoryDirectoryInspection(directory, { cause: primary }, 'inspection close').catch(cause => cause);
+      expect(result).toBeInstanceOf(AggregateError); expect(result.cause).toBe(primary);
+      expect(result.errors).toEqual([primary, secondary]); expect(result.code).toBeUndefined();
+    });
+
 });

@@ -1,4 +1,4 @@
-/** Dormant owner-bound publication, verified reads and metadata observations; no cleanup or runtime wiring. */
+/** Dormant owner-bound publication, observations and protected cleanup; no runtime wiring. */
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import * as fs from 'node:fs/promises';
@@ -7,6 +7,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { FileMemoryDirectoryScanBudget, type FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryArchiveCleanup, captureArchiveCleanupRequest, type ArchiveCleanupPhase, type FileArchiveCleanupResult } from './FileMemoryArchiveCleanup.js';
+export type { ArchiveCleanupPhase, FileArchiveCleanupResult } from './FileMemoryArchiveCleanup.js';
 import { FileMemoryListProofBudget } from './FileMemoryListProofBudget.js';
 import { captureMemoryVolumeEntryLimit, MAX_MEMORY_VOLUME_LIST_DIAGNOSTICS, type MemoryVolumeListOptions, type MemoryVolumeObservation, type MemoryVolumeListDiagnostic } from './MemoryVolumeObservation.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
@@ -65,6 +67,7 @@ export interface FileMemoryVolumeStoreOptions {
   /** Read-only deterministic fault barriers; no production callback or repair authority. */
   readonly afterObservation?: (phase: 'observed' | 'verified', location: string) => void | Promise<void>;
   /** Fault/process barriers only. Never recovery or production activation. */
+  readonly afterCleanup?: (phase: ArchiveCleanupPhase) => void | Promise<void>;
   readonly afterPublication?: (phase: ArchivePublicationPhase, residualPath: string) => void | Promise<void>;
 }
 interface ReadArchiveNamespace {
@@ -242,6 +245,27 @@ export class FileMemoryVolumeStore {
     if (process.platform === 'win32' || !process.getuid) throw new Error('File archive storage requires local POSIX ownership checks');
     this.options = Object.freeze({ ...options });
   }
+  /** Dormant exact unreferenced content cleanup; a fresh current head and exact receipt are required. */
+  removeUnreferenced(expected: OwnedFileMemoryToken, receipt: FileMemoryVolumeReceipt): Promise<FileArchiveCleanupResult> {
+    const captured = captureArchiveCleanupRequest(expected, receipt);
+    let outcome: FileArchiveCleanupResult | undefined;
+    return this.options.coordinator.withTenantTransaction(context => this.options.coordinator.perform(context, async operation => {
+      outcome = await new FileMemoryArchiveCleanup(this.options, operation, captured.token, captured.receipt).run();
+      return outcome;
+    })).catch(cause => {
+      const result = { status: outcome?.status === 'removed' ? 'removed' as const : 'unknown' as const,
+        reason: outcome?.status === 'removed' ? 'removed' as const : 'query' as const,
+        ...(outcome?.status === 'removed' ? { receipt: captured.receipt } : {}) };
+      Object.defineProperty(result, 'cause', { value: cause, enumerable: false });
+      return Object.freeze(result);
+    });
+  }
+  removeUnreferencedInTransaction(context: FileMemoryLeaseContext, expected: OwnedFileMemoryToken,
+    receipt: FileMemoryVolumeReceipt): Promise<FileArchiveCleanupResult> {
+    const captured = captureArchiveCleanupRequest(expected, receipt);
+    return this.options.coordinator.perform(context, operation =>
+      new FileMemoryArchiveCleanup(this.options, operation, captured.token, captured.receipt).run());
+  }
   createExclusive(expected: OwnedFileMemoryToken, input: FileMemoryVolumeInput): Promise<FileMemoryVolumeReceipt> {
     const captured = capture(input);
     const token = this.captureToken(expected);
@@ -366,7 +390,9 @@ export class FileMemoryVolumeStore {
     diagnose: (reason: MemoryVolumeListDiagnostic['reason'], message: string) => void, index = 0): Promise<void> {
     const group = groups[index];
     if (!group) return;
-    if (group.names.length !== 1 || group.names[0] !== `v${group.volume}`) {
+    if (group.names.includes(`v${group.volume}.cleanup.json`)) {
+      diagnose('partial', 'Pending cleanup blocks the archive declaration');
+    } else if (group.names.length !== 1 || group.names[0] !== `v${group.volume}`) {
       diagnose('alias', 'Archive number spelling is ambiguous');
     } else {
       try { declarations.push(await this.listDeclaration(root, token, group.volume, budget)); }
@@ -394,8 +420,9 @@ export class FileMemoryVolumeStore {
   private listCandidateGroups(names: readonly string[]): { volume: number; names: string[] }[] {
     const groups = new Map<number, string[]>();
     for (const name of names) {
-      if (!/^v\d+$/iu.test(name)) continue;
-      const volume = Number(name.slice(1));
+      const match = /^v(\d+)(.*)$/iu.exec(name);
+      if (!match) continue;
+      const volume = Number(match[1]);
       if (!Number.isSafeInteger(volume) || volume < 1) continue;
       const group = groups.get(volume) ?? [];
       group.push(name);
@@ -569,6 +596,12 @@ export class FileMemoryVolumeStore {
     this.requireCanonicalVolumeSpelling(siblings, volume);
   }
   private requireCanonicalVolumeSpelling(siblings: readonly string[], volume: number): void {
+    for (const name of siblings) {
+      const match = /^v(\d+)(.*)$/iu.exec(name);
+      if (!match || BigInt(match[1]) !== BigInt(volume) || name === `v${volume}`) continue;
+      if (name === `v${volume}.cleanup.json`) throw error('EARCHIVEBLOCKED', 'Pending cleanup blocks target archive admission');
+      throw error('EARCHIVEUNSAFE', 'Unknown target-derived archive residue is unsafe');
+    }
     if (siblings.some(name => /^v\d+$/iu.test(name) && BigInt(name.slice(1)) === BigInt(volume) && name !== `v${volume}`)) {
       throw error('EARCHIVEUNSAFE', 'Archive volume number alias is unsafe');
     }

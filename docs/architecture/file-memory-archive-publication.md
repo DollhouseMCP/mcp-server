@@ -227,3 +227,58 @@ maintenance execution and activation remain separate gates.
 The 1-second lock timeout and 5-second statement timeout apply to individual SQL
 statements, not the complete transaction. Test-only interleaving barriers are
 not production deadlines. No total transaction deadline guarantee is claimed.
+
+## Dormant file exact unreferenced cleanup
+
+`FileMemoryVolumeStore.removeUnreferenced(expectedOwnedToken, exactReceipt)` and
+its in-transaction form use one tracked operation and lease. A narrow
+`FileMemoryOwnerSnapshots.snapshotOwnedAtScope` seam returns raw content and its
+owned token from the same read, compares the fresh expected token and rechecks
+ACTIVE. The raw head is file reference authority; it has no separate database
+projection. All seven logical fields are validated, and any declaration of the
+target number blocks removal even if its digest differs. Logical paths never
+become unlink paths. The selected archive object cannot also be that head.
+
+Cleanup binds the original receipt, payload/metadata bytes and full file
+identities, full empty marker identity, relevant private directory lineage and
+complete fresh canonical names. Namespace commitments cover unchanged names
+and counts, with exact selected basenames enforced separately for each residual
+prefix. They do not promise unrelated-child metadata stability. Directory stable
+identity survives retry; full live directory metadata is bound within each
+invocation and changes only through verified own transitions.
+
+The exclusive, immutable `vN.cleanup.json` sits outside `vN`. It is written through
+its own descriptor, synced and closed, then its parent is qualified, synced and
+closed. It is never overwritten or advanced with mutable phases. Recovery admits
+only the ordered absence prefixes: marker, payload, metadata, generation, slot.
+Every remaining object still binds original evidence. Partial, malformed,
+contradictory, foreign or ambiguous residues remain preserved for manual handling.
+Each retry uses a fresh current head token; persisted head evidence is provenance,
+not authority. Newly referenced volumes block a retry.
+
+`removed` means this invocation performed the final slot rmdir and completed the
+qualified owner-directory sync and close. Its genuine receipt is captured before
+later hooks, audit or lease release; later failures retain it and exact
+non-enumerable causes. Physical removal with failed final sync/close is unknown.
+Fresh observation of an already absent slot returns `absent`, never historical
+removal. Attributable immutable intent retirement is also synced/closed; a late
+failure retains known removal where this invocation reached its boundary.
+
+Target archive read, allocation/publication and metadata listing refuse or
+diagnose pending/unknown target-derived cleanup residue. Listing remains honestly
+incomplete. Ordinary head snapshots, adoption, conditional UPDATE and owned
+CREATE gain no global cleanup guard; cleanup must still read current head authority
+while its valid intent exists. This is local cooperating-process crash safety,
+not hostile-filesystem or power-loss atomicity.
+
+The complete immutable record is bounded to 8 KiB, with supported numeric fields
+at most 40 characters. One operation-private counter retains bounded discovery,
+reserves once and charges entries, EOF and failures without reset/refund. Physical
+families are deduplicated for a 4,096-entry projected envelope, discovery is
+bounded by 8,192 attempts, and the reviewed 17-proof maximum derives a hard
+2,109,440-attempt ceiling. These are resource support bounds, not latency promises.
+Actual work includes fresh head reads, byte hashes and stats; populated capacity
+and real crash/interleaving qualification are required before activation.
+
+This executor remains unwired. Protected cleanup parity does not complete
+retention, owner erasure, reconciliation, every-writer integration or activation.

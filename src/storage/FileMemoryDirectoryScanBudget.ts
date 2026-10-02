@@ -22,9 +22,10 @@ export async function closeMemoryDirectoryInspection(
   try { await directory.close(); }
   catch (cause) {
     if (!primary) throw cause;
-    throw Object.assign(new AggregateError([primary.cause, cause], message, { cause: primary.cause }), {
-      code: (primary.cause as NodeJS.ErrnoException | undefined)?.code,
-    });
+    let code: string | undefined;
+    try { const value = (primary.cause as NodeJS.ErrnoException | null | undefined)?.code; if (typeof value === 'string') code = value; }
+    catch { /* An arbitrary primary's getter cannot replace either actual failure. */ }
+    throw Object.assign(new AggregateError([primary.cause, cause], message, { cause: primary.cause }), { code });
   }
   if (primary) throw primary.cause;
 }
