@@ -11,9 +11,10 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileMemoryOperationScope } from './FileMemoryTransactionCoordinator.js';
 
 import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdinal as ordinal, evidenceDecimal as decimal,
-  evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
+  OwnedHeadEvidenceBudget, evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
   evidenceOriginalIdentity as original, canonicalEvidence, stableEvidenceChild as stable, inspectEvidenceNames,
   withEvidenceFileClose, observeEvidenceDirectory, readEvidenceFile, admitEvidenceAncestor, writeEvidenceFile,
+  observeEvidenceCanonicalVolume, evidenceVolumeIdentity, captureEvidenceConfinement,
   type HeadIdentity as Identity, type HeadArtifact as Artifact, type HeadChild as Child,
   type HeadDirectory as Directory, type HeadDirectoryNames as DirectoryNames, type HeadFileEvidence as FileEvidence } from './FileMemoryOwnedHeadEvidence.js';
 
@@ -152,17 +153,9 @@ function parse(raw: string): Record {
   return record;
 }
 
-class RenameBudget {
-  consumed = 0;
-  private ceiling = 8192;
-  get limit(): number { return this.ceiling; }
-  private weights?: Map<string, number>;
+class RenameBudget extends OwnedHeadEvidenceBudget {
   reserve(slots: Map<string, string[]>, head: string): void {
-    if (this.weights) throw new FileMemoryDirectoryScanLimitError();
-    this.weights = new Map([...slots].map(([locator, names]) => [locator, new Set(names).size + 1]));
-    const P = [...this.weights.values()].reduce((sum, value) => sum + value, 0);
-    if (P > 4096) throw new FileMemoryDirectoryScanLimitError();
-    const q = (locator: string) => this.weights!.get(locator)! + (locator === '.' ? 0 : this.weights!.get(path.posix.dirname(locator)) ?? 0);
+    const { P, q } = this.reserveWeights(slots);
     // 89P forward +31P barriers +1P baseline +9P source reader.
     // Disjoint head/ancestor and registry/ownership roles give qH+qR<=P;
     // with retained discovery this is <=160P, inside the selected194P ceiling.
@@ -170,16 +163,12 @@ class RenameBudget {
     if (this.limit > 794624) throw new FileMemoryDirectoryScanLimitError();
   }
   private read(directory: Dir): Promise<Dirent | null> {
-    if (this.consumed >= this.limit) throw new FileMemoryDirectoryScanLimitError();
-    this.consumed++; return directory.read();
+    this.chargeRead(); return directory.read();
   }
   scan(target: string, inspect: (name: string) => void): Promise<void> {
     return inspectEvidenceNames(target, inspect, directory => this.read(directory), 'RENAME directory inspection and close failed');
   }
-  check(locator: string, names: string[]): void {
-    const weight = this.weights?.get(locator);
-    if (weight !== undefined && names.length + 1 > weight) throw new FileMemoryDirectoryScanLimitError();
-  }
+
 }
 function commitment(directory: Directory): Commitment {
   const children = directory.children.map(stable).map(child => [child.name, child.directory, child.identity.device, child.identity.inode,
@@ -356,25 +345,14 @@ export class FileMemoryOwnedRename {
     catch (cause) { if (causeCode(cause) === 'ENOENT') return undefined;
       throw cause; }
   }
-  private async confined(): Promise<void> {
-    const first = this.request.expectedToken.locator.includes('/') ? this.absolute(this.request.expectedToken.locator.split('/')[0]) : this.scope.tenantRoot;
-    const paths = [first, this.absolute('.memory-owners'), this.absolute('.memory-fences')];
-    const volumeBefore = await this.canonicalVolume();
-    const before = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
-    for (const stat of before) if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== BigInt(process.getuid!())) fail();
-    const locators = new Set<string>(['.', '.memory-owners', '.memory-owners/owners']);
-    let locator = '.';
-    for (const component of this.request.expectedToken.locator.split('/').slice(0, -1)) { locator = locator === '.' ? component : `${locator}/${component}`; locators.add(locator); }
-    // Ancestors are captured before descendants. No directory is created by RENAME.
-    const ordered = [...locators].sort((a, b) => a.split('/').length - b.split('/').length || ordinal(a, b));
-    this.directories = [];
-    for (const item of ordered) {
-      this.admitAncestor(item);
-      this.directories.push(await this.observe(item, true));
-    }
-    const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
-    const volumeAfter = await this.canonicalVolume();
-    this.validateConfinement(before, after, volumeBefore, volumeAfter);
+  private confined(): Promise<void> {
+    return captureEvidenceConfinement({
+      sourceLocator: () => this.request.expectedToken.locator, tenantRoot: () => this.scope.tenantRoot,
+      absolute: locator => this.absolute(locator), canonicalVolume: () => this.canonicalVolume(),
+      reset: () => { this.directories = []; }, admit: item => this.admitAncestor(item),
+      observe: item => this.observe(item, true), append: directory => { this.directories.push(directory); },
+      validate: (before, after, volumeBefore, volumeAfter) => this.validateConfinement(before, after, volumeBefore, volumeAfter), fail,
+    });
   }
   private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore: BigIntStats | undefined, volumeAfter: BigIntStats | undefined): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
@@ -394,19 +372,10 @@ export class FileMemoryOwnedRename {
   private matchesSelectedDirectory(stat: BigIntStats): boolean {
     return this.directories.some(directory => directory.identity.device === String(stat.dev) && directory.identity.inode === String(stat.ino));
   }
-  private async canonicalVolume(): Promise<BigIntStats | undefined> {
-    try {
-      const stat = await fs.lstat(this.absolute('volumes'), { bigint: true });
-      if (!stat.isDirectory() || stat.isSymbolicLink()) fail();
-      return stat;
-    } catch (cause) {
-      if (causeCode(cause) === 'ENOENT') return undefined;
-      throw cause;
-    }
+  private canonicalVolume(): Promise<BigIntStats | undefined> {
+    return observeEvidenceCanonicalVolume(this.absolute('volumes'), fail);
   }
-  private volumeIdentity(stat: BigIntStats) {
-    return { identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
-  }
+  private volumeIdentity(stat: BigIntStats) { return evidenceVolumeIdentity(stat, fail); }
   private admitAncestor(item: string): void { admitEvidenceAncestor(item, this.directories, fail); }
   private paths(): void {
     this.source = this.absolute(this.request.expectedToken.locator); this.destination = this.absolute(this.request.destinationLocator);

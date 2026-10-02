@@ -484,3 +484,103 @@ can change when adding a regular file, so no OS-based nlink formula is assumed.
 Cross-invocation same-inode directory timestamp/nlink-only drift is not proved
 absent. This is the existing cooperating-local-filesystem observation model,
 not protection against an arbitrary hostile filesystem or a power-loss guarantee.
+
+## Dormant exact head DELETE and forward recovery
+
+`FileMemoryOwnerSnapshots.deleteOwned({ operationId, expectedToken })` and
+`deleteOwnedInTransaction(context, request)` delete an exactly owned file head
+under the existing active tenant operation. They are not wired into runtime
+writers. An active operation lease is distinct from the original owner metadata
+being ACTIVE: recovery proves its own exact DELETING artifacts instead of relaxing
+ordinary owned-head reads.
+
+The exclusive canonical per-head journal records BASE, REGISTRY_DELETING,
+PAIR_DELETING, HEAD_REMOVED and TERMINAL. Registry and adjacent metadata become
+DELETING durably before unlinking the original head. The terminal registry is a
+minimal HEAD_DELETED record containing tenant user, old owner UUID and deletion
+operation UUID. Exact adjacent metadata and journal retirement require qualified
+parent-directory sync and successful close. Only this invocation's actual head
+unlink followed by that final boundary yields `head-deleted` evidence with its
+proved locator. Recovery after head absence yields `already-head-deleted`
+observation without locator, content hash or revision; it is not a reconstructed
+historical deletion receipt.
+
+A captured current outcome survives later audit or coordinator-release failure as
+`EHEADDELETED` with the genuine result and exact direct cause. Uncaptured failures
+cannot inherit prior or forged outcome markers. Partial journals, replacement
+stages and mutation-before-next-complete-record gaps are preserved for manual
+recovery; neither absence nor matching terminal JSON advances an incomplete
+phase. A clean terminal retry requires both old head and sidecar absent, or a
+fresh ordinary owned-head read proving a different memory owner UUID. It never
+unlinks that replacement. Device/inode reuse alone does not contradict a genuinely
+different owner: the shortcut refuses the exact full original head identity, then
+requires the fresh ordinary owned/different-UUID proof for a replacement.
+
+All old-owner archive states remain untouched, including committed, unindexed,
+partial, temporary, malformed and pending-cleanup objects. DELETE performs no
+archive census and claims only head deletion with erasure pending. The minimal
+tombstone predates head-artifact retirement and cannot authorize owner erasure
+following restart. [#2903's durable retirement-authority prerequisite](https://github.com/DollhouseMCP/mcp-server/issues/2903#issuecomment-5945940657)
+requires separately proved retirement-complete authority before exhaustive erasure
+and tombstone retirement; current observations are not that capability.
+
+Request capture rejects platforms other than Linux and Darwin before acquiring a
+tenant fence. With the actual canonical scope, admission bounds each absolute generated path plus NUL
+to 4,096 or 1,024 UTF-8 bytes respectively before DELETE artifacts or source
+mutation, bounds components to 255 bytes, and rejects canonical archive
+ancestry or its captured physical aliases without archive enumeration. All five
+complete journal envelopes must fit 8 KiB before the first artifact. The private
+retained read budget reserves `D + 109P + 20qH + 6qR`, at most 130P under the admitted
+physical-role disjointness, with P at most 4,096 and a 532,480-attempt ceiling.
+Every EOF and failed read is charged; recovery retains its discovery charge and
+cannot reset the quota. Fresh names, selected identities, full own artifacts and
+full foreign-baseline checkpoints remain mandatory. Directory evidence has the
+same cooperating-local-filesystem and cross-invocation limitations described
+above. Process-interruption qualification does not prove power-loss durability.
+
+All nine populated DELETE capacity scenarios separately bound serial
+fixture construction and baseline capture to 10 seconds. Actual fresh deletion or
+interruption/recovery and all preservation verification then share one 10-second
+lifecycle bound. This explicitly
+relaxes the previous 10-second whole-scenario test policy; it does not change the
+operation's proofs, read budgets, workload or deadlines. Diagnostics retain total
+elapsed time and report lifecycle elapsed time from the test boundary. The same
+approved setup/lifecycle boundary applies to all six fresh and three interrupted
+recovery scenarios; CI job timeout remains unchanged.
+
+The same separately bounded 10-second setup and 10-second lifecycle policy also
+applies to the one RESERVED-adoption recovery case with 4,096 unrelated files:
+initial fixture, unchanged `Promise.all` noise-file creation and residual baseline
+capture precede the recovery/refusal and all evidence verification. Its shared
+invocation read cap and expected resource refusal remain unchanged. The nearby
+post-publication exhaustion injection retains its existing test boundary.
+
+The common POSIX fence acquisition path now also admits canonical `volumes`,
+`.memory-fences` and tenant-root separation before any fence-parent mkdir attempt
+and before each lease mkdir, including retries. Stable physical aliases among
+these roles, or unsafe present canonical directories, refuse without a callback
+or lease write. Missing `volumes` remains supported and admission never creates
+it. This deliberately strengthens both generic per-locator and tenant fence
+admission. For example, standalone archive publication against a symbolic
+`volumes` namespace now refuses earlier with `EHEADCONFLICT`, before its callback
+and lease attempts; archive-level checks inside an already legitimate transaction
+still return `EARCHIVEUNSAFE`. The earlier error boundary is deliberate. The read-only sandwich binds existing device/inode, type, mode and UID;
+it permits cooperating lease changes to directory times, size and link count,
+and validates optional namespaces created by cooperating publishers while it
+observes. Existing namespaces cannot disappear or be replaced.
+The acquisition deadline is checked again after admission and never extended.
+DELETE additionally compares canonical volume/fence identity in its fresh
+confinement observation, including when invoked in an existing transaction.
+These checks protect cooperating local POSIX operations and detect observed
+namespace changes; pathname checks cannot atomically exclude hostile mount swaps
+or arbitrary same-UID topology writers. They do not undo an earlier legitimate
+lease acquisition if topology changes later. Release and manual orphan-lease
+handling remain unchanged.
+
+DELETE reuses the internal phase-independent owned-head evidence primitives for
+canonical observation, descriptor reads/closes, full directory transitions and
+exclusive writes. Its full foreign baseline, five-state protocol, reservation,
+partial hooks and current-outcome branding remain executor-owned; it does not
+adopt RENAME's operation-specific targeted transition semantics.
+
+Prelease fence admission also observes the optional `.memory-owners` directory and, only after that ancestor is observed as an actual nonsymlink directory, its optional `owners` registry directory. A present unsafe managed owner/registry type or a physical identity alias between either directory and `.memory-fences` is refused with `EHEADCONFLICT` before parent or lease mkdir attempts. Missing owner ancestors are not traversed. These fixed readonly observations add no census, adoption or archive write authority; exact unrelated observation failures propagate. Stable existing identity/type/mode/UID checks and validated cooperating missing-to-present creation remain, without freezing mutable child metadata or extending acquisition deadlines. Each admission now awaits the root/volume/fence/owner observation batch and then conditionally the registry observation before returning; this adds a readonly observation boundary. With both owner directories present there are ten admission lstat calls per check (thirty admission calls across normal acquisition, ten per retry); with the owner ancestor absent there are eight (twenty-four admission calls across normal acquisition). Existing restricted-directory and lease-initialization stats remain additional calls. This initial cooperating POSIX separation check does not prove immunity to subsequent hostile topology changes.
