@@ -675,4 +675,34 @@ describe('dormant same-parent managed RENAME', () => {
     expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
   });
 
+  it('preflights real composed/decomposed destination resolution without assuming filesystem normalization', async () => {
+    const f = await fixture(), sourceLocator = 'Café.yaml', destinationLocator = 'Cafe\u0301.yaml';
+    expect(sourceLocator.toLowerCase()).not.toBe(destinationLocator.toLowerCase());
+    const token = await f.store().createOwned({ operationId: randomUUID(), locator: sourceLocator, content: CONTENT });
+    const source = path.join(f.root, sourceLocator), destination = path.join(f.root, destinationLocator);
+    const sidecar = path.join(f.root, `.${createHash('sha256').update(sourceLocator).digest('hex')}.memory-owner.json`);
+    const registry = path.join(f.root, '.memory-owners', 'owners', `${token.ownerId}.json`);
+    const targets = [source, sidecar, registry], before = await Promise.all(targets.map(evidence)), names = (await fs.readdir(f.root)).sort();
+    const original = await fs.lstat(source, { bigint: true });
+    const resolved = await fs.lstat(destination, { bigint: true }).catch(cause => { if (cause.code !== 'ENOENT') throw cause; return undefined; });
+    const request = { operationId: randomUUID(), expectedToken: token, destinationLocator };
+    console.info('[RENAME NAME RESOLUTION]', { platform: process.platform, resolution: !resolved ? 'distinct-absent' : resolved.dev === original.dev && resolved.ino === original.ino ? 'same-identity-alias' : 'foreign-occupied' });
+    if (resolved) {
+      // Actual descriptor equality identifies a normalization alias; a different inode is still an occupied destination.
+      const aliasesSource = resolved.dev === original.dev && resolved.ino === original.ino;
+      if (aliasesSource) expect([resolved.dev, resolved.ino]).toEqual([original.dev, original.ino]);
+      await expect(f.store().renameOwned(request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', residual: false });
+      expect(await Promise.all(targets.map(evidence))).toEqual(before);
+      expect((await fs.readdir(f.root)).sort()).toEqual(names);
+      expect((await f.store().readHeadSnapshot(sourceLocator)).token).toEqual(token);
+    } else {
+      const moved = await f.store().renameOwned(request);
+      expect(moved.ownerId).toBe(token.ownerId); expect(moved.revision).toBe(String(BigInt(token.revision) + 1n));
+      expect(moved.locator).toBe(destinationLocator); expect(await fs.readFile(destination, 'utf8')).toBe(CONTENT);
+      expect((await f.store().readHeadSnapshot(destinationLocator)).token).toEqual(moved);
+      await expect(fs.lstat(source)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect((await fs.readdir(f.root)).some(name => name.endsWith('.memory-write.json') || name.includes('.rename-'))).toBe(false);
+  });
+
 });

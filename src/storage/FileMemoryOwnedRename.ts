@@ -509,6 +509,7 @@ export class FileMemoryOwnedRename {
       await this.recover(); this.preflight(); return;
     }
     this.admitFreshHead();
+    await this.absent(this.destination);
     this.rejectStages();
     const snapshot = await this.reader(this.budget); if (!equal(snapshot.token, token)) fail('EHEADCONFLICT');
     this.binding = { ...this.expectedBinding(), contentBytes: Buffer.byteLength(snapshot.content) };
