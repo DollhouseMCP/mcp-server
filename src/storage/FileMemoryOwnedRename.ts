@@ -41,14 +41,26 @@ const HASH = /^[0-9a-f]{64}$/u;
 const DOMAIN = 'dollhouse.rename.schema4.full-children.v1';
 const RAW_HEAD_LIMIT = 3 * MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE;
 const LIMIT = 8192, MAX_REVISION = 9223372036854775807n;
-const states: State[] = ['BASE_RENAME', 'RESERVED_RENAME', 'PREPARED_RENAME', 'LINKED_RENAME', 'MOVED_RENAME', 'DESTINATION_METADATA_RENAME', 'METADATA_RENAME', 'FINAL_RENAME'];
+const states = new Set<State>(['BASE_RENAME', 'RESERVED_RENAME', 'PREPARED_RENAME', 'LINKED_RENAME', 'MOVED_RENAME', 'DESTINATION_METADATA_RENAME', 'METADATA_RENAME', 'FINAL_RENAME']);
 function fail(code = 'EOWNERRECOVERY'): never { throw Object.assign(new Error('Managed RENAME evidence is unsafe or changed'), { code }); }
+function causeCode(cause: unknown): string | undefined {
+  try { const value = (cause as NodeJS.ErrnoException | null | undefined)?.code; return typeof value === 'string' ? value : undefined; }
+  catch { return undefined; }
+}
 const digest = (raw: string) => createHash('sha256').update(raw).digest('hex');
-const ordinal = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+function ordinal(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
 function decimal(value: string, width: number, signed = false): boolean {
   return typeof value === 'string' && (signed ? /^(?:0|-?[1-9]\d*)$/u : /^(?:0|[1-9]\d*)$/u).test(value) && value.replace('-', '').length <= width;
 }
-function scalar(value: bigint, width = 40): string { const result = String(value); if (!decimal(result, width, true)) fail('EHEADRESOURCE'); return result; }
+function scalar(value: bigint, width = 40): string {
+  const result = String(value);
+  if (!decimal(result, width, true)) fail('EHEADRESOURCE');
+  return result;
+}
 function identity(stat: BigIntStats): Identity { return { device: scalar(stat.dev), inode: scalar(stat.ino), size: scalar(stat.size), mtimeNs: scalar(stat.mtimeNs), ctimeNs: scalar(stat.ctimeNs) }; }
 function keys(value: unknown, expected: string[]): value is object {
   return !!value && typeof value === 'object' && !Array.isArray(value) && Reflect.ownKeys(value).length === expected.length &&
@@ -60,6 +72,7 @@ function validIdentity(value: unknown): value is Identity {
   return ['device', 'inode', 'size'].every(key => decimal(item[key as keyof Identity], 40)) &&
     ['mtimeNs', 'ctimeNs'].every(key => decimal(item[key as keyof Identity], 40, true));
 }
+// Own link/unlink changes ctime; phase checks separately bind full identity and mode/UID.
 function original(a: Identity, b: Identity): boolean { return a.device === b.device && a.inode === b.inode && a.size === b.size && a.mtimeNs === b.mtimeNs; }
 function validLocator(value: unknown): value is string {
   return typeof value === 'string' && !!value && Buffer.byteLength(value) <= 1024 && Buffer.from(value).toString('utf8') === value &&
@@ -74,7 +87,7 @@ export function captureRenameRequest(input: RenameOwnedRequest): RenameOwnedRequ
     !validLocator(token.locator) || !decimal(token.revision, 19) || BigInt(token.revision) < 1n || BigInt(token.revision) >= MAX_REVISION ||
     typeof token.userId !== 'string' || !token.userId || Buffer.byteLength(token.userId) > 128 || typeof token.tenantRoot !== 'string' ||
     path.posix.dirname(token.locator) !== path.posix.dirname(destinationLocator) || path.posix.basename(token.locator).toLowerCase() === path.posix.basename(destinationLocator).toLowerCase() ||
-    ['.memory-owners', '.memory-fences'].includes(token.locator.split('/')[0])) throw new TypeError('Unsupported managed RENAME request');
+    ['.memory-owners', '.memory-fences', 'volumes'].includes(token.locator.split('/')[0])) throw new TypeError('Unsupported managed RENAME request');
   return Object.freeze({ operationId, destinationLocator, expectedToken: Object.freeze({ ...token, fileIdentity: Object.freeze({ ...token.fileIdentity }) }) });
 }
 const fieldOrder = ['schema', 'state', 'binding', 'baseline', 'originalSourceJournal', 'reservation', 'prior', 'currentHead', 'destinationSidecar', 'newRegistry',
@@ -91,7 +104,11 @@ function canonical(value: unknown): unknown {
   }
   return value;
 }
-function serialize(record: Record): string { const raw = JSON.stringify(canonical(record)); if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE'); return raw; }
+function serialize(record: Record): string {
+  const raw = JSON.stringify(canonical(record));
+  if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE');
+  return raw;
+}
 function artifact(raw: string, captured: Identity): Artifact { return { raw, digest: digest(raw), identity: captured }; }
 function validArtifact(value: unknown): value is Artifact {
   if (!keys(value, ['raw', 'digest', 'identity'])) return false;
@@ -101,7 +118,7 @@ function validArtifact(value: unknown): value is Artifact {
 function validHistory(value: unknown, withState = false): boolean {
   if (!keys(value, withState ? ['state', 'digest', 'identity'] : ['digest', 'identity'])) return false;
   const item = value as Historical & { state?: State };
-  return HASH.test(item.digest) && validIdentity(item.identity) && BigInt(item.identity.size) <= BigInt(LIMIT) && (!withState || states.includes(item.state!));
+  return HASH.test(item.digest) && validIdentity(item.identity) && BigInt(item.identity.size) <= BigInt(LIMIT) && (!withState || states.has(item.state!));
 }
 function validChild(item: Child): boolean {
   return keys(item, ['name', 'identity', 'mode', 'uid', 'links', 'directory']) && typeof item.name === 'string' && !!item.name && !item.name.includes('/') &&
@@ -123,19 +140,21 @@ function validateBaseline(baseline: Baseline): void {
     (entry.locator !== '.' && !validLocator(entry.locator)) || !decimal(entry.device, 40) || !decimal(entry.inode, 40) || !decimal(entry.mode, 20) || !decimal(entry.uid, 20) ||
     !Number.isInteger(entry.childCount) || entry.childCount < 0 || entry.childCount > 4095 || entry.domain !== DOMAIN || !HASH.test(entry.sha256)) fail();
 }
+function validateFinal(final: FinalRecord, common: string[]): void {
+  if (!keys(final, [...common, 'sourceFinalJournal', 'prior']) || !keys(final.sourceFinalJournal, ['record', 'digest', 'identity']) || !validHistory(final.prior, true) || final.prior.state !== 'RESERVED_RENAME') fail();
+  const terminal = final.sourceFinalJournal.record;
+  if (terminal?.state !== 'METADATA_RENAME') fail();
+  validateRecord(terminal);
+  const raw = serialize(terminal);
+  if (!equal(terminal.binding, final.binding) || digest(raw) !== final.sourceFinalJournal.digest || !validIdentity(final.sourceFinalJournal.identity) ||
+    final.sourceFinalJournal.identity.size !== String(Buffer.byteLength(raw)) || !equal(terminal.reservation, { digest: final.prior.digest, identity: final.prior.identity })) fail();
+}
 function validateRecord(record: Record): void {
-  if (!record || record.schema !== 4 || !states.includes(record.state)) fail();
+  if (record?.schema !== 4 || !states.has(record.state)) fail();
   validateBinding(record.binding);
   const common = ['schema', 'state', 'binding'];
   if (record.state === 'FINAL_RENAME') {
-    const final = record as FinalRecord;
-    if (!keys(final, [...common, 'sourceFinalJournal', 'prior']) || !keys(final.sourceFinalJournal, ['record', 'digest', 'identity']) || !validHistory(final.prior, true) || final.prior.state !== 'RESERVED_RENAME') fail();
-    const terminal = final.sourceFinalJournal.record;
-    if (terminal?.state !== 'METADATA_RENAME') fail();
-    validateRecord(terminal);
-    const raw = serialize(terminal);
-    if (!equal(terminal.binding, final.binding) || digest(raw) !== final.sourceFinalJournal.digest || !validIdentity(final.sourceFinalJournal.identity) ||
-      final.sourceFinalJournal.identity.size !== String(Buffer.byteLength(raw)) || !equal(terminal.reservation, { digest: final.prior.digest, identity: final.prior.identity })) fail();
+    validateFinal(record as FinalRecord, common);
     return;
   }
   if (record.state === 'RESERVED_RENAME') {
@@ -149,6 +168,9 @@ function validateRecord(record: Record): void {
   if (!keys(source, [...common, 'baseline', ...extras])) fail();
   validateBaseline(source.baseline);
   if (source.state === 'BASE_RENAME') return;
+  validateSourceHistory(source);
+}
+function validateSourceHistory(source: SourceRecord): void {
   const previous: { [key: string]: State } = { PREPARED_RENAME: 'BASE_RENAME', LINKED_RENAME: 'PREPARED_RENAME', MOVED_RENAME: 'LINKED_RENAME', DESTINATION_METADATA_RENAME: 'MOVED_RENAME', METADATA_RENAME: 'DESTINATION_METADATA_RENAME' };
   if (!validHistory(source.originalSourceJournal) || !validHistory(source.reservation) || !validHistory(source.prior, true) || source.prior!.state !== previous[source.state] ||
     (source.state === 'PREPARED_RENAME' && !equal(source.currentHead?.identity, source.binding.originalSourceIdentity)) ||
@@ -157,7 +179,9 @@ function validateRecord(record: Record): void {
 }
 function parse(raw: string): Record {
   let record: Record; try { record = JSON.parse(raw) as Record; } catch { fail(); }
-  validateRecord(record); if (serialize(record) !== raw) fail(); return record;
+  validateRecord(record);
+  if (serialize(record) !== raw) fail();
+  return record;
 }
 
 class RenameBudget {
@@ -225,11 +249,12 @@ export class FileMemoryOwnedRename {
   private async closed<T>(handle: fs.FileHandle, body: () => Promise<T>): Promise<T> {
     let value!: T, primary: { cause: unknown } | undefined;
     try { value = await body(); } catch (cause) { primary = { cause }; }
-    try { await handle.close(); } catch (closeCause) {
-      if (primary) { const error = new Error('RENAME operation and close failed'); this.closeFailures.set(error, { cause: primary.cause, closeCause }); throw error; }
-      throw closeCause;
+    try { await handle.close(); } catch (error_) {
+      if (primary) { const error = new Error('RENAME operation and close failed'); this.closeFailures.set(error, { cause: primary.cause, closeCause: error_ }); throw error; }
+      throw error_;
     }
-    if (primary) throw primary.cause; return value;
+    if (primary) throw primary.cause;
+    return value;
   }
   private async observe(locator: string, full: true): Promise<Directory>;
   private async observe(locator: string, full: false): Promise<DirectoryNames>;
@@ -246,7 +271,10 @@ export class FileMemoryOwnedRename {
         const stat = await fs.lstat(path.join(target, name), { bigint: true });
         return { name, identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
       }));
-      for (const result of observed) { if (result.status === 'rejected') throw result.reason; children.push(result.value); }
+      for (const result of observed) {
+        if (result.status === 'rejected') throw result.reason;
+        children.push(result.value);
+      }
     }
     const after = await fs.lstat(target, { bigint: true });
     if (!equal(identity(before), identity(after)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
@@ -260,7 +288,8 @@ export class FileMemoryOwnedRename {
       if (!before.isFile() || before.nlink !== BigInt(links) || before.uid !== BigInt(process.getuid!()) ||
         (privateFile && (before.mode & 0o777n) !== 0o600n) || before.size > BigInt(maximum)) fail();
       const bytes = Buffer.alloc(Number(before.size)); let offset = 0;
-      while (offset < bytes.length) { const read = await handle.read(bytes, offset, bytes.length - offset, offset); if (!read.bytesRead) fail(); offset += read.bytesRead; }
+      while (offset < bytes.length) { const read = await handle.read(bytes, offset, bytes.length - offset, offset); if (!read.bytesRead) fail();
+        offset += read.bytesRead; }
       const raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
       const after = await handle.stat({ bigint: true }), named = await fs.lstat(target, { bigint: true });
       if (!equal(identity(before), identity(after)) || !equal(identity(after), identity(named)) || before.nlink !== named.nlink || before.mode !== named.mode || before.uid !== named.uid) fail();
@@ -284,6 +313,10 @@ export class FileMemoryOwnedRename {
     const children = new Map(after.children.map(child => [child.name, child]));
     for (const child of before.children) if (!remove.includes(child.name) && !changed.includes(child.name) && !equal(child, children.get(child.name))) fail();
     this.directories[index] = after;
+    await this.transitionAncestor(target, index);
+    await this.proof();
+  }
+  private async transitionAncestor(target: string, index: number): Promise<void> {
     const ancestorIndex = this.directories.findIndex(item => this.absolute(item.locator) === path.dirname(target));
     if (ancestorIndex >= 0 && ancestorIndex !== index) {
       const ancestor = this.directories[ancestorIndex], fresh = await this.observe(ancestor.locator, true), name = path.basename(target);
@@ -292,7 +325,6 @@ export class FileMemoryOwnedRename {
       for (const child of ancestor.children) if (!equal(child.name === name ? stable(child) : child, child.name === name ? stable(observed.get(child.name)!) : observed.get(child.name))) fail();
       this.directories[ancestorIndex] = fresh;
     }
-    await this.proof();
   }
   private async barrier(phase: RenamePublication, mandatory = false): Promise<void> { await this.hook?.(phase); await this.proof(mandatory || !!this.hook); }
   private async sync(target: string, final = false): Promise<void> {
@@ -309,7 +341,8 @@ export class FileMemoryOwnedRename {
     } else this.active();
   }
   private async write(target: string, raw: string, partial: RenamePublication): Promise<Artifact> {
-    if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE'); await this.proof(); this.active();
+    if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE');
+    await this.proof(); this.active();
     this.residual = true;
     const handle = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     const captured = await this.closed(handle, async () => {
@@ -317,7 +350,8 @@ export class FileMemoryOwnedRename {
       while (split > 0 && (bytes[split] & 0xc0) === 0x80) split--;
       const write = async (part: Buffer) => {
         let offset = 0;
-        while (offset < part.length) { this.active(); const result = await handle.write(part, offset, part.length - offset, null); this.active(); if (!result.bytesWritten) fail(); offset += result.bytesWritten; }
+        while (offset < part.length) { this.active(); const result = await handle.write(part, offset, part.length - offset, null); this.active(); if (!result.bytesWritten) fail();
+          offset += result.bytesWritten; }
       };
       await write(bytes.subarray(0, split));
       const original = await handle.stat({ bigint: true }), part = await this.read(target, split), observed = await handle.stat({ bigint: true });
@@ -344,7 +378,9 @@ export class FileMemoryOwnedRename {
     await this.transition(path.dirname(target), [], [path.basename(stage)], [path.basename(target)]); await this.sync(path.dirname(target));
     this.attempted = false; return artifact(published.raw, published.identity);
   }
-  private history(target: string): Historical { const file = this.files.get(target); if (!file) fail(); return { digest: file.digest, identity: file.identity }; }
+  private history(target: string): Historical { const file = this.files.get(target);
+    if (!file) fail();
+    return { digest: file.digest, identity: file.identity }; }
   private async publish(next: SourceRecord, partial: RenamePublication, durable: RenamePublication): Promise<void> {
     next.prior = { state: this.record.state, ...this.history(this.sourceJournal) }; validateRecord(next);
     await this.replace(this.sourceJournal, next, next.state, partial); this.record = next; await this.barrier(durable);
@@ -355,11 +391,13 @@ export class FileMemoryOwnedRename {
   }
   private async optional(target: string): Promise<Artifact | undefined> {
     try { const file = await this.read(target, LIMIT); this.files.set(target, file); return artifact(file.raw, file.identity); }
-    catch (cause) { if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined; throw cause; }
+    catch (cause) { if (causeCode(cause) === 'ENOENT') return undefined;
+      throw cause; }
   }
   private async confined(): Promise<void> {
     const first = this.request.expectedToken.locator.includes('/') ? this.absolute(this.request.expectedToken.locator.split('/')[0]) : this.scope.tenantRoot;
     const paths = [first, this.absolute('.memory-owners'), this.absolute('.memory-fences')];
+    const volumeBefore = await this.canonicalVolume();
     const before = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
     for (const stat of before) if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== BigInt(process.getuid!())) fail();
     const locators = new Set<string>(['.', '.memory-owners', '.memory-owners/owners']);
@@ -369,29 +407,49 @@ export class FileMemoryOwnedRename {
     const ordered = [...locators].sort((a, b) => a.split('/').length - b.split('/').length || ordinal(a, b));
     this.directories = [];
     for (const item of ordered) {
-      if (item !== '.') {
-        const parent = this.directories.find(directory => directory.locator === path.posix.dirname(item));
-        const name = path.posix.basename(item);
-        if (!parent || !parent.names.includes(name)) fail();
-        const aliases = parent.children.filter(child => child.name !== name && child.name.toLowerCase() === name.toLowerCase());
-        if (aliases.length) {
-          const actual = parent.children.find(child => child.name === name)!;
-          if (parent.locator !== '.' || !['.memory-owners', '.memory-fences'].includes(name.toLowerCase()) || !actual.directory ||
-            aliases.some(child => !child.directory || (child.identity.device === actual.identity.device && child.identity.inode === actual.identity.inode))) fail();
-        }
-      }
+      this.admitAncestor(item);
       this.directories.push(await this.observe(item, true));
     }
     const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
+    const volumeAfter = await this.canonicalVolume();
+    if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
+    if (volumeBefore && volumeBefore.dev === before[0].dev && volumeBefore.ino === before[0].ino) fail('EHEADCONFLICT');
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();
     if (before.slice(1).some(stat => stat.dev === before[0].dev && stat.ino === before[0].ino)) fail('EHEADCONFLICT');
     const pairs = new Set<string>();
     for (const directory of this.directories) {
-      const pair = `${directory.identity.device}:${directory.identity.inode}`; if (pairs.has(pair)) fail(); pairs.add(pair);
+      const pair = `${directory.identity.device}:${directory.identity.inode}`; if (pairs.has(pair)) fail();
+      pairs.add(pair);
     }
     const H = this.directories.find(directory => directory.locator === path.posix.dirname(this.request.expectedToken.locator))!;
     if (this.directories.filter(item => item.locator === '.memory-owners' || item.locator === '.memory-owners/owners').some(item =>
       item.identity.device === H.identity.device && item.identity.inode === H.identity.inode)) fail('EHEADCONFLICT');
+  }
+  private async canonicalVolume(): Promise<BigIntStats | undefined> {
+    try {
+      const stat = await fs.lstat(this.absolute('volumes'), { bigint: true });
+      if (!stat.isDirectory() || stat.isSymbolicLink()) fail();
+      return stat;
+    } catch (cause) {
+      if (causeCode(cause) === 'ENOENT') return undefined;
+      throw cause;
+    }
+  }
+  private volumeIdentity(stat: BigIntStats) {
+    return { identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
+  }
+  private admitAncestor(item: string): void {
+      if (item !== '.') {
+        const parent = this.directories.find(directory => directory.locator === path.posix.dirname(item));
+        const name = path.posix.basename(item);
+        if (!parent?.names.includes(name)) fail();
+        const aliases = parent.children.filter(child => child.name !== name && child.name.toLowerCase() === name.toLowerCase());
+        if (aliases.length) {
+          const actual = parent.children.find(child => child.name === name)!;
+          if (parent.locator !== '.' || !['.memory-owners', '.memory-fences', 'volumes'].includes(name.toLowerCase()) || !actual.directory ||
+            aliases.some(child => !child.directory || (child.identity.device === actual.identity.device && child.identity.inode === actual.identity.inode))) fail();
+        }
+      }
   }
   private paths(): void {
     this.source = this.absolute(this.request.expectedToken.locator); this.destination = this.absolute(this.request.destinationLocator);
@@ -410,7 +468,8 @@ export class FileMemoryOwnedRename {
   }
   private child(target: string): Child {
     const parent = this.directories.find(item => item.locator === this.relative(path.dirname(target)))!;
-    const child = parent.children.find(item => item.name === path.basename(target)); if (!child || child.directory || child.links !== '1') fail(); return child;
+    const child = parent.children.find(item => item.name === path.basename(target)); if (!child || child.directory || child.links !== '1') fail();
+    return child;
   }
   private expectedBinding(): Omit<Binding, 'contentBytes'> {
     const token = this.request.expectedToken;
@@ -425,26 +484,13 @@ export class FileMemoryOwnedRename {
     this.paths(); await this.confined(); this.reserve();
     const destinationJournal = await this.optional(this.destinationJournal), sourceJournal = await this.optional(this.sourceJournal);
     if (destinationJournal || sourceJournal) {
-      if (!destinationJournal) fail();
-      const destinationRecord = parse(destinationJournal.raw);
-      if (destinationRecord.state === 'FINAL_RENAME') {
-        this.final = destinationRecord as FinalRecord; this.record = this.final.sourceFinalJournal.record;
-        if (sourceJournal && (!equal(sourceJournal.identity, this.final.sourceFinalJournal.identity) || sourceJournal.raw !== serialize(this.record))) fail();
-      } else {
-        if (destinationRecord.state !== 'RESERVED_RENAME' || !sourceJournal) fail();
-        const sourceRecord = parse(sourceJournal.raw);
-        if (sourceRecord.state === 'FINAL_RENAME' || sourceRecord.state === 'RESERVED_RENAME' || sourceRecord.state === 'BASE_RENAME') fail();
-        this.record = sourceRecord as SourceRecord;
-        if (!equal(this.record.reservation, artifactHistory(destinationJournal)) || !equal(this.record.originalSourceJournal, destinationRecord.originalSourceJournal) || !equal(this.record.binding, destinationRecord.binding)) fail();
-      }
+      this.restoreRecords(destinationJournal, sourceJournal);
       this.binding = this.record.binding;
       if (!equal(this.binding, { ...this.expectedBinding(), contentBytes: this.binding.contentBytes })) fail('EHEADCONFLICT');
       await this.recover(); this.preflight(); return;
     }
-    const H = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!;
-    for (const target of [this.destination, this.destinationSidecar, this.destinationJournal]) if (H.names.some(name => name.toLowerCase() === path.basename(target).toLowerCase())) fail('EHEADCONFLICT');
-    if (!H.names.includes(path.basename(this.source)) || H.names.some(name => name !== path.basename(this.source) && name.toLowerCase() === path.basename(this.source).toLowerCase())) fail();
-    await this.rejectStages();
+    this.admitFreshHead();
+    this.rejectStages();
     const snapshot = await this.reader(this.budget); if (!equal(snapshot.token, token)) fail('EHEADCONFLICT');
     this.binding = { ...this.expectedBinding(), contentBytes: Buffer.byteLength(snapshot.content) };
     const head = await this.read(this.source, this.binding.contentBytes, '1', false), sidecar = await this.optional(this.sourceSidecar), registry = await this.optional(this.registry);
@@ -460,7 +506,26 @@ export class FileMemoryOwnedRename {
     await this.publish({ ...this.record, state: 'PREPARED_RENAME', originalSourceJournal, reservation: artifactHistory(reserved),
       currentHead: { identity: head.identity, links: '1' } }, 'partial-prepared', 'prepared-durable');
   }
-  private async rejectStages(): Promise<void> {
+  private admitFreshHead(): void {
+    const H = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!;
+    for (const target of [this.destination, this.destinationSidecar, this.destinationJournal]) if (H.names.some(name => name.toLowerCase() === path.basename(target).toLowerCase())) fail('EHEADCONFLICT');
+    if (!H.names.includes(path.basename(this.source)) || H.names.some(name => name !== path.basename(this.source) && name.toLowerCase() === path.basename(this.source).toLowerCase())) fail();
+  }
+  private restoreRecords(destinationJournal: Artifact | undefined, sourceJournal: Artifact | undefined): void {
+      if (!destinationJournal) fail();
+      const destinationRecord = parse(destinationJournal.raw);
+      if (destinationRecord.state === 'FINAL_RENAME') {
+        this.final = destinationRecord as FinalRecord; this.record = this.final.sourceFinalJournal.record;
+        if (sourceJournal && (!equal(sourceJournal.identity, this.final.sourceFinalJournal.identity) || sourceJournal.raw !== serialize(this.record))) fail();
+      } else {
+        if (destinationRecord.state !== 'RESERVED_RENAME' || !sourceJournal) fail();
+        const sourceRecord = parse(sourceJournal.raw);
+        if (sourceRecord.state === 'FINAL_RENAME' || sourceRecord.state === 'RESERVED_RENAME' || sourceRecord.state === 'BASE_RENAME') fail();
+        this.record = sourceRecord as SourceRecord;
+        if (!equal(this.record.reservation, artifactHistory(destinationJournal)) || !equal(this.record.originalSourceJournal, destinationRecord.originalSourceJournal) || !equal(this.record.binding, destinationRecord.binding)) fail();
+      }
+  }
+  private rejectStages(): void {
     for (const directory of this.directories) for (const name of directory.names) {
       if (name.toLowerCase().includes(`.rename-${this.request.operationId}`) ||
         [this.sourceJournal, this.destinationJournal, this.sourceSidecar, this.destinationSidecar, this.registry].some(target =>
@@ -503,20 +568,10 @@ export class FileMemoryOwnedRename {
     if (actual.identity.device !== parent.identity.device) fail();
   }
   private async recover(): Promise<void> {
-    await this.rejectStages(); this.residual = true;
+    this.rejectStages(); this.residual = true;
     const record = this.record, baseline = record.baseline, head = record.currentHead!;
     const originalHead = baseline.originalChildren.head, originalSide = baseline.originalChildren.sourceSidecar, originalRegistry = baseline.originalChildren.registry;
-    if (originalHead.name !== path.basename(this.source) || originalSide.name !== path.basename(this.sourceSidecar) || originalRegistry.name !== path.basename(this.registry) ||
-      originalHead.directory || originalSide.directory || originalRegistry.directory || originalHead.links !== '1' || originalSide.links !== '1' || originalRegistry.links !== '1' ||
-      !equal(originalHead.identity, this.binding.originalSourceIdentity) || !equal(originalSide.identity, baseline.sourceSidecar.identity) || !equal(originalRegistry.identity, baseline.registry.identity)) fail();
-    const H = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!;
-    const baseRaw = serialize({ schema: 4, state: 'BASE_RENAME', binding: this.binding, baseline });
-    const origin = record.originalSourceJournal!;
-    const reservationRaw = serialize({ schema: 4, state: 'RESERVED_RENAME', binding: this.binding, originalSourceJournal: origin });
-    if (origin.digest !== digest(baseRaw) || origin.identity.size !== String(Buffer.byteLength(baseRaw)) || origin.identity.device !== H.identity.device ||
-      record.reservation!.digest !== digest(reservationRaw) || record.reservation!.identity.size !== String(Buffer.byteLength(reservationRaw)) || record.reservation!.identity.device !== H.identity.device ||
-      (record.state === 'PREPARED_RENAME' && !equal(record.prior, { state: 'BASE_RENAME', ...origin }))) fail();
-    this.validateMetadata(baseline.sourceSidecar.raw, false); this.validateMetadata(baseline.registry.raw, false);
+    this.validateRecoveryOrigin(baseline, originalHead, originalSide, originalRegistry);
     const state = record.state;
     const sourceExpected = state === 'PREPARED_RENAME' || state === 'LINKED_RENAME';
     const destinationExpected = state !== 'PREPARED_RENAME';
@@ -528,6 +583,13 @@ export class FileMemoryOwnedRename {
     if (sourceExpected) await inspectHead(this.source); else await this.absent(this.source);
     if (destinationExpected) await inspectHead(this.destination); else await this.absent(this.destination);
     if (state === 'LINKED_RENAME' && !equal(this.files.get(this.source)!.identity, this.files.get(this.destination)!.identity)) fail();
+    await this.recoverMetadata();
+    this.restoreNamespace(baseline, originalHead, originalSide, originalRegistry);
+    // Only after exact phase reconstruction may the already observed live arrays be authority.
+    await this.proof(true);
+  }
+  private async recoverMetadata(): Promise<void> {
+    const record = this.record, baseline = record.baseline;
     if (record.destinationSidecar) { this.validateMetadata(record.destinationSidecar.raw, true); await this.requireArtifact(this.destinationSidecar, record.destinationSidecar); }
     else await this.absent(this.destinationSidecar);
     if (record.newRegistry) { this.validateMetadata(record.newRegistry.raw, true); await this.requireArtifact(this.registry, record.newRegistry); }
@@ -537,6 +599,22 @@ export class FileMemoryOwnedRename {
     if (!this.final && (!oldSidecar || !sourceJournal)) fail();
     if (this.final && oldSidecar && !sourceJournal) fail();
     if (this.final && sourceJournal && (sourceJournal.raw !== serialize(record) || !equal(sourceJournal.identity, this.final.sourceFinalJournal.identity))) fail();
+  }
+  private validateRecoveryOrigin(baseline: Baseline, originalHead: Child, originalSide: Child, originalRegistry: Child): void {
+    const record = this.record;
+    if (originalHead.name !== path.basename(this.source) || originalSide.name !== path.basename(this.sourceSidecar) || originalRegistry.name !== path.basename(this.registry) ||
+      originalHead.directory || originalSide.directory || originalRegistry.directory || originalHead.links !== '1' || originalSide.links !== '1' || originalRegistry.links !== '1' ||
+      !equal(originalHead.identity, this.binding.originalSourceIdentity) || !equal(originalSide.identity, baseline.sourceSidecar.identity) || !equal(originalRegistry.identity, baseline.registry.identity)) fail();
+    const H = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!;
+    const baseRaw = serialize({ schema: 4, state: 'BASE_RENAME', binding: this.binding, baseline });
+    const origin = record.originalSourceJournal!;
+    const reservationRaw = serialize({ schema: 4, state: 'RESERVED_RENAME', binding: this.binding, originalSourceJournal: origin });
+    if (origin.digest !== digest(baseRaw) || origin.identity.size !== String(Buffer.byteLength(baseRaw)) || origin.identity.device !== H.identity.device ||
+      record.reservation!.digest !== digest(reservationRaw) || record.reservation!.identity.size !== String(Buffer.byteLength(reservationRaw)) || record.reservation!.identity.device !== H.identity.device ||
+      (record.state === 'PREPARED_RENAME' && !equal(record.prior, { state: 'BASE_RENAME', ...origin }))) fail();
+    this.validateMetadata(baseline.sourceSidecar.raw, false); this.validateMetadata(baseline.registry.raw, false);
+  }
+  private restoreNamespace(baseline: Baseline, originalHead: Child, originalSide: Child, originalRegistry: Child): void {
     const originals = new Map<string, Child>([[this.source, originalHead], [this.sourceSidecar, originalSide], [this.registry, originalRegistry]]);
     const own = new Set(this.files.keys());
     if (baseline.namespace.length !== this.directories.length || new Set(baseline.namespace.map(item => item.locator)).size !== baseline.namespace.length) fail();
@@ -547,18 +625,17 @@ export class FileMemoryOwnedRename {
       reconstructed.sort((a, b) => ordinal(a.name, b.name));
       if (new Set(reconstructed.map(child => child.name)).size !== reconstructed.length || !equal(commitment({ ...current, names: reconstructed.map(child => child.name), children: reconstructed }), expected)) fail();
     }
-    // Only after exact phase reconstruction may the already observed live arrays be authority.
-    await this.proof(true);
   }
   private async absent(target: string): Promise<void> {
-    try { await fs.lstat(target, { bigint: true }); } catch (cause) { if ((cause as NodeJS.ErrnoException)?.code === 'ENOENT') return; throw cause; }
+    try { await fs.lstat(target, { bigint: true }); } catch (cause) { if (causeCode(cause) === 'ENOENT') return;
+      throw cause; }
     fail();
   }
   private async link(): Promise<void> {
     await this.barrier('before-link', true); this.active(); this.attempted = true;
     try { await fs.link(this.source, this.destination); }
     catch (cause) {
-      if (cause && typeof cause === 'object' && (cause as NodeJS.ErrnoException).code === 'EEXIST') { this.linkConflict = true; this.attempted = false; }
+      if (causeCode(cause) === 'EEXIST') { this.linkConflict = true; this.attempted = false; }
       throw cause;
     }
     const source = await this.read(this.source, this.binding.contentBytes, '2', false), destination = await this.read(this.destination, this.binding.contentBytes, '2', false);
@@ -604,6 +681,22 @@ export class FileMemoryOwnedRename {
     await this.sync(path.dirname(target), last);
     if (!last) this.attempted = false;
   }
+  private outcomeCode(): string {
+    if (this.committed) return 'EHEADCOMMITTED';
+    if (this.linkConflict) return 'EHEADCONFLICT';
+    if (this.attempted) return 'EHEADCOMMITUNKNOWN';
+    if (this.residual) return 'EOWNERRECOVERY';
+    return 'EHEADCONFLICT';
+  }
+  private outcomeError(cause: unknown): Error {
+    const close = cause && typeof cause === 'object' ? this.closeFailures.get(cause) : undefined;
+    const error = Object.assign(new Error('Managed RENAME stopped; preserve phase evidence'), {
+      code: this.outcomeCode(),
+      cause: close ? close.cause : cause, operationId: this.request.operationId, phase: this.final ? 'FINAL_RENAME' : this.record?.state ?? 'initial', residual: this.residual });
+    if (close) Object.assign(error, { closeCause: close.closeCause });
+    if (this.committed) Object.assign(error, { committed: true, token: this.committed });
+    return error;
+  }
   async run(): Promise<OwnedFileMemoryToken> {
     try {
       await this.initialize();
@@ -619,12 +712,7 @@ export class FileMemoryOwnedRename {
       SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW', source: 'FileMemoryOwnedRename', details: `Managed memory RENAME known committed; invocation=${this.invocationId}` });
       await this.barrier('after-audit', true); await this.barrier('before-return', true); return this.committed;
     } catch (cause) {
-      const close = cause && typeof cause === 'object' ? this.closeFailures.get(cause) : undefined;
-      const error = Object.assign(new Error('Managed RENAME stopped; preserve phase evidence'), {
-        code: this.committed ? 'EHEADCOMMITTED' : this.linkConflict ? 'EHEADCONFLICT' : this.attempted ? 'EHEADCOMMITUNKNOWN' : this.residual ? 'EOWNERRECOVERY' : 'EHEADCONFLICT',
-        cause: close ? close.cause : cause, operationId: this.request.operationId, phase: this.final ? 'FINAL_RENAME' : this.record?.state ?? 'initial', residual: this.residual });
-      if (close) Object.assign(error, { closeCause: close.closeCause });
-      if (this.committed) Object.assign(error, { committed: true, token: this.committed }); throw error;
+      throw this.outcomeError(cause);
     }
   }
 }
