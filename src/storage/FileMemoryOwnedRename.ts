@@ -412,6 +412,9 @@ export class FileMemoryOwnedRename {
     }
     const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
     const volumeAfter = await this.canonicalVolume();
+    this.validateConfinement(before, after, volumeBefore, volumeAfter);
+  }
+  private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore: BigIntStats | undefined, volumeAfter: BigIntStats | undefined): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
     if (volumeBefore && volumeBefore.dev === before[0].dev && volumeBefore.ino === before[0].ino) fail('EHEADCONFLICT');
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();
@@ -439,17 +442,17 @@ export class FileMemoryOwnedRename {
     return { identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
   }
   private admitAncestor(item: string): void {
-      if (item !== '.') {
-        const parent = this.directories.find(directory => directory.locator === path.posix.dirname(item));
-        const name = path.posix.basename(item);
-        if (!parent?.names.includes(name)) fail();
-        const aliases = parent.children.filter(child => child.name !== name && child.name.toLowerCase() === name.toLowerCase());
-        if (aliases.length) {
-          const actual = parent.children.find(child => child.name === name)!;
-          if (parent.locator !== '.' || !['.memory-owners', '.memory-fences', 'volumes'].includes(name.toLowerCase()) || !actual.directory ||
-            aliases.some(child => !child.directory || (child.identity.device === actual.identity.device && child.identity.inode === actual.identity.inode))) fail();
-        }
+    if (item !== '.') {
+      const parent = this.directories.find(directory => directory.locator === path.posix.dirname(item));
+      const name = path.posix.basename(item);
+      if (!parent?.names.includes(name)) fail();
+      const aliases = parent.children.filter(child => child.name !== name && child.name.toLowerCase() === name.toLowerCase());
+      if (aliases.length) {
+        const actual = parent.children.find(child => child.name === name)!;
+        if (parent.locator !== '.' || !['.memory-owners', '.memory-fences', 'volumes'].includes(name.toLowerCase()) || !actual.directory ||
+          aliases.some(child => !child.directory || (child.identity.device === actual.identity.device && child.identity.inode === actual.identity.inode))) fail();
       }
+    }
   }
   private paths(): void {
     this.source = this.absolute(this.request.expectedToken.locator); this.destination = this.absolute(this.request.destinationLocator);
@@ -512,18 +515,18 @@ export class FileMemoryOwnedRename {
     if (!H.names.includes(path.basename(this.source)) || H.names.some(name => name !== path.basename(this.source) && name.toLowerCase() === path.basename(this.source).toLowerCase())) fail();
   }
   private restoreRecords(destinationJournal: Artifact | undefined, sourceJournal: Artifact | undefined): void {
-      if (!destinationJournal) fail();
-      const destinationRecord = parse(destinationJournal.raw);
-      if (destinationRecord.state === 'FINAL_RENAME') {
-        this.final = destinationRecord as FinalRecord; this.record = this.final.sourceFinalJournal.record;
-        if (sourceJournal && (!equal(sourceJournal.identity, this.final.sourceFinalJournal.identity) || sourceJournal.raw !== serialize(this.record))) fail();
-      } else {
-        if (destinationRecord.state !== 'RESERVED_RENAME' || !sourceJournal) fail();
-        const sourceRecord = parse(sourceJournal.raw);
-        if (sourceRecord.state === 'FINAL_RENAME' || sourceRecord.state === 'RESERVED_RENAME' || sourceRecord.state === 'BASE_RENAME') fail();
-        this.record = sourceRecord as SourceRecord;
-        if (!equal(this.record.reservation, artifactHistory(destinationJournal)) || !equal(this.record.originalSourceJournal, destinationRecord.originalSourceJournal) || !equal(this.record.binding, destinationRecord.binding)) fail();
-      }
+    if (!destinationJournal) fail();
+    const destinationRecord = parse(destinationJournal.raw);
+    if (destinationRecord.state === 'FINAL_RENAME') {
+      this.final = destinationRecord as FinalRecord; this.record = this.final.sourceFinalJournal.record;
+      if (sourceJournal && (!equal(sourceJournal.identity, this.final.sourceFinalJournal.identity) || sourceJournal.raw !== serialize(this.record))) fail();
+    } else {
+      if (destinationRecord.state !== 'RESERVED_RENAME' || !sourceJournal) fail();
+      const sourceRecord = parse(sourceJournal.raw);
+      if (sourceRecord.state === 'FINAL_RENAME' || sourceRecord.state === 'RESERVED_RENAME' || sourceRecord.state === 'BASE_RENAME') fail();
+      this.record = sourceRecord as SourceRecord;
+      if (!equal(this.record.reservation, artifactHistory(destinationJournal)) || !equal(this.record.originalSourceJournal, destinationRecord.originalSourceJournal) || !equal(this.record.binding, destinationRecord.binding)) fail();
+    }
   }
   private rejectStages(): void {
     for (const directory of this.directories) for (const name of directory.names) {
