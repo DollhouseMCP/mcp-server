@@ -101,7 +101,11 @@ jobs:
 
       - name: Run ordinary unit matrix
         id: original_tests
-        run: npm test -- --testPathPatterns='^(?!.*(?:^|/)FileMemoryOwnedCreate[.]test[.]ts$).*'
+        # Preserve npm test's VM flags and full-suite timing-selection signal.
+        env:
+          NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
+          npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)FileMemoryOwnedCreate[.]test[.]ts$).*'
         continue-on-error: true
 
       # Keep the complete filesystem capacity suite in a fresh serial process.
