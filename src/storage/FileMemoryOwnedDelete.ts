@@ -14,7 +14,7 @@ import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdin
   evidenceOriginalIdentity as original, canonicalEvidence, stableEvidenceChild as stable, inspectEvidenceNames,
   withEvidenceFileClose, observeEvidenceDirectory, readEvidenceFile, applyEvidenceDirectoryTransition,
   applyEvidenceAncestorTransition, admitEvidenceAncestor, writeEvidenceFile,
-  observeEvidenceCanonicalVolume, evidenceVolumeIdentity, captureEvidenceAncestors,
+  observeEvidenceCanonicalVolume, evidenceVolumeIdentity, captureEvidenceConfinement,
   type HeadIdentity as Identity, type HeadArtifact as Artifact, type HeadChild as Child,
   type HeadDirectory as Directory, type HeadDirectoryNames as DirectoryNames } from './FileMemoryOwnedHeadEvidence.js';
 
@@ -200,22 +200,18 @@ export class FileMemoryOwnedDelete {
     await this.transition(path.dirname(target), [], [path.basename(stage)], [path.basename(target)]); await this.sync(path.dirname(target));
     this.attempted = false; return artifact(published.raw, published.identity);
   }
-  private async confined(): Promise<void> {
-    const first = this.request.expectedToken.locator.includes('/') ? this.absolute(this.request.expectedToken.locator.split('/')[0]) : this.scope.tenantRoot;
-    const paths = [first, this.absolute('.memory-owners'), this.absolute('.memory-fences')];
-    const volumeBefore = await this.canonicalVolume();
-    const before = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
-    for (const stat of before) if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== BigInt(process.getuid!())) fail();
-    await captureEvidenceAncestors(this.request.expectedToken.locator, {
+  private confined(): Promise<void> {
+    return captureEvidenceConfinement({
+      sourceLocator: () => this.request.expectedToken.locator, tenantRoot: () => this.scope.tenantRoot,
+      absolute: locator => this.absolute(locator), canonicalVolume: () => this.canonicalVolume(),
       reset: () => { this.directories = []; }, admit: item => this.admitAncestor(item),
       observe: item => this.observe(item, true), append: directory => { this.directories.push(directory); },
+      validate: (before, after, volumeBefore, volumeAfter) => this.validateConfinement(before, after, volumeBefore, volumeAfter), fail,
     });
-    const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
-    const volumeAfter = await this.canonicalVolume();
-    this.validateConfinement(before, after, volumeBefore, volumeAfter);
   }
   private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore?: BigIntStats, volumeAfter?: BigIntStats): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
+    if (volumeBefore && volumeBefore.dev === before[2].dev && volumeBefore.ino === before[2].ino) fail('EHEADCONFLICT');
     if (volumeBefore && this.directories.some(directory =>
       directory.identity.device === String(volumeBefore.dev) && directory.identity.inode === String(volumeBefore.ino))) fail('EHEADCONFLICT');
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();

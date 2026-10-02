@@ -95,15 +95,26 @@ function observeReads() {
   return { measured, restore: () => spy.mockRestore() };
 }
 
+function phaseDiagnostic(count: number, nested: boolean, stop: string) {
+  const started = performance.now();
+  return (phase: string, counts: { attemptedReads: number; completedCensuses: number }) => {
+    process.stderr.write(`DELETE phase ${JSON.stringify({ count, nested, stop, phase, elapsedMs: performance.now() - started,
+      node: process.version, pid: process.pid, ...counts })}\n`);
+  };
+}
+
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 describe('dormant head DELETE populated owner portfolios', () => {
   it.each([100, 250, 1000].flatMap(count => [false, true].map(nested => [count, nested] as const)))(
     'retains all foreign owner evidence at %i existing owners, nested=%s', async (count, nested) => {
-      const f = await fixture(nested, count);
-      const archived = await treeEvidence(f.owner), reads = observeReads(), started = performance.now();
+      const diagnostic = phaseDiagnostic(count, nested, 'fresh'), setup = observeReads();
+      let f: Awaited<ReturnType<typeof fixture>>, archived: Evidence[];
+      try { f = await fixture(nested, count); archived = await treeEvidence(f.owner); }
+      finally { setup.restore(); diagnostic('setup-complete', setup.measured); }
+      const reads = observeReads(), started = performance.now();
       let result;
       try { result = await f.owners.deleteOwned({ operationId: randomUUID(), expectedToken: f.token }); }
-      finally { reads.restore(); }
+      finally { reads.restore(); diagnostic('operation-end', reads.measured); }
       expect(result.status).toBe('head-deleted');
       expect(reads.measured.attemptedReads).toBeGreaterThan(0);
       expect(reads.measured.completedCensuses).toBeGreaterThan(0);
@@ -117,17 +128,25 @@ describe('dormant head DELETE populated owner portfolios', () => {
         expect((await fs.readdir(namespace.target)).sort()).toEqual(expected);
       }
       await expect(fs.lstat(path.join(f.root, f.locator))).rejects.toMatchObject({ code: 'ENOENT' });
+      diagnostic('assertions-complete', reads.measured);
     });
   it.each([[false, 'pair-durable'], [true, 'pair-durable'], [true, 'head-durable']] as const)(
     'retains populated recovery authority at 1,000 owners, nested=%s phase=%s', async (nested, phase) => {
-      const f = await fixture(nested, 1000), archived = await treeEvidence(f.owner);
+      const diagnostic = phaseDiagnostic(1000, nested, phase), setup = observeReads();
+      let f: Awaited<ReturnType<typeof fixture>>, archived: Evidence[];
+      try { f = await fixture(nested, 1000); archived = await treeEvidence(f.owner); }
+      finally { setup.restore(); diagnostic('setup-complete', setup.measured); }
       let stop = true, reached = false; const cause = new Error('actual durable portfolio interruption');
       const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: f.root, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
       const owners = new FileMemoryOwnerSnapshots({ coordinator, afterDeletePublication: current => { if (stop && current === phase) { reached = true; throw cause; } } });
       const request = { operationId: randomUUID(), expectedToken: f.token };
-      await expect(owners.deleteOwned(request)).rejects.toMatchObject({ cause }); expect(reached).toBe(true); stop = false;
+      const interruptedReads = observeReads();
+      try { await expect(owners.deleteOwned(request)).rejects.toMatchObject({ cause }); }
+      finally { interruptedReads.restore(); diagnostic('interrupted-operation-end', interruptedReads.measured); }
+      expect(reached).toBe(true); stop = false;
       const reads = observeReads(); let result;
-      try { result = await owners.deleteOwned(request); } finally { reads.restore(); }
+      try { result = await owners.deleteOwned(request); }
+      finally { reads.restore(); diagnostic('retry-end', reads.measured); }
       expect(result.status).toBe(phase === 'head-durable' ? 'already-head-deleted' : 'head-deleted');
       if (phase === 'head-durable') expect(result.evidence).not.toHaveProperty('locator');
       expect(reads.measured.attemptedReads).toBeGreaterThan(0);
@@ -138,6 +157,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
         const expected = namespace.target === parent ? namespace.names.filter(name => name !== path.basename(f.locator) && name !== sidecar) : namespace.names;
         expect((await fs.readdir(namespace.target)).sort()).toEqual(expected);
       }
+      diagnostic('assertions-complete', reads.measured);
     });
 
 });

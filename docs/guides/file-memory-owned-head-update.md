@@ -538,6 +538,25 @@ full foreign-baseline checkpoints remain mandatory. Directory evidence has the
 same cooperating-local-filesystem and cross-invocation limitations described
 above. Process-interruption qualification does not prove power-loss durability.
 
+The common POSIX fence acquisition path now also admits canonical `volumes`,
+`.memory-fences` and tenant-root separation before any fence-parent mkdir attempt
+and before each lease mkdir, including retries. Stable physical aliases among
+these roles, or unsafe present canonical directories, refuse without a callback
+or lease write. Missing `volumes` remains supported and admission never creates
+it. This deliberately strengthens both generic per-locator and tenant fence
+admission. The read-only sandwich binds existing device/inode, type, mode and UID;
+it permits cooperating lease changes to directory times, size and link count,
+and validates optional namespaces created by cooperating publishers while it
+observes. Existing namespaces cannot disappear or be replaced.
+The acquisition deadline is checked again after admission and never extended.
+DELETE additionally compares canonical volume/fence identity in its fresh
+confinement observation, including when invoked in an existing transaction.
+These checks protect cooperating local POSIX operations and detect observed
+namespace changes; pathname checks cannot atomically exclude hostile mount swaps
+or arbitrary same-UID topology writers. They do not undo an earlier legitimate
+lease acquisition if topology changes later. Release and manual orphan-lease
+handling remain unchanged.
+
 DELETE reuses the internal phase-independent owned-head evidence primitives for
 canonical observation, descriptor reads/closes, full directory transitions and
 exclusive writes. Its full foreign baseline, five-state protocol, reservation,

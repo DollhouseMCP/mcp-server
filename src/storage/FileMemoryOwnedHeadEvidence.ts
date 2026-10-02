@@ -47,19 +47,31 @@ export async function observeEvidenceCanonicalVolume(target: string, fail: Evide
 export function evidenceVolumeIdentity(stat: BigIntStats, fail: EvidenceFail) {
   return { identity: evidenceIdentity(stat, fail), mode: evidenceScalar(stat.mode, 20, fail), uid: evidenceScalar(stat.uid, 20, fail), links: evidenceScalar(stat.nlink, 20, fail), directory: stat.isDirectory() };
 }
-export async function captureEvidenceAncestors(sourceLocator: string, context: {
+export async function captureEvidenceConfinement(context: {
+  sourceLocator(): string; tenantRoot(): string; absolute(locator: string): string;
+  canonicalVolume(): Promise<BigIntStats | undefined>;
   reset(): void; admit(locator: string): void; observe(locator: string): Promise<HeadDirectory>; append(directory: HeadDirectory): void;
+  validate(before: BigIntStats[], after: BigIntStats[], volumeBefore: BigIntStats | undefined, volumeAfter: BigIntStats | undefined): void;
+  fail: EvidenceFail;
 }): Promise<void> {
+  const first = context.sourceLocator().includes('/') ? context.absolute(context.sourceLocator().split('/')[0]) : context.tenantRoot();
+  const paths = [first, context.absolute('.memory-owners'), context.absolute('.memory-fences')];
+  const volumeBefore = await context.canonicalVolume();
+  const before = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
+  for (const stat of before) if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== BigInt(process.getuid!())) context.fail();
   const locators = new Set<string>(['.', '.memory-owners', '.memory-owners/owners']);
   let locator = '.';
-  for (const component of sourceLocator.split('/').slice(0, -1)) { locator = locator === '.' ? component : `${locator}/${component}`; locators.add(locator); }
-  // Ancestors are captured before descendants; callers create no directory here.
+  for (const component of context.sourceLocator().split('/').slice(0, -1)) { locator = locator === '.' ? component : `${locator}/${component}`; locators.add(locator); }
+  // Ancestors are captured before descendants; partial capture on failure grants no authority.
   const ordered = [...locators].sort((a, b) => a.split('/').length - b.split('/').length || evidenceOrdinal(a, b));
   context.reset();
   for (const item of ordered) {
     context.admit(item);
     context.append(await context.observe(item));
   }
+  const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
+  const volumeAfter = await context.canonicalVolume();
+  context.validate(before, after, volumeBefore, volumeAfter);
 }
 export function evidenceKeys(value: unknown, expected: readonly string[]): value is object {
   return !!value && typeof value === 'object' && !Array.isArray(value) && Reflect.ownKeys(value).length === expected.length &&
