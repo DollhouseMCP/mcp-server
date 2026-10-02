@@ -18,6 +18,7 @@ type Identity = OwnedFileMemoryToken['fileIdentity'];
 interface Child { name: string; identity: Identity; mode: string; uid: string; links: string; directory: boolean }
 interface StableDirectory { locator: string; device: string; inode: string; mode: string; uid: string; names: string[]; children: Child[] }
 interface Directory extends StableDirectory { identity: Identity; directoryLinks: string }
+type DirectoryNames = Omit<Directory, 'children'>;
 interface DirectoryCommitment {
   locator: string; device: string; inode: string; mode: string; uid: string;
   baselineChildCount: number; commitmentVersion: 1; sha256: string;
@@ -195,14 +196,18 @@ export class FileMemoryOwnedCreate {
     await this.budget.scan(directory, name => names.push(name));
     return names.sort(ordinal);
   }
-  private async directory(locator: string): Promise<Directory> {
+  private directory(locator: string): Promise<Directory> { return this.observeDirectory(locator, true); }
+  private directoryNames(locator: string): Promise<DirectoryNames> { return this.observeDirectory(locator, false); }
+  private observeDirectory(locator: string, full: true): Promise<Directory>;
+  private observeDirectory(locator: string, full: false): Promise<DirectoryNames>;
+  private async observeDirectory(locator: string, full: boolean): Promise<Directory | DirectoryNames> {
     const target = this.absolute(locator), before = await fs.lstat(target, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
       ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
     const names = await this.names(target), children: Child[] = [];
     // Independent readonly observations are bounded to sixteen. Drain the whole
     // batch and retain ordinal failure precedence before launching any next batch.
-    for (let offset = 0; offset < names.length; offset += 16) {
+    for (let offset = 0; full && offset < names.length; offset += 16) {
       const results = await Promise.allSettled(names.slice(offset, offset + 16).map(name => this.observeChild(target, name)));
       for (const result of results) {
         if (result.status === 'rejected') throw result.reason;
@@ -211,15 +216,25 @@ export class FileMemoryOwnedCreate {
     }
     const after = await fs.lstat(target, { bigint: true });
     if (!isDeepStrictEqual(identity(before), identity(after)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
-    return { locator, device: scalar(before.dev), inode: scalar(before.ino), mode: scalar(before.mode), uid: scalar(before.uid), names, children, identity: identity(after), directoryLinks: scalar(after.nlink) };
+    const observed = { locator, device: scalar(before.dev), inode: scalar(before.ino), mode: scalar(before.mode), uid: scalar(before.uid), names,
+      identity: identity(after), directoryLinks: scalar(after.nlink) };
+    return full ? { ...observed, children } : observed;
   }
   private async observeChild(target: string, name: string): Promise<Child> {
     const stat = await fs.lstat(path.join(target, name), { bigint: true });
     return { name, identity: identity(stat), mode: scalar(stat.mode), uid: scalar(stat.uid), links: scalar(stat.nlink), directory: stat.isDirectory() };
   }
-  private async proof(): Promise<void> {
-    // All directory observations consume the same monotonic budget in proof order.
-    for (const before of this.directories) if (!isDeepStrictEqual(await this.directory(before.locator), before)) fail();
+  private async proof(full = false): Promise<void> {
+    // Every proof observes complete fresh names and full selected-directory metadata.
+    // Only explicit checkpoints additionally compare the unchanged foreign-child baseline.
+    for (const before of this.directories) {
+      if (full) {
+        if (!isDeepStrictEqual(await this.directory(before.locator), before)) fail();
+      } else {
+        const { children: _children, ...expected } = before;
+        if (!isDeepStrictEqual(await this.directoryNames(before.locator), expected)) fail();
+      }
+    }
     // Serial artifact reproof bounds descriptor pressure and fails at the first changed file.
     for (const [target, before] of this.files) if (!isDeepStrictEqual(await this.read(target, Buffer.byteLength(before.raw), before.links), before)) fail();
     this.active();
@@ -296,7 +311,7 @@ export class FileMemoryOwnedCreate {
   }
   private async barrier(phase: CreatePublication): Promise<void> {
     await this.hook?.(phase);
-    await this.proof();
+    await this.proof(Boolean(this.hook) || phase === 'before-link' || phase === 'committed' || phase === 'after-read');
   }
   private async write(target: string, raw: string, partial?: CreatePublication): Promise<Artifact> {
     await this.proof(); this.residual = true;
@@ -336,7 +351,7 @@ export class FileMemoryOwnedCreate {
     }
   }
   private async syncDirectory(target: string, final = false): Promise<void> {
-    await this.proof();
+    await this.proof(final);
     const locator = path.relative(this.scope.tenantRoot, target).split(path.sep).join('/') || '.';
     const expected = this.directories.find(directory => directory.locator === locator)!;
     const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
@@ -345,9 +360,9 @@ export class FileMemoryOwnedCreate {
       const before = await handle.stat({ bigint: true });
       if (!before.isDirectory() || !isDeepStrictEqual(identity(before), expected.identity) ||
         scalar(before.mode) !== expected.mode || scalar(before.uid) !== expected.uid) fail();
-      await this.proof(); this.active(); await handle.sync();
+      await this.proof(final); this.active(); await handle.sync();
       if (!isDeepStrictEqual(identity(await handle.stat({ bigint: true })), expected.identity)) fail();
-      await this.proof();
+      await this.proof(final);
     });
     if (final) {
       const token: OwnedFileMemoryToken = Object.freeze({ backend: 'file', ownership: 'owned', userId: this.scope.userId,
@@ -552,7 +567,7 @@ export class FileMemoryOwnedCreate {
       }
     }
     this.recoverNamespace();
-    await this.proof();
+    await this.proof(true);
   }
   private async recoverContent(): Promise<void> {
     const head = this.intent.state !== 'PREPARED_CREATE', stage = this.intent.state !== 'PUBLISHED_CREATE';
@@ -654,7 +669,7 @@ export class FileMemoryOwnedCreate {
         if (!this.files.has(target)) await this.write(target, this.activeRecord());
         await this.syncDirectory(path.dirname(target)); await this.barrier(point);
       }
-      await this.proof(); this.phase = 'intent-removal-unknown'; this.active(); this.attempted = true;
+      await this.proof(true); this.phase = 'intent-removal-unknown'; this.active(); this.attempted = true;
       await fs.unlink(this.journal); this.files.delete(this.journal);
       await this.transition(path.dirname(this.head), [], [path.basename(this.journal)]);
       this.phase = 'durability-unconfirmed'; await this.barrier('intent-unlinked');

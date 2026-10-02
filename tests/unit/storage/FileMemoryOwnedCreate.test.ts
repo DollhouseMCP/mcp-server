@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
@@ -167,6 +168,85 @@ describe('exclusive owned CREATE', () => {
     expect((await fs.readdir(path.dirname(f.head))).sort()).toEqual(names);
     await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it.each([
+    ['prepared', 'EOWNERRECOVERY'], ['active-sidecar', 'EOWNERRECOVERY'],
+    ['intent-unlinked', 'EHEADCOMMITUNKNOWN'],
+  ] as const)('allows scoped observation at %s but refuses foreign drift at the next full checkpoint', async (point, code) => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
+    const barrier = internals.barrier; let scopedCompleted = false;
+    jest.spyOn(internals, 'barrier').mockImplementation(async function(this: typeof internals, phase) {
+      if (phase === point) await fs.writeFile(foreign, 'changed');
+      await barrier.call(this, phase);
+      if (phase === point) scopedCompleted = true;
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code });
+    expect(scopedCompleted).toBe(true);
+    expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    const journals = (await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.memory-write.json'));
+    expect(journals).toHaveLength(point === 'intent-unlinked' ? 0 : 1);
+    if (point === 'prepared') await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+    else expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
+  });
+  it('uses full foreign evidence after an actual callback before content staging', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original'); let called = false;
+    await expect(f.store(async phase => {
+      if (phase === 'before-content') { called = true; await fs.writeFile(foreign, 'changed'); }
+    }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    expect(called).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await fs.readdir(path.dirname(f.head))).some(name => name.includes('memory-write'))).toBe(false);
+  });
+  it('rechecks full foreign evidence after final directory sync and before close', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as {
+      closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown>;
+      phase: string;
+    };
+    const closed = internals.closed; let changed = false;
+    jest.spyOn(internals, 'closed').mockImplementation(async function(this: typeof internals, handle, body) {
+      if (this.phase === 'durability-unconfirmed' && (await handle.stat()).isDirectory()) {
+        const sync = handle.sync.bind(handle);
+        jest.spyOn(handle, 'sync').mockImplementation(async () => {
+          await sync(); await fs.writeFile(foreign, 'changed'); changed = true;
+        });
+      }
+      return closed.call(this, handle, body);
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITUNKNOWN' });
+    expect(changed).toBe(true);
+    expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
+  });
+  it('retains genuine commitment when post-audit full foreign evidence refuses', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { audit: () => void };
+    const audit = internals.audit; let audited = false;
+    jest.spyOn(internals, 'audit').mockImplementation(function(this: typeof internals) {
+      audit.call(this); audited = true; writeFileSync(foreign, 'changed');
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITTED', committed: true,
+      token: { locator: f.request.locator, revision: '1', ownership: 'owned' } });
+    expect(audited).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
+  });
+  it('performs full foreign comparison immediately before successful return without a callback', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
+    const barrier = internals.barrier; let changed = false;
+    jest.spyOn(internals, 'barrier').mockImplementation(async function(this: typeof internals, phase) {
+      await barrier.call(this, phase);
+      if (phase === 'committed') { await fs.writeFile(foreign, 'changed'); changed = true; }
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITTED', committed: true });
+    expect(changed).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
   });
   it('rejects unrelated same-byte file ABA during its own permitted directory transition', async () => {
     const f = await fixture(), unrelated = path.join(path.dirname(f.head), 'unrelated');
@@ -785,27 +865,41 @@ describe('exclusive owned CREATE', () => {
   }
   function observeAccounting() {
     const records: { before: number; limit: number; phase?: string; budget: FileMemoryCreateScanBudget }[] = [];
-    const measured = { completedCensuses: 0, childLstatsInCompletedCensuses: 0, directoryLstatsInCompletedCensuses: 0,
-      canonicalDescriptorBytesAcrossCompletedCensuses: 0, peakSnapshotBytes: 0, peakRss: process.memoryUsage().rss };
+    const measured = { completedCensuses: 0, fullDirectoryCaptures: 0, childLstatsInCompletedCensuses: 0,
+      directoryLstatsInCompletedCensuses: 0, rich: process.env.DOLLHOUSE_CREATE_RICH_METRICS === '1'
+        ? { canonicalDescriptorBytesAcrossFullCaptures: 0, peakSnapshotBytes: 0, peakRss: process.memoryUsage().rss } : null };
+    type FullCapture = Parameters<typeof commitCreateDirectory>[0];
+    type NamesCapture = Omit<FullCapture, 'children'>;
     const internals = FileMemoryOwnedCreate.prototype as unknown as {
-      directory: (locator: string) => Promise<Parameters<typeof commitCreateDirectory>[0]>;
+      directory: (locator: string) => Promise<FullCapture>;
+      directoryNames: (locator: string) => Promise<NamesCapture>;
     };
+    function record(result: FullCapture | NamesCapture) {
+      measured.completedCensuses++;
+      measured.directoryLstatsInCompletedCensuses += 2;
+      if ('children' in result) {
+        measured.fullDirectoryCaptures++;
+        measured.childLstatsInCompletedCensuses += result.children.length;
+        if (measured.rich) {
+          const tuples = result.children.map(child => [child.name, child.directory, child.identity.device, child.identity.inode,
+            child.directory ? '0' : child.identity.size, child.directory ? '0' : child.identity.mtimeNs,
+            child.directory ? '0' : child.identity.ctimeNs, child.mode, child.uid, child.directory ? '0' : child.links]);
+          measured.rich.canonicalDescriptorBytesAcrossFullCaptures += Buffer.byteLength(JSON.stringify(['dollhouse-create-namespace-directory-v1', result.locator,
+            result.device, result.inode, result.mode, result.uid, tuples]));
+        }
+      }
+      if (measured.rich) {
+        measured.rich.peakSnapshotBytes = Math.max(measured.rich.peakSnapshotBytes, Buffer.byteLength(JSON.stringify(result)));
+        measured.rich.peakRss = Math.max(measured.rich.peakRss, process.memoryUsage().rss);
+      }
+    }
     const directory = internals.directory;
     jest.spyOn(internals, 'directory').mockImplementation(async function(this: typeof internals, locator) {
-      const result = await directory.call(this, locator);
-      // A successfully returned real directory() has performed exactly one lstat
-      // per child plus its two directory observations; failures are not counted.
-      measured.completedCensuses++;
-      measured.childLstatsInCompletedCensuses += result.children.length;
-      measured.directoryLstatsInCompletedCensuses += 2;
-      const tuples = result.children.map(child => [child.name, child.directory, child.identity.device, child.identity.inode,
-        child.directory ? '0' : child.identity.size, child.directory ? '0' : child.identity.mtimeNs,
-        child.directory ? '0' : child.identity.ctimeNs, child.mode, child.uid, child.directory ? '0' : child.links]);
-      measured.canonicalDescriptorBytesAcrossCompletedCensuses += Buffer.byteLength(JSON.stringify(['dollhouse-create-namespace-directory-v1', result.locator,
-        result.device, result.inode, result.mode, result.uid, tuples]));
-      measured.peakSnapshotBytes = Math.max(measured.peakSnapshotBytes, Buffer.byteLength(JSON.stringify(result)));
-      measured.peakRss = Math.max(measured.peakRss, process.memoryUsage().rss);
-      return result;
+      const result = await directory.call(this, locator); record(result); return result;
+    });
+    const directoryNames = internals.directoryNames;
+    jest.spyOn(internals, 'directoryNames').mockImplementation(async function(this: typeof internals, locator) {
+      const result = await directoryNames.call(this, locator); record(result); return result;
     });
     const reserve = FileMemoryCreateScanBudget.prototype.reserve;
     jest.spyOn(FileMemoryCreateScanBudget.prototype, 'reserve').mockImplementation(function(this: FileMemoryCreateScanBudget, slots, headParent, phase) {

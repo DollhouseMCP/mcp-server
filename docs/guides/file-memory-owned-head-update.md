@@ -414,8 +414,8 @@ existing directory-child normalization and full file identity semantics. Recover
 first validates exact phase-owned artifacts, then reconstructs the baseline from
 a fresh complete census by excluding only those validated artifact paths. It
 checks the original count and commitment before accepting a live baseline. A
-digest alone never supplies authority. Full live snapshots and fresh reproofs
-remain unchanged. Strict schema3 records continue through schema3 phases; they
+digest alone never supplies authority. The original full baseline remains bound throughout the invocation; scoped
+observations never replace its child evidence. Strict schema3 records continue through schema3 phases; they
 are not reinterpreted as compact records. Schema4 remains reserved for RENAME.
 
 These CREATE-private limits do not change shared APIs: ordinary unbudgeted
@@ -440,23 +440,43 @@ Schema5 removes portfolio cardinality from persisted record size while retaining
 bounded fresh filesystem work. [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974)
 still requires representative qualification and separately tracks shared listing
 and recovery capacity before lifecycle activation.
-The measured 1000-memory CREATE performs approximately 228000 fresh directory
-read attempts and child observations locally. Fresh child indexing removes
+The earlier always-full 1000-memory CREATE performed approximately 228000 fresh
+directory read attempts and child observations locally. The checkpointed schedule
+retains every fresh name census and its read accounting while reducing repeated
+observations of unrelated child metadata; hosted qualification remains pending. Fresh child indexing removes
 quadratic descriptor lookup, but it does not reduce any census or I/O barrier.
-Within each fresh directory census, at most sixteen independent readonly child
+Within each full directory census, at most sixteen independent readonly child
 lstat observations run concurrently. Names and returned descriptors retain
 ordinal order; every launched batch settles before proceeding. The first
 ordinal rejection is preserved exactly, and no next batch starts after failure.
 A failed batch may perform up to fifteen additional readonly observations compared
 with serial fail-fast behavior (twelve more than the previous four-observation
-batch). Directory before/after checks, full proofs,
-mutations, hooks and durability operations retain their existing order.
+batch). Directory before/after checks, mutations, hooks and durability operations retain
+their existing order. Full child observation remains inside the directory
+before/after identity checks.
 Local correctness under the existing test timeout is not a hosted throughput,
 concurrency, latency or operation-memory qualification. The explicit practical
 performance gate remains open in [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974#issuecomment-5940492445).
 
 Unrelated non-directory children retain exact full metadata in the canonical
-committed baseline and every fresh live proof.
+baseline. Admission, recovery and each own namespace transition compare complete
+fresh child evidence. Ordinary internal proofs instead inspect complete fresh
+names, full selected-directory identity and all tracked artifact bytes, identity
+and link counts. They neither substitute old children for fresh observations nor
+change the foreign baseline. Full comparisons run after actual callbacks, before
+head publication, before intent removal, at all three final directory-sync proofs,
+after audit listeners and immediately before successful return. Genuine receipt
+capture still requires successful final sync and close.
+
+This schedule changes when unrelated metadata-only drift is refused and which
+residue may already exist when refusal occurs. Persistent drift is rejected at full checkpoints; successful return cannot bypass
+them; a metadata-only change restored between those
+observations is not claimed observed. All name/collision, target, own-artifact and
+selected-directory proofs remain fresh at the existing internal barriers.
+Capacity tests retain their full workloads, ten-second case bounds and safety
+assertions. Expensive diagnostic snapshot serialization and RSS sampling run only
+with `DOLLHOUSE_CREATE_RICH_METRICS=1`; census, child-observation and budget counts
+remain enabled independently.
 Directory children persist stable device/inode/type/mode/UID; size, timestamps and
 nlink are freshly bound during each invocation and may advance only across exact
 own child-set transitions. An isolated APFS observation confirmed directory nlink
