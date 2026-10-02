@@ -77,6 +77,69 @@ describe('dormant exact protected file archive cleanup', () => {
     expect(await fs.readdir(f.owner)).toEqual(['v1']);
     expect((await f.store().read(token, 1)).status).toBe('found');
   });
+  it.each([false, true])('refuses reversed unrelated timestamps without changing evidence, retry=%s', async retry => {
+    const f = await fixture();
+    if (retry) await f.store(phase => { if (phase === 'intent-durable') throw new Error('controlled stop'); }).removeUnreferenced(f.token, f.receipt);
+    const declaration = { volume: 2, file: `volumes/${f.token.ownerId}/v0002.yaml`, sha256: 'b'.repeat(64), entryCount: 0,
+      sealedAt: '2026-10-01T00:00:00.000Z', firstEntryAt: '2026-10-01T01:00:00.000Z', lastEntryAt: '2026-10-01T00:00:00.000Z' };
+    const token = await f.owners.updateOwnedHead(f.token, `volumes: ${JSON.stringify([declaration])}\nentries: []\n`);
+    const payload = path.join(f.slot, `g-${f.receipt.generationId}`, 'payload.yaml');
+    const bytes = await fs.readFile(payload); const identity = await fs.lstat(payload, { bigint: true });
+    const names = await fs.readdir(f.owner); const head = await f.owners.readHeadSnapshot(token.locator);
+    const intent = retry ? await fs.readFile(f.intent) : undefined;
+    const result = await f.store().removeUnreferenced(token, f.receipt);
+    expect(result).toMatchObject({ status: 'refused', reason: 'unsafe' }); expect(result).not.toHaveProperty('receipt');
+    expect(await fs.readdir(f.owner)).toEqual(names); expect(await fs.readFile(payload)).toEqual(bytes);
+    const after = await fs.lstat(payload, { bigint: true });
+    for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink'] as const) expect(after[key]).toBe(identity[key]);
+    if (retry) expect(await fs.readFile(f.intent)).toEqual(intent);
+    expect(await f.owners.readHeadSnapshot(token.locator)).toEqual(head);
+  });
+  it.each([[null, null], ['2026-10-01T00:00:00.000Z', null], [null, '2026-10-01T00:00:00.000Z'],
+    ['2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z']])('accepts valid unrelated timestamp endpoints %s / %s', async (firstEntryAt, lastEntryAt) => {
+    const f = await fixture();
+    const declaration = { volume: 2, file: `volumes/${f.token.ownerId}/v0002.yaml`, sha256: 'b'.repeat(64), entryCount: 0,
+      sealedAt: '2026-10-01T00:00:00.000Z', firstEntryAt, lastEntryAt };
+    const token = await f.owners.updateOwnedHead(f.token, `volumes: ${JSON.stringify([declaration])}\nentries: []\n`);
+    expect(await f.store().removeUnreferenced(token, f.receipt)).toMatchObject({ status: 'removed', receipt: durableEvidence(f.receipt) });
+    expect(await fs.readdir(f.owner)).toEqual([]);
+  });
+  it.each(['fresh', 'intent-durable', 'after-metadata'])('refuses reversed archive metadata before further mutation (%s)', async boundary => {
+    const f = await fixture(); const receipt = { ...f.receipt };
+    const metadataPath = path.join(f.slot, `g-${receipt.generationId}`, 'metadata.json');
+    if (boundary !== 'fresh') await f.store(phase => { if (phase === boundary) throw new Error('controlled stop'); }).removeUnreferenced(f.token, receipt);
+    const firstEntryAt = '2026-10-01T01:00:00.000Z'; const lastEntryAt = '2026-10-01T00:00:00.000Z';
+    if (boundary === 'fresh') {
+      const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8'));
+      await fs.writeFile(metadataPath, JSON.stringify({ ...metadata, firstEntryAt, lastEntryAt }));
+      const stat = await fs.lstat(metadataPath, { bigint: true });
+      receipt.metadataIdentity = { device: String(stat.dev), inode: String(stat.ino), size: String(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs) };
+    } else {
+      const record = JSON.parse(await fs.readFile(f.intent, 'utf8'));
+      Object.assign(record.metadata, { firstEntryAt, lastEntryAt }); await fs.writeFile(f.intent, JSON.stringify(record));
+    }
+    const names = await fs.readdir(f.owner); const selectedNames = await fs.readdir(f.slot);
+    const head = await f.owners.readHeadSnapshot(f.token.locator);
+    const evidence = async () => {
+      const values = [];
+      for (const named of [f.slot, path.join(f.slot, 'COMMITTED'), path.dirname(metadataPath),
+        path.join(path.dirname(metadataPath), 'payload.yaml'), metadataPath]) {
+        let stat;
+        try { stat = await fs.lstat(named, { bigint: true }); }
+        catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') { values.push({ named, absent: true }); continue; } throw cause; }
+        values.push({ named, identity: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.nlink],
+          bytes: stat.isFile() ? await fs.readFile(named) : undefined });
+      }
+      return values;
+    };
+    const original = await evidence();
+    const intent = boundary === 'fresh' ? undefined : await fs.readFile(f.intent);
+    const result = await f.store().removeUnreferenced(f.token, receipt);
+    expect(result).toMatchObject({ status: 'refused', reason: 'unsafe' }); expect(result).not.toHaveProperty('receipt');
+    expect(await fs.readdir(f.owner)).toEqual(names); expect(await fs.readdir(f.slot)).toEqual(selectedNames);
+    if (intent) expect(await fs.readFile(f.intent)).toEqual(intent);
+    expect(await evidence()).toEqual(original); expect(await f.owners.readHeadSnapshot(f.token.locator)).toEqual(head);
+  });
   it('resumes immutable intent and never attributes a prior invocation removal', async () => {
     const f = await fixture(); const cause = new Error('controlled stop');
     const first = await f.store(phase => { if (phase === 'after-slot') throw cause; }).removeUnreferenced(f.token, f.receipt);

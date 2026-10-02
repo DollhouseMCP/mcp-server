@@ -214,6 +214,13 @@ function validateLogicalDates(entry: Record<string, unknown>): void {
     if (typeof value === 'string' && /\.\d{3}0*[1-9]/u.test(value)) throw failure('Cleanup date loses precision');
     if (!Number.isFinite(new Date(value).getTime())) throw failure('Cleanup date is invalid');
   }
+  validateDateOrder(entry);
+}
+function validateDateOrder(entry: Record<string, unknown>): void {
+  if (entry.firstEntryAt !== null && entry.lastEntryAt !== null &&
+    new Date(entry.firstEntryAt as Date | string).getTime() > new Date(entry.lastEntryAt as Date | string).getTime()) {
+    throw failure('Cleanup reference timestamps are reversed');
+  }
 }
 function validateLogicalReference(entry: unknown, owner: string, seen: Set<number>): void {
   exactKeys(entry, ['volume', 'file', 'sha256', 'entryCount', 'sealedAt', 'firstEntryAt', 'lastEntryAt']);
@@ -419,6 +426,7 @@ export class FileMemoryArchiveCleanup {
       receipt: this.receipt, metadata: { sha256: digest(metadata.bytes), sealedAt: date(declaration.sealedAt, false)!,
         firstEntryAt: date(declaration.firstEntryAt, true), lastEntryAt: date(declaration.lastEntryAt, true) },
       files: { payload: payload.identity, metadata: metadata.identity }, marker: this.#live.get(this.#paths.K)!, namespace: this.namespaceCommitments() };
+    validateDateOrder(this.#intent.metadata);
     for (const [role, expected] of [['S', this.receipt.volumeIdentity], ['G', this.receipt.generationIdentity]] as const) {
       const value = this.#live.get(this.#paths[role])!;
       if (value.device !== expected.device || value.inode !== expected.inode) throw Object.assign(failure('Cleanup receipt directory disagrees'), { code: 'EARCHIVEMISMATCH' });
@@ -478,6 +486,7 @@ export class FileMemoryArchiveCleanup {
         throw failure('Cleanup persisted date is not canonical');
       }
     }
+    validateDateOrder(record.metadata);
     if (typeof record.metadata.sha256 !== 'string' || !HASH.test(record.metadata.sha256)) throw failure('Cleanup metadata commitment is invalid');
   }
   private async ownerProof(): Promise<void> {
