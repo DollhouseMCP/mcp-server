@@ -188,3 +188,42 @@ unverified payload declarations. They are not publication receipts, public
 history/access/expiry/reference decisions, or cleanup/erasure authority. Existing
 verified reads and publication retain their full payload proof. No runtime DI,
 rollover activation, cleanup protocol or deployment is introduced.
+
+## Dormant database exact unreferenced cleanup
+
+`DatabaseMemoryVolumeStore.removeUnreferenced(expectedHead, receipt)` captures the
+current database head token and exact row/user/owner/number/digest receipt. One
+READ COMMITTED tenant transaction locks the current clean parent before freshly
+qualifying raw/indexed reference declarations. Any declaration of the target
+number blocks deletion, even with a different digest. Logical seven-field index
+paths remain `volumes/<owner>/vNNNN.yaml`; they are declarations, not physical file
+unlink paths. Malformed, mixed, incomplete or disagreeing references refuse.
+
+The bounded owner metadata inventory is a snapshot admission observation, not a
+held-stable inventory. No archive locking SELECT, global lock, UPDATE grant or
+policy is required. Atomic exact-predicate DELETE protects the target row; zero
+rows triggers a fresh number-slot observation to distinguish replacement from
+current absence. Parent locking excludes cooperating head/index publication and
+FK insertion; arbitrary future privileged writes and later observations are not
+promised absent. Legacy writers remain subject to the all-writer activation gate.
+
+Limits are 8 MiB raw UTF-8 plus the existing legacy YAML code-unit bound, 2 MiB
+indexed metadata, 10,000 archive metadata rows and 16 MiB encoded projection.
+SQL timestamp precision flags prevent submillisecond truncation from qualifying
+references. No archive payload is materialized by this cleanup proof.
+
+`removed` is returned only after acknowledged transaction commit; `absent` means
+current observed absence, not historical removal. Refusal and unknown outcomes
+never claim rollback from an arbitrary error marker. Exact failure causes are
+non-enumerable, outside routine sanitized status/reason diagnostics. Unknown
+commit requires fresh reconciliation; no automatic retry. Existing boolean
+`removeCreated` is not this protected cleanup authority.
+
+This database slice does not complete file parity, owner erasure or retention.
+File cleanup still needs fresh same-operation head/reference evidence, pending
+publication exclusion and exact durable multi-unlink recovery. Runtime wiring,
+maintenance execution and activation remain separate gates.
+
+The 1-second lock timeout and 5-second statement timeout apply to individual SQL
+statements, not the complete transaction. Test-only interleaving barriers are
+not production deadlines. No total transaction deadline guarantee is claimed.
