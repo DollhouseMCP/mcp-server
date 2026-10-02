@@ -161,8 +161,11 @@ describe('file archive cleanup actual process crashes', () => {
         expect(await evidence(f.owner)).toEqual(remainingBefore);
       } else {
         expect(result.status).toBe(prefix < 5 ? 'removed' : 'absent');
-        if (prefix < 5) expect(result.receipt).toEqual(f.receipt);
-        else expect(result).not.toHaveProperty('receipt');
+        if (prefix < 5) {
+          const { operationId: _publicationOperationId, ...durableReceipt } = f.receipt;
+          expect(result.receipt).toEqual(durableReceipt);
+          expect(result.receipt).not.toHaveProperty('operationId');
+        } else expect(result).not.toHaveProperty('receipt');
         expect(await exists(f.slot)).toBe(false);
         expect(await exists(intent)).toBe(false);
       }

@@ -24,13 +24,18 @@ async function fixture(nested = false) {
   const owner = path.join(token.tenantRoot, 'volumes', 'by-id', token.ownerId);
   return { root, token, owners, coordinator, fence, store, receipt, owner, slot: path.join(owner, 'v1'), intent: path.join(owner, 'v1.cleanup.json') };
 }
+function durableEvidence(receipt: Awaited<ReturnType<FileMemoryVolumeStore['createExclusive']>>) {
+  const value = { ...receipt };
+  Reflect.deleteProperty(value, 'operationId');
+  return value;
+}
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 describe('dormant exact protected file archive cleanup', () => {
   it.each([false, true])('removes only exact unreferenced archive, nested=%s', async nested => {
     const f = await fixture(nested);
     const before = await f.owners.readHeadSnapshot(f.token.locator);
     const result = await f.store().removeUnreferenced(f.token, f.receipt);
-    expect(result).toMatchObject({ status: 'removed', receipt: f.receipt });
+    expect(result).toMatchObject({ status: 'removed', receipt: durableEvidence(f.receipt) });
     expect(await fs.readdir(f.owner)).toEqual([]);
     expect(await f.owners.readHeadSnapshot(f.token.locator)).toEqual(before);
     expect(await f.store().removeUnreferenced(f.token, f.receipt)).toMatchObject({ status: 'absent' });
@@ -56,7 +61,7 @@ describe('dormant exact protected file archive cleanup', () => {
     });
     try {
       const result = await f.store().removeUnreferenced(f.token, f.receipt);
-      expect(result).toMatchObject({ status: 'removed', reason: 'removed', receipt: f.receipt });
+      expect(result).toMatchObject({ status: 'removed', reason: 'removed', receipt: durableEvidence(f.receipt) });
       expect(result.cause).toBe(cause); expect(await fs.readdir(f.owner)).toEqual([]);
       expect(await fs.readdir(path.join(f.root, '.memory-fences'))).not.toContain('tenant.lock');
       expect(await f.store().removeUnreferenced(f.token, f.receipt)).toEqual({ status: 'absent', reason: 'absent' });
@@ -75,7 +80,7 @@ describe('dormant exact protected file archive cleanup', () => {
   it('resumes immutable intent and never attributes a prior invocation removal', async () => {
     const f = await fixture(); const cause = new Error('controlled stop');
     const first = await f.store(phase => { if (phase === 'after-slot') throw cause; }).removeUnreferenced(f.token, f.receipt);
-    expect(first).toMatchObject({ status: 'removed', receipt: f.receipt }); expect(first.cause).toBe(cause);
+    expect(first).toMatchObject({ status: 'removed', receipt: durableEvidence(f.receipt) }); expect(first.cause).toBe(cause);
     const bytes = await fs.readFile(f.intent);
     const retry = await f.store().removeUnreferenced(f.token, f.receipt);
     expect(retry).toEqual({ status: 'absent', reason: 'absent' });
@@ -104,6 +109,23 @@ describe('dormant exact protected file archive cleanup', () => {
     const before = await fs.readFile(f.intent);
     expect(await f.store().removeUnreferenced(f.token, f.receipt)).toMatchObject({ status: 'refused', reason: 'mismatch' });
     expect(await fs.readFile(f.intent)).toEqual(before); expect(await fs.readdir(f.slot)).toContain('COMMITTED');
+  });
+  it.each(['changed UUID', 'throwing getter'])('never persists or returns untrusted publication correlation (%s)', async kind => {
+    const f = await fixture();
+    const input = { ...f.receipt };
+    const correlation = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    if (kind === 'changed UUID') input.operationId = correlation;
+    else Object.defineProperty(input, 'operationId', { get: () => { throw new Error('untrusted correlation'); } });
+    const first = await f.store(phase => { if (phase === 'intent-durable') throw new Error('stop'); }).removeUnreferenced(f.token, input);
+    expect(first.status).toBe('unknown'); expect(first).not.toHaveProperty('receipt');
+    const record = JSON.parse(await fs.readFile(f.intent, 'utf8'));
+    expect(record.receipt).toEqual(durableEvidence(f.receipt));
+    expect(record.receipt).not.toHaveProperty('operationId');
+    expect(record.operationId).toMatch(/^[0-9a-f-]{36}$/u); expect(record.operationId).not.toBe(correlation);
+    const result = await f.store().removeUnreferenced(f.token, f.receipt);
+    expect(result).toEqual({ status: 'removed', reason: 'removed', receipt: durableEvidence(f.receipt) });
+    expect(result.receipt).not.toHaveProperty('operationId');
+    expect(await fs.readdir(f.owner)).toEqual([]);
   });
   it.each([false, true])('rejects an altered receipt byte length before fresh or resumed cleanup (retry=%s)', async retry => {
     const f = await fixture();

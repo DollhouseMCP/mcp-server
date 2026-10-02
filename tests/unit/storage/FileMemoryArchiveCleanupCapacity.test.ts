@@ -103,6 +103,15 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
+function diagnostics(caseDetails: object) {
+  const started = performance.now(); let records = 0;
+  return (phase: string, measured: object = {}) => {
+    if (records++ >= 8) return;
+    process.stderr.write(`Cleanup phase ${JSON.stringify({ ...caseDetails, phase, elapsedMs: performance.now() - started,
+      node: process.version, pid: process.pid, ...measured })}\n`);
+  };
+}
+
 describe('file protected cleanup populated portfolios', () => {
   it.each([
     [false, 100, false], [false, 250, false], [false, 1000, false],
@@ -110,6 +119,7 @@ describe('file protected cleanup populated portfolios', () => {
     [false, 100, true], [false, 250, true], [false, 1000, true],
     [true, 100, true], [true, 250, true], [true, 1000, true],
   ] as const)('qualifies nested=%s owners=%i referenced=%s without altering foreign evidence', async (nested, count, referenced) => {
+    const record = diagnostics({ nested, count, referenced });
     const f = await fixture(nested, count);
     let token = f.token;
     if (referenced) token = await f.owners.updateOwnedHead(token, `volumes: ${JSON.stringify([{
@@ -117,11 +127,14 @@ describe('file protected cleanup populated portfolios', () => {
       sealedAt: '2026-10-01T00:00:00.000Z', firstEntryAt: null, lastEntryAt: null,
     }])}\nentries: []\n`);
     const targetBefore = await treeEvidence(f.slot), headBefore = await f.owners.readHeadSnapshot(f.locator);
+    record('setup-complete');
+    record('operation-start');
     const observed = observeReads(), started = performance.now();
     let result;
     try { result = await f.store().removeUnreferenced(token, f.receipt); }
     finally { observed.restore(); }
     const operationMs = performance.now() - started;
+    record('operation-end', { operationMs, ...observed.measured });
     expect(observed.measured.attemptedReads).toBeGreaterThan(0);
     expect(observed.measured.completedCensuses).toBeGreaterThan(0);
     expect(observed.measured.attemptedReads).toBeLessThanOrEqual(2_109_440);
@@ -130,17 +143,23 @@ describe('file protected cleanup populated portfolios', () => {
       await verify(targetBefore);
       expect(await fs.readdir(f.owner)).toEqual(['v1', 'v2']);
     } else {
-      expect(result).toMatchObject({ status: 'removed', receipt: f.receipt });
+      const { operationId: _publicationOperationId, ...durableReceipt } = f.receipt;
+      expect(result).toMatchObject({ status: 'removed', receipt: durableReceipt });
+      expect(result.receipt).not.toHaveProperty('operationId');
       expect(await fs.readdir(f.owner)).toEqual(['v2']);
     }
     expect(await f.owners.readHeadSnapshot(f.locator)).toEqual(headBefore);
     await verifyRetained(f);
+    record('assertion-complete');
     process.stderr.write(`Cleanup capacity ${JSON.stringify({ nested, count, referenced, operationMs, ...observed.measured })}\n`);
   });
   it.each([[false, 'after-payload'], [true, 'after-payload'], [true, 'after-slot']] as const)(
     'retries nested=%s at %s with 1000 owners and fresh revision authority', async (nested, stop) => {
+      const record = diagnostics({ nested, count: 1000, stop });
       const f = await fixture(nested, 1000), cause = new Error('controlled populated prefix');
+      record('setup-complete'); record('interrupted-start');
       const first = await f.store(phase => { if (phase === stop) throw cause; }).removeUnreferenced(f.token, f.receipt);
+      record('interrupted-end');
       expect(first.status).toBe(stop === 'after-slot' ? 'removed' : 'unknown');
       expect(first.cause).toBe(cause);
       const originalIntent = await capture(f.intent);
@@ -149,17 +168,24 @@ describe('file protected cleanup populated portfolios', () => {
       const updated = await f.owners.updateOwnedHead(current, 'entries: []\nname: FreshRetry\n');
       expect(BigInt(updated.revision)).toBe(BigInt(f.token.revision) + 1n);
       const fresh = (await f.owners.readHeadSnapshot(f.locator)).token as OwnedFileMemoryToken;
+      record('fresh-revision-complete'); record('operation-start');
       const observed = observeReads(), started = performance.now();
       let result;
       try { result = await f.store().removeUnreferenced(fresh, f.receipt); }
       finally { observed.restore(); }
       const operationMs = performance.now() - started;
+      record('operation-end', { operationMs, ...observed.measured });
       expect(result.status).toBe(stop === 'after-slot' ? 'absent' : 'removed');
       if (stop === 'after-slot') expect(result).not.toHaveProperty('receipt');
-      else expect(result.receipt).toEqual(f.receipt);
+      else {
+        const { operationId: _publicationOperationId, ...durableReceipt } = f.receipt;
+        expect(result.receipt).toEqual(durableReceipt);
+        expect(result.receipt).not.toHaveProperty('operationId');
+      }
       expect(await fs.readdir(f.owner)).toEqual(['v2']);
       expect((await f.owners.readHeadSnapshot(f.locator)).token).toEqual(updated);
       await verifyRetained(f);
+      record('assertion-complete');
       process.stderr.write(`Cleanup populated retry ${JSON.stringify({ nested, stop, operationMs, ...observed.measured })}\n`);
     });
 });

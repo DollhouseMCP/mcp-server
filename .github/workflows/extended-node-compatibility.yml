@@ -105,7 +105,7 @@ jobs:
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)FileMemoryOwnedCreate[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity)[.]test[.]ts$).*'
         continue-on-error: true
 
       # Keep the complete filesystem capacity suite in a fresh serial process.
@@ -114,15 +114,22 @@ jobs:
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedCreate.test.ts
         continue-on-error: true
 
-      - name: Enforce both required test groups
+      # Keep all cleanup capacity cases and their whole-case deadlines in a fresh process.
+      - name: Run required archive cleanup capacity suite
+        id: cleanup_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryArchiveCleanupCapacity.test.ts
+        continue-on-error: true
+
+      - name: Enforce all required test groups
         if: always()
         shell: bash
         env:
           TEST_OUTCOME: ${{ steps.original_tests.outcome }}
           CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
         run: |
-          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ]; then
-            echo "Both ordinary unit and CREATE capacity groups must pass compatibility validation."
+          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ]; then
+            echo "Ordinary unit, CREATE capacity and archive cleanup capacity groups must all pass compatibility validation."
             exit 1
           fi
 

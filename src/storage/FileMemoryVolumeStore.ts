@@ -7,8 +7,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { FileMemoryDirectoryScanBudget, type FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
-import { FileMemoryArchiveCleanup, captureArchiveCleanupRequest, type ArchiveCleanupPhase, type FileArchiveCleanupResult } from './FileMemoryArchiveCleanup.js';
-export type { ArchiveCleanupPhase, FileArchiveCleanupResult } from './FileMemoryArchiveCleanup.js';
+import { FileMemoryArchiveCleanup, captureArchiveCleanupRequest, type ArchiveCleanupPhase, type FileArchiveCleanupResult, type FileMemoryArchiveCleanupEvidence } from './FileMemoryArchiveCleanup.js';
+export type { ArchiveCleanupPhase, FileArchiveCleanupResult, FileMemoryArchiveCleanupEvidence } from './FileMemoryArchiveCleanup.js';
 import { FileMemoryListProofBudget } from './FileMemoryListProofBudget.js';
 import { captureMemoryVolumeEntryLimit, MAX_MEMORY_VOLUME_LIST_DIAGNOSTICS, type MemoryVolumeListOptions, type MemoryVolumeObservation, type MemoryVolumeListDiagnostic } from './MemoryVolumeObservation.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
@@ -246,7 +246,7 @@ export class FileMemoryVolumeStore {
     this.options = Object.freeze({ ...options });
   }
   /** Dormant exact unreferenced content cleanup; a fresh current head and exact receipt are required. */
-  removeUnreferenced(expected: OwnedFileMemoryToken, receipt: FileMemoryVolumeReceipt): Promise<FileArchiveCleanupResult> {
+  removeUnreferenced(expected: OwnedFileMemoryToken, receipt: FileMemoryArchiveCleanupEvidence): Promise<FileArchiveCleanupResult> {
     const captured = captureArchiveCleanupRequest(expected, receipt);
     let outcome: FileArchiveCleanupResult | undefined;
     return this.options.coordinator.withTenantTransaction(context => this.options.coordinator.perform(context, async operation => {
@@ -261,7 +261,7 @@ export class FileMemoryVolumeStore {
     });
   }
   removeUnreferencedInTransaction(context: FileMemoryLeaseContext, expected: OwnedFileMemoryToken,
-    receipt: FileMemoryVolumeReceipt): Promise<FileArchiveCleanupResult> {
+    receipt: FileMemoryArchiveCleanupEvidence): Promise<FileArchiveCleanupResult> {
     const captured = captureArchiveCleanupRequest(expected, receipt);
     return this.options.coordinator.perform(context, operation =>
       new FileMemoryArchiveCleanup(this.options, operation, captured.token, captured.receipt).run());

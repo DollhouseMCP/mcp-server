@@ -177,15 +177,17 @@ const ORDER = ['marker', 'payload', 'metadata', 'generation', 'slot'] as const;
 type Action = typeof ORDER[number];
 export type ArchiveCleanupPhase = 'partial-intent' | 'before-intent-sync' | 'intent-durable' |
   `before-${Action}` | `after-${Action}` | 'before-retire' | 'after-retire';
+/** Exact durable archive target; publication operationId is runtime-only correlation. */
+export type FileMemoryArchiveCleanupEvidence = Omit<FileMemoryVolumeReceipt, 'operationId'>;
 export interface FileArchiveCleanupResult {
   readonly status: 'removed' | 'absent' | 'refused' | 'unknown';
   readonly reason: 'removed' | 'absent' | 'referenced' | 'mismatch' | 'unsafe' | 'resource' | 'head' | 'query';
-  readonly receipt?: FileMemoryVolumeReceipt;
+  readonly receipt?: FileMemoryArchiveCleanupEvidence;
   readonly cause?: unknown;
 }
 interface Intent {
   schema: 1; kind: 'ARCHIVE_CLEANUP'; state: 'PREPARED';
-  operationId: string; token: OwnedFileMemoryToken; receipt: FileMemoryVolumeReceipt;
+  operationId: string; token: OwnedFileMemoryToken; receipt: FileMemoryArchiveCleanupEvidence;
   metadata: { sha256: string; sealedAt: string; firstEntryAt: string | null; lastEntryAt: string | null };
   files: { payload: Identity; metadata: Identity }; marker: Identity;
   namespace: Record<Role, Commitment>;
@@ -266,7 +268,7 @@ export class FileMemoryArchiveCleanup {
   #captured = false;
   #retired = false;
   constructor(readonly options: CleanupOptions, readonly operation: FileMemoryOperationScope,
-    readonly expected: OwnedFileMemoryToken, readonly receipt: FileMemoryVolumeReceipt) {
+    readonly expected: OwnedFileMemoryToken, readonly receipt: FileMemoryArchiveCleanupEvidence) {
     const scope = this.active();
     const owner = path.join(scope.tenantRoot, 'volumes', 'by-id', expected.ownerId);
     this.#paths = { T: scope.tenantRoot, H: path.dirname(path.join(scope.tenantRoot, expected.locator)),
@@ -378,8 +380,7 @@ export class FileMemoryArchiveCleanup {
     }
     return prefix;
   }
-  private namespaceCommitments(): Promise<Record<Role, Commitment>> {
-    return new Promise(resolve => {
+  private namespaceCommitments(): Record<Role, Commitment> {
     const result = {} as Record<Role, Commitment>;
     for (const role of ROLES) {
       const value = this.#live.get(this.#paths[role]);
@@ -389,8 +390,7 @@ export class FileMemoryArchiveCleanup {
       if (['S', 'G', 'K'].includes(role) && foreign.length) throw failure('Fresh archive contains unexpected children');
       result[role] = { identity: stable(value), count: foreign.length, sha256: namesHash(foreign) };
     }
-    resolve(result);
-    });
+    return result;
   }
   private async bindFresh(): Promise<void> {
     const payload = await readBoundFile(path.join(this.#paths.G, 'payload.yaml'), 3 * MEMORY_CONSTANTS.MAX_YAML_SIZE);
@@ -687,8 +687,8 @@ export class FileMemoryArchiveCleanup {
 }
 
 /** Exact primitive capture precedes tenant acquisition; caller outcome markers never become results. */
-export function captureArchiveCleanupRequest(expected: OwnedFileMemoryToken, receipt: FileMemoryVolumeReceipt): {
-  token: OwnedFileMemoryToken; receipt: FileMemoryVolumeReceipt;
+export function captureArchiveCleanupRequest(expected: OwnedFileMemoryToken, receipt: FileMemoryArchiveCleanupEvidence): {
+  token: OwnedFileMemoryToken; receipt: FileMemoryArchiveCleanupEvidence;
 } {
   const token = { backend: expected.backend, ownership: expected.ownership, userId: expected.userId,
     tenantRoot: expected.tenantRoot, locator: expected.locator, ownerId: expected.ownerId, revision: expected.revision,
@@ -704,13 +704,13 @@ export function captureArchiveCleanupRequest(expected: OwnedFileMemoryToken, rec
   const copyDirectory = (value: { device: string; inode: string }) => ({ device: value.device, inode: value.inode });
   const copyFile = (value: FileMemoryVolumeReceipt['payloadIdentity']) => ({ ...copyDirectory(value), size: value.size, mtimeNs: value.mtimeNs, ctimeNs: value.ctimeNs });
   const captured = { schema: receipt.schema, tenantRoot: receipt.tenantRoot, userId: receipt.userId, ownerId: receipt.ownerId,
-    volume: receipt.volume, generationId: receipt.generationId, operationId: receipt.operationId, sha256: receipt.sha256,
+    volume: receipt.volume, generationId: receipt.generationId, sha256: receipt.sha256,
     byteLength: receipt.byteLength, entryCount: receipt.entryCount, volumeIdentity: copyDirectory(receipt.volumeIdentity),
     generationIdentity: copyDirectory(receipt.generationIdentity), payloadIdentity: copyFile(receipt.payloadIdentity), metadataIdentity: copyFile(receipt.metadataIdentity) };
   const values = [token.fileIdentity, captured.volumeIdentity, captured.generationIdentity, captured.payloadIdentity, captured.metadataIdentity];
   if (captured.schema !== 1 || captured.tenantRoot !== token.tenantRoot || captured.userId !== token.userId || captured.ownerId !== token.ownerId ||
     !Number.isSafeInteger(captured.volume) || captured.volume < 1 || typeof captured.generationId !== 'string' || !UUID.test(captured.generationId) ||
-    typeof captured.operationId !== 'string' || !UUID.test(captured.operationId) || typeof captured.sha256 !== 'string' || !HASH.test(captured.sha256) ||
+    typeof captured.sha256 !== 'string' || !HASH.test(captured.sha256) ||
     !Number.isSafeInteger(captured.byteLength) || captured.byteLength < 0 || captured.byteLength > 3 * MEMORY_CONSTANTS.MAX_YAML_SIZE ||
     !Number.isInteger(captured.entryCount) || captured.entryCount < 0 || captured.entryCount > 2_147_483_647 ||
     values.some(value => Object.entries(value).some(([key, field]) => typeof field !== 'string' || field.length > MAX_NUMERIC_WIDTH ||

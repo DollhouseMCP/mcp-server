@@ -230,7 +230,7 @@ not production deadlines. No total transaction deadline guarantee is claimed.
 
 ## Dormant file exact unreferenced cleanup
 
-`FileMemoryVolumeStore.removeUnreferenced(expectedOwnedToken, exactReceipt)` and
+`FileMemoryVolumeStore.removeUnreferenced(expectedOwnedToken, durableTargetEvidence)` and
 its in-transaction form use one tracked operation and lease. A narrow
 `FileMemoryOwnerSnapshots.snapshotOwnedAtScope` seam returns raw content and its
 owned token from the same read, compares the fresh expected token and rechecks
@@ -239,7 +239,15 @@ projection. All seven logical fields are validated, and any declaration of the
 target number blocks removal even if its digest differs. Logical paths never
 become unlink paths. The selected archive object cannot also be that head.
 
-Cleanup binds the original receipt, payload/metadata bytes and full file
+`FileMemoryArchiveCleanupEvidence` contains every durable publication target
+field except publication `operationId`. That ID is runtime correlation: schema-1
+publication metadata does not store it and COMMITTED is an empty directory.
+Cleanup normalizes input, intent authority and removed-result evidence without
+reading or retaining that unverified field. Publication receipts remain unchanged.
+The cleanup intent has its own independently generated operation ID. The earlier
+“exact receipt” wording could not truthfully authenticate all publication fields.
+
+Cleanup binds this exact durable target, payload/metadata bytes and full file
 identities, full empty marker identity, relevant private directory lineage and
 complete fresh canonical names. Namespace commitments cover unchanged names
 and counts, with exact selected basenames enforced separately for each residual
@@ -257,7 +265,7 @@ Each retry uses a fresh current head token; persisted head evidence is provenanc
 not authority. Newly referenced volumes block a retry.
 
 `removed` means this invocation performed the final slot rmdir and completed the
-qualified owner-directory sync and close. Its genuine receipt is captured before
+qualified owner-directory sync and close. Its genuine durable target evidence is captured before
 later hooks, audit or lease release; later failures retain it and exact
 non-enumerable causes. Physical removal with failed final sync/close is unknown.
 Fresh observation of an already absent slot returns `absent`, never historical
