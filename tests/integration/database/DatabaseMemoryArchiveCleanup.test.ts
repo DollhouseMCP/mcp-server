@@ -66,6 +66,18 @@ describe('protected archive cleanup with actual FORCE RLS', () => {
     expect(await f.store.removeUnreferenced(f.snapshot.token, f.archive)).toEqual({ status: 'absent', reason: 'absent' });
   });
 
+  it('refuses an actual owner-row overflow without deleting any archive', async () => {
+    const f = await fixture();
+    await admin.execute(sql`INSERT INTO memory_volumes (user_id, memory_id, volume, raw_content, sha256, entry_count, sealed_at)
+      SELECT ${userId}::uuid, ${f.archive.memoryId}::uuid, n, '{}', ${'a'.repeat(64)}, 0, '1970-01-01T00:00:00Z'::timestamptz
+      FROM generate_series(2, 10001) AS n`);
+    expect(await f.store.removeUnreferenced(f.snapshot.token, f.archive)).toEqual({ status: 'refused', reason: 'resource' });
+    const count = await admin.execute(sql`SELECT count(*)::int AS count FROM memory_volumes
+      WHERE user_id = ${userId}::uuid AND memory_id = ${f.archive.memoryId}::uuid`);
+    expect(count[0].count).toBe(10_001);
+    expect(await f.layer.readHeadSnapshot(f.archive.memoryId)).toEqual(f.snapshot);
+  });
+
   it('supports a nonempty unrelated index and preserves its referenced row', async () => {
     const f = await fixture();
     const retained = await f.store.createExclusive({ userId, memoryId: f.archive.memoryId }, {

@@ -16,6 +16,7 @@ function fixture(metadata: Record<string, unknown> = {}, mode = 'success') {
   const raw = JSON.stringify({ metadata, entries: [] });
   const hash = createHash('sha256').update(raw).digest('hex');
   const statements: string[] = [];
+  const parameters: unknown[][] = [];
   let selection = 0;
   const responses: unknown[][][] = [
     [['Memory', 1n, false, Buffer.byteLength(raw), Buffer.byteLength(JSON.stringify(metadata))]],
@@ -23,8 +24,9 @@ function fixture(metadata: Record<string, unknown> = {}, mode = 'success') {
     [[0, '0']], [], [[id, receipt.sha256]], [[id]],
   ];
   const client = postgres('postgres://unused:unused@127.0.0.1:1/unused');
-  jest.spyOn(client, 'unsafe').mockImplementation(((query: string) => {
+  jest.spyOn(client, 'unsafe').mockImplementation(((query: string, valuesInput: unknown[] = []) => {
     statements.push(query);
+    parameters.push(valuesInput);
     const values = /^select /iu.test(query) && !query.includes('set_config') ? responses[selection++] :
       /^delete /iu.test(query) ? responses[selection++] : [];
     const task = Promise.resolve(values);
@@ -42,7 +44,7 @@ function fixture(metadata: Record<string, unknown> = {}, mode = 'success') {
     }
   }) as typeof client.begin);
   const store = new DatabaseMemoryVolumeStore(drizzle(client) as DatabaseInstance, () => userId);
-  return { store, responses, statements };
+  return { store, responses, statements, parameters };
 }
 
 describe('protected database archive cleanup envelope', () => {
@@ -98,6 +100,16 @@ describe('protected database archive cleanup envelope', () => {
     const f = fixture(); f.responses[0][0][Number(index)] = size;
     expect(await f.store.removeUnreferenced(expected, receipt)).toMatchObject({ status: 'refused', reason: 'resource' });
     expect(f.statements.some(query => query.includes('"content_hash"'))).toBe(false);
+  });
+
+  it('caps admission rows before aggregation and refuses the overflow sentinel', async () => {
+    const f = fixture(); f.responses[2] = [[10_001, '0']];
+    expect(await f.store.removeUnreferenced(expected, receipt)).toMatchObject({ status: 'refused', reason: 'resource' });
+    const index = f.statements.findIndex(query => query.includes('count(*)'));
+    expect(f.statements[index]).toMatch(/from \(select .* limit \$\d+\) "archive_admission"/su);
+    expect(f.parameters[index]).toContain(10_001);
+    expect(f.statements.some(query => query.includes('sealedUnrepresentable'))).toBe(false);
+    expect(f.statements.some(query => query.startsWith('delete'))).toBe(false);
   });
 
   it('prechecks complete archive projection size before metadata fetch', async () => {

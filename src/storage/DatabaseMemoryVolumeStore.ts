@@ -411,8 +411,10 @@ export class DatabaseMemoryVolumeStore {
           const metadataBytes = sql<number>`octet_length(json_build_object('id', ${memoryVolumes.id}, 'volume', ${memoryVolumes.volume},
             'sha256', ${memoryVolumes.sha256}, 'entryCount', ${memoryVolumes.entryCount}, 'sealedAt', ${memoryVolumes.sealedAt},
             'firstEntryAt', ${memoryVolumes.firstEntryAt}, 'lastEntryAt', ${memoryVolumes.lastEntryAt})::text)`;
+          const admissionRows = tx.select({ bytes: metadataBytes.as('metadata_bytes') }).from(memoryVolumes)
+            .where(archiveCondition).limit(CLEANUP_ROWS + 1).as('archive_admission');
           const [archiveBounds] = await tx.select({ count: sql<number>`count(*)::int`,
-            bytes: sql<string>`coalesce(sum(${metadataBytes}), 0)::text` }).from(memoryVolumes).where(archiveCondition);
+            bytes: sql<string>`coalesce(sum(${admissionRows.bytes}), 0)::text` }).from(admissionRows);
           if (!archiveBounds || !Number.isSafeInteger(archiveBounds.count) || archiveBounds.count < 0 ||
             typeof archiveBounds.bytes !== 'string' || !/^(0|[1-9]\d*)$/u.test(archiveBounds.bytes)) throw new CleanupRefusal('unsafe');
           if (archiveBounds.count > CLEANUP_ROWS || BigInt(archiveBounds.bytes) > BigInt(CLEANUP_PROJECTED_BYTES)) throw new CleanupRefusal('resource');
