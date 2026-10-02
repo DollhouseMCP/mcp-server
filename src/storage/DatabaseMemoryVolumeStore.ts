@@ -199,6 +199,13 @@ function cleanupReferences(content: string, indexed: unknown, owner: string): Re
   return references;
 }
 
+/** Validate the locked head before admitting content materialization. */
+function cleanupHeadBounds(bounds: { name: string; revision: bigint; dirty: boolean; rawBytes: number; metadataBytes: number } | undefined,
+  head: { name: string; revision: string }): asserts bounds is { name: string; revision: bigint; dirty: boolean; rawBytes: number; metadataBytes: number } {
+  if (bounds?.name !== head.name || bounds.revision.toString() !== head.revision || bounds.dirty !== false) throw new CleanupRefusal('head');
+  if (![bounds.rawBytes, bounds.metadataBytes].every(value => Number.isSafeInteger(value) && value >= 0)) throw new CleanupRefusal('unsafe');
+}
+
 /** Validate the materialized head after its locked size admission. */
 function cleanupHeadContent(parent: { raw: string; bytes: number; hash: string } | undefined): asserts parent is { raw: string; bytes: number; hash: string } {
   if (!parent || Buffer.from(parent.raw, 'utf8').toString('utf8') !== parent.raw ||
@@ -392,10 +399,7 @@ export class DatabaseMemoryVolumeStore {
             dirty: elements.memoryEntriesOutOfSync, rawBytes: sql<number>`octet_length(${elements.rawContent})`,
             metadataBytes: sql<number>`octet_length(${elements.metadata}::text)`
           }).from(elements).where(condition).for('update').limit(1);
-          if (bounds?.name !== head.name || bounds.revision.toString() !== head.revision || bounds.dirty !== false) {
-            throw new CleanupRefusal('head');
-          }
-          if (![bounds.rawBytes, bounds.metadataBytes].every(value => Number.isSafeInteger(value) && value >= 0)) throw new CleanupRefusal('unsafe');
+          cleanupHeadBounds(bounds, head);
           await this.cleanupBarrier('parent-locked');
           if (bounds.rawBytes > CLEANUP_RAW_BYTES || bounds.metadataBytes > CLEANUP_METADATA_BYTES) throw new CleanupRefusal('resource');
           const [parent] = await tx.select({ raw: elements.rawContent, metadata: elements.metadata,
