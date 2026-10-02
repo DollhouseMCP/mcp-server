@@ -74,12 +74,22 @@ describe('recovery-private resource reservation', () => {
     await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('requires room for EOF without creating artifacts', async () => {
-    const root = await fixture();
-    await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(root, `n${index}`), 'x')));
+    const started = performance.now();
+    const diagnostic = (phase: string, accounting: object = {}) => process.stderr.write(`ADOPTION EOF ${JSON.stringify({
+      phase, elapsedMs: performance.now() - started, node: process.version, pid: process.pid, noiseFiles: 4096, ...accounting })}\n`);
+    diagnostic('setup-start');
+    let root: string;
+    try {
+      root = await fixture();
+      await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(root, `n${index}`), 'x')));
+    } finally { diagnostic('setup-end'); }
     const budget = new FileMemoryAdoptionRecoveryScanBudget();
-    await expect(budget.discover(root, root, '.head.memory-owner.json', 'owner')).rejects.toMatchObject({ code: 'EHEADRESOURCE' });
+    try {
+      await expect(budget.discover(root, root, '.head.memory-owner.json', 'owner')).rejects.toMatchObject({ code: 'EHEADRESOURCE' });
+    } finally { diagnostic('discover-end', { chargedReads: budget.consumed, scanLimit: budget.limit }); }
     expect(budget.consumed).toBe(4096);
     await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+    diagnostic('assertions-complete', { chargedReads: budget.consumed, scanLimit: budget.limit });
   });
   it('rejects aggregate projection overflow after a complete admitted discovery', async () => {
     const root = await fixture();

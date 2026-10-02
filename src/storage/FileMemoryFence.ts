@@ -228,8 +228,10 @@ export class FileMemoryFence {
 
   /** Stable canonical aliases must be refused before even an EEXIST mkdir attempt. */
   private async assertCanonicalSeparation(root: string): Promise<void> {
-    const paths = [root, path.join(root, 'volumes'), path.join(root, LOCK_DIRECTORY)];
-    const observe = () => Promise.all(paths.map(async (target, index) => {
+    const paths = [root, path.join(root, 'volumes'), path.join(root, LOCK_DIRECTORY),
+      path.join(root, '.memory-owners'), path.join(root, '.memory-owners', 'owners')];
+    const fail = () => { throw Object.assign(new Error('Canonical memory volumes and fence directories are unsafe or changed'), { code: 'EHEADCONFLICT' }); };
+    const optional = async (target: string, index: number) => {
       try { return await fs.lstat(target, { bigint: true }); }
       catch (cause) {
         if (index > 0 && hasCode(cause, 'ENOENT')) {
@@ -237,8 +239,15 @@ export class FileMemoryFence {
         }
         throw cause;
       }
-    }));
-    const fail = () => { throw Object.assign(new Error('Canonical memory volumes and fence directories are unsafe or changed'), { code: 'EHEADCONFLICT' }); };
+    };
+    const observe = async () => {
+      const stats = await Promise.all(paths.slice(0, 4).map(optional));
+      const ownerRoot = stats[3];
+      // Never traverse an unsafe owner ancestor to observe its registry child.
+      if (ownerRoot && (!ownerRoot.isDirectory() || ownerRoot.isSymbolicLink())) fail();
+      stats.push(ownerRoot ? await optional(paths[4], 4) : undefined);
+      return stats;
+    };
     const pair = (a: BigIntStats | undefined, b: BigIntStats | undefined) => !!a && !!b && a.dev === b.dev && a.ino === b.ino;
     const validate = (stats: (BigIntStats | undefined)[]) => {
       for (const [index, stat] of stats.entries()) {
@@ -251,7 +260,8 @@ export class FileMemoryFence {
       const fence = stats[2];
       if (fence && (fence.mode & 0o077n) !== 0n) throw new Error(`Memory fence directory is not a private, non-symlink directory: ${paths[2]}`);
       if (fence && process.getuid && fence.uid !== BigInt(process.getuid())) throw new Error(`Memory fence directory has another owner: ${paths[2]}`);
-      if (pair(stats[1], stats[2]) || pair(stats[1], stats[0]) || pair(stats[2], stats[0])) fail();
+      if (pair(stats[1], stats[2]) || pair(stats[1], stats[0]) || pair(stats[2], stats[0]) ||
+        pair(stats[2], stats[3]) || pair(stats[2], stats[4])) fail();
     };
     const before = await observe();
     validate(before);

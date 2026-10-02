@@ -97,6 +97,84 @@ describe('canonical archive/fence separation before lease mutation', () => {
       expect((await f.owners.readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
     });
 
+  describe.each(['.memory-owners', '.memory-owners/owners'])('fence separation from %s', archive => {
+    it.each(['tenant', 'generic', 'coordinator', 'delete'] as const)('refuses actual-stat archive/fence alias through %s before lease mutation', async entry => {
+      const f = await fixture(), before = await tree(f.tenantRoot);
+      const identity = await realFs.lstat(path.join(f.tenantRoot, archive), { bigint: true });
+      const observed = substituteIdentity(f.fenceRoot, identity);
+      let callback = false, result: unknown;
+      const operation = () => { callback = true; return 'unexpected'; };
+      clearMutations();
+      const pending = entry === 'generic' ? f.fence.withFence({ tenantRoot: f.tenantRoot, memoryLocator: 'memory.yaml' }, operation) :
+        entry === 'coordinator' ? f.coordinator.withTenantTransaction(operation) :
+          entry === 'delete' ? f.owners.deleteOwned(f.request) : f.fence.withTenantFence(f.tenantRoot, operation);
+      await expect(pending.then(value => { result = value; })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(observed()).toBeGreaterThan(0); expect(callback).toBe(false); expect(result).toBeUndefined(); noMutations();
+      lstat.mockImplementation(realFs.lstat); expect(await tree(f.tenantRoot)).toEqual(before);
+      expect((await f.owners.readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
+    });
+  });
+  describe.each(['.memory-owners', '.memory-owners/owners'])('unsafe managed archive path %s', archive => {
+    it.each(['file', 'symlink'])('refuses %s without lease writes or traversal through an unsafe owner ancestor', async kind => {
+      const tenantRoot = await root(), target = path.join(tenantRoot, archive);
+      if (archive.endsWith('/owners')) await realFs.mkdir(path.dirname(target), { mode: 0o700 });
+      if (kind === 'file') await realFs.writeFile(target, 'retained');
+      else await realFs.symlink(tenantRoot, target);
+      const before = await tree(tenantRoot); clearMutations(); lstat.mockClear();
+      await expect(new FileMemoryFence().withTenantFence(tenantRoot, () => 'unexpected')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      noMutations(); expect(await tree(tenantRoot)).toEqual(before);
+      if (archive === '.memory-owners') expect(lstat.mock.calls.some(args => String(args[0]) === path.join(target, 'owners'))).toBe(false);
+    });
+  });
+  it.each(['.memory-owners', '.memory-owners/owners'])('permits actual cooperating creation of optional %s during admission', async archive => {
+    const tenantRoot = await root(), target = path.join(tenantRoot, archive);
+    if (archive.endsWith('/owners')) await realFs.mkdir(path.dirname(target), { mode: 0o700 });
+    let created = false;
+    lstat.mockImplementation(async (...args: Parameters<typeof realFs.lstat>) => {
+      try { return await realFs.lstat(...args); }
+      catch (cause) {
+        if (!created && String(args[0]) === target && (cause as NodeJS.ErrnoException).code === 'ENOENT') {
+          created = true; await realFs.mkdir(target, { mode: 0o700 });
+          await realFs.writeFile(path.join(target, 'retained'), 'cooperating archive');
+        }
+        throw cause;
+      }
+    });
+    clearMutations();
+    await expect(new FileMemoryFence().withTenantFence(tenantRoot, () => 'done')).resolves.toBe('done');
+    expect(created).toBe(true); expect(await realFs.readFile(path.join(target, 'retained'), 'utf8')).toBe('cooperating archive');
+    expect(mkdir.mock.calls.some(args => String(args[0]).startsWith(path.join(tenantRoot, '.memory-owners')))).toBe(false);
+    expect(await realFs.readdir(path.join(tenantRoot, '.memory-fences'))).toEqual([]);
+  });
+  it('preserves an exact owner observation failure before any lease mutation', async () => {
+    const f = await fixture(), before = await tree(f.tenantRoot), cause = Object.assign(new Error('owner observation denied'), { code: 'EACCES' });
+    lstat.mockImplementation(async (...args: Parameters<typeof realFs.lstat>) => {
+      const actual = await realFs.lstat(...args);
+      if (String(args[0]) === path.join(f.tenantRoot, '.memory-owners')) throw cause;
+      return actual;
+    });
+    clearMutations(); await expect(f.owners.deleteOwned(f.request)).rejects.toBe(cause); noMutations();
+    lstat.mockImplementation(realFs.lstat); expect(await tree(f.tenantRoot)).toEqual(before);
+  });
+  it('rejects nonalias owner replacement between admission observations before lease attempts', async () => {
+    const f = await fixture(), other = path.join(f.tenantRoot, 'other-owner'); await realFs.mkdir(other, { mode: 0o700 });
+    const before = await tree(f.tenantRoot), identity = await realFs.lstat(other, { bigint: true }); let reads = 0;
+    const observed = substituteIdentity(path.join(f.tenantRoot, '.memory-owners'), identity, () => ++reads === 2);
+    clearMutations(); await expect(f.fence.withTenantFence(f.tenantRoot, () => 'unexpected')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+    expect(observed()).toBe(1); noMutations(); lstat.mockImplementation(realFs.lstat); expect(await tree(f.tenantRoot)).toEqual(before);
+  });
+  it('refuses a registry/fence alias discovered on a real contended lease retry before another lease mkdir', async () => {
+    const f = await fixture(), lock = path.join(f.fenceRoot, 'tenant.lock');
+    await realFs.mkdir(lock, { mode: 0o700 }); await realFs.writeFile(path.join(lock, 'owner'), 'foreign lease', { mode: 0o600 });
+    const before = await tree(f.tenantRoot), identity = await realFs.lstat(f.fenceRoot, { bigint: true });
+    const observed = substituteIdentity(path.join(f.tenantRoot, '.memory-owners', 'owners'), identity,
+      () => mkdir.mock.calls.some(args => String(args[0]) === lock));
+    clearMutations(); await expect(f.fence.withTenantFence(f.tenantRoot, () => 'unexpected', { timeoutMs: 1000 })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+    expect(observed()).toBeGreaterThan(0); expect(mkdir.mock.calls.filter(args => String(args[0]) === lock)).toHaveLength(1);
+    for (const spy of [open, writeFile, unlink, rmdir]) expect(spy).not.toHaveBeenCalled();
+    lstat.mockImplementation(realFs.lstat); expect(await tree(f.tenantRoot)).toEqual(before);
+  });
+
   it('refuses standalone archive publication at the unsafe canonical-volume prelease boundary with zero lease attempts', async () => {
     const tenantRoot = await root(), target = await root();
     await realFs.writeFile(path.join(tenantRoot, 'memory.yaml'), 'entries: []\n');
