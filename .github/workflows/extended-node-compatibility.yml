@@ -99,8 +99,28 @@ jobs:
           # REMOVED restore-keys for consistency with TypeScript cache fix
           # Jest cache can also become stale and cause test failures
 
-      - name: Run test suite
-        run: npm test
+      - name: Run ordinary unit matrix
+        id: original_tests
+        run: npm test -- --testPathPatterns='^(?!.*(?:^|/)FileMemoryOwnedCreate[.]test[.]ts$).*'
+        continue-on-error: true
+
+      # Keep the complete filesystem capacity suite in a fresh serial process.
+      - name: Run required CREATE capacity suite
+        id: create_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedCreate.test.ts
+        continue-on-error: true
+
+      - name: Enforce both required test groups
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
+          CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ]; then
+            echo "Both ordinary unit and CREATE capacity groups must pass compatibility validation."
+            exit 1
+          fi
 
       - name: Compatibility validation
         run: |
