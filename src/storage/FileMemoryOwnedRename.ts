@@ -77,7 +77,7 @@ function original(a: Identity, b: Identity): boolean { return a.device === b.dev
 function validLocator(value: unknown): value is string {
   return typeof value === 'string' && !!value && Buffer.byteLength(value) <= 1024 && Buffer.from(value).toString('utf8') === value &&
     !value.includes('\\') && !value.includes('\0') && !path.win32.isAbsolute(value) &&
-    !/^\.[0-9a-f]{64}\.memory-(?:owner\.json|write)(?:\.|$)/iu.test(path.posix.basename(value)) && value.split('/').every(part => !!part && part !== '.' && part !== '..') && !path.isAbsolute(value);
+    !/^\.[0-9a-f]{64}\.memory-(?:owner\.json|write)(?:\.|$)/iu.test(path.posix.basename(value)) && value.split('/').every(part => !!part && part !== '.' && part !== '..' && Buffer.byteLength(part) <= 255) && !path.isAbsolute(value);
 }
 export function captureRenameRequest(input: RenameOwnedRequest): RenameOwnedRequest {
   if (!keys(input, ['operationId', 'expectedToken', 'destinationLocator'])) throw new TypeError('RENAME requires operationId, expectedToken and destinationLocator');
@@ -87,7 +87,7 @@ export function captureRenameRequest(input: RenameOwnedRequest): RenameOwnedRequ
     !validLocator(token.locator) || !decimal(token.revision, 19) || BigInt(token.revision) < 1n || BigInt(token.revision) >= MAX_REVISION ||
     typeof token.userId !== 'string' || !token.userId || Buffer.byteLength(token.userId) > 128 || typeof token.tenantRoot !== 'string' ||
     path.posix.dirname(token.locator) !== path.posix.dirname(destinationLocator) || path.posix.basename(token.locator).toLowerCase() === path.posix.basename(destinationLocator).toLowerCase() ||
-    ['.memory-owners', '.memory-fences', 'volumes'].includes(token.locator.split('/')[0])) throw new TypeError('Unsupported managed RENAME request');
+    [token.locator, destinationLocator].some(locator => ['.memory-owners', '.memory-fences', 'volumes'].includes(locator.includes('/') ? locator.split('/')[0] : locator.toLowerCase()))) throw new TypeError('Unsupported managed RENAME request');
   return Object.freeze({ operationId, destinationLocator, expectedToken: Object.freeze({ ...token, fileIdentity: Object.freeze({ ...token.fileIdentity }) }) });
 }
 const fieldOrder = ['schema', 'state', 'binding', 'baseline', 'originalSourceJournal', 'reservation', 'prior', 'currentHead', 'destinationSidecar', 'newRegistry',
@@ -416,7 +416,7 @@ export class FileMemoryOwnedRename {
   }
   private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore: BigIntStats | undefined, volumeAfter: BigIntStats | undefined): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
-    if (volumeBefore && volumeBefore.dev === before[0].dev && volumeBefore.ino === before[0].ino) fail('EHEADCONFLICT');
+    if (volumeBefore && this.directories.some(directory => directory.identity.device === String(volumeBefore.dev) && directory.identity.inode === String(volumeBefore.ino))) fail('EHEADCONFLICT');
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();
     if (before.slice(1).some(stat => stat.dev === before[0].dev && stat.ino === before[0].ino)) fail('EHEADCONFLICT');
     const pairs = new Set<string>();
@@ -498,6 +498,7 @@ export class FileMemoryOwnedRename {
     this.binding = { ...this.expectedBinding(), contentBytes: Buffer.byteLength(snapshot.content) };
     const head = await this.read(this.source, this.binding.contentBytes, '1', false), sidecar = await this.optional(this.sourceSidecar), registry = await this.optional(this.registry);
     if (!sidecar || !registry || head.digest !== this.binding.contentHash || !equal(head.identity, token.fileIdentity)) fail();
+    this.validateMetadata(sidecar.raw, false); this.validateMetadata(registry.raw, false);
     this.files.set(this.source, head); await this.proof(true);
     this.record = { schema: 4, state: 'BASE_RENAME', binding: this.binding, baseline: { sourceSidecar: sidecar, registry,
       originalChildren: { head: this.child(this.source), sourceSidecar: this.child(this.sourceSidecar), registry: this.child(this.registry) }, namespace: this.directories.map(commitment) } };

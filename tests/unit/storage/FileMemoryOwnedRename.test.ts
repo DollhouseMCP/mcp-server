@@ -7,8 +7,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { FileMemoryOwnerSnapshots, type RenamePublication, type RenameOwnedRequest, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
-import { Dir, type Dirent } from 'node:fs';
+import { FileMemoryOwnerSnapshots, type RenamePublication, type RenameOwnedRequest, type UnownedFileMemoryToken, type FileMemorySnapshot } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
+import { Dir, type Dirent, type BigIntStats } from 'node:fs';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
 import { FileMemoryOwnedRename } from '../../../src/storage/FileMemoryOwnedRename.js';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
@@ -490,4 +490,53 @@ describe('dormant same-parent managed RENAME', () => {
         clearTimeout(timer); if (!didClose) child.kill('SIGKILL'); await closed;
       }
     });
+
+  it.each(['a'.repeat(251) + '.yaml', '界'.repeat(86) + '.yaml', 'volumes', 'VOLUMES', '.memory-owners', '.MEMORY-FENCES'])(
+    'rejects unusable root destination %s before artifacts', async destinationLocator => {
+      const f = await fixture(), names = (await fs.readdir(f.root)).sort(), before = await evidence(f.source);
+      await expect(f.store().renameOwned({ ...f.request, destinationLocator })).rejects.toThrow();
+      expect((await fs.readdir(f.root)).sort()).toEqual(names); expect(await evidence(f.source)).toEqual(before);
+      expect((await f.store().readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
+    });
+  it('permits an exact 255-byte destination component', async () => {
+    const f = await fixture(), destinationLocator = 'a'.repeat(250) + '.yaml';
+    expect(Buffer.byteLength(destinationLocator)).toBe(255);
+    const moved = await f.store().renameOwned({ ...f.request, destinationLocator });
+    expect(moved.locator).toBe(destinationLocator);
+    expect((await f.store().readHeadSnapshot(destinationLocator)).token).toEqual(moved);
+  });
+  it.each(['sidecar', 'registry'] as const)('rejects conflicting %s bytes captured after the real owner reader', async kind => {
+    const f = await fixture(), store = f.store(), headBefore = await evidence(f.source), names = (await fs.readdir(f.root)).sort();
+    const target = kind === 'sidecar' ? f.sourceJournal.replace('.memory-write.json', '.memory-owner.json') : path.join(f.root, '.memory-owners', 'owners', `${f.token.ownerId}.json`);
+    const reader = store as unknown as { readAtRoot(root: string, user: string, locator: string, ...rest: unknown[]): Promise<FileMemorySnapshot> };
+    const original = reader.readAtRoot.bind(store); let changed = false, retained: Awaited<ReturnType<typeof evidence>> | undefined;
+    const spy = jest.spyOn(reader, 'readAtRoot').mockImplementation(async (...args) => {
+      const snapshot = await original(...args);
+      if (!changed) {
+        changed = true; const record = JSON.parse(await fs.readFile(target, 'utf8'));
+        record.ownerId = randomUUID(); await fs.writeFile(target, JSON.stringify(record)); retained = await evidence(target);
+      }
+      return snapshot;
+    });
+    try { await expect(store.renameOwned(f.request)).rejects.toThrow(); }
+    finally { spy.mockRestore(); }
+    expect(changed).toBe(true); expect(await evidence(target)).toEqual(retained);
+    expect(await evidence(f.source)).toEqual(headBefore); expect((await fs.readdir(f.root)).sort()).toEqual(names);
+    await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.lstat(f.destinationJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rejects a canonical volume identity matching a deeper captured source ancestor', async () => {
+    const f = await fixture(), locator = 'Alias/Nested/Original.yaml';
+    await fs.mkdir(path.join(f.root, 'Alias', 'Nested'), { recursive: true });
+    const token = await f.store().createOwned({ operationId: randomUUID(), locator, content: CONTENT });
+    const target = path.join(f.root, locator), before = await evidence(target), parent = path.dirname(target), names = (await fs.readdir(parent)).sort();
+    const canonical = await fs.lstat(parent, { bigint: true });
+    const prototype = FileMemoryOwnedRename.prototype as unknown as { canonicalVolume(): Promise<BigIntStats | undefined> };
+    // Descriptor injection models a deeper physical alias without creating a privileged bind mount.
+    const spy = jest.spyOn(prototype, 'canonicalVolume').mockResolvedValue(canonical);
+    try { await expect(f.store().renameOwned({ operationId: randomUUID(), expectedToken: token, destinationLocator: 'Alias/Nested/Renamed.yaml' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' }); }
+    finally { spy.mockRestore(); }
+    expect(await evidence(target)).toEqual(before); expect((await fs.readdir(parent)).sort()).toEqual(names);
+    expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
+  });
 });
