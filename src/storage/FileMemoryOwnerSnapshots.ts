@@ -16,6 +16,8 @@ import type { FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget
 import { FileMemoryAdoptionRecoveryScanBudget } from './FileMemoryAdoptionRecoveryScanBudget.js';
 import { FileMemoryOwnedCreate, captureCreateRequest, type CreateOwnedRequest, type CreatePublication } from './FileMemoryOwnedCreate.js';
 export type { CreateOwnedRequest, CreatePublication } from './FileMemoryOwnedCreate.js';
+import { FileMemoryOwnedRename, captureRenameRequest, type RenameOwnedRequest, type RenamePublication } from './FileMemoryOwnedRename.js';
+export type { RenameOwnedRequest, RenamePublication } from './FileMemoryOwnedRename.js';
 import {
   classifyFileMemoryWrite,
   type FileMemoryWriteDiagnostic,
@@ -233,6 +235,8 @@ type AdoptionTopologyProof = (stage?: { path: string; identity: FileIdentity },
 interface FileMemoryOwnerSnapshotsBaseOptions {
   /** Dormant exclusive CREATE barriers; never mutation or retry authority. */
   readonly afterCreatePublication?: (phase: CreatePublication) => void | Promise<void>;
+  /** Dormant same-parent RENAME barriers; never mutation/recovery authority. */
+  readonly afterRenamePublication?: (phase: RenamePublication) => void | Promise<void>;
   /** Dormant adoption-recovery test barriers; never recovery authority. */
   readonly afterAdoptionRecoveryPublication?: (phase: AdoptionRecoveryPublication) => void | Promise<void>;
   /** Isolated abort fault barriers; never authority or automatic orphan handling. */
@@ -372,6 +376,7 @@ function decodeUtf8(bytes: Buffer, code = 'EINVALIDHEAD'): string {
 export class FileMemoryOwnerSnapshots {
   private readonly options: FileMemoryOwnerSnapshotsOptions;
   private readonly adoptedErrors = new WeakMap<object, OwnedFileMemoryToken>();
+  private readonly renameErrors = new WeakMap<object, OwnedFileMemoryToken>();
   private readonly createErrors = new WeakMap<object, OwnedFileMemoryToken>();
 
   constructor(options: FileMemoryOwnerSnapshotsOptions) {
@@ -388,6 +393,57 @@ export class FileMemoryOwnerSnapshots {
   async readHeadSnapshot(locator: string): Promise<FileMemorySnapshot> {
     const scope = await this.captureStandaloneScope();
     return this.readAtRoot(scope.tenantRoot, scope.userId, locator);
+  }
+
+  /** Dormant same-parent RENAME; exact pending phase replay requires the original request. */
+  async renameOwned(input: RenameOwnedRequest): Promise<OwnedFileMemoryToken> {
+    let committed: OwnedFileMemoryToken | undefined;
+    try {
+      const request = captureRenameRequest(input);
+      return await this.requiredCoordinator().withTenantTransaction(context =>
+        this.performOwnedRename(context, request, token => { committed = token; }));
+    } catch (cause) {
+      if (!committed) throw this.renamePrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.renameErrors.get(cause) === committed) throw cause;
+      const error = committedError(cause, committed); this.renameErrors.set(error, committed); throw error;
+    }
+  }
+
+  renameOwnedInTransaction(context: FileMemoryLeaseContext, input: RenameOwnedRequest): Promise<OwnedFileMemoryToken> {
+    try { return this.performOwnedRename(context, captureRenameRequest(input)); }
+    catch (cause) { throw this.renamePrecommitError(cause); }
+  }
+
+  private renamePrecommitError(cause: unknown): unknown {
+    if (cause === null || (typeof cause !== 'object' && typeof cause !== 'function')) return cause;
+    let marker: boolean;
+    try {
+      const value = cause as { code?: unknown; committed?: unknown; token?: unknown };
+      marker = value.code === 'EHEADCOMMITTED' || value.committed === true || 'token' in value;
+    } catch { marker = true; }
+    return marker ? Object.assign(headError('EOWNERRECOVERY', 'This RENAME has no captured publication outcome'), { cause }) : cause;
+  }
+
+  private performOwnedRename(context: FileMemoryLeaseContext, request: RenameOwnedRequest,
+    capture?: (token: OwnedFileMemoryToken) => void): Promise<OwnedFileMemoryToken> {
+    let committed: OwnedFileMemoryToken | undefined;
+    const coordinator = this.requiredCoordinator();
+    const result = coordinator.perform(context, async operation => {
+      try {
+        return await new FileMemoryOwnedRename(operation, request,
+          () => { coordinator.requireActiveOperationScope(operation); },
+          budget => this.readAtRoot(operation.tenantRoot, operation.userId, request.expectedToken.locator, undefined, budget),
+          this.options.afterRenamePublication, token => { committed = token; capture?.(token); }).run();
+      } catch (cause) {
+        if (committed && cause && typeof cause === 'object') this.renameErrors.set(cause, committed);
+        throw cause;
+      }
+    }).catch(cause => {
+      if (!committed) throw this.renamePrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.renameErrors.get(cause) === committed) throw cause;
+      const error = committedError(cause, committed); this.renameErrors.set(error, committed); throw error;
+    });
+    void result.catch(() => undefined); return result;
   }
 
   /** Dormant new-owner CREATE or exact persisted-phase forward recovery. */
