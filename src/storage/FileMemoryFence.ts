@@ -231,7 +231,12 @@ export class FileMemoryFence {
     const paths = [root, path.join(root, 'volumes'), path.join(root, LOCK_DIRECTORY)];
     const observe = () => Promise.all(paths.map(async (target, index) => {
       try { return await fs.lstat(target, { bigint: true }); }
-      catch (cause) { if (index > 0 && hasCode(cause, 'ENOENT')) return undefined; throw cause; }
+      catch (cause) {
+        if (index > 0 && hasCode(cause, 'ENOENT')) {
+          return undefined;
+        }
+        throw cause;
+      }
     }));
     const fail = () => { throw Object.assign(new Error('Canonical memory volumes and fence directories are unsafe or changed'), { code: 'EHEADCONFLICT' }); };
     const pair = (a: BigIntStats | undefined, b: BigIntStats | undefined) => !!a && !!b && a.dev === b.dev && a.ino === b.ino;
