@@ -538,13 +538,22 @@ full foreign-baseline checkpoints remain mandatory. Directory evidence has the
 same cooperating-local-filesystem and cross-invocation limitations described
 above. Process-interruption qualification does not prove power-loss durability.
 
-The three populated interrupted-DELETE recovery scenarios separately bound serial
-fixture construction and baseline capture to 10 seconds, then bound interruption,
-recovery and all preservation verification together to 10 seconds. This explicitly
+All nine populated DELETE capacity scenarios separately bound serial
+fixture construction and baseline capture to 10 seconds. Actual fresh deletion or
+interruption/recovery and all preservation verification then share one 10-second
+lifecycle bound. This explicitly
 relaxes the previous 10-second whole-scenario test policy; it does not change the
 operation's proofs, read budgets, workload or deadlines. Diagnostics retain total
-elapsed time and report lifecycle elapsed time from the test boundary. The six
-fresh populated cases and CI job timeout remain unchanged.
+elapsed time and report lifecycle elapsed time from the test boundary. The same
+approved setup/lifecycle boundary applies to all six fresh and three interrupted
+recovery scenarios; CI job timeout remains unchanged.
+
+The same separately bounded 10-second setup and 10-second lifecycle policy also
+applies to the one RESERVED-adoption recovery case with 4,096 unrelated files:
+initial fixture, unchanged `Promise.all` noise-file creation and residual baseline
+capture precede the recovery/refusal and all evidence verification. Its shared
+invocation read cap and expected resource refusal remain unchanged. The nearby
+post-publication exhaustion injection retains its existing test boundary.
 
 The common POSIX fence acquisition path now also admits canonical `volumes`,
 `.memory-fences` and tenant-root separation before any fence-parent mkdir attempt

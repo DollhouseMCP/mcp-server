@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
@@ -333,13 +333,40 @@ describe('dormant final RESERVED adoption recovery', () => {
     await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING' });
     expect((await fs.lstat(setup.stagePath)).isFIFO()).toBe(true);
   });
-  it('charges unrelated entries against one whole invocation budget, preserving exhaustion evidence', async () => {
-    const setup = await fixture();
-    await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x')));
-    const before = await residual(setup);
-    await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', cause: { code: 'EHEADRESOURCE' } });
-    expect(await residual(setup)).toEqual(before);
-    await expect(fs.lstat(setup.stagePath)).rejects.toMatchObject({ code: 'ENOENT' });
+  describe('whole-invocation budget exhaustion with 4096 unrelated entries', () => {
+    let setup: Setup, before: Awaited<ReturnType<typeof residual>>, started: number, lifecycleStarted: number | undefined;
+    const diagnostic = (phase: string, accounting: object = {}) => {
+      process.stderr.write(`ADOPTION capacity ${JSON.stringify({ phase, elapsedMs: performance.now() - started,
+        ...(lifecycleStarted === undefined ? {} : { lifecycleElapsedMs: performance.now() - lifecycleStarted }),
+        node: process.version, pid: process.pid, noiseFiles: 4096, ...accounting })}\n`);
+    };
+    beforeEach(async () => {
+      started = performance.now();
+      try {
+        setup = await fixture();
+        await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(path.dirname(setup.headPath), `noise-${index}`), 'x')));
+        before = await residual(setup);
+      } finally { diagnostic('setup-end'); }
+    }, 10000);
+    it('charges unrelated entries against one whole invocation budget, preserving exhaustion evidence', async () => {
+      lifecycleStarted = performance.now(); diagnostic('lifecycle-start');
+      const read = FileMemoryAdoptionRecoveryScanBudget.prototype.read;
+      let budgetReadCalls = 0;
+      let budgetAccounting: (() => { chargedReads: number; scanLimit: number }) | undefined;
+      // Direct delegation keeps the original read promise and distinguishes calls
+      // (including a refused admission) from the budget's actual charged attempts.
+      jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read').mockImplementation(function(this: FileMemoryAdoptionRecoveryScanBudget, directory, attempts, bound) {
+        budgetAccounting = () => ({ chargedReads: this.consumed, scanLimit: this.limit });
+        budgetReadCalls++; return read.call(this, directory, attempts, bound);
+      });
+      const accounting = () => ({ budgetReadCalls, ...budgetAccounting?.() });
+      try {
+        await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', cause: { code: 'EHEADRESOURCE' } });
+      } finally { diagnostic('recovery-end', accounting()); }
+      expect(await residual(setup)).toEqual(before);
+      await expect(fs.lstat(setup.stagePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      diagnostic('assertions-complete', accounting());
+    }, 10000);
   });
   it('retains a known token when the same private budget exhausts only after publication', async () => {
     const setup = await fixture();

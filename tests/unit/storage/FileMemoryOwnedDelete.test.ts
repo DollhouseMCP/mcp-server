@@ -247,6 +247,32 @@ describe('dormant exact head DELETE with owner erasure pending', () => {
     expect(await fs.readFile(path.join(f.root, f.token.locator), 'utf8')).toBe('entries: []\n');
   });
 
+  it('keeps final directory close refusal ambiguous without capturing a head-deleted result', async () => {
+    let final = false, refused = false;
+    const cause = new Error('controlled final directory close refusal');
+    const f = await fixture(false, phase => { if (phase === 'after-intent-retirement') final = true; });
+    const archive = await tree(f.archiveRoot);
+    type Internals = { closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown> };
+    const internals = FileMemoryOwnedDelete.prototype as unknown as Internals, original = internals.closed;
+    jest.spyOn(internals, 'closed').mockImplementation(function(this: Internals, handle, body) {
+      if (final) {
+        const sync = handle.sync.bind(handle), close = handle.close.bind(handle);
+        let synced = false;
+        handle.sync = async () => { await sync(); synced = true; };
+        handle.close = async () => { await close(); if (synced) { refused = true; throw cause; } };
+      }
+      return original.call(this, handle, body);
+    });
+    const error = await f.owners.deleteOwned(f.request).catch(value => value);
+    expect(final).toBe(true); expect(refused).toBe(true);
+    expect(error).toMatchObject({ code: 'EHEADCOMMITUNKNOWN' }); expect(error.cause).toBe(cause);
+    expect(error).not.toHaveProperty('result'); expect(error).not.toHaveProperty('headDeleted');
+    await expect(fs.lstat(path.join(f.token.tenantRoot, f.token.locator))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await fs.readFile(path.join(f.token.tenantRoot, '.memory-owners', 'owners', `${f.token.ownerId}.json`), 'utf8')))
+      .toEqual({ schema: 1, state: 'HEAD_DELETED', userId: USER, ownerId: f.token.ownerId, operationId: f.request.operationId });
+    expect(await tree(f.archiveRoot)).toEqual(archive);
+  });
+
   it('refuses a complete phase envelope overflow before the first intent artifact', async () => {
     const f = await fixture(), locator = `${Array.from({ length: 70 }, () => 'd').join('/')}/Deep.yaml`;
     const target = path.join(f.root, locator); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, 'entries: []\n');

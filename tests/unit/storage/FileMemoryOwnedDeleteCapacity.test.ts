@@ -107,30 +107,38 @@ function phaseDiagnostic(count: number, nested: boolean, stop: string, lifecycle
 
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 describe('dormant head DELETE populated owner portfolios', () => {
-  it.each([100, 250, 1000].flatMap(count => [false, true].map(nested => [count, nested] as const)))(
-    'retains all foreign owner evidence at %i existing owners, nested=%s', async (count, nested) => {
-      const diagnostic = phaseDiagnostic(count, nested, 'fresh'), setup = observeReads();
-      let f: Awaited<ReturnType<typeof fixture>>, archived: Evidence[];
-      try { f = await fixture(nested, count); archived = await treeEvidence(f.owner); }
-      finally { setup.restore(); diagnostic('setup-complete', setup.measured); }
-      const reads = observeReads(), started = performance.now();
-      let result;
-      try { result = await f.owners.deleteOwned({ operationId: randomUUID(), expectedToken: f.token }); }
-      finally { reads.restore(); diagnostic('operation-end', reads.measured); }
-      expect(result.status).toBe('head-deleted');
-      expect(reads.measured.attemptedReads).toBeGreaterThan(0);
-      expect(reads.measured.completedCensuses).toBeGreaterThan(0);
-      expect(reads.measured.attemptedReads).toBeLessThanOrEqual(532480);
-      console.info(JSON.stringify({ label: 'DELETE populated fixture', count, nested, operationMs: performance.now() - started, ...reads.measured }));
-      await verify(f.retained); await verify(archived);
-      const parent = path.dirname(path.join(f.root, f.locator));
-      const sidecarName = `.${hash(path.posix.basename(f.locator))}.memory-owner.json`;
-      for (const namespace of f.namespaces) {
-        const expected = namespace.target === parent ? namespace.names.filter(name => name !== path.basename(f.locator) && name !== sidecarName) : namespace.names;
-        expect((await fs.readdir(namespace.target)).sort()).toEqual(expected);
-      }
-      await expect(fs.lstat(path.join(f.root, f.locator))).rejects.toMatchObject({ code: 'ENOENT' });
-      diagnostic('assertions-complete', reads.measured);
+  describe.each([100, 250, 1000].flatMap(count => [false, true].map(nested => [count, nested] as const)))(
+    'retains all foreign owner evidence at %i existing owners, nested=%s', (count, nested) => {
+      let f: Awaited<ReturnType<typeof fixture>>, archived: Evidence[], lifecycleStarted: number | undefined;
+      let diagnostic: ReturnType<typeof phaseDiagnostic>;
+      beforeEach(async () => {
+        diagnostic = phaseDiagnostic(count, nested, 'fresh', () => lifecycleStarted);
+        const setup = observeReads();
+        try { f = await fixture(nested, count); archived = await treeEvidence(f.owner); }
+        finally { setup.restore(); diagnostic('setup-complete', setup.measured); }
+      }, 10000);
+      it('completes fresh deletion and all preservation verification', async () => {
+        lifecycleStarted = performance.now();
+        diagnostic('lifecycle-start', { attemptedReads: 0, completedCensuses: 0 });
+        const reads = observeReads(), started = performance.now();
+        let result;
+        try { result = await f.owners.deleteOwned({ operationId: randomUUID(), expectedToken: f.token }); }
+        finally { reads.restore(); diagnostic('operation-end', reads.measured); }
+        expect(result.status).toBe('head-deleted');
+        expect(reads.measured.attemptedReads).toBeGreaterThan(0);
+        expect(reads.measured.completedCensuses).toBeGreaterThan(0);
+        expect(reads.measured.attemptedReads).toBeLessThanOrEqual(532480);
+        console.info(JSON.stringify({ label: 'DELETE populated fixture', count, nested, operationMs: performance.now() - started, ...reads.measured }));
+        await verify(f.retained); await verify(archived);
+        const parent = path.dirname(path.join(f.root, f.locator));
+        const sidecarName = `.${hash(path.posix.basename(f.locator))}.memory-owner.json`;
+        for (const namespace of f.namespaces) {
+          const expected = namespace.target === parent ? namespace.names.filter(name => name !== path.basename(f.locator) && name !== sidecarName) : namespace.names;
+          expect((await fs.readdir(namespace.target)).sort()).toEqual(expected);
+        }
+        await expect(fs.lstat(path.join(f.root, f.locator))).rejects.toMatchObject({ code: 'ENOENT' });
+        diagnostic('assertions-complete', reads.measured);
+      }, 10000);
     });
   describe.each([[false, 'pair-durable'], [true, 'pair-durable'], [true, 'head-durable']] as const)(
     'retains populated recovery authority at 1,000 owners, nested=%s phase=%s', (nested, phase) => {
