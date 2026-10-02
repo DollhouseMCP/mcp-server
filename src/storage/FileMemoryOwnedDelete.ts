@@ -10,7 +10,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileMemoryOperationScope } from './FileMemoryTransactionCoordinator.js';
 
 import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdinal as ordinal, evidenceDecimal as decimal,
-  evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
+  OwnedHeadEvidenceBudget, evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
   evidenceOriginalIdentity as original, canonicalEvidence, stableEvidenceChild as stable, inspectEvidenceNames,
   withEvidenceFileClose, observeEvidenceDirectory, readEvidenceFile, applyEvidenceDirectoryTransition,
   applyEvidenceAncestorTransition, admitEvidenceAncestor, writeEvidenceFile,
@@ -78,33 +78,21 @@ function commitment(directory: Directory): Commitment {
   return { locator: directory.locator, device: directory.identity.device, inode: directory.identity.inode, mode: directory.mode, uid: directory.uid,
     childCount: children.length, domain: DOMAIN, sha256: digest(JSON.stringify([DOMAIN, directory.locator, directory.identity.device, directory.identity.inode, directory.mode, directory.uid, children])) };
 }
-class DeleteBudget {
-  consumed = 0;
-  private ceiling = 8192;
-  get limit(): number { return this.ceiling; }
-  private weights?: Map<string, number>;
+class DeleteBudget extends OwnedHeadEvidenceBudget {
   reserve(slots: Map<string, string[]>, head: string): void {
-    if (this.weights) throw new FileMemoryDirectoryScanLimitError();
-    this.weights = new Map([...slots].map(([locator, names]) => [locator, new Set(names).size + 1]));
-    const P = [...this.weights.values()].reduce((sum, value) => sum + value, 0);
-    if (P > 4096) throw new FileMemoryDirectoryScanLimitError();
-    const q = (locator: string) => this.weights!.get(locator)! + (locator === '.' ? 0 : this.weights!.get(path.posix.dirname(locator)) ?? 0);
+    const { P, q } = this.reserveWeights(slots);
     // Forward primitives75P, barriers24P, baseline1P, original reader9P.
     // Physical head/ancestor versus ownership/registry disjointness proves qH+qR<=P.
     this.ceiling = this.consumed + 109 * P + 20 * q(head) + 6 * q('.memory-owners/owners');
     if (this.limit > 532480) throw new FileMemoryDirectoryScanLimitError();
   }
   async read(directory: import('node:fs').Dir) {
-    if (this.consumed >= this.limit) throw new FileMemoryDirectoryScanLimitError();
-    this.consumed++; return await directory.read();
+    this.chargeRead(); return await directory.read();
   }
   scan(target: string, inspect: (name: string) => void): Promise<void> {
     return inspectEvidenceNames(target, inspect, directory => this.read(directory), 'DELETE directory inspection and close failed');
   }
-  check(locator: string, names: string[]): void {
-    const weight = this.weights?.get(locator);
-    if (weight !== undefined && names.length + 1 > weight) throw new FileMemoryDirectoryScanLimitError();
-  }
+
 }
 export class FileMemoryOwnedDelete {
   private readonly budget = new DeleteBudget();

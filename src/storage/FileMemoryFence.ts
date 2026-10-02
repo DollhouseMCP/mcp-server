@@ -236,10 +236,12 @@ export class FileMemoryFence {
     const fail = () => { throw Object.assign(new Error('Canonical memory volumes and fence directories are unsafe or changed'), { code: 'EHEADCONFLICT' }); };
     const pair = (a: BigIntStats | undefined, b: BigIntStats | undefined) => !!a && !!b && a.dev === b.dev && a.ino === b.ino;
     const validate = (stats: (BigIntStats | undefined)[]) => {
-      for (const [index, stat] of stats.entries()) if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
-        // Retain the established private-fence diagnostic for an unsafe existing fence.
-        if (index === 2) throw new Error(`Memory fence directory is not a private, non-symlink directory: ${paths[2]}`);
-        fail();
+      for (const [index, stat] of stats.entries()) {
+        if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) {
+          // Retain the established private-fence diagnostic for an unsafe existing fence.
+          if (index === 2) throw new Error(`Memory fence directory is not a private, non-symlink directory: ${paths[2]}`);
+          fail();
+        }
       }
       const fence = stats[2];
       if (fence && (fence.mode & 0o077n) !== 0n) throw new Error(`Memory fence directory is not a private, non-symlink directory: ${paths[2]}`);

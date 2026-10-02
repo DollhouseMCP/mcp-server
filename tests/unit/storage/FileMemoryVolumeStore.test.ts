@@ -33,6 +33,16 @@ async function fixture(hook?: (phase: ArchivePublicationPhase, location: string)
   const store = new FileMemoryVolumeStore({ coordinator, owners, afterPublication: hook });
   return { root, coordinator, owners, token, store, ownerPath: path.join(root, 'volumes', 'by-id', token.ownerId) };
 }
+async function namespaceEvidence(root: string): Promise<unknown[]> {
+  const entries: unknown[] = [];
+  for (const name of (await fs.readdir(root)).sort()) {
+    const target = path.join(root, name), stat = await fs.lstat(target, { bigint: true });
+    entries.push({ name, identity: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.nlink],
+      bytes: stat.isFile() ? await fs.readFile(target) : undefined,
+      children: stat.isDirectory() ? await namespaceEvidence(target) : undefined });
+  }
+  return entries;
+}
 afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 
 describe('dormant file archive publication', () => {
@@ -159,13 +169,27 @@ describe('dormant file archive publication', () => {
     });
     await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ committed: true, code: 'EARCHIVECOMMITTED' });
   });
-  it('rejects symbolic namespace aliases without writing outside captured tenant', async () => {
-    const f = await fixture();
-    const target = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-outside-'));
+  it('rejects symbolic namespace aliases at the prelease boundary without changing the real fixture', async () => {
+    const f = await fixture(), target = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-alias-'));
     roots.push(target);
     await fs.symlink(target, path.join(f.root, 'volumes'));
-    await expect(f.store.createExclusive(f.token, input)).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+    const before = await namespaceEvidence(f.root); let result: unknown;
+    await expect(f.store.createExclusive(f.token, input).then(value => { result = value; })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+    expect(result).toBeUndefined(); expect(await namespaceEvidence(f.root)).toEqual(before);
     expect(await fs.readdir(target)).toEqual([]);
+  });
+  it('retains archive-level symbolic alias refusal inside an already legitimate transaction', async () => {
+    const f = await fixture(), target = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-held-alias-'));
+    roots.push(target); let reached = false, result: unknown;
+    await expect(f.coordinator.withTenantTransaction(async context => {
+      reached = true; await fs.symlink(target, path.join(f.root, 'volumes'));
+      const before = await namespaceEvidence(f.root);
+      await expect(f.store.createExclusiveInTransaction(context, f.token, input).then(value => { result = value; })).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+      expect(result).toBeUndefined(); expect(await namespaceEvidence(f.root)).toEqual(before);
+      expect(await fs.readdir(target)).toEqual([]);
+    })).rejects.toMatchObject({ code: 'EARCHIVEUNSAFE' });
+    expect(reached).toBe(true); expect(await fs.readdir(path.join(f.root, '.memory-fences'))).toEqual([]);
+    expect((await f.owners.readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
   });
   it('does not nest perform when used in one caller-owned operation', async () => {
     const f = await fixture();

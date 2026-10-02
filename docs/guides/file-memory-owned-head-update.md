@@ -538,13 +538,24 @@ full foreign-baseline checkpoints remain mandatory. Directory evidence has the
 same cooperating-local-filesystem and cross-invocation limitations described
 above. Process-interruption qualification does not prove power-loss durability.
 
+The three populated interrupted-DELETE recovery scenarios separately bound serial
+fixture construction and baseline capture to 10 seconds, then bound interruption,
+recovery and all preservation verification together to 10 seconds. This explicitly
+relaxes the previous 10-second whole-scenario test policy; it does not change the
+operation's proofs, read budgets, workload or deadlines. Diagnostics retain total
+elapsed time and report lifecycle elapsed time from the test boundary. The six
+fresh populated cases and CI job timeout remain unchanged.
+
 The common POSIX fence acquisition path now also admits canonical `volumes`,
 `.memory-fences` and tenant-root separation before any fence-parent mkdir attempt
 and before each lease mkdir, including retries. Stable physical aliases among
 these roles, or unsafe present canonical directories, refuse without a callback
 or lease write. Missing `volumes` remains supported and admission never creates
 it. This deliberately strengthens both generic per-locator and tenant fence
-admission. The read-only sandwich binds existing device/inode, type, mode and UID;
+admission. For example, standalone archive publication against a symbolic
+`volumes` namespace now refuses earlier with `EHEADCONFLICT`, before its callback
+and lease attempts; archive-level checks inside an already legitimate transaction
+still return `EARCHIVEUNSAFE`. The earlier error boundary is deliberate. The read-only sandwich binds existing device/inode, type, mode and UID;
 it permits cooperating lease changes to directory times, size and link count,
 and validates optional namespaces created by cooperating publishers while it
 observes. Existing namespaces cannot disappear or be replaced.

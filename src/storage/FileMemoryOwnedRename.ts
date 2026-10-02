@@ -11,7 +11,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileMemoryOperationScope } from './FileMemoryTransactionCoordinator.js';
 
 import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdinal as ordinal, evidenceDecimal as decimal,
-  evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
+  OwnedHeadEvidenceBudget, evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
   evidenceOriginalIdentity as original, canonicalEvidence, stableEvidenceChild as stable, inspectEvidenceNames,
   withEvidenceFileClose, observeEvidenceDirectory, readEvidenceFile, admitEvidenceAncestor, writeEvidenceFile,
   observeEvidenceCanonicalVolume, evidenceVolumeIdentity, captureEvidenceConfinement,
@@ -153,17 +153,9 @@ function parse(raw: string): Record {
   return record;
 }
 
-class RenameBudget {
-  consumed = 0;
-  private ceiling = 8192;
-  get limit(): number { return this.ceiling; }
-  private weights?: Map<string, number>;
+class RenameBudget extends OwnedHeadEvidenceBudget {
   reserve(slots: Map<string, string[]>, head: string): void {
-    if (this.weights) throw new FileMemoryDirectoryScanLimitError();
-    this.weights = new Map([...slots].map(([locator, names]) => [locator, new Set(names).size + 1]));
-    const P = [...this.weights.values()].reduce((sum, value) => sum + value, 0);
-    if (P > 4096) throw new FileMemoryDirectoryScanLimitError();
-    const q = (locator: string) => this.weights!.get(locator)! + (locator === '.' ? 0 : this.weights!.get(path.posix.dirname(locator)) ?? 0);
+    const { P, q } = this.reserveWeights(slots);
     // 89P forward +31P barriers +1P baseline +9P source reader.
     // Disjoint head/ancestor and registry/ownership roles give qH+qR<=P;
     // with retained discovery this is <=160P, inside the selected194P ceiling.
@@ -171,16 +163,12 @@ class RenameBudget {
     if (this.limit > 794624) throw new FileMemoryDirectoryScanLimitError();
   }
   private read(directory: Dir): Promise<Dirent | null> {
-    if (this.consumed >= this.limit) throw new FileMemoryDirectoryScanLimitError();
-    this.consumed++; return directory.read();
+    this.chargeRead(); return directory.read();
   }
   scan(target: string, inspect: (name: string) => void): Promise<void> {
     return inspectEvidenceNames(target, inspect, directory => this.read(directory), 'RENAME directory inspection and close failed');
   }
-  check(locator: string, names: string[]): void {
-    const weight = this.weights?.get(locator);
-    if (weight !== undefined && names.length + 1 > weight) throw new FileMemoryDirectoryScanLimitError();
-  }
+
 }
 function commitment(directory: Directory): Commitment {
   const children = directory.children.map(stable).map(child => [child.name, child.directory, child.identity.device, child.identity.inode,

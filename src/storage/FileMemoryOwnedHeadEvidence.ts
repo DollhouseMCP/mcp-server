@@ -99,6 +99,30 @@ export function stableEvidenceChild(child: HeadChild): HeadChild {
   return child.directory ? { ...child, links: '0', identity: { ...child.identity, size: '0', mtimeNs: '0', ctimeNs: '0' } } : child;
 }
 
+/** Retained weighted namespace/read accounting; executors own reservation arithmetic. */
+export class OwnedHeadEvidenceBudget {
+  consumed = 0;
+  protected ceiling = 8192;
+  get limit(): number { return this.ceiling; }
+  private weights?: Map<string, number>;
+  protected reserveWeights(slots: Map<string, string[]>): { P: number; q(locator: string): number } {
+    if (this.weights) throw new FileMemoryDirectoryScanLimitError();
+    this.weights = new Map([...slots].map(([locator, names]) => [locator, new Set(names).size + 1]));
+    const P = [...this.weights.values()].reduce((sum, value) => sum + value, 0);
+    if (P > 4096) throw new FileMemoryDirectoryScanLimitError();
+    const q = (locator: string) => this.weights!.get(locator)! + (locator === '.' ? 0 : this.weights!.get(path.posix.dirname(locator)) ?? 0);
+    return { P, q };
+  }
+  protected chargeRead(): void {
+    if (this.consumed >= this.limit) throw new FileMemoryDirectoryScanLimitError();
+    this.consumed++;
+  }
+  check(locator: string, names: string[]): void {
+    const weight = this.weights?.get(locator);
+    if (weight !== undefined && names.length + 1 > weight) throw new FileMemoryDirectoryScanLimitError();
+  }
+}
+
 function artifact(raw: string, captured: HeadIdentity): HeadArtifact { return { raw, digest: evidenceDigest(raw), identity: captured }; }
 export async function inspectEvidenceNames(target: string, inspect: (name: string) => void,
   read: (directory: Dir) => Promise<Dirent | null>, closeMessage: string): Promise<void> {

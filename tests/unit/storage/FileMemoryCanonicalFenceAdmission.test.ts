@@ -97,6 +97,26 @@ describe('canonical archive/fence separation before lease mutation', () => {
       expect((await f.owners.readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
     });
 
+  it('refuses standalone archive publication at the unsafe canonical-volume prelease boundary with zero lease attempts', async () => {
+    const tenantRoot = await root(), target = await root();
+    await realFs.writeFile(path.join(tenantRoot, 'memory.yaml'), 'entries: []\n');
+    const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
+    const owners = new FileMemoryOwnerSnapshots({ coordinator }), snapshot = await owners.readHeadSnapshot('memory.yaml');
+    if (snapshot.token.ownership !== 'unowned') throw new Error('Fixture must begin unowned');
+    const token = await owners.adoptUnowned(snapshot.token), archives = new FileMemoryVolumeStore({ coordinator, owners });
+    await realFs.symlink(target, path.join(tenantRoot, 'volumes'));
+    const before = await tree(tenantRoot), outside = await tree(target);
+    const perform = jest.spyOn(coordinator, 'perform'); let result: unknown;
+    clearMutations();
+    try {
+      await expect(archives.createExclusive(token, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0,
+        sealedAt: new Date('2026-10-01') }).then(value => { result = value; })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(result).toBeUndefined(); expect(perform).not.toHaveBeenCalled(); noMutations();
+    } finally { perform.mockRestore(); }
+    expect(await tree(tenantRoot)).toEqual(before); expect(await tree(target)).toEqual(outside);
+    expect((await owners.readHeadSnapshot(token.locator)).token).toEqual(token);
+  });
+
   it.each(['volume-root', 'fence-root'] as const)('refuses canonical %s physical alias before parent mkdir', async role => {
     const tenantRoot = await root();
     await realFs.mkdir(path.join(tenantRoot, 'volumes'), { mode: 0o700 });
