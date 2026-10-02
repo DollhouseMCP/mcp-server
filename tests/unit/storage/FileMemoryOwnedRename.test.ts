@@ -191,6 +191,128 @@ describe('dormant same-parent managed RENAME', () => {
     } finally { clearTimeout(timer); if (!didClose) child.kill('SIGKILL'); await closed; }
   });
 
+  it.each([false, true])('retains foreign baseline and refuses persistent transition drift with callback=%s', async callback => {
+    const f = await fixture(), original = await evidence(f.source);
+    const seam = FileMemoryOwnedRename.prototype as unknown as { observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
+    const capture = seam.observeTransition; let injected = false, reachedPartial = false;
+    jest.spyOn(seam, 'observeTransition').mockImplementation(function(this: typeof seam, locator, inspect) {
+      return capture.call(this, locator, async () => {
+        await inspect();
+        if (!injected) { injected = true; await fs.chmod(f.foreign, 0o640); }
+      });
+    });
+    const failure = await f.store(callback ? phase => { if (phase === 'partial-base') reachedPartial = true; } : undefined)
+      .renameOwned(f.request).catch(error => error);
+    expect(injected).toBe(true); expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ code: 'EOWNERRECOVERY', residual: true }); expect(failure.token).toBeUndefined();
+    expect(reachedPartial).toBe(callback); expect(await evidence(f.source)).toEqual(original);
+    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    const raw = await fs.readFile(f.sourceJournal, 'utf8');
+    if (callback) expect(raw).not.toContain('PREPARED_RENAME');
+    else expect(raw).toContain('PREPARED_RENAME');
+  });
+  it('permits exactly restored transient foreign descriptors between full checkpoints through a disclosed descriptor seam', async () => {
+    const f = await fixture(), foreign = await evidence(f.foreign);
+    const seam = FileMemoryOwnedRename.prototype as unknown as {
+      observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown>;
+      observe: (locator: string, full: boolean) => Promise<{ children?: { name: string; identity: { inode: string } }[] }> };
+    const capture = seam.observeTransition, observe = seam.observe;
+    let transient = false, started = false, restored = false, transientFullObservations = 0;
+    // This simulates a descriptor change restored exactly, including ctime. Real chmod/restore cannot establish that.
+    jest.spyOn(seam, 'observe').mockImplementation(async function(this: typeof seam, locator, full) {
+      const actual = await observe.call(this, locator, full);
+      if (transient && full && locator === '.') {
+        transientFullObservations++;
+        return { ...actual, children: actual.children!.map(child => child.name === path.basename(f.foreign)
+          ? { ...child, identity: { ...child.identity, inode: '999999999999999999999999' } } : child) };
+      }
+      return actual;
+    });
+    jest.spyOn(seam, 'observeTransition').mockImplementation(function(this: typeof seam, locator, inspect) {
+      if (!started) { started = true; transient = true; }
+      return capture.call(this, locator, inspect);
+    });
+    const moved = await f.store(phase => { if (phase === 'partial-base') { transient = false; restored = true; } }).renameOwned(f.request);
+    expect(started && restored).toBe(true); expect(transientFullObservations).toBe(0);
+    expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
+    expect(await evidence(f.foreign)).toEqual(foreign);
+  });
+  it('refuses own descriptor replacement after tracking inside the targeted transition sandwich', async () => {
+    const f = await fixture(), head = await evidence(f.source);
+    const seam = FileMemoryOwnedRename.prototype as unknown as {
+      observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
+    const capture = seam.observeTransition; let replaced = false, rejectedInsideInspect = false;
+    const backup = `${f.sourceJournal}.original-fd`;
+    jest.spyOn(seam, 'observeTransition').mockImplementation(function(this: typeof seam, locator, inspect) {
+      return capture.call(this, locator, async () => {
+        if (!replaced) {
+          replaced = true; const partial = await fs.readFile(f.sourceJournal);
+          await fs.rename(f.sourceJournal, backup); await fs.writeFile(f.sourceJournal, partial, { flag: 'wx', mode: 0o600 });
+        }
+        try { await inspect(); } catch (cause) { rejectedInsideInspect = true; throw cause; }
+      });
+    });
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
+    expect(replaced && rejectedInsideInspect).toBe(true);
+    expect((await fs.lstat(f.sourceJournal, { bigint: true })).ino).not.toBe((await fs.lstat(backup, { bigint: true })).ino); expect(await fs.readFile(f.sourceJournal)).toEqual(await fs.readFile(backup));
+    expect(await evidence(f.source)).toEqual(head); await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rejects a foreign changed-child delta without rebinding its baseline', async () => {
+    const f = await fixture(), foreign = await evidence(f.foreign), head = await evidence(f.source);
+    const seam = FileMemoryOwnedRename.prototype as unknown as {
+      transition: (target: string, add?: string[], remove?: string[], changed?: string[]) => Promise<void> };
+    const transition = seam.transition; let injected = false;
+    jest.spyOn(seam, 'transition').mockImplementation(function(this: typeof seam, target, add, remove, changed) {
+      if (!injected) { injected = true; return transition.call(this, target, add, remove, [path.basename(f.foreign)]); }
+      return transition.call(this, target, add, remove, changed);
+    });
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
+    expect(injected).toBe(true); expect(await evidence(f.foreign)).toEqual(foreign); expect(await evidence(f.source)).toEqual(head);
+    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('rejects an untracked foreign removal delta without adopting observed absence as ownership', async () => {
+    const f = await fixture(), foreign = await evidence(f.foreign), head = await evidence(f.source);
+    const seam = FileMemoryOwnedRename.prototype as unknown as {
+      transition: (target: string, add?: string[], remove?: string[], changed?: string[]) => Promise<void> };
+    const transition = seam.transition; let injected = false;
+    jest.spyOn(seam, 'transition').mockImplementation(function(this: typeof seam, target, add, remove, changed) {
+      if (!injected) { injected = true; return transition.call(this, target, add, [path.basename(f.foreign)], changed); }
+      return transition.call(this, target, add, remove, changed);
+    });
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
+    expect(injected).toBe(true); expect(await evidence(f.foreign)).toEqual(foreign); expect(await evidence(f.source)).toEqual(head);
+    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('refuses a directory namespace change after targeted reads before transition rebinding', async () => {
+    const f = await fixture(), head = await evidence(f.source);
+    const seam = FileMemoryOwnedRename.prototype as unknown as { observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
+    const capture = seam.observeTransition; let injected = false;
+    const extra = path.join(f.root, 'Unexpected.yaml');
+    jest.spyOn(seam, 'observeTransition').mockImplementation(function(this: typeof seam, locator, inspect) {
+      return capture.call(this, locator, async () => { await inspect();
+        if (!injected) { injected = true; await fs.writeFile(extra, 'foreign addition', { flag: 'wx', mode: 0o600 }); }
+      });
+    });
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
+    expect(injected).toBe(true); expect(await fs.readFile(extra, 'utf8')).toBe('foreign addition'); expect(await evidence(f.source)).toEqual(head);
+    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('freshly binds the selected child directory inside the ancestor transition sandwich', async () => {
+    const f = await fixture(true), head = await evidence(f.source), target = path.dirname(f.source);
+    const seam = FileMemoryOwnedRename.prototype as unknown as { observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
+    const capture = seam.observeTransition; let injected = false;
+    const alteredMode = ((await fs.lstat(target)).mode & 0o777) === 0o700 ? 0o750 : 0o700;
+    jest.spyOn(seam, 'observeTransition').mockImplementation(function(this: typeof seam, locator, inspect) {
+      return capture.call(this, locator, async () => {
+        if (!injected && locator === '.') { injected = true; await fs.chmod(target, alteredMode); }
+        await inspect();
+      });
+    });
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
+    expect(injected).toBe(true); expect(await evidence(f.source)).toEqual(head);
+    await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('refuses a replaced partial journal before another write on the original descriptor', async () => {
     const f = await fixture(), originalRead = (FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean) => Promise<unknown> }).read;
     const internals = FileMemoryOwnedRename.prototype as unknown as { read: typeof originalRead };
@@ -263,7 +385,7 @@ describe('dormant same-parent managed RENAME', () => {
     return batches.flat();
   }
   function renameObservation() {
-    const counts = { fullCaptures: 0, namesCaptures: 0, capturedChildren: 0 };
+    const counts = { fullCaptures: 0, namesCaptures: 0, capturedChildren: 0, targetedCaptures: 0, targetedFileReads: 0, targetedAbsenceChecks: 0, ancestorChildStats: 0, sandwichStats: 0 };
     const internals = FileMemoryOwnedRename.prototype as unknown as { observe: (locator: string, full: boolean) => Promise<{ children?: unknown[] }> };
     const original = internals.observe;
     const spy = jest.spyOn(internals, 'observe').mockImplementation(async function(this: typeof internals, locator, full) {
@@ -271,7 +393,32 @@ describe('dormant same-parent managed RENAME', () => {
       if (full) { counts.fullCaptures++; counts.capturedChildren += result.children!.length; } else counts.namesCaptures++;
       return result;
     });
-    return { counts, restore: () => spy.mockRestore() };
+    const targeted = FileMemoryOwnedRename.prototype as unknown as {
+      observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown>;
+      read: (target: string, maximum: number, links?: '1' | '2', privateFile?: boolean) => Promise<unknown>;
+      absent: (target: string) => Promise<void> };
+    const transitionCapture = targeted.observeTransition, read = targeted.read, absent = targeted.absent;
+    let inside = false;
+    const captureSpy = jest.spyOn(targeted, 'observeTransition').mockImplementation(async function(this: typeof targeted, locator, inspect) {
+      counts.targetedCaptures++; counts.sandwichStats += 2;
+      return transitionCapture.call(this, locator, async () => {
+        inside = true; const previousReads = counts.targetedFileReads, previousAbsence = counts.targetedAbsenceChecks;
+        try { await inspect(); }
+        finally { inside = false;
+          if (previousReads === counts.targetedFileReads && previousAbsence === counts.targetedAbsenceChecks) counts.ancestorChildStats++;
+        }
+      });
+    });
+    const readSpy = jest.spyOn(targeted, 'read').mockImplementation(function(this: typeof targeted, target, maximum, links, privateFile) {
+      if (inside) counts.targetedFileReads++;
+      return read.call(this, target, maximum, links, privateFile);
+    });
+    const absenceSpy = jest.spyOn(targeted, 'absent').mockImplementation(function(this: typeof targeted, target) {
+      if (inside) counts.targetedAbsenceChecks++;
+      return absent.call(this, target);
+    });
+    return { counts, restore: () => { spy.mockRestore(); captureSpy.mockRestore(); readSpy.mockRestore(); absenceSpy.mockRestore(); } };
+
   }
   function phaseDiagnostic(nested: boolean, stop: string, count: number) {
     const started = Date.now(); let records = 0;
