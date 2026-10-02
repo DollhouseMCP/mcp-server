@@ -4,13 +4,14 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type CreatePublication } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryCreateScanBudget } from '../../../src/storage/FileMemoryCreateScanBudget.js';
-import { FileMemoryOwnedCreate } from '../../../src/storage/FileMemoryOwnedCreate.js';
+import { FileMemoryOwnedCreate, commitCreateDirectory } from '../../../src/storage/FileMemoryOwnedCreate.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
@@ -150,15 +151,102 @@ describe('exclusive owned CREATE', () => {
         .toEqual({ raw: entry.raw, inode: entry.inode, links: entry.links });
     }
   });
-  it('refuses a namespace whose persisted declaration exceeds 8 KiB without unbounded scanning', async () => {
+  it('preserves long Unicode unrelated names without growing compact phase records', async () => {
     const f = await fixture();
-    for (let index = 0; index < 20; index++) await fs.writeFile(path.join(path.dirname(f.head), `${index}-${'x'.repeat(190)}`), 'preserved');
-    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' }, residual: false });
-    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+    for (let index = 0; index < 20; index++) await fs.writeFile(path.join(path.dirname(f.head), `${index}-${'界'.repeat(70)}`), 'preserved');
+    const token = await f.store().createOwned(f.request);
+    expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.memory-write.json'))).toEqual([]);
     expect((await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.head.tmp'))).toEqual([]);
+    for (let index = 0; index < 20; index++) expect(await fs.readFile(path.join(path.dirname(f.head), `${index}-${'界'.repeat(70)}`), 'utf8')).toBe('preserved');
+  });
+  it('refuses an over-cap real census before creating ownership directories or artifacts', async () => {
+    const f = await fixture();
+    for (let index = 0; index < 4096; index++) await fs.writeFile(path.join(path.dirname(f.head), `unrelated-${index}`), 'preserved');
+    const names = (await fs.readdir(path.dirname(f.head))).sort();
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', residual: false });
+    expect((await fs.readdir(path.dirname(f.head))).sort()).toEqual(names);
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
-    for (let index = 0; index < 20; index++) expect(await fs.readFile(path.join(path.dirname(f.head), `${index}-${'x'.repeat(190)}`), 'utf8')).toBe('preserved');
+  });
+  it.each([
+    ['prepared', 'EOWNERRECOVERY'], ['active-sidecar', 'EOWNERRECOVERY'],
+    ['intent-unlinked', 'EHEADCOMMITUNKNOWN'],
+  ] as const)('allows scoped observation at %s but refuses foreign drift at the next full checkpoint', async (point, code) => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
+    const barrier = internals.barrier; let scopedCompleted = false;
+    jest.spyOn(internals, 'barrier').mockImplementation(async function(this: typeof internals, phase) {
+      if (phase === point) await fs.writeFile(foreign, 'changed');
+      await barrier.call(this, phase);
+      if (phase === point) scopedCompleted = true;
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code });
+    expect(scopedCompleted).toBe(true);
+    expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    const journals = (await fs.readdir(path.dirname(f.head))).filter(name => name.endsWith('.memory-write.json'));
+    expect(journals).toHaveLength(point === 'intent-unlinked' ? 0 : 1);
+    if (point === 'prepared') await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+    else expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
+  });
+  it('uses full foreign evidence after an actual callback before content staging', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original'); let called = false;
+    await expect(f.store(async phase => {
+      if (phase === 'before-content') { called = true; await fs.writeFile(foreign, 'changed'); }
+    }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    expect(called).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await fs.readdir(path.dirname(f.head))).some(name => name.includes('memory-write'))).toBe(false);
+  });
+  it('rechecks full foreign evidence after final directory sync and before close', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as {
+      closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown>;
+      phase: string;
+    };
+    const closed = internals.closed; let changed = false;
+    jest.spyOn(internals, 'closed').mockImplementation(async function(this: typeof internals, handle, body) {
+      if (this.phase === 'durability-unconfirmed' && (await handle.stat()).isDirectory()) {
+        const sync = handle.sync.bind(handle);
+        jest.spyOn(handle, 'sync').mockImplementation(async () => {
+          await sync(); await fs.writeFile(foreign, 'changed'); changed = true;
+        });
+      }
+      return closed.call(this, handle, body);
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITUNKNOWN' });
+    expect(changed).toBe(true);
+    expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
+  });
+  it('retains genuine commitment when post-audit full foreign evidence refuses', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { audit: () => void };
+    const audit = internals.audit; let audited = false;
+    jest.spyOn(internals, 'audit').mockImplementation(function(this: typeof internals) {
+      audit.call(this); audited = true; writeFileSync(foreign, 'changed');
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITTED', committed: true,
+      token: { locator: f.request.locator, revision: '1', ownership: 'owned' } });
+    expect(audited).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
+  });
+  it('performs full foreign comparison immediately before successful return without a callback', async () => {
+    const f = await fixture(), foreign = path.join(path.dirname(f.head), 'foreign');
+    await fs.writeFile(foreign, 'original');
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { barrier: (phase: CreatePublication) => Promise<void> };
+    const barrier = internals.barrier; let changed = false;
+    jest.spyOn(internals, 'barrier').mockImplementation(async function(this: typeof internals, phase) {
+      await barrier.call(this, phase);
+      if (phase === 'committed') { await fs.writeFile(foreign, 'changed'); changed = true; }
+    });
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCOMMITTED', committed: true });
+    expect(changed).toBe(true); expect(await fs.readFile(foreign, 'utf8')).toBe('changed');
+    expect(await fs.readFile(f.head, 'utf8')).toBe(f.request.content);
   });
   it('rejects unrelated same-byte file ABA during its own permitted directory transition', async () => {
     const f = await fixture(), unrelated = path.join(path.dirname(f.head), 'unrelated');
@@ -573,8 +661,246 @@ describe('exclusive owned CREATE', () => {
       await f.store().adoptUnowned(snapshot.token);
     }
   }
+  // Exact persisted ACTIVE schema1 fixtures qualify CREATE, not public adoption throughput.
+  async function seedPersistedOwners(f: Awaited<ReturnType<typeof fixture>>, count: number): Promise<void> {
+    const owners = path.join(f.tenantRoot, '.memory-owners', 'owners');
+    await fs.mkdir(path.dirname(owners), { mode: 0o700 });
+    await fs.mkdir(owners, { mode: 0o700 });
+    for (let index = 0; index < count; index++) {
+      const locator = path.posix.join(path.posix.dirname(f.request.locator), `Existing${index}.yaml`);
+      const target = path.join(f.tenantRoot, locator), raw = 'name: Existing\ncontent: prior\n';
+      await fs.writeFile(target, raw, { mode: 0o600 });
+      const stat = await fs.stat(target, { bigint: true }), ownerId = randomUUID();
+      const record = JSON.stringify({ schema: 1, state: 'ACTIVE', userId: USER, ownerId, locator, revision: '1',
+        contentHash: createHash('sha256').update(raw).digest('hex'), fileIdentity: {
+          device: String(stat.dev), inode: String(stat.ino), size: String(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs),
+        } });
+      const basename = createHash('sha256').update(path.posix.basename(locator)).digest('hex');
+      await fs.writeFile(path.join(path.dirname(target), `.${basename}.memory-owner.json`), record, { mode: 0o600 });
+      await fs.writeFile(path.join(owners, `${ownerId}.json`), record, { mode: 0o600 });
+    }
+    expect((await f.store().readHeadSnapshot(path.posix.join(path.posix.dirname(f.request.locator), 'Existing0.yaml'))).token.ownership).toBe('owned');
+  }
+  it('commits exact ordinal child identities and refuses malformed canonical baselines', () => {
+    const child = { name: 'a', directory: false, identity: { device: '1', inode: '2', size: '3', mtimeNs: '4', ctimeNs: '5' }, mode: '384', uid: '1', links: '1' };
+    const baseline = { locator: '.', device: '1', inode: '9', mode: '448', uid: '1', names: ['a'], children: [child] };
+    const committed = commitCreateDirectory(baseline);
+    expect(committed.baselineChildCount).toBe(1);
+    expect(committed.sha256).toBe(createHash('sha256').update(JSON.stringify([
+      'dollhouse-create-namespace-directory-v1', '.', '1', '9', '448', '1',
+      [['a', false, '1', '2', '3', '4', '5', '384', '1', '1']],
+    ])).digest('hex'));
+    for (const field of ['locator', 'device', 'inode', 'mode', 'uid'] as const) {
+      expect(commitCreateDirectory({ ...baseline, [field]: field === 'locator' ? 'Other' : '10' }).sha256).not.toBe(committed.sha256);
+    }
+    for (const field of ['device', 'inode', 'size', 'mtimeNs', 'ctimeNs'] as const) {
+      expect(commitCreateDirectory({ ...baseline, children: [{ ...child, identity: { ...child.identity, [field]: '10' } }] }).sha256).not.toBe(committed.sha256);
+    }
+    for (const field of ['mode', 'uid', 'links'] as const) {
+      expect(commitCreateDirectory({ ...baseline, children: [{ ...child, [field]: '10' }] }).sha256).not.toBe(committed.sha256);
+    }
+    expect(commitCreateDirectory({ ...baseline, names: ['b'], children: [{ ...child, name: 'b' }] }).sha256).not.toBe(committed.sha256);
+    const directoryChild = { ...child, directory: true, links: '0', identity: { ...child.identity, size: '0', mtimeNs: '0', ctimeNs: '0' } };
+    const directoryCommitment = commitCreateDirectory({ ...baseline, children: [directoryChild] });
+    expect(directoryCommitment.sha256).not.toBe(committed.sha256);
+    expect(directoryCommitment.sha256).toBe(createHash('sha256').update(JSON.stringify([
+      'dollhouse-create-namespace-directory-v1', '.', '1', '9', '448', '1',
+      [['a', true, '1', '2', '0', '0', '0', '384', '1', '0']],
+    ])).digest('hex'));
+    expect(() => commitCreateDirectory({ ...baseline, children: [{ ...directoryChild, links: '1' }] })).toThrow();
+    expect(() => commitCreateDirectory({ ...baseline, names: ['a', 'a'], children: [child, child] })).toThrow();
+  });
+  it('indexes each fresh child observation without silently collapsing duplicate names', () => {
+    type Child = Parameters<typeof commitCreateDirectory>[0]['children'][number];
+    const index = FileMemoryOwnedCreate.prototype as unknown as { childIndex: (children: Child[]) => Map<string, Child> };
+    const a: Child = { name: 'a', directory: false, identity: { device: '1', inode: '2', size: '3', mtimeNs: '4', ctimeNs: '5' }, mode: '384', uid: '1', links: '1' };
+    const b = { ...a, name: 'b' };
+    const observed = index.childIndex([b, a]);
+    expect([...observed.keys()]).toEqual(['b', 'a']);
+    expect(observed.get('a')).toBe(a);
+    expect(observed.get('missing')).toBeUndefined();
+    expect(() => index.childIndex([a, a])).toThrow(expect.objectContaining({ code: 'EOWNERRECOVERY' }));
+    expect(() => index.childIndex([a, { ...a, identity: { ...a.identity, inode: '99' } }])).toThrow(expect.objectContaining({ code: 'EOWNERRECOVERY' }));
+    expect(index.childIndex([{ ...a, identity: { ...a.identity, inode: '99' } }]).get('a')?.identity.inode).toBe('99');
+    expect(observed.get('a')?.identity.inode).toBe('2');
+  });
+  it.each([null, undefined])('drains sixteen readonly child observations and retains ordinal failure %s', async first => {
+    const f = await fixture(), parent = await fs.realpath(path.dirname(f.head));
+    for (const name of 'abcdefghijklmnopq') await fs.writeFile(path.join(parent, name), 'unchanged');
+    type Child = Parameters<typeof commitCreateDirectory>[0]['children'][number];
+    const internals = FileMemoryOwnedCreate.prototype as unknown as { observeChild: (target: string, name: string) => Promise<Child> };
+    const original = internals.observeChild, secondary = new Error('second ordinal fails first');
+    const calls: string[] = [];
+    let outstanding = 0, maximum = 0, completed = false;
+    let rejectFirst!: () => void, started!: () => void;
+    let releaseC: (() => void) | undefined, releaseD: (() => void) | undefined;
+    const batchStarted = new Promise<void>(resolve => { started = resolve; });
+    jest.spyOn(internals, 'observeChild').mockImplementation(function(this: typeof internals, target, name) {
+      if (target !== parent) return original.call(this, target, name);
+      calls.push(name); outstanding++; maximum = Math.max(maximum, outstanding);
+      let result: Promise<Child>;
+      if (name === 'a') result = new Promise((_resolve, reject) => { rejectFirst = () => reject(first); });
+      else if (name === 'b') result = Promise.reject(secondary);
+      else result = original.call(this, target, name).then(child => name !== 'c' && name !== 'd' ? child : new Promise<Child>(resolve => {
+        if (name === 'c') releaseC = () => resolve(child);
+        if (name === 'd') releaseD = () => resolve(child);
+        if (releaseC && releaseD) started();
+      }));
+      return result.finally(() => { outstanding--; });
+    });
+    const operation = f.store().createOwned(f.request);
+    void operation.then(() => { completed = true; }, () => { completed = true; });
+    await batchStarted;
+    expect(calls).toEqual([...'abcdefghijklmnop']);
+    expect(maximum).toBe(16);
+    expect(completed).toBe(false);
+    rejectFirst();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(completed).toBe(false);
+    releaseC!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(completed).toBe(false);
+    releaseD!();
+    const failure = await operation.catch(cause => cause);
+    expect(failure.code).toBe('EHEADCONFLICT');
+    expect(Object.hasOwn(failure, 'cause')).toBe(true);
+    expect(failure.cause).toBe(first);
+    expect(outstanding).toBe(0);
+    expect(calls).toEqual([...'abcdefghijklmnop']);
+    await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+    for (const name of 'abcdefghijklmnopq') expect(await fs.readFile(path.join(parent, name), 'utf8')).toBe('unchanged');
+  });
+  it('preserves strict schema3 forward recovery instead of reinterpreting legacy evidence', async () => {
+    const f = await fixture();
+    await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    const names = await fs.readdir(path.dirname(f.head)), journal = names.find(name => name.endsWith('.memory-write.json'))!;
+    const target = path.join(path.dirname(f.head), journal), value = JSON.parse(await fs.readFile(target, 'utf8'));
+    const legacy = [];
+    for (const slot of value.namespace) {
+      const directory = path.join(f.tenantRoot, slot.locator);
+      const retained = (await fs.readdir(directory)).filter(name => name !== journal && name !== value.stageName).sort();
+      const children = [];
+      for (const name of retained) {
+        const stat = await fs.lstat(path.join(directory, name), { bigint: true }), isDirectory = stat.isDirectory();
+        children.push({ name, directory: isDirectory, identity: { device: String(stat.dev), inode: String(stat.ino),
+          size: isDirectory ? '0' : String(stat.size), mtimeNs: isDirectory ? '0' : String(stat.mtimeNs), ctimeNs: isDirectory ? '0' : String(stat.ctimeNs) },
+          mode: String(stat.mode), uid: String(stat.uid), links: isDirectory ? '0' : String(stat.nlink) });
+      }
+      const { locator, device, inode, mode, uid } = slot;
+      legacy.push({ locator, device, inode, mode, uid, names: retained, children });
+    }
+    value.schema = 3; value.namespace = legacy;
+    await fs.writeFile(target, JSON.stringify(value));
+    const seen: number[] = [];
+    const token = await f.store(async phase => {
+      if (phase === 'linked' || phase === 'published') seen.push(JSON.parse(await fs.readFile(target, 'utf8')).schema);
+    }).createOwned(f.request);
+    expect(seen).toEqual([3, 3]);
+    expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
+  });
+  it.each(['count', 'digest', 'same-byte-ABA'] as const)('refuses compact recovery with changed %s without accepting a fresh baseline', async change => {
+    const f = await fixture(), unrelated = path.join(path.dirname(f.head), 'unrelated');
+    await fs.writeFile(unrelated, 'same bytes');
+    await expect(f.store(phase => { if (phase === 'prepared') throw new Error('stop'); }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    const names = (await fs.readdir(path.dirname(f.head))).sort(), journal = names.find(name => name.endsWith('.memory-write.json'))!;
+    const target = path.join(path.dirname(f.head), journal);
+    if (change === 'same-byte-ABA') {
+      await fs.rename(unrelated, `${unrelated}.old`);
+      await fs.writeFile(unrelated, 'same bytes');
+      await fs.unlink(`${unrelated}.old`);
+    } else {
+      const value = JSON.parse(await fs.readFile(target, 'utf8'));
+      if (change === 'count') value.namespace[0].baselineChildCount++;
+      else value.namespace[0].sha256 = '0'.repeat(64);
+      await fs.writeFile(target, JSON.stringify(value));
+    }
+    const before = await Promise.all(names.map(async name => ({ name, raw: await fs.readFile(path.join(path.dirname(f.head), name), 'utf8'),
+      inode: (await fs.stat(path.join(path.dirname(f.head), name))).ino })));
+    await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    for (const entry of before) expect({ raw: await fs.readFile(path.join(path.dirname(f.head), entry.name), 'utf8'),
+      inode: (await fs.stat(path.join(path.dirname(f.head), entry.name))).ino }).toEqual({ raw: entry.raw, inode: entry.inode });
+    await expect(fs.stat(f.head)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it.each([
+    ['Created.yaml', 100], ['Created.yaml', 250], ['Created.yaml', 1000],
+    ['Notes/Created.yaml', 100], ['Notes/Created.yaml', 250], ['Notes/Created.yaml', 1000],
+  ] as const)('fits compact phase evidence and completes %s with %s existing memories', async (locator, count) => {
+      const diagnostic = count === 1000 ? capacityDiagnostic(locator) : undefined;
+      diagnostic?.('setup-start');
+      const f = await fixture(locator);
+      await seedPersistedOwners(f, count);
+      diagnostic?.('setup-complete');
+      const observed = observeAccounting(), sizes: Record<string, number> = {};
+      const start = performance.now();
+      diagnostic?.('operation-start');
+      const token = await f.store(async phase => {
+        diagnostic?.('publication', phase, observed);
+        if (['prepared', 'linked', 'published'].includes(phase)) {
+          const name = (await fs.readdir(path.dirname(f.head))).find(value => value.endsWith('.memory-write.json'))!;
+          const raw = await fs.readFile(path.join(path.dirname(f.head), name), 'utf8');
+          sizes[phase] = Buffer.byteLength(raw);
+          expect(JSON.parse(raw).schema).toBe(5);
+          expect(sizes[phase]).toBeLessThanOrEqual(8192);
+        }
+      }).createOwned(f.request);
+      expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
+      expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
+      expect(observed.budget().limit).toBeLessThanOrEqual(454656);
+      diagnostic?.('operation-complete', undefined, observed);
+      process.stderr.write(`CREATE capacity ${JSON.stringify({ locator, count, sizes, consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
+  });
+  function capacityDiagnostic(locator: string, stop?: CreatePublication) {
+    const started = performance.now(); let records = 0;
+    return (event: 'setup-start' | 'setup-complete' | 'interrupted-start' | 'interrupted-end' | 'operation-start' | 'publication' | 'operation-complete',
+      phase?: CreatePublication, observed?: ReturnType<typeof observeAccounting>) => {
+      if (records++ >= 64) return;
+      // Runtime-internal symbol descriptions are a diagnostic, not active context
+      // counts or proof of causality. Never inspect the stored context values.
+      const legacyStoreSymbolCount = Object.getOwnPropertySymbols(Promise.resolve())
+        .filter(symbol => symbol.description === 'kResourceStore').length;
+      process.stderr.write(`CREATE qualification ${JSON.stringify({ locator, stop, event, phase, elapsedMs: performance.now() - started,
+        nodeVersion: process.version, pid: process.pid, legacyStoreSymbolCount,
+        consumed: observed?.records.at(-1)?.budget.consumed, completedCensuses: observed?.measured.completedCensuses })}\n`);
+    };
+  }
   function observeAccounting() {
     const records: { before: number; limit: number; phase?: string; budget: FileMemoryCreateScanBudget }[] = [];
+    const measured = { completedCensuses: 0, fullDirectoryCaptures: 0, childLstatsInCompletedCensuses: 0,
+      directoryLstatsInCompletedCensuses: 0, rich: process.env.DOLLHOUSE_CREATE_RICH_METRICS === '1'
+        ? { canonicalDescriptorBytesAcrossFullCaptures: 0, peakSnapshotBytes: 0, peakRss: process.memoryUsage().rss } : null };
+    type FullCapture = Parameters<typeof commitCreateDirectory>[0];
+    type NamesCapture = Omit<FullCapture, 'children'>;
+    const internals = FileMemoryOwnedCreate.prototype as unknown as {
+      directory: (locator: string) => Promise<FullCapture>;
+      directoryNames: (locator: string) => Promise<NamesCapture>;
+    };
+    function record(result: FullCapture | NamesCapture) {
+      measured.completedCensuses++;
+      measured.directoryLstatsInCompletedCensuses += 2;
+      if ('children' in result) {
+        measured.fullDirectoryCaptures++;
+        measured.childLstatsInCompletedCensuses += result.children.length;
+        if (measured.rich) {
+          const tuples = result.children.map(child => [child.name, child.directory, child.identity.device, child.identity.inode,
+            child.directory ? '0' : child.identity.size, child.directory ? '0' : child.identity.mtimeNs,
+            child.directory ? '0' : child.identity.ctimeNs, child.mode, child.uid, child.directory ? '0' : child.links]);
+          measured.rich.canonicalDescriptorBytesAcrossFullCaptures += Buffer.byteLength(JSON.stringify(['dollhouse-create-namespace-directory-v1', result.locator,
+            result.device, result.inode, result.mode, result.uid, tuples]));
+        }
+      }
+      if (measured.rich) {
+        measured.rich.peakSnapshotBytes = Math.max(measured.rich.peakSnapshotBytes, Buffer.byteLength(JSON.stringify(result)));
+        measured.rich.peakRss = Math.max(measured.rich.peakRss, process.memoryUsage().rss);
+      }
+    }
+    const directory = internals.directory;
+    jest.spyOn(internals, 'directory').mockImplementation(async function(this: typeof internals, locator) {
+      const result = await directory.call(this, locator); record(result); return result;
+    });
+    const directoryNames = internals.directoryNames;
+    jest.spyOn(internals, 'directoryNames').mockImplementation(async function(this: typeof internals, locator) {
+      const result = await directoryNames.call(this, locator); record(result); return result;
+    });
     const reserve = FileMemoryCreateScanBudget.prototype.reserve;
     jest.spyOn(FileMemoryCreateScanBudget.prototype, 'reserve').mockImplementation(function(this: FileMemoryCreateScanBudget, slots, headParent, phase) {
       const before = this.consumed;
@@ -582,8 +908,31 @@ describe('exclusive owned CREATE', () => {
       records.push({ before, limit: this.limit, phase, budget: this });
       expect(this.consumed).toBe(before);
     });
-    return { records, budget: () => records.at(-1)!.budget };
+    return { records, measured, budget: () => records.at(-1)!.budget };
   }
+  it.each([
+    ['Created.yaml', 'prepared'], ['Created.yaml', 'linked'], ['Created.yaml', 'published'],
+    ['Notes/Created.yaml', 'prepared'], ['Notes/Created.yaml', 'linked'], ['Notes/Created.yaml', 'published'],
+  ] as const)('recovers %s at %s with 1000 persisted owners and exact compact evidence', async (locator, stop) => {
+    const diagnostic = capacityDiagnostic(locator, stop);
+    diagnostic('setup-start');
+    const f = await fixture(locator);
+    await seedPersistedOwners(f, 1000);
+    diagnostic('setup-complete');
+    const cause = new Error('target-scale controlled interruption');
+    diagnostic('interrupted-start');
+    await expect(f.store(phase => { diagnostic('publication', phase); if (phase === stop) throw cause; }).createOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', cause });
+    diagnostic('interrupted-end');
+    const observed = observeAccounting(), start = performance.now();
+    diagnostic('operation-start');
+    const token = await f.store(phase => { diagnostic('publication', phase, observed); }).createOwned(f.request);
+    expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
+    expect(observed.records).toHaveLength(1);
+    expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
+    diagnostic('operation-complete', undefined, observed);
+    process.stderr.write(`CREATE target recovery ${JSON.stringify({ locator, stop, before: observed.records[0].before,
+      consumed: observed.budget().consumed, reserved: observed.budget().limit, ms: performance.now() - start, measured: observed.measured })}\n`);
+  });
   it.each([
     ['Created.yaml', 1], ['Created.yaml', 5], ['Notes/Created.yaml', 1], ['Notes/Created.yaml', 5],
   ] as const)('completes real %s CREATE with %s existing owners inside its reserved protocol', async (locator, count) => {
@@ -601,7 +950,7 @@ describe('exclusive owned CREATE', () => {
     expect(observed.records).toHaveLength(1);
     expect(observed.records[0].before).toBeGreaterThan(0);
     expect(observed.budget().consumed).toBeLessThanOrEqual(observed.budget().limit);
-    expect(observed.budget().limit).toBeLessThanOrEqual(110000);
+    expect(observed.budget().limit).toBeLessThanOrEqual(454656);
     expect(progress).toEqual([...progress].sort((a, b) => a - b));
     expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
     expect((await fs.readdir(path.dirname(f.head))).some(name => name.includes('memory-write'))).toBe(false);
@@ -668,7 +1017,7 @@ describe('exclusive owned CREATE', () => {
     expect(() => budget.reserve(slots, 'Notes')).toThrow('budget exhausted');
     expect(budget.limit).toBe(reserved); expect(budget.consumed).toBe(2);
     const excessive = new FileMemoryCreateScanBudget();
-    expect(() => excessive.reserve([{ ...slots[0], names: Array.from({ length: 1000 }, (_, index) => String(index)) }, ...slots.slice(1)], 'Notes')).toThrow('budget exhausted');
+    expect(() => excessive.reserve([{ ...slots[0], names: Array.from({ length: 4096 }, (_, index) => String(index)) }, ...slots.slice(1)], 'Notes')).toThrow('budget exhausted');
     expect(excessive.consumed).toBe(0);
     await expect(fs.stat(path.join(f.tenantRoot, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
   });

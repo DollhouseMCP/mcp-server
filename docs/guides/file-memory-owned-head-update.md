@@ -393,17 +393,37 @@ qualified manual handling. Intent unlink without proved final directory durabili
 does not produce a receipt, and a later clean retry conflicts with the existing head.
 
 CREATE uses a private two-dimensional budget; the shared observation/listing
-budget remains unchanged. Read-only discovery and projected peak census
-cardinality are capped at 1000 attempts including EOF. Every subsequent census
-also has that cap, and all actual reads charge one retained monotonic operation
+budget remains unchanged. Each census and aggregate projected peak full-proof
+cardinality are capped at 4096 attempts including EOF. Initial discovery and a
+recovery baseline proof share an 8192-attempt allowance. Every subsequent census
+also has the 4096 cap, and all actual reads charge one retained monotonic operation
 counter, including errors. Before CREATE mkdir or head staging, the exact
 remaining phase schedule reserves its full allowance from captured distinct
 slot cardinalities and fixed own-name additions. The full fresh protocol uses
 59P + 15q(head-parent) + 2q(owners), plus ownership-directory preparation, where
 P is the projected full-proof cost and q the primary/optional-ancestor census
 cost. Recovery reserves only its remaining suffix and retains discovery/proof
-consumption. The conservative operation ceiling is 110000 attempts; no refund,
+consumption. The conservative operation ceiling is 454656 attempts (111 × 4096);
+the actual reservation remains the smaller phase-derived allowance. No refund,
 reset, cached census, truncated proof or first-N absence claim is allowed.
+
+New CREATE records use schema5, with a domain-separated SHA-256 commitment and
+child count for each complete canonical directory baseline. The encoding binds
+locator/device/inode/mode/uid and every ordinal child tuple, preserving the
+existing directory-child normalization and full file identity semantics. Recovery
+first validates exact phase-owned artifacts, then reconstructs the baseline from
+a fresh complete census by excluding only those validated artifact paths. It
+checks the original count and commitment before accepting a live baseline. A
+digest alone never supplies authority. The original full baseline remains bound throughout the invocation; scoped
+observations never replace its child evidence. Strict schema3 records continue through schema3 phases; they
+are not reinterpreted as compact records. Schema4 remains reserved for RENAME.
+
+These CREATE-private limits do not change shared APIs: ordinary unbudgeted
+owner scans allow 100000 entries per directory. Archive listing and RESERVED
+adoption recovery now use their separate private proof envelopes; archive listing
+retains its 1000-attempt archive-work counter, and other supplied shared observation
+budgets retain their 1000-attempt cumulative bound. Successful CREATE capacity qualification does not
+qualify those operations or establish complete lifecycle activation readiness.
 
 All three complete phase envelopes must fit the unchanged 8 KiB intent cap
 before CREATE mutations. Unknown future identity fields reserve the supported
@@ -413,13 +433,50 @@ Placeholders grant no authority and are never persisted. Existing ownership
 directories are recaptured against original discovery and their parents synced
 and closed, so retry cannot omit durability of a prior interrupted mkdir.
 Whole child sets, canonical spelling, descriptor identities, private modes and
-live ACTIVE authority remain bound after awaited callbacks. Namespace/complete
-record capacity refusal remains an activation consideration; a representative
-ten-owner fixture exceeds the cap, not a universal maximum-owner count.
-[#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974) tracks this explicit
-activation blocker; dormant implementation does not resolve production capacity.
+live ACTIVE authority remain bound after awaited callbacks. The prior schema3
+representation exceeded 8 KiB for a representative ten-owner fixture; that was
+a fixture-specific serialized-evidence failure, not a product owner-count limit.
+Schema5 removes portfolio cardinality from persisted record size while retaining
+bounded fresh filesystem work. [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974)
+still requires representative qualification and separately tracks shared listing
+and recovery capacity before lifecycle activation.
+The earlier always-full 1000-memory CREATE performed approximately 228000 fresh
+directory read attempts and child observations locally. The checkpointed schedule
+retains every fresh name census and its read accounting while reducing repeated
+observations of unrelated child metadata; hosted qualification remains pending. Fresh child indexing removes
+quadratic descriptor lookup, but it does not reduce any census or I/O barrier.
+Within each full directory census, at most sixteen independent readonly child
+lstat observations run concurrently. Names and returned descriptors retain
+ordinal order; every launched batch settles before proceeding. The first
+ordinal rejection is preserved exactly, and no next batch starts after failure.
+A failed batch may perform up to fifteen additional readonly observations compared
+with serial fail-fast behavior (twelve more than the previous four-observation
+batch). Directory before/after checks, mutations, hooks and durability operations retain
+their existing order. Full child observation remains inside the directory
+before/after identity checks.
+Local correctness under the existing test timeout is not a hosted throughput,
+concurrency, latency or operation-memory qualification. The explicit practical
+performance gate remains open in [#2974](https://github.com/DollhouseMCP/mcp-server/issues/2974#issuecomment-5940492445).
 
-Unrelated non-directory children retain exact full metadata in persisted evidence.
+Unrelated non-directory children retain exact full metadata in the canonical
+baseline. Admission, recovery and each own namespace transition compare complete
+fresh child evidence. Ordinary internal proofs instead inspect complete fresh
+names, full selected-directory identity and all tracked artifact bytes, identity
+and link counts. They neither substitute old children for fresh observations nor
+change the foreign baseline. Full comparisons run after actual callbacks, before
+head publication, before intent removal, at all three final directory-sync proofs,
+after audit listeners and immediately before successful return. Genuine receipt
+capture still requires successful final sync and close.
+
+This schedule changes when unrelated metadata-only drift is refused and which
+residue may already exist when refusal occurs. Persistent drift is rejected at full checkpoints; successful return cannot bypass
+them; a metadata-only change restored between those
+observations is not claimed observed. All name/collision, target, own-artifact and
+selected-directory proofs remain fresh at the existing internal barriers.
+Capacity tests retain their full workloads, ten-second case bounds and safety
+assertions. Expensive diagnostic snapshot serialization and RSS sampling run only
+with `DOLLHOUSE_CREATE_RICH_METRICS=1`; census, child-observation and budget counts
+remain enabled independently.
 Directory children persist stable device/inode/type/mode/UID; size, timestamps and
 nlink are freshly bound during each invocation and may advance only across exact
 own child-set transitions. An isolated APFS observation confirmed directory nlink
