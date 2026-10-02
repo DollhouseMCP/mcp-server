@@ -40,6 +40,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const HASH = /^[0-9a-f]{64}$/u;
 const DOMAIN = 'dollhouse.rename.schema4.full-children.v1';
 const RAW_HEAD_LIMIT = 3 * MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE;
+const PATH_LIMIT = process.platform === 'linux' ? 4096 : 1024;
 const LIMIT = 8192, MAX_REVISION = 9223372036854775807n;
 const states = new Set<State>(['BASE_RENAME', 'RESERVED_RENAME', 'PREPARED_RENAME', 'LINKED_RENAME', 'MOVED_RENAME', 'DESTINATION_METADATA_RENAME', 'METADATA_RENAME', 'FINAL_RENAME']);
 function fail(code = 'EOWNERRECOVERY'): never { throw Object.assign(new Error('Managed RENAME evidence is unsafe or changed'), { code }); }
@@ -80,6 +81,7 @@ function validLocator(value: unknown): value is string {
     !/^\.[0-9a-f]{64}\.memory-(?:owner\.json|write)(?:\.|$)/iu.test(path.posix.basename(value)) && value.split('/').every(part => !!part && part !== '.' && part !== '..' && Buffer.byteLength(part) <= 255) && !path.isAbsolute(value);
 }
 export function captureRenameRequest(input: RenameOwnedRequest): RenameOwnedRequest {
+  if (process.platform !== 'linux' && process.platform !== 'darwin') throw new TypeError('Managed RENAME is qualified only on Linux and Darwin');
   if (!keys(input, ['operationId', 'expectedToken', 'destinationLocator'])) throw new TypeError('RENAME requires operationId, expectedToken and destinationLocator');
   const { operationId, destinationLocator, expectedToken: token } = input;
   if (!UUID.test(operationId) || !validLocator(destinationLocator) || !keys(token, ['backend', 'ownership', 'userId', 'tenantRoot', 'locator', 'ownerId', 'revision', 'contentHash', 'fileIdentity']) ||
@@ -460,13 +462,19 @@ export class FileMemoryOwnedRename {
     this.sourceJournal = side(this.source, 'memory-write.json'); this.destinationJournal = side(this.destination, 'memory-write.json');
     this.sourceSidecar = side(this.source, 'memory-owner.json'); this.destinationSidecar = side(this.destination, 'memory-owner.json');
     this.registry = this.absolute(`.memory-owners/owners/${this.request.expectedToken.ownerId}.json`);
+    for (const target of [this.source, this.destination, this.sourceSidecar, this.destinationSidecar, this.sourceJournal, this.destinationJournal, this.registry, ...this.stagePaths()]) {
+      if (Buffer.byteLength(target) + 1 > PATH_LIMIT || target.split(path.sep).some(component => Buffer.byteLength(component) > 255)) fail('EHEADRESOURCE');
+    }
+  }
+  private stagePaths(): string[] {
+    return ['PREPARED_RENAME', 'LINKED_RENAME', 'MOVED_RENAME', 'DESTINATION_METADATA_RENAME', 'METADATA_RENAME'].map(state => this.stage(this.sourceJournal, state))
+      .concat(this.stage(this.destinationJournal, 'FINAL_RENAME'), this.stage(this.registry, 'REGISTRY'));
   }
   private reserve(): void {
     const projected = new Map(this.directories.map(item => [item.locator, [...item.names]]));
     const add = (target: string) => projected.get(this.relative(path.dirname(target)))!.push(path.basename(target));
     for (const target of [this.sourceJournal, this.destinationJournal, this.destination, this.destinationSidecar]) add(target);
-    for (const state of ['PREPARED_RENAME', 'LINKED_RENAME', 'MOVED_RENAME', 'DESTINATION_METADATA_RENAME', 'METADATA_RENAME']) add(this.stage(this.sourceJournal, state));
-    add(this.stage(this.destinationJournal, 'FINAL_RENAME')); add(this.stage(this.registry, 'REGISTRY'));
+    for (const stage of this.stagePaths()) add(stage);
     this.budget.reserve(projected, this.relative(path.dirname(this.source)));
   }
   private child(target: string): Child {
@@ -481,7 +489,7 @@ export class FileMemoryOwnedRename {
       contentHash: token.contentHash, originalSourceIdentity: token.fileIdentity };
   }
   private async initialize(): Promise<void> {
-    if (process.platform === 'win32') fail('EHEADCONFLICT');
+    if (process.platform !== 'linux' && process.platform !== 'darwin') fail('EHEADCONFLICT');
     const token = this.request.expectedToken;
     if (token.userId !== this.scope.userId || token.tenantRoot !== this.scope.tenantRoot) fail('EHEADCONFLICT');
     this.paths(); await this.confined(); this.reserve();

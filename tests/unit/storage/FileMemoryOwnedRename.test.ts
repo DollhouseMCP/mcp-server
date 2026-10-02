@@ -10,7 +10,7 @@ import * as os from 'node:os';
 import { FileMemoryOwnerSnapshots, type RenamePublication, type RenameOwnedRequest, type UnownedFileMemoryToken, type FileMemorySnapshot } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { Dir, type Dirent, type BigIntStats } from 'node:fs';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
-import { FileMemoryOwnedRename } from '../../../src/storage/FileMemoryOwnedRename.js';
+import { FileMemoryOwnedRename, captureRenameRequest } from '../../../src/storage/FileMemoryOwnedRename.js';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 
@@ -538,5 +538,45 @@ describe('dormant same-parent managed RENAME', () => {
     finally { spy.mockRestore(); }
     expect(await evidence(target)).toEqual(before); expect((await fs.readdir(parent)).sort()).toEqual(names);
     expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
+  });
+
+  it('refuses an over-envelope generated stage while the real original head and owner records remain readable', async () => {
+    const f = await fixture(), limit = process.platform === 'linux' ? 4096 : 1024;
+    let root = f.root;
+    const rootBytes = limit - 150;
+    while (Buffer.byteLength(root) < rootBytes) {
+      const remaining = rootBytes - Buffer.byteLength(root) - 1;
+      if (remaining < 1) break;
+      const component = 'p'.repeat(Math.min(200, remaining));
+      root = path.join(root, component); await fs.mkdir(root, { mode: 0o700 });
+    }
+    await fs.mkdir(path.join(root, '.memory-owners', 'owners'), { recursive: true, mode: 0o700 });
+    const locator = 'Original.yaml', source = path.join(root, locator); await fs.writeFile(source, CONTENT, { mode: 0o600 });
+    const stat = await fs.lstat(source, { bigint: true }), ownerId = randomUUID();
+    const fileIdentity = { device: String(stat.dev), inode: String(stat.ino), size: String(stat.size), mtimeNs: String(stat.mtimeNs), ctimeNs: String(stat.ctimeNs) };
+    const token = { ...f.token, tenantRoot: root, ownerId, locator, fileIdentity };
+    const active = JSON.stringify({ schema: 1, state: 'ACTIVE', userId: USER, ownerId, locator, revision: '1', contentHash: token.contentHash, fileIdentity });
+    const sidecar = path.join(root, `.${createHash('sha256').update(locator).digest('hex')}.memory-owner.json`), registry = path.join(root, '.memory-owners', 'owners', `${ownerId}.json`);
+    await fs.writeFile(sidecar, active, { mode: 0o600 }); await fs.writeFile(registry, active, { mode: 0o600 });
+    const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER, fence: new FileMemoryFence() }), store = new FileMemoryOwnerSnapshots({ coordinator });
+    // Establish the normal lease namespace before capturing the preservation baseline.
+    await coordinator.withTenantTransaction(() => undefined);
+    expect((await store.readHeadSnapshot(locator)).token).toEqual(token);
+    const request = { operationId: randomUUID(), expectedToken: token, destinationLocator: 'Renamed.yaml' };
+    const journal = path.join(root, `.${createHash('sha256').update(locator).digest('hex')}.memory-write.json`);
+    const stage = `${journal}.rename-${request.operationId}.DESTINATION_METADATA_RENAME.tmp`;
+    expect(Buffer.byteLength(journal) + 1).toBeLessThanOrEqual(limit); expect(Buffer.byteLength(stage) + 1).toBeGreaterThan(limit);
+    const before = await Promise.all([source, sidecar, registry].map(evidence)), names = (await fs.readdir(root)).sort();
+    await expect(store.renameOwned(request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' }, phase: 'initial', residual: false });
+    expect(await Promise.all([source, sidecar, registry].map(evidence))).toEqual(before);
+    expect((await fs.readdir(root)).sort()).toEqual(names); await expect(fs.lstat(journal)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await store.readHeadSnapshot(locator)).token).toEqual(token);
+  });
+  it('refuses unqualified platforms before capturing a RENAME request', async () => {
+    const f = await fixture(); const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    try {
+      Object.defineProperty(process, 'platform', { ...descriptor, value: 'freebsd' });
+      expect(() => captureRenameRequest(f.request)).toThrow('qualified only on Linux and Darwin');
+    } finally { Object.defineProperty(process, 'platform', descriptor); }
   });
 });
