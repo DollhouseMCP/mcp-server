@@ -418,7 +418,7 @@ export class FileMemoryArchiveCleanup {
     this.#intent = { schema: 1, kind: 'ARCHIVE_CLEANUP', state: 'PREPARED', operationId: randomUUID(), token: this.expected,
       receipt: this.receipt, metadata: { sha256: digest(metadata.bytes), sealedAt: date(declaration.sealedAt, false)!,
         firstEntryAt: date(declaration.firstEntryAt, true), lastEntryAt: date(declaration.lastEntryAt, true) },
-      files: { payload: payload.identity, metadata: metadata.identity }, marker: this.#live.get(this.#paths.K)!, namespace: await this.namespaceCommitments() };
+      files: { payload: payload.identity, metadata: metadata.identity }, marker: this.#live.get(this.#paths.K)!, namespace: this.namespaceCommitments() };
     for (const [role, expected] of [['S', this.receipt.volumeIdentity], ['G', this.receipt.generationIdentity]] as const) {
       const value = this.#live.get(this.#paths[role])!;
       if (value.device !== expected.device || value.inode !== expected.inode) throw Object.assign(failure('Cleanup receipt directory disagrees'), { code: 'EARCHIVEMISMATCH' });
