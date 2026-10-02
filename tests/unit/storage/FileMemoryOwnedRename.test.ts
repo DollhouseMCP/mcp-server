@@ -227,7 +227,7 @@ describe('dormant same-parent managed RENAME', () => {
     const value = JSON.parse(await fs.readFile(f.sourceJournal, 'utf8')), current = await fs.lstat(f.source, { bigint: true });
     value.currentHead.identity.ctimeNs = String(current.ctimeNs); await fs.writeFile(f.sourceJournal, JSON.stringify(value));
     const before = await evidence(f.sourceJournal);
-    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
     expect(await evidence(f.sourceJournal)).toEqual(before); await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it.each([`.${'a'.repeat(64)}.memory-owner.json`, `.${'b'.repeat(64)}.memory-write.json`, 'C:/Renamed.yaml'])('rejects unreadable reserved destination %s before artifacts', async destinationLocator => {
@@ -633,18 +633,46 @@ describe('dormant same-parent managed RENAME', () => {
     // Descriptor injection models a visible device mismatch, without a live cross-device mount.
     const observation = jest.spyOn(prototype, 'observe').mockImplementation(async function(this: typeof prototype, locator, full) {
       const actual = await observe.call(this, locator, full);
-      return locator === (recovery ? 'Notes' : '.memory-owners/owners')
+      return locator === '.memory-owners/owners'
         ? { ...actual, identity: { ...actual.identity, device: String(BigInt(actual.identity.device) + 1000000n) } } : actual;
     });
     const binding = jest.spyOn(prototype, 'bindContainingDevice').mockImplementation(function(this: typeof prototype, target, captured) {
-      reached.push(target); bind.call(this, target, captured);
+      if ([f.source, sidecar, registry].includes(target)) reached.push(target); bind.call(this, target, captured);
     });
     try { await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: recovery ? 'EOWNERRECOVERY' : 'EHEADCONFLICT' }); }
     finally { observation.mockRestore(); binding.mockRestore(); }
-    expect(reached).toEqual(recovery ? [f.source] : [f.source, sidecar, registry]);
+    expect(reached).toEqual([f.source, sidecar, registry]);
     expect(await Promise.all(targets.map(evidence))).toEqual(before);
     expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
     if (!recovery) await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['prepared-durable', 'final-durable'] as RenamePublication[])('binds the present recovery journal device before parsing at %s', async phase => {
+    const f = await fixture(true);
+    await expect(f.store(stop => { if (stop === phase) throw new Error('stop'); }).renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    const selected = phase === 'prepared-durable' ? f.sourceJournal : f.destinationJournal;
+    const sidecar = path.join(path.dirname(f.source), `.${createHash('sha256').update('Original.yaml').digest('hex')}.memory-owner.json`);
+    const registry = path.join(f.root, '.memory-owners', 'owners', `${f.token.ownerId}.json`);
+    const targets = [phase === 'prepared-durable' ? f.source : f.destination, sidecar, registry, f.sourceJournal, f.destinationJournal, f.foreign];
+    const before = await Promise.all(targets.map(evidence)), names = (await fs.readdir(path.dirname(f.source))).sort();
+    const prototype = FileMemoryOwnedRename.prototype as unknown as {
+      optional(target: string): Promise<{ identity: RenameOwnedRequest['expectedToken']['fileIdentity'] } | undefined>;
+      bindContainingDevice(target: string, captured: RenameOwnedRequest['expectedToken']['fileIdentity']): void;
+    };
+    const optional = prototype.optional, bind = prototype.bindContainingDevice; let reached = false;
+    // Preserve the real journal read and inject only the visible named-artifact device, not a live file mount.
+    const observation = jest.spyOn(prototype, 'optional').mockImplementation(async function(this: typeof prototype, target) {
+      const actual = await optional.call(this, target);
+      return target === selected && actual ? { ...actual, identity: { ...actual.identity, device: String(BigInt(actual.identity.device) + 1000000n) } } : actual;
+    });
+    const binding = jest.spyOn(prototype, 'bindContainingDevice').mockImplementation(function(this: typeof prototype, target, captured) {
+      if (target === selected) reached = true;
+      bind.call(this, target, captured);
+    });
+    try { await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true }); }
+    finally { observation.mockRestore(); binding.mockRestore(); }
+    expect(reached).toBe(true); expect(await Promise.all(targets.map(evidence))).toEqual(before);
+    expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
   });
 
 });

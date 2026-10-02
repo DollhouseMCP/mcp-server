@@ -502,6 +502,7 @@ export class FileMemoryOwnedRename {
     this.reserve();
     const destinationJournal = await this.optional(this.destinationJournal), sourceJournal = await this.optional(this.sourceJournal);
     if (destinationJournal || sourceJournal) {
+      for (const [target, item] of [[this.destinationJournal, destinationJournal], [this.sourceJournal, sourceJournal]] as const) if (item) this.bindContainingDevice(target, item.identity);
       this.restoreRecords(destinationJournal, sourceJournal);
       this.binding = this.record.binding;
       if (!equal(this.binding, { ...this.expectedBinding(), contentBytes: this.binding.contentBytes })) fail('EHEADCONFLICT');
