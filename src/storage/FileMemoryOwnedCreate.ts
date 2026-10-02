@@ -18,12 +18,17 @@ type Identity = OwnedFileMemoryToken['fileIdentity'];
 interface Child { name: string; identity: Identity; mode: string; uid: string; links: string; directory: boolean }
 interface StableDirectory { locator: string; device: string; inode: string; mode: string; uid: string; names: string[]; children: Child[] }
 interface Directory extends StableDirectory { identity: Identity; directoryLinks: string }
+type DirectoryNames = Omit<Directory, 'children'>;
+interface DirectoryCommitment {
+  locator: string; device: string; inode: string; mode: string; uid: string;
+  baselineChildCount: number; commitmentVersion: 1; sha256: string;
+}
 interface Artifact { raw: string; identity: Identity; links: '1' | '2' }
 type State = 'PREPARED_CREATE' | 'LINKED_CREATE' | 'PUBLISHED_CREATE';
 interface Intent {
-  schema: 3; state: State; userId: string; ownerId: string; locator: string; operationId: string;
+  schema: 3 | 5; state: State; userId: string; ownerId: string; locator: string; operationId: string;
   revision: '1'; contentHash: string; contentBytes: number; stageName: string;
-  initialStageIdentity: Identity; namespace: StableDirectory[];
+  initialStageIdentity: Identity; namespace: (StableDirectory | DirectoryCommitment)[];
   currentStageIdentity?: Identity; currentStageNlink?: '1' | '2';
   currentHeadIdentity?: Identity; currentHeadNlink?: '1' | '2';
   priorIntent?: { state: 'PREPARED_CREATE' | 'LINKED_CREATE'; hash: string; identity: Identity };
@@ -50,6 +55,25 @@ function stableChild(child: Child): Child {
 function identity(stat: BigIntStats): Identity {
   return { device: scalar(stat.dev), inode: scalar(stat.ino), size: scalar(stat.size),
     mtimeNs: scalar(stat.mtimeNs), ctimeNs: scalar(stat.ctimeNs) };
+}
+/** Complete canonical baseline commitment; never a replacement for fresh live proof. */
+export function commitCreateDirectory(directory: StableDirectory): DirectoryCommitment {
+  validateNamespace(directory);
+  const children = directory.children.map(stableChild).map(child => [child.name, child.directory,
+    child.identity.device, child.identity.inode, child.identity.size, child.identity.mtimeNs, child.identity.ctimeNs,
+    child.mode, child.uid, child.links]);
+  return { locator: directory.locator, device: directory.device, inode: directory.inode, mode: directory.mode, uid: directory.uid,
+    baselineChildCount: children.length, commitmentVersion: 1,
+    sha256: digest(JSON.stringify(['dollhouse-create-namespace-directory-v1', directory.locator,
+      directory.device, directory.inode, directory.mode, directory.uid, children])) };
+}
+function validateCommitment(directory: DirectoryCommitment): void {
+  if (!directory || !exactKeys(directory, ['locator', 'device', 'inode', 'mode', 'uid', 'baselineChildCount', 'commitmentVersion', 'sha256']) ||
+    typeof directory.locator !== 'string' || !['device', 'inode', 'mode', 'uid'].every(key => {
+      const value = directory[key as keyof DirectoryCommitment];
+      return typeof value === 'string' && value.length <= 32 && /^(?:0|[1-9]\d*)$/u.test(value);
+    }) || directory.commitmentVersion !== 1 || !Number.isSafeInteger(directory.baselineChildCount) ||
+    directory.baselineChildCount < 0 || directory.baselineChildCount > 4095 || typeof directory.sha256 !== 'string' || !HASH.test(directory.sha256)) fail();
 }
 function fail(code = 'EOWNERRECOVERY'): never {
   throw Object.assign(new Error('Exclusive memory creation evidence is unsafe or changed'), { code });
@@ -96,7 +120,7 @@ function parse(raw: string): Intent {
   try { value = JSON.parse(raw) as Intent; } catch { fail(); }
   const common = ['schema', 'state', 'userId', 'ownerId', 'locator', 'operationId', 'revision',
     'contentHash', 'contentBytes', 'stageName', 'initialStageIdentity', 'namespace'];
-  if (!value || typeof value !== 'object' || Array.isArray(value) || value.schema !== 3 ||
+  if (!value || typeof value !== 'object' || Array.isArray(value) || (value.schema !== 3 && value.schema !== 5) ||
     !['PREPARED_CREATE', 'LINKED_CREATE', 'PUBLISHED_CREATE'].includes(value.state)) fail();
   const extra = phaseKeys(value.state);
   if (!exactKeys(value, [...common, ...extra]) || typeof value.userId !== 'string' || !value.userId ||
@@ -108,7 +132,10 @@ function parse(raw: string): Intent {
     !validIdentity(value.initialStageIdentity) || typeof value.stageName !== 'string' ||
     !Array.isArray(value.namespace) || !value.namespace.length) fail();
   validatePhase(value);
-  for (const directory of value.namespace) validateNamespace(directory);
+  for (const directory of value.namespace) {
+    if (value.schema === 3) validateNamespace(directory as StableDirectory);
+    else validateCommitment(directory as DirectoryCommitment);
+  }
   serialize(value);
   return value;
 }
@@ -169,26 +196,56 @@ export class FileMemoryOwnedCreate {
     await this.budget.scan(directory, name => names.push(name));
     return names.sort(ordinal);
   }
-  private async directory(locator: string): Promise<Directory> {
+  private directory(locator: string): Promise<Directory> { return this.observeDirectory(locator, true); }
+  private directoryNames(locator: string): Promise<DirectoryNames> { return this.observeDirectory(locator, false); }
+  private observeDirectory(locator: string, full: true): Promise<Directory>;
+  private observeDirectory(locator: string, full: false): Promise<DirectoryNames>;
+  private async observeDirectory(locator: string, full: boolean): Promise<Directory | DirectoryNames> {
     const target = this.absolute(locator), before = await fs.lstat(target, { bigint: true });
     if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
       ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
     const names = await this.names(target), children: Child[] = [];
-    // Bounded serial observation limits live descriptors and preserves fail-fast rejection.
-    for (const name of names) {
-      const stat = await fs.lstat(path.join(target, name), { bigint: true });
-      children.push({ name, identity: identity(stat), mode: scalar(stat.mode), uid: scalar(stat.uid), links: scalar(stat.nlink), directory: stat.isDirectory() });
+    // Independent readonly observations are bounded to sixteen. Drain the whole
+    // batch and retain ordinal failure precedence before launching any next batch.
+    for (let offset = 0; full && offset < names.length; offset += 16) {
+      const results = await Promise.allSettled(names.slice(offset, offset + 16).map(name => this.observeChild(target, name)));
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+        children.push(result.value);
+      }
     }
     const after = await fs.lstat(target, { bigint: true });
     if (!isDeepStrictEqual(identity(before), identity(after)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
-    return { locator, device: scalar(before.dev), inode: scalar(before.ino), mode: scalar(before.mode), uid: scalar(before.uid), names, children, identity: identity(after), directoryLinks: scalar(after.nlink) };
+    const observed = { locator, device: scalar(before.dev), inode: scalar(before.ino), mode: scalar(before.mode), uid: scalar(before.uid), names,
+      identity: identity(after), directoryLinks: scalar(after.nlink) };
+    return full ? { ...observed, children } : observed;
   }
-  private async proof(): Promise<void> {
-    // All directory observations consume the same monotonic budget in proof order.
-    for (const before of this.directories) if (!isDeepStrictEqual(await this.directory(before.locator), before)) fail();
+  private async observeChild(target: string, name: string): Promise<Child> {
+    const stat = await fs.lstat(path.join(target, name), { bigint: true });
+    return { name, identity: identity(stat), mode: scalar(stat.mode), uid: scalar(stat.uid), links: scalar(stat.nlink), directory: stat.isDirectory() };
+  }
+  private async proof(full = false): Promise<void> {
+    // Every proof observes complete fresh names and full selected-directory metadata.
+    // Only explicit checkpoints additionally compare the unchanged foreign-child baseline.
+    for (const before of this.directories) {
+      if (full) {
+        if (!isDeepStrictEqual(await this.directory(before.locator), before)) fail();
+      } else {
+        const { children: _children, ...expected } = before;
+        if (!isDeepStrictEqual(await this.directoryNames(before.locator), expected)) fail();
+      }
+    }
     // Serial artifact reproof bounds descriptor pressure and fails at the first changed file.
     for (const [target, before] of this.files) if (!isDeepStrictEqual(await this.read(target, Buffer.byteLength(before.raw), before.links), before)) fail();
     this.active();
+  }
+  private childIndex(children: Child[]): Map<string, Child> {
+    const indexed = new Map<string, Child>();
+    for (const child of children) {
+      if (indexed.has(child.name)) fail();
+      indexed.set(child.name, child);
+    }
+    return indexed;
   }
   private async transition(target: string, add: string[], remove: string[] = [], changed: string[] = []): Promise<void> {
     const locator = path.relative(this.scope.tenantRoot, target).split(path.sep).join('/') || '.';
@@ -196,8 +253,9 @@ export class FileMemoryOwnedCreate {
     const before = this.directories[index], after = await this.directory(locator);
     if (!before || !['device', 'inode', 'mode', 'uid'].every(key => before[key as keyof Directory] === after[key as keyof Directory]) ||
       !isDeepStrictEqual(after.names, before.names.filter(name => !remove.includes(name)).concat(add).sort(ordinal))) fail();
+    const children = this.childIndex(after.children);
     for (const child of before.children) if (!remove.includes(child.name) && !changed.includes(child.name) &&
-      !isDeepStrictEqual(child, after.children.find(item => item.name === child.name))) fail();
+      !isDeepStrictEqual(child, children.get(child.name))) fail();
     this.directories[index] = after;
     await this.transitionAncestor(target, after);
     await this.proof();
@@ -207,8 +265,9 @@ export class FileMemoryOwnedCreate {
     if (ancestor && ancestor !== after) {
       const recaptured = await this.directory(ancestor.locator), name = path.basename(target);
       if (!isDeepStrictEqual(ancestor.identity, recaptured.identity) || !isDeepStrictEqual(ancestor.names, recaptured.names)) fail();
+      const children = this.childIndex(recaptured.children);
       for (const child of ancestor.children) {
-        const current = recaptured.children.find(item => item.name === child.name)!;
+        const current = children.get(child.name)!;
         const expected = child.name === name ? stableChild(child) : child;
         if (!isDeepStrictEqual(expected, child.name === name ? stableChild(current) : current)) fail();
       }
@@ -252,7 +311,7 @@ export class FileMemoryOwnedCreate {
   }
   private async barrier(phase: CreatePublication): Promise<void> {
     await this.hook?.(phase);
-    await this.proof();
+    await this.proof(Boolean(this.hook) || phase === 'before-link' || phase === 'committed' || phase === 'after-read');
   }
   private async write(target: string, raw: string, partial?: CreatePublication): Promise<Artifact> {
     await this.proof(); this.residual = true;
@@ -292,7 +351,7 @@ export class FileMemoryOwnedCreate {
     }
   }
   private async syncDirectory(target: string, final = false): Promise<void> {
-    await this.proof();
+    await this.proof(final);
     const locator = path.relative(this.scope.tenantRoot, target).split(path.sep).join('/') || '.';
     const expected = this.directories.find(directory => directory.locator === locator)!;
     const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
@@ -301,9 +360,9 @@ export class FileMemoryOwnedCreate {
       const before = await handle.stat({ bigint: true });
       if (!before.isDirectory() || !isDeepStrictEqual(identity(before), expected.identity) ||
         scalar(before.mode) !== expected.mode || scalar(before.uid) !== expected.uid) fail();
-      await this.proof(); this.active(); await handle.sync();
+      await this.proof(final); this.active(); await handle.sync();
       if (!isDeepStrictEqual(identity(await handle.stat({ bigint: true })), expected.identity)) fail();
-      await this.proof();
+      await this.proof(final);
     });
     if (final) {
       const token: OwnedFileMemoryToken = Object.freeze({ backend: 'file', ownership: 'owned', userId: this.scope.userId,
@@ -407,13 +466,13 @@ export class FileMemoryOwnedCreate {
   }
   private async prepareIntent(): Promise<void> {
     const namespace = this.directories.map(({ identity: _identity, directoryLinks: _links, ...directory }) => ({ ...directory, children: directory.children.map(stableChild) }));
-    if (Buffer.byteLength(JSON.stringify(namespace)) >= LIMIT) fail('EHEADRESOURCE');
+    const commitments = namespace.map(commitCreateDirectory);
     await this.barrier('before-content');
     const staged = await this.write(this.stage, this.request.content, 'partial-content');
-    this.intent = { schema: 3, state: 'PREPARED_CREATE', userId: this.scope.userId, ownerId: this.ownerId,
+    this.intent = { schema: 5, state: 'PREPARED_CREATE', userId: this.scope.userId, ownerId: this.ownerId,
       locator: this.request.locator, operationId: this.request.operationId, revision: '1', contentHash: digest(staged.raw),
       contentBytes: Buffer.byteLength(staged.raw), stageName: path.basename(this.stage), initialStageIdentity: staged.identity,
-      currentStageIdentity: staged.identity, currentStageNlink: '1', namespace };
+      currentStageIdentity: staged.identity, currentStageNlink: '1', namespace: commitments };
     parse(serialize(this.intent)); await this.write(this.journal, serialize(this.intent));
     await this.syncDirectory(path.dirname(this.head));
   }
@@ -434,7 +493,7 @@ export class FileMemoryOwnedCreate {
       await this.recover(); // Exact existing artifacts/namespace before even parent fsync.
     }
     const namespace = this.projectNamespace();
-    this.admitPhaseSizes(this.intent?.namespace ?? namespace);
+    this.admitPhaseSizes(this.intent?.namespace ?? namespace.map(commitCreateDirectory));
     const ownNames = new Map<string, string[]>([
       ['.', ['.memory-owners']], ['.memory-owners', ['owners']],
       ['.memory-owners/owners', [path.basename(this.registry)]],
@@ -459,9 +518,9 @@ export class FileMemoryOwnedCreate {
     }
     return namespace;
   }
-  private admitPhaseSizes(namespace: StableDirectory[]): void {
+  private admitPhaseSizes(namespace: (StableDirectory | DirectoryCommitment)[]): void {
     const future: Identity = { device: MAX_NUMBER, inode: MAX_NUMBER, size: String(Buffer.byteLength(this.request.content)), mtimeNs: MAX_NUMBER, ctimeNs: MAX_NUMBER };
-    const common = { schema: 3 as const, userId: this.scope.userId, ownerId: this.ownerId, locator: this.request.locator,
+    const common = { schema: this.intent?.schema ?? 5 as const, userId: this.scope.userId, ownerId: this.ownerId, locator: this.request.locator,
       operationId: this.request.operationId, revision: '1' as const, contentHash: digest(this.request.content), contentBytes: Buffer.byteLength(this.request.content),
       stageName: path.basename(this.stage), initialStageIdentity: this.intent?.initialStageIdentity ?? future, namespace };
     const prior = { state: 'PREPARED_CREATE' as const, hash: 'f'.repeat(64), identity: { ...future, size: String(LIMIT) } };
@@ -508,7 +567,7 @@ export class FileMemoryOwnedCreate {
       }
     }
     this.recoverNamespace();
-    await this.proof();
+    await this.proof(true);
   }
   private async recoverContent(): Promise<void> {
     const head = this.intent.state !== 'PREPARED_CREATE', stage = this.intent.state !== 'PUBLISHED_CREATE';
@@ -527,12 +586,24 @@ export class FileMemoryOwnedCreate {
     if (this.intent.namespace.length !== this.directories.length) fail();
     for (let index = 0; index < this.directories.length; index++) {
       const expected = this.intent.namespace[index], actual = this.directories[index];
-      if (!['locator', 'device', 'inode', 'mode', 'uid'].every(key => expected[key as keyof StableDirectory] === actual[key as keyof Directory])) fail();
+      if (!(['locator', 'device', 'inode', 'mode', 'uid'] as const).every(key => expected[key] === actual[key])) fail();
       const added = [...this.files.keys()].filter(target => path.dirname(target) === this.absolute(actual.locator)).map(target => path.basename(target));
-      if (!isDeepStrictEqual(actual.names, expected.names.concat(added).sort(ordinal))) fail();
-      for (const child of expected.children) {
-        if (!isDeepStrictEqual(child, stableChild(actual.children.find(item => item.name === child.name)!))) fail();
+      if (new Set(added).size !== added.length || added.some(name => !actual.names.includes(name))) fail();
+      if (this.intent.schema === 5) {
+        const retained = actual.children.filter(child => !added.includes(child.name)).map(stableChild);
+        const baseline = { locator: actual.locator, device: actual.device, inode: actual.inode, mode: actual.mode, uid: actual.uid,
+          names: retained.map(child => child.name), children: retained };
+        if (!isDeepStrictEqual(commitCreateDirectory(baseline), expected)) fail();
+        continue;
       }
+      this.recoverLegacyNamespace(expected as StableDirectory, actual, added);
+    }
+  }
+  private recoverLegacyNamespace(expected: StableDirectory, actual: Directory, added: string[]): void {
+    if (!isDeepStrictEqual(actual.names, expected.names.concat(added).sort(ordinal))) fail();
+    const children = this.childIndex(actual.children);
+    for (const child of expected.children) {
+      if (!isDeepStrictEqual(child, stableChild(children.get(child.name)!))) fail();
     }
   }
   private activeRecord(): string {
@@ -598,7 +669,7 @@ export class FileMemoryOwnedCreate {
         if (!this.files.has(target)) await this.write(target, this.activeRecord());
         await this.syncDirectory(path.dirname(target)); await this.barrier(point);
       }
-      await this.proof(); this.phase = 'intent-removal-unknown'; this.active(); this.attempted = true;
+      await this.proof(true); this.phase = 'intent-removal-unknown'; this.active(); this.attempted = true;
       await fs.unlink(this.journal); this.files.delete(this.journal);
       await this.transition(path.dirname(this.head), [], [path.basename(this.journal)]);
       this.phase = 'durability-unconfirmed'; await this.barrier('intent-unlinked');
