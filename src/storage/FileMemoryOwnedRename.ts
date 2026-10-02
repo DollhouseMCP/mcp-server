@@ -231,7 +231,7 @@ export class FileMemoryOwnedRename {
   }
   private async transition(target: string, add: string[] = [], remove: string[] = [], changed: string[] = []): Promise<void> {
     const index = this.directories.findIndex(item => item.locator === this.relative(target)), before = this.directories[index], after = await this.observe(before.locator, true);
-    applyEvidenceDirectoryTransition(this.directories, index, before, after, add, remove, changed, fail);
+    applyEvidenceDirectoryTransition(this.directories, index, before, after, { add, remove, changed }, fail);
     await this.transitionAncestor(target, index);
     await this.proof();
   }

@@ -79,9 +79,9 @@ export async function withEvidenceFileClose<T>(handle: fs.FileHandle, body: () =
   dualFailure: (primary: unknown, close: unknown) => Error): Promise<T> {
   let value!: T, primary: { cause: unknown } | undefined;
   try { value = await body(); } catch (cause) { primary = { cause }; }
-  try { await handle.close(); } catch (close) {
-    if (primary) throw dualFailure(primary.cause, close);
-    throw close;
+  try { await handle.close(); } catch (error_) {
+    if (primary) throw dualFailure(primary.cause, error_);
+    throw error_;
   }
   if (primary) throw primary.cause;
   return value;
@@ -89,27 +89,27 @@ export async function withEvidenceFileClose<T>(handle: fs.FileHandle, body: () =
 export async function observeEvidenceDirectory(locator: string, target: string, full: boolean,
   scan: (inspect: (name: string) => void) => Promise<void>, check: (names: string[]) => void,
   fail: EvidenceFail): Promise<HeadDirectory | HeadDirectoryNames> {
-    const before = await fs.lstat(target, { bigint: true });
-    if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
-      ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
-    const names: string[] = []; await scan(name => names.push(name)); names.sort(evidenceOrdinal);
-    check(names);
-    if (new Set(names).size !== names.length) fail();
-    const children: HeadChild[] = [];
-    for (let offset = 0; full && offset < names.length; offset += 16) {
-      const observed = await Promise.allSettled(names.slice(offset, offset + 16).map(async name => {
-        const stat = await fs.lstat(path.join(target, name), { bigint: true });
-        return { name, identity: evidenceIdentity(stat, fail), mode: evidenceScalar(stat.mode, 20, fail), uid: evidenceScalar(stat.uid, 20, fail), links: evidenceScalar(stat.nlink, 20, fail), directory: stat.isDirectory() };
-      }));
-      for (const result of observed) {
-        if (result.status === 'rejected') throw result.reason;
-        children.push(result.value);
-      }
+  const before = await fs.lstat(target, { bigint: true });
+  if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
+    ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
+  const names: string[] = []; await scan(name => names.push(name)); names.sort(evidenceOrdinal);
+  check(names);
+  if (new Set(names).size !== names.length) fail();
+  const children: HeadChild[] = [];
+  for (let offset = 0; full && offset < names.length; offset += 16) {
+    const observed = await Promise.allSettled(names.slice(offset, offset + 16).map(async name => {
+      const stat = await fs.lstat(path.join(target, name), { bigint: true });
+      return { name, identity: evidenceIdentity(stat, fail), mode: evidenceScalar(stat.mode, 20, fail), uid: evidenceScalar(stat.uid, 20, fail), links: evidenceScalar(stat.nlink, 20, fail), directory: stat.isDirectory() };
+    }));
+    for (const result of observed) {
+      if (result.status === 'rejected') throw result.reason;
+      children.push(result.value);
     }
-    const after = await fs.lstat(target, { bigint: true });
-    if (!equal(evidenceIdentity(before, fail), evidenceIdentity(after, fail)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
-    const base = { locator, identity: evidenceIdentity(after, fail), mode: evidenceScalar(after.mode, 20, fail), uid: evidenceScalar(after.uid, 20, fail), links: evidenceScalar(after.nlink, 20, fail), names };
-    return full ? { ...base, children } : base;
+  }
+  const after = await fs.lstat(target, { bigint: true });
+  if (!equal(evidenceIdentity(before, fail), evidenceIdentity(after, fail)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
+  const base = { locator, identity: evidenceIdentity(after, fail), mode: evidenceScalar(after.mode, 20, fail), uid: evidenceScalar(after.uid, 20, fail), links: evidenceScalar(after.nlink, 20, fail), names };
+  return full ? { ...base, children } : base;
 }
 export async function readEvidenceFile(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
   active: () => void, closed: EvidenceClose, fail: EvidenceFail): Promise<HeadFileEvidence> {
@@ -128,7 +128,8 @@ export async function readEvidenceFile(target: string, maximum: number, links: '
     });
 }
 export function applyEvidenceDirectoryTransition(directories: HeadDirectory[], index: number, before: HeadDirectory,
-  after: HeadDirectory, add: string[], remove: string[], changed: string[], fail: EvidenceFail): void {
+  after: HeadDirectory, delta: { add: string[]; remove: string[]; changed: string[] }, fail: EvidenceFail): void {
+  const { add, remove, changed } = delta;
   if (!equal(after.names, before.names.filter(name => !remove.includes(name)).concat(add).sort(evidenceOrdinal)) ||
     !['device', 'inode'].every(key => before.identity[key as keyof HeadIdentity] === after.identity[key as keyof HeadIdentity]) || before.mode !== after.mode || before.uid !== after.uid) fail();
   const children = new Map(after.children.map(child => [child.name, child]));
