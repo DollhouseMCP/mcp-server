@@ -512,7 +512,9 @@ stages and mutation-before-next-complete-record gaps are preserved for manual
 recovery; neither absence nor matching terminal JSON advances an incomplete
 phase. A clean terminal retry requires both old head and sidecar absent, or a
 fresh ordinary owned-head read proving a different memory owner UUID. It never
-unlinks that replacement.
+unlinks that replacement. Device/inode reuse alone does not contradict a genuinely
+different owner: the shortcut refuses the exact full original head identity, then
+requires the fresh ordinary owned/different-UUID proof for a replacement.
 
 All old-owner archive states remain untouched, including committed, unindexed,
 partial, temporary, malformed and pending-cleanup objects. DELETE performs no
@@ -535,3 +537,9 @@ cannot reset the quota. Fresh names, selected identities, full own artifacts and
 full foreign-baseline checkpoints remain mandatory. Directory evidence has the
 same cooperating-local-filesystem and cross-invocation limitations described
 above. Process-interruption qualification does not prove power-loss durability.
+
+DELETE reuses the internal phase-independent owned-head evidence primitives for
+canonical observation, descriptor reads/closes, full directory transitions and
+exclusive writes. Its full foreign baseline, five-state protocol, reservation,
+partial hooks and current-outcome branding remain executor-owned; it does not
+adopt RENAME's operation-specific targeted transition semantics.

@@ -1,16 +1,22 @@
 /** Dormant exact head DELETE; archives remain erasure-pending, ambiguous gaps manual. */
-import { createHash } from 'node:crypto';
 import { constants, type BigIntStats } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { isDeepStrictEqual as equal } from 'node:util';
-import { closeMemoryDirectoryInspection, FileMemoryDirectoryScanLimitError } from './FileMemoryDirectoryScanBudget.js';
+import { FileMemoryDirectoryScanLimitError } from './FileMemoryDirectoryScanBudget.js';
 import type { OwnedFileMemoryToken, FileMemorySnapshot } from './FileMemoryOwnerSnapshots.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileMemoryOperationScope } from './FileMemoryTransactionCoordinator.js';
 
-type Identity = OwnedFileMemoryToken['fileIdentity'];
+import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdinal as ordinal, evidenceDecimal as decimal,
+  evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
+  evidenceOriginalIdentity as original, canonicalEvidence, stableEvidenceChild as stable, inspectEvidenceNames,
+  withEvidenceFileClose, observeEvidenceDirectory, readEvidenceFile, applyEvidenceDirectoryTransition,
+  applyEvidenceAncestorTransition, admitEvidenceAncestor, writeEvidenceFile,
+  type HeadIdentity as Identity, type HeadArtifact as Artifact, type HeadChild as Child,
+  type HeadDirectory as Directory, type HeadDirectoryNames as DirectoryNames } from './FileMemoryOwnedHeadEvidence.js';
+
 export interface DeleteOwnedRequest { readonly operationId: string; readonly expectedToken: OwnedFileMemoryToken }
 export interface DeletedOwnerEvidence { readonly tenantRoot: string; readonly userId: string; readonly ownerId: string; readonly operationId: string }
 export interface HeadDeletedEvidence extends DeletedOwnerEvidence { readonly locator: string }
@@ -22,11 +28,7 @@ export type DeletePublication = 'partial-base' | 'partial-deleting-registry' | '
   'before-sidecar-retirement' | 'after-sidecar-retirement' | 'before-intent-retirement' | 'after-intent-retirement' |
   'after-audit' | 'before-return';
 type State = 'BASE' | 'REGISTRY_DELETING' | 'PAIR_DELETING' | 'HEAD_REMOVED' | 'TERMINAL';
-interface Child { name: string; identity: Identity; mode: string; uid: string; links: string; directory: boolean }
-interface Directory { locator: string; identity: Identity; mode: string; uid: string; links: string; names: string[]; children: Child[] }
-type DirectoryNames = Omit<Directory, 'children'>;
 interface Commitment { locator: string; device: string; inode: string; mode: string; uid: string; childCount: number; domain: string; sha256: string }
-interface Artifact { raw: string; digest: string; identity: Identity }
 interface Historical { digest: string; identity: Identity }
 interface Binding { userId: string; ownerId: string; operationId: string; locator: string; revision: string; contentHash: string; contentBytes: number; originalHeadIdentity: Identity }
 interface Baseline { sidecar: Artifact; registry: Artifact; originalChildren: { head: Child; sidecar: Child; registry: Child }; namespace: Commitment[] }
@@ -37,37 +39,8 @@ const DOMAIN = 'dollhouse.delete.schema1.full-children.v1';
 const RAW_HEAD_LIMIT = 3 * MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE;
 const LIMIT = 8192, MAX_REVISION = 9223372036854775807n;
 function fail(code = 'EOWNERRECOVERY'): never { throw Object.assign(new Error('Managed DELETE evidence is unsafe or changed'), { code }); }
-function causeCode(cause: unknown): string | undefined {
-  try { const value = (cause as NodeJS.ErrnoException | null | undefined)?.code; return typeof value === 'string' ? value : undefined; }
-  catch { return undefined; }
-}
-const digest = (raw: string) => createHash('sha256').update(raw).digest('hex');
-function ordinal(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-function decimal(value: string, width: number, signed = false): boolean {
-  return typeof value === 'string' && (signed ? /^(?:0|-?[1-9]\d*)$/u : /^(?:0|[1-9]\d*)$/u).test(value) && value.replace('-', '').length <= width;
-}
-function scalar(value: bigint, width = 40): string {
-  const result = String(value);
-  if (!decimal(result, width, true)) fail('EHEADRESOURCE');
-  return result;
-}
-function identity(stat: BigIntStats): Identity { return { device: scalar(stat.dev), inode: scalar(stat.ino), size: scalar(stat.size), mtimeNs: scalar(stat.mtimeNs), ctimeNs: scalar(stat.ctimeNs) }; }
-function keys(value: unknown, expected: string[]): value is object {
-  return !!value && typeof value === 'object' && !Array.isArray(value) && Reflect.ownKeys(value).length === expected.length &&
-    Reflect.ownKeys(value).every(key => typeof key === 'string' && expected.includes(key));
-}
-function validIdentity(value: unknown): value is Identity {
-  if (!keys(value, ['device', 'inode', 'size', 'mtimeNs', 'ctimeNs'])) return false;
-  const item = value as Identity;
-  return ['device', 'inode', 'size'].every(key => decimal(item[key as keyof Identity], 40)) &&
-    ['mtimeNs', 'ctimeNs'].every(key => decimal(item[key as keyof Identity], 40, true));
-}
-// Own link/unlink changes ctime; phase checks separately bind full identity and mode/UID.
-function original(a: Identity, b: Identity): boolean { return a.device === b.device && a.inode === b.inode && a.size === b.size && a.mtimeNs === b.mtimeNs; }
+function scalar(value: bigint, width = 40): string { return evidenceScalar(value, width, fail); }
+function identity(stat: BigIntStats): Identity { return evidenceIdentity(stat, fail); }
 function validLocator(value: unknown): value is string {
   return typeof value === 'string' && !!value && Buffer.byteLength(value) <= 1024 && Buffer.from(value).toString('utf8') === value &&
     !value.includes('\\') && !value.includes('\0') && !path.win32.isAbsolute(value) &&
@@ -91,25 +64,13 @@ const fieldOrder = ['schema', 'state', 'binding', 'baseline', 'prior', 'registry
   'userId', 'ownerId', 'operationId', 'locator', 'revision', 'contentHash', 'contentBytes', 'originalHeadIdentity',
   'originalChildren', 'head', 'namespace', 'name', 'device', 'inode', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'links',
   'directory', 'childCount', 'domain', 'sha256'];
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') {
-    const result: { [key: string]: unknown } = {};
-    for (const key of fieldOrder) if (Object.hasOwn(value, key)) result[key] = canonical((value as { [key: string]: unknown })[key]);
-    if (Object.keys(result).length !== Reflect.ownKeys(value).length) fail();
-    return result;
-  }
-  return value;
-}
+function canonical(value: unknown): unknown { return canonicalEvidence(value, fieldOrder, fail); }
 function serialize(record: Intent): string {
   const raw = JSON.stringify(canonical(record));
   if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE');
   return raw;
 }
 function artifact(raw: string, captured: Identity): Artifact { return { raw, digest: digest(raw), identity: captured }; }
-function stable(child: Child): Child {
-  return child.directory ? { ...child, links: '0', identity: { ...child.identity, size: '0', mtimeNs: '0', ctimeNs: '0' } } : child;
-}
 function commitment(directory: Directory): Commitment {
   const children = directory.children.map(stable).map(child => [child.name, child.directory, child.identity.device, child.identity.inode,
     child.identity.size, child.identity.mtimeNs, child.identity.ctimeNs, child.mode, child.uid, child.links]);
@@ -136,18 +97,8 @@ class DeleteBudget {
     if (this.consumed >= this.limit) throw new FileMemoryDirectoryScanLimitError();
     this.consumed++; return await directory.read();
   }
-  async scan(target: string, inspect: (name: string) => void): Promise<void> {
-    const directory = await fs.opendir(target); let primary: { cause: unknown } | undefined;
-    try {
-      let attempts = 0;
-      while (true) {
-        if (attempts++ >= 4096 || this.consumed >= this.limit) throw new FileMemoryDirectoryScanLimitError();
-        const entry = await this.read(directory); if (!entry) break;
-        if (Buffer.byteLength(entry.name) > 255 || Buffer.from(entry.name).toString('utf8') !== entry.name) throw new FileMemoryDirectoryScanLimitError();
-        inspect(entry.name);
-      }
-    } catch (cause) { primary = { cause }; }
-    await closeMemoryDirectoryInspection(directory, primary, 'DELETE directory inspection and close failed');
+  scan(target: string, inspect: (name: string) => void): Promise<void> {
+    return inspectEvidenceNames(target, inspect, directory => this.read(directory), 'DELETE directory inspection and close failed');
   }
   check(locator: string, names: string[]): void {
     const weight = this.weights?.get(locator);
@@ -175,55 +126,20 @@ export class FileMemoryOwnedDelete {
     private readonly capture: (result: DeleteOwnedResult) => void = () => {}) {}
   private absolute(locator: string): string { return locator === '.' ? this.scope.tenantRoot : path.join(this.scope.tenantRoot, locator); }
   private relative(target: string): string { return path.relative(this.scope.tenantRoot, target).split(path.sep).join('/') || '.'; }
-  private async closed<T>(handle: fs.FileHandle, body: () => Promise<T>): Promise<T> {
-    let value!: T, primary: { cause: unknown } | undefined;
-    try { value = await body(); } catch (cause) { primary = { cause }; }
-    try { await handle.close(); } catch (error_) {
-      if (primary) { const error = new Error('DELETE operation and close failed'); this.closeFailures.set(error, { cause: primary.cause, closeCause: error_ }); throw error; }
-      throw error_;
-    }
-    if (primary) throw primary.cause;
-    return value;
-  }
-  private async observe(locator: string, full: true): Promise<Directory>;
-  private async observe(locator: string, full: false): Promise<DirectoryNames>;
-  private async observe(locator: string, full: boolean): Promise<Directory | DirectoryNames> {
-    const target = this.absolute(locator), before = await fs.lstat(target, { bigint: true });
-    if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid!()) ||
-      ((locator === '.memory-owners' || locator.startsWith('.memory-owners/')) && (before.mode & 0o777n) !== 0o700n)) fail();
-    const names: string[] = []; await this.budget.scan(target, name => names.push(name)); names.sort(ordinal);
-    this.budget.check(locator, names);
-    if (new Set(names).size !== names.length) fail();
-    const children: Child[] = [];
-    for (let offset = 0; full && offset < names.length; offset += 16) {
-      const observed = await Promise.allSettled(names.slice(offset, offset + 16).map(async name => {
-        const stat = await fs.lstat(path.join(target, name), { bigint: true });
-        return { name, identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
-      }));
-      for (const result of observed) {
-        if (result.status === 'rejected') throw result.reason;
-        children.push(result.value);
-      }
-    }
-    const after = await fs.lstat(target, { bigint: true });
-    if (!equal(identity(before), identity(after)) || before.nlink !== after.nlink || before.mode !== after.mode || before.uid !== after.uid) fail();
-    const base = { locator, identity: identity(after), mode: scalar(after.mode, 20), uid: scalar(after.uid, 20), links: scalar(after.nlink, 20), names };
-    return full ? { ...base, children } : base;
-  }
-  private async read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true): Promise<Artifact & { links: '1' | '2'; mode: string; uid: string }> {
-    const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    return this.closed(handle, async () => {
-      const before = await handle.stat({ bigint: true });
-      if (!before.isFile() || before.nlink !== BigInt(links) || before.uid !== BigInt(process.getuid!()) ||
-        (privateFile && (before.mode & 0o777n) !== 0o600n) || before.size > BigInt(maximum)) fail();
-      const bytes = Buffer.alloc(Number(before.size)); let offset = 0;
-      while (offset < bytes.length) { const read = await handle.read(bytes, offset, bytes.length - offset, offset); if (!read.bytesRead) fail();
-        offset += read.bytesRead; }
-      const raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-      const after = await handle.stat({ bigint: true }), named = await fs.lstat(target, { bigint: true });
-      if (!equal(identity(before), identity(after)) || !equal(identity(after), identity(named)) || before.nlink !== named.nlink || before.mode !== named.mode || before.uid !== named.uid) fail();
-      this.active(); return { ...artifact(raw, identity(after)), links, mode: scalar(before.mode, 20), uid: scalar(before.uid, 20) };
+  private closed<T>(handle: fs.FileHandle, body: () => Promise<T>): Promise<T> {
+    return withEvidenceFileClose(handle, body, (cause, closeCause) => {
+      const error = new Error('DELETE operation and close failed'); this.closeFailures.set(error, { cause, closeCause }); return error;
     });
+  }
+  private observe(locator: string, full: true): Promise<Directory>;
+  private observe(locator: string, full: false): Promise<DirectoryNames>;
+  private observe(locator: string, full: boolean): Promise<Directory | DirectoryNames> {
+    const target = this.absolute(locator);
+    return observeEvidenceDirectory(locator, target, full,
+      inspect => this.budget.scan(target, inspect), names => this.budget.check(locator, names), fail);
+  }
+  private read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true): Promise<Artifact & { links: '1' | '2'; mode: string; uid: string }> {
+    return readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail);
   }
   private async proof(full = false): Promise<void> {
     for (const before of this.directories) {
@@ -237,11 +153,7 @@ export class FileMemoryOwnedDelete {
   }
   private async transition(target: string, add: string[] = [], remove: string[] = [], changed: string[] = []): Promise<void> {
     const index = this.directories.findIndex(item => item.locator === this.relative(target)), before = this.directories[index], after = await this.observe(before.locator, true);
-    if (!equal(after.names, before.names.filter(name => !remove.includes(name)).concat(add).sort(ordinal)) ||
-      !['device', 'inode'].every(key => before.identity[key as keyof Identity] === after.identity[key as keyof Identity]) || before.mode !== after.mode || before.uid !== after.uid) fail();
-    const children = new Map(after.children.map(child => [child.name, child]));
-    for (const child of before.children) if (!remove.includes(child.name) && !changed.includes(child.name) && !equal(child, children.get(child.name))) fail();
-    this.directories[index] = after;
+    applyEvidenceDirectoryTransition(this.directories, index, before, after, { add, remove, changed }, fail);
     await this.transitionAncestor(target, index);
     await this.proof();
   }
@@ -249,10 +161,7 @@ export class FileMemoryOwnedDelete {
     const ancestorIndex = this.directories.findIndex(item => this.absolute(item.locator) === path.dirname(target));
     if (ancestorIndex >= 0 && ancestorIndex !== index) {
       const ancestor = this.directories[ancestorIndex], fresh = await this.observe(ancestor.locator, true), name = path.basename(target);
-      if (!equal(ancestor.identity, fresh.identity) || !equal(ancestor.names, fresh.names) || ancestor.mode !== fresh.mode || ancestor.uid !== fresh.uid || ancestor.links !== fresh.links) fail();
-      const observed = new Map(fresh.children.map(child => [child.name, child]));
-      for (const child of ancestor.children) if (!equal(child.name === name ? stable(child) : child, child.name === name ? stable(observed.get(child.name)!) : observed.get(child.name))) fail();
-      this.directories[ancestorIndex] = fresh;
+      applyEvidenceAncestorTransition(this.directories, ancestorIndex, ancestor, fresh, name, fail);
     }
   }
   private async barrier(phase: DeletePublication, mandatory = false): Promise<void> { await this.hook?.(phase); await this.proof(mandatory || !!this.hook); }
@@ -268,32 +177,16 @@ export class FileMemoryOwnedDelete {
       this.capture(this.committed);
     } else this.active();
   }
-  private async write(target: string, raw: string, partial: DeletePublication): Promise<Artifact> {
-    if (Buffer.byteLength(raw) > LIMIT) fail('EHEADRESOURCE');
-    await this.proof(); this.active();
-    this.residual = true;
-    const handle = await fs.open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    const captured = await this.closed(handle, async () => {
-      const bytes = Buffer.from(raw); let split = Math.floor(bytes.length / 2);
-      while (split > 0 && (bytes[split] & 0xc0) === 0x80) split--;
-      const write = async (part: Buffer) => {
-        let offset = 0;
-        while (offset < part.length) { this.active(); const result = await handle.write(part, offset, part.length - offset, null); this.active(); if (!result.bytesWritten) fail();
-          offset += result.bytesWritten; }
-      };
-      await write(bytes.subarray(0, split));
-      const original = await handle.stat({ bigint: true }), part = await this.read(target, split), observed = await handle.stat({ bigint: true });
-      if (!original.isFile() || original.nlink !== 1n || original.uid !== BigInt(process.getuid!()) || (original.mode & 0o777n) !== 0o600n ||
-        !equal(identity(original), identity(observed)) || !equal(part.identity, identity(original)) || part.mode !== scalar(original.mode, 20) ||
-        part.uid !== scalar(original.uid, 20) || !Buffer.from(part.raw).equals(bytes.subarray(0, split))) fail();
-      this.files.set(target, part);
-      await this.transition(path.dirname(target), [path.basename(target)]); await this.barrier(partial);
-      await write(bytes.subarray(split)); this.active(); await handle.sync(); this.active(); return identity(await handle.stat({ bigint: true }));
+  private write(target: string, raw: string, partial: DeletePublication): Promise<Artifact> {
+    return writeEvidenceFile(target, raw, LIMIT, {
+      active: () => this.active(), proof: () => this.proof(), markResidual: () => { this.residual = true; },
+      closed: (handle, body) => this.closed(handle, body), read: (name, maximum) => this.read(name, maximum),
+      track: (name, evidence) => { this.files.set(name, evidence); },
+      transition: (name, add, remove, changed) => this.transition(name, add, remove, changed),
+      partialBarrier: () => this.barrier(partial),
+      containingDevice: name => this.directories.find(item => item.locator === this.relative(path.dirname(name)))!.identity.device,
+      fail,
     });
-    const file = await this.read(target, Buffer.byteLength(raw));
-    const parent = this.directories.find(item => item.locator === this.relative(path.dirname(target)))!;
-    if (file.raw !== raw || !equal(file.identity, captured) || file.identity.device !== parent.identity.device) fail();
-    this.files.set(target, file); await this.transition(path.dirname(target), [], [], [path.basename(target)]); return artifact(file.raw, file.identity);
   }
   private stage(target: string, state: string): string { return `${target}.delete-${this.request.operationId}.${state}.tmp`; }
   private async replace(target: string, record: Intent | string, state: string, partial: DeletePublication): Promise<Artifact> {
@@ -324,6 +217,9 @@ export class FileMemoryOwnedDelete {
     }
     const after = await Promise.all(paths.map(target => fs.lstat(target, { bigint: true })));
     const volumeAfter = await this.canonicalVolume();
+    this.validateConfinement(before, after, volumeBefore, volumeAfter);
+  }
+  private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore?: BigIntStats, volumeAfter?: BigIntStats): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
     if (volumeBefore && this.directories.some(directory =>
       (directory.locator === '.' || this.request.expectedToken.locator.startsWith(`${directory.locator}/`)) &&
@@ -331,6 +227,9 @@ export class FileMemoryOwnedDelete {
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();
     if (before.slice(1).some(stat => stat.dev === before[0].dev && stat.ino === before[0].ino) ||
       this.directories.some(directory => directory.identity.device === String(before[2].dev) && directory.identity.inode === String(before[2].ino))) fail('EHEADCONFLICT');
+    this.validateDirectorySeparation();
+  }
+  private validateDirectorySeparation(): void {
     const pairs = new Set<string>();
     for (const directory of this.directories) {
       const pair = `${directory.identity.device}:${directory.identity.inode}`; if (pairs.has(pair)) fail();
@@ -353,19 +252,7 @@ export class FileMemoryOwnedDelete {
   private volumeIdentity(stat: BigIntStats) {
     return { identity: identity(stat), mode: scalar(stat.mode, 20), uid: scalar(stat.uid, 20), links: scalar(stat.nlink, 20), directory: stat.isDirectory() };
   }
-  private admitAncestor(item: string): void {
-      if (item !== '.') {
-        const parent = this.directories.find(directory => directory.locator === path.posix.dirname(item));
-        const name = path.posix.basename(item);
-        if (!parent?.names.includes(name)) fail();
-        const aliases = parent.children.filter(child => child.name !== name && child.name.toLowerCase() === name.toLowerCase());
-        if (aliases.length) {
-          const actual = parent.children.find(child => child.name === name)!;
-          if (parent.locator !== '.' || !['.memory-owners', '.memory-fences', 'volumes'].includes(name.toLowerCase()) || !actual.directory ||
-            aliases.some(child => !child.directory || (child.identity.device === actual.identity.device && child.identity.inode === actual.identity.inode))) fail();
-        }
-      }
-  }
+  private admitAncestor(item: string): void { admitEvidenceAncestor(item, this.directories, fail); }
   private paths(): void {
     this.source = this.absolute(this.request.expectedToken.locator);
     const side = (target: string, suffix: string) => path.join(path.dirname(target), `.${digest(path.basename(target))}.${suffix}`);
@@ -376,7 +263,8 @@ export class FileMemoryOwnedDelete {
   private child(target: string): Child {
     const parent = this.directories.find(item => item.locator === this.relative(path.dirname(target)));
     const child = parent?.children.find(item => item.name === path.basename(target));
-    if (!child) fail(); return child;
+    if (!child) fail();
+    return child;
   }
   private metadataRaw(terminal = false): string {
     const original = this.binding.originalHeadIdentity;
@@ -388,7 +276,9 @@ export class FileMemoryOwnedDelete {
         contentHash: this.binding.contentHash, fileIdentity });
   }
   private history(target: string): Historical {
-    const value = this.files.get(target); if (!value) fail(); return { digest: value.digest, identity: value.identity };
+    const value = this.files.get(target);
+    if (!value) fail();
+    return { digest: value.digest, identity: value.identity };
   }
   private expectedBinding(): Omit<Binding, 'contentBytes'> {
     const token = this.request.expectedToken;
@@ -400,7 +290,9 @@ export class FileMemoryOwnedDelete {
       this.stage(this.registry, 'DELETING'), this.stage(this.registry, 'HEAD_DELETED'), this.stage(this.sourceSidecar, 'DELETING')];
   }
   private admitPaths(): void {
-    const maximum = process.platform === 'darwin' ? 1024 : process.platform === 'linux' ? 4096 : 0;
+    let maximum = 0;
+    if (process.platform === 'darwin') maximum = 1024;
+    else if (process.platform === 'linux') maximum = 4096;
     const targets = [this.source, this.sourceJournal, this.sourceSidecar, this.registry,
       this.absolute('.memory-owners'), this.absolute('.memory-owners/owners'), this.absolute('.memory-fences'), this.absolute('volumes'), ...this.generatedPaths()];
     if (!maximum || targets.some(target => Buffer.byteLength(target) + 1 > maximum ||
@@ -421,11 +313,23 @@ export class FileMemoryOwnedDelete {
     if (registryParent.names.some(value => value.toLowerCase().startsWith(name.toLowerCase()) && value !== name)) fail();
   }
   private async optional(target: string, limit = LIMIT, privateFile = true): Promise<Artifact | undefined> {
-    try { const value = await this.read(target, limit, '1', privateFile); this.files.set(target, value); return artifact(value.raw, value.identity); }
-    catch (cause) { if (causeCode(cause) === 'ENOENT') return undefined; throw cause; }
+    try {
+      const value = await this.read(target, limit, '1', privateFile);
+      this.files.set(target, value);
+      return artifact(value.raw, value.identity);
+    }
+    catch (cause) {
+      if (causeCode(cause) === 'ENOENT') return undefined;
+      throw cause;
+    }
   }
   private async absent(target: string): Promise<void> {
-    try { await fs.lstat(target, { bigint: true }); } catch (cause) { if (causeCode(cause) === 'ENOENT') return; throw cause; } fail();
+    try { await fs.lstat(target, { bigint: true }); }
+    catch (cause) {
+      if (causeCode(cause) === 'ENOENT') return;
+      throw cause;
+    }
+    fail();
   }
   private validateActive(raw: string): void {
     const value = JSON.parse(raw) as { state: string };
@@ -445,9 +349,18 @@ export class FileMemoryOwnedDelete {
     const extras = index === 0 ? [] : ['prior', 'registry', ...(index >= 2 ? ['sidecar'] : [])];
     if (record?.schema !== 1 || index < 0 || !keys(record, ['schema', 'state', 'binding', 'baseline', ...extras]) ||
       !keys(record.binding, ['userId', 'ownerId', 'operationId', 'locator', 'revision', 'contentHash', 'contentBytes', 'originalHeadIdentity'])) fail();
+    this.validateBinding(record);
+    this.validateBaseline(record);
+    this.validateNamespace(record);
+    this.validateHistory(record, index);
+    serialize(record);
+  }
+  private validateBinding(record: Intent): void {
     const { contentBytes, ...binding } = record.binding;
     if (!equal(binding, this.expectedBinding()) || !Number.isSafeInteger(contentBytes) || contentBytes < 0 || contentBytes > RAW_HEAD_LIMIT ||
       record.binding.originalHeadIdentity.size !== String(contentBytes)) fail();
+  }
+  private validateBaseline(record: Intent): void {
     const base = record.baseline;
     if (!keys(base, ['sidecar', 'registry', 'originalChildren', 'namespace']) || !keys(base.originalChildren, ['head', 'sidecar', 'registry']) ||
       !Array.isArray(base.namespace) || base.namespace.length !== this.directories.length) fail();
@@ -457,6 +370,10 @@ export class FileMemoryOwnedDelete {
       this.validateActive(value.raw);
     }
     this.originalDevices(record.binding.originalHeadIdentity, base.sidecar, base.registry);
+    this.validateOriginalChildren(record);
+  }
+  private validateOriginalChildren(record: Intent): void {
+    const base = record.baseline;
     const targets = { head: this.source, sidecar: this.sourceSidecar, registry: this.registry };
     for (const key of ['head', 'sidecar', 'registry'] as const) {
       const child = base.originalChildren[key];
@@ -464,17 +381,21 @@ export class FileMemoryOwnedDelete {
         !validIdentity(child.identity) || !decimal(child.mode, 20) || !decimal(child.uid, 20) || child.links !== '1' ||
         !equal(child.identity, key === 'head' ? record.binding.originalHeadIdentity : base[key].identity)) fail();
     }
+  }
+  private validateNamespace(record: Intent): void {
+    const base = record.baseline;
     for (const item of base.namespace) if (!keys(item, ['locator', 'device', 'inode', 'mode', 'uid', 'childCount', 'domain', 'sha256']) ||
       (item.locator !== '.' && !validLocator(item.locator)) || !decimal(item.device, 40) || !decimal(item.inode, 40) || !decimal(item.mode, 20) ||
       !decimal(item.uid, 20) || !Number.isInteger(item.childCount) || item.childCount < 0 || item.childCount > 4095 || item.domain !== DOMAIN || !HASH.test(item.sha256)) fail();
     this.originalDevices(record.binding.originalHeadIdentity, base.sidecar, base.registry, base.namespace);
+  }
+  private validateHistory(record: Intent, index: number): void {
     if (index > 0) {
       if (!keys(record.prior, ['state', 'digest', 'identity']) || record.prior!.state !== states[index - 1] || !HASH.test(record.prior!.digest) || !validIdentity(record.prior!.identity) || BigInt(record.prior!.identity.size) > BigInt(LIMIT)) fail();
       for (const value of [record.registry, ...(index >= 2 ? [record.sidecar] : [])]) {
         if (!keys(value, ['digest', 'identity']) || !HASH.test(value!.digest) || !validIdentity(value!.identity)) fail();
       }
     }
-    serialize(record);
   }
   private preflight(): void {
     const H = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!, R = this.directories.find(item => item.locator === '.memory-owners/owners')!;
@@ -490,6 +411,23 @@ export class FileMemoryOwnedDelete {
       this.validateRecord(next); serialize(next); prior = next;
     }
   }
+  private isTerminalRegistry(raw: string): boolean {
+    const token = this.request.expectedToken;
+    return raw === JSON.stringify({ schema: 1, state: 'HEAD_DELETED', userId: token.userId, ownerId: token.ownerId, operationId: this.request.operationId });
+  }
+  private validateReplacementArtifacts(head: Artifact | undefined, sidecar: Artifact | undefined): void {
+    if (!head || !sidecar || equal(head.identity, this.request.expectedToken.fileIdentity)) fail();
+  }
+  private async observeTerminalReplacement(): Promise<void> {
+    const token = this.request.expectedToken;
+    const head = await this.optional(this.source, RAW_HEAD_LIMIT, false), sidecar = await this.optional(this.sourceSidecar);
+    if (head || sidecar) {
+      this.validateReplacementArtifacts(head, sidecar);
+      const replacement = await this.replacement(this.budget); this.active();
+      if (replacement.token.ownership !== 'owned' || replacement.token.ownerId === token.ownerId) fail();
+    }
+    await this.proof(true); this.binding = { ...this.expectedBinding(), contentBytes: Number(token.fileIdentity.size) };
+  }
   private async initialize(): Promise<boolean> {
     const token = this.request.expectedToken;
     if (token.userId !== this.scope.userId || token.tenantRoot !== this.scope.tenantRoot || process.platform === 'win32' || !process.getuid) fail('EHEADCONFLICT');
@@ -498,14 +436,8 @@ export class FileMemoryOwnedDelete {
     this.reserve(); this.rejectStages();
     const journal = await this.optional(this.sourceJournal), registry = await this.optional(this.registry);
     if (!registry) fail();
-    if (!journal && registry.raw === JSON.stringify({ schema: 1, state: 'HEAD_DELETED', userId: token.userId, ownerId: token.ownerId, operationId: this.request.operationId })) {
-      const head = await this.optional(this.source, RAW_HEAD_LIMIT, false), sidecar = await this.optional(this.sourceSidecar);
-      if (head || sidecar) {
-        if (!head || !sidecar || (head.identity.device === token.fileIdentity.device && head.identity.inode === token.fileIdentity.inode)) fail();
-        const replacement = await this.replacement(this.budget); this.active();
-        if (replacement.token.ownership !== 'owned' || replacement.token.ownerId === token.ownerId) fail();
-      }
-      await this.proof(true); this.binding = { ...this.expectedBinding(), contentBytes: Number(token.fileIdentity.size) }; return false;
+    if (!journal && this.isTerminalRegistry(registry.raw)) {
+      await this.observeTerminalReplacement(); return false;
     }
     if (journal) {
       if (journal.identity.device !== this.directories.find(item => item.locator === this.relative(path.dirname(this.sourceJournal)))!.identity.device) fail();
@@ -527,20 +459,24 @@ export class FileMemoryOwnedDelete {
   }
   private async recover(): Promise<void> {
     const index = states.indexOf(this.record.state), baseline = this.record.baseline;
-    const require = async (target: string, expected: Artifact | Historical, raw: string) => {
-      const value = await this.optional(target);
-      if (!value || value.raw !== raw || value.digest !== expected.digest || !equal(value.identity, expected.identity) ||
-          value.identity.device !== this.directories.find(item => item.locator === this.relative(path.dirname(target)))!.identity.device) fail();
-    };
     if (index < 3) {
       const head = await this.read(this.source, RAW_HEAD_LIMIT, '1', false);
       if (!equal(head.identity, this.binding.originalHeadIdentity) || digest(head.raw) !== this.binding.contentHash || head.mode !== baseline.originalChildren.head.mode || head.uid !== baseline.originalChildren.head.uid || head.links !== baseline.originalChildren.head.links) fail();
       this.files.set(this.source, head);
     } else await this.absent(this.source);
-    await require(this.registry, index === 0 ? baseline.registry : this.record.registry!, index === 0 ? baseline.registry.raw : this.metadataRaw(index === 4));
+    await this.requireRecoveredArtifact(this.registry, index === 0 ? baseline.registry : this.record.registry!, index === 0 ? baseline.registry.raw : this.metadataRaw(index === 4));
     const sidecar = await this.optional(this.sourceSidecar);
-    if (sidecar) await require(this.sourceSidecar, index < 2 ? baseline.sidecar : this.record.sidecar!, index < 2 ? baseline.sidecar.raw : this.metadataRaw());
+    if (sidecar) await this.requireRecoveredArtifact(this.sourceSidecar, index < 2 ? baseline.sidecar : this.record.sidecar!, index < 2 ? baseline.sidecar.raw : this.metadataRaw());
     else if (index !== 4) fail();
+    this.validateRecoveredNamespace(baseline);
+    await this.proof(true);
+  }
+  private async requireRecoveredArtifact(target: string, expected: Artifact | Historical, raw: string): Promise<void> {
+    const value = await this.optional(target);
+    if (value?.raw !== raw || value.digest !== expected.digest || !equal(value.identity, expected.identity) ||
+        value.identity.device !== this.directories.find(item => item.locator === this.relative(path.dirname(target)))!.identity.device) fail();
+  }
+  private validateRecoveredNamespace(baseline: Baseline): void {
     const originals = new Map<string, Child>([[this.source, baseline.originalChildren.head], [this.sourceSidecar, baseline.originalChildren.sidecar], [this.registry, baseline.originalChildren.registry]]);
     for (const current of this.directories) {
       const expected = baseline.namespace.find(item => item.locator === current.locator); if (!expected) fail();
@@ -549,7 +485,6 @@ export class FileMemoryOwnedDelete {
       reconstructed.sort((a, b) => ordinal(a.name, b.name));
       if (new Set(reconstructed.map(item => item.name)).size !== reconstructed.length || !equal(commitment({ ...current, children: reconstructed, names: reconstructed.map(item => item.name) }), expected)) fail();
     }
-    await this.proof(true);
   }
   private async publishPhase(state: State, partial: DeletePublication, durable: DeletePublication): Promise<void> {
     const next: Intent = { schema: 1, state, binding: this.binding, baseline: this.record.baseline,
@@ -586,6 +521,21 @@ export class FileMemoryOwnedDelete {
     this.files.delete(this.sourceJournal); await this.transition(path.dirname(this.source), [], [path.basename(this.sourceJournal)]); await this.barrier('after-intent-retirement');
     await this.sync(path.dirname(this.source), true); this.attempted = false;
   }
+  private outcomeCode(): string {
+    if (this.committed) return 'EHEADDELETED';
+    if (this.attempted) return 'EHEADCOMMITUNKNOWN';
+    if (this.residual) return 'EOWNERRECOVERY';
+    return 'EHEADCONFLICT';
+  }
+  private failureError(cause: unknown): Error {
+    const secondary = cause && typeof cause === 'object' ? this.closeFailures.get(cause) : undefined;
+    const error = Object.assign(new Error('Managed DELETE stopped; preserve phase evidence'), {
+      code: this.outcomeCode(), cause: secondary ? secondary.cause : cause,
+      ...(secondary ? { closeCause: secondary.closeCause } : {}),
+      ...(this.committed ? { headDeleted: true, result: this.committed } : {}) });
+    if (this.committed) this.capturedErrors.set(error, this.committed);
+    return error;
+  }
   async run(): Promise<DeleteOwnedResult> {
     try {
       const pending = await this.initialize();
@@ -594,13 +544,7 @@ export class FileMemoryOwnedDelete {
       SecurityMonitor.logSecurityEvent({ type: 'DANGER_ZONE_OPERATION', severity: 'LOW', source: 'FileMemoryOwnedDelete', details: 'Exact head deleted; owner erasure remains pending' });
       await this.barrier('after-audit', true); await this.barrier('before-return', true); return this.committed!;
     } catch (cause) {
-      const secondary = cause && typeof cause === 'object' ? this.closeFailures.get(cause) : undefined;
-      const error = Object.assign(new Error('Managed DELETE stopped; preserve phase evidence'), {
-        code: this.committed ? 'EHEADDELETED' : this.attempted ? 'EHEADCOMMITUNKNOWN' : this.residual ? 'EOWNERRECOVERY' : 'EHEADCONFLICT',
-        cause: secondary ? secondary.cause : cause, ...(secondary ? { closeCause: secondary.closeCause } : {}),
-        ...(this.committed ? { headDeleted: true, result: this.committed } : {}) });
-      if (this.committed) this.capturedErrors.set(error, this.committed);
-      throw error;
+      throw this.failureError(cause);
     }
   }
 }

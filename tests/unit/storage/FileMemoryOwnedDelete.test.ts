@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
-import { FileMemoryOwnerSnapshots, type DeletePublication, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
+import { FileMemoryOwnerSnapshots, type DeletePublication, type UnownedFileMemoryToken, type FileMemorySnapshot } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryOwnedDelete } from '../../../src/storage/FileMemoryOwnedDelete.js';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
@@ -67,6 +67,48 @@ describe('dormant exact head DELETE with owner erasure pending', () => {
     expect(await f.owners.deleteOwned(f.request)).toMatchObject({ status: 'already-head-deleted' });
     expect(await f.owners.readHeadSnapshot(created.locator)).toEqual(current);
     await expect(f.archives.createExclusive(f.token, { minimumVolume: 2, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-10-01') })).rejects.toBeDefined();
+  });
+  it.each([false, true])('checks full original identity rather than only reused inode, exactOriginal=%s', async exactOriginal => {
+    const f = await fixture(); await f.owners.deleteOwned(f.request);
+    const created = await f.owners.createOwned({ operationId: randomUUID(), locator: f.token.locator, content: 'entries: []\n# genuinely different replacement content\n' });
+    expect(created.ownerId).not.toBe(f.token.ownerId);
+    const current = await f.owners.readHeadSnapshot(created.locator);
+    expect(current.token.fileIdentity).not.toEqual(f.token.fileIdentity);
+    const before = await tree(f.root), target = path.join(f.token.tenantRoot, f.token.locator);
+    type Identity = typeof f.token.fileIdentity;
+    type Actual = { identity: Identity; [key: string]: unknown };
+    type Internals = { read: (target: string, limit: number, links?: string, privateFile?: boolean) => Promise<Actual> };
+    const internals = FileMemoryOwnedDelete.prototype as unknown as Internals, originalRead = internals.read;
+    let observations = 0, ordinaryReads = 0;
+    const reused = (actual: Identity): Identity => exactOriginal ? { ...f.token.fileIdentity } :
+      { ...actual, device: f.token.fileIdentity.device, inode: f.token.fileIdentity.inode };
+    // Disclosed descriptor/token observation injection, not a real inode-allocation guarantee.
+    // All tracked head rereads agree; full real-tree verification stays outside the spy.
+    jest.spyOn(internals, 'read').mockImplementation(async function(this: Internals, named, limit, links, privateFile) {
+      const actual = await originalRead.call(this, named, limit, links, privateFile);
+      if (named !== target) return actual;
+      observations++; return { ...actual, identity: reused(actual.identity) };
+    });
+    type Reader = { readAtRoot: (...args: unknown[]) => Promise<FileMemorySnapshot> };
+    const reader = f.owners as unknown as Reader, originalSnapshot = reader.readAtRoot;
+    jest.spyOn(reader, 'readAtRoot').mockImplementation(async function(this: Reader, ...args) {
+      const actual = await originalSnapshot.apply(this, args); ordinaryReads++;
+      expect(actual.token.ownership).toBe('owned');
+      return { ...actual, token: { ...actual.token, fileIdentity: reused(actual.token.fileIdentity) } };
+    });
+    const outcome = await f.owners.deleteOwned(f.request).catch(value => value);
+    expect(observations).toBeGreaterThan(0);
+    if (exactOriginal) {
+      expect(ordinaryReads).toBe(0); expect(outcome.code).toBe('EHEADCONFLICT');
+      expect(outcome).not.toHaveProperty('result');
+    } else {
+      expect(ordinaryReads).toBe(1);
+      expect(outcome).toEqual({ status: 'already-head-deleted', erasure: 'pending', evidence: {
+        tenantRoot: f.token.tenantRoot, userId: USER, ownerId: f.token.ownerId, operationId: f.request.operationId } });
+      expect(outcome.evidence).not.toHaveProperty('locator');
+    }
+    jest.restoreAllMocks(); expect(await tree(f.root)).toEqual(before);
+    expect(await f.owners.readHeadSnapshot(created.locator)).toEqual(current);
   });
   it.each(['after-registry', 'after-sidecar', 'after-head-unlink', 'after-terminal-registry'] as DeletePublication[])(
     'preserves unrecorded mutation gap %s rather than promoting its phase', async boundary => {
