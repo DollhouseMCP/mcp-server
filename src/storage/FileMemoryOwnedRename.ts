@@ -84,7 +84,7 @@ export function captureRenameRequest(input: RenameOwnedRequest): RenameOwnedRequ
   if (process.platform !== 'linux' && process.platform !== 'darwin') throw new TypeError('Managed RENAME is qualified only on Linux and Darwin');
   if (!keys(input, ['operationId', 'expectedToken', 'destinationLocator'])) throw new TypeError('RENAME requires operationId, expectedToken and destinationLocator');
   const { operationId, destinationLocator, expectedToken: token } = input;
-  if (!UUID.test(operationId) || !validLocator(destinationLocator) || !keys(token, ['backend', 'ownership', 'userId', 'tenantRoot', 'locator', 'ownerId', 'revision', 'contentHash', 'fileIdentity']) ||
+  if (typeof operationId !== 'string' || !UUID.test(operationId) || !validLocator(destinationLocator) || !keys(token, ['backend', 'ownership', 'userId', 'tenantRoot', 'locator', 'ownerId', 'revision', 'contentHash', 'fileIdentity']) ||
     token.backend !== 'file' || token.ownership !== 'owned' || !UUID.test(token.ownerId) || !HASH.test(token.contentHash) || !validIdentity(token.fileIdentity) ||
     !validLocator(token.locator) || !decimal(token.revision, 19) || BigInt(token.revision) < 1n || BigInt(token.revision) >= MAX_REVISION ||
     typeof token.userId !== 'string' || !token.userId || Buffer.byteLength(token.userId) > 128 || typeof token.tenantRoot !== 'string' ||
@@ -128,7 +128,7 @@ function validChild(item: Child): boolean {
 }
 function validateBinding(binding: Binding): void {
   if (!keys(binding, ['userId', 'ownerId', 'operationId', 'sourceLocator', 'destinationLocator', 'oldRevision', 'newRevision', 'contentHash', 'contentBytes', 'originalSourceIdentity']) ||
-    typeof binding.userId !== 'string' || !binding.userId || Buffer.byteLength(binding.userId) > 128 || !UUID.test(binding.ownerId) || !UUID.test(binding.operationId) ||
+    typeof binding.userId !== 'string' || !binding.userId || Buffer.byteLength(binding.userId) > 128 || !UUID.test(binding.ownerId) || typeof binding.operationId !== 'string' || !UUID.test(binding.operationId) ||
     !validLocator(binding.sourceLocator) || !validLocator(binding.destinationLocator) || path.posix.dirname(binding.sourceLocator) !== path.posix.dirname(binding.destinationLocator) ||
     path.posix.basename(binding.sourceLocator).toLowerCase() === path.posix.basename(binding.destinationLocator).toLowerCase() ||
     !decimal(binding.oldRevision, 19) || !decimal(binding.newRevision, 19) || BigInt(binding.oldRevision) < 1n || BigInt(binding.newRevision) !== BigInt(binding.oldRevision) + 1n || BigInt(binding.newRevision) > MAX_REVISION ||
@@ -418,9 +418,10 @@ export class FileMemoryOwnedRename {
   }
   private validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore: BigIntStats | undefined, volumeAfter: BigIntStats | undefined): void {
     if (!equal(volumeBefore && this.volumeIdentity(volumeBefore), volumeAfter && this.volumeIdentity(volumeAfter))) fail();
-    if (volumeBefore && this.directories.some(directory => directory.identity.device === String(volumeBefore.dev) && directory.identity.inode === String(volumeBefore.ino))) fail('EHEADCONFLICT');
+    if (volumeBefore && this.matchesSelectedDirectory(volumeBefore)) fail('EHEADCONFLICT');
     if (!before.every((stat, index) => equal(identity(stat), identity(after[index])) && stat.mode === after[index].mode && stat.uid === after[index].uid && stat.nlink === after[index].nlink)) fail();
     if (before.slice(1).some(stat => stat.dev === before[0].dev && stat.ino === before[0].ino)) fail('EHEADCONFLICT');
+    if (this.matchesSelectedDirectory(before[2])) fail('EHEADCONFLICT');
     const pairs = new Set<string>();
     for (const directory of this.directories) {
       const pair = `${directory.identity.device}:${directory.identity.inode}`; if (pairs.has(pair)) fail();
@@ -429,6 +430,9 @@ export class FileMemoryOwnedRename {
     const H = this.directories.find(directory => directory.locator === path.posix.dirname(this.request.expectedToken.locator))!;
     if (this.directories.filter(item => item.locator === '.memory-owners' || item.locator === '.memory-owners/owners').some(item =>
       item.identity.device === H.identity.device && item.identity.inode === H.identity.inode)) fail('EHEADCONFLICT');
+  }
+  private matchesSelectedDirectory(stat: BigIntStats): boolean {
+    return this.directories.some(directory => directory.identity.device === String(stat.dev) && directory.identity.inode === String(stat.ino));
   }
   private async canonicalVolume(): Promise<BigIntStats | undefined> {
     try {
@@ -492,7 +496,10 @@ export class FileMemoryOwnedRename {
     if (process.platform !== 'linux' && process.platform !== 'darwin') fail('EHEADCONFLICT');
     const token = this.request.expectedToken;
     if (token.userId !== this.scope.userId || token.tenantRoot !== this.scope.tenantRoot) fail('EHEADCONFLICT');
-    this.paths(); await this.confined(); this.reserve();
+    this.paths(); await this.confined();
+    this.residual = [this.sourceJournal, this.destinationJournal].some(target => this.directories
+      .find(item => item.locator === this.relative(path.dirname(target)))!.names.includes(path.basename(target)));
+    this.reserve();
     const destinationJournal = await this.optional(this.destinationJournal), sourceJournal = await this.optional(this.sourceJournal);
     if (destinationJournal || sourceJournal) {
       this.restoreRecords(destinationJournal, sourceJournal);
@@ -507,6 +514,7 @@ export class FileMemoryOwnedRename {
     const head = await this.read(this.source, this.binding.contentBytes, '1', false), sidecar = await this.optional(this.sourceSidecar), registry = await this.optional(this.registry);
     if (!sidecar || !registry || head.digest !== this.binding.contentHash || !equal(head.identity, token.fileIdentity)) fail();
     this.validateMetadata(sidecar.raw, false); this.validateMetadata(registry.raw, false);
+    for (const [target, item] of [[this.source, head], [this.sourceSidecar, sidecar], [this.registry, registry]] as const) this.bindContainingDevice(target, item.identity);
     this.files.set(this.source, head); await this.proof(true);
     this.record = { schema: 4, state: 'BASE_RENAME', binding: this.binding, baseline: { sourceSidecar: sidecar, registry,
       originalChildren: { head: this.child(this.source), sourceSidecar: this.child(this.sourceSidecar), registry: this.child(this.registry) }, namespace: this.directories.map(commitment) } };
@@ -574,6 +582,10 @@ export class FileMemoryOwnedRename {
       contentHash: this.binding.contentHash, fileIdentity: destination ? this.record.currentHead!.identity : this.binding.originalSourceIdentity };
     if (!equal(metadata, expected)) fail();
   }
+  private bindContainingDevice(target: string, captured: Identity): void {
+    const parent = this.directories.find(item => item.locator === this.relative(path.dirname(target)))!;
+    if (captured.device !== parent.identity.device) fail();
+  }
   private async requireArtifact(target: string, expected: Artifact): Promise<void> {
     const actual = await this.optional(target); if (!actual || !equal(actual, expected)) fail();
     const parent = this.directories.find(item => item.locator === this.relative(path.dirname(target)))!;
@@ -617,6 +629,7 @@ export class FileMemoryOwnedRename {
     if (originalHead.name !== path.basename(this.source) || originalSide.name !== path.basename(this.sourceSidecar) || originalRegistry.name !== path.basename(this.registry) ||
       originalHead.directory || originalSide.directory || originalRegistry.directory || originalHead.links !== '1' || originalSide.links !== '1' || originalRegistry.links !== '1' ||
       !equal(originalHead.identity, this.binding.originalSourceIdentity) || !equal(originalSide.identity, baseline.sourceSidecar.identity) || !equal(originalRegistry.identity, baseline.registry.identity)) fail();
+    for (const [target, item] of [[this.source, originalHead], [this.sourceSidecar, originalSide], [this.registry, originalRegistry]] as const) this.bindContainingDevice(target, item.identity);
     const H = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!;
     const baseRaw = serialize({ schema: 4, state: 'BASE_RENAME', binding: this.binding, baseline });
     const origin = record.originalSourceJournal!;

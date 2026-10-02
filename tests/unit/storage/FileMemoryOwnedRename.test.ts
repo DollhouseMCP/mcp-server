@@ -579,4 +579,72 @@ describe('dormant same-parent managed RENAME', () => {
       expect(() => captureRenameRequest(f.request)).toThrow('qualified only on Linux and Darwin');
     } finally { Object.defineProperty(process, 'platform', descriptor); }
   });
+
+  it('rejects a canonical fence identity matching a deeper captured source ancestor', async () => {
+    const f = await fixture(), locator = 'Alias/Nested/Original.yaml';
+    await fs.mkdir(path.join(f.root, 'Alias', 'Nested'), { recursive: true });
+    const token = await f.store().createOwned({ operationId: randomUUID(), locator, content: CONTENT });
+    const target = path.join(f.root, locator), sidecar = path.join(path.dirname(target), `.${createHash('sha256').update('Original.yaml').digest('hex')}.memory-owner.json`);
+    const registry = path.join(f.root, '.memory-owners', 'owners', `${token.ownerId}.json`), parent = path.dirname(target), names = (await fs.readdir(parent)).sort();
+    const beforeEvidence = await Promise.all([target, sidecar, registry].map(evidence)), canonical = await fs.lstat(parent, { bigint: true });
+    const prototype = FileMemoryOwnedRename.prototype as unknown as {
+      validateConfinement(before: BigIntStats[], after: BigIntStats[], volumeBefore: BigIntStats | undefined, volumeAfter: BigIntStats | undefined): void;
+    };
+    const original = prototype.validateConfinement; let reached = false;
+    // Inject actual deeper directory identity into both canonical-F observations, without a privileged bind mount.
+    const spy = jest.spyOn(prototype, 'validateConfinement').mockImplementation(function(this: typeof prototype, before, after, volumeBefore, volumeAfter) {
+      reached = true;
+      original.call(this, [before[0], before[1], canonical], [after[0], after[1], canonical], volumeBefore, volumeAfter);
+    });
+    try { await expect(f.store().renameOwned({ operationId: randomUUID(), expectedToken: token, destinationLocator: 'Alias/Nested/Renamed.yaml' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' }); }
+    finally { spy.mockRestore(); }
+    expect(reached).toBe(true); expect(await Promise.all([target, sidecar, registry].map(evidence))).toEqual(beforeEvidence);
+    expect((await fs.readdir(parent)).sort()).toEqual(names); expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
+  });
+  it('rejects a coerced operation UUID array before operation I/O', async () => {
+    const f = await fixture();
+    const transaction = jest.spyOn(f.coordinator, 'withTenantTransaction');
+    expect(() => captureRenameRequest({ ...f.request, operationId: [f.request.operationId] } as unknown as RenameOwnedRequest)).toThrow(TypeError);
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it('reports an observed malformed canonical journal as preserved manual residual', async () => {
+    const f = await fixture(); await fs.writeFile(f.sourceJournal, '{"schema":4', { mode: 0o600 });
+    const targets = [f.source, f.sourceJournal, f.foreign], before = await Promise.all(targets.map(evidence));
+    const names = (await fs.readdir(f.root)).sort();
+    await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
+    expect(await Promise.all(targets.map(evidence))).toEqual(before);
+    expect((await fs.readdir(f.root)).sort()).toEqual(names);
+    await expect(fs.lstat(f.destinationJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([false, true])('binds original artifact devices to their captured containing directories on recovery=%s', async recovery => {
+    const f = await fixture(true);
+    if (recovery) await expect(f.store(phase => { if (phase === 'prepared-durable') throw new Error('stop'); }).renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+    const sidecar = path.join(path.dirname(f.source), `.${createHash('sha256').update('Original.yaml').digest('hex')}.memory-owner.json`);
+    const registry = path.join(f.root, '.memory-owners', 'owners', `${f.token.ownerId}.json`);
+    const targets = [f.source, sidecar, registry, ...(recovery ? [f.sourceJournal, f.destinationJournal] : [])];
+    const before = await Promise.all(targets.map(evidence)), names = (await fs.readdir(path.dirname(f.source))).sort();
+    const prototype = FileMemoryOwnedRename.prototype as unknown as {
+      observe(locator: string, full: boolean): Promise<{ identity: RenameOwnedRequest['expectedToken']['fileIdentity'] }>;
+      bindContainingDevice(target: string, captured: RenameOwnedRequest['expectedToken']['fileIdentity']): void;
+    };
+    const observe = prototype.observe, bind = prototype.bindContainingDevice, reached: string[] = [];
+    // Descriptor injection models a visible device mismatch, without a live cross-device mount.
+    const observation = jest.spyOn(prototype, 'observe').mockImplementation(async function(this: typeof prototype, locator, full) {
+      const actual = await observe.call(this, locator, full);
+      return locator === (recovery ? 'Notes' : '.memory-owners/owners')
+        ? { ...actual, identity: { ...actual.identity, device: String(BigInt(actual.identity.device) + 1000000n) } } : actual;
+    });
+    const binding = jest.spyOn(prototype, 'bindContainingDevice').mockImplementation(function(this: typeof prototype, target, captured) {
+      reached.push(target); bind.call(this, target, captured);
+    });
+    try { await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: recovery ? 'EOWNERRECOVERY' : 'EHEADCONFLICT' }); }
+    finally { observation.mockRestore(); binding.mockRestore(); }
+    expect(reached).toEqual(recovery ? [f.source] : [f.source, sidecar, registry]);
+    expect(await Promise.all(targets.map(evidence))).toEqual(before);
+    expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
+    if (!recovery) await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
 });
