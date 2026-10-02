@@ -527,4 +527,65 @@ describe('FileMemoryTransactionCoordinator', () => {
     await waitForOutput(child, 'TRACKED_FAILURE\n');
     await expect(childExit(child)).resolves.toBe(0);
   });
+
+  it('retains awaited DELETE refusal and tracks ignored DELETE without an unhandled rejection', async () => {
+    const { tenantRoot } = await fixture();
+    const script = `
+      import { strict as assert } from 'node:assert';
+      import { randomUUID } from 'node:crypto';
+      import * as fs from 'node:fs/promises';
+      import * as path from 'node:path';
+      import { FileMemoryFence } from ${JSON.stringify(sourceUrl('FileMemoryFence'))};
+      import { FileMemoryOwnerSnapshots } from ${JSON.stringify(sourceUrl('FileMemoryOwnerSnapshots'))};
+      import { FileMemoryTransactionCoordinator } from ${JSON.stringify(sourceUrl('FileMemoryTransactionCoordinator'))};
+      const coordinator = new FileMemoryTransactionCoordinator({
+        tenantRoot: process.argv[1], getCurrentUserId: () => ${JSON.stringify(USER_ID)}, fence: new FileMemoryFence(),
+      });
+      const owner = new FileMemoryOwnerSnapshots({ coordinator });
+      const token = await owner.adoptUnowned((await owner.readHeadSnapshot(${JSON.stringify(LOCATOR)})).token);
+      async function tree(root) {
+        const result = [];
+        for (const name of (await fs.readdir(root)).filter(name => name !== '.memory-fences').sort()) {
+          const target = path.join(root, name), stat = await fs.lstat(target, { bigint: true });
+          result.push({ name, identity: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.nlink],
+            bytes: stat.isFile() ? await fs.readFile(target) : undefined, children: stat.isDirectory() ? await tree(target) : undefined });
+        }
+        return result;
+      }
+      const before = await tree(token.tenantRoot), snapshot = await owner.readHeadSnapshot(token.locator);
+      const request = () => ({ operationId: randomUUID(), expectedToken: { ...token, revision: String(BigInt(token.revision) + 1n) } });
+      let awaitedCause;
+      try {
+        await coordinator.withTenantTransaction(async context => {
+          try { await owner.deleteOwnedInTransaction(context, request()); }
+          catch (cause) { awaitedCause = cause; }
+        });
+        assert.fail('awaited refusal must also fail the tracked transaction');
+      } catch (cause) {
+        assert.equal(cause, awaitedCause);
+        assert.equal(cause.code, 'EHEADCONFLICT');
+        assert.equal('result' in cause, false);
+      }
+      try {
+        await coordinator.withTenantTransaction(context => {
+          void owner.deleteOwnedInTransaction(context, request());
+          return 'ignored';
+        });
+        assert.fail('ignored refusal must fail the tracked transaction');
+      } catch (cause) {
+        assert.equal(cause.code, 'EHEADCONFLICT');
+        assert.equal('result' in cause, false);
+      }
+      assert.deepEqual(await tree(token.tenantRoot), before);
+      assert.deepEqual(await owner.readHeadSnapshot(token.locator), snapshot);
+      assert.deepEqual(await fs.readdir(path.join(token.tenantRoot, '.memory-fences')), []);
+      process.stdout.write('TRACKED_DELETE_FAILURE\\n');
+    `;
+    const child = spawn(process.execPath, [
+      '--unhandled-rejections=strict', '--import', 'tsx', '--input-type=module', '--eval', script, tenantRoot,
+    ], { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    children.push(child);
+    await waitForOutput(child, 'TRACKED_DELETE_FAILURE\n');
+    await expect(childExit(child)).resolves.toBe(0);
+  });
 });

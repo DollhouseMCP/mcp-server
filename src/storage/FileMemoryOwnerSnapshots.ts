@@ -427,7 +427,7 @@ export class FileMemoryOwnerSnapshots {
   }
   private performOwnedDelete(context: FileMemoryLeaseContext, request: DeleteOwnedRequest, capture?: (result: DeleteOwnedResult) => void): Promise<DeleteOwnedResult> {
     let captured: DeleteOwnedResult | undefined; const coordinator = this.requiredCoordinator();
-    return coordinator.perform(context, async operation => {
+    const result = coordinator.perform(context, async operation => {
       const executor = new FileMemoryOwnedDelete(operation, request, () => { coordinator.requireActiveOperationScope(operation); },
           budget => this.snapshotOwnedAtScope(operation, request.expectedToken, budget),
           budget => this.readAtRoot(operation.tenantRoot, operation.userId, request.expectedToken.locator, undefined, budget), this.options.afterDeletePublication,
@@ -444,6 +444,7 @@ export class FileMemoryOwnerSnapshots {
       const error = Object.assign(headError('EHEADDELETED', 'Head deletion completed before transaction failure; erasure remains pending'), { cause, headDeleted: true, result: captured });
       this.deleteErrors.set(error, captured); throw error;
     });
+    void result.catch(() => undefined); return result;
   }
 
   /** Dormant same-parent RENAME; exact pending phase replay requires the original request. */
