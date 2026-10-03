@@ -29,15 +29,15 @@ export interface MemoryAtomicInvalidationRequest {
 }
 type Reason = 'invalid-request' | 'abandoned' | 'deadline' | 'context' | 'catalog' |
   'conflict' | 'invalid-receipt' | 'incomplete-census' | 'unsafe-reference' | 'revision' | 'query';
-class Refusal extends Error {
-  constructor(readonly reason: Reason) { super(`Atomic memory invalidation refused: ${reason}`); }
+export class Refusal extends Error {
+  constructor(readonly reason: Reason, cause?: unknown) { super(`Atomic memory invalidation refused: ${reason}`, cause === undefined ? undefined : { cause }); }
 }
-interface CapturedRequest extends MemoryAtomicInvalidationRequest { readonly requestSha256: string }
+export interface CapturedMemoryMaintenanceRequest extends MemoryAtomicInvalidationRequest { readonly requestSha256: string }
 function byteBound(value: unknown, maximum: number): value is string {
   return typeof value === 'string' && Buffer.byteLength(value, 'utf8') >= 1 &&
     Buffer.byteLength(value, 'utf8') <= maximum && !value.includes('\0') && Buffer.from(value, 'utf8').toString('utf8') === value;
 }
-function captureRequest(input: MemoryAtomicInvalidationRequest): CapturedRequest {
+export function captureRequest(input: MemoryAtomicInvalidationRequest): CapturedMemoryMaintenanceRequest {
   let value: MemoryAtomicInvalidationRequest;
   try {
     const fields = ['runId', 'candidateCommit', 'expectedCatalogSha256', 'maintenanceEvidenceSha256',
@@ -60,7 +60,7 @@ function captureRequest(input: MemoryAtomicInvalidationRequest): CapturedRequest
   return Object.freeze({ ...canonical, requestSha256: createHash('sha256').update(encoded).digest('hex') });
 }
 
-interface Invocation {
+export interface MemoryMaintenanceInvocation {
   abandoned: boolean;
   drained: boolean;
   callbackStarted: boolean;
@@ -77,7 +77,7 @@ type ReservedTransaction = PostgresJsTransaction<typeof schema, ExtractTablesWit
 const ReservedSession = PostgresJsSession as unknown as new (
   client: TransactionSql, dialect: PgDialect, relationalSchema: undefined
 ) => ConstructorParameters<typeof PostgresJsTransaction<typeof schema, ExtractTablesWithRelations<typeof schema>>>[1];
-function checkInvocation(invocation: Invocation): void {
+function checkInvocation(invocation: MemoryMaintenanceInvocation): void {
   if (invocation.abandoned) throw new Refusal('abandoned');
   if (performance.now() >= invocation.deadline) throw new Refusal('deadline');
 }
@@ -86,7 +86,7 @@ function checkInvocation(invocation: Invocation): void {
 function requireRootConnection(connection: Sql): void {
   if (typeof connection.begin !== 'function' || 'savepoint' in connection) throw new Refusal('context');
 }
-async function transaction<T>(connection: Sql, invocation: Invocation, body: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+export async function transaction<T>(connection: Sql, invocation: MemoryMaintenanceInvocation, body: (tx: DrizzleTx) => Promise<T>): Promise<T> {
   try {
     return await connection.begin('isolation level repeatable read read write', async client => {
       invocation.callbackStarted = true;
@@ -115,7 +115,7 @@ async function transaction<T>(connection: Sql, invocation: Invocation, body: (tx
 }
 
 type Row = Record<string, unknown>;
-async function query(tx: DrizzleTx, invocation: Invocation, statement: SQL): Promise<Row[]> {
+async function query(tx: DrizzleTx, invocation: MemoryMaintenanceInvocation, statement: SQL): Promise<Row[]> {
   checkInvocation(invocation);
   const result = await tx.execute(statement);
   checkInvocation(invocation);
@@ -123,7 +123,7 @@ async function query(tx: DrizzleTx, invocation: Invocation, statement: SQL): Pro
   return result as Row[];
 }
 interface Context { databaseName: string; databaseOid: string; effectiveRole: string; serverVersionNum: number }
-async function lockAndProve(tx: DrizzleTx, invocation: Invocation, request: CapturedRequest): Promise<Context> {
+async function lockAndProve(tx: DrizzleTx, invocation: MemoryMaintenanceInvocation, request: CapturedMemoryMaintenanceRequest, archiveExclusion = false): Promise<Context> {
   await query(tx, invocation, sql`SET LOCAL search_path = pg_catalog, public, pg_temp`);
   await query(tx, invocation, sql`SET LOCAL lock_timeout = '1000ms'`);
   await query(tx, invocation, sql`SET LOCAL statement_timeout = '5000ms'`);
@@ -133,9 +133,10 @@ async function lockAndProve(tx: DrizzleTx, invocation: Invocation, request: Capt
   await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('elements')} IN EXCLUSIVE MODE`);
   await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('element_tags')} IN EXCLUSIVE MODE`);
   await query(tx, invocation, sql`LOCK TABLE ${sql.identifier('public')}.${sql.identifier('memory_entries')} IN EXCLUSIVE MODE`);
+  if (archiveExclusion) await query(tx, invocation, sql`LOCK TABLE public.memory_volumes IN EXCLUSIVE MODE`);
   return proveContext(tx, invocation, request);
 }
-async function proveContext(tx: DrizzleTx, invocation: Invocation, request: CapturedRequest): Promise<Context> {
+async function proveContext(tx: DrizzleTx, invocation: MemoryMaintenanceInvocation, request: CapturedMemoryMaintenanceRequest): Promise<Context> {
   const [row] = await query(tx, invocation, sql`SELECT
     pg_catalog.current_database() AS name, d.oid::text AS oid, current_user::text AS actor,
     pg_catalog.current_setting('server_version_num')::integer AS version,
@@ -180,13 +181,13 @@ async function proveContext(tx: DrizzleTx, invocation: Invocation, request: Capt
   return { databaseName: row.name as string, databaseOid: row.oid as string,
     effectiveRole: row.actor, serverVersionNum: row.version as number };
 }
-async function proveCatalog(tx: DrizzleTx, invocation: Invocation, request: CapturedRequest): Promise<void> {
+async function proveCatalog(tx: DrizzleTx, invocation: MemoryMaintenanceInvocation, request: CapturedMemoryMaintenanceRequest): Promise<void> {
   checkInvocation(invocation);
   const proof = await observeDatabaseMemoryMaintenanceCatalog(tx);
   checkInvocation(invocation);
   if (proof.status !== 'verified' || proof.descriptorSha256 !== request.expectedCatalogSha256) throw new Refusal('catalog');
 }
-async function census(tx: DrizzleTx, invocation: Invocation): Promise<{ owners: readonly MemoryTagAuditOwner[]; tags: number }> {
+async function census(tx: DrizzleTx, invocation: MemoryMaintenanceInvocation): Promise<{ owners: readonly MemoryTagAuditOwner[]; tags: number }> {
   const [bounds] = await query(tx, invocation, sql`WITH owners AS MATERIALIZED (
     SELECT id, user_id, storage_revision, memory_entries_out_of_sync FROM public.elements
     WHERE element_type = 'memories' ORDER BY id LIMIT 10001
@@ -210,6 +211,14 @@ async function census(tx: DrizzleTx, invocation: Invocation): Promise<{ owners: 
   const manifest = captureDatabaseMemoryOwnerManifest(owners as unknown as MemoryTagAuditOwner[]);
   if (manifest.ownerCount !== bounds.owners) throw new Refusal('incomplete-census');
   return { owners: manifest.owners, tags: bounds.tags as number };
+}
+
+/** @internal Fresh current proof for equivalent reconciliation; no receipt is consulted. */
+export async function observeCurrentMemoryMaintenance(tx: DrizzleTx, state: MemoryMaintenanceInvocation,
+  request: CapturedMemoryMaintenanceRequest): Promise<void> {
+  await lockAndProve(tx, state, request, true);
+  await proveCatalog(tx, state, request);
+  await census(tx, state);
 }
 
 export interface MemoryAtomicInvalidationReceipt extends MemoryAtomicInvalidationRequest {
@@ -250,7 +259,7 @@ function finiteTimestamp(value: unknown): string {
   if (!date || !Number.isFinite(date.getTime())) throw new Refusal('invalid-receipt');
   return date.toISOString();
 }
-function readReceipt(row: Row, request: CapturedRequest): MemoryAtomicInvalidationReceipt {
+function readReceipt(row: Row, request: CapturedMemoryMaintenanceRequest): MemoryAtomicInvalidationReceipt {
   if (Object.keys(row).length !== 21 || row.formatVersion !== 1 ||
     row.claim !== 'historical-exact-owner-set-invalidation' || row.canApply !== false || row.canActivate !== false ||
     !byteBound(row.effectiveRole, 63) || !Number.isInteger(row.serverVersionNum) || Number(row.serverVersionNum) <= 0 ||
@@ -274,7 +283,7 @@ function readReceipt(row: Row, request: CapturedRequest): MemoryAtomicInvalidati
     serverVersionNum: row.serverVersionNum as number, ownerCount: row.ownerCount as number, tagCount: row.tagCount as number,
     startedAt, finishedAt, canApply: false, canActivate: false });
 }
-async function lookup(tx: DrizzleTx, invocation: Invocation, request: CapturedRequest): Promise<MemoryAtomicInvalidationReceipt | null> {
+async function lookup(tx: DrizzleTx, invocation: MemoryMaintenanceInvocation, request: CapturedMemoryMaintenanceRequest): Promise<MemoryAtomicInvalidationReceipt | null> {
   const rows = await query(tx, invocation, sql`${RECEIPT_SELECT} WHERE run_id=${request.runId}::pg_catalog.uuid LIMIT 2`);
   if (rows.length > 1) throw new Refusal('invalid-receipt');
   return rows.length === 0 ? null : readReceipt(rows[0], request);
@@ -282,11 +291,11 @@ async function lookup(tx: DrizzleTx, invocation: Invocation, request: CapturedRe
 
 /** Explicit supplied root connections only; no runtime wiring or environment discovery. */
 export class DatabaseMemoryAtomicInvalidator {
-  readonly #invocations = new Map<string, { request: CapturedRequest; state: Invocation }>();
+  readonly #invocations = new Map<string, { request: CapturedMemoryMaintenanceRequest; state: MemoryMaintenanceInvocation }>();
   constructor(private readonly connection: Sql) { requireRootConnection(connection); }
 
   async invalidate(input: MemoryAtomicInvalidationRequest): Promise<MemoryAtomicInvalidationOutcome> {
-    let request: CapturedRequest;
+    let request: CapturedMemoryMaintenanceRequest;
     try { request = captureRequest(input); }
     catch { return { status: 'aborted', reason: 'invalid-request' }; }
     const prior = this.#invocations.get(request.runId);
@@ -297,7 +306,7 @@ export class DatabaseMemoryAtomicInvalidator {
     }
     // An unknown prior operation is resolve-only; a new call cannot silently retry it.
     if (prior?.state.abandoned && !prior.state.acknowledgedAbort && !prior.state.resolved) return { status: 'unknown', reason: null };
-    const state: Invocation = { abandoned: false, drained: false, callbackStarted: false, acknowledgedAbort: false, settled: false, resolved: false,
+    const state: MemoryMaintenanceInvocation = { abandoned: false, drained: false, callbackStarted: false, acknowledgedAbort: false, settled: false, resolved: false,
       abort: Object.freeze({}), refusal: null, deadline: performance.now() + LIMITS.operationMilliseconds };
     this.#invocations.set(request.runId, { request, state });
     try {
@@ -314,7 +323,7 @@ export class DatabaseMemoryAtomicInvalidator {
   }
 
   async resolveRun(input: MemoryAtomicInvalidationRequest, freshConnection: Sql): Promise<MemoryAtomicResolutionOutcome> {
-    let request: CapturedRequest;
+    let request: CapturedMemoryMaintenanceRequest;
     try { request = captureRequest(input); }
     catch { return { status: 'refused', reason: 'invalid-request' }; }
     try { requireRootConnection(freshConnection); }
@@ -324,7 +333,7 @@ export class DatabaseMemoryAtomicInvalidator {
     if (!original) return { status: 'refused', reason: 'context' };
     if (original.request.requestSha256 !== request.requestSha256) return { status: 'refused', reason: 'conflict' };
     if (!original.state.drained || !original.state.settled) return { status: 'unknown', reason: null };
-    const state: Invocation = { abandoned: false, drained: false, callbackStarted: false, acknowledgedAbort: false, settled: false, resolved: false,
+    const state: MemoryMaintenanceInvocation = { abandoned: false, drained: false, callbackStarted: false, acknowledgedAbort: false, settled: false, resolved: false,
       abort: Object.freeze({}), refusal: null, deadline: performance.now() + LIMITS.operationMilliseconds };
     try {
       const result = await transaction(freshConnection, state, async tx => {
@@ -342,7 +351,7 @@ export class DatabaseMemoryAtomicInvalidator {
   }
 }
 
-async function invalidateOwners(tx: DrizzleTx, state: Invocation, request: CapturedRequest, context: Context): Promise<MemoryAtomicInvalidationReceipt> {
+async function invalidateOwners(tx: DrizzleTx, state: MemoryMaintenanceInvocation, request: CapturedMemoryMaintenanceRequest, context: Context): Promise<MemoryAtomicInvalidationReceipt> {
   const observed = await census(tx, state);
   const before = captureDatabaseMemoryOwnerManifest(observed.owners);
   if (before.owners.some(owner => owner.revision === '9223372036854775807')) throw new Refusal('revision');

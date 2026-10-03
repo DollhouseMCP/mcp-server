@@ -3,12 +3,14 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { DrizzleTx } from '../database/db-utils.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import { elements, elementTags } from '../database/schema/elements.js';
 import { memoryEntries } from '../database/schema/memories.js';
 import { memoryVolumes } from '../database/schema/memoryVolumes.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
+import { SecurityError } from '../errors/SecurityError.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 
@@ -97,6 +99,32 @@ function sameStrings(a: readonly string[], b: readonly string[]): boolean {
   return true;
 }
 
+/** Apply-only first slice: numeric JSON/YAML authority is limited to safe integers. */
+function hasUnqualifiedNumericPrecision(rows: readonly { kind: string; value: string }[]): boolean {
+  for (const row of rows) {
+    // Strip complete JSON strings, including escaped quotes, before examining
+    // PostgreSQL's ORIGINAL numeric lexemes. JSON.parse would lose this evidence.
+    const numericText = row.value.replace(/"(?:\\.|[^"\\])*"/gu, '""');
+    const numbers = numericText.match(/-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/gu) ?? [];
+    if (numbers.some(token => /[.eE]/u.test(token) || !Number.isSafeInteger(Number(token)))) return true;
+    if (row.kind === 'parent') {
+      const parent = JSON.parse(row.value) as { raw_content: string };
+      try {
+        SecureYamlParser.parseRawYaml(parent.raw_content, { maxSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
+          contentPolicy: 'structure-only', numericPolicy: 'safe-integers' });
+      } catch (cause) {
+        if (cause instanceof SecurityError && cause.code === 'YAML_NUMERIC_PRECISION') return true;
+        throw cause;
+      }
+    }
+  }
+  return false;
+}
+
+async function checked<T>(checkpoint: () => void, read: () => PromiseLike<T>): Promise<T> {
+  checkpoint(); const value = await read(); checkpoint(); return value;
+}
+
 /** A conservative inspector: never resolves ambiguity by rewriting or choosing a winner. */
 export class DatabaseMemoryReconciliationInspector {
   constructor(private readonly db: DatabaseInstance, private readonly getCurrentUserId: UserIdResolver) {}
@@ -111,39 +139,45 @@ export class DatabaseMemoryReconciliationInspector {
       await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
       await tx.execute(sql`SELECT set_config('app.current_user_id', ${captured.userId}, true)`);
 
-      const parentBounds = await tx.select({
+      return this.inspectInTransaction(tx, captured);
+    });
+  }
+
+  /** @internal Same-transaction classification; never grants apply authority. */
+  async inspectInTransaction(tx: DrizzleTx, captured: MemoryInspectionOwner, checkpoint: () => void = () => undefined): Promise<MemoryReconciliationInspection> {
+      const parentBounds = await checked(checkpoint, () => tx.select({
         rawBytes: sql<number>`octet_length(${elements.rawContent})`,
         metadataBytes: sql<number>`octet_length(${elements.metadata}::text)`,
         descriptionBytes: sql<number>`coalesce(octet_length(${elements.description}), 0)`,
       }).from(elements).where(and(eq(elements.userId, captured.userId),
-        eq(elements.elementType, 'memories'), eq(elements.id, captured.memoryId))).limit(1);
+        eq(elements.elementType, 'memories'), eq(elements.id, captured.memoryId))).limit(1));
       if (!parentBounds[0]) {
         const error = new Error('Memory head not found') as NodeJS.ErrnoException;
         error.code = 'ENOENT';
         throw error;
       }
-      const [childBounds] = await tx.select({
+      const [childBounds] = await checked(checkpoint, () => tx.select({
         count: sql<number>`count(*)::int`,
         bytes: sql<number>`coalesce(sum(octet_length(row_to_json(${memoryEntries})::text)), 0)::bigint`,
       }).from(memoryEntries).where(and(eq(memoryEntries.userId, captured.userId),
-        eq(memoryEntries.memoryId, captured.memoryId)));
-      const [tagBounds] = await tx.select({
+        eq(memoryEntries.memoryId, captured.memoryId))));
+      const [tagBounds] = await checked(checkpoint, () => tx.select({
         count: sql<number>`count(*)::int`,
         bytes: sql<number>`coalesce(sum(octet_length(${elementTags.tag})), 0)::bigint`,
       }).from(elementTags).where(and(eq(elementTags.userId, captured.userId),
-        eq(elementTags.elementId, captured.memoryId)));
-      const [volumeBounds] = await tx.select({ count: sql<number>`count(*)::int` })
+        eq(elementTags.elementId, captured.memoryId))));
+      const [volumeBounds] = await checked(checkpoint, () => tx.select({ count: sql<number>`count(*)::int` })
         .from(memoryVolumes).where(and(eq(memoryVolumes.userId, captured.userId),
-          eq(memoryVolumes.memoryId, captured.memoryId)));
+          eq(memoryVolumes.memoryId, captured.memoryId))));
 
       const tooLarge = parentBounds[0].rawBytes > MAX_RAW_BYTES ||
         parentBounds[0].metadataBytes > MAX_METADATA_BYTES || parentBounds[0].descriptionBytes > MAX_METADATA_BYTES ||
         childBounds.count > MAX_ROWS || Number(childBounds.bytes) > MAX_PROJECTED_BYTES ||
         tagBounds.count > MAX_ROWS || Number(tagBounds.bytes) > MAX_PROJECTED_BYTES || volumeBounds.count > MAX_ROWS;
       if (tooLarge) {
-        const row = await tx.select({ name: elements.name, revision: elements.storageRevision,
+        const row = await checked(checkpoint, () => tx.select({ name: elements.name, revision: elements.storageRevision,
           dirty: elements.memoryEntriesOutOfSync })
-          .from(elements).where(and(eq(elements.userId, captured.userId), eq(elements.id, captured.memoryId))).limit(1);
+          .from(elements).where(and(eq(elements.userId, captured.userId), eq(elements.id, captured.memoryId))).limit(1));
         return {
           status: 'ineligible' as const, canApply: false as const, owner: captured,
           name: row[0].name, revision: row[0].revision.toString(), dirty: row[0].dirty,
@@ -151,7 +185,7 @@ export class DatabaseMemoryReconciliationInspector {
           diagnostics: [diagnostic('resource_limit', 'head')], diagnosticsTruncated: false,
         };
       }
-      const [parent] = await tx.select({
+      const [parent] = await checked(checkpoint, () => tx.select({
         id: elements.id, name: elements.name, rawContent: elements.rawContent,
         contentHash: elements.contentHash, byteSize: elements.byteSize,
         hasBodyContent: sql<boolean>`${elements.bodyContent} IS NOT NULL`,
@@ -163,18 +197,18 @@ export class DatabaseMemoryReconciliationInspector {
         visibility: elements.visibility, memoryType: elements.memoryType,
         autoLoad: elements.autoLoad, priority: elements.priority,
       }).from(elements).where(and(eq(elements.userId, captured.userId),
-        eq(elements.elementType, 'memories'), eq(elements.id, captured.memoryId))).limit(1);
-      await this.afterParentRead();
-      const children = await tx.select({
+        eq(elements.elementType, 'memories'), eq(elements.id, captured.memoryId))).limit(1));
+      await checked(checkpoint, () => this.afterParentRead());
+      const children = await checked(checkpoint, () => tx.select({
         entry: memoryEntries,
         timestampUnrepresentable: sql<boolean>`NOT isfinite(${memoryEntries.timestamp}) OR mod(extract(microseconds from ${memoryEntries.timestamp})::numeric, 1000) <> 0`,
         expiryUnrepresentable: sql<boolean>`${memoryEntries.expiresAt} IS NOT NULL AND (NOT isfinite(${memoryEntries.expiresAt}) OR mod(extract(microseconds from ${memoryEntries.expiresAt})::numeric, 1000) <> 0)`,
       }).from(memoryEntries).where(and(eq(memoryEntries.userId, captured.userId),
         eq(memoryEntries.memoryId, captured.memoryId)))
-        .orderBy(desc(memoryEntries.timestamp), asc(memoryEntries.entryId));
-      const tags = await tx.select({ tag: elementTags.tag }).from(elementTags).where(and(
-        eq(elementTags.userId, captured.userId), eq(elementTags.elementId, captured.memoryId)));
-      const volumes = await tx.select({ volume: memoryVolumes.volume, sha256: memoryVolumes.sha256,
+        .orderBy(desc(memoryEntries.timestamp), asc(memoryEntries.entryId)));
+      const tags = await checked(checkpoint, () => tx.select({ tag: elementTags.tag }).from(elementTags).where(and(
+        eq(elementTags.userId, captured.userId), eq(elementTags.elementId, captured.memoryId))));
+      const volumes = await checked(checkpoint, () => tx.select({ volume: memoryVolumes.volume, sha256: memoryVolumes.sha256,
         entryCount: memoryVolumes.entryCount, sealedAt: memoryVolumes.sealedAt,
         firstEntryAt: memoryVolumes.firstEntryAt, lastEntryAt: memoryVolumes.lastEntryAt,
         sealedUnrepresentable: sql<boolean>`NOT isfinite(${memoryVolumes.sealedAt}) OR mod(extract(microseconds from ${memoryVolumes.sealedAt})::numeric, 1000) <> 0`,
@@ -182,9 +216,43 @@ export class DatabaseMemoryReconciliationInspector {
         lastUnrepresentable: sql<boolean>`${memoryVolumes.lastEntryAt} IS NOT NULL AND (NOT isfinite(${memoryVolumes.lastEntryAt}) OR mod(extract(microseconds from ${memoryVolumes.lastEntryAt})::numeric, 1000) <> 0)`,
       })
         .from(memoryVolumes).where(and(eq(memoryVolumes.userId, captured.userId),
-          eq(memoryVolumes.memoryId, captured.memoryId))).orderBy(asc(memoryVolumes.volume));
+          eq(memoryVolumes.memoryId, captured.memoryId))).orderBy(asc(memoryVolumes.volume)));
       return this.classify(captured, parent, children, tags.map(row => row.tag), volumes);
-    });
+  }
+
+  /** @internal Complete comparison fingerprint, not authorization. Bounds precede transfer. */
+  async captureEquivalentProjection(tx: DrizzleTx, owner: MemoryInspectionOwner, checkpoint: () => void = () => undefined): Promise<{
+    inspection: MemoryReconciliationInspection; projectionSha256: string | null;
+  }> {
+    const inspection = await this.inspectInTransaction(tx, owner, checkpoint);
+    if (inspection.status !== 'equivalent' || inspection.diagnosticsTruncated || inspection.counts.volumes !== 0) {
+      return { inspection, projectionSha256: null };
+    }
+    const bounds = await checked(checkpoint, () => tx.execute(sql`SELECT
+      (SELECT pg_catalog.octet_length(pg_catalog.row_to_json(e)::text) FROM public.elements e
+        WHERE e.id=${owner.memoryId}::uuid AND e.user_id=${owner.userId}::uuid AND e.element_type='memories') AS parent_bytes,
+      (SELECT coalesce(sum(pg_catalog.octet_length(pg_catalog.row_to_json(t)::text)),0)::text FROM public.element_tags t
+        WHERE t.element_id=${owner.memoryId}::uuid AND t.user_id=${owner.userId}::uuid) AS tag_bytes`));
+    const bound = (bounds as unknown as { parent_bytes: number; tag_bytes: string }[])[0];
+    if (!bound || !Number.isSafeInteger(bound.parent_bytes) || bound.parent_bytes > MAX_PROJECTED_BYTES ||
+      !/^\d+$/u.test(bound.tag_bytes) || BigInt(bound.tag_bytes) > BigInt(MAX_PROJECTED_BYTES)) {
+      return { inspection: { ...inspection, status: 'ineligible', diagnostics: [diagnostic('resource_limit', 'projection')] }, projectionSha256: null };
+    }
+    // PostgreSQL's row JSON retains all stored fields and microsecond timestamps;
+    // digest its text directly rather than rounding dates through JavaScript Date.
+    const rows = await checked(checkpoint, () => tx.execute(sql`SELECT 'parent' AS kind, pg_catalog.row_to_json(e)::text AS value
+      FROM public.elements e WHERE e.id=${owner.memoryId}::uuid AND e.user_id=${owner.userId}::uuid AND e.element_type='memories'
+      UNION ALL SELECT 'child', pg_catalog.row_to_json(c)::text FROM public.memory_entries c
+        WHERE c.memory_id=${owner.memoryId}::uuid AND c.user_id=${owner.userId}::uuid
+      UNION ALL SELECT 'tag', pg_catalog.row_to_json(t)::text FROM public.element_tags t
+        WHERE t.element_id=${owner.memoryId}::uuid AND t.user_id=${owner.userId}::uuid`));
+    const values = rows as unknown as { kind: string; value: string }[];
+    if (!Array.isArray(values) || values.filter(row => row.kind === 'parent').length !== 1 ||
+      values.some(row => typeof row.value !== 'string' || !['parent', 'child', 'tag'].includes(row.kind))) throw new Error('Incomplete reconciliation projection');
+    if (hasUnqualifiedNumericPrecision(values)) return { inspection: { ...inspection, status: 'ineligible',
+      diagnostics: [diagnostic('unrepresentable_numeric_precision', 'projection')] }, projectionSha256: null };
+    const encoded = values.map(row => JSON.stringify([row.kind, row.value])).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    return { inspection, projectionSha256: createHash('sha256').update(JSON.stringify([1, owner.userId, owner.memoryId, encoded, 'archive-free'])).digest('hex') };
   }
 
   /** @internal Test-only barrier for deterministic concurrent-writer checks. */
