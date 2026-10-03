@@ -103,3 +103,47 @@ That suite had eleven passes and one failure before later job cancellation.
 The selector/sort correction makes no capacity or job-duration fix claim.
 Fresh exact-head CI and reviews, including actual Sonar, remain required;
 no old-head runtime pass or review is transferred as new-head qualification.
+
+## Required erasure matrix isolation
+
+On 2026-10-03 at 04:32 UTC, Mick answered “Yes go ahead” to separating
+required serial erasure qualification into its own jobs while preserving cases,
+platform coverage and limits, and extending the same braces-only exception to
+remaining qualification commits within this draft PR. This permits no dependency,
+production behavior, test timeout, gate suppression, merge or deployment change.
+
+Both workflows share their original platform/Node matrix with a new erasure job
+through a YAML anchor. Each erasure job retains the 15-minute ceiling and runs
+only the existing complete serial capacity suite after install/build. Windows
+retains that suite's existing intentional POSIX skip. Existing protected `Test`
+contexts and `Extended` contexts keep their names and depend on their workflow's
+entire erasure matrix. Their first gate runs even after dependency failure and
+requires exactly `success`; the erasure job also independently enforces its
+actual test-step outcome, refusing failed, cancelled, skipped or missing results.
+No branch protection settings change. Waiting for dependencies does not consume
+the ordinary job's runner time. This scheduling change makes no capacity latency
+promise and preserves the earlier real macOS 30-second failure.
+
+The existing static workflow suite passes 165 tests. Additional configuration
+validation confirms complete matrix parity and rejects omitted jobs, commands,
+platforms, dependencies, conditional matrix skipping and tolerated failures.
+The actual extracted Bash guards each reject failure, cancellation, skipping,
+empty and unset outcomes, accepting only success. These local checks validate
+configuration and enforcement logic; fresh hosted execution remains required.
+No unchanged capacity or runtime test was repeated for this workflow-only change.
+
+Normal precommit again passes 108 rapid-security tests (46 skipped) and script
+typecheck, then fails the unchanged dependency audit. The fresh full audit has
+identical raw SHA-256 `94d49ccda4919564e3159719642d3b192460b6988ef2aa653e0a40e51dc29720`
+and is already preserved in the linked correction audit above: 37 high paths,
+zero critical, 19 moderate and one low. All high paths/nodes remain unchanged
+and rooted only in GHSA-vfj7-8cjw-p6xm. Ordinary hooks remain intact. The #2988
+exception and the safety image's development-tree presence and unproven dynamic
+or transitive runtime reachability remain material caveats.
+
+The superseded `42dcd993d257f3c0493e69d986e404934990703d` head ended
+with 22 successful checks and two 15-minute job timeouts; those results do not
+transfer to the scheduling correction. Beta's three protected core Test contexts
+are unchanged. Extended contexts are not branch-protected; each still enforces
+its own complete six-lane prerequisite matrix, and final review requires their
+actual hosted outcomes as well.

@@ -22,14 +22,26 @@ jobs:
     name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    needs: owner-erasure-capacity
+    if: ${{ always() }}
 
     strategy:
       fail-fast: false
-      matrix:
+      matrix: &core-platforms
         os: [ubuntu-latest, windows-latest, macos-latest]
         node-version: ['20.x']
 
     steps:
+      - name: Enforce complete owner erasure matrix
+        shell: bash
+        env:
+          ERASURE_MATRIX_RESULT: ${{ needs.owner-erasure-capacity.result }}
+        run: |
+          if [ "$ERASURE_MATRIX_RESULT" != "success" ]; then
+            echo "Every owner erasure matrix job must succeed; failed, cancelled, skipped or missing results refuse this gate."
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -165,12 +177,6 @@ jobs:
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedDeleteCapacity.test.ts
         continue-on-error: true
 
-      # Whole-owner erasure remains a separate serial POSIX fixture qualification.
-      - name: Run required owner erasure capacity suite
-        id: erasure_tests
-        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedErasureCapacity.test.ts
-        continue-on-error: true
-
       - name: Run performance tests (separate process)
         id: performance_tests
         run: npm run test:performance
@@ -202,10 +208,9 @@ jobs:
           CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
           RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
           DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
-          ERASURE_OUTCOME: ${{ steps.erasure_tests.outcome }}
         run: |
-          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$ERASURE_OUTCOME" != "success" ]; then
-            echo "Ordinary unit, CREATE capacity, archive cleanup capacity, managed RENAME, head DELETE capacity and owner erasure capacity groups must all pass the core build gate."
+          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ]; then
+            echo "Ordinary unit, CREATE capacity, archive cleanup capacity, managed RENAME, head DELETE capacity groups must all pass the core build gate."
             exit 1
           fi
 
@@ -214,6 +219,47 @@ jobs:
           echo "✅ Core Build & Test Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
+
+  # The original check names enforce this entire shared matrix before ordinary tests.
+  # Windows retains the suite's existing intentional POSIX skip.
+  owner-erasure-capacity:
+    name: Core owner erasure (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: *core-platforms
+    env:
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          fetch-tags: true
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies without scripts
+        run: npm ci --ignore-scripts
+      - name: Build project
+        run: npm run build
+      - name: Run required owner erasure capacity suite
+        id: erasure_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedErasureCapacity.test.ts
+      - name: Enforce owner erasure execution
+        if: always()
+        shell: bash
+        env:
+          ERASURE_OUTCOME: ${{ steps.erasure_tests.outcome }}
+        run: |
+          if [ "$ERASURE_OUTCOME" != "success" ]; then
+            echo "The complete owner erasure suite must execute successfully."
+            exit 1
+          fi
 
   postgres-integration:
     name: PostgreSQL Integration
