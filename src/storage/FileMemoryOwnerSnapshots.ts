@@ -518,9 +518,9 @@ export class FileMemoryOwnerSnapshots {
       const accounting = new ErasureAccounting(); active(); accounting.charge('lstats');
       const root = await fs.lstat(operation.tenantRoot, { bigint: true });
       const inspection = new ErasureInspection(operation.tenantRoot, String(root.dev), accounting, active);
-      const token = 'expectedToken' in request ? request.expectedToken : undefined;
-      if (token && (token.userId !== operation.userId || token.tenantRoot !== operation.tenantRoot)) throw headError('EHEADCONFLICT', 'Erasure token belongs to another tenant');
-      const binding = { userId: operation.userId, ownerId: token?.ownerId ?? (request as RecoverOwnedErasureRequest).ownerId,
+      const expectedOwnership = 'expectedToken' in request ? request.expectedToken : undefined;
+      if (expectedOwnership && (expectedOwnership.userId !== operation.userId || expectedOwnership.tenantRoot !== operation.tenantRoot)) throw headError('EHEADCONFLICT', 'Erasure token belongs to another tenant');
+      const binding = { userId: operation.userId, ownerId: expectedOwnership?.ownerId ?? (request as RecoverOwnedErasureRequest).ownerId,
         operationId: request.operationId, deleteOperationId: request.deleteOperationId };
       const executor = new FileMemoryOwnedErasure(inspection, binding, this.options.afterErasurePublication,
         (locator, observer) => this.observeErasureReplacementAtScope(operation, locator, observer),
@@ -532,15 +532,15 @@ export class FileMemoryOwnerSnapshots {
         try { await inspection.lstat(`${OWNER_DIRECTORY}/owners/${erasureJournalName(binding.ownerId)}`); }
         catch (cause) { if (!hasCode(cause, 'ENOENT')) throw cause; existing = false; }
         if (!recovery && !existing) {
-          if (!token) throw new TypeError('Initial erasure requires an owned token');
-          head = new FileMemoryOwnedDelete(operation, { operationId: request.deleteOperationId, expectedToken: token }, active,
-            budget => this.snapshotOwnedAtScope(operation, token, budget),
-            budget => this.readAtRoot(operation.tenantRoot, operation.userId, token.locator, undefined, budget), this.options.afterDeletePublication,
+          if (!expectedOwnership) throw new TypeError('Initial erasure requires an owned token');
+          head = new FileMemoryOwnedDelete(operation, { operationId: request.deleteOperationId, expectedToken: expectedOwnership }, active,
+            budget => this.snapshotOwnedAtScope(operation, expectedOwnership, budget),
+            budget => this.readAtRoot(operation.tenantRoot, operation.userId, expectedOwnership.locator, undefined, budget), this.options.afterDeletePublication,
             deleted => { headResult = deleted; }, { operationId: request.operationId, executor, publication: this.options.afterErasurePublication });
           await head.run();
           if (!headResult) throw headError('EERASURERESIDUAL', 'A minimal head tombstone is not erasure preparation');
         }
-        value = await executor.run(recovery || existing, !!headResult, token);
+        value = await executor.run(recovery || existing, !!headResult, expectedOwnership);
       } catch (cause) { failed = true; failure = cause; }
       try { await this.options.afterErasureWork?.(Object.freeze({ ...executor.workReport, ...(head ? { head: head.erasureHandoffReadWork } : {}) })); }
       catch (cause) { failure = failed ? new AggregateError([failure, cause], 'Erasure operation and diagnostics failed', { cause: failure }) : cause; failed = true; }

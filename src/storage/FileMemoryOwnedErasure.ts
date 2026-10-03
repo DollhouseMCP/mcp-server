@@ -3,7 +3,7 @@ import { isDeepStrictEqual as equal } from 'node:util';
 import type { FileMemorySnapshot, OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { evidenceCauseCode, evidenceDigest, stableEvidenceChild, type HeadDirectory } from './FileMemoryOwnedHeadEvidence.js';
+import { evidenceCauseCode, evidenceDigest, evidenceOrdinal, stableEvidenceChild, type HeadDirectory } from './FileMemoryOwnedHeadEvidence.js';
 import { ErasureInspection, erasureSameDirectory, erasureNamesCapture, type ErasureDirectoryCapture } from './FileMemoryErasureInspection.js';
 import { ERASURE_DOMAIN, ERASURE_NAMES_DOMAIN, ERASURE_NAMES_PROTOCOL, type ErasureProtocol, ERASURE_NODE_LIMIT, erasureFail, erasureJournalName, erasureNamesDigest,
   erasureInventoryDigest, erasureMaximumIdentity, erasurePack, erasureParseRecord, erasureParseSegment, erasureSegmentName, erasureSerialize, erasureStageName,
@@ -162,7 +162,7 @@ export class FileMemoryOwnedErasure {
       !this.sameCaptureChildren(observed, this.registryDirectory)) erasureFail();
     const own = observed.names.filter(name => name.toLowerCase().startsWith(`${this.binding.ownerId}.erase`) ||
       name.toLowerCase().startsWith(`${this.binding.ownerId}.json`));
-    const expected = [...this.authority.keys()].map(locator => locator.split('/').at(-1)!).sort();
+    const expected = [...this.authority.keys()].map(locator => locator.split('/').at(-1)!).sort(evidenceOrdinal);
     if (!equal(own, expected)) erasureFail();
     if (this.protocol.schema === 2) {
       const artifacts = [...this.authority];
@@ -369,7 +369,7 @@ export class FileMemoryOwnedErasure {
       const locator = this.locator(index);
       if (locator.split('/').length - 3 > 16) erasureFail('EHEADRESOURCE');
       this.inspection.absolute(locator);
-      const children = this.nodes.filter(item => item.parent === index).map(item => item.name).sort();
+      const children = this.nodes.filter(item => item.parent === index).map(item => item.name).sort(evidenceOrdinal);
       if (new Set(children).size !== children.length || children.length !== node.childCount ||
         erasureNamesDigest(children) !== node.sha256) erasureFail();
     }
@@ -448,7 +448,7 @@ export class FileMemoryOwnedErasure {
             const observed = await this.inspection.directory(locator);
             if (observed.identity.device !== node.identity.device || observed.identity.inode !== node.identity.inode ||
               observed.mode !== node.mode || observed.uid !== node.uid) erasureFail();
-            const remaining = this.nodes.filter(child => child.parent === node.index && child.index >= cursor).map(child => child.name).sort();
+            const remaining = this.nodes.filter(child => child.parent === node.index && child.index >= cursor).map(child => child.name).sort(evidenceOrdinal);
             if (!equal(observed.names, remaining)) erasureFail();
           } else {
             const observed = await this.inspection.file(locator);
@@ -465,7 +465,7 @@ export class FileMemoryOwnedErasure {
           const observed = await this.inspection.directory(locator);
           if (observed.identity.device !== node.identity.device || observed.identity.inode !== node.identity.inode ||
             observed.mode !== node.mode || observed.uid !== node.uid) erasureFail();
-          const remaining = this.nodes.filter(child => child.parent === node.index && child.index >= cursor).map(child => child.name).sort();
+          const remaining = this.nodes.filter(child => child.parent === node.index && child.index >= cursor).map(child => child.name).sort(evidenceOrdinal);
           if (!equal(observed.names, remaining)) erasureFail();
         } else {
           const observed = await this.inspection.file(locator);
