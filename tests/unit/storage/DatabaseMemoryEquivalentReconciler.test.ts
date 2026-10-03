@@ -22,8 +22,9 @@ class FakeRefusal extends Error { constructor(readonly reason: string) { super(r
 const observe = jest.fn(async () => undefined);
 const capture = jest.fn(async () => current);
 const fresh = jest.fn(async () => current.inspection);
+const refreshInspection = jest.fn(async (_tx: unknown, owner: { userId: string; memoryId: string }) => ({ ...await fresh(), owner }));
 await jest.unstable_mockModule('../../../src/storage/DatabaseMemoryReconciliationInspector.js', () => ({
-  DatabaseMemoryReconciliationInspector: class { captureEquivalentProjection = capture; inspect = fresh; inspectInTransaction = fresh; },
+  DatabaseMemoryReconciliationInspector: class { captureEquivalentProjection = capture; inspect = fresh; inspectInTransaction = refreshInspection; },
 }));
 await jest.unstable_mockModule('../../../src/storage/DatabaseMemoryAtomicInvalidator.js', () => ({
   Refusal: FakeRefusal,
@@ -62,7 +63,7 @@ function reconciler() { return new DatabaseMemoryEquivalentReconciler(db, () => 
 beforeEach(() => {
   statements.length = 0; current = { inspection: { ...inspection }, projectionSha256: 'a'.repeat(64) };
   commitFailure = null; activeUser = USER; archive = false; roleSafe = true; releaseCommit = null; gateCommit = null;
-  observe.mockClear(); capture.mockClear(); fresh.mockClear();
+  observe.mockClear(); capture.mockClear(); fresh.mockClear(); refreshInspection.mockClear();
 });
 describe('dormant equivalent reconciliation transaction boundaries (synthetic transaction adapter)', () => {
   it('prepares diagnostic exact-owner input without maintenance proof or writes', async () => {
@@ -110,9 +111,18 @@ describe('dormant equivalent reconciliation transaction boundaries (synthetic tr
     expect(await owner.qualifyEquivalent(proposal!, { ...maintenance, runId: OWNER })).toEqual({ status: 'unknown', attemptId: RUN });
     expect(observe.mock.calls).toHaveLength(count);
     commitFailure = null;
-    expect(await owner.refreshUnknown({ begin: () => undefined } as unknown as Sql)).toEqual(current.inspection); expect(fresh).toHaveBeenCalledTimes(1);
+    current = { ...current, inspection: { ...current.inspection, dirty: false, revision: '8' } };
+    const refresh = await owner.refreshUnknown({ begin: () => undefined } as unknown as Sql);
+    expect(refresh).toEqual(current.inspection);
+    expect(refresh.owner).toEqual({ userId: USER, memoryId: OWNER });
+    expect(Object.keys(refresh.owner).sort()).toEqual(['memoryId', 'userId']);
+    expect(Object.isFrozen(refreshInspection.mock.calls.at(-1)?.[1])).toBe(true);
+    expect(refresh).toMatchObject({ dirty: false, revision: '8' });
+    expect(fresh).toHaveBeenCalledTimes(1);
     commitFailure = null;
-    expect(await owner.qualifyEquivalent(proposal!, maintenance)).toMatchObject({ status: 'qualified' });
+    expect(await owner.qualifyEquivalent(proposal!, maintenance)).toEqual({ status: 'refused', reason: 'stale' });
+    const prepared = await owner.prepareEquivalent({ userId: USER, memoryId: OWNER });
+    expect(await owner.qualifyEquivalent(prepared.proposal!, maintenance)).toMatchObject({ status: 'already-qualified' });
   });
   it('refuses a changed active user before unknown refresh queries and retains poison', async () => {
     const owner = reconciler(), { proposal } = await owner.prepareEquivalent({ userId: USER, memoryId: OWNER });

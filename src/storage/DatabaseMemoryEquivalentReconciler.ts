@@ -183,7 +183,8 @@ export class DatabaseMemoryEquivalentReconciler {
           await query(sql`SET LOCAL ROLE ${sql.identifier(this.applicationRole)}`);
           await query(sql`SELECT set_config('app.current_user_id', ${pending.proposal.userId}, true)`);
           await this.proveApplicationContext(query, pending.proposal.userId, () => { throw new Refusal('context'); });
-          const current = await this.inspector.inspectInTransaction(tx, pending.proposal, checkpoint);
+          const owner = Object.freeze({ userId: pending.proposal.userId, memoryId: pending.proposal.memoryId });
+          const current = await this.inspector.inspectInTransaction(tx, owner, checkpoint);
           await this.proveApplicationContext(query, pending.proposal.userId, () => { throw new Refusal('context'); });
           return current;
         } catch (cause) {

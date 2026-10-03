@@ -317,6 +317,9 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
       await actualBegin;
       const refresh = await reconciler.refreshUnknown(f.competitor);
       expect(refresh).toMatchObject({ status: 'equivalent', dirty: false, canApply: false });
+      expect(refresh.owner).toEqual({ userId: f.userId, memoryId: f.memoryId });
+      expect(Object.keys(refresh.owner).sort()).toEqual(['memoryId', 'userId']);
+      expect(refresh.revision).toBe((BigInt(proposal.revision) + 1n).toString());
       expect(refresh).not.toHaveProperty('token');
     } finally {
       release();
@@ -340,6 +343,9 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
     expect(await reconciler.qualifyEquivalent(proposal, f.request())).toEqual({ status: 'unknown', attemptId: request.runId });
     const refresh = await reconciler.refreshUnknown(f.competitor);
     expect(refresh).toMatchObject({ status: 'equivalent', dirty: false, canApply: false });
+    expect(refresh.owner).toEqual({ userId: f.userId, memoryId: f.memoryId });
+    expect(Object.keys(refresh.owner).sort()).toEqual(['memoryId', 'userId']);
+    expect(refresh.revision).toBe((BigInt(proposal.revision) + 1n).toString());
     expect(refresh).not.toHaveProperty('token');
     // This is an acknowledged-commit publication fault, not a network COMMIT fault.
   }));
