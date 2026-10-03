@@ -1,0 +1,113 @@
+{
+  "@jest/console": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/core": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/environment": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/expect": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/fake-timers": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/globals": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/reporters": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/test-result": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/test-sequencer": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@jest/transform": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@types/jest": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@typescript-eslint/eslint-plugin": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@typescript-eslint/parser": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@typescript-eslint/type-utils": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@typescript-eslint/typescript-estree": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "@typescript-eslint/utils": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "babel-jest": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "braces": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "create-jest": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "expect": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "fast-glob": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "globby": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-circus": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-cli": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-config": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-environment-node": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-haste-map": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-message-util": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-resolve": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-resolve-dependencies": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-runner": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-runtime": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-snapshot": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "jest-watcher": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "micromatch": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ],
+  "ts-jest-resolver": [
+    "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+  ]
+}

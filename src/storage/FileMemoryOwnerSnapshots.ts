@@ -13,6 +13,15 @@ import { parseFileMemoryAbortIntent, serializeFileMemoryAbortIntent,
   type FileMemoryAbortIntent } from './FileMemoryAbortIntentCodec.js';
 import { observeTenantFence, type FileMemoryFence } from './FileMemoryFence.js';
 import type { FileMemoryDirectoryScanner } from './FileMemoryDirectoryScanBudget.js';
+import { ErasureAccounting, ErasureInspection } from './FileMemoryErasureInspection.js';
+import { FileMemoryOwnedErasure, type EraseOwnedRequest, type EraseOwnedResult, type ErasurePublication,
+  type ErasureReplacementSnapshot, type RecoverOwnedErasureRequest } from './FileMemoryOwnedErasure.js';
+import { erasureBinding, erasureJournalName } from './FileMemoryErasureEvidence.js';
+import { evidenceKeys } from './FileMemoryOwnedHeadEvidence.js';
+export type { EraseOwnedRequest, EraseOwnedResult, ErasurePublication, RecoverOwnedErasureRequest } from './FileMemoryOwnedErasure.js';
+export type OwnedErasureWorkReport = FileMemoryOwnedErasure['workReport'] & {
+  readonly head?: FileMemoryOwnedDelete['erasureHandoffReadWork'];
+};
 import { FileMemoryAdoptionRecoveryScanBudget } from './FileMemoryAdoptionRecoveryScanBudget.js';
 import { FileMemoryOwnedCreate, captureCreateRequest, type CreateOwnedRequest, type CreatePublication } from './FileMemoryOwnedCreate.js';
 export type { CreateOwnedRequest, CreatePublication } from './FileMemoryOwnedCreate.js';
@@ -238,6 +247,9 @@ interface FileMemoryOwnerSnapshotsBaseOptions {
   /** Dormant exclusive CREATE barriers; never mutation or retry authority. */
   readonly afterCreatePublication?: (phase: CreatePublication) => void | Promise<void>;
   readonly afterDeletePublication?: (phase: DeletePublication) => Promise<void> | void;
+  /** Dormant erasure barriers and invocation-local diagnostics, never mutation authority. */
+  readonly afterErasurePublication?: (phase: ErasurePublication) => Promise<void> | void;
+  readonly afterErasureWork?: (report: OwnedErasureWorkReport) => Promise<void> | void;
   /** Dormant same-parent RENAME barriers; never mutation/recovery authority. */
   readonly afterRenamePublication?: (phase: RenamePublication) => void | Promise<void>;
   /** Dormant adoption-recovery test barriers; never recovery authority. */
@@ -382,6 +394,8 @@ export class FileMemoryOwnerSnapshots {
   private readonly deleteErrors = new WeakMap<object, DeleteOwnedResult>();
   private readonly renameErrors = new WeakMap<object, OwnedFileMemoryToken>();
   private readonly createErrors = new WeakMap<object, OwnedFileMemoryToken>();
+  private readonly eraseErrors = new WeakMap<object, EraseOwnedResult>();
+  private readonly eraseHeadErrors = new WeakSet<object>();
 
   constructor(options: FileMemoryOwnerSnapshotsOptions) {
     if (process.platform === 'win32') {
@@ -443,6 +457,113 @@ export class FileMemoryOwnerSnapshots {
       if (cause && typeof cause === 'object' && this.deleteErrors.get(cause) === captured) throw cause;
       const error = Object.assign(headError('EHEADDELETED', 'Head deletion completed before transaction failure; erasure remains pending'), { cause, headDeleted: true, result: captured });
       this.deleteErrors.set(error, captured); throw error;
+    });
+    void result.catch(() => undefined); return result;
+  }
+
+  /** Dormant whole-owner erasure; no account purge or runtime Memory deletion wiring. */
+  eraseOwned(input: EraseOwnedRequest): Promise<EraseOwnedResult> {
+    return this.standaloneErasure(input, false);
+  }
+  recoverOwnedErasure(input: RecoverOwnedErasureRequest): Promise<EraseOwnedResult> {
+    return this.standaloneErasure(input, true);
+  }
+  eraseOwnedInTransaction(context: FileMemoryLeaseContext, input: EraseOwnedRequest): Promise<EraseOwnedResult> {
+    return this.performOwnedErasure(context, this.captureErasureRequest(input, false), false);
+  }
+  recoverOwnedErasureInTransaction(context: FileMemoryLeaseContext, input: RecoverOwnedErasureRequest): Promise<EraseOwnedResult> {
+    return this.performOwnedErasure(context, this.captureErasureRequest(input, true), true);
+  }
+  private captureErasureRequest(input: EraseOwnedRequest | RecoverOwnedErasureRequest, recovery: boolean): EraseOwnedRequest | RecoverOwnedErasureRequest {
+    if (process.platform !== 'linux' && process.platform !== 'darwin') throw new TypeError('Owner erasure supports Linux and Darwin only');
+    const fields = recovery ? ['ownerId', 'deleteOperationId', 'operationId'] : ['expectedToken', 'deleteOperationId', 'operationId'];
+    if (!evidenceKeys(input, fields)) throw new TypeError('Erasure request has unsupported fields');
+    const operationId = input.operationId, deleteOperationId = input.deleteOperationId;
+    if (recovery) {
+      const ownerId = (input as RecoverOwnedErasureRequest).ownerId;
+      erasureBinding({ userId: 'selector', operationId, deleteOperationId, ownerId });
+      return Object.freeze({ ownerId, operationId, deleteOperationId });
+    }
+    const deleted = captureDeleteRequest({ operationId: deleteOperationId, expectedToken: (input as EraseOwnedRequest).expectedToken });
+    validateLocator(deleted.expectedToken.locator);
+    erasureBinding({ userId: deleted.expectedToken.userId, ownerId: deleted.expectedToken.ownerId, operationId, deleteOperationId });
+    return Object.freeze({ operationId, deleteOperationId, expectedToken: deleted.expectedToken });
+  }
+  private standaloneErasure(input: EraseOwnedRequest | RecoverOwnedErasureRequest, recovery: boolean): Promise<EraseOwnedResult> {
+    let captured: EraseOwnedResult | undefined;
+    const result = (async () => {
+      const request = this.captureErasureRequest(input, recovery);
+      return await this.requiredCoordinator().withTenantTransaction(context => this.performOwnedErasure(context, request, recovery, value => { captured = value; }));
+    })().catch(cause => {
+      if (!captured) throw this.erasePrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.eraseErrors.get(cause) === captured) throw cause;
+      const error = Object.assign(headError('EOWNERERASED', 'Owner erasure reached its qualified boundary before transaction failure'), { cause, result: captured });
+      this.eraseErrors.set(error, captured); throw error;
+    });
+    void result.catch(() => undefined); return result;
+  }
+  private erasePrecommitError(cause: unknown): unknown {
+    if (cause === null || (typeof cause !== 'object' && typeof cause !== 'function')) return cause;
+    if (this.eraseHeadErrors.has(cause)) return cause;
+    let marker = false;
+    try { const value = cause as { code?: unknown; headDeleted?: unknown }; marker = value.code === 'EOWNERERASED' || value.headDeleted === true || 'result' in value; }
+    catch { marker = true; }
+    return marker ? Object.assign(headError('EERASURERESIDUAL', 'This erasure has no captured completion'), { cause }) : cause;
+  }
+  private performOwnedErasure(context: FileMemoryLeaseContext, request: EraseOwnedRequest | RecoverOwnedErasureRequest,
+    recovery: boolean, capture?: (result: EraseOwnedResult) => void): Promise<EraseOwnedResult> {
+    const coordinator = this.requiredCoordinator(); let captured: EraseOwnedResult | undefined;
+    const result = coordinator.perform(context, async operation => {
+      const active = () => { coordinator.requireActiveOperationScope(operation); };
+      const accounting = new ErasureAccounting(); active(); accounting.charge('lstats');
+      const root = await fs.lstat(operation.tenantRoot, { bigint: true });
+      const inspection = new ErasureInspection(operation.tenantRoot, String(root.dev), accounting, active);
+      const expectedOwnership = 'expectedToken' in request ? request.expectedToken : undefined;
+      if (expectedOwnership && (expectedOwnership.userId !== operation.userId || expectedOwnership.tenantRoot !== operation.tenantRoot)) throw headError('EHEADCONFLICT', 'Erasure token belongs to another tenant');
+      const binding = { userId: operation.userId, ownerId: expectedOwnership?.ownerId ?? (request as RecoverOwnedErasureRequest).ownerId,
+        operationId: request.operationId, deleteOperationId: request.deleteOperationId };
+      const executor = new FileMemoryOwnedErasure(inspection, binding, this.options.afterErasurePublication,
+        (locator, observer) => this.observeErasureReplacementAtScope(operation, locator, observer),
+        value => { captured = value; capture?.(value); });
+      let head: FileMemoryOwnedDelete | undefined, headResult: DeleteOwnedResult | undefined;
+      let value!: EraseOwnedResult, failed = false, failure: unknown;
+      try {
+        let existing = true;
+        try { await inspection.lstat(`${OWNER_DIRECTORY}/owners/${erasureJournalName(binding.ownerId)}`); }
+        catch (cause) { if (!hasCode(cause, 'ENOENT')) throw cause; existing = false; }
+        if (!recovery && !existing) {
+          if (!expectedOwnership) throw new TypeError('Initial erasure requires an owned token');
+          head = new FileMemoryOwnedDelete(operation, { operationId: request.deleteOperationId, expectedToken: expectedOwnership }, active,
+            budget => this.snapshotOwnedAtScope(operation, expectedOwnership, budget),
+            budget => this.readAtRoot(operation.tenantRoot, operation.userId, expectedOwnership.locator, undefined, budget), this.options.afterDeletePublication,
+            deleted => { headResult = deleted; }, { operationId: request.operationId, executor, publication: this.options.afterErasurePublication });
+          await head.run();
+          if (!headResult) throw headError('EERASURERESIDUAL', 'A minimal head tombstone is not erasure preparation');
+        }
+        value = await executor.run(recovery || existing, !!headResult, expectedOwnership);
+      } catch (cause) { failed = true; failure = cause; }
+      try { await this.options.afterErasureWork?.(Object.freeze({ ...executor.workReport, ...(head ? { head: head.erasureHandoffReadWork } : {}) })); }
+      catch (cause) { failure = failed ? new AggregateError([failure, cause], 'Erasure operation and diagnostics failed', { cause: failure }) : cause; failed = true; }
+      if (failed) {
+        if (captured) {
+          const error = Object.assign(headError('EOWNERERASED', 'Owner erasure completed before its tracked operation failed'), { cause: failure, result: captured });
+          this.eraseErrors.set(error, captured); throw error;
+        }
+        if (headResult || executor.hasQualifiedHeadDeletion) {
+          const error = Object.assign(headError(hasCode(failure, 'EERASURECOMMITUNKNOWN') ? 'EERASURECOMMITUNKNOWN' : 'EERASURERESIDUAL',
+            'Head deletion completed; owner erasure remains pending'), { cause: failure, headDeleted: true,
+            archiveMutationAttempted: accounting.actual.archiveMutationAttempts > 0,
+            headEvidence: headResult?.evidence ?? { tenantRoot: operation.tenantRoot, userId: binding.userId, ownerId: binding.ownerId, operationId: binding.deleteOperationId } });
+          this.eraseHeadErrors.add(error); throw error;
+        }
+        throw this.erasePrecommitError(failure);
+      }
+      return value;
+    }).catch(cause => {
+      if (!captured) throw this.erasePrecommitError(cause);
+      if (cause && typeof cause === 'object' && this.eraseErrors.get(cause) === captured) throw cause;
+      const error = Object.assign(headError('EOWNERERASED', 'Owner erasure completed before transaction failure'), { cause, result: captured });
+      this.eraseErrors.set(error, captured); throw error;
     });
     void result.catch(() => undefined); return result;
   }
@@ -2313,6 +2434,43 @@ export class FileMemoryOwnerSnapshots {
       throw headError('EHEADCONFLICT', 'Memory owner changed before guarded operation');
     }
     return current.token;
+  }
+
+  /** @internal Accounted, read-only replacement authority for the dormant erasure executor. */
+  async observeErasureReplacementAtScope(
+    operation: FileMemoryOperationScope, locator: string, inspection: ErasureInspection,
+  ): Promise<ErasureReplacementSnapshot> {
+    const coordinator = this.requiredCoordinator(), scope = coordinator.requireActiveOperationScope(operation);
+    validateLocator(locator);
+    if (inspection.root !== scope.tenantRoot) throw headError('EHEADCONFLICT', 'Replacement observation belongs to another tenant');
+    const components = locator.split('/'), name = components.pop()!, parent = components.join('/') || '.';
+    const hash = createHash('sha256').update(name).digest('hex');
+    const sidecar = `${parent === '.' ? '' : `${parent}/`}.${hash}${SIDECAR_SUFFIX}`;
+    const artifacts = async (ownerId?: string) => {
+      const names = await inspection.names(parent);
+      const exact = `.${hash}${SIDECAR_SUFFIX}`;
+      if (names.some(value => value.toLowerCase().startsWith(`.${hash}.memory-write`) ||
+        value.toLowerCase().startsWith(exact) && value !== exact)) throw headError('EOWNERRECOVERY', 'Replacement head has publication evidence');
+      if (ownerId && (await inspection.names(`${OWNER_DIRECTORY}/owners`)).some(value =>
+        value.toLowerCase().startsWith(`${ownerId}.json.`))) throw headError('EOWNERRECOVERY', 'Replacement registry has publication evidence');
+    };
+    await artifacts();
+    const before = await inspection.record(sidecar), content = await inspection.replacementHead(locator);
+    if (Buffer.byteLength(before.raw, 'utf8') > MAX_RECORD_BYTES) throw headError('EOWNERRECOVERY', 'Replacement owner exceeds the ownership record bound');
+    let owner: unknown; try { owner = JSON.parse(before.raw); } catch { throw headError('EOWNERRECOVERY', 'Replacement owner is malformed'); }
+    if (!validRecord(owner) || owner.state !== 'ACTIVE') throw headError('EOWNERRECOVERY', 'Replacement owner is incomplete');
+    const registry = await inspection.record(`${OWNER_DIRECTORY}/owners/${owner.ownerId}.json`);
+    if (Buffer.byteLength(registry.raw, 'utf8') > MAX_RECORD_BYTES) throw headError('EOWNERRECOVERY', 'Replacement registry exceeds the ownership record bound');
+    let recorded: unknown; try { recorded = JSON.parse(registry.raw); } catch { throw headError('EOWNERRECOVERY', 'Replacement registry is malformed'); }
+    const after = await inspection.record(sidecar); await artifacts(owner.ownerId);
+    if (Buffer.byteLength(after.raw, 'utf8') > MAX_RECORD_BYTES) throw headError('EOWNERRECOVERY', 'Replacement owner exceeds the ownership record bound');
+    const head = await inspection.lstat(locator);
+    if (!validRecord(recorded) || recorded.state !== 'ACTIVE' || before.raw !== after.raw || !sameIdentity(before.identity, after.identity) ||
+      owner.userId !== scope.userId || owner.locator !== locator || owner.contentHash !== content.digest || !sameIdentity(owner.fileIdentity, content.identity) ||
+      !isDeepStrictEqual(owner, recorded) || !sameIdentity(content.identity, identityOf(head))) throw headError('EOWNERRECOVERY', 'Replacement head and ownership disagree');
+    coordinator.requireActiveOperationScope(operation);
+    return { content: content.raw, registryEvidence: registry, token: { backend: 'file', ownership: 'owned', userId: scope.userId, tenantRoot: scope.tenantRoot,
+      locator, ownerId: owner.ownerId, revision: owner.revision, contentHash: content.digest, fileIdentity: content.identity } };
   }
 
   /** @internal Same-read raw head and token for guarded archive cleanup; no nested operation. */

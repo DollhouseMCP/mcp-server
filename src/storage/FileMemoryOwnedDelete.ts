@@ -8,6 +8,9 @@ import type { OwnedFileMemoryToken, FileMemorySnapshot } from './FileMemoryOwner
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileMemoryOperationScope } from './FileMemoryTransactionCoordinator.js';
+import { FileMemoryOwnedErasure, erasureNamespace, type ErasurePublication } from './FileMemoryOwnedErasure.js';
+import { erasureJournalName, erasureMaximumIdentity, erasureSerialize, erasureValidateRecord,
+  type ErasureArtifact, type ErasureHeadPreparation, type ErasureRecord } from './FileMemoryErasureEvidence.js';
 
 import { evidenceCauseCode as causeCode, evidenceDigest as digest, evidenceOrdinal as ordinal, evidenceDecimal as decimal,
   OwnedHeadEvidenceBudget, evidenceScalar, evidenceIdentity, evidenceKeys as keys, evidenceValidIdentity as validIdentity,
@@ -27,7 +30,12 @@ export type DeletePublication = 'partial-base' | 'partial-deleting-registry' | '
   'base-durable' | 'registry-durable' | 'pair-durable' | 'head-durable' | 'terminal-durable' |
   'after-registry' | 'after-sidecar' | 'before-head-unlink' | 'after-head-unlink' | 'after-terminal-registry' |
   'before-sidecar-retirement' | 'after-sidecar-retirement' | 'before-intent-retirement' | 'after-intent-retirement' |
-  'after-audit' | 'before-return';
+  'after-audit' | 'before-return' | 'partial-erasure-prepared' | 'partial-erasure-ready';
+/** Internal fixed handoff; never a generic mutation callback or public DELETE option. */
+export interface DeleteErasureHandoff {
+  readonly operationId: string; readonly executor: FileMemoryOwnedErasure;
+  readonly publication?: (phase: ErasurePublication) => Promise<void> | void;
+}
 type State = 'BASE' | 'REGISTRY_DELETING' | 'PAIR_DELETING' | 'HEAD_REMOVED' | 'TERMINAL';
 interface Commitment { locator: string; device: string; inode: string; mode: string; uid: string; childCount: number; domain: string; sha256: string }
 interface Historical { digest: string; identity: Identity }
@@ -79,11 +87,14 @@ function commitment(directory: Directory): Commitment {
     childCount: children.length, domain: DOMAIN, sha256: digest(JSON.stringify([DOMAIN, directory.locator, directory.identity.device, directory.identity.inode, directory.mode, directory.uid, children])) };
 }
 class DeleteBudget extends OwnedHeadEvidenceBudget {
-  reserve(slots: Map<string, string[]>, head: string): void {
+  reserve(slots: Map<string, string[]>, head: string, erasure = false): void {
     const { P, q } = this.reserveWeights(slots);
     // Forward primitives75P, barriers24P, baseline1P, original reader9P.
     // Physical head/ancestor versus ownership/registry disjointness proves qH+qR<=P.
     this.ceiling = this.consumed + 109 * P + 20 * q(head) + 6 * q('.memory-owners/owners');
+    // Fixed handoff: HEAD_PREPARED W/Y/B8P+2qR; READY V/B10P+3qR;
+    // three full critical construction/witness proofs3P. Original head cap remains unchanged.
+    if (erasure) this.ceiling += 21 * P + 5 * q('.memory-owners/owners');
     if (this.limit > 532480) throw new FileMemoryDirectoryScanLimitError();
   }
   async read(directory: import('node:fs').Dir) {
@@ -100,6 +111,9 @@ export class FileMemoryOwnedDelete {
   private readonly files = new Map<string, Artifact & { links: '1' | '2'; mode: string; uid: string }>();
   private record!: Intent; private binding!: Binding;
   private source = ''; private sourceJournal = ''; private sourceSidecar = ''; private registry = '';
+  private erasureJournal = ''; private preparedErasure?: ErasureRecord;
+  /** @internal Actual composed-head scanner work, distinct from erasure inspection. */
+  get erasureHandoffReadWork() { return Object.freeze({ directoryReads: this.budget.consumed, reservedDirectoryReads: this.budget.limit }); }
   private readonly closeFailures = new WeakMap<object, { cause: unknown; closeCause: unknown }>();
   private readonly capturedErrors = new WeakMap<object, DeleteOwnedResult>();
   isCapturedError(cause: unknown, result: DeleteOwnedResult): boolean { return !!cause && typeof cause === 'object' && this.capturedErrors.get(cause) === result; }
@@ -112,7 +126,8 @@ export class FileMemoryOwnedDelete {
     private readonly active: () => void, private readonly fresh: (budget: DeleteBudget) => Promise<FileMemorySnapshot>,
     private readonly replacement: (budget: DeleteBudget) => Promise<FileMemorySnapshot>,
     private readonly hook?: (phase: DeletePublication) => Promise<void> | void,
-    private readonly capture: (result: DeleteOwnedResult) => void = () => {}) {}
+    private readonly capture: (result: DeleteOwnedResult) => void = () => {},
+    private readonly erasure?: DeleteErasureHandoff) {}
   private absolute(locator: string): string { return locator === '.' ? this.scope.tenantRoot : path.join(this.scope.tenantRoot, locator); }
   private relative(target: string): string { return path.relative(this.scope.tenantRoot, target).split(path.sep).join('/') || '.'; }
   private closed<T>(handle: fs.FileHandle, body: () => Promise<T>): Promise<T> {
@@ -228,6 +243,7 @@ export class FileMemoryOwnedDelete {
     this.sourceJournal = side(this.source, 'memory-write.json');
     this.sourceSidecar = side(this.source, 'memory-owner.json');
     this.registry = this.absolute(`.memory-owners/owners/${this.request.expectedToken.ownerId}.json`);
+    if (this.erasure) this.erasureJournal = this.absolute(`.memory-owners/owners/${erasureJournalName(this.request.expectedToken.ownerId)}`);
   }
   private child(target: string): Child {
     const parent = this.directories.find(item => item.locator === this.relative(path.dirname(target)));
@@ -256,7 +272,8 @@ export class FileMemoryOwnedDelete {
   }
   private generatedPaths(): string[] {
     return [this.sourceJournal, ...states.slice(1).map(state => this.stage(this.sourceJournal, state)),
-      this.stage(this.registry, 'DELETING'), this.stage(this.registry, 'HEAD_DELETED'), this.stage(this.sourceSidecar, 'DELETING')];
+      this.stage(this.registry, 'DELETING'), this.stage(this.registry, 'HEAD_DELETED'), this.stage(this.sourceSidecar, 'DELETING'),
+      ...(this.erasure ? [this.erasureJournal, this.stage(this.erasureJournal, 'ERASURE_READY')] : [])];
   }
   private admitPaths(): void {
     let maximum = 0;
@@ -271,7 +288,7 @@ export class FileMemoryOwnedDelete {
     const projected = new Map(this.directories.map(item => [item.locator, [...item.names]]));
     const add = (target: string) => projected.get(this.relative(path.dirname(target)))!.push(path.basename(target));
     for (const target of this.generatedPaths()) add(target);
-    this.budget.reserve(projected, this.relative(path.dirname(this.source)));
+    this.budget.reserve(projected, this.relative(path.dirname(this.source)), !!this.erasure);
   }
   private rejectStages(): void {
     const headParent = this.directories.find(item => item.locator === this.relative(path.dirname(this.source)))!;
@@ -280,6 +297,8 @@ export class FileMemoryOwnedDelete {
     const registryParent = this.directories.find(item => item.locator === '.memory-owners/owners')!;
     const name = path.basename(this.registry);
     if (registryParent.names.some(value => value.toLowerCase().startsWith(name.toLowerCase()) && value !== name)) fail();
+    const erasurePrefix = `${this.request.expectedToken.ownerId}.erase`;
+    if (this.erasure && registryParent.names.some(value => value.toLowerCase().startsWith(erasurePrefix))) fail();
   }
   private async optional(target: string, limit = LIMIT, privateFile = true): Promise<Artifact | undefined> {
     try {
@@ -379,6 +398,52 @@ export class FileMemoryOwnedDelete {
         ...(states.indexOf(state) >= 2 ? { sidecar: { digest: digest(sidecarRaw), identity: maximum(H.identity.device, String(Buffer.byteLength(sidecarRaw))) } } : {}) };
       this.validateRecord(next); serialize(next); prior = next;
     }
+    if (this.erasure) {
+      const prepared: ErasureRecord = { ...this.erasure.executor.protocol, state: 'HEAD_PREPARED',
+        userId: this.binding.userId, ownerId: this.binding.ownerId, deleteOperationId: this.binding.operationId,
+        operationId: this.erasure.operationId, head: this.erasureHead(true) };
+      erasureSerialize(prepared);
+      const locators = ['.', 'volumes', 'volumes/by-id', `volumes/by-id/${this.binding.ownerId}`], maximum = erasureMaximumIdentity();
+      erasureSerialize({ ...prepared, state: 'ERASURE_READY', archive: { firstMissing: null,
+        existing: locators.map((locator, index) => ({ locator, device: maximum.device, inode: maximum.inode,
+          mode: '9'.repeat(20), uid: '9'.repeat(20), childCount: 4095, sha256: 'f'.repeat(64),
+          ...(this.erasure!.executor.protocol.schema === 2 ? { kind: index === 3 ? 'full' as const : 'names' as const } : {}) })) } });
+    }
+  }
+  private erasureHead(maximum = false): ErasureHeadPreparation {
+    const captured = (target: string): ErasureArtifact => {
+      if (maximum) return { identity: erasureMaximumIdentity(), digest: 'f'.repeat(64), mode: '9'.repeat(20), uid: '9'.repeat(20), links: '1' };
+      const file = this.files.get(target); if (!file || file.links !== '1') fail();
+      return { identity: file.identity, digest: file.digest, mode: file.mode, uid: file.uid, links: '1' };
+    };
+    const H = this.relative(path.dirname(this.source));
+    return { locator: this.binding.locator, originalHeadIdentity: this.binding.originalHeadIdentity,
+      sidecar: captured(this.sourceSidecar), intent: captured(this.sourceJournal), registry: captured(this.registry),
+      namespace: this.directories.map(directory => erasureNamespace(directory, new Set([
+        ...(directory.locator === H ? [path.basename(this.source), path.basename(this.sourceSidecar), path.basename(this.sourceJournal)] : []),
+        ...(directory.locator === '.memory-owners/owners' ? [path.basename(this.registry), path.basename(this.erasureJournal)] : []),
+      ]), this.erasure!.executor.protocol.schema)) };
+  }
+  private async prepareErasure(): Promise<void> {
+    if (!this.erasure) return;
+    await this.proof(true);
+    const record: ErasureRecord = { ...this.erasure.executor.protocol, state: 'HEAD_PREPARED', userId: this.binding.userId,
+      ownerId: this.binding.ownerId, deleteOperationId: this.binding.operationId, operationId: this.erasure.operationId, head: this.erasureHead() };
+    erasureValidateRecord(record);
+    await this.write(this.erasureJournal, erasureSerialize(record), 'partial-erasure-prepared');
+    await this.sync(path.dirname(this.erasureJournal)); this.preparedErasure = record;
+    await this.erasure.publication?.('head-prepared-durable'); await this.proof(true);
+  }
+  private async readyErasure(): Promise<void> {
+    if (!this.erasure) return;
+    if (!this.committed || !this.preparedErasure) fail();
+    await this.proof(true);
+    const archive = await this.erasure.executor.archiveWitness(this.preparedErasure.head);
+    await this.proof(true);
+    const ready: ErasureRecord = { ...this.preparedErasure, state: 'ERASURE_READY', archive };
+    erasureValidateRecord(ready);
+    await this.replace(this.erasureJournal, erasureSerialize(ready), 'ERASURE_READY', 'partial-erasure-ready');
+    await this.erasure.publication?.('ready-durable'); await this.proof(true);
   }
   private isTerminalRegistry(raw: string): boolean {
     const token = this.request.expectedToken;
@@ -485,10 +550,12 @@ export class FileMemoryOwnedDelete {
       await this.replace(this.registry, this.metadataRaw(true), 'HEAD_DELETED', 'partial-terminal-registry'); await this.barrier('after-terminal-registry');
       await this.publishPhase('TERMINAL', 'partial-terminal-phase', 'terminal-durable');
     }
+    await this.prepareErasure();
     if (this.files.has(this.sourceSidecar)) await this.remove(this.sourceSidecar, 'before-sidecar-retirement', 'after-sidecar-retirement');
     await this.barrier('before-intent-retirement', true); this.active(); this.attempted = true; await fs.unlink(this.sourceJournal);
     this.files.delete(this.sourceJournal); await this.transition(path.dirname(this.source), [], [path.basename(this.sourceJournal)]); await this.barrier('after-intent-retirement');
     await this.sync(path.dirname(this.source), true); this.attempted = false;
+    await this.readyErasure();
   }
   private outcomeCode(): string {
     if (this.committed) return 'EHEADDELETED';
