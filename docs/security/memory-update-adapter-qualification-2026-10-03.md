@@ -69,6 +69,8 @@ The correction changes only that production error-code entry. A regression sends
 
 Correction receipts: `/tmp/2992-invalid-head-correction-receipt.txt`, `/tmp/2992-invalid-head-red.log`, `/tmp/2992-invalid-head-green.log`, `/tmp/2992-invalid-head-types.log`, and `/tmp/2992-invalid-head-lint.log`.
 
+Sonar's remaining S6582 readability finding was corrected by using optional chaining for the missing-binding guard. Tenant validation guarantees a nonempty string before the comparison, so an absent binding still refuses before any later state access. All 15 adapter cases, production TypeScript and changed-file lint pass after this change; independent review accepted adapter blob `e093a52797b77828571e4ec9b6ce93c8d5e1f478`. Receipts are `/tmp/2992-optional-chain-runtime.log`, `/tmp/2992-optional-chain-types.log`, and `/tmp/2992-optional-chain-lint.log`. No finding suppression or test limit change was made.
+
 - `/tmp/2906-local-qualification-receipt.md` and `/tmp/2906-central-update-source-freeze.txt`
 - `/tmp/2906-qualified-adapter-runtime.log`, `/tmp/2906-final-focused-runtime.log`, `/tmp/2906-generic-compatibility.log`
 - `/tmp/2906-final-production-types.log`, `/tmp/2906-qualified-unit-types.log`, `/tmp/2906-qualified-lint.log`, `/tmp/2906-worker-lint.log`

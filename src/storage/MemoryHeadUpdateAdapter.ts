@@ -71,7 +71,7 @@ export class MemoryHeadUpdateAdapter {
   beginUpdate(memory: object, tenant: string, locator: string | undefined, name: string, contextRoot: string): MemoryUpdateToken {
     this.requireTenant(tenant);
     const state = this.bindings.get(memory);
-    if (!state || state.token.userId !== tenant || state.token.locator !== locator || state.name !== name || state.contextRoot !== contextRoot) {
+    if (state?.token.userId !== tenant || state.token.locator !== locator || state.name !== name || state.contextRoot !== contextRoot) {
       throw refusal('UPDATE requires original instance ownership, name and locator');
     }
     if (state.busy || state.unknown) throw refusal('Memory has an in-flight or unresolved update');
