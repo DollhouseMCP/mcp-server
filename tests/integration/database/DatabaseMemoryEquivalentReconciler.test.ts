@@ -30,13 +30,14 @@ async function prepared(f: EquivalentFixture, reconciler = executor(f)): Promise
   if (!result.proposal) throw new Error('Real writer fixture did not produce an equivalent proposal');
   return result.proposal;
 }
+// Only raw execute statements are intercepted; structured Drizzle reads retain the real PendingQuery.values() interface.
 type QueryParameters = NonNullable<Parameters<Sql['unsafe']>[1]>;
-function intercepted(connection: Sql, intercept: (client: Sql, statement: string, parameters: QueryParameters) => Promise<unknown>): Sql {
+function intercepted(connection: Sql, matches: (statement: string) => boolean, intercept: (client: Sql, statement: string, parameters: QueryParameters) => Promise<unknown>): Sql {
   return new Proxy(connection, { get(target, property, receiver) {
     if (property === 'begin') return (options: string, callback: (client: unknown) => Promise<unknown>) =>
       target.begin(options, async reserved => callback(new Proxy(reserved, { get(client, key, innerReceiver) {
         if (key === 'unsafe') return (statement: string, parameters: QueryParameters) =>
-          intercept(client as unknown as Sql, statement, parameters);
+          matches(statement) ? intercept(client as unknown as Sql, statement, parameters) : client.unsafe(statement, parameters);
         return Reflect.get(client, key, innerReceiver);
       } })));
     return Reflect.get(target, property, receiver);
@@ -86,7 +87,12 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
 
   it('refuses a stale complete projection even if raw and child equivalence remains intact', () => isolated(async f => {
     const proposal = await prepared(f);
-    await f.maintenance`UPDATE public.elements SET visibility='public' WHERE id=${f.memoryId}::uuid`;
+    await f.maintenance`UPDATE public.elements SET updated_at=updated_at+interval '1 microsecond' WHERE id=${f.memoryId}::uuid`;
+    const fresh = await executor(f).prepareEquivalent({ userId: f.userId, memoryId: f.memoryId });
+    expect(fresh.inspection).toMatchObject({ status: 'equivalent', dirty: true });
+    expect(fresh.proposal).not.toBeNull();
+    expect(fresh.proposal?.projectionSha256).not.toBe(proposal.projectionSha256);
+    expect(fresh.proposal?.revision).not.toBe(proposal.revision);
     const before = await f.snapshot();
     expect(await executor(f).qualifyEquivalent(proposal, f.request())).toEqual({ status: 'refused', reason: 'stale' });
     expect(await f.snapshot()).toEqual(before);
@@ -156,7 +162,7 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
     const proposal = await prepared(f);
     let attempted = false;
     let blockedCode: unknown;
-    const guarded = intercepted(f.maintenance, async (client, statement, parameters) => {
+    const guarded = intercepted(f.maintenance, statement => statement.includes('SELECT EXISTS(SELECT 1 FROM public.memory_volumes'), async (client, statement, parameters) => {
       const rows = await client.unsafe(statement, parameters);
       if (statement.includes('SELECT EXISTS(SELECT 1 FROM public.memory_volumes') && !attempted) {
         attempted = true;
@@ -181,11 +187,13 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
     const proposal = await prepared(f);
     const before = await f.snapshot();
     let updated = false;
-    const failing = intercepted(f.maintenance, async (client, statement, parameters) => {
+    let injectedCode: unknown;
+    const failing = intercepted(f.maintenance, statement => statement.startsWith('UPDATE public.elements SET memory_entries_out_of_sync=false'), async (client, statement, parameters) => {
       const rows = await client.unsafe(statement, parameters);
       if (statement.startsWith('UPDATE public.elements SET memory_entries_out_of_sync=false')) {
         updated = true;
-        await client.unsafe('SELECT 1/0');
+        try { await client.unsafe('SELECT 1/0'); }
+        catch (cause) { injectedCode = (cause as { code?: string }).code; throw cause; }
       }
       return rows;
     });
@@ -193,6 +201,7 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
     const request = f.request();
     expect(await reconciler.qualifyEquivalent(proposal, request)).toEqual({ status: 'refused', reason: 'query' });
     expect(updated).toBe(true);
+    expect(injectedCode).toBe('22012');
     expect(await f.snapshot()).toEqual(before);
   }));
 
@@ -291,7 +300,7 @@ requiredDescribe('owned CI database equivalent reconciliation', () => {
     const reconciler = executor(f, early);
     const request = f.request();
     let actualLockFailure: unknown;
-    const freshBarrier = intercepted(f.competitor, async (client, statement, parameters) => {
+    const freshBarrier = intercepted(f.competitor, statement => statement.startsWith('LOCK TABLE '), async (client, statement, parameters) => {
       try { return await client.unsafe(statement, parameters); }
       catch (cause) {
         if ((cause as { code?: string }).code === '55P03') actualLockFailure = cause;

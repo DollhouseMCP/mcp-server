@@ -70,8 +70,10 @@ export async function makeEquivalentFixture() {
     await maintenance`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO ${maintenance(roleName)}`;
     await maintenance`GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO ${maintenance(roleName)}`;
     await maintenance`REVOKE INSERT,UPDATE,DELETE ON public.users FROM ${maintenance(roleName)}`;
+    const selectedUsername = `selected-${suffix}`;
+    const foreignUsername = `foreign-${suffix}`;
     await maintenance`INSERT INTO public.users(id,username) VALUES
-      (${userId}::uuid,${`selected-${suffix}`}),(${foreignUserId}::uuid,${`foreign-${suffix}`})`;
+      (${userId}::uuid,${selectedUsername}),(${foreignUserId}::uuid,${foreignUsername})`;
     const appUrl = new URL(url);
     appUrl.username = roleName;
     appUrl.password = password;
@@ -110,7 +112,7 @@ export async function makeEquivalentFixture() {
       layer, request, snapshot, cleanup };
   } catch (cause) {
     try { await cleanup(); }
-    catch (secondary) { throw new AggregateError([cause, secondary], 'Owned fixture setup and cleanup failed'); }
+    catch (cleanupError) { throw new AggregateError([cause, cleanupError], 'Owned fixture setup and cleanup failed'); }
     throw cause;
   }
 }

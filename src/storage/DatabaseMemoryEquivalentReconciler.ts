@@ -45,7 +45,7 @@ export class DatabaseMemoryEquivalentReconciler {
   constructor(private readonly db: DatabaseInstance, private readonly getCurrentUserId: UserIdResolver,
     private readonly maintenanceConnection: Sql, private readonly applicationRole: string) {
     if (typeof maintenanceConnection.begin !== 'function' || 'savepoint' in maintenanceConnection ||
-      typeof applicationRole !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/u.test(applicationRole)) throw new TypeError('Invalid maintenance connection or application role');
+      typeof applicationRole !== 'string' || !/^[a-zA-Z_]\w{0,62}$/u.test(applicationRole)) throw new TypeError('Invalid maintenance connection or application role');
     this.inspector = new DatabaseMemoryReconciliationInspector(db, getCurrentUserId);
   }
   async prepareEquivalent(owner: MemoryInspectionOwner): Promise<{ inspection: MemoryReconciliationInspection; proposal: MemoryEquivalentProposal | null }> {
@@ -171,7 +171,10 @@ export class DatabaseMemoryEquivalentReconciler {
         const checkpoint = () => { if (invocation.abandoned || performance.now() >= invocation.deadline) throw new Refusal('deadline'); };
         const query = async (statement: SQL): Promise<Row[]> => {
           checkpoint(); const rows = await tx.execute(statement); checkpoint();
-          if (!Array.isArray(rows)) throw new Refusal('query'); return rows as Row[];
+          if (!Array.isArray(rows)) {
+            throw new Refusal('query');
+          }
+          return rows as Row[];
         };
         try {
           // The fresh global exclusion barrier waits out any older backend writer.

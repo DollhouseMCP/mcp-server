@@ -251,7 +251,11 @@ export class DatabaseMemoryReconciliationInspector {
       values.some(row => typeof row.value !== 'string' || !['parent', 'child', 'tag'].includes(row.kind))) throw new Error('Incomplete reconciliation projection');
     if (hasUnqualifiedNumericPrecision(values)) return { inspection: { ...inspection, status: 'ineligible',
       diagnostics: [diagnostic('unrepresentable_numeric_precision', 'projection')] }, projectionSha256: null };
-    const encoded = values.map(row => JSON.stringify([row.kind, row.value])).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    const encoded = values.map(row => JSON.stringify([row.kind, row.value])).sort((a, b) => {
+      if (a < b) return -1;
+      if (a > b) return 1;
+      return 0;
+    });
     return { inspection, projectionSha256: createHash('sha256').update(JSON.stringify([1, owner.userId, owner.memoryId, encoded, 'archive-free'])).digest('hex') };
   }
 
