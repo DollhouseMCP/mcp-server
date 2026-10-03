@@ -13,6 +13,8 @@ import {
   getOperationsForEndpoint,
   resolveOperationName,
 } from '../../../../src/handlers/mcp-aql/OperationRouter.js';
+import { getDefaultPermissionLevel } from '../../../../src/handlers/mcp-aql/policies/OperationPolicies.js';
+import { PermissionLevel } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 
 describe('OperationRouter', () => {
   // Canonical list of all operations — add new operations here when registering them in OPERATION_ROUTES
@@ -82,6 +84,7 @@ describe('OperationRouter', () => {
         'query_metrics',
         // UPDATE operations
         'edit_element',
+        'rollover_memory',
         'upgrade_element',
         // DELETE operations
         'delete_element',
@@ -261,6 +264,13 @@ describe('OperationRouter', () => {
   });
 
   describe('UPDATE endpoint operations', () => {
+    it('maps rollover_memory to UPDATE so it uses single-use confirmation', () => {
+      const route = OPERATION_ROUTES.rollover_memory;
+      expect(route.endpoint).toBe('UPDATE');
+      expect(route.handler).toBe('Memory.rollover');
+      expect(getDefaultPermissionLevel('rollover_memory')).toBe(PermissionLevel.CONFIRM_SINGLE_USE);
+    });
+
     it('should map edit_element to UPDATE endpoint', () => {
       const route = OPERATION_ROUTES.edit_element;
       expect(route.endpoint).toBe('UPDATE');
@@ -271,6 +281,7 @@ describe('OperationRouter', () => {
       const updateOps = getOperationsForEndpoint('UPDATE');
       expect(updateOps.length).toBeGreaterThan(0);
       expect(updateOps).toContain('edit_element');
+      expect(updateOps).toContain('rollover_memory');
     });
   });
 

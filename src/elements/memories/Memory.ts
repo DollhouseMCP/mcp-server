@@ -26,7 +26,7 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, MemoryOnFullPolicy, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
-import { MemoryType } from './types.js';
+import { MemoryType, MemoryVolumeRecord } from './types.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
 import { logger } from '../../utils/logger.js';
@@ -95,6 +95,11 @@ export interface MemoryMetadata extends IElementMetadata {
    * sets an expiring retention policy. See MEMORY_CONSTANTS.ON_FULL_POLICIES.
    */
   onFull?: MemoryOnFullPolicy;
+  /**
+   * Index of sealed archive volumes created by rollover (Issue #2861).
+   * System-generated; validated on construction.
+   */
+  volumes?: MemoryVolumeRecord[];
   encryptionEnabled?: boolean;
   // Search index configuration (Issue #984)
   indexThreshold?: number;
@@ -247,6 +252,10 @@ export class Memory extends BaseElement implements IElement {
   private privacyLevel: PrivacyLevel;
   private searchable: boolean;
   private maxEntries: number;
+  /** Prepared rollover markers may be projected on a detached head before insertion. */
+  private static readonly preparedRolloverMarkers = new WeakSet<MemoryEntry>();
+  /** Detached rollover snapshots never start indexing or emit add events. */
+  private rolloverProjectionOnly = false;
   // Issue #2859: running count of entries removed by policy (expiry or
   // eviction), so callers can report removals instead of inferring them.
   private policyRemovedCount = 0;
@@ -340,13 +349,13 @@ export class Memory extends BaseElement implements IElement {
       privacyLevel: this.privacyLevel,
       searchable: this.searchable,
       maxEntries: this.maxEntries,
-      // Issue #2859: persist only a valid explicit choice, so the default keeps
-      // following retentionDays if that changes later.
-      // A present but invalid policy must fail safe. Silently dropping a typo
-      // here would make an expiring memory default to evict_oldest instead.
+      // A present but invalid policy must fail safe. Absence still follows
+      // retentionDays so permanent memories reject and expiring caches evict.
       onFull: requestedOnFull === undefined
         ? undefined
         : Memory.isOnFullPolicy(requestedOnFull) ? requestedOnFull : 'error',
+      // Issue #2861: keep only well-formed volume records.
+      volumes: Memory.sanitizeVolumeRecords(metadata.volumes),
       autoLoad: metadata.autoLoad,
       priority: metadata.priority,
       encryptionEnabled: metadata.encryptionEnabled || false
@@ -411,12 +420,26 @@ export class Memory extends BaseElement implements IElement {
     metadata?: Record<string, any>,
     source: string = 'unknown'
   ): Promise<MemoryEntry> {
-    // SECURITY: Sanitize source parameter before use
-    const sanitizedSource = sanitizeInput(source, 50);
-
     if (this.entriesSize >= this.maxEntries) {
       await this.enforceRetentionPolicy();
     }
+
+    const entry = this.prepareEntry(content, tags, metadata, source);
+
+    // Issue #2859: synchronous capacity check immediately before the insert.
+    this.assertCapacityAvailable();
+    this.insertEntry(entry, true);
+    return entry;
+  }
+
+  private prepareEntry(
+    content: string,
+    tags?: string[],
+    metadata?: Record<string, any>,
+    source: string = 'unknown'
+  ): MemoryEntry {
+    // SECURITY: Sanitize source parameter before use
+    const sanitizedSource = sanitizeInput(source, 50);
 
     // FIX #1315: Sanitize content but don't validate for threats (non-blocking)
     // Just normalize Unicode and apply DOMPurify
@@ -443,19 +466,85 @@ export class Memory extends BaseElement implements IElement {
       source: sanitizedSource
     };
 
-    // Issue #2859: synchronous capacity check immediately before the insert.
-    // No await sits between this check and set(), so concurrent addEntry calls
-    // cannot all pass it. A memory that has not opted into eviction rejects the
-    // new entry instead of deleting existing ones.
-    this.assertCapacityAvailable();
+    return entry;
+  }
 
-    // Store entry
+  /**
+   * Snapshot the exact live entries that will remain after rollover for YAML
+   * sizing. Deserialization is intentionally bypassed: it can sanitize or
+   * quarantine entries and run on-load retention, none of which occurs when
+   * applyRollover() removes entries from this already-loaded memory.
+   */
+  public createRolloverHeadProjection(
+    keptIds: ReadonlySet<string>,
+    records: readonly MemoryVolumeRecord[],
+    metadataService: MetadataService,
+  ): Memory {
+    const head = new Memory({ ...this.metadata, maxEntries: this.maxEntries }, metadataService, undefined, undefined, true);
+    head.id = this.id;
+    head.version = this.version;
+    head.metadata = {
+      ...this.metadata,
+      volumes: [...this.getVolumeRecords(), ...records],
+    } as MemoryMetadata;
+    head.extensions = { ...this.extensions };
+    head.instructions = this.instructions;
+    head.entries = this.selectRolloverEntries(keptIds);
+    head.rolloverProjectionOnly = true;
+    return head;
+  }
+
+  /** Build a volume from the live entries without a second lossy load pass. */
+  public createRolloverVolumeProjection(
+    metadata: Partial<MemoryMetadata>,
+    entryIds: ReadonlySet<string>,
+    metadataService: MetadataService,
+  ): Memory {
+    const volume = new Memory(metadata, metadataService, undefined, undefined, true);
+    volume.entries = this.selectRolloverEntries(entryIds);
+    volume.rolloverProjectionOnly = true;
+    return volume;
+  }
+
+  private selectRolloverEntries(ids: ReadonlySet<string>): Map<string, MemoryEntry> {
+    return new Map([...this.entries].filter(([id]) => ids.has(id)));
+  }
+
+  /** Prepare the one marker object used for both head projection and live insertion. */
+  public prepareRolloverMarker(content: string, volumeNumbers: readonly number[]): MemoryEntry {
+    const entry = this.prepareEntry(
+      content,
+      [...MEMORY_CONSTANTS.ROLLOVER_MARKER_TAGS],
+      { rolloverVolumes: [...volumeNumbers] },
+      'rollover'
+    );
+    Memory.preparedRolloverMarkers.add(entry);
+    return entry;
+  }
+
+  /** Append an informational marker only when it cannot remove a kept entry. */
+  public appendPreparedRolloverMarkerIfCapacity(entry: MemoryEntry): boolean {
+    if (!Memory.preparedRolloverMarkers.has(entry)) {
+      throw new Error('Rollover marker was not prepared by Memory');
+    }
+    // An informational marker must also leave one slot for the next real
+    // entry; otherwise rollover at the count limit would recover no capacity.
+    if (this.entriesSize + 1 >= this.maxEntries || this.entries.has(entry.id)) {
+      return false;
+    }
+    this.insertEntry(entry, false);
+    return true;
+  }
+
+  private insertEntry(entry: MemoryEntry, enforceCapacity: boolean): void {
+    // No await sits between the capacity check and insertion.
     this.entries.set(entry.id, entry);
     this._isDirty = true;
 
     // FIX (PR #1313): Enforce capacity AFTER adding to prevent race conditions.
     // Issue #2859: only memories with onFull 'evict_oldest' are trimmed here.
-    this.enforceCapacitySync();
+    if (enforceCapacity) this.enforceCapacitySync();
+    if (this.rolloverProjectionOnly) return;
 
     // Update search index (Issue #984)
     if (!this.appendCandidate) this.searchIndex.addEntry(entry);
@@ -474,10 +563,8 @@ export class Memory extends BaseElement implements IElement {
       type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED,
       severity: 'LOW',
       source: 'Memory.addEntry',
-      details: `Added memory entry ${entry.id} with ${sanitizedTags.length} tags (UNTRUSTED, pending validation)`
+      details: `Added memory entry ${entry.id} with ${entry.tags?.length ?? 0} tags (UNTRUSTED, pending validation)`
     });
-
-    return entry;
   }
 
   /**
@@ -631,6 +718,97 @@ export class Memory extends BaseElement implements IElement {
     };
     this.entries.set(entry.id, entry);
     this.searchIndex.addEntry(entry);
+    this._isDirty = true;
+  }
+
+  /**
+   * Issue #2861: validate volume records from metadata. Anything malformed
+   * is dropped, so the index can only hold system-generated values.
+   */
+  private static sanitizeVolumeRecords(value: unknown): MemoryVolumeRecord[] | undefined {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+    const isoOrUndefined = (v: unknown): string | undefined =>
+      typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : undefined;
+    const records: MemoryVolumeRecord[] = [];
+    for (const raw of value) {
+      if (!raw || typeof raw !== 'object') continue;
+      const r = raw as Record<string, unknown>;
+      const sealedAt = isoOrUndefined(r.sealedAt);
+      if (
+        !Number.isSafeInteger(r.volume) || (r.volume as number) < 1 ||
+        typeof r.file !== 'string' || !Memory.VOLUME_FILE_PATTERN.test(r.file) ||
+        !sealedAt ||
+        !Number.isInteger(r.entryCount) || (r.entryCount as number) < 0 ||
+        typeof r.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(r.sha256)
+      ) {
+        continue;
+      }
+      records.push({
+        volume: r.volume as number,
+        file: r.file,
+        sealedAt,
+        entryCount: r.entryCount as number,
+        firstEntryAt: isoOrUndefined(r.firstEntryAt),
+        lastEntryAt: isoOrUndefined(r.lastEntryAt),
+        sha256: r.sha256,
+      });
+    }
+    return records.length > 0 ? records : undefined;
+  }
+
+  /** Issue #2861: file name for a volume number, e.g. v0001.yaml */
+  public static volumeFileName(volume: number): string {
+    if (!Number.isSafeInteger(volume) || volume < 1) {
+      throw new RangeError('Memory volume number must be a positive safe integer');
+    }
+    return `v${String(volume).padStart(4, '0')}.yaml`;
+  }
+
+  /** Issue #2861: relative path of a volume file under the memories directory */
+  private static readonly VOLUME_FILE_PATTERN = /^volumes\/[a-z0-9][a-z0-9._-]*\/v\d{4,}\.yaml$/;
+
+  /**
+   * Issue #2861: the sealed archive volumes recorded for this memory.
+   */
+  public getVolumeRecords(): MemoryVolumeRecord[] {
+    return [...(Memory.sanitizeVolumeRecords((this.metadata as MemoryMetadata).volumes) ?? [])];
+  }
+
+  /**
+   * Issue #2861: decide which entries a rollover seals. Entries tagged with
+   * any keepTags, and the keepLatest newest entries, stay in the live memory.
+   * Sealed entries are returned oldest first.
+   */
+  public planRollover(keepTags: readonly string[], keepLatest: number): { sealed: MemoryEntry[]; kept: MemoryEntry[] } {
+    const newestFirst = this.getEntriesNewestFirst();
+    const keep = new Set(keepTags);
+    const keptIds = new Set(newestFirst.slice(0, Math.max(0, keepLatest)).map(entry => entry.id));
+    for (const entry of newestFirst) {
+      if (entry.tags?.some(tag => keep.has(tag))) {
+        keptIds.add(entry.id);
+      }
+    }
+    return {
+      sealed: newestFirst.filter(entry => !keptIds.has(entry.id)).reverse(),
+      kept: newestFirst.filter(entry => keptIds.has(entry.id)),
+    };
+  }
+
+  /**
+   * Issue #2861: move sealed entries out of the live memory once their volume
+   * has been written and verified, and record the volumes. This is an
+   * explicit archive step, not a policy removal, so it is not counted in
+   * getPolicyRemovedCount().
+   */
+  public applyRollover(sealedIds: readonly string[], records: readonly MemoryVolumeRecord[]): void {
+    for (const id of sealedIds) {
+      this.entries.delete(id);
+      this.searchIndex.removeEntry(id);
+    }
+    const existing = this.getVolumeRecords();
+    this.metadata = { ...this.metadata, volumes: [...existing, ...records] } as MemoryMetadata;
     this._isDirty = true;
   }
 
@@ -1384,6 +1562,15 @@ export class Memory extends BaseElement implements IElement {
         keyCount++;
       } else if (sanitizedKey && typeof value === 'number') {
         sanitized[sanitizedKey] = value;
+        keyCount++;
+      } else if (
+        sanitizedKey === 'rolloverVolumes' && Array.isArray(value) &&
+        value.length <= MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT &&
+        value.every((volume: unknown) => Number.isSafeInteger(volume) && (volume as number) > 0)
+      ) {
+        // This system-generated marker field must survive the same sanitizer
+        // used by addEntry. Other arrays remain disallowed.
+        sanitized[sanitizedKey] = [...value];
         keyCount++;
       }
       // Skip other types for security

@@ -82,3 +82,55 @@ export interface MemoryMetadataBase {
   // Trigger words for Enhanced Index (Issue #1124)
   triggers?: string[];
 }
+
+/**
+ * Index record for one sealed archive volume of a memory (Issue #2861).
+ * Stored in the live memory's metadata.volumes. Holds only structured,
+ * system-generated values; free-text reasons go in the rollover marker entry.
+ */
+export interface MemoryVolumeRecord {
+  /** 1-based volume number, unique per memory */
+  volume: number;
+  /** Volume file path relative to the memories directory */
+  file: string;
+  /** ISO timestamp when the volume was sealed */
+  sealedAt: string;
+  entryCount: number;
+  /** ISO timestamps of the oldest and newest sealed entries */
+  firstEntryAt?: string;
+  lastEntryAt?: string;
+  /** SHA-256 of the volume file content as written */
+  sha256: string;
+}
+
+/**
+ * Options for rolling a memory over into sealed archive volumes (Issue #2861).
+ */
+export interface MemoryRolloverOptions {
+  /** Entries carrying any of these tags stay in the live memory */
+  keepTags: string[];
+  /** Number of newest entries that stay in the live memory */
+  keepLatest: number;
+  /** Plan only; write nothing */
+  dryRun: boolean;
+  /** Free-text reason, recorded in the marker entry only */
+  reason?: string;
+}
+
+/**
+ * Outcome of a rollover (Issue #2861).
+ */
+export interface MemoryRolloverResult {
+  memory: string;
+  dryRun: boolean;
+  sealedCount: number;
+  keptCount: number;
+  /** Records for volumes written (or that would be written, on a dry run) */
+  volumes: MemoryVolumeRecord[];
+  /** Entry ids moved out of the live memory; empty on a dry run */
+  sealedIds: string[];
+  /** Internal preflight decision; an informational marker must never evict kept entries. */
+  includeMarker?: boolean;
+  /** Exact prepared marker projected into the head; omitted when it would exceed a limit. */
+  markerEntry?: MemoryEntry;
+}

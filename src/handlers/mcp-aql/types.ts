@@ -233,7 +233,7 @@ export const ENDPOINT_OPERATIONS = {
     'deactivate_element',
     'introspect',
   ],
-  update: ['edit_element'],
+  update: ['edit_element', 'rollover_memory'],
   delete: ['delete_element', 'execute_agent', 'clear'],
 } as const;
 

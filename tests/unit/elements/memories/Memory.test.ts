@@ -653,4 +653,80 @@ describe('Memory Element', () => {
       expect(content).not.toContain('[]'); // Should not show empty brackets
     });
   });
+
+  describe('rollover planning and volume index (Issue #2861)', () => {
+    async function memoryWithEntries(): Promise<{ memory: Memory; ids: Record<string, string> }> {
+      const memory = new Memory({ name: 'Rollover Source' }, metadataService);
+      const ids: Record<string, string> = {};
+      const entriesMap = () => (memory as any).entries as Map<string, MemoryEntry>;
+      const specs: Array<[string, string[], string]> = [
+        ['oldest', [], '2026-01-01T00:00:00Z'],
+        ['pinned-old', ['pinned'], '2026-01-02T00:00:00Z'],
+        ['middle', [], '2026-01-03T00:00:00Z'],
+        ['newer', [], '2026-01-04T00:00:00Z'],
+        ['newest', [], '2026-01-05T00:00:00Z'],
+      ];
+      for (const [content, tags, time] of specs) {
+        const entry = await memory.addEntry(content, tags);
+        entriesMap().get(entry.id)!.timestamp = new Date(time);
+        ids[content] = entry.id;
+      }
+      return { memory, ids };
+    }
+
+    it('keeps tagged entries and the newest keepLatest, sealing the rest oldest first', async () => {
+      const { memory } = await memoryWithEntries();
+
+      const plan = memory.planRollover(['pinned'], 2);
+
+      expect(plan.sealed.map(e => e.content)).toEqual(['oldest', 'middle']);
+      expect(plan.kept.map(e => e.content)).toEqual(['newest', 'newer', 'pinned-old']);
+    });
+
+    it('seals everything untagged when keepLatest is 0', async () => {
+      const { memory } = await memoryWithEntries();
+      expect(memory.planRollover([], 0).sealed).toHaveLength(5);
+    });
+
+    it('applies a rollover: removes sealed entries, records volumes, and is not a policy removal', async () => {
+      const { memory, ids } = await memoryWithEntries();
+      const record = {
+        volume: 1,
+        file: 'volumes/rollover-source/v0001.yaml',
+        sealedAt: '2026-02-01T00:00:00.000Z',
+        entryCount: 2,
+        sha256: 'a'.repeat(64),
+      };
+
+      memory.applyRollover([ids.oldest, ids.middle], [record]);
+
+      expect((await memory.search({})).map(e => e.content).sort()).toEqual(['newer', 'newest', 'pinned-old']);
+      expect(memory.getVolumeRecords()).toEqual([record]);
+      expect(memory.getPolicyRemovedCount()).toBe(0);
+    });
+
+    it('keeps well-formed volume records from metadata and drops malformed ones', () => {
+      const valid = {
+        volume: 2, file: 'volumes/log/v0002.yaml', sealedAt: '2026-02-01T00:00:00Z',
+        entryCount: 10, sha256: 'b'.repeat(64),
+      };
+      const memory = new Memory({
+        name: 'Log',
+        volumes: [
+          valid,
+          { ...valid, file: '../../etc/passwd' },
+          { ...valid, sha256: 'not-a-hash' },
+          { ...valid, volume: 0 },
+          'junk',
+        ] as never,
+      }, metadataService);
+
+      expect(memory.getVolumeRecords()).toEqual([{ ...valid, sealedAt: '2026-02-01T00:00:00.000Z' }]);
+    });
+
+    it('names volume files with a zero-padded number', () => {
+      expect(Memory.volumeFileName(1)).toBe('v0001.yaml');
+      expect(Memory.volumeFileName(12345)).toBe('v12345.yaml');
+    });
+  });
 });

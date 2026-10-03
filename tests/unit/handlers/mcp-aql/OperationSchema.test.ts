@@ -513,9 +513,10 @@ describe('OperationSchema', () => {
    */
   describe('Introspection-only schemas (Issue #594)', () => {
     describe('MEMORY_SCHEMAS', () => {
-      it('should define 2 memory operations', () => {
-        expect(Object.keys(MEMORY_SCHEMAS)).toHaveLength(2);
+      it('should define 3 memory operations', () => {
+        expect(Object.keys(MEMORY_SCHEMAS)).toHaveLength(3);
         expect(MEMORY_SCHEMAS.addEntry).toBeDefined();
+        expect(MEMORY_SCHEMAS.rollover_memory).toBeDefined();
         expect(MEMORY_SCHEMAS.clear).toBeDefined();
       });
 
@@ -527,6 +528,7 @@ describe('OperationSchema', () => {
 
       it('should have correct endpoints', () => {
         expect(MEMORY_SCHEMAS.addEntry.endpoint).toBe('CREATE');
+        expect(MEMORY_SCHEMAS.rollover_memory.endpoint).toBe('UPDATE');
         expect(MEMORY_SCHEMAS.clear.endpoint).toBe('DELETE');
       });
 

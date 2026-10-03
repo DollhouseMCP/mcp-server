@@ -6,6 +6,10 @@ import type { Memory } from '../../elements/memories/Memory.js';
 import type { ExecutionContext } from '../../security/encryption/ContextTracker.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { validateRequiredString } from './shared.js';
+import { sanitizeInput } from '../../security/InputValidator.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { MEMORY_CONSTANTS } from '../../elements/memories/constants.js';
+import type { MemoryRolloverOptions, MemoryRolloverResult } from '../../elements/memories/types.js';
 
 /**
  * Capability used to re-establish a save's originating per-user execution context
@@ -60,6 +64,9 @@ export class MemorySaveHandler {
    * session-scoped save key. Recovery on the next addEntry / flush retries these.
    */
   private readonly failedMemorySaves = new Map<string, FailedSave>();
+
+  // Issue #2861: memories with a rollover in progress (by save key)
+  private readonly rolloversInFlight = new Set<string>();
   /**
    * Issue #2329: per-key save attempt counter. The newest-started save wins —
    * an older in-flight save resolving late cannot erase a newer failure.
@@ -90,6 +97,8 @@ export class MemorySaveHandler {
         return this.addEntry(memoryName, memory, manager, params);
       case 'clear':
         return this.clear(memoryName, memory, manager);
+      case 'rollover':
+        return this.rollover(memoryName, memory, manager, params);
       default:
         throw new Error(`Unknown Memory method: ${method}`);
     }
@@ -399,6 +408,132 @@ export class MemorySaveHandler {
       `Missing required parameter 'content'. ${hint} ` +
       `Example: { operation: "addEntry", params: { element_name: "${memoryName}", content: "your text here", tags: ["optional"] } }`
     );
+  }
+
+  /**
+   * Issue #2861: seal older entries into read-only archive volumes and reset
+   * the live memory under the same name.
+   *
+   * Order: volumes are written and verified first (MemoryManager.rolloverMemory),
+   * then the sealed entries leave the in-RAM memory and it is saved through the
+   * ordinary save path. A failure before the save leaves the entries in both
+   * places, never in neither.
+   */
+  private async rollover(
+    memoryName: string,
+    memory: Memory,
+    manager: MemoryManager,
+    params: Record<string, unknown>
+  ): Promise<unknown> {
+    const options = MemorySaveHandler.parseRolloverOptions(params);
+    const saveKey = this.memorySaveKey(memoryName);
+    if (this.rolloversInFlight.has(saveKey)) {
+      throw new Error(`A rollover of memory '${memoryName}' is already in progress`);
+    }
+    this.rolloversInFlight.add(saveKey);
+    try {
+      // Operate on the authoritative instance, as addEntry does (#2329).
+      const priorFailure = this.failedMemorySaves.get(saveKey);
+      const targetMemory = priorFailure?.memory ?? this.pendingSaves.get(saveKey)?.memory ?? memory;
+      // Share the same-instance mutation queue with addEntry and clear. A
+      // volume write can await I/O before applyRollover, and the immediate
+      // head save can also await; neither window may accept a competing
+      // mutation on this in-memory object.
+      return await MemorySaveHandler.withMemoryMutation(targetMemory, async () => {
+        if (priorFailure && !options.dryRun) {
+          try {
+            await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
+          } catch (retryErr) {
+            throw new Error(
+              `Rollover NOT performed: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
+              `(${priorFailure.error.message}) and the retry also failed: ` +
+              `${retryErr instanceof Error ? retryErr.message : retryErr}`
+            );
+          }
+        }
+
+        const result = await manager.rolloverMemory(targetMemory, options);
+        if (options.dryRun || result.sealedCount === 0) {
+          return MemorySaveHandler.rolloverReceipt(result);
+        }
+
+        // The immediate save below supersedes any pending debounced save.
+        const pending = this.pendingSaves.get(saveKey);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingSaves.delete(saveKey);
+        }
+        targetMemory.applyRollover(result.sealedIds, result.volumes);
+        if (result.markerEntry) {
+          this.addRolloverMarker(targetMemory, result);
+        }
+        await this.saveMemoryTracked(saveKey, targetMemory, manager);
+        return MemorySaveHandler.rolloverReceipt(result);
+      });
+    } finally {
+      this.rolloversInFlight.delete(saveKey);
+    }
+  }
+
+  private static parseRolloverOptions(params: Record<string, unknown>): MemoryRolloverOptions {
+    const keepTagsParam = params.keep_tags;
+    if (keepTagsParam !== undefined && (!Array.isArray(keepTagsParam) || keepTagsParam.some(tag => typeof tag !== 'string'))) {
+      throw new TypeError('keep_tags must be an array of strings');
+    }
+    const keepTags = keepTagsParam === undefined
+      ? [...MEMORY_CONSTANTS.ROLLOVER_DEFAULT_KEEP_TAGS]
+      : (keepTagsParam as string[])
+          .slice(0, MEMORY_CONSTANTS.MAX_TAGS_PER_ENTRY)
+          .map(tag => sanitizeInput(UnicodeValidator.normalize(tag).normalizedContent, MEMORY_CONSTANTS.MAX_TAG_LENGTH))
+          .filter(tag => tag.length > 0);
+
+    const keepLatestParam = params.keep_latest ?? 0;
+    if (!Number.isInteger(keepLatestParam) || (keepLatestParam as number) < 0
+        || (keepLatestParam as number) > MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT) {
+      throw new Error(`keep_latest must be an integer from 0 to ${MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT}`);
+    }
+
+    const dryRunParam = params.dry_run ?? false;
+    if (typeof dryRunParam !== 'boolean') {
+      throw new TypeError('dry_run must be a boolean');
+    }
+
+    const reasonParam = params.reason;
+    if (reasonParam !== undefined && typeof reasonParam !== 'string') {
+      throw new TypeError('reason must be a string');
+    }
+    const reason = reasonParam
+      ? sanitizeInput(reasonParam, MEMORY_CONSTANTS.ROLLOVER_REASON_MAX_LENGTH)
+      : undefined;
+
+    return { keepTags, keepLatest: keepLatestParam as number, dryRun: dryRunParam, reason: reason || undefined };
+  }
+
+  /**
+   * Record the rollover in the live memory. The volume index in metadata is
+   * authoritative; this entry is informational, so a failure here (for example
+   * a memory whose kept entries still fill it) does not stop the save.
+   */
+  private addRolloverMarker(memory: Memory, result: MemoryRolloverResult): void {
+    try {
+      // The same sanitized entry was measured in the projected head. This
+      // operation cannot invoke the memory's eviction policy.
+      memory.appendPreparedRolloverMarkerIfCapacity(result.markerEntry!);
+    } catch (error) {
+      logger.warn(`[MemorySaveHandler] Rollover marker not added to memory '${memory.metadata.name}'`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private static rolloverReceipt(result: MemoryRolloverResult): Record<string, unknown> {
+    return {
+      memory: result.memory,
+      dryRun: result.dryRun,
+      sealedCount: result.sealedCount,
+      keptCount: result.keptCount,
+      volumes: result.volumes,
+    };
   }
 
   private async clear(memoryName: string, memory: Memory, manager: MemoryManager): Promise<unknown> {

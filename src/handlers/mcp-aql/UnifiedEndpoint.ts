@@ -216,6 +216,7 @@ export function getOperationHelp(): string {
 
 ### UPDATE Operations (modifying)
 - edit_element: Modify an existing element's fields
+- rollover_memory: Seal older memory entries into read-only archive volumes, keeping the memory name
 
 ### DELETE Operations (destructive)
 - delete_element: Permanently delete an element

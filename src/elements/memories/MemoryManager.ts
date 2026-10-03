@@ -10,7 +10,7 @@
  * 5. MEDIUM: Path validation prevents directory traversal attacks
  */
 
-import type { MemoryMetadata } from './Memory.js';
+import type { MemoryEntry, MemoryMetadata } from './Memory.js';
 import { Memory } from './Memory.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
@@ -22,6 +22,7 @@ import {
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer, type ElementSaveOptions } from '../../storage/IStorageLayer.js';
 import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import { ExclusiveCreateCleanupError } from '../../services/FileOperationsService.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _packageLocator = new PackageResourceLocator();
@@ -38,6 +39,8 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
+import type { MemoryRolloverOptions, MemoryRolloverResult, MemoryVolumeRecord } from './types.js';
+import { rolloverMarkerText } from './rolloverMarker.js';
 import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
 import type { ValidationService } from '../../services/validation/ValidationService.js';
 import type { SerializationService } from '../../services/SerializationService.js';
@@ -96,6 +99,17 @@ interface BackupCleanupResult {
   deletedFiles: string[];
   keptFiles: string[];
   errorDetails: Array<{ file: string; error: string }>;
+}
+
+interface RolloverWritePlan {
+  chunks: Array<{ entries: Array<Record<string, unknown>>; yaml: string }>;
+  volumeDir: string;
+  firstVolume: number;
+  slug: string;
+  sealedAt: string;
+  keptIds: ReadonlySet<string>;
+  sealedCount: number;
+  reason?: string;
 }
 
 export class MemoryManager extends BaseElementManager<Memory> {
@@ -722,6 +736,301 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async assertPersistable(element: Memory): Promise<void> {
     const yamlContent = await this.serializeElement(element);
     this.validateSerializedContent(yamlContent);
+  }
+
+  /**
+   * Issue #2861: seal a memory's older entries into read-only archive volumes.
+   *
+   * Writes and verifies every volume before returning. It does NOT modify the
+   * live memory: the caller applies the result with Memory.applyRollover() and
+   * saves through the ordinary save path, so a crash between steps leaves
+   * duplicated entries (volume plus live memory), never lost ones.
+   *
+   * Volumes are standard memory-format YAML under memories/volumes/<memory>/,
+   * a directory the memory scanner never reads, each within MAX_YAML_SIZE.
+   * Rolling over an oversized legacy memory (#2864) therefore splits it.
+   */
+  async rolloverMemory(memory: Memory, options: MemoryRolloverOptions): Promise<MemoryRolloverResult> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      throw new Error(
+        'rollover_memory is not yet available in database storage mode. ' +
+        'Start a new memory for additional entries in the meantime.'
+      );
+    }
+
+    const memoryName = memory.metadata.name;
+    const { sealed, kept } = memory.planRollover(options.keepTags, options.keepLatest);
+    const emptyResult: MemoryRolloverResult = {
+      memory: memoryName, dryRun: options.dryRun, sealedCount: 0, keptCount: kept.length, volumes: [], sealedIds: [],
+    };
+    if (sealed.length === 0) {
+      return emptyResult;
+    }
+
+    const serializedById = new Map<string, Record<string, unknown>>(
+      (JSON.parse(memory.serialize()).entries as Array<Record<string, unknown>>)
+        .map(entry => [entry.id as string, entry])
+    );
+    const sealedSerialized = sealed.map(entry => serializedById.get(entry.id)).filter((e): e is Record<string, unknown> => !!e);
+    const keptIds = new Set(kept.map(entry => entry.id));
+
+    const slug = this.normalizeFilename(memoryName);
+    if (!slug) {
+      throw new Error(`Memory '${memoryName}' has no safe archive filename; rollover was not started`);
+    }
+    const volumeDir = path.join(this.memoriesDir, MEMORY_CONSTANTS.VOLUMES_DIR, slug);
+    const sealedAt = new Date().toISOString();
+    const chunks = await this.packVolumeChunks(memory, sealedSerialized);
+    const nextVolume = Math.max(0, ...memory.getVolumeRecords().map(record => record.volume)) + 1;
+    const plannedNumbers = await this.planAvailableVolumeNumbers(volumeDir, nextVolume, chunks.length);
+    const plannedRecords = chunks.map((chunk, index) =>
+      this.buildVolumeRecord(plannedNumbers[index], slug, sealedAt, chunk.entries, chunk.yaml));
+
+    // Project the actual serialized head, including the new volume index and
+    // an optional marker, before creating any archive. A fixed headroom number
+    // cannot account for an accumulated index or a split into many volumes.
+    let markerEntry = await this.assertRolloverHeadFits(
+      memory, keptIds, plannedRecords, sealedSerialized.length, options.reason);
+
+    if (options.dryRun) {
+      return { ...emptyResult, sealedCount: sealedSerialized.length, volumes: plannedRecords,
+        includeMarker: !!markerEntry };
+    }
+
+    const written = await this.writeRolloverVolumes(memory, {
+      chunks, volumeDir, firstVolume: nextVolume, slug, sealedAt, keptIds,
+      sealedCount: sealedSerialized.length, reason: options.reason,
+    });
+    const records = written.records;
+    markerEntry = written.markerEntry;
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_ROLLED_OVER,
+      severity: 'MEDIUM',
+      source: 'MemoryManager.rolloverMemory',
+      details: `Sealed ${sealedSerialized.length} entries of memory '${memoryName}' into volume(s) ` +
+        records.map(r => r.volume).join(', '),
+    });
+    return {
+      ...emptyResult,
+      sealedCount: sealedSerialized.length,
+      volumes: records,
+      sealedIds: sealedSerialized.map(entry => entry.id as string),
+      includeMarker: !!markerEntry,
+      markerEntry,
+    };
+  }
+
+  /** Write and verify every archive before the caller changes the live head. */
+  private async writeRolloverVolumes(
+    memory: Memory,
+    plan: RolloverWritePlan,
+  ): Promise<{ records: MemoryVolumeRecord[]; markerEntry?: MemoryEntry }> {
+    await this.fileOperations.createDirectory(plan.volumeDir);
+    const written: Array<{ absolutePath: string; record: MemoryVolumeRecord }> = [];
+    let nextVolume = plan.firstVolume;
+    try {
+      for (const chunk of plan.chunks) {
+        const { absolutePath, volume } = await this.createVolumeFile(plan.volumeDir, nextVolume, chunk.yaml);
+        nextVolume = volume + 1;
+        const record = this.buildVolumeRecord(volume, plan.slug, plan.sealedAt, chunk.entries, chunk.yaml);
+        written.push({ absolutePath, record });
+        await this.verifyVolumeFile(absolutePath, record.sha256, chunk.entries.length);
+      }
+      const records = written.map(item => item.record);
+      // A collision can change a number, so remeasure the actual head before
+      // mutation; a sizing failure still triggers archive cleanup.
+      const markerEntry = await this.assertRolloverHeadFits(memory, plan.keptIds, records, plan.sealedCount, plan.reason);
+      return { records, markerEntry };
+    } catch (error) {
+      throw await this.rolloverWriteError(memory.metadata.name, written, error);
+    }
+  }
+
+  private async rolloverWriteError(
+    memoryName: string,
+    written: Array<{ absolutePath: string; record: MemoryVolumeRecord }>,
+    error: unknown,
+  ): Promise<Error> {
+    // The live head has not changed, but failed cleanup may leave an unindexed
+    // copy. Never report full rollback when an archive could remain.
+    const cleanupFailures: string[] = [];
+    for (const { absolutePath, record } of written) {
+      try {
+        await this.fileOperations.deleteFile(absolutePath);
+      } catch (cleanupError) {
+        cleanupFailures.push(`volume ${record.volume}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      }
+    }
+    const cause = error instanceof Error ? error.message : String(error);
+    if (error instanceof ExclusiveCreateCleanupError) {
+      cleanupFailures.push(`partial volume ${path.basename(error.partialPath)}: exclusive-create cleanup failed`);
+    }
+    if (cleanupFailures.length > 0) {
+      return new Error(
+        `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
+        `cleanup failed and unindexed archive copies may remain (${cleanupFailures.join('; ')}). ` +
+        `Original error: ${cause}`
+      );
+    }
+    return new Error(
+      `Rollover of memory '${memoryName}' failed before the live memory was changed; ` +
+      `recorded volumes were removed. Original error: ${cause}`
+    );
+  }
+
+  private async assertRolloverHeadFits(
+    memory: Memory,
+    keptIds: ReadonlySet<string>,
+    records: readonly MemoryVolumeRecord[],
+    sealedCount: number,
+    reason?: string,
+  ): Promise<MemoryEntry | undefined> {
+    const head = memory.createRolloverHeadProjection(keptIds, records, this.metadataService);
+    const yaml = await this.serializeElement(head);
+    if (yaml.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+      throw new Error(
+        `Rollover would leave ${keptIds.size} entries (${yaml.length} characters) in memory ` +
+        `'${memory.metadata.name}', which is still over the ${MEMORY_CONSTANTS.MAX_YAML_SIZE} limit. ` +
+        `Lower keep_latest or narrow keep_tags.`
+      );
+    }
+    this.validateSerializedContent(yaml);
+
+    const markerEntry = memory.prepareRolloverMarker(
+      rolloverMarkerText(sealedCount, records, reason),
+      records.map(record => record.volume),
+    );
+    if (!head.appendPreparedRolloverMarkerIfCapacity(markerEntry)) return undefined;
+    try {
+      const withMarker = await this.serializeElement(head);
+      if (withMarker.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) return undefined;
+      this.validateSerializedContent(withMarker);
+      return markerEntry;
+    } catch {
+      // The marker is informational. A valid head without it is sufficient.
+      return undefined;
+    }
+  }
+
+  /**
+   * Issue #2861: pack sealed entries (oldest first) into volumes that each fit
+   * within MAX_YAML_SIZE. Packs by estimated size, then verifies the real
+   * serialized size and splits any chunk that overshoots.
+   */
+  private async packVolumeChunks(
+    memory: Memory,
+    sealedSerialized: Array<Record<string, unknown>>,
+  ): Promise<Array<{ entries: Array<Record<string, unknown>>; yaml: string }>> {
+    const budget = Math.floor(MEMORY_CONSTANTS.MAX_YAML_SIZE * 0.9);
+    const groups: Array<Array<Record<string, unknown>>> = [];
+    let current: Array<Record<string, unknown>> = [];
+    let currentSize = 0;
+    for (const entry of sealedSerialized) {
+      const size = JSON.stringify(entry).length;
+      if (current.length > 0 && currentSize + size > budget) {
+        groups.push(current);
+        current = [];
+        currentSize = 0;
+      }
+      current.push(entry);
+      currentSize += size;
+    }
+    if (current.length > 0) groups.push(current);
+
+    const chunks: Array<{ entries: Array<Record<string, unknown>>; yaml: string }> = [];
+    const pending = [...groups];
+    while (pending.length > 0) {
+      const group = pending.shift()!;
+      const volume = memory.createRolloverVolumeProjection({
+        name: `${memory.metadata.name} volume`,
+        description: `Sealed archive volume of memory '${memory.metadata.name}'`,
+        privacyLevel: (memory.metadata as MemoryMetadata).privacyLevel,
+        retentionDays: (memory.metadata as MemoryMetadata).retentionDays,
+        tags: ['memory-volume'],
+      }, new Set(group.map(entry => entry.id as string)), this.metadataService);
+      const yaml = await this.serializeElement(volume);
+      if (yaml.length > MEMORY_CONSTANTS.MAX_YAML_SIZE && group.length > 1) {
+        const middle = Math.ceil(group.length / 2);
+        pending.unshift(group.slice(0, middle), group.slice(middle));
+        continue;
+      }
+      if (yaml.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+        throw new Error(`A single entry of memory '${memory.metadata.name}' is too large to seal into a volume`);
+      }
+      chunks.push({ entries: group, yaml });
+    }
+    return chunks;
+  }
+
+  private buildVolumeRecord(
+    volume: number,
+    slug: string,
+    sealedAt: string,
+    entries: Array<Record<string, unknown>>,
+    yaml: string,
+  ): MemoryVolumeRecord {
+    const times = entries
+      .map(entry => Date.parse(String(entry.timestamp)))
+      .filter(time => !Number.isNaN(time));
+    return {
+      volume,
+      file: `${MEMORY_CONSTANTS.VOLUMES_DIR}/${slug}/${Memory.volumeFileName(volume)}`,
+      sealedAt,
+      entryCount: entries.length,
+      firstEntryAt: times.length > 0 ? new Date(Math.min(...times)).toISOString() : undefined,
+      lastEntryAt: times.length > 0 ? new Date(Math.max(...times)).toISOString() : undefined,
+      sha256: crypto.createHash('sha256').update(yaml, 'utf8').digest('hex'),
+    };
+  }
+
+  /**
+   * Create a volume file exclusively; never overwrite an existing volume. If
+   * the number is taken (for example, two memories normalize to the same
+   * directory name), try the next one.
+   */
+  private async createVolumeFile(
+    volumeDir: string,
+    firstVolume: number,
+    yaml: string,
+  ): Promise<{ absolutePath: string; volume: number }> {
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const volume = firstVolume + attempt;
+      const absolutePath = path.join(volumeDir, Memory.volumeFileName(volume));
+      if (await this.fileOperations.createFileExclusive(absolutePath, yaml, { source: 'MemoryManager.rolloverMemory' })) {
+        return { absolutePath, volume };
+      }
+    }
+    throw new Error(`No free volume number in ${volumeDir}`);
+  }
+
+  /** Best-effort preview of exclusive-create assignments at this instant. */
+  private async planAvailableVolumeNumbers(volumeDir: string, firstVolume: number, count: number): Promise<number[]> {
+    const numbers: number[] = [];
+    let candidate = firstVolume;
+    for (let index = 0; index < count; index++) {
+      let attempts = 0;
+      while (attempts < 1000 &&
+        await this.fileOperations.exists(path.join(volumeDir, Memory.volumeFileName(candidate)))) {
+        candidate++;
+        attempts++;
+      }
+      if (attempts >= 1000) throw new Error(`No free volume number in ${volumeDir}`);
+      numbers.push(candidate++);
+    }
+    return numbers;
+  }
+
+  private async verifyVolumeFile(absolutePath: string, expectedSha256: string, expectedEntries: number): Promise<void> {
+    const written = await this.fileOperations.readFile(absolutePath);
+    const actualSha256 = crypto.createHash('sha256').update(written, 'utf8').digest('hex');
+    if (actualSha256 !== expectedSha256) {
+      throw new Error(`Volume ${path.basename(absolutePath)} failed its integrity check after writing`);
+    }
+    const parsed = this.parseContent(written).data;
+    const entries = Array.isArray(parsed.entries) ? parsed.entries.length : -1;
+    if (entries !== expectedEntries) {
+      throw new Error(`Volume ${path.basename(absolutePath)} holds ${entries} entries, expected ${expectedEntries}`);
+    }
   }
 
   /**
@@ -2164,6 +2473,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       onFull: Object.hasOwn(metadataSource, 'onFull')
         ? metadataSource.onFull
         : metadataSource.on_full,
+      // Issue #2861: carry the sealed-volume index through reload; the Memory
+      // constructor drops anything malformed.
+      volumes: metadataSource.volumes,
       // FIX #1430: Extract auto-load configuration
       autoLoad: metadataSource.autoLoad,
       priority: metadataSource.priority,

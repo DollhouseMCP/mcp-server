@@ -31,6 +31,22 @@ export interface FileOperationOptions {
   source?: string;
 }
 
+/** Exclusive creation succeeded, but cleanup of a failed partial write did not. */
+export class ExclusiveCreateCleanupError extends Error {
+  constructor(
+    readonly partialPath: string,
+    originalError: unknown,
+    cleanupError: unknown,
+  ) {
+    super(
+      `Exclusive create failed and its partial file could not be removed: ${partialPath}; ` +
+      `cleanup error: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+      { cause: originalError },
+    );
+    this.name = 'ExclusiveCreateCleanupError';
+  }
+}
+
 export interface FileOperationsConfig {
   /** Enable verbose audit logging for read operations (default: false) */
   verboseAudit?: boolean;
@@ -345,6 +361,7 @@ export class FileOperationsService implements IFileOperationsService {
   }
 
   async createFileExclusive(filePath: string, content: string, options: FileWriteOptions = {}): Promise<boolean> {
+    let createdPath: string | undefined;
     try {
       const validatedPath = await this.enforceWriteAllowlist(filePath, 'createFileExclusive');
       const maxSize = options.maxSize ?? this.defaultMaxFileSize;
@@ -355,11 +372,13 @@ export class FileOperationsService implements IFileOperationsService {
       // Use 'wx' flag for atomic creation - fails if file already exists
       // This prevents TOCTOU race conditions
       const fileHandle = await fs.open(validatedPath, 'wx');
+      createdPath = validatedPath;
       try {
         await fileHandle.writeFile(content, { encoding: options.encoding ?? 'utf-8' });
       } finally {
         await fileHandle.close();
       }
+      createdPath = undefined;
 
       SecurityMonitor.logSecurityEvent({
         type: 'FILE_WRITTEN',
@@ -370,12 +389,25 @@ export class FileOperationsService implements IFileOperationsService {
 
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      if (!createdPath && (error as NodeJS.ErrnoException).code === 'EEXIST') {
         // File already exists - this is expected in race condition scenarios
         return false;
       }
-      logger.error(`Failed to create file exclusively: ${filePath}`, error);
-      throw error;
+      let failure = error;
+      if (createdPath) {
+        // 'wx' succeeded, so this attempt created the file. Never remove a
+        // path after EEXIST. Cross-process delete/recreate ownership needs the
+        // durable volume-store contract (#2871); this is not an ABA guard.
+        try {
+          await fs.unlink(createdPath);
+        } catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') {
+            failure = new ExclusiveCreateCleanupError(createdPath, error, cleanupError);
+          }
+        }
+      }
+      logger.error(`Failed to create file exclusively: ${filePath}`, failure);
+      throw failure;
     }
   }
 

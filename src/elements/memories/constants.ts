@@ -35,6 +35,16 @@ export const MEMORY_CONSTANTS = {
    */
   ON_FULL_POLICIES: ['error', 'evict_oldest'] as const,
 
+  /**
+   * Rollover into sealed archive volumes (Issue #2861).
+   * Volumes live under memories/<VOLUMES_DIR>/<memory>/, a directory the
+   * memory scanner never reads, so a volume is never listed as a memory.
+   */
+  VOLUMES_DIR: 'volumes',
+  ROLLOVER_DEFAULT_KEEP_TAGS: ['pinned', 'read-first', 'schema'] as readonly string[],
+  ROLLOVER_MARKER_TAGS: ['rollover', 'system'] as readonly string[],
+  ROLLOVER_REASON_MAX_LENGTH: 200,
+
   // Entry limits
   MAX_TAGS_PER_ENTRY: 20,              // Maximum tags per memory entry
   MAX_TAG_LENGTH: 50,                  // Maximum length of each tag
@@ -158,4 +168,6 @@ export const MEMORY_SECURITY_EVENTS = {
   // FIX #1430: Seed memory installation events
   SEED_MEMORY_INSTALLED: 'SEED_MEMORY_INSTALLED',
   SEED_MEMORY_INSTALLATION_FAILED: 'SEED_MEMORY_INSTALLATION_FAILED',
+  // Issue #2861: entries sealed into archive volumes
+  MEMORY_ROLLED_OVER: 'MEMORY_ROLLED_OVER',
 } as const;

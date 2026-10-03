@@ -270,7 +270,6 @@ Quick start examples:
 Valid ensemble roles: ${ELEMENT_ROLES.join(', ')}
 { operation: "addEntry", params: { element_name: "session-notes", content: "Remember this fact", tags: ["important"] } }
 Note: addEntry content supports markdown (headers, lists, bold, tables, code blocks). Ensure markdown content is properly JSON-escaped — use ${String.raw`\n`} for newlines, ${String.raw`\"`} for quotes, and ${String.raw`\\`} for backslashes within the JSON string value.
-
 Execution lifecycle — record agent progress (appends step records, like addEntry):
 { operation: "record_execution_step", params: { element_name: "code-reviewer", stepDescription: "Analyzed files", outcome: "success", findings: "Found 3 issues" } }
 This is the normal next lifecycle call after mcp_aql_execute { operation: "execute_agent", ... }.
@@ -436,6 +435,8 @@ Element types: ${elementTypes}
 These operations modify existing data, potentially overwriting previous values.
 
 Note: Memories are append-only and do not support edit_element. Use addEntry (CREATE) to add new entries.
+To seal older memory entries into archive volumes while rewriting the live memory, use rollover_memory (UPDATE; confirmation required by default):
+{ operation: "rollover_memory", params: { element_name: "session-notes", keep_latest: 20, dry_run: true } }
 
 Quick start example:
 { operation: "edit_element", element_type: "persona", params: { element_name: "MyPersona", input: { description: "Updated description" } } }
