@@ -1,0 +1,108 @@
+Summary of all failing tests
+FAIL tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts
+  ● EmbeddedAuthorizationServer — hosted auth assets › serves the first-party assets used by generated auth pages
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 404
+
+      22 |
+      23 |     const css = await request(app).get('/fonts.css');
+    > 24 |     expect(css.status).toBe(200);
+         |                        ^
+      25 |     expect(css.headers['content-type']).toContain('text/css');
+      26 |     expect(css.text).toContain('@font-face');
+      27 |
+
+      at Object.<anonymous> (tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts:24:24)
+
+FAIL tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts (51.438 s)
+  ● actual process interruption of dormant owner erasure › qualifies recovery or preserves manual residual after SIGKILL at gap-root-sync
+
+    Erasure child closed before barrier:
+
+      119 |       const closed = new Promise<void>(resolve => child.once('close', (_code, actualSignal) => { dead = true; signal = actualSignal; resolve(); }));
+      120 |       const ready = new Promise<void>((resolve, reject) => {
+    > 121 |         child.once('error', reject); child.once('close', () => reject(new Error(`Erasure child closed before barrier: ${diagnostics}`)));
+          |                                                                       ^
+      122 |         child.stdout.on('data', chunk => {
+      123 |           output += String(chunk);
+      124 |           if (output === 'ERASURE_BARRIER\n') resolve();
+
+      at ChildProcess.<anonymous> (tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts:121:71)
+
+  ● actual process interruption of dormant owner erasure › qualifies recovery or preserves manual residual after SIGKILL at gap-root-close
+
+    Erasure child closed before barrier:
+
+      119 |       const closed = new Promise<void>(resolve => child.once('close', (_code, actualSignal) => { dead = true; signal = actualSignal; resolve(); }));
+      120 |       const ready = new Promise<void>((resolve, reject) => {
+    > 121 |         child.once('error', reject); child.once('close', () => reject(new Error(`Erasure child closed before barrier: ${diagnostics}`)));
+          |                                                                       ^
+      122 |         child.stdout.on('data', chunk => {
+      123 |           output += String(chunk);
+      124 |           if (output === 'ERASURE_BARRIER\n') resolve();
+
+      at ChildProcess.<anonymous> (tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts:121:71)
+
+FAIL tests/unit/services/BuildInfoService.test.ts (106.282 s)
+  ● BuildInfoService › Integration and Resilience › should handle concurrent calls correctly
+
+    thrown: "Exceeded timeout of 10000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      528 |
+      529 |   describe('Integration and Resilience', () => {
+    > 530 |     it('should handle concurrent calls correctly', async () => {
+          |     ^
+      531 |       const promises = [
+      532 |         service.getBuildInfo(),
+      533 |         service.getBuildInfo(),
+
+      at tests/unit/services/BuildInfoService.test.ts:530:5
+      at tests/unit/services/BuildInfoService.test.ts:529:3
+      at tests/unit/services/BuildInfoService.test.ts:21:1
+
+  ● BuildInfoService › Integration and Resilience › should provide fallback values for missing data
+
+    thrown: "Exceeded timeout of 10000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      551 |     });
+      552 |
+    > 553 |     it('should provide fallback values for missing data', async () => {
+          |     ^
+      554 |       const info = await service.getBuildInfo();
+      555 |
+      556 |       // Even if external tools fail, we should get basic structure
+
+      at tests/unit/services/BuildInfoService.test.ts:553:5
+      at tests/unit/services/BuildInfoService.test.ts:529:3
+      at tests/unit/services/BuildInfoService.test.ts:21:1
+
+FAIL tests/unit/web/permissionRoutes.test.ts (62.665 s)
+  ● permissionRoutes › decision tracking › should isolate recent decisions between separate router instances
+
+    thrown: "Exceeded timeout of 10000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      633 |     });
+      634 |
+    > 635 |     it('should isolate recent decisions between separate router instances', async () => {
+          |     ^
+      636 |       const firstHandler = {
+      637 |         handleRead: jest
+      638 |           .fn()
+
+      at tests/unit/web/permissionRoutes.test.ts:635:5
+      at tests/unit/web/permissionRoutes.test.ts:596:3
+      at tests/unit/web/permissionRoutes.test.ts:47:1
+
+
+Test Suites: 4 failed, 1 skipped, 714 passed, 718 of 719 total
+Tests:       6 failed, 9 skipped, 16765 passed, 16780 total
+Snapshots:   0 total
+Time:        524.625 s
+Ran all test suites matching ^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure)[.]test[.]ts$).*.
+Test results written to: ../../../../../../tmp/2905-ordinary-unit-results.json

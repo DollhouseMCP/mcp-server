@@ -1,0 +1,43 @@
+FAIL Unit Tests tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts (10.27 s)
+  actual process interruption of dormant owner erasure
+    ✓ qualifies recovery or preserves manual residual after SIGKILL at gap-root-sync (3360 ms)
+    ✕ qualifies recovery or preserves manual residual after SIGKILL at gap-root-close (6196 ms)
+    ○ skipped observes the same rejecting public InTransaction promise when a caller omits await
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at head-prepared-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at ready-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at inventory-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at action-prepared-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at after-owner-action
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at owner-root-removed-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at evidence-retiring-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at retire-action-prepared-durable
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at after-evidence-retirement
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at partial-segment-stage
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-final-journal-unlink
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-final-sync
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-final-close
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-directory-rmdir
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-directory-sync
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-directory-close
+    ○ skipped qualifies recovery or preserves manual residual after SIGKILL at gap-root-rmdir
+
+  ● actual process interruption of dormant owner erasure › qualifies recovery or preserves manual residual after SIGKILL at gap-root-close
+
+    Erasure child closed before barrier:
+
+      119 |       const closed = new Promise<void>(resolve => child.once('close', (_code, actualSignal) => { dead = true; signal = actualSignal; resolve(); }));
+      120 |       const ready = new Promise<void>((resolve, reject) => {
+    > 121 |         child.once('error', reject); child.once('close', () => reject(new Error(`Erasure child closed before barrier: ${diagnostics}`)));
+          |                                                                       ^
+      122 |         child.stdout.on('data', chunk => {
+      123 |           output += String(chunk);
+      124 |           if (output === 'ERASURE_BARRIER\n') resolve();
+
+      at ChildProcess.<anonymous> (tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts:121:71)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 18 skipped, 1 passed, 20 total
+Snapshots:   0 total
+Time:        11.082 s, estimated 52 s
+Ran all test suites within paths "tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts".
+Test results written to: ../../../../../../tmp/2905-diagnostic-erasure-root-gaps-results.json
