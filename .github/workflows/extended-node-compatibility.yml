@@ -105,7 +105,7 @@ jobs:
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity)[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity)[.]test[.]ts$).*'
         continue-on-error: true
 
       # Keep the complete filesystem capacity suite in a fresh serial process.
@@ -132,6 +132,12 @@ jobs:
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedDeleteCapacity.test.ts
         continue-on-error: true
 
+      # Whole-owner erasure remains a separate serial POSIX fixture qualification.
+      - name: Run required owner erasure capacity suite
+        id: erasure_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedErasureCapacity.test.ts
+        continue-on-error: true
+
       - name: Enforce all required test groups
         if: always()
         shell: bash
@@ -141,9 +147,10 @@ jobs:
           CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
           RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
           DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
+          ERASURE_OUTCOME: ${{ steps.erasure_tests.outcome }}
         run: |
-          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ]; then
-            echo "Ordinary unit, CREATE capacity, archive cleanup capacity, managed RENAME and head DELETE capacity groups must all pass compatibility validation."
+          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$ERASURE_OUTCOME" != "success" ]; then
+            echo "Ordinary unit, CREATE capacity, archive cleanup capacity, managed RENAME, head DELETE capacity and owner erasure capacity groups must all pass compatibility validation."
             exit 1
           fi
 
