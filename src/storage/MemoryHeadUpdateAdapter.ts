@@ -29,7 +29,7 @@ interface BoundState {
 }
 export type MemoryUpdateOutcome = { status: 'committed'; token: MemoryUpdateToken; cause?: unknown } |
   { status: 'refused' | 'unknown'; cause: unknown };
-const refusalCodes = new Set(['ESTALE', 'EHEADOUTOFSYNC', 'EHEADCONFLICT', 'EHEADINVALID', 'EHEADRESOURCE']);
+const refusalCodes = new Set(['ESTALE', 'EHEADOUTOFSYNC', 'EHEADCONFLICT', 'EINVALIDHEAD', 'EHEADRESOURCE']);
 function refusal(message: string): Error {
   return Object.assign(new Error(message), { code: 'EHEADCONFLICT' });
 }

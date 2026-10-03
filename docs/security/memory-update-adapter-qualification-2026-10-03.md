@@ -61,6 +61,14 @@ The new PR must target beta and obtain fresh checks, actual PostgreSQL execution
 
 ## Retained local receipts
 
+### Invalid-candidate refusal correction
+
+The first published head, `4bc6ad4af5f9110ca13ce4450a1614e977c88771`, received a [Codex P2 finding](https://github.com/DollhouseMCP/mcp-server/pull/2992#discussion_r4175423377): its refusal classifier misspelled the backend's `EINVALIDHEAD` code as `EHEADINVALID`. This misclassified a conclusively rejected candidate as an unknown write and prevented a corrected save on the same working instance.
+
+The correction changes only that production error-code entry. A regression sends malformed YAML through the actual owned-file backend, verifies the rejected candidate bytes, original token, error identity and unchanged persisted snapshot, then verifies a corrected save on the same instance commits revision 2 and clears pending evidence. It fails with the original typo and passes with the correction. The full adapter suite now passes 15/15; scoped TypeScript and changed-file lint also pass. Independent review accepted adapter blob `650ee1a0ebdee8735505c82a39d346bca7c47207` and test blob `db5cde55776dae798e8fa9ba542def078fe930bc`. The source table and earlier hosted checks above remain historical; the correction requires fresh hosted qualification and reviews.
+
+Correction receipts: `/tmp/2992-invalid-head-correction-receipt.txt`, `/tmp/2992-invalid-head-red.log`, `/tmp/2992-invalid-head-green.log`, `/tmp/2992-invalid-head-types.log`, and `/tmp/2992-invalid-head-lint.log`.
+
 - `/tmp/2906-local-qualification-receipt.md` and `/tmp/2906-central-update-source-freeze.txt`
 - `/tmp/2906-qualified-adapter-runtime.log`, `/tmp/2906-final-focused-runtime.log`, `/tmp/2906-generic-compatibility.log`
 - `/tmp/2906-final-production-types.log`, `/tmp/2906-qualified-unit-types.log`, `/tmp/2906-qualified-lint.log`, `/tmp/2906-worker-lint.log`

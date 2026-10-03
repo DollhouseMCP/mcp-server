@@ -26,15 +26,16 @@ const USER = '11111111-1111-4111-8111-111111111111';
 class ObservedManager extends MemoryManager {
   serializeGate?: Promise<void>;
   rejectValidation = false;
+  backendValidationCandidate?: string;
   publicationFailure?: { cause: unknown };
   cached(locator: string): Memory | undefined { return this.getCachedByAbsolutePath(path.join(this.elementDir, locator)); }
   protected override async serializeElement(memory: Memory): Promise<string> {
     if (this.serializeGate) await this.serializeGate;
-    return super.serializeElement(memory);
+    return this.backendValidationCandidate ?? super.serializeElement(memory);
   }
   protected override validateSerializedContent(content: string): void {
     if (this.rejectValidation) throw new Error('controlled candidate validation');
-    super.validateSerializedContent(content);
+    if (this.backendValidationCandidate === undefined) super.validateSerializedContent(content);
   }
   protected override afterSave(memory: Memory, locator: string): Promise<void> {
     if (this.publicationFailure) return Promise.reject(this.publicationFailure.cause);
@@ -213,6 +214,31 @@ posix('dormant central owned memory UPDATE', () => {
       await expect(manager.save(memory)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
       expect(write).not.toHaveBeenCalled();
       expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '1' });
+    } finally { await f.cleanup(); }
+  });
+  it('retains a genuine invalid-head refusal and permits corrected same-instance save', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const memory = await manager.load('head.yaml');
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      // Defer this candidate's validation to the actual file backend, not a mocked error.
+      manager.backendValidationCandidate = 'metadata: [invalid YAML';
+      let rejected: unknown;
+      try { await manager.save(memory); } catch (cause) { rejected = cause; }
+      expect(rejected).toMatchObject({ code: 'EINVALIDHEAD', message: 'Memory update YAML is invalid' });
+      const pending = manager.getPendingHeadUpdate(memory);
+      expect(pending?.status).toBe('refused');
+      expect(pending?.cause).toBe(rejected);
+      expect(pending?.candidate?.content).toBe(manager.backendValidationCandidate);
+      expect(pending?.originalToken).toEqual(before.token);
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+      manager.backendValidationCandidate = undefined;
+      await memory.addEntry('Corrected candidate');
+      await manager.save(memory);
+      expect(manager.getPendingHeadUpdate(memory)).toBeUndefined();
+      const committed = await f.owners.readHeadSnapshot('head.yaml');
+      expect(committed.token).toMatchObject({ revision: '2' });
+      expect(committed.content).toContain('Corrected candidate');
     } finally { await f.cleanup(); }
   });
   it('blocks an unknown write on the same instance without dispatching again', async () => {
