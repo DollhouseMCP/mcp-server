@@ -7,6 +7,18 @@ import { pathToFileURL } from 'node:url';
 import { makeOwnedErasureFixture, captureErasureTree, captureErasureFiles } from './fixtures/ownedErasureFixture.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
+async function cleanupWithCompletion(fixture: Awaited<ReturnType<typeof makeOwnedErasureFixture>>,
+  primary: { cause: unknown } | undefined, completion: Record<string, unknown> | undefined): Promise<void> {
+  let cleanup = 'completed';
+  try { await fixture.cleanup(); }
+  catch (cause) {
+    cleanup = 'failed';
+    if (primary) throw new AggregateError([primary.cause, cause], 'Crash assertion and fixture cleanup failed');
+    throw cause;
+  } finally {
+    if (completion) console.info('ERASURE child completion', JSON.stringify({ ...completion, cleanup, primaryFailure: !!primary }));
+  }
+}
 const childSource = `
 const [ownersUrl,coordinatorUrl,fenceUrl,root,user,requestRaw,stop]=process.argv.slice(1);
 const pause=()=>{process.stdout.write('ERASURE_BARRIER\\n');process.stdin.resume();return new Promise(()=>{});};
@@ -64,6 +76,8 @@ await owners.eraseOwned(JSON.parse(requestRaw));
 describe('actual process interruption of dormant owner erasure', () => {
   it('observes the same rejecting public InTransaction promise when a caller omits await', async () => {
     const fixture = await makeOwnedErasureFixture({ volumes: 2 });
+    let primary: { cause: unknown } | undefined;
+    let completion: Record<string, unknown> | undefined;
     try {
       const before = { archive: await captureErasureTree(path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId)),
         registry: await captureErasureTree(path.join(fixture.root, '.memory-owners/owners')) };
@@ -85,18 +99,30 @@ catch(cause){rejected=true;if(cause?.result||cause?.headDeleted)throw new Error(
 if(!rejected)throw new Error('Coordinator omitted tracked failure');
 await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVED_REJECTION\\n');
 `;
+      const childStarted = performance.now();
       const child = spawn(process.execPath, ['--unhandled-rejections=strict', ...loader, '--input-type=module', '-e', source,
         ...modules, fixture.root, fixture.token.userId, JSON.stringify(fixture.request)], { cwd: fixture.root, stdio: ['ignore', 'pipe', 'pipe'] });
       let output = '', diagnostics = '';
       child.stdout.on('data', chunk => { output = (output + String(chunk)).slice(0, 512); });
       child.stderr.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(0, 4096); });
-      const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
-      const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-      clearTimeout(timer);
+      let watchdogKillSent = false;
+      const timer = setTimeout(() => { watchdogKillSent = child.kill('SIGKILL'); }, 5000);
+      let spawnFailure: { cause: unknown } | undefined;
+      const closed = new Promise<number | null>(resolve => {
+        child.once('error', cause => { spawnFailure = { cause }; }); child.once('close', (actualCode, signal) => {
+          completion = { stop: 'omitted-await', exitCode: actualCode, signal, lifetimeMs: performance.now() - childStarted,
+            watchdogKillSent, stdout: output, stderr: diagnostics, barrierReached: false };
+          resolve(actualCode);
+        });
+      });
+      let code: number | null;
+      try { code = await closed; } finally { clearTimeout(timer); }
+      if (spawnFailure) throw spawnFailure.cause;
       expect({ code, output, diagnostics }).toEqual({ code: 0, output: 'OBSERVED_REJECTION\n', diagnostics: '' });
       expect({ archive: await captureErasureTree(path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId)),
         registry: await captureErasureTree(path.join(fixture.root, '.memory-owners/owners')) }).toEqual(before);
-    } finally { await fixture.cleanup(); }
+    } catch (cause) { primary = { cause }; throw cause; }
+    finally { await cleanupWithCompletion(fixture, primary, completion); }
   }, 10_000);
   it.each(['head-prepared-durable', 'ready-durable', 'inventory-durable', 'action-prepared-durable',
     'after-owner-action', 'owner-root-removed-durable', 'evidence-retiring-durable',
@@ -113,21 +139,29 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
       const selected = path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId);
       const before = await captureErasureTree(selected), foreign = await captureErasureFiles(fixture.foreignFiles);
+      const childStarted = performance.now();
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules,
         fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], { cwd: fixture.root, stdio: ['pipe', 'pipe', 'pipe'] });
-      let dead = false, signal: NodeJS.Signals | null = null, output = '', diagnostics = '';
-      const closed = new Promise<void>(resolve => child.once('close', (_code, actualSignal) => { dead = true; signal = actualSignal; resolve(); }));
+      let dead = false, signal: NodeJS.Signals | null = null, exitCode: number | null = null;
+      let output = '', diagnostics = '', watchdogKillSent = false, barrierReached = false, lifetimeMs = 0;
+      let primary: { cause: unknown } | undefined;
+      const closed = new Promise<void>(resolve => child.once('close', (code, actualSignal) => {
+        dead = true; signal = actualSignal; exitCode = code; lifetimeMs = performance.now() - childStarted; resolve();
+      }));
       const ready = new Promise<void>((resolve, reject) => {
-        child.once('error', reject); child.once('close', () => reject(new Error(`Erasure child closed before barrier: ${diagnostics}`)));
+        child.once('error', reject); child.once('close', () => reject(new Error(`Erasure child closed before barrier: ${JSON.stringify({
+          stop, exitCode, signal, lifetimeMs: performance.now() - childStarted, watchdogKillSent,
+          stdout: output.slice(0, 256), stderr: diagnostics,
+        })}`)));
         child.stdout.on('data', chunk => {
-          output += String(chunk);
-          if (output === 'ERASURE_BARRIER\n') resolve();
+          output = (output + String(chunk)).slice(0, 257);
+          if (output === 'ERASURE_BARRIER\n') { barrierReached = true; resolve(); }
           else if (output.length > 256) reject(new Error('Erasure child output exceeded bound'));
         });
         child.stderr.on('data', chunk => { diagnostics = (diagnostics + String(chunk)).slice(0, 4096); });
       });
       void ready.catch(() => undefined);
-      const timer = setTimeout(() => { if (!dead) child.kill('SIGKILL'); }, 5000);
+      const timer = setTimeout(() => { if (!dead) watchdogKillSent = child.kill('SIGKILL'); }, 5000);
       try {
         await ready; child.kill('SIGKILL'); await closed; expect(signal).toBe('SIGKILL');
         if (stop.startsWith('gap-directory-') || stop.startsWith('gap-root-')) {
@@ -172,8 +206,11 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
         await expect(fs.lstat(selected)).rejects.toMatchObject({ code: 'ENOENT' });
         expect((await fs.readdir(path.join(fixture.root, '.memory-owners/owners')))
           .filter(name => name.startsWith(fixture.token.ownerId))).toEqual([]);
-      } finally {
-        clearTimeout(timer); if (!dead) child.kill('SIGKILL'); await closed; await fixture.cleanup();
+      } catch (cause) { primary = { cause }; throw cause; }
+      finally {
+        clearTimeout(timer); if (!dead) child.kill('SIGKILL'); await closed;
+        await cleanupWithCompletion(fixture, primary, { stop, exitCode, signal, lifetimeMs, watchdogKillSent,
+          stdout: output.slice(0, 256), stderr: diagnostics, barrierReached });
       }
     }, 10_000);
 });
