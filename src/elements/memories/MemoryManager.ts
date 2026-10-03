@@ -12,6 +12,7 @@
 
 import type { MemoryMetadata } from './Memory.js';
 import { Memory } from './Memory.js';
+import type { MemoryHeadUpdateAdapter, MemoryUpdateCandidate, PendingMemoryUpdate } from '../../storage/MemoryHeadUpdateAdapter.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
@@ -136,7 +137,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
   private readonly _localActiveMemoryNames: Set<string> = new Set();
 
-  constructor(deps: ElementManagerDeps) {
+  constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
       ElementType.MEMORY,
       deps.portfolioManager,
@@ -258,6 +259,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * from the parsed YAML stashed on the element during load.
    */
   override async load(filePath: string): Promise<Memory> {
+    if (this.guardedUpdateAdapter) return this.loadGuardedMemory(filePath);
     // Resolve the path: bare filenames need to search system/, adapters/, date folders.
     // In DB mode, filePath is a UUID — pass through as-is.
     // MEMORY_LOAD_FAILED is emitted via the onLoadError hook (base class calls it
@@ -604,6 +606,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When atomic write operation fails
    */
   override async save(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
+    if (this.guardedUpdateAdapter) return this.saveGuardedMemory(element, filePath, options);
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -658,6 +661,83 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // from its transaction rollback). No try/catch wrapper here — that would
     // double-emit alongside base's element:save:error event.
     await super.save(element, resolvedRelativePath, options);
+  }
+
+  private async loadGuardedMemory(filePath: string): Promise<Memory> {
+    const adapter = this.guardedUpdateAdapter!;
+    const tenant = adapter.captureTenant();
+    const contextRoot = this.memoriesDir;
+    const tenantRoot = isWritableStorageLayer(this.storageLayer) ? contextRoot : await fs.realpath(contextRoot);
+    this.requireGuardedContext(tenant, contextRoot);
+    let locator = filePath;
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      const fullPath = await this.resolveMemoryPath(filePath);
+      if (!fullPath) throw new Error(`Could not resolve memory path: ${filePath}`);
+      locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
+    }
+    const snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot);
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator);
+    memory.setFilePath(locator);
+    this.requireGuardedContext(tenant, contextRoot);
+    adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
+    // The caller receives a mutable working copy, not a durable cache entry.
+    return memory;
+  }
+
+  /** Diagnostic pending state, not retry or replacement authority. */
+  getPendingHeadUpdate(memory: Memory): PendingMemoryUpdate | undefined {
+    return this.guardedUpdateAdapter?.getPendingUpdate(memory);
+  }
+
+  private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
+    const adapter = this.guardedUpdateAdapter!;
+    const tenant = adapter.captureTenant();
+    if (options?.expectedIdentity !== undefined || options?.expectedStorageRevision !== undefined || options?.expectedFileSnapshot !== undefined) throw new Error('Caller preconditions are unsupported by the dormant memory adapter');
+    if (options?.exclusive || isCorruptedBackupName(element.metadata.name)) throw new Error('Dormant memory adapter supports unchanged-name UPDATE only');
+    const contextRoot = this.memoriesDir;
+    const locator = filePath ?? element.getFilePath();
+    const original = adapter.beginUpdate(element, tenant, locator, element.metadata.name, contextRoot);
+    let candidate: MemoryUpdateCandidate | undefined;
+    let committed = false;
+    try {
+      // Snapshot current state without replaying load-time quarantine or retention.
+      const detached = element.createPersistenceCandidate();
+      const validation = detached.validate();
+      if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
+      const content = await this.serializeElement(detached);
+      candidate = { content, name: detached.metadata.name, metadata: {
+        author: detached.metadata.author ?? '', version: detached.metadata.version ?? '1.0.0',
+        description: detached.metadata.description ?? '', tags: [...(detached.metadata.tags ?? [])],
+        visibility: (detached.metadata as MemoryMetadata & { visibility?: string }).visibility,
+      } };
+      this.validateSerializedContent(content);
+      this.requireGuardedContext(tenant, contextRoot);
+      const outcome = await adapter.write(element, tenant, candidate);
+      if (outcome.status !== 'committed') throw outcome.cause;
+      committed = true;
+      if ('cause' in outcome) throw outcome.cause;
+      // A concurrent caller mutation never becomes the committed cache snapshot.
+      const publication = detached;
+      publication.setFilePath(locator!);
+      this.requireGuardedContext(tenant, contextRoot);
+      adapter.bindLoaded(publication, { content, token: outcome.token }, publication.metadata.name, contextRoot);
+      if (!isWritableStorageLayer(this.storageLayer)) {
+        await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+        this.requireGuardedContext(tenant, contextRoot);
+      }
+      this.cacheElement(publication, locator!);
+      await this.afterSave(publication, locator!);
+    } catch (cause) {
+      adapter.recordFailure(element, candidate, original, cause, committed);
+      throw cause;
+    } finally {
+      adapter.finishUpdate(element);
+    }
+  }
+
+  private requireGuardedContext(tenant: string, contextRoot: string): void {
+    this.guardedUpdateAdapter!.requireTenant(tenant);
+    if (this.memoriesDir !== contextRoot) throw Object.assign(new Error('Memory portfolio root changed during operation'), { code: 'EHEADCONFLICT' });
   }
 
   /**
@@ -1657,6 +1737,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * SECURITY: Validates path and logs deletion
    */
   override async delete(filePath: string): Promise<void> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       // Resolve to a relative path that super.delete() can handle.
       // In DB mode, filePath may be a name or UUID — passed through as-is.
@@ -1721,6 +1802,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Create a new memory with metadata
    */
   async create(metadata: Partial<MemoryMetadata> & { content?: string; instructions?: string }): Promise<Memory> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     // Use specialized validator for input validation
     const validationResult = await this.validator.validateCreate({
       name: metadata.name,

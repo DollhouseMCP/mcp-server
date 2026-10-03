@@ -161,6 +161,19 @@ export class ElementLoader<T extends IElement> {
     return this.host.createElement(metadata, parsed.content);
   }
 
+  /** Hydrate a same-read snapshot completely without reading storage or publishing cache state. */
+  async hydrateDefinitionFromContent(content: string, relativePath: string): Promise<T> {
+    const parsed = this.host.parseContent(content);
+    this.host.migrateMetadataDefaults(parsed.data, relativePath);
+    const metadata = await this.host.parseMetadata(parsed.data);
+    const element = this.host.createElement(metadata, parsed.content);
+    if (parsed.data.extensions && typeof parsed.data.extensions === 'object' && !Array.isArray(parsed.data.extensions)) {
+      element.extensions = structuredClone(parsed.data.extensions as Record<string, unknown>);
+    }
+    if (this.host.afterLoad) await this.host.afterLoad(element, relativePath, parsed);
+    return element;
+  }
+
   private async readContent(relativePath: string, absolutePath: string): Promise<string> {
     if (isWritableStorageLayer(this.storageLayer)) {
       return this.storageLayer.readContent(relativePath);

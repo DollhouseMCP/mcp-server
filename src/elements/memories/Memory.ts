@@ -572,6 +572,15 @@ export class Memory extends BaseElement implements IElement {
     return candidate;
   }
 
+  /** Deep working-state snapshot for persistence; no load-time validation or retention replay. */
+  public createPersistenceCandidate(): Memory {
+    const candidate = this.createAppendCandidate();
+    candidate.metadata = structuredClone(this.metadata);
+    candidate.extensions = structuredClone(this.extensions);
+    candidate.entries = structuredClone(this.entries);
+    return candidate;
+  }
+
   /** Commit a validated candidate only if no other live mutation intervened. */
   public commitAppendCandidate(before: MemoryAppendSnapshot, candidate: Memory, entry: MemoryEntry): boolean {
     if (this.captureAppendState().fingerprint !== before.fingerprint) return false;
