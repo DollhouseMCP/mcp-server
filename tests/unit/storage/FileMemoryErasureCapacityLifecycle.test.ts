@@ -6,8 +6,9 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runErasureCapacityLifecycle } from './fixtures/erasureCapacityLifecycle.js';
+import { runErasureCapacityLifecycle, CAPACITY_OBSERVER_TIMEOUT_MS } from './fixtures/erasureCapacityLifecycle.js';
 import { makeOwnedErasureFixture } from './fixtures/ownedErasureFixture.js';
+import { runOrdinaryErasureCase, registerOrdinaryErasureFixture } from './fixtures/ordinaryErasureFixtureScope.js';
 
 describe('cleanup-inclusive erasure capacity test lifecycle', () => {
   it('includes awaited cleanup in whole timing before reporting success', async () => {
@@ -117,4 +118,37 @@ await fs.writeFile(root+'/next-case','MUST NOT EXIST');
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+  it('ordinary scope drains every fixture without repeating successful cleanup', async () => {
+    const roots = await Promise.all([1, 2].map(() => fs.mkdtemp(path.join(os.tmpdir(), 'ordinary-erasure-lifecycle-'))));
+    const attempts = [0, 0];
+    await runOrdinaryErasureCase('two actual fixtures', async () => {
+      const cleanups = roots.map((root, index) => registerOrdinaryErasureFixture(root, async () => {
+        attempts[index]++; await fs.rm(root, { recursive: true });
+      }));
+      await cleanups[0](); // Existing body's finally owns this cleanup first.
+    });
+    expect(attempts).toEqual([1, 1]);
+    for (const root of roots) await expect(fs.lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, CAPACITY_OBSERVER_TIMEOUT_MS);
+
+  it('ordinary scope retains a rejected cleanup promise without retrying or advancing early', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ordinary-erasure-lifecycle-'));
+    const cause = new Error('actual once-only cleanup failure');
+    let attempts = 0;
+    let failure: unknown;
+    try {
+      await runOrdinaryErasureCase('failed cleanup', async () => {
+        const cleanup = registerOrdinaryErasureFixture(root, async () => {
+          attempts++; await fs.rm(root, { recursive: true }); throw cause;
+        });
+        await cleanup();
+      });
+    } catch (caught) { failure = caught; }
+    expect(attempts).toBe(1);
+    expect(failure).toBe(cause);
+    await expect(fs.lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, CAPACITY_OBSERVER_TIMEOUT_MS);
+
+
+
 });

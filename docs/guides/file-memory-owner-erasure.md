@@ -157,3 +157,16 @@ and proves neither successful cleanup nor protocol sync/close. CI invokes this
 suite alone; a broader local Jest invocation would also be terminated. Use the
 dedicated `--runInBand --runTestsByPath` capacity command. Earlier pre-cleanup
 diagnostics and failed hosted 30-second cases remain historical evidence.
+
+The ordinary erasure lifecycle suite now runs as a required serial storage stage,
+separate from the ordinary parallel matrix and the populated capacity jobs.
+Every case retains its measured ten-second whole-case passing budget, including
+its original setup, assertions, restoration and finally cleanup. The same
+60-second terminal/65-second observer guards are fail-only: they permit failed
+work to drain, never a pass beyond ten seconds. Fixture cleanup is registered
+before setup and shares one cached attempt between the original finally and
+outer drain; rejection is retained without retry. The release-failure injection
+is restricted to the actual fixture fence instance. The serial storage matrix
+also runs the existing CREATE, cleanup, RENAME and DELETE suites under unchanged
+limits. Original protected checks enforce both complete prerequisite matrices;
+this scheduling isolation does not guarantee performance on a shared runner.

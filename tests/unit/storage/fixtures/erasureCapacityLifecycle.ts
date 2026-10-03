@@ -21,6 +21,7 @@ export async function runErasureCapacityLifecycle(options: LifecycleOptions, bod
   let phase = 'setup', root: string | undefined;
   let cleanup: (() => Promise<unknown>) | undefined;
   const failures: unknown[] = [];
+  const retainFailure = (cause: unknown) => { if (!failures.includes(cause)) failures.push(cause); };
   // A referenced real timer terminates the dedicated process before Jest's
   // observer can reject and advance. Hard termination cannot claim cleanup.
   const watchdog = setTimeout(() => {
@@ -40,12 +41,12 @@ export async function runErasureCapacityLifecycle(options: LifecycleOptions, bod
       await body({ started, phase: name => { phase = name; }, registerCleanup: (next, allocatedRoot) => {
         cleanup = next; root = allocatedRoot;
       } });
-    } catch (cause) { failures.push(cause); }
+    } catch (cause) { retainFailure(cause); }
     finally {
       phase = 'cleanup';
       const cleanupStarted = performance.now();
       try { if (cleanup) await cleanup(); }
-      catch (cause) { failures.push(cause); }
+      catch (cause) { retainFailure(cause); }
       cleanupMs = performance.now() - cleanupStarted;
     }
     const wholeMs = performance.now() - started;
@@ -53,7 +54,7 @@ export async function runErasureCapacityLifecycle(options: LifecycleOptions, bod
       `Erasure capacity whole case exceeded ${options.deadlineMs} ms after awaited cleanup (${wholeMs.toFixed(3)} ms)`));
     phase = 'completed';
     try { options.completed?.({ cleanupMs, wholeMs, failed: failures.length > 0 }); }
-    catch (cause) { failures.push(cause); }
+    catch (cause) { retainFailure(cause); }
   } finally { clearTimeout(watchdog); }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, 'Erasure capacity body, cleanup or whole-case deadline failed', { cause: failures[0] });

@@ -1,4 +1,4 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it as jestIt, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -10,6 +10,29 @@ import { ErasureAccounting, ErasureInspection } from '../../../src/storage/FileM
 import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
 import { ERASURE_LEGACY_PROTOCOL, erasureParseRecord, erasureParseSegment, erasureSegmentName, erasureSerialize } from '../../../src/storage/FileMemoryErasureEvidence.js';
 import { makeOwnedErasureFixture, captureErasureTree, captureErasureFiles } from './fixtures/ownedErasureFixture.js';
+
+import { runOrdinaryErasureCase } from './fixtures/ordinaryErasureFixtureScope.js';
+import { CAPACITY_OBSERVER_TIMEOUT_MS } from './fixtures/erasureCapacityLifecycle.js';
+
+// This one serial suite retains a measured ten-second whole-case budget.
+// Its larger observer only permits cleanup/restoration to drain before failure.
+const registration: ProxyHandler<typeof jestIt> = {
+  apply(target, thisArg, args) {
+    const [name, callback] = args;
+    if (typeof callback !== 'function') return Reflect.apply(target, thisArg, args);
+    const body = callback as (...values: unknown[]) => Promise<void>;
+    return Reflect.apply(target, thisArg, [name, (...values: unknown[]) =>
+      runOrdinaryErasureCase(`${String(name)} ${JSON.stringify(values)}`, () => body(...values)), CAPACITY_OBSERVER_TIMEOUT_MS]);
+  },
+};
+const it = new Proxy(jestIt, {
+  ...registration,
+  get(target, property, receiver) {
+    if (property === 'each') return (...tables: unknown[]) =>
+      new Proxy(Reflect.apply(target.each, target, tables) as typeof jestIt, registration);
+    return Reflect.get(target, property, receiver);
+  },
+});
 
 const supported = process.platform === 'linux' || process.platform === 'darwin';
 (supported ? describe : describe.skip)('dormant whole-owner erasure', () => {
@@ -500,10 +523,10 @@ const supported = process.platform === 'linux' || process.platform === 'darwin';
   it('retains the qualified result and exact cause after actual outer lease release fails', async () => {
     const fixture = await makeOwnedErasureFixture({ volumes: 2, foreignOwners: 100 });
     const foreign = await captureErasureFiles(fixture.foreignFiles);
-    const prototype = FileMemoryFence.prototype as unknown as { release(lease: unknown): Promise<void> };
-    const original = prototype.release, cause = Object.assign(new Error('controlled post-release failure'), { code: 'EIO' });
+    const fence = fixture.fence as unknown as { release(lease: unknown): Promise<void> };
+    const original = fence.release, cause = Object.assign(new Error('controlled post-release failure'), { code: 'EIO' });
     let released = false;
-    const spy = jest.spyOn(prototype, 'release').mockImplementation(async function(this: FileMemoryFence, lease) {
+    const spy = jest.spyOn(fence, 'release').mockImplementation(async function(this: FileMemoryFence, lease) {
       await original.call(this, lease); released = true; throw cause;
     });
     try {
@@ -534,4 +557,24 @@ const supported = process.platform === 'linux' || process.platform === 'darwin';
       expect(await captureErasureTree(selected)).toEqual(before);
     } finally { await fixture.cleanup(); }
   });
+  it('fixture-local release fault cannot contaminate genuine second-fixture adoption or erasure', async () => {
+    const first = await makeOwnedErasureFixture({ volumes: 2 });
+    const fence = first.fence as unknown as { release(lease: unknown): Promise<void> };
+    const original = fence.release, cause = Object.assign(new Error('controlled instance-only release failure'), { code: 'EIO' });
+    const spy = jest.spyOn(fence, 'release').mockImplementation(async function(this: FileMemoryFence, lease) {
+      await original.call(this, lease); throw cause;
+    });
+    try {
+      const second = await makeOwnedErasureFixture({ volumes: 2 });
+      const selected = path.join(second.root, 'volumes/by-id', second.token.ownerId);
+      const before = await captureErasureTree(selected);
+      const failure = await first.owners.eraseOwned(first.request).catch(value => value);
+      expect(failure).toMatchObject({ code: 'EOWNERERASED', result: { status: 'erased' } });
+      expect(failure.cause).toBe(cause);
+      expect(await captureErasureTree(selected)).toEqual(before);
+      expect((await second.owners.eraseOwned(second.request)).status).toBe('erased');
+      await expect(fs.lstat(selected)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { spy.mockRestore(); }
+  });
+
 });

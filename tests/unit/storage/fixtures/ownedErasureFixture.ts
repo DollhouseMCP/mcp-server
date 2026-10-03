@@ -1,3 +1,4 @@
+import { registerOrdinaryErasureFixture } from './ordinaryErasureFixtureScope.js';
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -65,7 +66,7 @@ async function requireAbsent(target: string): Promise<void> {
 
 export async function makeOwnedErasureFixture(options: OwnedErasureFixtureOptions = {}, onRootAllocated?: (root: string) => void) {
   let root = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-erasure-'));
-  const cleanup = () => fs.rm(root, { recursive: true, force: true });
+  const cleanup = registerOrdinaryErasureFixture(root, () => fs.rm(root, { recursive: true, force: true }));
   try {
     onRootAllocated?.(root);
     root = await fs.realpath(root);
@@ -74,7 +75,8 @@ export async function makeOwnedErasureFixture(options: OwnedErasureFixtureOption
     const head = path.join(root, locator);
     if (options.nested) await fs.mkdir(path.dirname(head), { mode: 0o700 });
     await fs.writeFile(head, RAW, { mode: 0o600 });
-    const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
+    const fence = new FileMemoryFence();
+    const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER, fence });
     const owners = new FileMemoryOwnerSnapshots({ coordinator });
     const snapshot = await owners.readHeadSnapshot(locator);
     const token: OwnedFileMemoryToken = await owners.adoptUnowned(snapshot.token as UnownedFileMemoryToken);
@@ -131,7 +133,7 @@ export async function makeOwnedErasureFixture(options: OwnedErasureFixtureOption
     if (archive === 'no-volumes') await requireAbsent(volumes);
     if (archive === 'no-by-id') await requireAbsent(byId);
     if (archive === 'no-owner-root') await requireAbsent(selected);
-    return { root, coordinator, owners, archives, token,
+    return { root, fence, coordinator, owners, archives, token,
       request: { operationId: randomUUID(), deleteOperationId: randomUUID(), expectedToken: token },
       foreignFiles, cleanup };
   } catch (cause) {

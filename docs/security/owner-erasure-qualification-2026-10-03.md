@@ -220,3 +220,76 @@ suite. No prior suite is removed. Reviewed lifecycle helper SHA-256 is
 capacity test SHA-256 is
 `307e8b8a3735785c440d2ab584bfcfab9507391f745c5b683e047d261561360c`.
 All reviewed file hashes remained unchanged through qualification.
+
+## Ordinary erasure isolation and drain correction
+
+Exact head `84332b804257e8c170d003afd96e3044f97ba33e` finished with
+30 successful checks, one core macOS ordinary failure and two extended macOS
+15-minute cancellations. All nine populated capacity jobs succeeded: 72 actual
+POSIX cases passed and 36 Windows cases intentionally skipped. Those results
+remain distinct from the ordinary failures and do not transfer to this change.
+
+Core macOS had five unchanged ten-second lifecycle timeouts and one demonstrated
+cross-test fault-injection failure. The timed-out release test retained a global
+prototype spy until its still-running async finally restored it; the next
+fixture's adoption received that exact controlled post-release EIO. The current
+correction scopes the fault to its actual fixture instance. Every case in this
+one ordinary lifecycle suite uses the existing cleanup-safe helper with a measured
+ten-second whole passing budget. Original bodies, assertions and finally blocks
+remain; a terminal 60-second watchdog and 65-second observer are fail-only.
+Fixture registration before setup supplies a once-only cleanup promise shared by
+the original finally and outer drain. A rejected cleanup stays rejected without
+retry; the same identical cause encountered twice is reported once. Distinct
+body/cleanup causes remain preserved by the helper, but an unchanged body finally
+can still mask its earlier error before the adapter receives its final rejection.
+
+The required serial storage matrices now own the existing CREATE, cleanup,
+RENAME and DELETE suites plus the ordinary erasure lifecycle suite. Their platform
+and Node definitions alias the same original matrices, their job ceilings remain
+900 seconds, and final always gates require success for every actual suite step.
+Existing Test/Extended contexts retain their names and require BOTH entire
+capacity and serial-storage matrices to succeed, refusing failed, cancelled,
+skipped or missing aggregate results. Extended remains separately enforced within
+its workflow and is not silently represented as branch-protected. No production,
+dependency, passing allowance, workload, platform or proof changes are included.
+
+This addresses demonstrated budget starvation: both extended macOS ordinary
+matrices passed 16,751 tests before their jobs reached fifteen minutes in the
+following serial storage stages. It is scheduling isolation, not a demonstrated
+cure or latency promise for the five ordinary timeouts. Fresh source review and
+changed-path qualification are required before publication.
+
+Independent final nine-file review accepted the test/fixture/guide/workflow freeze
+before execution. Changed-path qualification passes 226 tests across three suites
+in 56.944 seconds: all 50 retained ordinary erasure cases plus the genuine A/B
+fixture regression (51), the eight retained helper cases plus two once-only
+cleanup regressions (10), and 165 existing workflow-validation cases. All 51
+ordinary completion markers are within the measured ten-second whole budget,
+with no failed flag; the largest is 2.461065 seconds. The helper's intentionally
+rejected cleanup marker is expected failure evidence asserted by its passing
+regression, not a failed ordinary case. Cached cleanup executes once across body
+finally and outer drain, and identical reobserved error identity remains exact.
+All reviewed hashes remained unchanged through this qualification.
+
+Both actual aggregate shell gates were validated over 36 combinations of the two
+matrix results, accepting only two successes. Each serial-storage gate was
+validated over 30 per-stage success/failure/cancelled/skipped/empty/unset outcomes.
+Seven omitted/skipped/tolerated-failure configuration mutations per workflow are
+rejected. Shared matrix parity, original protected names, 900-second ceilings,
+unchanged capacity job objects and the exact ordinary suite partition were
+checked. These configuration tests are not a substitute for hosted execution.
+Strict changed-test types and focused lint pass. No unchanged populated capacity
+suite was repeated locally; the new head must qualify every hosted capacity lane.
+
+Normal precommit passes 108 rapid-security tests (46 skipped) and script types,
+then fails only the standing authorized dependency advisory cohort. Fresh full
+lock audit reports 37 high, zero critical, 19 moderate and one low. All high
+paths/nodes remain unchanged and rooted solely in GHSA-vfj7-8cjw-p6xm. Its raw
+SHA-256 `1f237e25163f3baf72a04228ef4701a3edaafcce12472a36921667a58b4e01ed`
+exactly matches the original full durable audit linked above. No manifest,
+lockfile or production source change exists. Ordinary hooks remain intact;
+#2988's narrowly scoped qualification-publication exception does not waive merge,
+deployment or activation. The safety image contains the affected development
+tree, and the 1,026-file built-JavaScript direct-import scan does not exclude
+dynamic/transitive runtime reachability. Fresh exact-head CI/reviews/Sonar remain
+required; the earlier failed head remains unqualified despite its capacity passes.

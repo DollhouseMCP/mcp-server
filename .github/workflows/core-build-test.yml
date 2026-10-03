@@ -22,7 +22,7 @@ jobs:
     name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    needs: owner-erasure-capacity
+    needs: [owner-erasure-capacity, serial-storage-tests]
     if: ${{ always() }}
 
     strategy:
@@ -32,13 +32,14 @@ jobs:
         node-version: ['20.x']
 
     steps:
-      - name: Enforce complete owner erasure matrix
+      - name: Enforce complete required storage matrices
         shell: bash
         env:
           ERASURE_MATRIX_RESULT: ${{ needs.owner-erasure-capacity.result }}
+          STORAGE_MATRIX_RESULT: ${{ needs.serial-storage-tests.result }}
         run: |
-          if [ "$ERASURE_MATRIX_RESULT" != "success" ]; then
-            echo "Every owner erasure matrix job must succeed; failed, cancelled, skipped or missing results refuse this gate."
+          if [ "$ERASURE_MATRIX_RESULT" != "success" ] || [ "$STORAGE_MATRIX_RESULT" != "success" ]; then
+            echo "Every owner erasure and serial storage matrix job must succeed; failed, cancelled, skipped or missing results refuse this gate."
             exit 1
           fi
 
@@ -150,31 +151,7 @@ jobs:
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity)[.]test[.]ts$).*'
-        continue-on-error: true
-
-      # Keep the complete filesystem capacity suite in a fresh serial process.
-      - name: Run required CREATE capacity suite
-        id: create_tests
-        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedCreate.test.ts
-        continue-on-error: true
-
-      # Keep all cleanup capacity cases and their whole-case deadlines in a fresh process.
-      - name: Run required archive cleanup capacity suite
-        id: cleanup_tests
-        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryArchiveCleanupCapacity.test.ts
-        continue-on-error: true
-
-      # Preserve the complete managed RENAME suite and its deadlines in a fresh process.
-      - name: Run required managed RENAME suite
-        id: rename_tests
-        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts
-        continue-on-error: true
-
-      # DELETE's populated filesystem proofs retain all cases and deadlines in a fresh process.
-      - name: Run required head DELETE capacity suite
-        id: delete_tests
-        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedDeleteCapacity.test.ts
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Run performance tests (separate process)
@@ -204,13 +181,9 @@ jobs:
         shell: bash
         env:
           TEST_OUTCOME: ${{ steps.original_tests.outcome }}
-          CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
-          CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
-          RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
-          DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
         run: |
-          if [ "$TEST_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ]; then
-            echo "Ordinary unit, CREATE capacity, archive cleanup capacity, managed RENAME, head DELETE capacity groups must all pass the core build gate."
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Ordinary unit tests must pass the core build gate."
             exit 1
           fi
 
@@ -258,6 +231,66 @@ jobs:
         run: |
           if [ "$ERASURE_OUTCOME" != "success" ]; then
             echo "The complete owner erasure suite must execute successfully."
+            exit 1
+          fi
+
+  serial-storage-tests:
+    name: Core serial storage (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: *core-platforms
+    env:
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          fetch-tags: true
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies without scripts
+        run: npm ci --ignore-scripts
+      - name: Build project
+        run: npm run build
+      - name: Run required managed owner erasure lifecycle suite
+        id: lifecycle_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedErasure.test.ts
+        continue-on-error: true
+      - name: Run required CREATE capacity suite
+        id: create_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedCreate.test.ts
+        continue-on-error: true
+      - name: Run required archive cleanup capacity suite
+        id: cleanup_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryArchiveCleanupCapacity.test.ts
+        continue-on-error: true
+      - name: Run required managed RENAME suite
+        id: rename_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts
+        continue-on-error: true
+      - name: Run required head DELETE capacity suite
+        id: delete_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedDeleteCapacity.test.ts
+        continue-on-error: true
+      - name: Enforce every serial storage suite
+        if: always()
+        shell: bash
+        env:
+          LIFECYCLE_OUTCOME: ${{ steps.lifecycle_tests.outcome }}
+          CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
+          RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
+          DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
+        run: |
+          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ]; then
+            echo "Every serial storage suite must execute successfully."
             exit 1
           fi
 
