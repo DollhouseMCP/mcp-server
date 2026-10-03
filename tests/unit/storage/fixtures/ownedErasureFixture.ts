@@ -63,10 +63,12 @@ async function requireAbsent(target: string): Promise<void> {
   throw new Error(`Fixture expected an absent canonical component: ${target}`);
 }
 
-export async function makeOwnedErasureFixture(options: OwnedErasureFixtureOptions = {}) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'owned-erasure-')));
+export async function makeOwnedErasureFixture(options: OwnedErasureFixtureOptions = {}, onRootAllocated?: (root: string) => void) {
+  let root = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-erasure-'));
   const cleanup = () => fs.rm(root, { recursive: true, force: true });
   try {
+    onRootAllocated?.(root);
+    root = await fs.realpath(root);
     await fs.chmod(root, 0o700);
     const locator = options.nested ? 'Notes/Memory.yaml' : 'Memory.yaml';
     const head = path.join(root, locator);
@@ -132,5 +134,9 @@ export async function makeOwnedErasureFixture(options: OwnedErasureFixtureOption
     return { root, coordinator, owners, archives, token,
       request: { operationId: randomUUID(), deleteOperationId: randomUUID(), expectedToken: token },
       foreignFiles, cleanup };
-  } catch (cause) { await cleanup(); throw cause; }
+  } catch (cause) {
+    try { await cleanup(); }
+    catch (cleanupCause) { throw new AggregateError([cause, cleanupCause], 'Erasure fixture setup and cleanup failed', { cause }); }
+    throw cause;
+  }
 }

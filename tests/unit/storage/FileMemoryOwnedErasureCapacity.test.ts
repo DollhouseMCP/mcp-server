@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { FileMemoryOwnerSnapshots, type OwnedErasureWorkReport } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
+import { runErasureCapacityLifecycle, CAPACITY_OBSERVER_TIMEOUT_MS } from './fixtures/erasureCapacityLifecycle.js';
 import { captureErasureFiles, makeOwnedErasureFixture } from './fixtures/ownedErasureFixture.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
@@ -12,14 +13,21 @@ const cases = ([100, 250, 1000] as const).flatMap(foreignOwners =>
 describe('dormant owner erasure populated portfolios', () => {
   for (const options of cases) {
     it(`erases ${options.volumes} volumes with ${options.foreignOwners} foreign owners, nested=${options.nested}`, async () => {
-      const started = performance.now();
-      const fixture = await makeOwnedErasureFixture({ ...options, archive: 'published' });
+      const deadlineMs = options.foreignOwners === 1000 && options.volumes === 10 ? 45_000 : 30_000;
       let report: OwnedErasureWorkReport | undefined;
       let operationMs: number | undefined;
       let verificationMs: number | undefined;
-      const phase = (name: string) => console.info('ERASURE capacity phase', JSON.stringify({ ...options, phase: name,
-        elapsedMs: performance.now() - started, node: process.version, pid: process.pid }));
-      try {
+      await runErasureCapacityLifecycle({ deadlineMs, label: JSON.stringify(options), completed: timing => {
+        console.info('ERASURE capacity complete', JSON.stringify({ ...options, ...timing, deadlineMs,
+          operationMs, verificationMs, report }));
+      } }, async lifecycle => {
+        const started = lifecycle.started;
+        const fixture = await makeOwnedErasureFixture({ ...options, archive: 'published' }, root => {
+          lifecycle.registerCleanup(() => fs.rm(root, { recursive: true, force: true }), root);
+        });
+        lifecycle.registerCleanup(fixture.cleanup, fixture.root);
+        const phase = (name: string) => { lifecycle.phase(name); console.info('ERASURE capacity phase', JSON.stringify({ ...options, phase: name,
+          elapsedMs: performance.now() - started, node: process.version, pid: process.pid })); };
         const before = await captureErasureFiles(fixture.foreignFiles);
         const head = path.join(fixture.root, fixture.token.locator);
         const headNames = (await fs.readdir(path.dirname(head))).sort();
@@ -49,15 +57,9 @@ describe('dormant owner erasure populated portfolios', () => {
         verificationMs = performance.now() - verificationStarted;
         phase('assertions-complete');
         console.info('ERASURE capacity work', JSON.stringify({ ...options, setupMs, operationMs, verificationMs,
-          totalMs: performance.now() - started, discoveryReads: report!.discovery,
+          preCleanupMs: performance.now() - started, discoveryReads: report!.discovery,
           reservedDirectoryReads: report!.reservedDirectoryReads, actual: report!.actual, head: report!.head }));
-      } finally {
-        // A timed-out or failed case retains the last completed phase and actual
-        // report, without implying that operation or assertions completed.
-        console.info('ERASURE capacity finally', JSON.stringify({ ...options, elapsedMs: performance.now() - started,
-          operationMs, verificationMs, report }));
-        await fixture.cleanup();
-      }
-    }, 30_000);
+      });
+    }, CAPACITY_OBSERVER_TIMEOUT_MS);
   }
 });

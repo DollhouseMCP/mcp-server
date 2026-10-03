@@ -109,8 +109,8 @@ verification. The late assertions are not a pass. Eleven other capacity cases ha
 
 ### Approved populated qualification allowance
 
-The twelve populated erasure cases now have an explicitly approved 30-second
-whole-case test allowance. Each still includes genuine setup, baseline capture,
+The two 1,000-owner/ten-volume cases (flat and nested) have an explicitly
+approved 45-second whole-case allowance; the other ten cases retain 30 seconds. Each still includes genuine setup, baseline capture,
 the operation, every verification and cleanup in one case. There is no phase
 reset or fixture split. The 100/250/1,000-owner flat/nested and 2/10-volume
 workloads, read caps, proof checkpoints and assertions are unchanged. All
@@ -146,3 +146,14 @@ an inherited wide-registry admission refusal with full preservation. The latter
 returns the original phase-aware `EHEADCONFLICT` with its exact `EHEADRESOURCE`
 scan-budget cause; no head deletion or erasure publication occurred. Earlier
 incorrect test checkpoint/error expectations remain in the qualification record.
+
+The current capacity harness measures the complete whole case after awaited
+cleanup, including setup, operation and every assertion. A measured deadline
+failure is reported only after all case work settles. A real referenced
+60-second terminal watchdog exits the entire capacity process before the
+65-second Jest observer can advance with unfinished writes. These are fail-only
+safety guards, not passing allowances. A hard exit may retain the temporary root
+and proves neither successful cleanup nor protocol sync/close. CI invokes this
+suite alone; a broader local Jest invocation would also be terminated. Use the
+dedicated `--runInBand --runTestsByPath` capacity command. Earlier pre-cleanup
+diagnostics and failed hosted 30-second cases remain historical evidence.

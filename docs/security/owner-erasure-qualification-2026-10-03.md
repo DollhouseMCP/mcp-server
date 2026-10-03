@@ -147,3 +147,76 @@ transfer to the scheduling correction. Beta's three protected core Test contexts
 are unchanged. Extended contexts are not branch-protected; each still enforces
 its own complete six-lane prerequisite matrix, and final review requires their
 actual hosted outcomes as well.
+
+## Cleanup-inclusive capacity lifecycle correction
+
+On 2026-10-03 at 14:18 UTC, Mick answered “Yes you may proceed” to the
+reviewed cleanup-safe harness and a 45-second whole-case allowance ONLY for
+the flat and nested 1,000-owner/ten-volume cases. The other ten populated cases
+retain 30 seconds. Setup, operation, every assertion and awaited cleanup remain
+one whole case; no production protocol, workload, proof, resource cap, platform
+matrix or 900-second job ceiling changes.
+
+The old `6806f8d598186e1f543861297cdd179c23a1acf9` hosted result is
+24 successful checks and nine failures, including propagated matrix failure.
+Its isolated Extended Ubuntu 20 job had ten passes and two genuine 30-second
+failures; late assertions completed around 31.6 seconds before cleanup.
+Extended macOS 22 likewise failed the two largest cases. These remain failures,
+not transferred passes. Core Windows 20 also had a separate npm installation
+EEXIST/EPERM cache cleanup failure, unrelated to erasure authority or timing.
+The new local qualification below does not establish a fresh hosted pass.
+
+Fixture creation is now covered by the outer lifecycle. Its isolated temporary
+root is registered immediately after allocation and before realpath/setup can
+reject. Setup failures await helper cleanup; outer cleanup is idempotent.
+Body and cleanup failures preserve their original causes. Measured deadline
+failure is emitted only after all body work and cleanup settle, preventing
+ordinary timing failures from leaving writes running into the next case.
+
+A real, referenced 60-second terminal watchdog is armed before the first await.
+It emits a bounded synchronous best-effort diagnostic and exits nonzero even if
+that diagnostic throws. The 65-second Jest observer is only a fail-safe guard;
+neither value is a passing allowance. A hard hang terminates the entire dedicated
+capacity process rather than advancing to another case. Its temporary root may
+remain, and no successful cleanup or protocol sync/close is claimed. The timer
+remains armed through awaited cleanup and final diagnostics. CI invokes the
+capacity suite alone; a broader local Jest invocation would also be terminated.
+Event-loop blocking may delay timers; a completed case still fails its measured
+whole-case limit. This is test lifecycle control, not production cancellation.
+
+Independent exact-source review accepted the five-file harness/fixture/test/guide
+freeze before runtime. Eight small harness regressions pass in 1.289 seconds:
+cleanup-inclusive timing, setup root rejection/removal, body plus cleanup failure
+ordering, sole cleanup failure, drained late writes, and actual child-process
+terminal exits for setup hang, cleanup hang and diagnostic failure. Child teardown
+awaits actual process closure before removing the isolated fixture, including
+error paths. Focused lint and strict changed-test typing pass.
+
+The full twelve populated cases then pass once in 80.235 seconds with twelve
+post-cleanup completion markers. The largest flat case measures 14.171594 seconds
+including 0.121118-second cleanup; nested measures 14.331963 seconds including
+0.125476-second cleanup. All assertions and workloads remain intact. Whole time
+is sampled after awaited cleanup and before the final diagnostic; Jest's reported
+case duration additionally includes that bounded diagnostic/return overhead.
+No old-head pass is transferred, and no timing or CI guarantee is inferred from
+these local measurements. Fresh exact-head hosted qualification remains required.
+
+Normal precommit passes 108 rapid-security tests (46 skipped) and script typecheck,
+then fails only the unchanged authorized audit cohort. The fresh full lock audit
+again has 37 high, zero critical, 19 moderate and one low, with identical high
+paths/nodes rooted solely in GHSA-vfj7-8cjw-p6xm and raw SHA-256
+`94d49ccda4919564e3159719642d3b192460b6988ef2aa653e0a40e51dc29720`.
+The durable correction audit linked above therefore preserves the identical full
+report. Manifests, lockfiles, workflows and production blobs are unchanged by
+this harness correction. The ordinary hooks and standing narrowly scoped #2988
+qualification-publication exception remain in force; no suppression, merge or
+deployment waiver is introduced. The safety image contains the affected
+braces/micromatch development tree, and the scan of 1,026 built JavaScript files
+with no direct imports does not exclude dynamic/transitive runtime reachability.
+
+Suite discovery is 723: the previous 722 suites plus the single new small harness
+suite. No prior suite is removed. Reviewed lifecycle helper SHA-256 is
+`e300b5321467fc6630be9b9a13082a895ef56fc45797fbf8f3e7fdae6083b7c0`;
+capacity test SHA-256 is
+`307e8b8a3735785c440d2ab584bfcfab9507391f745c5b683e047d261561360c`.
+All reviewed file hashes remained unchanged through qualification.
