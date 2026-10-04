@@ -243,7 +243,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       this.guardedOperations.set(targetKey, Object.freeze({status: 'preparing', manager}));
       const baseline = await this.toRecord(captured.userId, 'memories', target.memory, false, target.content);
       this.assertExpectedHash(captured.expectedContentHash, baseline);
-      candidate = await manager.prepareGuardedMemoryReplacement(target.memory, guardedMemoryYaml(captured, target.replacementBaseline, target.memory.metadata.name));
+      candidate = await manager.prepareGuardedMemoryReplacement(target.memory, guardedMemoryYaml(captured, target.replacementBaseline));
       validateGuardedMemoryTags(candidate.metadata as unknown as Record<string, unknown>);
       const submitted = await this.rawContentFor('memories', candidate);
       const response = clonePortfolioElementDetailRecord(await this.toRecord(captured.userId, 'memories', candidate, false, submitted));
@@ -414,10 +414,10 @@ function editableGuardedMemoryYaml(baseline: Record<string, unknown>, rawMetadat
   return yaml.dump(editable, {lineWidth: -1, noRefs: true});
 }
 
-function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: Record<string, unknown>, name: string): string {
-  if (input.displayName != null && input.displayName !== name) throw new Error('Guarded memory rename is unavailable');
+function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: Record<string, unknown>): string {
   if (!isRecord(baseline) || !Array.isArray(baseline.entries)) throw new Error('Incomplete memory baseline');
   const originalMetadata = isRecord(baseline.metadata) ? baseline.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(baseline)).filter(([key]) => key !== 'instructions'));
+  if (input.displayName != null && input.displayName !== originalMetadata.name) throw new Error('Guarded memory rename is unavailable');
   const result = structuredClone(baseline);
   let body: Record<string, unknown> = {};
   if (input.content !== undefined) {
@@ -431,7 +431,7 @@ function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: 
   const config = isRecord(body.metadata) ? body.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(body)).filter(([key]) => key !== 'instructions'));
   const requestMetadata = Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== 'tags'));
   const metadata: Record<string, unknown> = {...originalMetadata, ...config, ...requestMetadata, modified: input.now.toISOString()};
-  if (metadata.name !== name) throw new Error('Guarded memory rename is unavailable');
+  if (metadata.name !== originalMetadata.name) throw new Error('Guarded memory rename is unavailable');
   if (metadata.unique_id !== originalMetadata.unique_id) throw new Error('Guarded memory identity change is unavailable');
   if (input.tags !== undefined) metadata.tags = [...input.tags];
   validateGuardedMemoryTags(metadata);

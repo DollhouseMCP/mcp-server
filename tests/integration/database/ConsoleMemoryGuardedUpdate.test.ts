@@ -3,6 +3,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import type { Memory } from '../../../src/elements/memories/Memory.js';
 import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
@@ -133,6 +134,31 @@ requiredDescribe('actual guarded console memory UPDATE with owned PostgreSQL', (
     expect(response?.content).toBe(subsequent?.content);
     expect(legacy).not.toHaveBeenCalled();
     expect(importFallback).not.toHaveBeenCalled();
+  }));
+
+  it('preserves legacy YAML name with admitted logical row identity and refuses a mismatched raw row', () => isolated('legacy-name', async context => {
+    const {f, manager, layer, store, mark} = context;
+    const data = yaml.load(f.raw, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+    data.name = 'R&D'; data.unique_id = f.memoryId;
+    await f.layer.writeContent('memories', f.name, yaml.dump(data),
+      {author: 'test-author', version: '1.0.0', description: '', tags: []});
+    await f.maintenance`UPDATE public.elements SET name='RD' WHERE id=${f.memoryId}::uuid`;
+    const before = await f.layer.readHeadSnapshot(f.memoryId); expect(before.token.name).toBe('RD');
+    const observed = await store.findByName(f.userId, 'memories', 'rd'); expect(observed?.displayName).toBe('R&D');
+    const write = jest.spyOn(layer, 'writeHeadIfCurrent'); const legacy = jest.spyOn(layer, 'writeContent');
+    mark('operation-begin');
+    const response = await store.update({...input(context, observed!.contentHash), canonicalName: 'rd', displayName: 'R&D'});
+    mark('operation-end');
+    expect(response?.displayName).toBe('R&D'); expect(response?.name).toBe('RD'); expect(write).toHaveBeenCalledTimes(1); expect(legacy).not.toHaveBeenCalled();
+    const committed = await f.layer.readHeadSnapshot(f.memoryId); expect(committed.token.name).toBe('RD');
+    expect((yaml.load(committed.content) as {metadata: {name: string; unique_id: string}}).metadata).toMatchObject({name: 'R&D', unique_id: f.memoryId});
+    expect((await f.layer.getEntries(f.memoryId)).map(entry => entry.entryId)).toEqual(['one']);
+    expect((await store.findByName(f.userId, 'memories', 'rd'))?.contentHash).toBe(response?.contentHash);
+    // Backend row/token identity remains strict; no migration or name repair.
+    await f.maintenance`UPDATE public.elements SET name='R&D' WHERE id=${f.memoryId}::uuid`;
+    const refused = await f.snapshot(); const save = jest.spyOn(manager, 'save'); write.mockClear();
+    await expect(store.findByName(f.userId, 'memories', 'rd')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+    expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(await f.snapshot()).toEqual(refused);
   }));
 
   it.each(['child', 'tag'] as const)('retains original authority after actual %s interference at the prepared-save barrier', kind => isolated(`conflict-${kind}`, async context => {
