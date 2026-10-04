@@ -99,7 +99,7 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
       return { manager, adapter };
     };
     const cleanup = async () => { for (const manager of managers) manager.dispose(); await fs.rm(root, { recursive: true, force: true }); };
-    return { root, tenantRoot, owners, fence, makeManager, setTenant: (value: string) => { tenant = value; }, cleanup };
+    return { root, tenantRoot, owners, fence, ordinary, makeManager, setTenant: (value: string) => { tenant = value; }, cleanup };
   } catch (cause) {
     for (const manager of managers) manager.dispose();
     await fs.rm(root, { recursive: true, force: true });
@@ -1015,6 +1015,103 @@ posix('guarded console canonical runtime configuration', () => {
     });
 });
 
+posix('guarded console complete snapshot ETag', () => {
+  it.each([{label: 'nested value', extensions: {nested: {value: 'First extension edit'}}},
+    {label: 'nested modified only', extensions: {nested: {value: 'original', modified: '2026-10-04T21:00:00.000Z'}}}])(
+    'refuses stale extension overwrite at equal captured time for $label', async ({extensions}) => {
+      const now = new Date('2026-10-04T20:00:00.000Z');
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        definition.metadata.modified = now.toISOString(); return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {}, headers: etag ? {'if-match': etag} : {},
+          consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const initial = await f.owners.readHeadSnapshot('head.yaml');
+        const definition = yaml.load(initial.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]; extensions: unknown};
+        const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        let source: Memory | undefined; let sourceState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+        });
+        const first = await service.updateElement(request({content: yaml.dump({...definition, extensions})}, before.headers!.ETag),
+          'memories', 'owned-memory');
+        expect(first.status).toBe(200); expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const accepted = await f.owners.readHeadSnapshot('head.yaml');
+        const parsed = yaml.load(accepted.content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+        expect(parsed.extensions).toEqual(extensions); expect(parsed.metadata.modified).toBe(now.toISOString());
+        expect(parsed.entries).toEqual(definition.entries); expect(parsed.metadata.unique_id).toBe(definition.metadata.unique_id);
+        const tree = async () => {
+          const files: Record<string, string> = {};
+          for (const entry of (await fs.readdir(f.tenantRoot, {recursive: true})).sort()) {
+            const file = path.join(f.tenantRoot, entry);
+            if ((await fs.lstat(file)).isFile()) files[entry] = (await fs.readFile(file)).toString('base64');
+          }
+          return files;
+        };
+        const acceptedTree = await tree(); save.mockClear(); write.mockClear();
+        const stale = await service.updateElement(request({content: yaml.dump(definition)}, before.headers!.ETag), 'memories', 'owned-memory');
+        const afterStale = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+        expect({status: stale.status, dispatched: write.mock.calls.length, persistedExtensions: afterStale.extensions,
+          priorTokenStillMatches: first.headers!.ETag === before.headers!.ETag})
+          .toEqual({status: 412, dispatched: 0, persistedExtensions: extensions, priorTokenStillMatches: false});
+        expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(accepted); expect(await tree()).toEqual(acceptedTree);
+        expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+        expect(first.headers!.ETag).not.toBe(before.headers!.ETag);
+        const after = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(after.body).toEqual(first.body); expect(after.headers!.ETag).toBe(first.headers!.ETag);
+        const second = await service.updateElement(request({content: yaml.dump({...definition, extensions: {nested: {value: 'Second extension edit'}}})},
+          first.headers!.ETag), 'memories', 'owned-memory');
+        expect(second.status).toBe(200); expect(source!.serialize()).toBe(sourceState);
+        expect(write).toHaveBeenCalledTimes(1);
+        const submitted = write.mock.calls[0][1]; const persisted = await f.owners.readHeadSnapshot('head.yaml');
+        expect(persisted.content).toBe(submitted);
+        expect(second.headers!.ETag).toBe(`"sha256:${createHash('sha256').update(submitted, 'utf8').digest('hex')}"`);
+        expect((yaml.load(persisted.content, {schema: yaml.JSON_SCHEMA}) as typeof definition).extensions).toEqual({nested: {value: 'Second extension edit'}});
+        expect(second.headers!.ETag).not.toBe(first.headers!.ETag);
+        expect((await service.getElement(request(), 'memories', 'owned-memory')).headers!.ETag).toBe(second.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+  it('distinguishes raw extensions absence null and empty while retaining legacy and list projections', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+      const hashes: string[] = [];
+      for (const value of [undefined, null, {}]) {
+        const definition = {...original};
+        if (value === undefined) delete definition.extensions; else definition.extensions = value;
+        const before = await f.owners.readHeadSnapshot('head.yaml');
+        if (before.token.ownership !== 'owned') throw new Error('Expected real owned projection fixture');
+        const content = yaml.dump(definition, {lineWidth: -1, noRefs: true});
+        await f.owners.updateOwnedHead(before.token, content);
+        const record = await store.findByName(USER, 'memories', 'owned-memory');
+        expect(record!.contentHash).toBe(createHash('sha256').update(content, 'utf8').digest('hex')); hashes.push(record!.contentHash!);
+      }
+      expect(new Set(hashes).size).toBe(3);
+      const stable = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(stable);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'modified').sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => [key, stable(value)]));
+      };
+      const legacy = consoleStore(f.ordinary); const record = await legacy.findByName(USER, 'memories', 'owned-memory');
+      const expected = createHash('sha256').update(JSON.stringify({type: 'memories', metadata: stable(record!.metadata), content: record!.content})).digest('hex');
+      expect(record!.contentHash).toBe(expected);
+      const runtime = await manager.load('head.yaml');
+      const summary = await (store as unknown as {toRecord: (user: string, type: string, memory: Memory) => Promise<{contentHash: string; metadata: unknown; content: string}>})
+        .toRecord(USER, 'memories', runtime);
+      expect(summary.contentHash).toBe(createHash('sha256').update(JSON.stringify({type: 'memories', metadata: stable(summary.metadata), content: summary.content})).digest('hex'));
+    } finally {await f.cleanup();}
+  });
+});
+
 posix('guarded console existing-owner UPDATE', () => {
   it.each(['delete', 'rename'].flatMap(transition => ['GET', 'initial PATCH', 'store PATCH'].map(operation => ({transition, operation}))))('returns service404 when $transition wins discovery/read race during $operation', async ({transition, operation}) => {
       const f = await fixture();
@@ -1144,14 +1241,8 @@ posix('guarded console existing-owner UPDATE', () => {
         const get = await service.getElement(request(), 'memories', 'owned-memory');
         expect(get.status).toBe(200);
         const original = get.body as {content: string; metadata: Record<string, unknown>};
-        const canonical = (value: unknown): unknown => {
-          if (Array.isArray(value)) return value.map(canonical);
-          if (!value || typeof value !== 'object') return value;
-          return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'modified').sort(([a], [b]) => a.localeCompare(b))
-            .map(([key, entry]) => [key, canonical(entry)]));
-        };
-        const rawHash = createHash('sha256').update(JSON.stringify({type: 'memories', metadata: canonical(rawDefinition),
-          content: markdown ? `${markdown}\n` : ''})).digest('hex');
+        const rawSnapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const rawHash = createHash('sha256').update(rawSnapshot.content, 'utf8').digest('hex');
         expect(get.headers?.ETag).toBe(`"sha256:${rawHash}"`);
         const initialSnapshot = await f.owners.readHeadSnapshot('head.yaml');
         const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');

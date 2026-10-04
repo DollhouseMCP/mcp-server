@@ -340,7 +340,9 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       canonicalName: canonicalizePortfolioElementName(name),
       displayName: typeof metadata.name === 'string' ? metadata.name : name,
       version: 1,
-      contentHash: sha256(stableContentProjection(type, metadata, parsed.content)),
+      contentHash: this.guardedManager(type) && capturedContent !== undefined
+        ? sha256(capturedContent)
+        : sha256(stableContentProjection(type, metadata, parsed.content)),
       updatedAt: parseUpdatedAt(element.metadata.modified),
       validationStatus: validation.valid ? 'valid' : 'invalid',
       tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [],
