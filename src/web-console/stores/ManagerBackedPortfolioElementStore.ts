@@ -25,6 +25,7 @@ import {
   type ConsolePortfolioListFilters,
   type IPortfolioElementStore,
   validatePortfolioElementDetailRecord,
+  validatePortfolioElementTags,
 } from './IPortfolioElementStore.js';
 
 type PortfolioElementManager = Pick<BaseElementManager<IElement>,
@@ -425,10 +426,12 @@ function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: 
     if (parsed.instructions !== undefined) result.instructions = parsed.instructions;
   }
   const config = isRecord(body.metadata) ? body.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(body)).filter(([key]) => key !== 'instructions'));
-  const metadata: Record<string, unknown> = {...originalMetadata, ...config, ...input.metadata, modified: input.now.toISOString()};
+  const requestMetadata = Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== 'tags'));
+  const metadata: Record<string, unknown> = {...originalMetadata, ...config, ...requestMetadata, modified: input.now.toISOString()};
   if (metadata.name !== name) throw new Error('Guarded memory rename is unavailable');
   if (metadata.unique_id !== originalMetadata.unique_id) throw new Error('Guarded memory identity change is unavailable');
   if (input.tags !== undefined) metadata.tags = [...input.tags];
+  validatePortfolioElementTags(Object.hasOwn(metadata, 'tags') ? metadata.tags : []);
   result.metadata = metadata;
   return yaml.dump(result, {lineWidth: -1, noRefs: true});
 }

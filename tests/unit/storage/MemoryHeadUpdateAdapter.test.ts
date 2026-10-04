@@ -4,6 +4,8 @@ import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePl
 import { InMemoryUserIntegrationStore } from '../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
 import { InMemoryPortfolioSyncJobStore } from '../../../src/web-console/stores/InMemoryPortfolioSyncJobStore.js';
 import { ManagerBackedPortfolioElementStore, type ManagerBackedPortfolioManagers } from '../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
+import { problemForConsoleError } from '../../../src/web-console/platform/ProblemResponses.js';
+import { ConsoleStoreValidationError } from '../../../src/web-console/stores/ConsoleStoreValidation.js';
 import { PortfolioElementVersionConflictError } from '../../../src/web-console/stores/IPortfolioElementStore.js';
 import { describe, it, expect, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
@@ -820,6 +822,127 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
   return new ManagerBackedPortfolioElementStore({getCurrentUserId: currentUser,
     managers: {memories: manager} as unknown as ManagerBackedPortfolioManagers});
 }
+
+async function tagBoundaryFixture(rawTags: unknown = ['original'], absent = false) {
+  const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+    const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+    if (absent) delete definition.metadata.tags;
+    else definition.metadata.tags = rawTags;
+    return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+  });
+  const {manager} = f.makeManager(); const store = consoleStore(manager);
+  const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+  const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {},
+    headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+  const get = await service.getElement(request(), 'memories', 'owned-memory');
+  const before = await f.owners.readHeadSnapshot('head.yaml');
+  const definition = yaml.load(before.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+  const tree = async () => {
+    const files: Record<string, string> = {};
+    for (const entry of (await fs.readdir(f.tenantRoot, {recursive: true})).sort()) {
+      const fullPath = path.join(f.tenantRoot, entry);
+      if ((await fs.lstat(fullPath)).isFile()) files[entry] = (await fs.readFile(fullPath)).toString('base64');
+    }
+    return files;
+  };
+  const originalTree = await tree();
+  let source: Memory | undefined; let sourceState: string | undefined;
+  const find = manager.findGuardedMemoryForUpdate.bind(manager);
+  jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+    const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+  });
+  const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+  const prepare = jest.spyOn(manager, 'prepareGuardedMemoryReplacement');
+  const update = (body: unknown) => service.updateElement(request(body, get.headers!.ETag), 'memories', 'owned-memory');
+  const sourceUnchanged = () => { expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState); };
+  const refused = async () => {
+    sourceUnchanged(); expect(prepare).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+    expect(await tree()).toEqual(originalTree); expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+    expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+  };
+  const coherent = async (response: Awaited<ReturnType<typeof update>>, expected: unknown, omitted = false) => {
+    expect(response.status).toBe(200); sourceUnchanged();
+    const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+    const publication = manager.cached('head.yaml')!;
+    if (omitted) expect(raw.metadata).not.toHaveProperty('tags');
+    else expect(raw.metadata.tags).toEqual(expected);
+    expect(publication.metadata.tags).toEqual(expected);
+    expect((response.body as {tags: unknown; metadata: Record<string, unknown>}).tags).toEqual(expected ?? []);
+    expect((response.body as {metadata: Record<string, unknown>}).metadata.tags).toEqual(expected);
+    expect(raw.entries).toEqual(definition.entries);
+    expect(raw.metadata.name).toBe(definition.metadata.name); expect(raw.metadata.unique_id).toBe(definition.metadata.unique_id);
+    expect(raw.metadata.version).toBe('3.4.5'); expect(raw.metadata.created).toBe(definition.metadata.created);
+    expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+    const next = await service.getElement(request(), 'memories', 'owned-memory');
+    expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+  };
+  return {...f, definition, update, refused, coherent, save, write};
+}
+
+posix('guarded console tag boundary', () => {
+  it.each([false, true].flatMap(content => [null, 'invalid', ['alternate']].map(tags => ({content, tags}))))(
+    'ignores request metadata tags $tags with content=$content', async ({content, tags}) => {
+      const f = await tagBoundaryFixture();
+      try {
+        const response = await f.update({metadata: {tags, description: 'Tag metadata edit'},
+          ...(content ? {content: yaml.dump(f.definition)} : {})});
+        await f.coherent(response, ['original']);
+        expect((response.body as {metadata: Record<string, unknown>}).metadata.description).toBe('Tag metadata edit');
+      } finally {await f.cleanup();}
+    });
+  it.each([
+    {label: 'scalar', tags: 'invalid'}, {label: 'null', tags: null}, {label: 'mixed', tags: ['good', 9]},
+    {label: 'empty', tags: ['']}, {label: 'control', tags: ['bad\u0000tag']},
+    {label: 'long', tags: ['x'.repeat(81)]}, {label: 'count', tags: Array.from({length: 51}, (_, i) => `tag-${i}`)},
+  ])('refuses effective structured-content tags $label before preparation', async ({tags}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      const error = await f.update({content: yaml.dump({...f.definition, metadata: {...f.definition.metadata, tags}})}).catch(cause => cause);
+      expect(error).toBeInstanceOf(ConsoleStoreValidationError);
+      expect(problemForConsoleError(error)).toMatchObject({status: 400, code: 'invalid_request'});
+      await f.refused();
+    } finally {await f.cleanup();}
+  });
+  it.each([{flat: false, tags: ['content']}, {flat: true, tags: ['flat']}, {flat: false, tags: []}])(
+    'preserves supported content tags $tags flat=$flat', async ({flat, tags}) => {
+      const f = await tagBoundaryFixture();
+      try {
+        const content = flat ? {...f.definition.metadata, entries: f.definition.entries, tags}
+          : {...f.definition, metadata: {...f.definition.metadata, tags}};
+        await f.coherent(await f.update({content: yaml.dump(content)}), tags);
+      } finally {await f.cleanup();}
+    });
+  it.each([{tags: ['dedicated']}, {tags: []}])('gives dedicated tags $tags precedence over malformed lower-priority tags', async ({tags}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      await f.coherent(await f.update({tags, metadata: {tags: 'invalid'},
+        content: yaml.dump({...f.definition, metadata: {...f.definition.metadata, tags: null}})}), tags);
+    } finally {await f.cleanup();}
+  });
+  it.each([false, true])('refuses malformed original tags unless explicitly repaired=%s', async repair => {
+    const f = await tagBoundaryFixture('original malformed');
+    try {
+      if (repair) await f.coherent(await f.update({tags: ['repaired']}), ['repaired']);
+      else {
+        const error = await f.update({metadata: {description: 'Must refuse'}}).catch(cause => cause);
+        expect(error).toBeInstanceOf(ConsoleStoreValidationError);
+        expect(problemForConsoleError(error)).toMatchObject({status: 400, code: 'invalid_request'});
+        await f.refused();
+      }
+    } finally {await f.cleanup();}
+  });
+  it('keeps an absent original tags field absent', async () => {
+    const f = await tagBoundaryFixture(undefined, true);
+    try {await f.coherent(await f.update({metadata: {description: 'Absent tags edit'}}), undefined, true);}
+    finally {await f.cleanup();}
+  });
+  it.each([{tags: 'invalid'}, {tags: ['']}, {tags: Array.from({length: 51}, (_, i) => `tag-${i}`)}])('retains direct dedicated tags $tags service422', async ({tags}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      expect((await f.update({tags})).status).toBe(422); await f.refused();
+    } finally {await f.cleanup();}
+  });
+});
 
 posix('guarded console existing-owner UPDATE', () => {
   it.each(['delete', 'rename'].flatMap(transition => ['GET', 'initial PATCH', 'store PATCH'].map(operation => ({transition, operation}))))('returns service404 when $transition wins discovery/read race during $operation', async ({transition, operation}) => {
