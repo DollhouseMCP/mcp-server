@@ -168,7 +168,10 @@ requiredDescribe('actual guarded immediate AQL requests with owned PostgreSQL', 
       });
       const changed = await f.snapshot(); resume.release();
       expect(await outcome).toMatchObject({ cause: { code: 'ESTALE' } });
-      expect(request.getPendingGuardedMutation(f.name)).toMatchObject({ status: 'refused', candidate: captured.memory, manager });
+      const retained = request.getPendingGuardedMutation(f.name);
+      expect(retained?.status).toBe('refused');
+      expect(retained?.candidate).toBe(captured.memory);
+      expect(retained?.manager).toBe(manager);
       expect(manager.getPendingHeadUpdate(captured.memory!)?.candidate?.content).toContain('Retained original-authority attempt');
       await request.flushPendingSaves();
       await expect(request.dispatch('clear', { element_name: f.name })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
@@ -232,7 +235,11 @@ requiredDescribe('actual guarded immediate AQL requests with owned PostgreSQL', 
     const pending = manager.getPendingHeadUpdate(captured.memory!);
     expect(pending?.status).toBe('committed-publication-failed'); expect(pending?.cause).toBe(failure);
     expect(pending?.committedToken).toBeDefined();
-    expect(request.getPendingGuardedMutation(f.name)).toMatchObject({ status: 'known-committed', candidate: captured.memory, manager, cause: failure });
+    const retained = request.getPendingGuardedMutation(f.name);
+    expect(retained?.status).toBe('known-committed');
+    expect(retained?.candidate).toBe(captured.memory);
+    expect(retained?.manager).toBe(manager);
+    expect(retained?.cause).toBe(failure);
     const committed = await f.snapshot();
     expect((await f.layer.readHeadSnapshot(f.memoryId)).content).toContain('Committed once despite publication failure');
     manager.publicationFailure = undefined;
