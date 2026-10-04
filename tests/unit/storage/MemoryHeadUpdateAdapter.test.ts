@@ -1,3 +1,8 @@
+import { createHash } from 'node:crypto';
+import { PortfolioService } from '../../../src/web-console/modules/portfolio/PortfolioService.js';
+import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
+import { InMemoryUserIntegrationStore } from '../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
+import { InMemoryPortfolioSyncJobStore } from '../../../src/web-console/stores/InMemoryPortfolioSyncJobStore.js';
 import { ManagerBackedPortfolioElementStore, type ManagerBackedPortfolioManagers } from '../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
 import { PortfolioElementVersionConflictError } from '../../../src/web-console/stores/IPortfolioElementStore.js';
 import { describe, it, expect, jest } from '@jest/globals';
@@ -817,6 +822,101 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
 }
 
 posix('guarded console existing-owner UPDATE', () => {
+  it.each([false, true].flatMap(body => [false, true].flatMap(missingId => [false, true].map(echo => ({body, missingId, echo})))))('edits frontmatter through the console service body=$body missingId=$missingId echoedContent=$echo', async ({body, missingId, echo}) => {
+      const markdown = body ? '# Route memory\n\nPreserved Markdown body.' : '';
+      let rawDefinition: Record<string, unknown> = {};
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        definition.metadata.custom = {value: 'route retained'};
+        if (missingId) delete definition.metadata.unique_id;
+        rawDefinition = definition;
+        return `---\n${yaml.dump(definition, {lineWidth: -1, noRefs: true})}---\n\n${markdown}\n`;
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-07T12:00:00.000Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (payload: unknown = undefined, etag?: string): ConsoleRequest => ({body: payload, query: {},
+          headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const get = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(get.status).toBe(200);
+        const original = get.body as {content: string; metadata: Record<string, unknown>};
+        const canonical = (value: unknown): unknown => {
+          if (Array.isArray(value)) return value.map(canonical);
+          if (!value || typeof value !== 'object') return value;
+          return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'modified').sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, entry]) => [key, canonical(entry)]));
+        };
+        const rawHash = createHash('sha256').update(JSON.stringify({type: 'memories', metadata: canonical(rawDefinition),
+          content: markdown ? `${markdown}\n` : ''})).digest('hex');
+        expect(get.headers?.ETag).toBe(`"sha256:${rawHash}"`);
+        const initialSnapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const stale = await service.updateElement(request({metadata: {description: 'Stale route'}}, '"sha256:stale"'), 'memories', 'owned-memory');
+        expect(stale.status).toBe(412); expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(initialSnapshot);
+        const first = await service.updateElement(request({display_name: null, metadata: {description: 'First route edit'}, tags: ['route'],
+          ...(echo ? {content: original.content} : {})}, get.headers!.ETag), 'memories', 'owned-memory');
+        expect(first.status).toBe(200);
+        const initialContent = yaml.load(original.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+        expect(Array.isArray(initialContent.entries)).toBe(true);
+        if (missingId) expect(initialContent.metadata).not.toHaveProperty('unique_id');
+        const firstRaw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: Array<{id: string; content: string}>};
+        const persistedId = firstRaw.metadata.unique_id;
+        expect(typeof persistedId).toBe('string');
+        if (!missingId) expect(persistedId).toBe((rawDefinition.metadata as Record<string, unknown>).unique_id);
+        expect(firstRaw.entries).toHaveLength(body ? 2 : 1);
+        expect(firstRaw.entries.filter(entry => entry.content === markdown)).toHaveLength(body ? 1 : 0);
+        expect(firstRaw.metadata.name).toBe('Owned memory'); expect(firstRaw.metadata.version).toBe('3.4.5');
+        expect(firstRaw.metadata.custom).toEqual({value: 'route retained'}); expect(firstRaw.metadata.modified).toBe(now.toISOString());
+        const next = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(next.headers?.ETag).toBe(first.headers?.ETag); expect(next.body).toEqual(first.body);
+        const returned = next.body as {content: string};
+        const edit = yaml.load(returned.content, {schema: yaml.JSON_SCHEMA}) as {entries: Array<{id: string; content: string}>};
+        edit.entries.find(entry => entry.content === 'Original entry')!.content = 'Edited echoed entry';
+        const second = await service.updateElement(request({content: yaml.dump(edit, {lineWidth: -1, noRefs: true}),
+          metadata: {description: 'Second route edit'}}, next.headers!.ETag), 'memories', 'owned-memory');
+        expect(second.status).toBe(200);
+        const secondSnapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const secondRaw = yaml.load(secondSnapshot.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: Array<{id: string; content: string}>};
+        expect(secondRaw.metadata.unique_id).toBe(persistedId); expect(secondRaw.metadata.created).toBe(firstRaw.metadata.created);
+        expect(secondRaw.entries.find(entry => entry.content === 'Edited echoed entry')?.id).toBe(firstRaw.entries.find(entry => entry.content === 'Original entry')?.id);
+        expect(secondRaw.entries.filter(entry => entry.content === markdown)).toHaveLength(body ? 1 : 0);
+        const publication = manager.cached('head.yaml')!;
+        expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+        expect(publication.version).toBe('3.4.5'); expect(publication.metadata.name).toBe('Owned memory');
+        const finalGet = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(finalGet.headers?.ETag).toBe(second.headers?.ETag); expect(finalGet.body).toEqual(second.body);
+        save.mockClear(); write.mockClear();
+        await expect(service.updateElement(request({metadata: {unique_id: 'wrong-id'}}, finalGet.headers!.ETag), 'memories', 'owned-memory')).rejects.toThrow('identity');
+        expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(secondSnapshot);
+      } finally {await f.cleanup();}
+    });
+
+  it.each([{entries: null}, {entries: [{content: 'Malformed raw entry'}]}])('retains malformed frontmatter entries through service editing projection: $entries', async ({entries}) => {
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+      return `---\n${yaml.dump({...definition, entries})}---\n`;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = (body: unknown = undefined, etag?: string): ConsoleRequest => ({body, query: {},
+        headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+      const get = await service.getElement(request(), 'memories', 'owned-memory');
+      expect(get.status).toBe(200);
+      const content = (get.body as {content: string}).content;
+      expect((yaml.load(content, {schema: yaml.JSON_SCHEMA}) as {entries: unknown}).entries).toEqual(entries);
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(service.updateElement(request({content, metadata: {description: 'Must refuse'}}, get.headers!.ETag),
+        'memories', 'owned-memory')).rejects.toThrow();
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
   it.each(['lookup', 'update'] as const)('does not resolve unrelated Unicode names through empty filename stems during %s', async operation => {
     const f = await fixture({name: '記憶'});
     try {
@@ -1154,7 +1254,11 @@ posix('guarded console existing-owner UPDATE', () => {
       const {manager} = f.makeManager(); const store = consoleStore(manager);
       const before = await store.findByName(USER, 'memories', 'owned-memory');
       expect(before).not.toBeNull();
-      if (frontmatter) expect(before!.content.trim()).toBe(body);
+      if (frontmatter) {
+        const editable = yaml.load(before!.content, {schema: yaml.JSON_SCHEMA}) as {entries: Array<{content: string}>};
+        expect(editable.entries).toHaveLength(Number(persistedEntries) + Number(!emptyBody));
+        if (!emptyBody) expect(editable.entries.filter(entry => entry.content === body)).toHaveLength(1);
+      }
       const write = jest.spyOn(f.owners, 'updateOwnedHead');
       const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
       await expect(store.update({...input, expectedContentHash: 'stale', metadata: {description: 'Refused'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);

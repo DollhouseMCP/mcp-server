@@ -109,7 +109,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       const tenant = guarded.captureGuardedTenant();
       const target = await guarded.findGuardedMemoryForUpdate(canonicalName, tenant);
       this.requireGuardedContext(userId, guarded, tenant);
-      const record = target ? clonePortfolioElementDetailRecord(await this.toRecord(userId, type, target.memory, true, target.content)) : null;
+      const record = target ? clonePortfolioElementDetailRecord(await this.toRecord(userId, type, target.memory, true, target.content, target.replacementBaseline)) : null;
       this.requireGuardedContext(userId, guarded, tenant);
       return record;
     }
@@ -313,6 +313,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     element: IElement,
     classifyUnreadable = false,
     capturedContent?: string,
+    capturedMemoryBaseline?: Record<string, unknown>,
   ): Promise<ConsolePortfolioElementDetailRecord> {
     if (type === 'skills' && capturedContent === undefined) {
       const snapshot = await this.manager(type).findForUpdate(element.metadata.name);
@@ -343,7 +344,8 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       validationStatus: validation.valid ? 'valid' : 'invalid',
       tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [],
       metadata,
-      content: parsed.content,
+      content: type === 'memories' && capturedMemoryBaseline && rawContent.trimStart().startsWith('---')
+        ? editableGuardedMemoryYaml(capturedMemoryBaseline, metadata) : parsed.content,
     };
     validatePortfolioElementDetailRecord(record);
     return record;
@@ -393,6 +395,19 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     }
     return manager.exportElement(element, managerFormatForType(type));
   }
+}
+
+/** Editing content is separate from the unchanged raw snapshot ETag projection. */
+function editableGuardedMemoryYaml(baseline: Record<string, unknown>, rawMetadata: Readonly<Record<string, unknown>>): string {
+  const editable = structuredClone(baseline);
+  const persisted = isRecord(rawMetadata.metadata) ? rawMetadata.metadata : rawMetadata;
+  if (!Object.hasOwn(persisted, 'unique_id')) {
+    // This constructor identity belongs to this GET's working object. An
+    // echoed PATCH must retain its own same-read identity when none is persisted.
+    const metadata = isRecord(editable.metadata) ? editable.metadata : editable;
+    delete metadata.unique_id;
+  }
+  return yaml.dump(editable, {lineWidth: -1, noRefs: true});
 }
 
 function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: Record<string, unknown>, name: string): string {
