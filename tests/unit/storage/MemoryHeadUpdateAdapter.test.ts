@@ -1,3 +1,5 @@
+import { ManagerBackedPortfolioElementStore, type ManagerBackedPortfolioManagers } from '../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
+import { PortfolioElementVersionConflictError } from '../../../src/web-console/stores/IPortfolioElementStore.js';
 import { describe, it, expect, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -801,4 +803,190 @@ describe('pure working candidate snapshot', () => {
     expect(clone.serialize()).not.toContain('changed');
     expect(clone.getEntries().size).toBe(1);
   });
+});
+
+function consoleStore(manager: MemoryManager, currentUser = () => USER): ManagerBackedPortfolioElementStore {
+  return new ManagerBackedPortfolioElementStore({getCurrentUserId: currentUser,
+    managers: {memories: manager} as unknown as ManagerBackedPortfolioManagers});
+}
+
+posix('guarded console existing-owner UPDATE', () => {
+  it('updates through same-read ETag and preserves complete state with coherent runtime config', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const originalEntryMetadata = [...(await manager.load('head.yaml')).getEntries().values()][0].metadata;
+      const imported = jest.spyOn(manager, 'importElement');
+      const result = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory',
+        expectedVersion: 1, expectedContentHash: before!.contentHash, now: new Date(),
+        metadata: {description: 'Console change', maxEntries: 7, retentionDays: 9, priority: 8, onFull: 'error'}, tags: []});
+      expect(imported).not.toHaveBeenCalled();
+      expect(result!.metadata.description).toBe('Console change');
+      expect(result!.tags).toEqual([]);
+      expect(result!.content).toContain('Original instructions');
+      const loaded = await manager.load('head.yaml');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      expect(loaded.instructions).toBe('Original instructions');
+      expect((loaded.metadata as MemoryMetadata).retentionDays).toBe(9);
+      for (let i = loaded.getEntries().size; i < 7; i++) await loaded.addEntry(`Capacity entry ${i}`);
+      await expect(loaded.addEntry('Eighth entry')).rejects.toThrow('full');
+      expect([...loaded.getEntries().values()].find(entry => entry.content === 'Original entry')!.metadata).toEqual(originalEntryMetadata);
+      expect(result!.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(result!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('makes no write for missing targets and failed ETags, then permits a corrected request', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'missing', expectedVersion: 1, now: new Date()};
+      expect(await store.update(input)).toBeNull();
+      await expect(store.update({...input, canonicalName: 'owned-memory', expectedContentHash: 'wrong'})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(write).not.toHaveBeenCalled();
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      await expect(store.update({...input, canonicalName: 'owned-memory', expectedContentHash: before!.contentHash,
+        metadata: {description: 'Accepted'}})).resolves.not.toBeNull();
+    } finally {await f.cleanup();}
+  });
+
+  it('retains a real competing-process conflict and blocks replay through another spelling', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const save = manager.save.bind(manager);
+      const saving = jest.spyOn(manager, 'save').mockImplementation(async (memory, locator, options) => {
+        await externalOwnedUpdate(f.tenantRoot);
+        await save(memory, locator, options);
+      });
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Attempted console'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      const pending = store.getPendingGuardedUpdate(USER, 'owned-memory')!;
+      expect(pending.status).toBe('refused'); expect(pending.manager).toBe(manager);
+      expect(manager.getPendingHeadUpdate(pending.candidate!)?.candidate?.content).toContain('Attempted console');
+      const winner = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'Owned memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Replay'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(saving).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(winner);
+    } finally {await f.cleanup();}
+  });
+
+  it('retains known commit publication failures and refuses lifecycle mutations before legacy methods', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const failure = new Error('Publication failed'); manager.publicationFailure = {cause: failure};
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Durable console'}})).rejects.toBe(failure);
+      const pending = store.getPendingGuardedUpdate(USER, 'owned-memory')!;
+      expect(pending.status).toBe('committed-publication-failed'); expect(pending.cause).toBe(failure);
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Durable console');
+      const imported = jest.spyOn(manager, 'importElement'); const removed = jest.spyOn(manager, 'delete');
+      await expect(store.create({userId: USER, type: 'memories', name: 'New', displayName: null, content: '',
+        metadata: {}, tags: [], now: new Date()})).rejects.toThrow('CREATE');
+      await expect(store.delete({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()})).rejects.toThrow('DELETE');
+      expect(imported).not.toHaveBeenCalled(); expect(removed).not.toHaveBeenCalled();
+    } finally {await f.cleanup();}
+  });
+  it('freshly refuses canonical duplicate names without any write', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      await fs.writeFile(path.join(f.tenantRoot, 'duplicate.yaml'), raw.replace('name: Owned memory', 'name: owned-memory'));
+      const save = jest.spyOn(manager, 'save');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()})).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('releases invalid preparation but retains an unknown attempt without automatic replay', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      await expect(store.update({...input, content: 'Not a complete memory document'})).rejects.toThrow('YAML content must parse to an object');
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+      const cause = new Error('Unknown transport outcome');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValue(cause);
+      await expect(store.update({...input, metadata: {description: 'Unknown attempt'}})).rejects.toBe(cause);
+      const pending = store.getPendingGuardedUpdate(USER, 'owned-memory')!;
+      expect(pending.status).toBe('unknown'); expect(pending.cause).toBe(cause);
+      expect(manager.getPendingHeadUpdate(pending.candidate!)?.candidate?.content).toContain('Unknown attempt');
+      await expect(store.update(input)).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {await f.cleanup();}
+  });
+
+  it('refuses captured tenant drift before dispatch and does not return old-tenant GET data', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const actual = manager.validate.bind(manager);
+      const validation = jest.spyOn(manager, 'validate').mockImplementation(memory => {
+        f.setTenant('22222222-2222-4222-8222-222222222222'); return actual(memory);
+      });
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.findByName(USER, 'memories', 'owned-memory')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      f.setTenant(USER);
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Not dispatched'}})).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(write).not.toHaveBeenCalled(); validation.mockRestore(); f.setTenant(USER);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('returns its own committed response instead of rereading a subsequent writer', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const save = manager.save.bind(manager);
+      jest.spyOn(manager, 'save').mockImplementation(async (memory, locator, options) => {
+        await save(memory, locator, options); await externalOwnedUpdate(f.tenantRoot);
+      });
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Original description'}});
+      expect(response!.metadata.description).toBe('Original description');
+      const current = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(current!.metadata.description).toBe('External description');
+      expect(current!.contentHash).not.toBe(response!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('edits structured content and then explicitly empties entries without losing omitted auxiliary state', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      await store.update({...input, content: 'entries:\n  - id: edited\n    content: Edited entry\n    timestamp: "2026-01-01T00:00:00.000Z"\n    metadata:\n      nested:\n        value: preserved\n'});
+      const loaded = await manager.load('head.yaml');
+      expect([...loaded.getEntries().values()][0].metadata).toEqual({nested: {value: 'preserved'}});
+      expect(loaded.instructions).toBe('Original instructions');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      await store.update({...input, content: 'entries: []'});
+      const empty = await manager.load('head.yaml');
+      expect(empty.getEntries().size).toBe(0); expect(empty.instructions).toBe('Original instructions');
+      expect(empty.extensions).toEqual({nested: {value: 'original'}});
+    } finally {await f.cleanup();}
+  });
+
+  it('uses the discovered exact root locator despite a different logical name at system/head.yaml', async () => {
+    const f = await fixture();
+    try {
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const shadow = raw.replace('name: Owned memory', 'name: Different system memory');
+      await fs.mkdir(path.join(f.tenantRoot, 'system')); await fs.writeFile(path.join(f.tenantRoot, 'system', 'head.yaml'), shadow);
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), content: 'entries: []'});
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('entries: []');
+      expect(await fs.readFile(path.join(f.tenantRoot, 'system', 'head.yaml'), 'utf8')).toBe(shadow);
+    } finally {await f.cleanup();}
+  });
+
 });

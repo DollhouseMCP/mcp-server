@@ -582,6 +582,26 @@ export class Memory extends BaseElement implements IElement {
     return this.copyPersistenceState(false);
   }
 
+  /** Complete validated replacement on a quiet preview; constructor-derived config stays coherent. */
+  public applyPersistenceReplacement(metadata: MemoryMetadata, entries: unknown[], extensions: unknown, instructions: unknown): void {
+    if (!this.appendCandidate) throw new Error('Replacement requires a persistence preview');
+    const configured = new Memory(structuredClone(metadata), this.metadataServiceRef,
+      this._memoryManagerRef, this._retentionPolicyRef, true);
+    configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: this.version,
+      metadata, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
+    if (configured.entriesSize !== entries.length) throw new Error('Replacement contains invalid or duplicate entries');
+    if (instructions !== undefined && typeof instructions !== 'string') throw new Error('Invalid memory instructions');
+    this.metadata = structuredClone(configured.metadata);
+    this.extensions = structuredClone(configured.extensions);
+    this.entries = structuredClone(configured.entries);
+    this.instructions = typeof instructions === 'string' ? instructions : '';
+    this.maxEntries = configured.maxEntries;
+    this.retentionDays = configured.retentionDays;
+    this.privacyLevel = configured.privacyLevel;
+    this.storageBackend = configured.storageBackend;
+    this.searchable = configured.searchable;
+  }
+
   private copyPersistenceState(preview: boolean): Memory {
     const copy = new Memory(this.metadata as MemoryMetadata, this.metadataServiceRef,
       this._memoryManagerRef, this._retentionPolicyRef, preview);

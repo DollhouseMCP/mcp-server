@@ -1,3 +1,6 @@
+import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
+import type { Memory } from '../../elements/memories/Memory.js';
+import { portfolioFilenameStem } from '../../utils/portfolioName.js';
 import { createHash, randomUUID } from 'node:crypto';
 import yaml from 'js-yaml';
 import type { IElement } from '../../types/elements/IElement.js';
@@ -47,7 +50,15 @@ export interface ManagerBackedPortfolioElementStoreOptions {
   readonly getCurrentUserId: () => string;
 }
 
+export interface PendingConsoleMemoryUpdate {
+  readonly status: 'preparing' | 'refused' | 'unknown' | 'committed-publication-failed';
+  readonly candidate?: Memory;
+  readonly manager: MemoryManager;
+  readonly cause?: unknown;
+}
+
 export class ManagerBackedPortfolioElementStore implements IPortfolioElementStore {
+  private readonly guardedOperations = new Map<string, PendingConsoleMemoryUpdate>();
   constructor(private readonly options: ManagerBackedPortfolioElementStoreOptions) {}
 
   async summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
@@ -93,6 +104,15 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     canonicalName: string,
   ): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(userId);
+    const guarded = this.guardedManager(type);
+    if (guarded) {
+      const tenant = guarded.captureGuardedTenant();
+      const target = await guarded.findGuardedMemoryForUpdate(canonicalName, tenant);
+      this.requireGuardedContext(userId, guarded, tenant);
+      const record = target ? clonePortfolioElementDetailRecord(await this.toRecord(userId, type, target.memory, true, target.content)) : null;
+      this.requireGuardedContext(userId, guarded, tenant);
+      return record;
+    }
     const element = await this.findElement(type, canonicalName);
     if (!element) return null;
     try {
@@ -106,6 +126,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   async create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
+    if (this.guardedManager(input.type)) throw new Error('Guarded console memory CREATE is unavailable');
     const canonicalName = canonicalizePortfolioElementName(input.name);
     if (await this.findElement(input.type, canonicalName)) {
       throw new PortfolioElementAlreadyExistsError();
@@ -132,6 +153,8 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
+    const guarded = this.guardedManager(input.type);
+    if (guarded) return this.updateGuardedMemory(input, guarded);
     const target = input.type === 'skills' ? await manager.findForUpdate(input.canonicalName).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ECONTENTCONFLICT') throw new PortfolioElementVersionConflictError();
       throw error;
@@ -165,6 +188,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   async delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
     const manager = this.manager(input.type);
+    if (this.guardedManager(input.type)) throw new Error('Guarded console memory DELETE is unavailable');
     const existing = await this.findElement(input.type, input.canonicalName);
     if (!existing) return null;
     const existingRecord = await this.toRecord(input.userId, input.type, existing);
@@ -174,6 +198,78 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       ...existingRecord,
       updatedAt: input.now,
     });
+  }
+
+  /** Process-local diagnostic only; does not confer retry or token authority. */
+  getPendingGuardedUpdate(userId: string, canonicalName: string): PendingConsoleMemoryUpdate | undefined {
+    this.assertAmbientUser(userId);
+    const manager = this.guardedManager('memories');
+    if (!manager) return undefined;
+    return this.guardedOperations.get(this.requestKey(userId, manager.captureGuardedTenant(), canonicalName));
+  }
+
+  private guardedManager(type: ConsolePortfolioElementType): MemoryManager | undefined {
+    const manager = this.manager(type) as PortfolioElementManager & Partial<MemoryManager>;
+    return type === 'memories' && manager.isGuardedHeadUpdateEnabled?.() ? manager as MemoryManager : undefined;
+  }
+
+  private requestKey(userId: string, tenant: string, name: string): string {
+    return JSON.stringify([userId, tenant, 'request', canonicalizePortfolioElementName(name)]);
+  }
+
+  private requireGuardedContext(userId: string, manager: MemoryManager, tenant: string): void {
+    this.assertAmbientUser(userId);
+    if (manager.captureGuardedTenant() !== tenant) throw Object.assign(new Error('Console memory tenant changed'), {code: 'EHEADCONFLICT'});
+  }
+
+  private async updateGuardedMemory(input: ConsolePortfolioElementUpdateInput, manager: MemoryManager): Promise<ConsolePortfolioElementDetailRecord | null> {
+    const captured = structuredClone(input);
+    const tenant = manager.captureGuardedTenant();
+    const requestKey = this.requestKey(captured.userId, tenant, captured.canonicalName);
+    if (this.guardedOperations.has(requestKey)) throw new PortfolioElementVersionConflictError('Memory operation is already retained');
+    this.guardedOperations.set(requestKey, Object.freeze({status: 'preparing', manager}));
+    let targetKey: string | undefined;
+    let candidate: Memory | undefined;
+    let committed = false;
+    let dispatched = false;
+    try {
+      const target = await manager.findGuardedMemoryForUpdate(captured.canonicalName, tenant);
+      this.requireGuardedContext(captured.userId, manager, tenant);
+      if (!target) return null;
+      const resolvedKey = JSON.stringify([captured.userId, tenant, 'locator', target.locator]);
+      if (this.guardedOperations.has(resolvedKey)) throw new PortfolioElementVersionConflictError('Memory target operation is already retained');
+      targetKey = resolvedKey;
+      this.guardedOperations.set(targetKey, Object.freeze({status: 'preparing', manager}));
+      const baseline = await this.toRecord(captured.userId, 'memories', target.memory, false, target.content);
+      this.assertExpectedHash(captured.expectedContentHash, baseline);
+      candidate = await manager.prepareGuardedMemoryReplacement(target.memory, guardedMemoryYaml(captured, target.content, target.memory.metadata.name));
+      const submitted = await this.rawContentFor('memories', candidate);
+      const response = clonePortfolioElementDetailRecord(await this.toRecord(captured.userId, 'memories', candidate, false, submitted));
+      this.requireGuardedContext(captured.userId, manager, tenant);
+      dispatched = true;
+      await manager.save(candidate);
+      committed = true;
+      this.requireGuardedContext(captured.userId, manager, tenant);
+      return response;
+    } catch (cause) {
+      if (candidate && dispatched) {
+        const pending = manager.getPendingHeadUpdate(candidate);
+        const status: PendingConsoleMemoryUpdate['status'] = committed || pending?.status === 'committed-publication-failed' ? 'committed-publication-failed'
+          : pending?.status === 'unknown' ? 'unknown' : 'refused';
+        const retained = Object.freeze({status, candidate, manager, cause});
+        this.guardedOperations.set(requestKey, retained);
+        if (targetKey) this.guardedOperations.set(targetKey, retained);
+      }
+      const code = (cause as NodeJS.ErrnoException | null)?.code;
+      if (candidate && dispatched && manager.getPendingHeadUpdate(candidate)?.status === 'refused' &&
+        (code === 'ESTALE' || code === 'EHEADCONFLICT' || code === 'ECONTENTCONFLICT')) throw new PortfolioElementVersionConflictError();
+      throw cause;
+    } finally {
+      if (this.guardedOperations.get(requestKey)?.status === 'preparing') {
+        this.guardedOperations.delete(requestKey);
+        if (targetKey) this.guardedOperations.delete(targetKey);
+      }
+    }
   }
 
   private manager(type: ConsolePortfolioElementType): PortfolioElementManager {
@@ -291,6 +387,30 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     }
     return manager.exportElement(element, managerFormatForType(type));
   }
+}
+
+function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, raw: string, name: string): string {
+  if (input.displayName !== undefined && input.displayName !== name) throw new Error('Guarded memory rename is unavailable');
+  const baseline = SecureYamlParser.parseRawYaml(raw, {maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES, schema: 'json', contentPolicy: 'structure-only'});
+  if (!isRecord(baseline) || !Array.isArray(baseline.entries)) throw new Error('Incomplete memory baseline');
+  const originalMetadata = isRecord(baseline.metadata) ? baseline.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(baseline)).filter(([key]) => key !== 'instructions'));
+  const result = structuredClone(baseline);
+  let body: Record<string, unknown> = {};
+  if (input.content !== undefined) {
+    const parsed = SecureYamlParser.parseRawYaml(input.content, {maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES, schema: 'json', contentPolicy: 'structure-only'});
+    if (!isRecord(parsed) || !Array.isArray(parsed.entries)) throw new Error('Guarded replacement requires structured memory entries');
+    body = parsed;
+    result.entries = structuredClone(parsed.entries);
+    if (parsed.extensions !== undefined) result.extensions = structuredClone(parsed.extensions);
+    if (parsed.instructions !== undefined) result.instructions = parsed.instructions;
+  }
+  const config = isRecord(body.metadata) ? body.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(body)).filter(([key]) => key !== 'instructions'));
+  const metadata = {...originalMetadata, ...config, ...input.metadata};
+  if (metadata.name !== name) throw new Error('Guarded memory rename is unavailable');
+  if (metadata.unique_id !== originalMetadata.unique_id) throw new Error('Guarded memory identity change is unavailable');
+  if (input.tags !== undefined) metadata.tags = [...input.tags];
+  result.metadata = metadata;
+  return yaml.dump(result, {lineWidth: -1, noRefs: true});
 }
 
 function rawContentFromInput(input: {
@@ -458,16 +578,7 @@ function elementPath(manager: PortfolioElementManager, canonicalName: string): s
   return `${filenameStem(canonicalName)}${manager.getFileExtension()}`;
 }
 
-function filenameStem(value: string): string {
-  return value
-    .trim()
-    .replaceAll(/([a-z])([A-Z])/gu, '$1-$2')
-    .replaceAll(/[\s_]+/gu, '-')
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9-]/gu, '-')
-    .replaceAll(/-+/gu, '-')
-    .replaceAll(/^-|-$/gu, '');
-}
+const filenameStem = portfolioFilenameStem;
 
 function parseUpdatedAt(value: string | undefined): Date {
   if (!value) return new Date(0);

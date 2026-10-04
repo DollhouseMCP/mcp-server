@@ -1,3 +1,4 @@
+import { canonicalizePortfolioName as canonicalizePortfolioElementName } from '../../utils/portfolioName.js';
 import {
   ConsoleStoreValidationError,
   assertDisplayString,
@@ -133,10 +134,7 @@ export function isConsolePortfolioElementType(value: string): value is ConsolePo
   return CONSOLE_PORTFOLIO_ELEMENT_TYPES.includes(value as ConsolePortfolioElementType);
 }
 
-export function canonicalizePortfolioElementName(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  return trimmed.replace(/\.md$|\.ya?ml$/u, '');
-}
+export { canonicalizePortfolioName as canonicalizePortfolioElementName } from '../../utils/portfolioName.js';
 
 export function validatePortfolioElementSummaryRecord(record: ConsolePortfolioElementSummaryRecord): void {
   assertUuid(record.userId, 'userId');

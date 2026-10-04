@@ -1,3 +1,4 @@
+import { matchesPortfolioName } from '../../utils/portfolioName.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
  * Handles CRUD operations and lifecycle management for memories implementing IElement
@@ -665,6 +666,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async loadGuardedMemory(filePath: string, mode: 'public' | 'mutation' = 'public'): Promise<Memory> {
+    return (await this.readGuardedMemory(filePath, mode)).memory;
+  }
+
+  private async readGuardedMemory(filePath: string, mode: 'public' | 'mutation'): Promise<Readonly<{memory: Memory; content: string; locator: string}>> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
     const contextRoot = this.memoriesDir;
@@ -684,7 +689,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.requireGuardedContext(tenant, contextRoot);
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
     // The caller receives a mutable working copy, not a durable cache entry.
-    return memory;
+    return Object.freeze({ memory, content: snapshot.content, locator });
   }
 
   isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
@@ -712,6 +717,45 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.requireGuardedContext(tenant, contextRoot);
     if (memory.metadata.name !== name) throw Object.assign(new Error('Memory target name changed during lookup'), { code: 'EHEADCONFLICT' });
     return memory;
+  }
+
+  /** Fresh console spelling resolution; cached/list bytes never acquire authority. */
+  async findGuardedMemoryForUpdate(name: string, expectedUserId: string): Promise<Readonly<{memory: Memory; content: string; locator: string}> | undefined> {
+    const tenant = this.captureGuardedTenant();
+    const contextRoot = this.memoriesDir;
+    if (tenant !== expectedUserId) throw Object.assign(new Error('Memory request tenant mismatch'), {code: 'EHEADCONFLICT'});
+    const summaries = await this.storageLayer.listSummaries({includePublic: false, preserveDuplicates: true, freshMetadata: true});
+    this.requireGuardedContext(tenant, contextRoot);
+    const matches = summaries.filter(summary => matchesPortfolioName(summary.name, name));
+    if (!matches.length) return undefined;
+    if (matches.length !== 1 || !matches[0].filePath) throw Object.assign(new Error('Ambiguous memory name'), {code: 'EHEADCONFLICT'});
+    const observed = await this.readGuardedMemory(matches[0].filePath, 'mutation');
+    this.requireGuardedContext(tenant, contextRoot);
+    if (observed.memory.metadata.name !== matches[0].name) throw Object.assign(new Error('Memory name changed during lookup'), {code: 'EHEADCONFLICT'});
+    const parsed = this.parseContent(observed.content).data;
+    const metadata = parsed.metadata && typeof parsed.metadata === 'object' ? parsed.metadata as Record<string, unknown> : parsed;
+    if (metadata.unique_id !== undefined) {
+      if (typeof metadata.unique_id !== 'string' || !metadata.unique_id) throw new Error('Invalid persisted memory identity');
+      observed.memory.id = metadata.unique_id;
+      (observed.memory.metadata as MemoryMetadata & {unique_id?: string}).unique_id = metadata.unique_id;
+    }
+    return observed;
+  }
+
+  /** Derive before parsing/validation awaits; never bind an imported replacement. */
+  async prepareGuardedMemoryReplacement(source: Memory, content: string): Promise<Memory> {
+    const candidate = this.deriveGuardedMutation(source);
+    const parsed = SecureYamlParser.parseRawYaml(content, {
+      maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE, schema: 'json', contentPolicy: 'structure-only',
+    });
+    if (!validateMemoryControlFields(parsed)) throw new Error('Invalid replacement control fields');
+    const metadata = parsed.metadata as MemoryMetadata & {unique_id?: unknown};
+    if (!metadata || metadata.name !== source.metadata.name ||
+      metadata.unique_id !== (source.metadata as MemoryMetadata & {unique_id?: unknown}).unique_id ||
+      !Array.isArray(parsed.entries)) throw new Error('Replacement must preserve memory identity and complete entries');
+    candidate.applyPersistenceReplacement(metadata, parsed.entries, parsed.extensions, parsed.instructions);
+    await this.assertPersistable(candidate);
+    return candidate;
   }
 
   /** Capture candidate and original authority synchronously, before mutation/validation awaits. */
