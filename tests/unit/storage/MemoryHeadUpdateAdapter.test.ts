@@ -817,6 +817,104 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
 }
 
 posix('guarded console existing-owner UPDATE', () => {
+  it.each([false, true])('keeps legacy config precedence in the committed publication for full replacement=%s', async fullReplacement => {
+    let originalEntries: unknown[] = [];
+    const f = await fixture({maxEntries: 3, onFull: 'error'}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {metadata: Record<string, unknown>; entries: unknown[]};
+      Object.assign(definition.metadata, {storage_backend: 'file', privacy_level: 'sensitive',
+        retention_policy: {default: '7 days', custom: 'retained'}, storageBackend: 'memory', privacyLevel: 'public',
+        retentionDays: 99, custom: {nested: {value: 'unknown metadata retained'}}});
+      originalEntries = definition.entries;
+      return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const source = await manager.load('head.yaml');
+      expect(source.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7});
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const content = fullReplacement ? yaml.dump({metadata: {description: 'Structured legacy edit'}, entries: originalEntries}) : undefined;
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), content, metadata: {description: 'Legacy edit',
+          storageBackend: 'memory', privacyLevel: 'public', retentionDays: 99}});
+      const publication = manager.cached('head.yaml')!;
+      expect(publication).toBeDefined();
+      expect(publication.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7,
+        storage_backend: 'file', privacy_level: 'sensitive', retention_policy: {default: '7 days', custom: 'retained'},
+        custom: {nested: {value: 'unknown metadata retained'}}, maxEntries: 3, onFull: 'error'});
+      expect(publication.instructions).toBe('Original instructions');
+      expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      expect([...publication.getEntries().values()]).toEqual([...source.getEntries().values()]);
+      expect(response!.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect(response!.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7});
+      const next = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(next!.contentHash).toBe(response!.contentHash);
+      expect(next!.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7});
+      const entry = await publication.addEntry('Added using committed runtime config');
+      expect(entry.privacyLevel).toBe('sensitive');
+      const expectedExpiry = new Date(entry.timestamp);
+      expectedExpiry.setDate(expectedExpiry.getDate() + 7);
+      expect(Math.abs(entry.expiresAt!.getTime() - expectedExpiry.getTime())).toBeLessThan(1000);
+      await publication.addEntry('Third entry stays within the original limit');
+      await expect(publication.addEntry('Fourth entry must refuse')).rejects.toThrow('full');
+      expect(publication.getEntries().size).toBe(3);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([
+    {format: 'flat YAML', nested: false, frontmatter: false},
+    {format: 'nested YAML', nested: true, frontmatter: false},
+    {format: 'flat frontmatter', nested: false, frontmatter: true},
+    {format: 'nested frontmatter', nested: true, frontmatter: true},
+  ])('adopts the captured constructor identity for $format without a persisted ID', async ({nested, frontmatter}) => {
+    const body = '# Legacy body without a persisted identity';
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {metadata: Record<string, unknown>};
+      delete definition.metadata.unique_id;
+      const {metadata, ...auxiliary} = definition;
+      const serialized = yaml.dump(nested ? definition : {...metadata, ...auxiliary}, {lineWidth: -1, noRefs: true});
+      return frontmatter ? `---\n${serialized}---\n\n${body}\n` : serialized;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(before!.metadata.unique_id).toBeUndefined();
+      const find = jest.spyOn(manager, 'findGuardedMemoryForUpdate');
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      const response = await store.update({...input, expectedContentHash: before!.contentHash, metadata: {description: 'First edit'}});
+      const found = find.mock.results[0];
+      if (found.type !== 'return') throw new Error('Expected same-read identity capture');
+      const observed = await found.value;
+      expect(response!.metadata.unique_id).toBe(observed!.memory.id);
+      expect(response!.metadata.unique_id).toMatch(/^memories_owned-memory_\d+$/u);
+      const loaded = await manager.load('head.yaml');
+      expect(loaded.instructions).toBe('Original instructions');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      expect([...loaded.getEntries().values()]).toEqual([...observed!.memory.getEntries().values()]);
+      const subsequent = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(subsequent!.contentHash).toBe(response!.contentHash);
+      expect(subsequent!.metadata.unique_id).toBe(response!.metadata.unique_id);
+      const second = await store.update({...input, expectedContentHash: subsequent!.contentHash, metadata: {description: 'Second edit'}});
+      expect(second!.metadata.unique_id).toBe(response!.metadata.unique_id);
+      expect([...((await manager.load('head.yaml')).getEntries().values())]).toEqual([...loaded.getEntries().values()]);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(second!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['unique_id', 'name'] as const)('refuses a changed persisted %s before any owned write', async field => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {[field]: 'Changed identity'}})).rejects.toThrow(field === 'name' ? 'rename' : 'identity change');
+      expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(raw);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
   it.each([
     {format: 'nested YAML', nested: true, frontmatter: false, persistedEntries: true},
     {format: 'flat YAML', nested: false, frontmatter: false, persistedEntries: true},

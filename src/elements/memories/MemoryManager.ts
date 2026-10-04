@@ -11,7 +11,7 @@ import { matchesPortfolioName } from '../../utils/portfolioName.js';
  * 5. MEDIUM: Path validation prevents directory traversal attacks
  */
 
-import type { MemoryMetadata } from './Memory.js';
+import type { MemoryEntry, MemoryMetadata } from './Memory.js';
 import { Memory } from './Memory.js';
 import type { MemoryHeadUpdateAdapter, MemoryUpdateCandidate, PendingMemoryUpdate } from '../../storage/MemoryHeadUpdateAdapter.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
@@ -747,6 +747,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       if (typeof metadata.unique_id !== 'string' || !metadata.unique_id) throw new Error('Invalid persisted memory identity');
       observed.memory.id = metadata.unique_id;
       (observed.memory.metadata as MemoryMetadata & {unique_id?: string}).unique_id = metadata.unique_id;
+    } else {
+      // Legacy serialization persists this object's constructor identity on
+      // its first save. Keep preparation and response on that same identity.
+      metadata.unique_id = observed.memory.id;
+      (observed.memory.metadata as MemoryMetadata & {unique_id?: string}).unique_id = observed.memory.id;
     }
     const replacementBaseline = this.guardedReplacementBaseline(observed.memory, observed.content, definition);
     return Object.freeze({...observed, replacementBaseline});
@@ -764,11 +769,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Keep raw persisted entries so replacement validation still refuses
       // malformed/duplicate entries rather than silently dropping them.
       const bodyId = this.loadedMarkdownBodyIds.get(memory);
-      const bodyEntry = bodyId === undefined ? undefined : memory.getEntries().get(bodyId);
-      if (!bodyEntry || bodyEntry.source !== 'file') {
+      const serialized = JSON.parse(memory.serialize()) as {entries: MemoryEntry[]};
+      const bodyEntry = serialized.entries.find(entry => entry.id === bodyId);
+      if (bodyEntry?.source !== 'file') {
         throw new Error('Missing hydrated memory markdown body');
       }
-      baseline.entries.push(JSON.parse(JSON.stringify(bodyEntry)));
+      baseline.entries.push(bodyEntry);
     }
     return baseline;
   }
@@ -784,7 +790,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (metadata?.name !== source.metadata.name ||
       metadata.unique_id !== (source.metadata as MemoryMetadata & {unique_id?: unknown}).unique_id ||
       !Array.isArray(parsed.entries)) throw new Error('Replacement must preserve memory identity and complete entries');
-    candidate.applyPersistenceReplacement(metadata, parsed.entries, parsed.extensions, parsed.instructions);
+    // Use the normal load path's precedence for these supported legacy aliases,
+    // retaining every original/unknown metadata field outside runtime config.
+    const configured = await this.parseMetadata({metadata});
+    const replacementMetadata = {...metadata, storageBackend: configured.storageBackend,
+      privacyLevel: configured.privacyLevel, retentionDays: configured.retentionDays};
+    candidate.applyPersistenceReplacement(replacementMetadata, parsed.entries, parsed.extensions, parsed.instructions);
     await this.assertPersistable(candidate);
     return candidate;
   }
