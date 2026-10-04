@@ -22,7 +22,7 @@ import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { Memory, type MemoryMetadata } from '../../../src/elements/memories/Memory.js';
 import { MemorySearchIndex } from '../../../src/elements/memories/MemorySearchIndex.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
-import { MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
@@ -942,6 +942,77 @@ posix('guarded console tag boundary', () => {
       expect((await f.update({tags})).status).toBe(422); await f.refused();
     } finally {await f.cleanup();}
   });
+});
+
+posix('guarded console canonical runtime configuration', () => {
+  const profiles = [
+    {label: 'constructor defaults and clamp', supplied: {maxEntries: 20000, privacyLevel: 'unsupported',
+      retentionDays: 0, storageBackend: null, searchable: null}, expected: {
+      maxEntries: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, privacyLevel: MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
+      retentionDays: MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS, storageBackend: MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND, searchable: true}},
+    {label: 'canonical supported false', supplied: {maxEntries: 7, privacyLevel: 'sensitive', retentionDays: 9,
+      storageBackend: 'file', searchable: false}, expected: {maxEntries: 7, privacyLevel: 'sensitive', retentionDays: 9,
+      storageBackend: 'file', searchable: false}},
+    {label: 'aliases win and normalize', supplied: {maxEntries: 20000, privacyLevel: 'public', privacy_level: 'unsupported',
+      storageBackend: 'memory', storage_backend: 'file', retentionDays: 20, retention_policy: {default: '7 days', custom: 'retained'},
+      searchable: null}, expected: {maxEntries: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, privacyLevel: MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
+      storageBackend: 'file', retentionDays: 7, searchable: true}},
+  ];
+  it.each([false, true].flatMap(content => profiles.map(profile => ({...profile, content}))))(
+    'persists normalized $label for actual service content=$content', async ({supplied, expected, content}) => {
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        delete definition.metadata.tags; definition.metadata.custom = {value: 'retained'};
+        return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-04T20:00:00.000Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {}, headers: etag ? {'if-match': etag} : {},
+          consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {
+          metadata: Record<string, unknown>; entries: unknown[]; instructions: string; extensions: unknown};
+        let source: Memory | undefined; let sourceState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+        });
+        const patch = content ? {content: yaml.dump({...original, metadata: {...original.metadata, ...supplied}})} : {metadata: supplied};
+        const response = await service.updateElement(request(patch, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(response.status).toBe(200);
+        expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const persisted = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof original;
+        const publication = manager.cached('head.yaml')!;
+        const runtime = JSON.parse(publication.captureAppendState().fingerprint) as Record<string, unknown>;
+        const returned = response.body as {metadata: Record<string, unknown>; content: string};
+        const submitted = yaml.load(returned.content, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(expected)) {
+          expect(persisted.metadata[key]).toEqual(value); expect((publication.metadata as unknown as Record<string, unknown>)[key]).toEqual(value);
+          expect(runtime[key]).toEqual(value); expect(returned.metadata[key]).toEqual(value); expect(submitted[key]).toEqual(value);
+        }
+        for (const key of ['privacy_level', 'storage_backend', 'retention_policy']) {
+          if (Object.hasOwn(supplied, key)) expect(persisted.metadata[key]).toEqual((supplied as Record<string, unknown>)[key]);
+        }
+        expect(persisted.metadata).not.toHaveProperty('tags'); expect(publication.metadata).not.toHaveProperty('tags');
+        expect(persisted.metadata.custom).toEqual(original.metadata.custom); expect(publication.metadata.custom).toEqual(original.metadata.custom);
+        expect(persisted.metadata.name).toBe(original.metadata.name); expect(persisted.metadata.unique_id).toBe(original.metadata.unique_id);
+        expect(persisted.metadata.created).toBe(original.metadata.created); expect(persisted.metadata.modified).toBe(now.toISOString());
+        expect(persisted.metadata.version).toBe('3.4.5'); expect(publication.version).toBe('3.4.5');
+        expect(persisted.entries).toEqual(original.entries); expect(persisted.instructions).toBe(original.instructions);
+        expect(persisted.extensions).toEqual(original.extensions);
+        const fresh = f.makeManager().manager; const reloaded = await fresh.load('head.yaml');
+        const reloadRuntime = JSON.parse(reloaded.captureAppendState().fingerprint) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(expected)) {
+          expect((reloaded.metadata as unknown as Record<string, unknown>)[key]).toEqual(value); expect(reloadRuntime[key]).toEqual(value);
+        }
+        expect(reloaded.getEntries().size).toBe(original.entries.length); expect(reloaded.validate().valid).toBe(true);
+        const nextService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const next = await nextService.getElement(request(), 'memories', 'owned-memory');
+        expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
 });
 
 posix('guarded console existing-owner UPDATE', () => {

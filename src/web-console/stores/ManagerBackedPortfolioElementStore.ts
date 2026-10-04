@@ -431,9 +431,14 @@ function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: 
   if (metadata.name !== name) throw new Error('Guarded memory rename is unavailable');
   if (metadata.unique_id !== originalMetadata.unique_id) throw new Error('Guarded memory identity change is unavailable');
   if (input.tags !== undefined) metadata.tags = [...input.tags];
-  validatePortfolioElementTags(Object.hasOwn(metadata, 'tags') ? metadata.tags : []);
+  validateGuardedMemoryTags(metadata);
   result.metadata = metadata;
   return yaml.dump(result, {lineWidth: -1, noRefs: true});
+}
+
+/** Keep absence distinct from a present malformed effective tag value. */
+function validateGuardedMemoryTags(metadata: Readonly<Record<string, unknown>>): void {
+  validatePortfolioElementTags(Object.hasOwn(metadata, 'tags') ? metadata.tags : []);
 }
 
 function rawContentFromInput(input: {

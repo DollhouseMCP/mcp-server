@@ -590,8 +590,14 @@ export class Memory extends BaseElement implements IElement {
     }
     const configured = new Memory(structuredClone(metadata), this.metadataServiceRef,
       this._memoryManagerRef, this._retentionPolicyRef, true);
+    // Persist the same canonical configuration the constructor uses at runtime,
+    // while retaining raw aliases, unrelated metadata and absent fields.
+    const canonical = configured.metadata as MemoryMetadata;
+    const replacementMetadata = {...metadata, version: configured.version,
+      maxEntries: canonical.maxEntries, retentionDays: canonical.retentionDays,
+      privacyLevel: canonical.privacyLevel, storageBackend: canonical.storageBackend, searchable: canonical.searchable};
     configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: configured.version,
-      metadata: {...metadata, version: configured.version}, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
+      metadata: replacementMetadata, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
     if (configured.entriesSize !== entries.length) throw new Error('Replacement contains invalid or duplicate entries');
     if (instructions !== undefined && typeof instructions !== 'string') throw new Error('Invalid memory instructions');
     const validation = configured.validate();
