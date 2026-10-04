@@ -482,6 +482,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._loader.loadDefinition(filePath);
   }
 
+  /** Complete hydration of exact snapshot bytes; intentionally no read/cache publication. */
+  protected hydrateDefinitionFromContent(content: string, relativePath: string): Promise<T> {
+    return this._loader.hydrateDefinitionFromContent(content, relativePath);
+  }
+
   async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
     return this._persister.save(element, filePath, options);
   }

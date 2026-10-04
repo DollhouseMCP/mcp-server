@@ -1,0 +1,10 @@
+import { FileMemoryOwnerSnapshots } from '../../src/storage/FileMemoryOwnerSnapshots.js';
+import { FileMemoryTransactionCoordinator } from '../../src/storage/FileMemoryTransactionCoordinator.js';
+import { FileMemoryFence } from '../../src/storage/FileMemoryFence.js';
+const [tenantRoot, user] = process.argv.slice(2);
+const owners = new FileMemoryOwnerSnapshots({ coordinator: new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => user, fence: new FileMemoryFence() }) });
+const snapshot = await owners.readHeadSnapshot('head.yaml');
+const content = snapshot.content.replace('Original description', 'External description');
+if (content === snapshot.content) throw new Error('Missing actual fixture field');
+await owners.updateOwnedHead(snapshot.token, content);
+process.stdout.write('CHILD_COMMITTED\n');
