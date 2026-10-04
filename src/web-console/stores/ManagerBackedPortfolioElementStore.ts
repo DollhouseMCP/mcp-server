@@ -244,6 +244,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       const baseline = await this.toRecord(captured.userId, 'memories', target.memory, false, target.content);
       this.assertExpectedHash(captured.expectedContentHash, baseline);
       candidate = await manager.prepareGuardedMemoryReplacement(target.memory, guardedMemoryYaml(captured, target.replacementBaseline, target.memory.metadata.name));
+      validateGuardedMemoryTags(candidate.metadata as unknown as Record<string, unknown>);
       const submitted = await this.rawContentFor('memories', candidate);
       const response = clonePortfolioElementDetailRecord(await this.toRecord(captured.userId, 'memories', candidate, false, submitted));
       this.requireGuardedContext(captured.userId, manager, tenant);

@@ -855,8 +855,9 @@ async function tagBoundaryFixture(rawTags: unknown = ['original'], absent = fals
   const prepare = jest.spyOn(manager, 'prepareGuardedMemoryReplacement');
   const update = (body: unknown) => service.updateElement(request(body, get.headers!.ETag), 'memories', 'owned-memory');
   const sourceUnchanged = () => { expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState); };
-  const refused = async () => {
-    sourceUnchanged(); expect(prepare).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+  const refused = async (preparationAllowed = false) => {
+    sourceUnchanged(); if (!preparationAllowed) expect(prepare).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
     expect(await tree()).toEqual(originalTree); expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
     expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
   };
@@ -1011,6 +1012,116 @@ posix('guarded console canonical runtime configuration', () => {
         const nextService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
         const next = await nextService.getElement(request(), 'memories', 'owned-memory');
         expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+});
+
+posix('guarded console computed metadata handoff', () => {
+  const fields = ['description', 'tags', 'triggers', 'gatekeeper'];
+  const profiles: Array<{label: string; supplied: Record<string, unknown>; expected: Record<string, unknown>; absent?: boolean}> = [
+    {label: 'validated values', supplied: {description: '  Edited description  ', tags: ['a;b'],
+      triggers: [' recall ', 'bad!trigger', ' ', 'x'.repeat(60)],
+      gatekeeper: {allow: ['verify_challenge', 'read_element'], confirm: ['confirm_operation'],
+        deny: ['abort_execution', 'delete_element', 'confirm_operation']}},
+    expected: {description: 'Edited description', tags: ['ab'], triggers: ['recall', 'x'.repeat(50)],
+      gatekeeper: {allow: ['read_element'], confirm: ['confirm_operation'], deny: ['delete_element', 'confirm_operation']}}},
+    {label: 'trigger count limit', supplied: {triggers: Array.from({length: 23}, (_, i) => `recall-${i}`)},
+      expected: {triggers: Array.from({length: 20}, (_, i) => `recall-${i}`)}},
+    {label: 'explicit clears', supplied: {description: null, tags: [], triggers: null, gatekeeper: null},
+      expected: {description: '', tags: [], triggers: [], gatekeeper: undefined}},
+    {label: 'absent fields', supplied: {}, expected: {}, absent: true},
+  ];
+  it.each(['metadata', 'nested', 'flat'].flatMap(mode => profiles.map(profile => ({...profile, mode}))))(
+    'keeps $label coherent for actual service mode=$mode', async ({supplied, expected, absent, mode}) => {
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        definition.metadata.custom = {value: 'retained'};
+        if (absent) for (const field of fields) delete definition.metadata[field];
+        return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-04T20:00:00.000Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {}, headers: etag ? {'if-match': etag} : {},
+          consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {
+          metadata: Record<string, unknown>; entries: unknown[]; instructions: string; extensions: unknown};
+        const metadata = {...original.metadata, ...supplied};
+        const content = mode === 'flat' ? {...metadata, entries: original.entries, instructions: original.instructions, extensions: original.extensions}
+          : {...original, metadata};
+        const patch = mode === 'metadata' ? {metadata: supplied, ...('tags' in supplied ? {tags: supplied.tags} : {})}
+          : {content: yaml.dump(content)};
+        let source: Memory | undefined; let sourceState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+        });
+        const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const response = await service.updateElement(request(patch, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(response.status).toBe(200); expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const persisted = yaml.load(snapshot.content, {schema: yaml.JSON_SCHEMA}) as typeof original;
+        const publication = manager.cached('head.yaml')!;
+        const fresh = f.makeManager().manager; const reloaded = await fresh.load('head.yaml');
+        const returned = response.body as {metadata: Record<string, unknown>; content: string; tags: unknown};
+        // Compare actual persisted, committed and reloaded fields before hash-shape assertions.
+        const pick = (metadata: Record<string, unknown>) => Object.fromEntries(Object.keys(expected).map(field => [field, metadata[field]]));
+        expect({persisted: pick(persisted.metadata), runtime: pick(publication.metadata as unknown as Record<string, unknown>),
+          response: pick(returned.metadata), reloaded: pick(reloaded.metadata as unknown as Record<string, unknown>)})
+          .toEqual({persisted: expected, runtime: expected, response: expected, reloaded: expected});
+        if (absent) for (const field of fields) {
+          expect(persisted.metadata).not.toHaveProperty(field); expect(publication.metadata).not.toHaveProperty(field);
+          expect(returned.metadata).not.toHaveProperty(field);
+        }
+        expect(persisted.entries).toEqual(original.entries); expect(persisted.instructions).toBe(original.instructions);
+        expect(persisted.extensions).toEqual(original.extensions); expect(persisted.metadata.custom).toEqual(original.metadata.custom);
+        for (const field of ['name', 'unique_id', 'version', 'created', 'maxEntries', 'retentionDays', 'privacyLevel', 'storageBackend', 'searchable']) {
+          expect(persisted.metadata[field]).toEqual(original.metadata[field]);
+        }
+        expect(persisted.metadata.modified).toBe(now.toISOString()); expect(publication.version).toBe('3.4.5');
+        expect(reloaded.getEntries().size).toBe(original.entries.length); expect(reloaded.validate().valid).toBe(true);
+        expect(write).toHaveBeenCalledTimes(1); expect(write.mock.calls[0][1]).toBe(snapshot.content);
+        expect(response.headers!.ETag).toBe(`"sha256:${createHash('sha256').update(snapshot.content, 'utf8').digest('hex')}"`);
+        const freshService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const next = await freshService.getElement(request(), 'memories', 'owned-memory');
+        expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+  it.each(['metadata', 'nested', 'flat'].flatMap(mode => [
+    {label: 'malformed authored gatekeeper', supplied: {gatekeeper: {allow: 'not an array'}}},
+    {label: 'sanitizer-empty tag', supplied: {tags: [';;']}},
+  ].map(profile => ({...profile, mode}))))('refuses $label before owned dispatch mode=$mode', async ({supplied, mode, label}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      const metadata = {...f.definition.metadata, ...supplied};
+      const content = mode === 'flat' ? {...metadata, entries: f.definition.entries} : {...f.definition, metadata};
+      const patch = mode === 'metadata' ? {metadata: supplied, ...('tags' in supplied ? {tags: supplied.tags} : {})}
+        : {content: yaml.dump(content)};
+      const error = await f.update(patch).catch(cause => cause);
+      if (label === 'sanitizer-empty tag') {
+        expect(error).toBeInstanceOf(ConsoleStoreValidationError);
+        expect(problemForConsoleError(error)).toMatchObject({status: 400, code: 'invalid_request'});
+      } else expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain(label === 'sanitizer-empty tag' ? 'printable non-empty' : 'Invalid gatekeeper policy');
+      // Normalization reaches preparation, but source/tree/owner and reservation proofs remain strict.
+      await f.refused(true);
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console canonical tag precedence', () => {
+  it.each([false, true].flatMap(flat => [['a;b'], []].map(tags => ({flat, tags}))))(
+    'canonicalizes dedicated tags $tags after precedence flat=$flat', async ({flat, tags}) => {
+      const f = await tagBoundaryFixture();
+      try {
+        const metadata = {...f.definition.metadata, tags: ['lower;priority']};
+        const content = flat ? {...metadata, entries: f.definition.entries} : {...f.definition, metadata};
+        const response = await f.update({content: yaml.dump(content), metadata: {tags: ['ignored;metadata']}, tags});
+        const expected = tags.length ? ['ab'] : [];
+        await f.coherent(response, expected);
+        expect((await f.makeManager().manager.load('head.yaml')).metadata.tags).toEqual(expected);
       } finally {await f.cleanup();}
     });
 });

@@ -804,11 +804,17 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (metadata?.name !== source.metadata.name ||
       metadata.unique_id !== (source.metadata as MemoryMetadata & {unique_id?: unknown}).unique_id ||
       !Array.isArray(parsed.entries)) throw new Error('Replacement must preserve memory identity and complete entries');
-    // Use the normal load path's precedence for these supported legacy aliases,
-    // retaining every original/unknown metadata field outside runtime config.
+    // Validate the authored policy before load-time sanitization can discard it.
+    this.validateSerializedContent(content);
+    // Use established loader values only for present normalized fields, keeping
+    // absent fields, raw aliases and unrelated metadata unchanged.
     const configured = await this.parseMetadata({metadata});
     const replacementMetadata = {...metadata, storageBackend: configured.storageBackend,
-      privacyLevel: configured.privacyLevel, retentionDays: configured.retentionDays};
+      privacyLevel: configured.privacyLevel, retentionDays: configured.retentionDays,
+      ...(Object.hasOwn(metadata, 'description') ? {description: configured.description} : {}),
+      ...(Object.hasOwn(metadata, 'tags') ? {tags: configured.tags} : {}),
+      ...(Object.hasOwn(metadata, 'triggers') ? {triggers: configured.triggers} : {}),
+      ...(Object.hasOwn(metadata, 'gatekeeper') ? {gatekeeper: configured.gatekeeper} : {})};
     candidate.applyPersistenceReplacement(replacementMetadata, parsed.entries, parsed.extensions, parsed.instructions);
     await this.assertPersistable(candidate);
     return candidate;
