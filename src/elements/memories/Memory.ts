@@ -590,6 +590,9 @@ export class Memory extends BaseElement implements IElement {
     }
     const configured = new Memory(structuredClone(metadata), this.metadataServiceRef,
       this._memoryManagerRef, this._retentionPolicyRef, true);
+    if (!Number.isFinite(configured.maxEntries)) throw new Error('Invalid memory: Max entries must be finite');
+    // Finiteness only: retain legacy numeric-string representation and expiry behavior.
+    if (!Number.isFinite(Number(configured.retentionDays))) throw new Error('Invalid memory: Retention days must be finite');
     // Persist the same canonical configuration the constructor uses at runtime,
     // while retaining raw aliases, unrelated metadata and absent fields.
     const canonical = configured.metadata as MemoryMetadata;

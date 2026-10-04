@@ -22,6 +22,7 @@ import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { Memory, type MemoryMetadata } from '../../../src/elements/memories/Memory.js';
 import { MemorySearchIndex } from '../../../src/elements/memories/MemorySearchIndex.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { logger } from '../../../src/utils/logger.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
@@ -877,7 +878,7 @@ async function tagBoundaryFixture(rawTags: unknown = ['original'], absent = fals
     const next = await service.getElement(request(), 'memories', 'owned-memory');
     expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
   };
-  return {...f, definition, update, refused, coherent, save, write};
+  return {...f, manager, definition, update, refused, coherent, save, write};
 }
 
 posix('guarded console tag boundary', () => {
@@ -1219,6 +1220,224 @@ posix('guarded console complete snapshot ETag', () => {
       const summary = await (store as unknown as {toRecord: (user: string, type: string, memory: Memory) => Promise<{contentHash: string; metadata: unknown; content: string}>})
         .toRecord(USER, 'memories', runtime);
       expect(summary.contentHash).toBe(createHash('sha256').update(JSON.stringify({type: 'memories', metadata: stable(summary.metadata), content: summary.content})).digest('hex'));
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded memory classified refusal audit', () => {
+  const failed = (audit: {mock: {calls: Parameters<typeof SecurityMonitor.logSecurityEvent>[]}}) =>
+    audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED);
+  async function durableTree(root: string) {
+    const snapshot: Record<string, string> = {};
+    for (const entry of (await fs.readdir(root, {recursive: true})).sort()) {
+      const target = path.join(root, entry); const stat = await fs.lstat(target);
+      if (stat.isSymbolicLink()) snapshot[entry] = `symlink:${await fs.readlink(target)}`;
+      else if (stat.isFile()) snapshot[entry] = (await fs.readFile(target)).toString('base64');
+    }
+    return snapshot;
+  }
+  it.each([{throwing: false, warningFailure: false}, {throwing: true, warningFailure: false}, {throwing: true, warningFailure: true}])(
+    'audits a real canonical fence refusal once with audit listener=$throwing warning listener=$warningFailure', async ({throwing, warningFailure}) => {
+    const f = await fixture();
+    let stop = () => {}; let stopWarning = () => {};
+    try {
+      const {manager} = f.makeManager(); const memory = await manager.load('head.yaml');
+      const original = await f.owners.readHeadSnapshot('head.yaml');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const legacy = jest.spyOn(FileOperationsService.prototype, 'writeFile');
+      await fs.symlink(path.join(f.tenantRoot, '.memory-fences'), path.join(f.tenantRoot, 'volumes'), 'dir');
+      const before = await durableTree(f.tenantRoot);
+      SecurityMonitor.clearAllEventsForTesting();
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const warn = jest.spyOn(logger, 'warn');
+      if (throwing) stop = SecurityMonitor.addLogListener(event => {
+        if (event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED) throw new Error('Listener failure must not replace refusal');
+      });
+      if (warningFailure) stopWarning = logger.addLogListener(entry => {
+        if (entry.message === 'Memory save failure audit hook threw; original refusal preserved') throw new Error('Warning listener failure must not replace refusal');
+      });
+      try {
+        const result = await manager.save(memory).then(() => ({cause: undefined}), cause => ({cause}));
+        expect(result.cause).toMatchObject({code: 'EHEADCONFLICT'});
+        expect((result.cause as Error).message).toBe('Canonical memory volumes and fence directories are unsafe or changed');
+        expect(manager.getPendingHeadUpdate(memory)?.status).toBe('refused');
+        expect(manager.getPendingHeadUpdate(memory)?.cause).toBe(result.cause);
+        expect(write).toHaveBeenCalledTimes(1); expect(legacy).not.toHaveBeenCalled();
+        expect(failed(audit)).toHaveLength(1);
+        expect(warn.mock.calls.filter(([message]) => message === 'Memory save failure audit hook threw; original refusal preserved')).toHaveLength(throwing ? 1 : 0);
+        expect(failed(audit)[0][0]).toMatchObject({severity: 'HIGH', source: 'MemoryManager.onSaveError'});
+        expect(audit.mock.calls.some(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVED)).toBe(false);
+        expect(await durableTree(f.tenantRoot)).toEqual(before);
+        expect(SecurityMonitor.getRecentEvents().filter(event => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED)).toHaveLength(1);
+        await fs.unlink(path.join(f.tenantRoot, 'volumes'));
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(original);
+      } finally {stop(); stopWarning(); audit.mockRestore(); warn.mockRestore(); write.mockRestore(); legacy.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('audits an admitted validation refusal but not a pre-admission unbound refusal', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const source = await manager.load('head.yaml'); const before = await durableTree(f.tenantRoot);
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      try {
+        await expect(manager.save(source.createPersistenceCandidate(), 'head.yaml')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+        expect(failed(audit)).toHaveLength(0);
+        manager.rejectValidation = true;
+        await expect(manager.save(source)).rejects.toThrow('controlled candidate validation');
+        expect(manager.getPendingHeadUpdate(source)?.status).toBe('refused'); expect(failed(audit)).toHaveLength(1);
+        expect(write).not.toHaveBeenCalled(); expect(await durableTree(f.tenantRoot)).toEqual(before);
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('retains unknown evidence without labeling it a refused save or replaying', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const memory = await manager.load('head.yaml'); const before = await durableTree(f.tenantRoot);
+      const cause = new Error('Unknown transport'); const write = jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValue(cause);
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        await expect(manager.save(memory)).rejects.toBe(cause);
+        expect(manager.getPendingHeadUpdate(memory)).toMatchObject({status: 'unknown', cause});
+        await expect(manager.save(memory)).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+        expect(write).toHaveBeenCalledTimes(1); expect(failed(audit)).toHaveLength(0);
+        expect(await durableTree(f.tenantRoot)).toEqual(before);
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('retains known committed publication failure without emitting a failed-save event', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const memory = await manager.load('head.yaml');
+      await memory.addEntry('Known committed audit control'); const cause = new Error('Publication failed'); manager.publicationFailure = {cause};
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        await expect(manager.save(memory)).rejects.toBe(cause);
+        expect(manager.getPendingHeadUpdate(memory)).toMatchObject({status: 'committed-publication-failed', cause, committedToken: {revision: '2'}});
+        expect(write).toHaveBeenCalledTimes(1); expect(failed(audit)).toHaveLength(0);
+        expect(audit.mock.calls.some(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVED)).toBe(false);
+        expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Known committed audit control');
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('keeps the ordinary save failure hook single without using the guarded path', async () => {
+    const f = await fixture();
+    try {
+      f.ordinary.clearCache(); const memory = await f.ordinary.load('head.yaml');
+      const cause = new Error('Ordinary writer control');
+      const write = jest.spyOn(FileOperationsService.prototype, 'writeFile').mockRejectedValue(cause);
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        await expect(f.ordinary.save(memory, 'head.yaml')).rejects.toBe(cause);
+        expect(write).toHaveBeenCalledTimes(1); expect(failed(audit)).toHaveLength(1);
+        expect(f.ordinary.getPendingHeadUpdate(memory)).toBeUndefined();
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+});
+
+posix('guarded console finite replacement limits', () => {
+  it.each(['maxEntries', 'retentionDays'].flatMap(field => [false, true].flatMap(content =>
+    ['invalid', {}].map(value => ({field, content, value})))))('refuses nonfinite effective $field=$value content=$content before dispatch', async ({field, content, value}) => {
+    const diagnostic = new Memory({name: 'Numeric diagnostic', [field]: value} as unknown as MemoryMetadata, new MetadataService());
+    expect(Number.isFinite(Number((diagnostic.metadata as MemoryMetadata)[field as 'maxEntries' | 'retentionDays']))).toBe(false);
+    expect(diagnostic.validate().valid).toBe(true); // Existing ordinary validation remains unchanged.
+    if (field === 'maxEntries') expect(JSON.parse(diagnostic.serialize()).metadata.maxEntries).toBeNull();
+    const f = await tagBoundaryFixture();
+    try {
+      const body = content ? {content: yaml.dump({metadata: {[field]: value}, entries: f.definition.entries})} : {metadata: {[field]: value}};
+      await expect(f.update(body)).rejects.toThrow('must be finite'); await f.refused(true);
+    } finally {await f.cleanup();}
+  });
+  it.each([false, true].flatMap(content => [
+    {label: 'finite', metadata: {maxEntries: 2, retentionDays: 365, onFull: 'error'}, max: 2, retention: 365},
+    {label: 'numeric entry string', metadata: {maxEntries: '2', retention_policy: {default: '7 days'}, onFull: 'error'}, max: 2, retention: 7},
+    {label: 'numeric retention string', metadata: {maxEntries: 2, retentionDays: '7', onFull: 'error'}, max: 2, retention: '7'},
+    {label: 'clamp', metadata: {maxEntries: 20000, retentionDays: 365}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: 365},
+    {label: 'null defaults', metadata: {maxEntries: null, retentionDays: null}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS},
+    {label: 'zero defaults', metadata: {maxEntries: 0, retentionDays: 0}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS},
+    {label: 'omitted', metadata: {}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: 36500},
+  ].map(profile => ({content, ...profile}))))('keeps established $label limits coherent content=$content', async ({content, metadata, max, retention}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      const response = await f.update(content ? {content: yaml.dump({metadata, entries: f.definition.entries})} : {metadata});
+      await f.coherent(response, ['original']);
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content) as {metadata: MemoryMetadata};
+      expect(raw.metadata.maxEntries).toBe(max); expect(raw.metadata.retentionDays).toBe(retention);
+      const publication = f.manager.cached('head.yaml')!; expect((publication.metadata as MemoryMetadata).maxEntries).toBe(max); expect((publication.metadata as MemoryMetadata).retentionDays).toBe(retention);
+      const reload = await f.manager.load('head.yaml');
+      expect((reload.metadata as MemoryMetadata).maxEntries).toBe(max);
+      expect((reload.metadata as MemoryMetadata).retentionDays).toBe(retention);
+      if (retention === '7') {
+        // Preserve the established string-addition expiry behavior, not a new seven-day policy.
+        const ordinary = new Memory({name: 'Ordinary retention control', retentionDays: retention} as unknown as MemoryMetadata, new MetadataService());
+        const control = await ordinary.addEntry('Ordinary expiry');
+        const actual = await reload.addEntry('Reload expiry');
+        expect(actual.expiresAt).toBeInstanceOf(Date);
+        expect(actual.expiresAt!.getTime()).toBeGreaterThan(Date.now());
+        expect(actual.expiresAt!.toISOString().slice(0, 10)).toBe(control.expiresAt!.toISOString().slice(0, 10));
+        expect((reload.metadata as MemoryMetadata).retentionDays).toBe('7');
+      }
+      if (max === 2) {
+        await publication.addEntry('Capacity second'); await expect(publication.addEntry('Capacity overflow')).rejects.toThrow('full'); expect(publication.getEntries().size).toBe(2);
+      }
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console unrelated malformed summary', () => {
+  const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {type: 'memories'},
+    headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+  async function withMalformed() {
+    const f = await fixture();
+    try {
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content) as {metadata: {name: string}}; raw.metadata.name = '!!!';
+      await fs.writeFile(path.join(f.tenantRoot, 'malformed.yaml'), yaml.dump(raw));
+      const snapshot = await f.owners.readHeadSnapshot('malformed.yaml'); if (snapshot.token.ownership !== 'unowned') throw new Error('Expected unowned malformed fixture'); await f.owners.adoptUnowned(snapshot.token);
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      return {...f, manager, store, service};
+    } catch (cause) {await f.cleanup(); throw cause;}
+  }
+  it.each([false, true])('allows actual valid LIST GET PATCH alongside !!! content=%s', async content => {
+    const f = await withMalformed();
+    try {
+      const list = await f.service.listElements(request()); expect(list.status).toBe(200);
+      const records = (list.body as {elements: Array<{name: string}>}).elements; expect(records.some(record => record.name === 'Owned memory')).toBe(true);
+      const get = await f.service.getElement(request(), 'memories', 'owned-memory'); expect(get.status).toBe(200);
+      const before = await f.owners.readHeadSnapshot('head.yaml'); const malformed = await f.owners.readHeadSnapshot('malformed.yaml');
+      const edit = yaml.load((get.body as {content: string}).content) as {entries: Array<{content: string}>}; if (content) edit.entries[0].content = 'Valid edit with unreadable neighbor';
+      const response = await f.service.updateElement(request({metadata: {description: 'Valid neighbor edit'}, ...(content ? {content: yaml.dump(edit)} : {})}, get.headers!.ETag), 'memories', 'owned-memory');
+      expect(response.status).toBe(200); expect(await f.owners.readHeadSnapshot('malformed.yaml')).toEqual(malformed);
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).not.toBe(before.content);
+      const next = await f.service.getElement(request(), 'memories', 'owned-memory'); expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+    } finally {await f.cleanup();}
+  });
+  it('retains strict direct malformed-target refusal without dispatch or mutation', async () => {
+    const f = await withMalformed();
+    try {
+      const snapshot = await f.owners.readHeadSnapshot('malformed.yaml'); const save = jest.spyOn(f.manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(f.service.getElement(request(), 'memories', '!!!')).rejects.toThrow('Invalid memory name');
+      await expect(f.service.updateElement(request({metadata: {description: 'Must not admit'}}, '"v1-old"'), 'memories', '!!!')).rejects.toThrow('Invalid memory name');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(await f.owners.readHeadSnapshot('malformed.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+  it('counts malformed raw matching candidates for ambiguity', async () => {
+    const f = await withMalformed();
+    try {
+      await fs.writeFile(path.join(f.tenantRoot, 'duplicate.yaml'), (await f.owners.readHeadSnapshot('malformed.yaml')).content);
+      const snapshot = await f.owners.readHeadSnapshot('duplicate.yaml'); if (snapshot.token.ownership !== 'unowned') throw new Error('Expected second unowned malformed target'); await f.owners.adoptUnowned(snapshot.token);
+      const write = jest.spyOn(f.owners, 'updateOwnedHead'); await expect(f.manager.findGuardedMemoryForUpdate('!!!', USER)).rejects.toMatchObject({code: 'EHEADCONFLICT'}); expect(write).not.toHaveBeenCalled();
+    } finally {await f.cleanup();}
+  });
+  it('does not swallow unexpected validator errors in unrelated normalization', async () => {
+    const f = await withMalformed();
+    try {
+      const failure = new Error('Unexpected validation infrastructure failure');
+      const validation = (f.manager as unknown as {validationService: ValidationService}).validationService;
+      jest.spyOn(validation, 'validateAndSanitizeInput').mockImplementation(() => {throw failure;});
+      const write = jest.spyOn(f.owners, 'updateOwnedHead'); await expect(f.manager.findGuardedMemoryForUpdate('owned-memory', USER)).rejects.toBe(failure); expect(write).not.toHaveBeenCalled();
     } finally {await f.cleanup();}
   });
 });

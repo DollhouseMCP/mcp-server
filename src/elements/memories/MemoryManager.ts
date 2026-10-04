@@ -758,8 +758,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (tenant !== expectedUserId) throw Object.assign(new Error('Memory request tenant mismatch'), {code: 'EHEADCONFLICT'});
     const summaries = await this.storageLayer.listSummaries({includePublic: false, preserveDuplicates: true, freshMetadata: true});
     this.requireGuardedContext(tenant, contextRoot);
-    const matches = summaries.filter(summary => matchesPortfolioName(summary.name, name) ||
-      matchesPortfolioName(this.normalizeMemoryName(summary.name), name));
+    const matches = summaries.filter(summary => {
+      if (matchesPortfolioName(summary.name, name)) return true;
+      const normalized = this.normalizeMemoryName(summary.name, 'skip-invalid');
+      return normalized !== undefined && matchesPortfolioName(normalized, name);
+    });
     if (!matches.length) return undefined;
     if (matches.length !== 1 || !matches[0].filePath) throw Object.assign(new Error('Ambiguous memory name'), {code: 'EHEADCONFLICT'});
     const observed = await this.readGuardedMemory(matches[0].filePath, 'lookup', {tenant, root: contextRoot});
@@ -897,6 +900,17 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.afterSave(publication, locator!);
     } catch (cause) {
       adapter.recordFailure(element, candidate, original, cause, committed);
+      if (adapter.getPendingUpdate(element)?.status === 'refused') {
+        try {
+          this.onSaveError(element, locator!, cause);
+        } catch {
+          try {
+            logger.warn('Memory save failure audit hook threw; original refusal preserved');
+          } catch {
+            // Both audit and warning delivery are best effort; preserve the refusal.
+          }
+        }
+      }
       throw cause;
     } finally {
       adapter.finishUpdate(element);
@@ -2353,11 +2367,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
   
   /** The same loader normalization used by console discovery hints. */
-  private normalizeMemoryName(input: string): string {
+  private normalizeMemoryName(input: string): string;
+  private normalizeMemoryName(input: string, mode: 'skip-invalid'): string | undefined;
+  private normalizeMemoryName(input: string, mode?: 'skip-invalid'): string | undefined {
     const result = this.validationService.validateAndSanitizeInput(input, {
       maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH, allowSpaces: true,
     });
     if (!result.isValid || result.sanitizedValue === undefined) {
+      // Unrelated discovery hints may be unreadable; raw matches still undergo
+      // strict hydration and all genuine matching candidates count for ambiguity.
+      if (mode === 'skip-invalid') return undefined;
       throw new Error(`Invalid memory name: ${result.errors?.join(', ')}`);
     }
     return result.sanitizedValue;
