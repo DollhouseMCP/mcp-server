@@ -686,6 +686,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
   isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
 
+  /** Capture the effective backend owner independently from the transport session identity. */
+  captureGuardedTenant(): string {
+    if (!this.guardedUpdateAdapter) throw new Error('Guarded memory updates are disabled');
+    return this.guardedUpdateAdapter.captureTenant();
+  }
+
   /** Names are discovery hints only; hydrate a new working object from its own snapshot. */
   async loadGuardedMemoryByName(name: string, expectedUserId: string): Promise<Memory> {
     const adapter = this.guardedUpdateAdapter;

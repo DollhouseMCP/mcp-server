@@ -27,7 +27,9 @@ import { createTestStorageFactory } from '../../helpers/createTestStorageFactory
 import type { ElementManagerDeps } from '../../../src/elements/base/BaseElementManager.js';
 import { MemorySaveHandler } from '../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import type { HandlerRegistry } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
-import type { ExecutionContext } from '../../../src/security/encryption/ContextTracker.js';
+import { ContextTracker, type ExecutionContext } from '../../../src/security/encryption/ContextTracker.js';
+import { createUserIdResolver } from '../../../src/database/UserContext.js';
+import { SessionActivationRegistry } from '../../../src/state/SessionActivationState.js';
 const USER = '11111111-1111-4111-8111-111111111111';
 class ObservedManager extends MemoryManager {
   serializeGate?: Promise<void>;
@@ -48,16 +50,17 @@ class ObservedManager extends MemoryManager {
     return super.afterSave(memory, locator);
   }
 }
-async function fixture(seedMetadata: Partial<MemoryMetadata> = {}) {
+async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-central-owned-'));
   const metadataService = new MetadataService();
   const lock = new FileLockManager();
   const files = new FileOperationsService(lock);
   let tenant = USER;
+  const currentTenant = () => tenantResolver ? tenantResolver() : tenant;
   const deps: ElementManagerDeps = { portfolioManager: new PortfolioManager(files, { baseDir: root }),
     fileLockManager: lock, fileOperationsService: files, serializationService: new SerializationService(),
     metadataService, validationRegistry: new ValidationRegistry(new ValidationService(), new TriggerValidationService(), metadataService),
-    eventDispatcher: new ElementEventDispatcher(), storageLayerFactory: createTestStorageFactory(), getCurrentUserId: () => tenant };
+    eventDispatcher: new ElementEventDispatcher(), storageLayerFactory: createTestStorageFactory(), getCurrentUserId: currentTenant };
   const managers: MemoryManager[] = [];
   const ordinary = new MemoryManager(deps); managers.push(ordinary);
   const memory = new Memory({ name: 'Owned memory', description: 'Original description', retentionDays: 36500,
@@ -69,13 +72,13 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}) {
     await ordinary.save(memory, 'head.yaml');
     const tenantRoot = await fs.realpath(path.join(root, 'memories'));
     const fence = new FileMemoryFence();
-    const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: () => tenant, fence });
+    const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: currentTenant, fence });
     const owners = new FileMemoryOwnerSnapshots({ coordinator });
     const unowned = await owners.readHeadSnapshot('head.yaml');
     if (unowned.token.ownership !== 'unowned') throw new Error('Expected genuine unowned fixture');
     await owners.adoptUnowned(unowned.token);
     const makeManager = (store = owners) => {
-      const adapter = new MemoryHeadUpdateAdapter({ backend: 'file', store }, () => tenant);
+      const adapter = new MemoryHeadUpdateAdapter({ backend: 'file', store }, currentTenant);
       const manager = new ObservedManager(deps, adapter); managers.push(manager);
       return { manager, adapter };
     };
@@ -362,6 +365,48 @@ function guardedHandler(manager: MemoryManager) {
 }
 
 posix('immediate guarded MCP-AQL mutations', () => {
+  it('pins real stdio effective identity separately from the raw session and retains switched-owner evidence', async () => {
+    const tracker = new ContextTracker();
+    const registry = new SessionActivationRegistry('stdio-guarded');
+    const session: ExecutionContext = { type: 'test', timestamp: Date.now(), session: {
+      userId: 'local-user', sessionId: 'stdio-guarded', tenantId: null, transport: 'stdio', createdAt: Date.now(),
+    } };
+    const state = registry.getOrCreate('stdio-guarded'); state.dbUserId = USER;
+    const resolver = createUserIdResolver(tracker, registry);
+    await tracker.runAsync(session, async () => {
+      const f = await fixture({}, resolver);
+      try {
+        const { manager } = f.makeManager();
+        const handler = new MemorySaveHandler({ memoryManager: manager } as unknown as HandlerRegistry,
+          name => `legacy:${name}`, tracker);
+        const dispatch = (method: string, content?: string) => handler.dispatch(method, { element_name: 'Owned memory', content });
+        expect(tracker.getSessionContext()?.userId).toBe('local-user'); expect(resolver()).toBe(USER);
+        await dispatch('addEntry', 'Effective owner append'); await dispatch('clear');
+        const committed = (await f.owners.readHeadSnapshot('head.yaml')).content;
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const original = manager.save.bind(manager);
+        const barrier = jest.spyOn(manager, 'save').mockImplementation((...args) => {
+          manager.serializeGate = gate;
+          const saving = original(...args);
+          state.dbUserId = '22222222-2222-4222-8222-222222222222'; release();
+          return saving;
+        });
+        try { await expect(dispatch('addEntry', 'Retained original owner')).rejects.toMatchObject({ code: 'EHEADCONFLICT' }); }
+        finally { barrier.mockRestore(); manager.serializeGate = undefined; }
+        expect(handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
+        state.dbUserId = USER;
+        const retained = handler.getPendingGuardedMutation('Owned memory');
+        expect(retained?.status).toBe('refused');
+        expect([...retained!.candidate!.getEntries().values()].map(entry => entry.content)).toContain('Retained original owner');
+        await expect(dispatch('clear')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+        await handler.flushPendingSaves();
+        expect((await f.owners.readHeadSnapshot('head.yaml')).content).toBe(committed);
+        expect(handler.getPendingGuardedMutation('Owned memory')).toBe(retained);
+      } finally { state.dbUserId = USER; await f.cleanup(); }
+    });
+  });
+
   it('awaits real append and clear commits without legacy writers or debounce', async () => {
     const f = await fixture();
     try {
@@ -390,7 +435,7 @@ posix('immediate guarded MCP-AQL mutations', () => {
         expect((handler as unknown as { pendingSaves: Map<string, unknown> }).pendingSaves.size).toBe(0);
         const count = timer.mock.calls.length;
         await handler.flushPendingSaves();
-        expect(timer.mock.calls.length).toBe(count);
+        expect(timer.mock.calls).toHaveLength(count);
       } finally { legacy.mockRestore(); timer.mockRestore(); }
     } finally { await f.cleanup(); }
   });
@@ -501,6 +546,8 @@ posix('immediate guarded MCP-AQL mutations', () => {
       } finally { release(); await first; lookup.mockRestore(); }
       await expect(handler.dispatch('addEntry', { element_name: 'Missing', content: 'No target' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
       expect(handler.getPendingGuardedMutation('Missing')).toBeUndefined();
+      await expect(dispatch('unsupported', {})).rejects.toThrow('Unknown Memory method: unsupported');
+      expect(handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
       await expect(dispatch('addEntry', { content: '' })).rejects.toThrow();
       expect(handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
       await dispatch('addEntry', { content: 'Next accepted request' });
@@ -578,7 +625,7 @@ posix('immediate guarded MCP-AQL mutations', () => {
       expect(other.handler.getPendingGuardedMutation('Owned memory')).toMatchObject({ status: 'unknown', cause: unknown });
       const calls = write.mock.calls.length; await other.handler.flushPendingSaves();
       await expect(other.dispatch('addEntry', { content: 'Do not replay' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
-      expect(write.mock.calls.length).toBe(calls);
+      expect(write.mock.calls).toHaveLength(calls);
     } finally { await f.cleanup(); }
   });
   it('refuses missing or changed session context without mixing retained tenant evidence', async () => {
@@ -590,9 +637,11 @@ posix('immediate guarded MCP-AQL mutations', () => {
       const cause = new Error('Unknown original tenant');
       jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValueOnce(cause);
       await expect(scoped.dispatch('clear')).rejects.toBe(cause);
+      f.setTenant('other-user');
       scoped.setContext({ type: 'test', timestamp: 1, session: { userId: 'other-user', sessionId: 'guarded-session', tenantId: null, transport: 'http', createdAt: 1 } });
       expect(scoped.handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
-      await expect(scoped.dispatch('clear')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      await expect(scoped.dispatch('clear')).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
+      f.setTenant(USER);
       scoped.setContext({ type: 'test', timestamp: 1, session: { userId: USER, sessionId: 'guarded-session', tenantId: null, transport: 'http', createdAt: 1 } });
       expect(scoped.handler.getPendingGuardedMutation('Owned memory')?.cause).toBe(cause);
     } finally { await f.cleanup(); }

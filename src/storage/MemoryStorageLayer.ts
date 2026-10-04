@@ -183,6 +183,7 @@ export class MemoryStorageLayer implements IStorageLayer {
     const subdirs = await this.discoverSubdirectoriesForDir(dir, true);
     const paths = await this.enumerateYamlFiles(dir, subdirs, true);
     const entries: ElementIndexEntry[] = [];
+    // Keep each read/stat pair ordered and fail fast before starting later locator I/O.
     for (const filePath of paths) {
       const absolutePath = path.join(dir, filePath);
       const content = await this.backend.readFile(absolutePath);
@@ -512,6 +513,7 @@ export class MemoryStorageLayer implements IStorageLayer {
 
   private async enumerateYamlFiles(dir: string, subdirs: string[], strict = false): Promise<string[]> {
     const allRelativePaths: string[] = [];
+    // Collection order and first-error behavior also serve the legacy inventory path.
     for (const subdir of subdirs) {
       await this.collectYamlFilesFromSubdir(dir, subdir, allRelativePaths, strict);
     }

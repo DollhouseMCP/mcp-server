@@ -106,14 +106,15 @@ export class MemorySaveHandler {
     }
   }
 
-  private guardedContext(memoryName: string): { key: string; userId: string; check: () => void } {
+  private guardedContext(memoryName: string, manager: MemoryManager): { key: string; userId: string; check: () => void } {
     const session = this.contextScope?.getContext?.()?.session;
     if (!session || typeof session.userId !== 'string' || !session.userId || typeof session.sessionId !== 'string' || !session.sessionId || (session.tenantId !== null && typeof session.tenantId !== 'string')) throw new Error('Guarded mutation requires authenticated session context');
     const { userId, sessionId, tenantId } = session;
-    const key = JSON.stringify([userId, sessionId, tenantId, memoryName.normalize('NFC').toLowerCase()]);
-    return { key, userId, check: () => {
+    const effectiveUserId = manager.captureGuardedTenant();
+    const key = JSON.stringify([userId, sessionId, tenantId, memoryName.normalize('NFC').toLowerCase(), effectiveUserId]);
+    return { key, userId: effectiveUserId, check: () => {
       const current = this.contextScope?.getContext?.()?.session;
-      if (current?.userId !== userId || current.sessionId !== sessionId || current.tenantId !== tenantId) {
+      if (current?.userId !== userId || current.sessionId !== sessionId || current.tenantId !== tenantId || manager.captureGuardedTenant() !== effectiveUserId) {
         throw Object.assign(new Error('Memory mutation session changed'), { code: 'EHEADCONFLICT' });
       }
     } };
@@ -121,11 +122,11 @@ export class MemorySaveHandler {
 
   /** Retained request evidence only; never authorizes retry or token refresh. */
   getPendingGuardedMutation(memoryName: string): GuardedMutationPending | undefined {
-    return this.guardedMutations.get(this.guardedContext(memoryName).key);
+    return this.guardedMutations.get(this.guardedContext(memoryName, this.handlers.memoryManager).key);
   }
 
   private async dispatchGuarded(method: string, memoryName: string, manager: MemoryManager, params: Record<string, unknown>): Promise<unknown> {
-    const context = this.guardedContext(memoryName);
+    const context = this.guardedContext(memoryName, manager);
     if (this.guardedMutations.has(context.key)) throw Object.assign(new Error('Memory mutation is pending; retain changes and resolve before another request'), { code: 'EHEADCONFLICT' });
     this.guardedMutations.set(context.key, Object.freeze({ status: 'preparing', manager }));
     let candidate: Memory | undefined;
@@ -142,20 +143,7 @@ export class MemorySaveHandler {
       candidate = manager.deriveGuardedMutation(source);
       const removedBefore = candidate.getPolicyRemovedCount();
       const clearCount = candidate.getEntries().size;
-      let response: unknown;
-      let removedCount = 0;
-      let audit: Parameters<typeof SecurityMonitor.logSecurityEvent>[0];
-      if (method === 'addEntry') {
-        const entry = await candidate.addEntry(params.content as string, params.tags as string[] | undefined, params.metadata as Record<string, unknown> | undefined);
-        removedCount = candidate.getPolicyRemovedCount() - removedBefore;
-        response = { id: entry.id, timestamp: entry.timestamp.toISOString(), trustLevel: entry.trustLevel,
-          ...this.removalWarningFields(memoryName, removedCount) };
-        audit = { type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED, severity: 'LOW', source: 'MemorySaveHandler.guardedMutation', details: `Durably added memory entry ${entry.id}` };
-      } else {
-        await candidate.clearAll(true);
-        response = undefined;
-        audit = { type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED, severity: 'HIGH', source: 'MemorySaveHandler.guardedMutation', details: `Durably cleared all ${clearCount} memory entries` };
-      }
+      const { response, audit, removedCount } = await this.prepareGuardedMutation(method, memoryName, candidate, params, removedBefore, clearCount);
       await manager.assertPersistable(candidate);
       context.check();
       accepted = true;
@@ -172,11 +160,32 @@ export class MemorySaveHandler {
     } catch (cause) {
       const pending = candidate && manager.getPendingHeadUpdate(candidate);
       if (accepted || pending) {
-        const status = committed || pending?.status === 'committed-publication-failed' ? 'known-committed' : pending?.status === 'unknown' ? 'unknown' : 'refused';
+        let status: GuardedMutationPending['status'] = 'refused';
+        if (committed || pending?.status === 'committed-publication-failed') status = 'known-committed';
+        else if (pending?.status === 'unknown') status = 'unknown';
         this.guardedMutations.set(context.key, Object.freeze({ status, candidate, manager, cause }));
       } else this.guardedMutations.delete(context.key);
       throw cause;
     }
+  }
+
+  /** Prepare candidate state and plain response fields before any backend attempt. */
+  private async prepareGuardedMutation(method: string, memoryName: string, candidate: Memory, params: Record<string, unknown>, removedBefore: number, clearCount: number) {
+    let response: unknown;
+    let removedCount = 0;
+    let audit: Parameters<typeof SecurityMonitor.logSecurityEvent>[0];
+    if (method === 'addEntry') {
+      const entry = await candidate.addEntry(params.content as string, params.tags as string[] | undefined, params.metadata as Record<string, unknown> | undefined);
+      removedCount = candidate.getPolicyRemovedCount() - removedBefore;
+      response = { id: entry.id, timestamp: entry.timestamp.toISOString(), trustLevel: entry.trustLevel,
+        ...this.removalWarningFields(memoryName, removedCount) };
+      audit = { type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED, severity: 'LOW', source: 'MemorySaveHandler.guardedMutation', details: `Durably added memory entry ${entry.id}` };
+    } else {
+      await candidate.clearAll(true);
+      response = undefined;
+      audit = { type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED, severity: 'HIGH', source: 'MemorySaveHandler.guardedMutation', details: `Durably cleared all ${clearCount} memory entries` };
+    }
+    return { response, audit, removedCount };
   }
 
   private reportGuardedPending(sessionId?: string): void {

@@ -3,6 +3,9 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
+import { SessionActivationRegistry } from '../../../src/state/SessionActivationState.js';
+import { createUserIdResolver } from '../../../src/database/UserContext.js';
 import type { Memory } from '../../../src/elements/memories/Memory.js';
 import { MemorySaveHandler } from '../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
@@ -82,7 +85,7 @@ function handler(manager: MemoryManager, getUser: () => string) {
   const context = () => ({ type: 'test' as const, timestamp: Date.now(), session: {
     userId: getUser(), sessionId: 'owned-pg-request', tenantId: null, transport: 'http' as const, createdAt: 0,
   } });
-  return new MemorySaveHandler({ memoryManager: manager } as ConstructorParameters<typeof MemorySaveHandler>[0],
+  return new MemorySaveHandler({ memoryManager: manager } as unknown as ConstructorParameters<typeof MemorySaveHandler>[0],
     name => `owned-pg-request:${name}`, { getContext: context });
 }
 function gate() {
@@ -215,4 +218,32 @@ requiredDescribe('actual guarded immediate AQL requests with owned PostgreSQL', 
     await expect(request.dispatch('addEntry', { element_name: f.name, content: 'Must not replay' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
     expect(await f.snapshot()).toEqual(committed);
   }));
+  it('real stdio identity resolution uses the registry database UUID for append and clear', () => isolated(async (f, makeManager) => {
+    const tracker = new ContextTracker();
+    const registry = new SessionActivationRegistry('stdio-owned-pg');
+    registry.getOrCreate('stdio-owned-pg').dbUserId = f.userId;
+    const resolveUser = createUserIdResolver(tracker, registry);
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: {
+        userId: 'local-user', sessionId: 'stdio-owned-pg', tenantId: null, transport: 'stdio', createdAt: 0,
+      } }, async () => {
+        expect(tracker.getSessionContext()?.userId).toBe('local-user');
+        expect(resolveUser()).toBe(f.userId);
+        const { manager, layer } = await makeManager(resolveUser);
+        const legacy = jest.spyOn(layer, 'writeContent');
+        const request = new MemorySaveHandler({ memoryManager: manager } as unknown as ConstructorParameters<typeof MemorySaveHandler>[0],
+          name => `stdio-owned-pg:${name}`, tracker);
+        const receipt = await request.dispatch('addEntry', { element_name: f.name, content: 'Registry-resolved durable entry' }) as { id: string };
+        const committed = await f.layer.readHeadSnapshot(f.memoryId);
+        expect(committed.token.userId).toBe(f.userId);
+        expect(committed.content).toContain(receipt.id);
+        expect(committed.content).toContain('Registry-resolved durable entry');
+        await request.dispatch('clear', { element_name: f.name });
+        expect((await manager.load(f.memoryId)).getEntries().size).toBe(0);
+        expect(BigInt((await f.layer.readHeadSnapshot(f.memoryId)).token.revision)).toBeGreaterThan(BigInt(committed.token.revision));
+        expect(legacy).not.toHaveBeenCalled();
+      });
+    } finally { registry.dispose('stdio-owned-pg'); await tracker.dispose(); }
+  }));
+
 });
