@@ -1,0 +1,63 @@
+
+> @dollhousemcp/mcp-server@2.1.0-beta.2 security:audit
+> tsx scripts/run-security-audit.ts
+
+🔒 Running Security Audit...
+
+[2026-10-04T01:53:31.070Z] [INFO] SecurityAuditor: Initialized 3 security scanners
+[2026-10-04T01:53:31.071Z] [INFO] SecurityAuditor: Starting security audit of /Users/mick/.codex/worktrees/2686-beta-security-sync/mcp-server
+[2026-10-04T01:53:34.125Z] [DEBUG] [ConfigurationScanner] Failed to parse config file
+[2026-10-04T01:53:34.125Z] [DEBUG] [ConfigurationScanner] Failed to parse config file
+[2026-10-04T01:53:34.126Z] [DEBUG] [ConfigurationScanner] Failed to parse config file
+[2026-10-04T01:53:34.126Z] [DEBUG] [ConfigurationScanner] Failed to parse config file
+[2026-10-04T01:53:34.131Z] [INFO] SecurityAuditor: Audit completed: 3 findings in 3059ms
+
+🔒 Security Audit Report
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 Summary:
+  Total findings: 3
+  Files scanned: 84
+
+  By severity:
+     CRITICAL : 0
+    HIGH: 0
+    MEDIUM: 0
+    LOW: 3
+    INFO: 0
+
+📋 Findings:
+
+LOW (3)
+
+  🔵 Security operation without audit logging
+     📁 /Users/mick/.codex/worktrees/2686-beta-security-sync/mcp-server/src/storage/FileMemoryOwnedHeadEvidence.ts
+     💡 Add SecurityMonitor.logSecurityEvent() for audit trail
+     🏷️  DMCP-SEC-006 (medium confidence)
+
+  🔵 Security operation without audit logging
+     📁 /Users/mick/.codex/worktrees/2686-beta-security-sync/mcp-server/src/storage/FileMemoryFence.ts
+     💡 Add SecurityMonitor.logSecurityEvent() for audit trail
+     🏷️  DMCP-SEC-006 (medium confidence)
+
+  🔵 Security operation without audit logging
+     📁 /Users/mick/.codex/worktrees/2686-beta-security-sync/mcp-server/src/storage/FileMemoryAbortIntentCodec.ts
+     💡 Add SecurityMonitor.logSecurityEvent() for audit trail
+     🏷️  DMCP-SEC-006 (medium confidence)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Scan completed in 3059ms
+
+
+📄 Markdown report saved to:
+   - security-audit-report.md (latest)
+   - .security-audit/security-audit-2026-10-04T01-53-34.md (timestamped)
+
+📋 Summary saved to: .security-audit/security-audit-summary-2026-10-04T01-53-34.md
+
+✅ Security audit complete!
+
+📊 Quick Stats:
+   - Scan duration: 3062ms
+   - Total findings: 3
+   - Critical/High: 0

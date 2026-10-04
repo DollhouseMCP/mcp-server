@@ -1,3 +1,4 @@
+import { MEMORY_SECURITY_EVENTS } from '../../elements/memories/constants.js';
 import { STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
@@ -49,9 +50,17 @@ interface FailedSave {
   context?: ExecutionContext;
 }
 
+export interface GuardedMutationPending {
+  readonly status: 'preparing' | 'refused' | 'unknown' | 'known-committed';
+  readonly candidate?: Memory;
+  readonly manager: MemoryManager;
+  readonly cause?: unknown;
+}
+
 export class MemorySaveHandler {
   /** Serialize append validation and clear for the same in-process Memory object. */
   private static readonly mutationTails = new WeakMap<Memory, Promise<void>>();
+  private readonly guardedMutations = new Map<string, GuardedMutationPending>();
   private readonly pendingSaves = new Map<string, PendingSave>();
   private readonly debounceMetrics = { coalesced: 0, written: 0 };
   private readonly saveFrequencyCounters = new Map<string, SaveFrequencyCounter>();
@@ -80,6 +89,8 @@ export class MemorySaveHandler {
       'the name of the memory to operate on'
     );
 
+    if (manager.isGuardedHeadUpdateEnabled?.()) return this.dispatchGuarded(method, memoryName, manager, params);
+
     const memory = await manager.find(m => m.metadata.name === memoryName);
     if (!memory) {
       throw new Error(`Memory '${memoryName}' not found. Use list_elements to see available memories.`);
@@ -92,6 +103,105 @@ export class MemorySaveHandler {
         return this.clear(memoryName, memory, manager);
       default:
         throw new Error(`Unknown Memory method: ${method}`);
+    }
+  }
+
+  private guardedContext(memoryName: string, manager: MemoryManager): { key: string; userId: string; check: () => void } {
+    const session = this.contextScope?.getContext?.()?.session;
+    if (!session || typeof session.userId !== 'string' || !session.userId || typeof session.sessionId !== 'string' || !session.sessionId || (session.tenantId !== null && typeof session.tenantId !== 'string')) throw new Error('Guarded mutation requires authenticated session context');
+    const { userId, sessionId, tenantId } = session;
+    const effectiveUserId = manager.captureGuardedTenant();
+    const key = JSON.stringify([userId, sessionId, tenantId, memoryName.normalize('NFC').toLowerCase(), effectiveUserId]);
+    return { key, userId: effectiveUserId, check: () => {
+      const current = this.contextScope?.getContext?.()?.session;
+      if (current?.userId !== userId || current.sessionId !== sessionId || current.tenantId !== tenantId || manager.captureGuardedTenant() !== effectiveUserId) {
+        throw Object.assign(new Error('Memory mutation session changed'), { code: 'EHEADCONFLICT' });
+      }
+    } };
+  }
+
+  /** Retained request evidence only; never authorizes retry or token refresh. */
+  getPendingGuardedMutation(memoryName: string): GuardedMutationPending | undefined {
+    return this.guardedMutations.get(this.guardedContext(memoryName, this.handlers.memoryManager).key);
+  }
+
+  private async dispatchGuarded(method: string, memoryName: string, manager: MemoryManager, params: Record<string, unknown>): Promise<unknown> {
+    const context = this.guardedContext(memoryName, manager);
+    if (this.guardedMutations.has(context.key)) throw Object.assign(new Error('Memory mutation is pending; retain changes and resolve before another request'), { code: 'EHEADCONFLICT' });
+    this.guardedMutations.set(context.key, Object.freeze({ status: 'preparing', manager }));
+    let candidate: Memory | undefined;
+    let accepted = false;
+    let committed = false;
+    try {
+      if (method !== 'addEntry' && method !== 'clear') throw new Error(`Unknown Memory method: ${method}`);
+      if (method === 'addEntry') {
+        if (params.entry !== undefined && params.content === undefined) params.content = params.entry;
+        this.validateContent(memoryName, params);
+      }
+      const source = await manager.loadGuardedMemoryByName(memoryName, context.userId);
+      context.check();
+      candidate = manager.deriveGuardedMutation(source);
+      const removedBefore = candidate.getPolicyRemovedCount();
+      const clearCount = candidate.getEntries().size;
+      const { response, audit, removedCount } = await this.prepareGuardedMutation(method, memoryName, candidate, params, removedBefore, clearCount);
+      await manager.assertPersistable(candidate);
+      context.check();
+      accepted = true;
+      await manager.save(candidate);
+      committed = true;
+      context.check();
+      SecurityMonitor.logSecurityEvent(audit);
+      if (removedCount > 0) SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED, severity: 'MEDIUM',
+        source: 'MemorySaveHandler.guardedMutation', details: `Durably removed ${removedCount} entries by retention or onFull policy`,
+      });
+      this.guardedMutations.delete(context.key);
+      return response;
+    } catch (cause) {
+      const pending = candidate && manager.getPendingHeadUpdate(candidate);
+      if (accepted || pending) {
+        const status = this.classifyGuardedOutcome(committed, pending);
+        this.guardedMutations.set(context.key, Object.freeze({ status, candidate, manager, cause }));
+      } else this.guardedMutations.delete(context.key);
+      throw cause;
+    }
+  }
+
+  /** Known durable commit takes precedence over pending unknown/refusal evidence. */
+  private classifyGuardedOutcome(committed: boolean, pending: ReturnType<MemoryManager['getPendingHeadUpdate']>): GuardedMutationPending['status'] {
+    if (committed || pending?.status === 'committed-publication-failed') return 'known-committed';
+    if (pending?.status === 'unknown') return 'unknown';
+    return 'refused';
+  }
+
+  /** Prepare candidate state and plain response fields before any backend attempt. */
+  private async prepareGuardedMutation(method: string, memoryName: string, candidate: Memory, params: Record<string, unknown>, removedBefore: number, clearCount: number) {
+    let response: unknown;
+    let removedCount = 0;
+    let audit: Parameters<typeof SecurityMonitor.logSecurityEvent>[0];
+    if (method === 'addEntry') {
+      await candidate.enforceCandidateLoadRetention();
+      const entry = await candidate.addEntry(params.content as string, params.tags as string[] | undefined, params.metadata as Record<string, unknown> | undefined);
+      removedCount = candidate.getPolicyRemovedCount() - removedBefore;
+      response = { id: entry.id, timestamp: entry.timestamp.toISOString(), trustLevel: entry.trustLevel,
+        ...this.removalWarningFields(memoryName, removedCount) };
+      audit = { type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED, severity: 'LOW', source: 'MemorySaveHandler.guardedMutation', details: `Durably added memory entry ${entry.id}` };
+    } else {
+      await candidate.clearAll(true);
+      response = undefined;
+      audit = { type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED, severity: 'HIGH', source: 'MemorySaveHandler.guardedMutation', details: `Durably cleared all ${clearCount} memory entries` };
+    }
+    return { response, audit, removedCount };
+  }
+
+  private reportGuardedPending(sessionId?: string): void {
+    const counts = { preparing: 0, refused: 0, unknown: 0, 'known-committed': 0 };
+    for (const [key, operation] of this.guardedMutations) {
+      if (sessionId !== undefined && (JSON.parse(key) as string[])[1] !== sessionId) continue;
+      counts[operation.status]++;
+    }
+    if (Object.values(counts).some(count => count > 0)) {
+      logger.warn(`[MCPAQLHandler] Guarded mutation outcomes retained without replay: preparing=${counts.preparing}, refused=${counts.refused}, unknown=${counts.unknown}, known-committed=${counts['known-committed']}`);
     }
   }
 
@@ -112,6 +222,7 @@ export class MemorySaveHandler {
    * and checking the probe token captured in that same context.
    */
   cleanupSession(sessionId: string): void {
+    this.reportGuardedPending(sessionId);
     const prefix = `${sessionId}:`;
 
     for (const [key, entry] of this.failedMemorySaves) {
@@ -150,6 +261,7 @@ export class MemorySaveHandler {
    * proceeds context-less as before.
    */
   async flushPendingSaves(): Promise<void> {
+    this.reportGuardedPending();
     const pending = [...this.pendingSaves.entries()];
     this.pendingSaves.clear();
     if (pending.length > 0) {

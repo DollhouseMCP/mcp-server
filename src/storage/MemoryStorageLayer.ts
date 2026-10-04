@@ -168,11 +168,33 @@ export class MemoryStorageLayer implements IStorageLayer {
     }
   }
 
-  async listSummaries(_options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
+  async listSummaries(options?: { includePublic?: boolean; preserveDuplicates?: boolean; freshMetadata?: boolean }): Promise<ElementIndexEntry[]> {
+    if (options?.freshMetadata) return this.readFreshSummaries(options.preserveDuplicates === true);
     // File-mode memories are single-user per installation; includePublic is a
     // no-op here until Step 4.5 delivers the per-user layout + shared/ dir.
     await this.scan();
-    return this.deduplicateByName(this.getState().index.getAll());
+    const entries = this.getState().index.getAll();
+    return options?.preserveDuplicates ? entries : this.deduplicateByName(entries);
+  }
+
+  /** Read-only guarded discovery; no mtime/index authority and no index publication. */
+  private async readFreshSummaries(preserveDuplicates: boolean): Promise<ElementIndexEntry[]> {
+    const dir = this.memoriesDir;
+    const subdirs = await this.discoverSubdirectoriesForDir(dir, true);
+    const paths = await this.enumerateYamlFiles(dir, subdirs, true);
+    const entries: ElementIndexEntry[] = [];
+    // Keep each read/stat pair ordered and fail fast before starting later locator I/O.
+    for (const filePath of paths) {
+      const absolutePath = path.join(dir, filePath);
+      const content = await this.backend.readFile(absolutePath);
+      const meta = await this.backend.stat(absolutePath);
+      const extracted = MemoryMetadataExtractor.extractMetadata(content, filePath);
+      entries.push({ ...extracted, filePath, name: extracted.name ?? 'unnamed',
+        description: extracted.description ?? '', version: extracted.version ?? '1.0.0',
+        author: extracted.author ?? '', tags: extracted.tags ?? [],
+        mtimeMs: meta.mtimeMs, sizeBytes: meta.sizeBytes });
+    }
+    return preserveDuplicates ? entries : this.deduplicateByName(entries);
   }
 
   async getIndexedPaths(): Promise<string[]> {
@@ -357,7 +379,7 @@ export class MemoryStorageLayer implements IStorageLayer {
    * Discover all subdirectories to scan.
    * Returns ['system', 'adapters', ...dateFolders, ''] where '' = root.
    */
-  private async discoverSubdirectoriesForDir(dir: string): Promise<string[]> {
+  private async discoverSubdirectoriesForDir(dir: string, strict = false): Promise<string[]> {
     const subdirs: string[] = [];
 
     try {
@@ -378,6 +400,7 @@ export class MemoryStorageLayer implements IStorageLayer {
       dateFolders.sort((a, b) => a.localeCompare(b));
       subdirs.push(...dateFolders);
     } catch (error) {
+      if (strict) throw error;
       if ((error as any).code !== 'ENOENT') {
         logger.debug('MemoryStorageLayer: failed to list subdirectories', {
           error: error instanceof Error ? error.message : String(error),
@@ -488,15 +511,16 @@ export class MemoryStorageLayer implements IStorageLayer {
     return diff;
   }
 
-  private async enumerateYamlFiles(dir: string, subdirs: string[]): Promise<string[]> {
+  private async enumerateYamlFiles(dir: string, subdirs: string[], strict = false): Promise<string[]> {
     const allRelativePaths: string[] = [];
+    // Collection order and first-error behavior also serve the legacy inventory path.
     for (const subdir of subdirs) {
-      await this.collectYamlFilesFromSubdir(dir, subdir, allRelativePaths);
+      await this.collectYamlFilesFromSubdir(dir, subdir, allRelativePaths, strict);
     }
     return allRelativePaths;
   }
 
-  private async collectYamlFilesFromSubdir(dir: string, subdir: string, out: string[]): Promise<void> {
+  private async collectYamlFilesFromSubdir(dir: string, subdir: string, out: string[], strict = false): Promise<void> {
     const absDir = subdir ? path.join(dir, subdir) : dir;
     try {
       const files = await this.backend.listFiles(absDir, '.yaml');
@@ -505,6 +529,7 @@ export class MemoryStorageLayer implements IStorageLayer {
         out.push(subdir ? `${subdir}/${file}` : file);
       }
     } catch (error) {
+      if (strict) throw error;
       if ((error as any).code !== 'ENOENT') {
         logger.debug(`MemoryStorageLayer: failed to list ${absDir}`, {
           error: error instanceof Error ? error.message : String(error),

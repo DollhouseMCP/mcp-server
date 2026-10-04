@@ -1003,6 +1003,19 @@ export class Memory extends BaseElement implements IElement {
     ].join('\n');
   }
 
+  /** Apply opted-in load retention to a quiet persistence candidate before mutation. */
+  public async enforceCandidateLoadRetention(): Promise<number> {
+    if (!this.appendCandidate) throw new Error('Load retention preparation requires a persistence candidate');
+    let enforceOnLoad = false;
+    try {
+      enforceOnLoad = this.getRetentionPolicyService()?.shouldEnforceOnLoad() ?? false;
+    } catch {
+      // Optional policy resolution has the same safe fallback as ordinary loading.
+      return 0;
+    }
+    return enforceOnLoad ? this.enforceRetentionPolicy() : 0;
+  }
+
   /**
    * Enforce retention policy by removing expired entries
    * SECURITY: Ensures memory doesn't grow unbounded
@@ -1057,7 +1070,7 @@ export class Memory extends BaseElement implements IElement {
     this.entries.clear();
     this._isDirty = true;
     
-    SecurityMonitor.logSecurityEvent({
+    if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED,
       severity: 'HIGH',
       source: 'Memory.clearAll',
@@ -1290,7 +1303,7 @@ export class Memory extends BaseElement implements IElement {
    * SECURITY: Validates all loaded data
    * FIX #1269: Added ContentValidator to prevent loading infected memories
    */
-  public override deserialize(data: string): void {
+  public override deserialize(data: string, options?: { suppressLoadPolicy?: boolean }): void {
     try {
       const parsed = JSON.parse(data);
 
@@ -1340,31 +1353,7 @@ export class Memory extends BaseElement implements IElement {
         });
       }
 
-      // Issue #51: Check if retention enforcement should happen on load
-      // IMPORTANT: Retention enforcement is now opt-in, not automatic
-      // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
-      try {
-        const retentionService = this.getRetentionPolicyService();
-        if (retentionService?.shouldEnforceOnLoad()) {
-          // User has explicitly enabled on-load enforcement
-          this.enforceRetentionPolicy();
-          logger.debug(`[Memory] Retention policy enforced on load for "${this.metadata.name}"`, {
-            enforcementMode: 'on_load'
-          });
-        } else if (retentionService?.isEnabled()) {
-          // Retention is enabled but not set to on_load mode - log for visibility
-          logger.debug(`[Memory] Retention is enabled but not enforced on load for "${this.metadata.name}"`, {
-            note: 'Use explicit enforcement command to cleanup expired entries'
-          });
-        }
-        // If retentionService is not configured or disabled, no enforcement happens
-        // This is the safe default - nothing is deleted without explicit consent
-      } catch {
-        // Silently ignore retention policy errors during deserialization
-        // This can happen in test environments where ConfigManager is not initialized,
-        // or when a stale resolver references a disposed service instance
-        // It's safe to skip retention enforcement in these cases - the default is no deletion
-      }
+      this.applyLoadRetentionPolicy(options);
 
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
@@ -1377,6 +1366,35 @@ export class Memory extends BaseElement implements IElement {
     }
   }
   
+  /** Preserve legacy optional load policy without consulting it for guarded hydration. */
+  private applyLoadRetentionPolicy(options?: { suppressLoadPolicy?: boolean }): void {
+  // Issue #51: Check if retention enforcement should happen on load
+  // IMPORTANT: Retention enforcement is now opt-in, not automatic
+  // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
+  try {
+    const retentionService = options?.suppressLoadPolicy ? undefined : this.getRetentionPolicyService();
+    if (retentionService?.shouldEnforceOnLoad()) {
+      // User has explicitly enabled on-load enforcement
+      this.enforceRetentionPolicy();
+      logger.debug(`[Memory] Retention policy enforced on load for "${this.metadata.name}"`, {
+        enforcementMode: 'on_load'
+      });
+    } else if (retentionService?.isEnabled()) {
+      // Retention is enabled but not set to on_load mode - log for visibility
+      logger.debug(`[Memory] Retention is enabled but not enforced on load for "${this.metadata.name}"`, {
+        note: 'Use explicit enforcement command to cleanup expired entries'
+      });
+    }
+    // If retentionService is not configured or disabled, no enforcement happens
+    // This is the safe default - nothing is deleted without explicit consent
+  } catch {
+    // Silently ignore retention policy errors during deserialization
+    // This can happen in test environments where ConfigManager is not initialized,
+    // or when a stale resolver references a disposed service instance
+    // It's safe to skip retention enforcement in these cases - the default is no deletion
+  }
+  }
+
   // Private helper methods
   
   private calculateExpiryDate(): Date {
