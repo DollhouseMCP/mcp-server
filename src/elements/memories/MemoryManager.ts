@@ -664,7 +664,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     await super.save(element, resolvedRelativePath, options);
   }
 
-  private async loadGuardedMemory(filePath: string, suppressLoadPolicy = false): Promise<Memory> {
+  private async loadGuardedMemory(filePath: string, mode: 'public' | 'mutation' = 'public'): Promise<Memory> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
     const contextRoot = this.memoriesDir;
@@ -672,12 +672,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.requireGuardedContext(tenant, contextRoot);
     let locator = filePath;
     if (!isWritableStorageLayer(this.storageLayer)) {
-      const fullPath = await this.resolveMemoryPath(filePath);
+      const fullPath = mode === 'mutation'
+        ? await this.validateAndResolvePath(filePath)
+        : await this.resolveMemoryPath(filePath);
       if (!fullPath) throw new Error(`Could not resolve memory path: ${filePath}`);
       locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
     }
     const snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot);
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy });
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode === 'mutation' });
     memory.setFilePath(locator);
     this.requireGuardedContext(tenant, contextRoot);
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
@@ -706,7 +708,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (matches.length !== 1 || matches[0].name !== name || !matches[0].filePath) {
       throw Object.assign(new Error('Memory name must resolve to one exact owned target'), { code: 'EHEADCONFLICT' });
     }
-    const memory = await this.loadGuardedMemory(matches[0].filePath, true);
+    const memory = await this.loadGuardedMemory(matches[0].filePath, 'mutation');
     this.requireGuardedContext(tenant, contextRoot);
     if (memory.metadata.name !== name) throw Object.assign(new Error('Memory target name changed during lookup'), { code: 'EHEADCONFLICT' });
     return memory;

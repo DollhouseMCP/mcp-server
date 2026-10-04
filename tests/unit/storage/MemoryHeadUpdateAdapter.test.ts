@@ -459,6 +459,35 @@ posix('immediate guarded MCP-AQL mutations', () => {
       expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '2' });
     } finally { await f.cleanup(); }
   });
+  it.each(['addEntry', 'clear'])('mutates the exact discovered root locator for %s despite a system basename shadow', async method => {
+    const f = await fixture();
+    try {
+      const original = await f.owners.readHeadSnapshot('head.yaml');
+      const shadowPath = path.join(f.tenantRoot, 'system', 'head.yaml');
+      await fs.mkdir(path.dirname(shadowPath), { recursive: true });
+      await fs.writeFile(shadowPath, original.content.replace('Owned memory', 'System shadow'));
+      const unowned = await f.owners.readHeadSnapshot('system/head.yaml');
+      if (unowned.token.ownership !== 'unowned') throw new Error('Expected genuine unowned shadow');
+      await f.owners.adoptUnowned(unowned.token);
+      const shadowBefore = await f.owners.readHeadSnapshot('system/head.yaml');
+      const { manager } = f.makeManager();
+      // Public basename loading deliberately retains the existing system-first precedence.
+      expect((await manager.load('head.yaml')).metadata.name).toBe('System shadow');
+      const { dispatch } = guardedHandler(manager);
+      await dispatch(method, { content: 'Exact root append' });
+      const rootAfter = await f.owners.readHeadSnapshot('head.yaml');
+      expect(rootAfter.token).toMatchObject({ revision: '2', locator: 'head.yaml' });
+      if (method === 'addEntry') {
+        expect(rootAfter.content).toContain('Exact root append');
+        expect(rootAfter.content).toContain('Original entry');
+      } else {
+        expect(rootAfter.content).not.toContain('Original entry');
+      }
+      const shadowAfter = await f.owners.readHeadSnapshot('system/head.yaml');
+      expect(shadowAfter.content).toBe(shadowBefore.content);
+      expect(shadowAfter.token).toEqual(shadowBefore.token);
+    } finally { await f.cleanup(); }
+  });
   it('preserves public guarded on-load behavior while named mutation hydration stays quiet', async () => {
     const f = await fixture({}, undefined, true);
     try {
