@@ -11,6 +11,9 @@ import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemor
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { Memory, type MemoryMetadata } from '../../../src/elements/memories/Memory.js';
+import { MemorySearchIndex } from '../../../src/elements/memories/MemorySearchIndex.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
@@ -280,6 +283,27 @@ posix('dormant central owned memory UPDATE', () => {
       const saving = manager.save(memory); enabled = true; release(); await saving;
       expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Original entry');
       expect([...manager.cached('head.yaml')!.getEntries().values()].map(entry => entry.content)).toEqual(['Original entry']);
+    } finally { await f.cleanup(); }
+  });
+  it('publishes a normal runtime copy that indexes and audits subsequent cached appends', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const memory = await manager.load('head.yaml');
+      await manager.save(memory);
+      const cached = manager.cached('head.yaml')!;
+      expect(cached).not.toBe(memory);
+      expect(cached.serialize()).toBe(memory.serialize());
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      const index = jest.spyOn(MemorySearchIndex.prototype, 'addEntry');
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        const entry = await cached.addEntry('Cached normal runtime append', ['runtime']);
+        expect(index).toHaveBeenCalledWith(entry);
+        expect(audit).toHaveBeenCalledWith(expect.objectContaining({ type: MEMORY_SECURITY_EVENTS.MEMORY_ADDED, source: 'Memory.addEntry' }));
+        expect(await cached.search({ query: 'Cached normal runtime append' })).toContainEqual(entry);
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+        expect(memory.getEntries().size).toBe(1);
+      } finally { index.mockRestore(); audit.mockRestore(); }
     } finally { await f.cleanup(); }
   });
   it('rejects a separate process UPDATE using the working instance original token', async () => {

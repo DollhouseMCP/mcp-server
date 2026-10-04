@@ -574,11 +574,32 @@ export class Memory extends BaseElement implements IElement {
 
   /** Deep working-state snapshot for persistence; no load-time validation or retention replay. */
   public createPersistenceCandidate(): Memory {
-    const candidate = this.createAppendCandidate();
-    candidate.metadata = structuredClone(this.metadata);
-    candidate.extensions = structuredClone(this.extensions);
-    candidate.entries = structuredClone(this.entries);
-    return candidate;
+    return this.copyPersistenceState(true);
+  }
+
+  /** Publish captured committed state with normal runtime indexing and audit behavior. */
+  public createRuntimePublication(): Memory {
+    return this.copyPersistenceState(false);
+  }
+
+  private copyPersistenceState(preview: boolean): Memory {
+    const copy = new Memory(this.metadata as MemoryMetadata, this.metadataServiceRef,
+      this._memoryManagerRef, this._retentionPolicyRef, preview);
+    copy.id = this.id;
+    copy.version = this.version;
+    copy.metadata = structuredClone(this.metadata);
+    copy.extensions = structuredClone(this.extensions);
+    copy.instructions = this.instructions;
+    const entries = structuredClone(this.entries);
+    if (preview) copy.entries = entries;
+    else copy.replaceEntries(entries);
+    copy.maxEntries = this.maxEntries;
+    copy.retentionDays = this.retentionDays;
+    copy.privacyLevel = this.privacyLevel;
+    copy.storageBackend = this.storageBackend;
+    copy.searchable = this.searchable;
+    copy.policyRemovedCount = this.policyRemovedCount;
+    return copy;
   }
 
   /** Commit a validated candidate only if no other live mutation intervened. */

@@ -77,6 +77,14 @@ The first head's [required PostgreSQL job](https://github.com/DollhouseMCP/mcp-s
 
 Independent review accepted test blob `e150c4aa00ef154e09739b37ac3edd744e46650d`; test lint passed and scoped repository-settings typing still reports only the inherited TS1205 described above. No local PostgreSQL execution is claimed. The failed full run (168 of 169 suites passed; 3,278 tests passed, one failed, 24 skipped) is retained in `/tmp/2992-4bc6-postgresql-terminal.log`. All six cases and the complete required job must pass on the corrected published head before merge.
 
+### Normal runtime publication correction
+
+Head `0f58a5c4005cf017d10d50137501bce749a67b18` passed all 42 hosted checks and all six new PostgreSQL cases, but its ready-transition Codex review found a [real cached-publication P2](https://github.com/DollhouseMCP/mcp-server/pull/2992#discussion_r4175565824). The cached detached object retained the internal append-preview flag, suppressing later normal indexing and audit events. The PR returned to draft rather than merging that candidate.
+
+The correction creates a normal runtime copy from the detached committed state. A shared private copier preserves deep metadata, extensions and entries, scalar state and service references; persistence previews remain quiet, while the publication copy has normal runtime behavior. It does not deserialize, call `afterLoad`, or replay retention/quarantine. `createAppendCandidate` is unchanged. The new regression reproduces missing index updates on the old implementation and verifies actual cached `addEntry` indexing, audit emission, search, unchanged durable content before another save, and isolation from the original instance after the fix.
+
+All 16 adapter cases and 48 existing Memory cases pass, along with production/scoped unit TypeScript and changed-file lint. Independent review accepted Memory blob `e45d2c3e9c6bac057dcd959ce0ca4f87e5eabee8`, manager blob `2561bf1ca70ff96080d17a3e7f3314bed63d6d2a`, and test blob `b3467627a68545785153931a9829e9abb913018b`. Receipts: `/tmp/2992-runtime-publication-correction-receipt.txt` and `/tmp/2992-runtime-publication-red.log`. All hosted checks and reviews must qualify the updated head; prior passes are historical evidence only.
+
 - `/tmp/2906-local-qualification-receipt.md` and `/tmp/2906-central-update-source-freeze.txt`
 - `/tmp/2906-qualified-adapter-runtime.log`, `/tmp/2906-final-focused-runtime.log`, `/tmp/2906-generic-compatibility.log`
 - `/tmp/2906-final-production-types.log`, `/tmp/2906-qualified-unit-types.log`, `/tmp/2906-qualified-lint.log`, `/tmp/2906-worker-lint.log`

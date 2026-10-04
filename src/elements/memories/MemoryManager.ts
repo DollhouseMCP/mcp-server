@@ -717,7 +717,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       committed = true;
       if ('cause' in outcome) throw outcome.cause;
       // A concurrent caller mutation never becomes the committed cache snapshot.
-      const publication = detached;
+      const publication = detached.createRuntimePublication();
       publication.setFilePath(locator!);
       this.requireGuardedContext(tenant, contextRoot);
       adapter.bindLoaded(publication, { content, token: outcome.token }, publication.metadata.name, contextRoot);
