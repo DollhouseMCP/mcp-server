@@ -901,19 +901,23 @@ export class MemoryManager extends BaseElementManager<Memory> {
     } catch (cause) {
       adapter.recordFailure(element, candidate, original, cause, committed);
       if (adapter.getPendingUpdate(element)?.status === 'refused') {
-        try {
-          this.onSaveError(element, locator!, cause);
-        } catch {
-          try {
-            logger.warn('Memory save failure audit hook threw; original refusal preserved');
-          } catch {
-            // Both audit and warning delivery are best effort; preserve the refusal.
-          }
-        }
+        this.auditRefusedSave(element, locator!, cause);
       }
       throw cause;
     } finally {
       adapter.finishUpdate(element);
+    }
+  }
+
+  private auditRefusedSave(element: Memory, locator: string, cause: unknown): void {
+    try {
+      this.onSaveError(element, locator, cause);
+    } catch {
+      try {
+        logger.warn('Memory save failure audit hook threw; original refusal preserved');
+      } catch {
+        // Both audit and warning delivery are best effort; preserve the refusal.
+      }
     }
   }
 
