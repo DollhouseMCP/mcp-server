@@ -32,6 +32,7 @@ import type { HandlerRegistry } from '../../../src/handlers/mcp-aql/MCPAQLHandle
 import { ContextTracker, type ExecutionContext } from '../../../src/security/encryption/ContextTracker.js';
 import { createUserIdResolver } from '../../../src/database/UserContext.js';
 import { SessionActivationRegistry } from '../../../src/state/SessionActivationState.js';
+import yaml from 'js-yaml';
 const USER = '11111111-1111-4111-8111-111111111111';
 class ObservedManager extends MemoryManager {
   serializeGate?: Promise<void>;
@@ -52,7 +53,8 @@ class ObservedManager extends MemoryManager {
     return super.afterSave(memory, locator);
   }
 }
-async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string, expired = false) {
+async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string, expired = false,
+  transformSeed?: (raw: string) => string) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-central-owned-'));
   const metadataService = new MetadataService();
   const lock = new FileLockManager();
@@ -74,6 +76,10 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
   try {
     await ordinary.save(memory, 'head.yaml');
     const tenantRoot = await fs.realpath(path.join(root, 'memories'));
+    if (transformSeed) {
+      const seedPath = path.join(tenantRoot, 'head.yaml');
+      await fs.writeFile(seedPath, transformSeed(await fs.readFile(seedPath, 'utf8')));
+    }
     const fence = new FileMemoryFence();
     const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: currentTenant, fence });
     const owners = new FileMemoryOwnerSnapshots({ coordinator });
@@ -811,6 +817,102 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
 }
 
 posix('guarded console existing-owner UPDATE', () => {
+  it.each([
+    {format: 'nested YAML', nested: true, frontmatter: false, persistedEntries: true},
+    {format: 'flat YAML', nested: false, frontmatter: false, persistedEntries: true},
+    {format: 'nested frontmatter with entries and Markdown', nested: true, frontmatter: true, persistedEntries: true},
+    {format: 'flat frontmatter with entries and Markdown', nested: false, frontmatter: true, persistedEntries: true},
+    {format: 'frontmatter with only a Markdown body', nested: false, frontmatter: true, persistedEntries: false},
+    {format: 'frontmatter without entries or a body', nested: false, frontmatter: true, persistedEntries: false, emptyBody: true},
+  ])('preserves same-read content and ETag preconditions for $format metadata edits', async ({nested, frontmatter, persistedEntries, emptyBody}) => {
+    const body = emptyBody ? '' : '# Legacy memory\n\nRemember the original Markdown body.';
+    let identity: string | undefined;
+    const f = await fixture({maxEntries: 1, onFull: 'error'}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {metadata: Record<string, unknown>};
+      identity = definition.metadata.unique_id as string;
+      definition.metadata.custom = {nested: {value: 'metadata retained'}};
+      if (!persistedEntries) delete definition.entries;
+      const {metadata, ...auxiliary} = definition;
+      const serialized = yaml.dump(nested ? definition : {...metadata, ...auxiliary}, {lineWidth: -1, noRefs: true});
+      return frontmatter ? `---\n${serialized}---\n\n${body}\n` : serialized;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(before).not.toBeNull();
+      if (frontmatter) expect(before!.content.trim()).toBe(body);
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      await expect(store.update({...input, expectedContentHash: 'stale', metadata: {description: 'Refused'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(write).not.toHaveBeenCalled();
+      const find = jest.spyOn(manager, 'findGuardedMemoryForUpdate');
+      const imported = jest.spyOn(manager, 'importElement');
+      const response = await store.update({...input, expectedContentHash: before!.contentHash,
+        metadata: {description: 'Metadata edit', maxEntries: 3}});
+      const found = find.mock.results[0];
+      if (found.type !== 'return') throw new Error('Expected captured memory lookup');
+      const observed = await found.value;
+      expect(write).toHaveBeenCalledTimes(1); expect(imported).not.toHaveBeenCalled();
+      const loaded = await manager.load('head.yaml');
+      const persisted = yaml.load(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')) as {metadata: Record<string, unknown>};
+      expect(loaded.metadata.description).toBe('Metadata edit');
+      expect(persisted.metadata.unique_id).toBe(identity);
+      expect(persisted.metadata.custom).toEqual({nested: {value: 'metadata retained'}});
+      expect(loaded.instructions).toBe('Original instructions');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      const entries = [...loaded.getEntries().values()];
+      expect(entries).toHaveLength(Number(persistedEntries) + Number(frontmatter && !emptyBody));
+      if (persistedEntries) expect(entries.find(entry => entry.content === 'Original entry')).toBeDefined();
+      if (frontmatter && !emptyBody) {
+        const capturedBody = [...observed!.memory.getEntries().values()].find(entry => entry.content === body)!;
+        expect(capturedBody).toBeDefined();
+        expect(entries.find(entry => entry.id === capturedBody.id)).toEqual(capturedBody);
+        expect(observed!.memory.metadata.description).toBe('Original description');
+      }
+      expect(response!.metadata.description).toBe('Metadata edit');
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(response!.contentHash);
+      await store.update({...input, expectedContentHash: response!.contentHash, metadata: {description: 'Second metadata edit'}});
+      expect((await manager.load('head.yaml')).getEntries().size).toBe(entries.length);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['invalid', 'duplicate'])('retains %s raw frontmatter array entries for strict replacement refusal', async kind => {
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {entries: unknown[]};
+      definition.entries.push(kind === 'duplicate' ? definition.entries[0] : {id: 'invalid'});
+      return `---\n${yaml.dump(definition, {noRefs: true})}---\n\n# Preserved body\n`;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Must refuse'}})).rejects.toThrow('Replacement contains invalid or duplicate entries');
+      expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(raw);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it.each([null, 'invalid entries', {content: 'Not an array'}])('refuses frontmatter with explicit malformed entries %j before any owned write', async entries => {
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown>;
+      return `---\n${yaml.dump({...definition, entries})}---\n\n# Preserved body\n`;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Must refuse'}})).rejects.toThrow('Incomplete memory baseline');
+      expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(raw);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
   it('updates through same-read ETag and preserves complete state with coherent runtime config', async () => {
     const f = await fixture();
     try {

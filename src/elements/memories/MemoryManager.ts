@@ -137,6 +137,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   private readonly _localActiveMemoryNames: Set<string> = new Set();
+  private readonly loadedMarkdownBodyIds = new WeakMap<Memory, string>();
 
   constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
@@ -414,8 +415,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (parsedData.content.trim()) {
       // Loading existing bytes must not apply append-time capacity or retention
       // policy: a full memory may be read-only, but its body is still data.
-      memory.appendLoadedMarkdownBody(parsedData.content.trim());
+      this.appendLoadedMarkdownBody(memory, parsedData.content.trim());
     }
+  }
+
+  private appendLoadedMarkdownBody(memory: Memory, content: string): void {
+    const existingIds = new Set(memory.getEntries().keys());
+    memory.appendLoadedMarkdownBody(content);
+    const appended = [...memory.getEntries().values()].filter(entry => !existingIds.has(entry.id));
+    if (appended.length === 1) this.loadedMarkdownBodyIds.set(memory, appended[0].id);
   }
 
   /**
@@ -720,7 +728,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /** Fresh console spelling resolution; cached/list bytes never acquire authority. */
-  async findGuardedMemoryForUpdate(name: string, expectedUserId: string): Promise<Readonly<{memory: Memory; content: string; locator: string}> | undefined> {
+  async findGuardedMemoryForUpdate(name: string, expectedUserId: string): Promise<Readonly<{memory: Memory; content: string; locator: string; replacementBaseline: Record<string, unknown>}> | undefined> {
     const tenant = this.captureGuardedTenant();
     const contextRoot = this.memoriesDir;
     if (tenant !== expectedUserId) throw Object.assign(new Error('Memory request tenant mismatch'), {code: 'EHEADCONFLICT'});
@@ -732,14 +740,37 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const observed = await this.readGuardedMemory(matches[0].filePath, 'mutation');
     this.requireGuardedContext(tenant, contextRoot);
     if (observed.memory.metadata.name !== matches[0].name) throw Object.assign(new Error('Memory name changed during lookup'), {code: 'EHEADCONFLICT'});
-    const parsed = this.parseContent(observed.content).data;
+    const definition = this.parseContent(observed.content);
+    const parsed = definition.data;
     const metadata = parsed.metadata && typeof parsed.metadata === 'object' ? parsed.metadata as Record<string, unknown> : parsed;
     if (metadata.unique_id !== undefined) {
       if (typeof metadata.unique_id !== 'string' || !metadata.unique_id) throw new Error('Invalid persisted memory identity');
       observed.memory.id = metadata.unique_id;
       (observed.memory.metadata as MemoryMetadata & {unique_id?: string}).unique_id = metadata.unique_id;
     }
-    return observed;
+    const replacementBaseline = this.guardedReplacementBaseline(observed.memory, observed.content, definition);
+    return Object.freeze({...observed, replacementBaseline});
+  }
+
+  private guardedReplacementBaseline(memory: Memory, raw: string,
+    definition: {data: Record<string, unknown>; content: string}): Record<string, unknown> {
+    const baseline = structuredClone(definition.data);
+    if (!this.serializationService.hasFrontmatter(raw)) return baseline;
+    if (!Object.hasOwn(baseline, 'entries')) baseline.entries = [];
+    // Preserve malformed fields for UPDATE validation without changing GET.
+    if (!Array.isArray(baseline.entries)) return baseline;
+    if (definition.content.trim()) {
+      // afterLoad appended this body entry to the same-read working object.
+      // Keep raw persisted entries so replacement validation still refuses
+      // malformed/duplicate entries rather than silently dropping them.
+      const bodyId = this.loadedMarkdownBodyIds.get(memory);
+      const bodyEntry = bodyId === undefined ? undefined : memory.getEntries().get(bodyId);
+      if (!bodyEntry || bodyEntry.source !== 'file') {
+        throw new Error('Missing hydrated memory markdown body');
+      }
+      baseline.entries.push(JSON.parse(JSON.stringify(bodyEntry)));
+    }
+    return baseline;
   }
 
   /** Derive before parsing/validation awaits; never bind an imported replacement. */
@@ -750,7 +781,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     });
     if (!validateMemoryControlFields(parsed)) throw new Error('Invalid replacement control fields');
     const metadata = parsed.metadata as MemoryMetadata & {unique_id?: unknown};
-    if (!metadata || metadata.name !== source.metadata.name ||
+    if (metadata?.name !== source.metadata.name ||
       metadata.unique_id !== (source.metadata as MemoryMetadata & {unique_id?: unknown}).unique_id ||
       !Array.isArray(parsed.entries)) throw new Error('Replacement must preserve memory identity and complete entries');
     candidate.applyPersistenceReplacement(metadata, parsed.entries, parsed.extensions, parsed.instructions);

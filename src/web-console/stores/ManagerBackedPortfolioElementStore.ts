@@ -242,7 +242,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       this.guardedOperations.set(targetKey, Object.freeze({status: 'preparing', manager}));
       const baseline = await this.toRecord(captured.userId, 'memories', target.memory, false, target.content);
       this.assertExpectedHash(captured.expectedContentHash, baseline);
-      candidate = await manager.prepareGuardedMemoryReplacement(target.memory, guardedMemoryYaml(captured, target.content, target.memory.metadata.name));
+      candidate = await manager.prepareGuardedMemoryReplacement(target.memory, guardedMemoryYaml(captured, target.replacementBaseline, target.memory.metadata.name));
       const submitted = await this.rawContentFor('memories', candidate);
       const response = clonePortfolioElementDetailRecord(await this.toRecord(captured.userId, 'memories', candidate, false, submitted));
       this.requireGuardedContext(captured.userId, manager, tenant);
@@ -252,24 +252,30 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       this.requireGuardedContext(captured.userId, manager, tenant);
       return response;
     } catch (cause) {
-      if (candidate && dispatched) {
-        const pending = manager.getPendingHeadUpdate(candidate);
-        const status: PendingConsoleMemoryUpdate['status'] = committed || pending?.status === 'committed-publication-failed' ? 'committed-publication-failed'
-          : pending?.status === 'unknown' ? 'unknown' : 'refused';
-        const retained = Object.freeze({status, candidate, manager, cause});
-        this.guardedOperations.set(requestKey, retained);
-        if (targetKey) this.guardedOperations.set(targetKey, retained);
-      }
-      const code = (cause as NodeJS.ErrnoException | null)?.code;
-      if (candidate && dispatched && manager.getPendingHeadUpdate(candidate)?.status === 'refused' &&
-        (code === 'ESTALE' || code === 'EHEADCONFLICT' || code === 'ECONTENTCONFLICT')) throw new PortfolioElementVersionConflictError();
-      throw cause;
+      throw this.retainGuardedFailure(manager, candidate, dispatched, committed, requestKey, targetKey, cause);
     } finally {
       if (this.guardedOperations.get(requestKey)?.status === 'preparing') {
         this.guardedOperations.delete(requestKey);
         if (targetKey) this.guardedOperations.delete(targetKey);
       }
     }
+  }
+
+  /** Preserve genuine commit precedence and original evidence before wrapping a stale refusal. */
+  private retainGuardedFailure(manager: MemoryManager, candidate: Memory | undefined, dispatched: boolean,
+    committed: boolean, requestKey: string, targetKey: string | undefined, cause: unknown): unknown {
+    if (!candidate || !dispatched) return cause;
+    const pending = manager.getPendingHeadUpdate(candidate);
+    let status: PendingConsoleMemoryUpdate['status'] = 'refused';
+    if (committed || pending?.status === 'committed-publication-failed') status = 'committed-publication-failed';
+    else if (pending?.status === 'unknown') status = 'unknown';
+    const retained = Object.freeze({status, candidate, manager, cause});
+    this.guardedOperations.set(requestKey, retained);
+    if (targetKey) this.guardedOperations.set(targetKey, retained);
+    const code = (cause as NodeJS.ErrnoException | null)?.code;
+    if (manager.getPendingHeadUpdate(candidate)?.status === 'refused' &&
+      (code === 'ESTALE' || code === 'EHEADCONFLICT' || code === 'ECONTENTCONFLICT')) return new PortfolioElementVersionConflictError();
+    return cause;
   }
 
   private manager(type: ConsolePortfolioElementType): PortfolioElementManager {
@@ -389,9 +395,8 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   }
 }
 
-function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, raw: string, name: string): string {
+function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: Record<string, unknown>, name: string): string {
   if (input.displayName !== undefined && input.displayName !== name) throw new Error('Guarded memory rename is unavailable');
-  const baseline = SecureYamlParser.parseRawYaml(raw, {maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES, schema: 'json', contentPolicy: 'structure-only'});
   if (!isRecord(baseline) || !Array.isArray(baseline.entries)) throw new Error('Incomplete memory baseline');
   const originalMetadata = isRecord(baseline.metadata) ? baseline.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(baseline)).filter(([key]) => key !== 'instructions'));
   const result = structuredClone(baseline);
