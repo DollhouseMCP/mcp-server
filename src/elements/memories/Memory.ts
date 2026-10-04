@@ -587,10 +587,13 @@ export class Memory extends BaseElement implements IElement {
     if (!this.appendCandidate) throw new Error('Replacement requires a persistence preview');
     const configured = new Memory(structuredClone(metadata), this.metadataServiceRef,
       this._memoryManagerRef, this._retentionPolicyRef, true);
-    configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: this.version,
-      metadata, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
+    configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: configured.version,
+      metadata: {...metadata, version: configured.version}, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
     if (configured.entriesSize !== entries.length) throw new Error('Replacement contains invalid or duplicate entries');
     if (instructions !== undefined && typeof instructions !== 'string') throw new Error('Invalid memory instructions');
+    const validation = configured.validate();
+    if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
+    this.version = configured.version;
     this.metadata = structuredClone(configured.metadata);
     this.extensions = structuredClone(configured.extensions);
     this.entries = structuredClone(configured.entries);

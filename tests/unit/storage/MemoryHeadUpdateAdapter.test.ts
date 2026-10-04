@@ -817,6 +817,72 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
 }
 
 posix('guarded console existing-owner UPDATE', () => {
+  it.each([
+    {fullReplacement: false, version: 'invalid'},
+    {fullReplacement: true, version: 'invalid'},
+    {fullReplacement: false, version: '1.0.0-!'},
+    {fullReplacement: true, version: '1.0.0-!'},
+  ])('refuses invalid persisted version $version before dispatch for full replacement=$fullReplacement', async ({fullReplacement, version}) => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const definition = yaml.load(snapshot.content) as {entries: unknown[]};
+      let source: Memory | undefined; let sourceState: string | undefined;
+      const find = manager.findGuardedMemoryForUpdate.bind(manager);
+      const lookup = jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+        const target = await find(...args);
+        source = target?.memory; sourceState = source?.serialize();
+        return target;
+      });
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const content = fullReplacement ? yaml.dump({metadata: {version}, entries: definition.entries}) : undefined;
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), content,
+        metadata: fullReplacement ? {description: 'Invalid full replacement'} : {version}})).rejects.toThrow('Version');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+      expect(source!.version).toBe('1.0.0'); expect(source!.validate().valid).toBe(true);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(before!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([
+    {fullReplacement: false, version: '02.3', expected: '2.3.0'},
+    {fullReplacement: true, version: '02.3', expected: '2.3.0'},
+    {fullReplacement: false, version: undefined, expected: '1.0.0'},
+    {fullReplacement: true, version: undefined, expected: '1.0.0'},
+  ])('keeps persisted version $version coherent for full replacement=$fullReplacement', async ({fullReplacement, version, expected}) => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const definition = yaml.load(snapshot.content) as {entries: unknown[]};
+      const metadata = version === undefined ? {description: 'Omitted version edit'} : {version};
+      const content = fullReplacement ? yaml.dump({metadata, entries: definition.entries}) : undefined;
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), content, metadata: fullReplacement ? undefined : metadata});
+      const publication = manager.cached('head.yaml')!;
+      const persisted = await f.owners.readHeadSnapshot('head.yaml');
+      const raw = yaml.load(persisted.content) as {metadata: Record<string, unknown>; entries: unknown[]};
+      expect(publication.version).toBe(expected); expect(publication.metadata.version).toBe(expected);
+      expect(JSON.parse(publication.serialize()).version).toBe(expected);
+      expect(raw.metadata.version).toBe(expected); expect(response!.metadata.version).toBe(expected);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(response!.contentHash);
+      expect(raw.entries).toEqual(definition.entries);
+      expect(raw.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect(publication.instructions).toBe('Original instructions');
+      expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      const reloaded = await f.makeManager().manager.load('head.yaml');
+      expect(reloaded.version).toBe(expected); expect(reloaded.metadata.version).toBe(expected);
+      expect(reloaded.validate().valid).toBe(true);
+    } finally {await f.cleanup();}
+  });
+
   it.each([false, true])('keeps legacy config precedence in the committed publication for full replacement=%s', async fullReplacement => {
     let originalEntries: unknown[] = [];
     const f = await fixture({maxEntries: 3, onFull: 'error'}, undefined, false, raw => {
