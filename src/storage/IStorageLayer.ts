@@ -40,8 +40,12 @@ export interface IStorageLayer {
    *   (default), results are scoped to the current user. Implementations that
    *   don't support public content (e.g. legacy file-mode layouts with no
    *   shared directory) ignore the flag and return only own content.
+   * preserveDuplicates keeps every locator instead of normal name deduplication.
+   * freshMetadata rereads current file names without relying on cached mtimes;
+   * discovery/read failures refuse. Database implementations already query fresh rows.
+   * These summaries discover locators, not atomic ownership or write authority.
    */
-  listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]>;
+  listSummaries(options?: { includePublic?: boolean; preserveDuplicates?: boolean; freshMetadata?: boolean }): Promise<ElementIndexEntry[]>;
 
   /**
    * Trigger scan and return all indexed file paths.

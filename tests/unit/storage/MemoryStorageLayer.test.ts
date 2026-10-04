@@ -898,3 +898,34 @@ entries:
     });
   });
 });
+
+describe('guarded fresh metadata discovery', () => {
+  it.each(['discover', 'enumerate', 'read', 'stat'])('propagates %s failures rather than returning a partial inventory', async step => {
+    const fileOps = makeMockFileOps(); const backend = createMockBackend();
+    const cause = Object.assign(new Error(`Controlled ${step} failure`), { code: 'EIO' });
+    (backend.listFiles as jest.Mock<any>).mockResolvedValue(['head.yaml']);
+    if (step === 'discover') (fileOps.listDirectory as jest.Mock<any>).mockRejectedValue(cause);
+    if (step === 'enumerate') (backend.listFiles as jest.Mock<any>).mockRejectedValue(cause);
+    if (step === 'read') (backend.readFile as jest.Mock<any>).mockRejectedValue(cause);
+    if (step === 'stat') (backend.stat as jest.Mock<any>).mockRejectedValue(cause);
+    const layer = new MemoryStorageLayer(fileOps, { memoriesDir: MEMORIES_DIR, storageBackend: backend });
+    try {
+      await expect(layer.listSummaries({ freshMetadata: true, preserveDuplicates: true })).rejects.toBe(cause);
+      expect(fileOps.writeFile).not.toHaveBeenCalled();
+    } finally { await layer.dispose(); }
+  });
+  it('pins its root through awaits and preserves duplicate observations without index writes', async () => {
+    const fileOps = makeMockFileOps(); const backend = createMockBackend(); let root = MEMORIES_DIR;
+    (fileOps.listDirectory as jest.Mock<any>).mockImplementation(async () => { root = '/other-user'; return []; });
+    (backend.listFiles as jest.Mock<any>).mockResolvedValue(['first.yaml', 'second.yaml']);
+    (backend.readFile as jest.Mock<any>).mockResolvedValue(makeYaml('duplicate'));
+    const layer = new MemoryStorageLayer(fileOps, { memoriesDir: MEMORIES_DIR, memoriesDirResolver: () => root, storageBackend: backend });
+    try {
+      const entries = await layer.listSummaries({ freshMetadata: true, preserveDuplicates: true });
+      expect(entries.map(entry => entry.name)).toEqual(['duplicate', 'duplicate']);
+      expect(backend.listFiles).toHaveBeenCalledWith(MEMORIES_DIR, '.yaml');
+      expect((backend.readFile as jest.Mock<any>).mock.calls.map(([value]) => value)).toEqual([`${MEMORIES_DIR}/first.yaml`, `${MEMORIES_DIR}/second.yaml`]);
+      expect(fileOps.writeFile).not.toHaveBeenCalled();
+    } finally { await layer.dispose(); }
+  });
+});

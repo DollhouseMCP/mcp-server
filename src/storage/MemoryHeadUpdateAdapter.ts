@@ -25,6 +25,7 @@ interface BoundState {
   contextRoot: string;
   busy: boolean;
   unknown: boolean;
+  lineage: { unresolved: boolean };
   pending?: PendingMemoryUpdate;
 }
 export type MemoryUpdateOutcome = { status: 'committed'; token: MemoryUpdateToken; cause?: unknown } |
@@ -66,15 +67,32 @@ export class MemoryHeadUpdateAdapter {
   bindLoaded(memory: object, snapshot: MemoryUpdateSnapshot, name: string, contextRoot: string): void {
     this.requireTenant(snapshot.token.userId);
     if ('name' in snapshot.token && snapshot.token.name !== name) throw refusal('Memory name does not match its owner snapshot');
-    this.bindings.set(memory, { token: copyToken(snapshot.token), name, contextRoot, busy: false, unknown: false });
+    this.bindings.set(memory, { token: copyToken(snapshot.token), name, contextRoot, busy: false, unknown: false, lineage: { unresolved: false } });
   }
+  /** Internal manager derivation: no refreshed read and no advancement of source authority. */
+  deriveBinding(source: object, candidate: object, tenant: string, locator: string | undefined, name: string, contextRoot: string): void {
+    this.requireTenant(tenant);
+    const state = this.requiredState(source);
+    if (state.busy || state.unknown || state.lineage.unresolved || state.token.userId !== tenant ||
+      state.token.locator !== locator || state.name !== name || state.contextRoot !== contextRoot || this.bindings.has(candidate)) {
+      throw refusal('Cannot derive a current owned memory mutation');
+    }
+    this.bindings.set(candidate, { ...state, token: copyToken(state.token), busy: false, pending: undefined });
+  }
+
+  /** A committed publication shares unresolved sibling state without changing source bytes/token. */
+  bindPublication(publication: object, committed: object): void {
+    const state = this.requiredState(committed);
+    this.bindings.set(publication, { ...state, token: copyToken(state.token), busy: false, pending: undefined });
+  }
+
   beginUpdate(memory: object, tenant: string, locator: string | undefined, name: string, contextRoot: string): MemoryUpdateToken {
     this.requireTenant(tenant);
     const state = this.bindings.get(memory);
     if (state?.token.userId !== tenant || state.token.locator !== locator || state.name !== name || state.contextRoot !== contextRoot) {
       throw refusal('UPDATE requires original instance ownership, name and locator');
     }
-    if (state.busy || state.unknown) throw refusal('Memory has an in-flight or unresolved update');
+    if (state.busy || state.unknown || state.lineage.unresolved) throw refusal('Memory has an in-flight or unresolved update');
     state.busy = true;
     state.pending = undefined;
     return state.token;
@@ -84,6 +102,7 @@ export class MemoryHeadUpdateAdapter {
     const captured = copyCandidate(candidate);
     const originalToken = state.token;
     this.requireTenant(tenant);
+    if (state.lineage.unresolved) throw refusal('Memory has an unresolved related update');
     try {
       const token = this.port.backend === 'database'
         ? await this.port.store.writeHeadIfCurrent(originalToken as MemoryHeadToken, captured.name, captured.content, captured.metadata)
@@ -99,6 +118,7 @@ export class MemoryHeadUpdateAdapter {
       }
       const status = error?.residual !== true && refusalCodes.has(error?.code ?? '') ? 'refused' : 'unknown';
       state.unknown = status === 'unknown';
+      if (state.unknown) state.lineage.unresolved = true;
       state.pending = Object.freeze({ status, candidate: captured, originalToken, cause });
       return { status, cause };
     }

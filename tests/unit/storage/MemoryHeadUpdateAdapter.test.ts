@@ -25,6 +25,9 @@ import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatch
 import { MetadataService } from '../../../src/services/MetadataService.js';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 import type { ElementManagerDeps } from '../../../src/elements/base/BaseElementManager.js';
+import { MemorySaveHandler } from '../../../src/handlers/mcp-aql/MemorySaveHandler.js';
+import type { HandlerRegistry } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { ExecutionContext } from '../../../src/security/encryption/ContextTracker.js';
 const USER = '11111111-1111-4111-8111-111111111111';
 class ObservedManager extends MemoryManager {
   serializeGate?: Promise<void>;
@@ -45,7 +48,7 @@ class ObservedManager extends MemoryManager {
     return super.afterSave(memory, locator);
   }
 }
-async function fixture() {
+async function fixture(seedMetadata: Partial<MemoryMetadata> = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-central-owned-'));
   const metadataService = new MetadataService();
   const lock = new FileLockManager();
@@ -58,7 +61,7 @@ async function fixture() {
   const managers: MemoryManager[] = [];
   const ordinary = new MemoryManager(deps); managers.push(ordinary);
   const memory = new Memory({ name: 'Owned memory', description: 'Original description', retentionDays: 36500,
-    tags: ['original'], autoLoad: true, priority: 3 }, metadataService);
+    tags: ['original'], autoLoad: true, priority: 3, ...seedMetadata }, metadataService);
   memory.instructions = 'Original instructions';
   memory.extensions = { nested: { value: 'original' } };
   await memory.addEntry('Original entry', ['original'], { nested: { value: 'original' } });
@@ -335,6 +338,267 @@ posix('dormant central owned memory UPDATE', () => {
     }
   });
 });
+async function externalOwnedUpdate(tenantRoot: string): Promise<void> {
+  const worker = new URL('../../fixtures/memory-head-update-worker.ts', import.meta.url);
+  const child = spawn(process.execPath, ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href, worker.pathname, tenantRoot, USER], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let code: number | null = null, output = '', error = '', spawnFailure: Error | undefined;
+  child.once('error', cause => { spawnFailure = cause; });
+  child.stdout.on('data', chunk => { output = (output + String(chunk)).slice(0, 1024); });
+  child.stderr.on('data', chunk => { error = (error + String(chunk)).slice(0, 4096); });
+  const closed = new Promise<void>(resolve => child.once('close', value => { code = value; resolve(); }));
+  const guard = setTimeout(() => child.kill('SIGKILL'), 5000);
+  try { await closed; expect(spawnFailure).toBeUndefined(); expect({ code, output, error }).toEqual({ code: 0, output: 'CHILD_COMMITTED\n', error: '' }); }
+  finally { clearTimeout(guard); if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await closed; }
+}
+
+function guardedHandler(manager: MemoryManager) {
+  let context: ExecutionContext = { type: 'test', timestamp: Date.now(), session: {
+    userId: USER, sessionId: 'guarded-session', tenantId: null, transport: 'http', createdAt: Date.now(),
+  } };
+  const handler = new MemorySaveHandler({ memoryManager: manager } as unknown as HandlerRegistry,
+    name => `legacy:${name}`, { getContext: () => context });
+  const dispatch = (method: string, params: Record<string, unknown> = {}) => handler.dispatch(method, { element_name: 'Owned memory', ...params });
+  return { handler, dispatch, setContext: (value: ExecutionContext) => { context = value; } };
+}
+
+posix('immediate guarded MCP-AQL mutations', () => {
+  it('awaits real append and clear commits without legacy writers or debounce', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const { handler, dispatch } = guardedHandler(manager);
+      const legacy = jest.spyOn(FileOperationsService.prototype, 'writeFile');
+      const timer = jest.spyOn(globalThis, 'setTimeout');
+      try {
+        const result = await dispatch('addEntry', { content: 'Durable handler append', tags: ['handler'] });
+        expect(result).toMatchObject({ id: expect.any(String), timestamp: expect.any(String), trustLevel: 'untrusted' });
+        let snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        expect(snapshot.content).toContain('Durable handler append');
+        expect(snapshot.content).toContain('Original instructions');
+        expect(snapshot.content).toContain('Original description');
+        expect(snapshot.content).toContain('nested:');
+        expect(snapshot.token).toMatchObject({ revision: '2' });
+        expect(handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
+        await dispatch('clear');
+        snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        expect(snapshot.content).not.toContain('Durable handler append');
+        expect(snapshot.content).not.toContain('Original entry');
+        expect(snapshot.content).toContain('Original instructions');
+        expect(snapshot.token).toMatchObject({ revision: '3' });
+        expect(legacy.mock.calls.every(([destination]) => destination.endsWith('_index.json'))).toBe(true);
+        // Discovery/index publication may write _index.json; no legacy head write is allowed.
+        // Backend fencing can schedule timers; guarded handler has no pending debounce.
+        expect((handler as unknown as { pendingSaves: Map<string, unknown> }).pendingSaves.size).toBe(0);
+        const count = timer.mock.calls.length;
+        await handler.flushPendingSaves();
+        expect(timer.mock.calls.length).toBe(count);
+      } finally { legacy.mockRestore(); timer.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
+  it.each(['addEntry', 'clear'])('emits no %s mutation audit before durable qualification', async method => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const { dispatch } = guardedHandler(manager);
+      let reached!: () => void, release!: () => void;
+      const atBarrier = new Promise<void>(resolve => { reached = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const original = manager.assertPersistable.bind(manager);
+      const validation = jest.spyOn(manager, 'assertPersistable').mockImplementation(async memory => { reached(); await gate; return original(memory); });
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const pending = dispatch(method, { content: 'Held mutation' });
+      try {
+        await atBarrier;
+        expect(audit.mock.calls.some(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_ADDED || event.type === MEMORY_SECURITY_EVENTS.MEMORY_CLEARED)).toBe(false);
+        expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '1' });
+      } finally { release(); await pending; validation.mockRestore(); audit.mockRestore(); }
+      expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '2' });
+    } finally { await f.cleanup(); }
+  });
+  it('publishes policy-removal audit only with a genuine durable eviction', async () => {
+    const f = await fixture({ maxEntries: 1, onFull: 'evict_oldest' });
+    try {
+      const { manager } = f.makeManager(); const { dispatch } = guardedHandler(manager);
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        const response = await dispatch('addEntry', { content: 'Durable evicting append' });
+        expect(response).toMatchObject({ warning: expect.any(String) });
+        expect(audit).toHaveBeenCalledWith(expect.objectContaining({ type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED,
+          source: 'MemorySaveHandler.guardedMutation', details: 'Durably removed 1 entries by retention or onFull policy' }));
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        expect(snapshot.content).toContain('Durable evicting append'); expect(snapshot.content).not.toContain('Original entry');
+      } finally { audit.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
+  it.each(['addEntry', 'clear'])('refuses stale %s after actual separate-process interference and retains evidence', async method => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const { handler, dispatch } = guardedHandler(manager);
+      let reached!: () => void, release!: () => void;
+      const atBarrier = new Promise<void>(resolve => { reached = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const original = manager.assertPersistable.bind(manager);
+      const validation = jest.spyOn(manager, 'assertPersistable').mockImplementation(async candidate => { reached(); await gate; return original(candidate); });
+      const saving = dispatch(method, { content: 'Stale handler append' });
+      const rejected = expect(saving).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      try { await atBarrier; await externalOwnedUpdate(f.tenantRoot); }
+      finally { release(); await rejected; validation.mockRestore(); }
+      const operation = handler.getPendingGuardedMutation('Owned memory');
+      expect(operation?.status).toBe('refused');
+      expect(operation?.candidate).toBeDefined();
+      expect(manager.getPendingHeadUpdate(operation!.candidate!)?.candidate?.content).toBeDefined();
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      expect(snapshot.content).toContain('External description'); expect(snapshot.content).toContain('Original entry');
+      expect(snapshot.content).not.toContain('Stale handler append');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await handler.flushPendingSaves(); handler.cleanupSession('guarded-session');
+      await expect(dispatch('clear')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(write).not.toHaveBeenCalled();
+    } finally { await f.cleanup(); }
+  });
+  it('refuses a same-mtime rename-to-duplicate rather than trusting indexed metadata', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager();
+      const content = (await f.owners.readHeadSnapshot('head.yaml')).content;
+      const duplicate = path.join(f.tenantRoot, 'same-mtime.yaml');
+      const fixed = new Date('2020-01-01T00:00:00Z');
+      await fs.writeFile(duplicate, content.replace('Owned memory', 'Other memory'));
+      await fs.utimes(duplicate, fixed, fixed);
+      await manager.loadGuardedMemoryByName('Owned memory', USER);
+      const before = await fs.stat(duplicate);
+      await fs.writeFile(duplicate, content); await fs.utimes(duplicate, fixed, fixed);
+      expect((await fs.stat(duplicate)).mtimeMs).toBe(before.mtimeMs);
+      await expect(manager.loadGuardedMemoryByName('Owned memory', USER)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '1' });
+    } finally { await f.cleanup(); }
+  });
+  it('rejects actual duplicate-name inventory and never retokenizes cached content', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const loaded = await manager.load('head.yaml');
+      await manager.save(loaded); const cached = manager.cached('head.yaml');
+      await externalOwnedUpdate(f.tenantRoot);
+      const fresh = await manager.loadGuardedMemoryByName('Owned memory', USER);
+      expect(fresh).not.toBe(cached); expect(fresh.metadata.description).toBe('External description');
+      expect(cached?.metadata.description).toBe('Original description');
+      await fs.copyFile(path.join(f.tenantRoot, 'head.yaml'), path.join(f.tenantRoot, 'duplicate.yaml'));
+      await expect(manager.loadGuardedMemoryByName('Owned memory', USER)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+    } finally { await f.cleanup(); }
+  });
+  it('claims the case-collision slot before lookup and releases preparation failures', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const { handler, dispatch } = guardedHandler(manager);
+      let reached!: () => void, release!: () => void;
+      const atBarrier = new Promise<void>(resolve => { reached = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const original = manager.loadGuardedMemoryByName.bind(manager);
+      const lookup = jest.spyOn(manager, 'loadGuardedMemoryByName').mockImplementation(async (...args) => { reached(); await gate; return original(...args); });
+      const first = dispatch('addEntry', { content: 'First claimed request' });
+      try {
+        await atBarrier;
+        await expect(handler.dispatch('clear', { element_name: 'owned MEMORY' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+        expect(lookup).toHaveBeenCalledTimes(1);
+      } finally { release(); await first; lookup.mockRestore(); }
+      await expect(handler.dispatch('addEntry', { element_name: 'Missing', content: 'No target' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(handler.getPendingGuardedMutation('Missing')).toBeUndefined();
+      await expect(dispatch('addEntry', { content: '' })).rejects.toThrow();
+      expect(handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
+      await dispatch('addEntry', { content: 'Next accepted request' });
+    } finally { await f.cleanup(); }
+  });
+  it('keeps candidate and source authority independent under both CAS orders', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const source = await manager.load('head.yaml');
+      const candidate = manager.deriveGuardedMutation(source);
+      await candidate.addEntry('Candidate winner'); await manager.save(candidate);
+      expect(source.getEntries().size).toBe(1);
+      await source.addEntry('Stale source edit');
+      await expect(manager.save(source)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      const fresh = await manager.load('head.yaml');
+      const stale = manager.deriveGuardedMutation(fresh);
+      await stale.addEntry('Losing candidate');
+      await fresh.addEntry('Source winner'); await manager.save(fresh);
+      await expect(manager.save(stale)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      const actual = await f.owners.readHeadSnapshot('head.yaml');
+      expect(actual.content).toContain('Candidate winner'); expect(actual.content).toContain('Source winner');
+      expect(actual.content).not.toContain('Stale source edit'); expect(actual.content).not.toContain('Losing candidate');
+    } finally { await f.cleanup(); }
+  });
+  it('blocks source and prederived siblings after unknown without clearing lineage on late success', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const source = await manager.load('head.yaml');
+      const unknown = manager.deriveGuardedMutation(source), late = manager.deriveGuardedMutation(source), blocked = manager.deriveGuardedMutation(source);
+      const original = f.owners.updateOwnedHead.bind(f.owners);
+      let reached!: () => void, release!: () => void;
+      const atBarrier = new Promise<void>(resolve => { reached = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let call = 0;
+      const cause = new Error('Unknown backend transport');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead').mockImplementation(async (...args) => {
+        if (++call === 1) { reached(); await gate; return original(...args); }
+        throw cause;
+      });
+      const settling = manager.save(late);
+      try {
+        await atBarrier;
+        await expect(manager.save(unknown)).rejects.toBe(cause);
+        expect(() => manager.deriveGuardedMutation(source)).toThrow('Cannot derive');
+        await expect(manager.save(blocked)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      } finally { release(); await settling; }
+      await expect(manager.save(late)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      await expect(manager.save(source)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(write).toHaveBeenCalledTimes(2); write.mockRestore();
+      await manager.save(await manager.load('head.yaml'));
+    } finally { await f.cleanup(); }
+  });
+  it('retains unknown and known-committed audit outcomes without shutdown replay', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const { handler, dispatch } = guardedHandler(manager);
+      const failure = new Error('Audit after real commit');
+      const originalAudit = SecurityMonitor.logSecurityEvent;
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(event => {
+        if (event.source === 'MemorySaveHandler.guardedMutation') throw failure;
+        return originalAudit.call(SecurityMonitor, event);
+      });
+      try { await expect(dispatch('addEntry', { content: 'Committed despite audit' })).rejects.toBe(failure); }
+      finally { audit.mockRestore(); }
+      expect(handler.getPendingGuardedMutation('Owned memory')).toMatchObject({ status: 'known-committed', cause: failure });
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      expect(before.content).toContain('Committed despite audit');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await handler.flushPendingSaves(); await handler.dispose();
+      await expect(dispatch('clear')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(write).not.toHaveBeenCalled(); expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+      const other = guardedHandler(manager); const unknown = new Error('Unknown transport');
+      write.mockRejectedValueOnce(unknown);
+      await expect(other.dispatch('clear')).rejects.toBe(unknown);
+      expect(other.handler.getPendingGuardedMutation('Owned memory')).toMatchObject({ status: 'unknown', cause: unknown });
+      const calls = write.mock.calls.length; await other.handler.flushPendingSaves();
+      await expect(other.dispatch('addEntry', { content: 'Do not replay' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(write.mock.calls.length).toBe(calls);
+    } finally { await f.cleanup(); }
+  });
+  it('refuses missing or changed session context without mixing retained tenant evidence', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager(); const noContext = new MemorySaveHandler({ memoryManager: manager } as unknown as HandlerRegistry, name => name);
+      await expect(noContext.dispatch('clear', { element_name: 'Owned memory' })).rejects.toThrow('authenticated session');
+      const scoped = guardedHandler(manager);
+      const cause = new Error('Unknown original tenant');
+      jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValueOnce(cause);
+      await expect(scoped.dispatch('clear')).rejects.toBe(cause);
+      scoped.setContext({ type: 'test', timestamp: 1, session: { userId: 'other-user', sessionId: 'guarded-session', tenantId: null, transport: 'http', createdAt: 1 } });
+      expect(scoped.handler.getPendingGuardedMutation('Owned memory')).toBeUndefined();
+      await expect(scoped.dispatch('clear')).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      scoped.setContext({ type: 'test', timestamp: 1, session: { userId: USER, sessionId: 'guarded-session', tenantId: null, transport: 'http', createdAt: 1 } });
+      expect(scoped.handler.getPendingGuardedMutation('Owned memory')?.cause).toBe(cause);
+    } finally { await f.cleanup(); }
+  });
+});
+
 describe('pure working candidate snapshot', () => {
   it('does not replay opted-in load retention and isolates nested state', async () => {
     const metadata = new MetadataService(); let enabled = false;

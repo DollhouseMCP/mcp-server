@@ -1057,7 +1057,7 @@ export class Memory extends BaseElement implements IElement {
     this.entries.clear();
     this._isDirty = true;
     
-    SecurityMonitor.logSecurityEvent({
+    if (!this.appendCandidate) SecurityMonitor.logSecurityEvent({
       type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED,
       severity: 'HIGH',
       source: 'Memory.clearAll',

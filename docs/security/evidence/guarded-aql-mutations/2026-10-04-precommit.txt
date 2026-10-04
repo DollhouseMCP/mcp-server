@@ -1,0 +1,366 @@
+
+> @dollhousemcp/mcp-server@2.1.0-beta.2 pre-commit
+> npm run security:rapid && npm run typecheck:scripts && npm audit --audit-level=high
+
+
+> @dollhousemcp/mcp-server@2.1.0-beta.2 security:rapid
+> npm run security:critical -- --testTimeout=30000
+
+
+> @dollhousemcp/mcp-server@2.1.0-beta.2 security:critical
+> cross-env "NODE_OPTIONS=--experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs tests/security/tests --testNamePattern="(Command Injection|Path Traversal|YAML)" --maxWorkers=4 --testTimeout=30000
+
+PASS Unit Tests tests/security/tests/command-injection.test.ts
+PASS Unit Tests tests/security/tests/yaml-deserialization.test.ts
+PASS Unit Tests tests/security/tests/element-yaml-security.test.ts
+PASS Unit Tests tests/security/tests/input-validation-security.test.ts
+PASS Unit Tests tests/security/tests/unicode-normalization.test.ts
+PASS Unit Tests tests/security/tests/yaml-deserialization-expanded.test.ts
+PASS Unit Tests tests/security/tests/path-traversal.test.ts
+PASS Unit Tests tests/security/tests/security-validators.test.ts
+PASS Unit Tests tests/security/tests/mcp-tools-security.test.ts (10.442 s)
+  ● Console
+
+    console.log
+      [dotenv@17.2.3] injecting env (0) from .env.local,.env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+
+      at _log (node_modules/dotenv/lib/main.js:142:11)
+
+
+Test Suites: 9 passed, 9 total
+Tests:       46 skipped, 108 passed, 154 total
+Snapshots:   0 total
+Time:        11.838 s
+Ran all test suites matching tests/security/tests with tests matching "(Command Injection|Path Traversal|YAML)".
+
+> @dollhousemcp/mcp-server@2.1.0-beta.2 typecheck:scripts
+> tsc --noEmit --project tsconfig.scripts.json
+
+# npm audit report
+
+@babel/core  <=7.29.0
+@babel/core: Arbitrary File Read via sourceMappingURL Comment - https://github.com/advisories/GHSA-4x5r-pxfx-6jf8
+fix available via `npm audit fix`
+node_modules/@babel/core
+packages/safety/node_modules/@babel/core
+
+@hono/node-server  <=1.19.14
+Severity: moderate
+Node.js Adapter for Hono: Path traversal in `serve-static` on Windows via encoded backslash (`%5C`) - https://github.com/advisories/GHSA-frvp-7c67-39w9
+Depends on vulnerable versions of hono
+fix available via `npm audit fix`
+node_modules/@hono/node-server
+  @modelcontextprotocol/sdk  >=1.26.0
+  Depends on vulnerable versions of @hono/node-server
+  Depends on vulnerable versions of express
+  Depends on vulnerable versions of hono
+  node_modules/@modelcontextprotocol/sdk
+
+@humanfs/node  <0.16.8
+Severity: moderate
+humanfs: Recursive copy follows symlinked files and copies data from outside the source tree - https://github.com/advisories/GHSA-p498-v437-472g
+fix available via `npm audit fix`
+node_modules/@humanfs/node
+
+body-parser  1.20.5 - 1.20.6 || 2.0.0 - 2.2.2
+Severity: moderate
+body-parser vulnerable to denial of service when invalid limit value silently disables size enforcement - https://github.com/advisories/GHSA-v422-hmwv-36x6
+Depends on vulnerable versions of qs
+fix available via `npm audit fix`
+node_modules/body-parser
+
+braces  *
+Severity: high
+braces vulnerable to stack-exhaustion denial of service through deeply nested patterns - https://github.com/advisories/GHSA-vfj7-8cjw-p6xm
+fix available via `npm audit fix --force`
+Will install jest@30.5.2, which is a breaking change
+node_modules/braces
+  micromatch  >=0.2.0
+  Depends on vulnerable versions of braces
+  node_modules/micromatch
+    @jest/core  <=30.2.0
+    Depends on vulnerable versions of @jest/console
+    Depends on vulnerable versions of @jest/reporters
+    Depends on vulnerable versions of @jest/test-result
+    Depends on vulnerable versions of @jest/transform
+    Depends on vulnerable versions of jest-config
+    Depends on vulnerable versions of jest-haste-map
+    Depends on vulnerable versions of jest-message-util
+    Depends on vulnerable versions of jest-resolve
+    Depends on vulnerable versions of jest-resolve-dependencies
+    Depends on vulnerable versions of jest-runner
+    Depends on vulnerable versions of jest-runtime
+    Depends on vulnerable versions of jest-snapshot
+    Depends on vulnerable versions of jest-watcher
+    Depends on vulnerable versions of micromatch
+    node_modules/@jest/core
+    packages/safety/node_modules/@jest/core
+      jest  23.5.0 - 30.2.0
+      Depends on vulnerable versions of @jest/core
+      Depends on vulnerable versions of jest-cli
+      node_modules/jest
+      packages/safety/node_modules/jest
+      jest-cli  23.5.0 - 30.2.0
+      Depends on vulnerable versions of @jest/core
+      Depends on vulnerable versions of @jest/test-result
+      Depends on vulnerable versions of create-jest
+      Depends on vulnerable versions of jest-config
+      node_modules/jest-cli
+      packages/safety/node_modules/jest-cli
+    @jest/transform  <=30.2.0
+    Depends on vulnerable versions of jest-haste-map
+    Depends on vulnerable versions of micromatch
+    node_modules/@jest/transform
+    packages/safety/node_modules/@jest/transform
+      @jest/reporters  <=30.2.0
+      Depends on vulnerable versions of @jest/console
+      Depends on vulnerable versions of @jest/test-result
+      Depends on vulnerable versions of @jest/transform
+      Depends on vulnerable versions of jest-message-util
+      node_modules/@jest/reporters
+      packages/safety/node_modules/@jest/reporters
+      babel-jest  24.2.0-alpha.0 - 30.2.0
+      Depends on vulnerable versions of @jest/transform
+      node_modules/babel-jest
+      packages/safety/node_modules/babel-jest
+        jest-config  18.1.0 - 18.5.0-alpha.7da3df39 || 23.5.0 - 30.2.0
+        Depends on vulnerable versions of @jest/test-sequencer
+        Depends on vulnerable versions of babel-jest
+        Depends on vulnerable versions of jest-circus
+        Depends on vulnerable versions of jest-environment-node
+        Depends on vulnerable versions of jest-resolve
+        Depends on vulnerable versions of jest-runner
+        Depends on vulnerable versions of micromatch
+        node_modules/jest-config
+        packages/safety/node_modules/jest-config
+          create-jest  29.7.0 - 30.2.0
+          Depends on vulnerable versions of jest-config
+          packages/safety/node_modules/create-jest
+      jest-runner  21.0.0-alpha.1 - 30.2.0
+      Depends on vulnerable versions of @jest/console
+      Depends on vulnerable versions of @jest/environment
+      Depends on vulnerable versions of @jest/test-result
+      Depends on vulnerable versions of @jest/transform
+      Depends on vulnerable versions of jest-environment-node
+      Depends on vulnerable versions of jest-haste-map
+      Depends on vulnerable versions of jest-message-util
+      Depends on vulnerable versions of jest-resolve
+      Depends on vulnerable versions of jest-runtime
+      Depends on vulnerable versions of jest-watcher
+      node_modules/jest-runner
+      packages/safety/node_modules/jest-runner
+      jest-runtime  18.1.0 - 30.2.0
+      Depends on vulnerable versions of @jest/environment
+      Depends on vulnerable versions of @jest/fake-timers
+      Depends on vulnerable versions of @jest/globals
+      Depends on vulnerable versions of @jest/test-result
+      Depends on vulnerable versions of @jest/transform
+      Depends on vulnerable versions of jest-haste-map
+      Depends on vulnerable versions of jest-message-util
+      Depends on vulnerable versions of jest-resolve
+      Depends on vulnerable versions of jest-snapshot
+      node_modules/jest-runtime
+      packages/safety/node_modules/jest-runtime
+        jest-circus  20.1.0-alpha.1 - 30.2.0
+        Depends on vulnerable versions of @jest/environment
+        Depends on vulnerable versions of @jest/expect
+        Depends on vulnerable versions of @jest/test-result
+        Depends on vulnerable versions of jest-message-util
+        Depends on vulnerable versions of jest-runtime
+        Depends on vulnerable versions of jest-snapshot
+        node_modules/jest-circus
+        packages/safety/node_modules/jest-circus
+      jest-snapshot  23.3.0 - 30.2.0
+      Depends on vulnerable versions of @jest/transform
+      Depends on vulnerable versions of expect
+      Depends on vulnerable versions of jest-message-util
+      node_modules/jest-snapshot
+      packages/safety/node_modules/jest-snapshot
+        @jest/expect  <=30.2.0
+        Depends on vulnerable versions of expect
+        Depends on vulnerable versions of jest-snapshot
+        node_modules/@jest/expect
+        packages/safety/node_modules/@jest/expect
+          @jest/globals  <=30.2.0
+          Depends on vulnerable versions of @jest/environment
+          Depends on vulnerable versions of @jest/expect
+          node_modules/jest-runtime/node_modules/@jest/globals
+          packages/safety/node_modules/@jest/globals
+        jest-resolve-dependencies  27.0.0-next.0 - 30.2.0
+        Depends on vulnerable versions of jest-snapshot
+        node_modules/jest-resolve-dependencies
+        packages/safety/node_modules/jest-resolve-dependencies
+    fast-glob  *
+    Depends on vulnerable versions of micromatch
+    node_modules/fast-glob
+      @typescript-eslint/typescript-estree  3.10.2-alpha.0 - 8.47.1-alpha.9
+      Depends on vulnerable versions of fast-glob
+      Depends on vulnerable versions of globby
+      node_modules/@typescript-eslint/typescript-estree
+      packages/safety/node_modules/@typescript-eslint/typescript-estree
+        @typescript-eslint/parser  3.10.2-alpha.0 - 8.2.1-alpha.25
+        Depends on vulnerable versions of @typescript-eslint/typescript-estree
+        packages/safety/node_modules/@typescript-eslint/parser
+          @typescript-eslint/eslint-plugin  4.0.1-alpha.0 - 8.47.1-alpha.9
+          Depends on vulnerable versions of @typescript-eslint/parser
+          Depends on vulnerable versions of @typescript-eslint/type-utils
+          Depends on vulnerable versions of @typescript-eslint/type-utils
+          Depends on vulnerable versions of @typescript-eslint/utils
+          Depends on vulnerable versions of @typescript-eslint/utils
+          node_modules/@typescript-eslint/eslint-plugin
+          packages/safety/node_modules/@typescript-eslint/eslint-plugin
+        @typescript-eslint/type-utils  5.9.2-alpha.0 - 8.47.1-alpha.9
+        Depends on vulnerable versions of @typescript-eslint/typescript-estree
+        Depends on vulnerable versions of @typescript-eslint/typescript-estree
+        Depends on vulnerable versions of @typescript-eslint/utils
+        Depends on vulnerable versions of @typescript-eslint/utils
+        node_modules/@typescript-eslint/type-utils
+        packages/safety/node_modules/@typescript-eslint/type-utils
+        @typescript-eslint/utils  <=8.47.1-alpha.9
+        Depends on vulnerable versions of @typescript-eslint/typescript-estree
+        Depends on vulnerable versions of @typescript-eslint/typescript-estree
+        node_modules/@typescript-eslint/utils
+        packages/safety/node_modules/@typescript-eslint/utils
+      globby  >=8.0.0
+      Depends on vulnerable versions of fast-glob
+      packages/safety/node_modules/globby
+    jest-haste-map  18.1.0 - 30.2.0
+    Depends on vulnerable versions of micromatch
+    node_modules/jest-haste-map
+    node_modules/ts-jest-resolver/node_modules/jest-haste-map
+    packages/safety/node_modules/jest-haste-map
+      @jest/test-sequencer  <=30.2.0
+      Depends on vulnerable versions of @jest/test-result
+      Depends on vulnerable versions of jest-haste-map
+      node_modules/@jest/test-sequencer
+      packages/safety/node_modules/@jest/test-sequencer
+      jest-resolve  18.1.0 - 19.0.2 || 24.2.0-alpha.0 - 24.5.0 || 27.1.0 - 30.2.0
+      Depends on vulnerable versions of jest-haste-map
+      node_modules/jest-resolve
+      node_modules/ts-jest-resolver/node_modules/jest-resolve
+      packages/safety/node_modules/jest-resolve
+        ts-jest-resolver  >=2.0.0
+        Depends on vulnerable versions of jest-resolve
+        node_modules/ts-jest-resolver
+    jest-message-util  18.5.0-alpha.7da3df39 - 30.2.0
+    Depends on vulnerable versions of micromatch
+    node_modules/jest-message-util
+    packages/safety/node_modules/jest-message-util
+      @jest/console  25.4.0 - 30.2.0
+      Depends on vulnerable versions of jest-message-util
+      node_modules/@jest/console
+      packages/safety/node_modules/@jest/console
+        @jest/test-result  25.4.0 - 30.2.0
+        Depends on vulnerable versions of @jest/console
+        node_modules/@jest/test-result
+        packages/safety/node_modules/@jest/test-result
+          jest-watcher  25.4.0 - 30.2.0
+          Depends on vulnerable versions of @jest/test-result
+          node_modules/jest-watcher
+          packages/safety/node_modules/jest-watcher
+      @jest/fake-timers  <=30.2.0
+      Depends on vulnerable versions of jest-message-util
+      node_modules/@jest/fake-timers
+      packages/safety/node_modules/@jest/fake-timers
+        @jest/environment  <=30.2.0
+        Depends on vulnerable versions of @jest/fake-timers
+        node_modules/@jest/environment
+        packages/safety/node_modules/@jest/environment
+        jest-environment-node  24.2.0-alpha.0 - 30.2.0
+        Depends on vulnerable versions of @jest/environment
+        Depends on vulnerable versions of @jest/fake-timers
+        node_modules/jest-environment-node
+        packages/safety/node_modules/jest-environment-node
+      expect  21.0.0-beta.1 - 30.2.0
+      Depends on vulnerable versions of jest-message-util
+      node_modules/expect
+      packages/safety/node_modules/expect
+        @types/jest  28.1.7 - 29.5.14
+        Depends on vulnerable versions of expect
+        packages/safety/node_modules/@types/jest
+
+dompurify  <=3.4.12
+Severity: moderate
+DOMPurify: IN_PLACE hook removal leaves a detached subtree executable, causing XSS - https://github.com/advisories/GHSA-55q2-fjhq-7xh7
+DOMPurify: `CUSTOM_ELEMENT_HANDLING` bypasses `afterSanitizeElements` for allowed custom elements. - https://github.com/advisories/GHSA-c2j3-45gr-mqc4
+fix available via `npm audit fix`
+node_modules/dompurify
+
+esbuild  <=0.24.2
+Severity: moderate
+esbuild enables any website to send any requests to the development server and read the response - https://github.com/advisories/GHSA-67mh-4wv8-2f99
+fix available via `npm audit fix --force`
+Will install drizzle-kit@0.18.1, which is a breaking change
+node_modules/@esbuild-kit/core-utils/node_modules/esbuild
+  @esbuild-kit/core-utils  *
+  Depends on vulnerable versions of esbuild
+  node_modules/@esbuild-kit/core-utils
+    @esbuild-kit/esm-loader  *
+    Depends on vulnerable versions of @esbuild-kit/core-utils
+    node_modules/@esbuild-kit/esm-loader
+      drizzle-kit  0.19.0 - 1.0.0-beta.1-fd8bfcc
+      Depends on vulnerable versions of @esbuild-kit/esm-loader
+      node_modules/drizzle-kit
+
+fast-uri  3.0.0 - 3.1.7
+Severity: moderate
+fast-uri vulnerable to inconsistent host case normalization via percent-encoded octets - https://github.com/advisories/GHSA-hrr3-gc8f-f4qj
+fix available via `npm audit fix`
+node_modules/fast-uri
+  ajv
+  Depends on vulnerable versions of fast-uri
+  node_modules/@modelcontextprotocol/sdk/node_modules/ajv
+  node_modules/ajv-formats/node_modules/ajv
+
+hono  <=4.13.6
+Severity: moderate
+Hono: ReDoS in CORS middleware via Access-Control-Request-Headers - https://github.com/advisories/GHSA-8j4g-w8fx-2239
+Hono: `memo()` retains SSR output across requests, leading to cross-user data disclosure - https://github.com/advisories/GHSA-f23p-vx2j-j53r
+Hono: Proxy Helper does not remove response headers listed in the `Connection` header - https://github.com/advisories/GHSA-79qm-7rj5-m7r9
+Hono: Algorithmic Complexity DoS in Language Middleware - https://github.com/advisories/GHSA-54fx-42gc-7vw4
+Hono: Incomplete fix for CVE-2026-39408: `toSSG()` still writes files outside the output directory - https://github.com/advisories/GHSA-gqvv-2mrq-wpjv
+Hono: Unbounded dot-notation nesting in `parseBody()` can cause memory exhaustion - https://github.com/advisories/GHSA-g6gw-c38x-mqfc
+Hono: Query parser reads parameters after the URL fragment, causing cache-key and proxy interpretation differentials - https://github.com/advisories/GHSA-crvj-82cr-hjcx
+hono/jsx renders plain strings unescaped in boundary components, leading to XSS - https://github.com/advisories/GHSA-hxh3-vqpv-xpqv
+fix available via `npm audit fix`
+node_modules/hono
+
+ip-address  <=10.7.0
+Severity: moderate
+ip-address: Address6.isLinkLocal() recognizes fe80::/64 rather than fe80::/10, allowing SSRF and trust-boundary bypass to on-link hosts - https://github.com/advisories/GHSA-rpw4-54j3-4h4q
+ip-address: no classifier recognizes the NAT64 local-use range 64:ff9b:1::/48, allowing SSRF and trust-boundary bypass - https://github.com/advisories/GHSA-2vr4-cq9g-pvrc
+ip-address: isInSubnet() and isHostInSubnet() compare addresses of different families as if they shared an address space, allowing an allowlist check to admit an address outside its range - https://github.com/advisories/GHSA-j6r3-76f7-8jcv
+ip-address: Address6 builds a parse diagnostic proportional to the input with no length bound, allowing a single long string to stall or crash the process - https://github.com/advisories/GHSA-h3mg-xc3c-68pw
+fix available via `npm audit fix`
+node_modules/ip-address
+  express-rate-limit  8.0.1 - 8.5.0
+  Depends on vulnerable versions of ip-address
+  node_modules/express-rate-limit
+
+qs  2.2.5 - 6.15.3
+Severity: moderate
+qs array-limit bypass via bracket-key comma parsing - https://github.com/advisories/GHSA-x5fp-wj9c-mxmx
+qs: Denial of Service via Attacker Controlled isBuffer - https://github.com/advisories/GHSA-4mjr-xmp4-gh2g
+fix available via `npm audit fix --force`
+Will install @modelcontextprotocol/inspector@2.9.0, which is a breaking change
+node_modules/qs
+  express  4.22.2
+  Depends on vulnerable versions of qs
+  node_modules/express
+    @modelcontextprotocol/inspector-cli  >=0.19.0
+    Depends on vulnerable versions of express
+    node_modules/@modelcontextprotocol/inspector-cli
+      @modelcontextprotocol/inspector  0.19.0 - 1.0.2
+      Depends on vulnerable versions of @modelcontextprotocol/inspector-cli
+      node_modules/@modelcontextprotocol/inspector
+  superagent
+  Depends on vulnerable versions of qs
+  node_modules/superagent
+
+57 vulnerabilities (1 low, 19 moderate, 37 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force

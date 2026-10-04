@@ -684,6 +684,39 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return memory;
   }
 
+  isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
+
+  /** Names are discovery hints only; hydrate a new working object from its own snapshot. */
+  async loadGuardedMemoryByName(name: string, expectedUserId: string): Promise<Memory> {
+    const adapter = this.guardedUpdateAdapter;
+    if (!adapter) throw new Error('Guarded memory updates are disabled');
+    const tenant = adapter.captureTenant();
+    const contextRoot = this.memoriesDir;
+    if (tenant !== expectedUserId) throw Object.assign(new Error('Memory request tenant mismatch'), { code: 'EHEADCONFLICT' });
+    const summaries = await this.storageLayer.listSummaries({ includePublic: false, preserveDuplicates: true, freshMetadata: true });
+    this.requireGuardedContext(tenant, contextRoot);
+    const matches = summaries.filter(summary => summary.name.normalize('NFC').toLowerCase() === name.normalize('NFC').toLowerCase());
+    if (matches.length !== 1 || matches[0].name !== name || !matches[0].filePath) {
+      throw Object.assign(new Error('Memory name must resolve to one exact owned target'), { code: 'EHEADCONFLICT' });
+    }
+    const memory = await this.loadGuardedMemory(matches[0].filePath);
+    this.requireGuardedContext(tenant, contextRoot);
+    if (memory.metadata.name !== name) throw Object.assign(new Error('Memory target name changed during lookup'), { code: 'EHEADCONFLICT' });
+    return memory;
+  }
+
+  /** Capture candidate and original authority synchronously, before mutation/validation awaits. */
+  deriveGuardedMutation(source: Memory): Memory {
+    const adapter = this.guardedUpdateAdapter;
+    if (!adapter) throw new Error('Guarded memory updates are disabled');
+    const tenant = adapter.captureTenant();
+    const candidate = source.createPersistenceCandidate();
+    const locator = source.getFilePath();
+    adapter.deriveBinding(source, candidate, tenant, locator, source.metadata.name, this.memoriesDir);
+    if (locator) candidate.setFilePath(locator);
+    return candidate;
+  }
+
   /** Diagnostic pending state, not retry or replacement authority. */
   getPendingHeadUpdate(memory: Memory): PendingMemoryUpdate | undefined {
     return this.guardedUpdateAdapter?.getPendingUpdate(memory);
@@ -720,7 +753,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const publication = detached.createRuntimePublication();
       publication.setFilePath(locator!);
       this.requireGuardedContext(tenant, contextRoot);
-      adapter.bindLoaded(publication, { content, token: outcome.token }, publication.metadata.name, contextRoot);
+      adapter.bindPublication(publication, element);
       if (!isWritableStorageLayer(this.storageLayer)) {
         await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
         this.requireGuardedContext(tenant, contextRoot);
