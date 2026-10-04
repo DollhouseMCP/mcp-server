@@ -1003,6 +1003,12 @@ export class Memory extends BaseElement implements IElement {
     ].join('\n');
   }
 
+  /** Apply opted-in load retention to a quiet persistence candidate before mutation. */
+  public async enforceCandidateLoadRetention(): Promise<number> {
+    if (!this.appendCandidate) throw new Error('Load retention preparation requires a persistence candidate');
+    return this.getRetentionPolicyService()?.shouldEnforceOnLoad() ? this.enforceRetentionPolicy() : 0;
+  }
+
   /**
    * Enforce retention policy by removing expired entries
    * SECURITY: Ensures memory doesn't grow unbounded
@@ -1290,7 +1296,7 @@ export class Memory extends BaseElement implements IElement {
    * SECURITY: Validates all loaded data
    * FIX #1269: Added ContentValidator to prevent loading infected memories
    */
-  public override deserialize(data: string): void {
+  public override deserialize(data: string, options?: { suppressLoadPolicy?: boolean }): void {
     try {
       const parsed = JSON.parse(data);
 
@@ -1344,7 +1350,7 @@ export class Memory extends BaseElement implements IElement {
       // IMPORTANT: Retention enforcement is now opt-in, not automatic
       // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
       try {
-        const retentionService = this.getRetentionPolicyService();
+        const retentionService = options?.suppressLoadPolicy ? undefined : this.getRetentionPolicyService();
         if (retentionService?.shouldEnforceOnLoad()) {
           // User has explicitly enabled on-load enforcement
           this.enforceRetentionPolicy();

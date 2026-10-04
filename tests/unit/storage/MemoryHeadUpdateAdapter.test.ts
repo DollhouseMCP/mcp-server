@@ -50,7 +50,7 @@ class ObservedManager extends MemoryManager {
     return super.afterSave(memory, locator);
   }
 }
-async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string) {
+async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string, expired = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-central-owned-'));
   const metadataService = new MetadataService();
   const lock = new FileLockManager();
@@ -67,7 +67,8 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
     tags: ['original'], autoLoad: true, priority: 3, ...seedMetadata }, metadataService);
   memory.instructions = 'Original instructions';
   memory.extensions = { nested: { value: 'original' } };
-  await memory.addEntry('Original entry', ['original'], { nested: { value: 'original' } });
+  const seededEntry = await memory.addEntry('Original entry', ['original'], { nested: { value: 'original' } });
+  if (expired) seededEntry.expiresAt = new Date('2000-01-01T00:00:00Z');
   try {
     await ordinary.save(memory, 'head.yaml');
     const tenantRoot = await fs.realpath(path.join(root, 'memories'));
@@ -458,6 +459,51 @@ posix('immediate guarded MCP-AQL mutations', () => {
       expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '2' });
     } finally { await f.cleanup(); }
   });
+  it.each(['success', 'conflict', 'clear'])('keeps on-load retention quiet until guarded %s commits', async outcome => {
+    const f = await fixture({}, undefined, true);
+    try {
+      const { manager } = f.makeManager();
+      manager.setRetentionPolicyService({ shouldEnforceOnLoad: () => true, isEnabled: () => true });
+      const { handler, dispatch } = guardedHandler(manager);
+      let source: Memory | undefined;
+      const derive = manager.deriveGuardedMutation.bind(manager);
+      jest.spyOn(manager, 'deriveGuardedMutation').mockImplementation(memory => { source = memory; return derive(memory); });
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const validate = manager.assertPersistable.bind(manager);
+      jest.spyOn(manager, 'assertPersistable').mockImplementation(async candidate => {
+        expect(source!.getEntries().size).toBe(1);
+        expect(source!.getPolicyRemovedCount()).toBe(0);
+        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
+        expect((await f.owners.readHeadSnapshot('head.yaml')).content).toBe(before.content);
+        if (outcome === 'conflict') await externalOwnedUpdate(f.tenantRoot);
+        return validate(candidate);
+      });
+      try {
+        if (outcome === 'conflict') {
+          await expect(dispatch('addEntry', { content: 'Quiet candidate append' })).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+          expect(handler.getPendingGuardedMutation('Owned memory')?.candidate?.getEntries().size).toBe(1);
+          const current = await f.owners.readHeadSnapshot('head.yaml');
+          expect(current.content).toContain('Original entry');
+          expect(current.content).not.toContain('Quiet candidate append');
+          expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
+        } else {
+          const response = await dispatch(outcome === 'clear' ? 'clear' : 'addEntry', { content: 'Quiet candidate append' });
+          const current = await f.owners.readHeadSnapshot('head.yaml');
+          expect(current.content).not.toContain('Original entry');
+          expect(source!.getEntries().size).toBe(1);
+          if (outcome === 'success') {
+            expect(response).toMatchObject({ warning: expect.stringContaining('1 existing entry was removed') });
+            expect(current.content).toContain('Quiet candidate append');
+            expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(1);
+          } else {
+            expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
+            expect(audit).toHaveBeenCalledWith(expect.objectContaining({ type: MEMORY_SECURITY_EVENTS.MEMORY_CLEARED, details: 'Durably cleared all 1 memory entries' }));
+          }
+        }
+      } finally { audit.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
   it('publishes policy-removal audit only with a genuine durable eviction', async () => {
     const f = await fixture({ maxEntries: 1, onFull: 'evict_oldest' });
     try {
@@ -649,6 +695,22 @@ posix('immediate guarded MCP-AQL mutations', () => {
 });
 
 describe('pure working candidate snapshot', () => {
+  it.each([true, false])('preserves legacy load policy and quiet candidate policy when on_load=%s', async onLoad => {
+    const metadata = new MetadataService();
+    const policy = { shouldEnforceOnLoad: () => onLoad, isEnabled: () => true };
+    const original = new Memory({ name: 'Policy' }, metadata);
+    const entry = await original.addEntry('Expired'); entry.expiresAt = new Date('2000-01-01T00:00:00Z');
+    const quiet = new Memory({ name: 'Policy' }, metadata, undefined, policy);
+    quiet.deserialize(original.serialize(), { suppressLoadPolicy: true });
+    expect(quiet.getEntries().size).toBe(1);
+    const candidate = quiet.createPersistenceCandidate();
+    await candidate.enforceCandidateLoadRetention();
+    expect(candidate.getEntries().size).toBe(onLoad ? 0 : 1);
+    expect(quiet.getEntries().size).toBe(1);
+    const legacy = new Memory({ name: 'Policy' }, metadata, undefined, policy);
+    legacy.deserialize(original.serialize());
+    expect(legacy.getEntries().size).toBe(onLoad ? 0 : 1);
+  });
   it('does not replay opted-in load retention and isolates nested state', async () => {
     const metadata = new MetadataService(); let enabled = false;
     const memory = new Memory({ name: 'Retained', retentionDays: 1 }, metadata, undefined,

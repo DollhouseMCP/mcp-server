@@ -241,6 +241,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     element: T,
     filePath: string,
     parsedData?: { data: Record<string, unknown>; content: string },
+    options?: { suppressLoadPolicy?: boolean },
   ): Promise<void>;
   protected beforeSave?(element: T, filePath: string): Promise<void>;
   protected afterSave?(element: T, filePath: string): Promise<void>;
@@ -359,8 +360,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       migrateMetadataDefaults: (d: Record<string, unknown>, fp: string) => this.migrateMetadataDefaults(d, fp),
       parseMetadata: (d: any) => this.parseMetadata(d),
       createElement: (m: T['metadata'], c: string) => this.createElement(m, c),
-      afterLoad: (el: T, fp: string, pd?: { data: Record<string, unknown>; content: string }) =>
-        this.afterLoad ? this.afterLoad(el, fp, pd) : Promise.resolve(),
+      afterLoad: (el: T, fp: string, pd?: { data: Record<string, unknown>; content: string }, options?: { suppressLoadPolicy?: boolean }) =>
+        this.afterLoad ? this.afterLoad(el, fp, pd, options) : Promise.resolve(),
       onLoadError: (fp: string, err: unknown) => this.onLoadError?.(fp, err),
       getElementLabel: () => this.getElementLabel(),
       getElementLabelCapitalized: () => this.getElementLabelCapitalized(),
@@ -483,8 +484,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /** Complete hydration of exact snapshot bytes; intentionally no read/cache publication. */
-  protected hydrateDefinitionFromContent(content: string, relativePath: string): Promise<T> {
-    return this._loader.hydrateDefinitionFromContent(content, relativePath);
+  protected hydrateDefinitionFromContent(content: string, relativePath: string, options?: { suppressLoadPolicy?: boolean }): Promise<T> {
+    return this._loader.hydrateDefinitionFromContent(content, relativePath, options);
   }
 
   async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {

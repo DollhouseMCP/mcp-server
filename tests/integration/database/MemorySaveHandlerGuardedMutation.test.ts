@@ -3,6 +3,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
 import { SessionActivationRegistry } from '../../../src/state/SessionActivationState.js';
 import { createUserIdResolver } from '../../../src/database/UserContext.js';
@@ -277,6 +278,70 @@ requiredDescribe('actual guarded immediate AQL requests with owned PostgreSQL', 
         expect(legacy).not.toHaveBeenCalled();
       });
     } finally { registry.dispose('stdio-owned-pg'); await tracker.dispose(); }
+  }));
+
+  it.each(['conflict', 'commit'] as const)('on-load retention %s keeps source and audit provisional until a durable append', mode => isolated(`on-load-${mode}`, async (f, makeManager, mark) => {
+    const raw = f.raw.replace('    timestamp: "2026-09-28T12:00:00.000Z"',
+      '    timestamp: "2026-09-28T12:00:00.000Z"\n    expiresAt: "2026-09-29T12:00:00.000Z"');
+    expect(raw).toContain('expiresAt:');
+    expect(await f.layer.writeContent('memories', f.name, raw,
+      { author: 'test-author', version: '1.0.0', description: '', tags: [] })).toBe(f.memoryId);
+    const original = await f.layer.readHeadSnapshot(f.memoryId);
+    expect(original.content).toBe(raw);
+    const { manager } = await makeManager();
+    manager.setRetentionPolicyService({ shouldEnforceOnLoad: () => true, isEnabled: () => true });
+    const captured = captureCandidate(manager);
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+    const retentionEvents = () => audit.mock.calls.map(([event]) => event)
+      .filter(event => event.type === 'RETENTION_POLICY_ENFORCED');
+    const mutationEvents = () => audit.mock.calls.map(([event]) => event)
+      .filter(event => event.type === 'RETENTION_POLICY_ENFORCED' || event.type === 'MEMORY_ADDED');
+    const entered = gate(); const resume = gate();
+    const validate = manager.assertPersistable.bind(manager);
+    jest.spyOn(manager, 'assertPersistable').mockImplementation(async memory => {
+      mark('barrier-entered'); entered.release(); await resume.promise; mark('barrier-released'); return validate(memory);
+    });
+    const request = handler(manager, () => f.userId);
+    mark('operation-begin');
+    const pending = request.dispatch('addEntry', { element_name: f.name, content: 'Durable retention append' });
+    const outcome = pending.then(value => { mark('operation-end'); return { value }; }, cause => { mark('operation-end'); return { cause }; });
+    try {
+      await Promise.race([entered.promise, outcome.then(result => { if ('cause' in result) throw result.cause; throw new Error('Request settled before required validation barrier'); })]);
+      expect(captured.source?.getEntries().has('one')).toBe(true);
+      expect(captured.source?.getPolicyRemovedCount()).toBe(0);
+      expect(captured.memory?.getEntries().has('one')).toBe(false);
+      expect(captured.memory?.getPolicyRemovedCount()).toBe(1);
+      expect(mutationEvents()).toHaveLength(0);
+      expect((await f.layer.readHeadSnapshot(f.memoryId)).content).toBe(raw);
+      if (mode === 'conflict') {
+        await f.layer.addEntry(f.memoryId, { entryId: 'accepted-retention-conflict',
+          timestamp: new Date('2026-10-04T12:00:00Z'), content: 'Accepted concurrent child' });
+      }
+      const beforeAttempt = await f.snapshot();
+      resume.release();
+      const result = await outcome;
+      if (mode === 'conflict') {
+        expect(result).toMatchObject({ cause: { code: 'ESTALE' } });
+        expect(await f.snapshot()).toEqual(beforeAttempt);
+        expect(mutationEvents()).toHaveLength(0);
+        expect(captured.source?.getEntries().has('one')).toBe(true);
+        expect(manager.getPendingHeadUpdate(captured.memory!)?.candidate?.content).toContain('Durable retention append');
+      } else {
+        expect('value' in result).toBe(true);
+        if (!('value' in result)) throw result.cause;
+        const receipt = result.value as { id: string; warning?: string };
+        expect(receipt.warning).toContain('1 existing entry was removed');
+        const committed = await f.layer.readHeadSnapshot(f.memoryId);
+        expect(BigInt(committed.token.revision)).toBeGreaterThan(BigInt(original.token.revision));
+        expect(committed.content).toContain(receipt.id);
+        const entries = await f.layer.getEntries(f.memoryId);
+        expect(entries.some(entry => entry.entryId === 'one')).toBe(false);
+        expect(entries.some(entry => entry.entryId === receipt.id)).toBe(true);
+        expect(mutationEvents()).toHaveLength(2);
+        expect(retentionEvents()).toHaveLength(1);
+        expect(retentionEvents()[0]).toMatchObject({ source: 'MemorySaveHandler.guardedMutation', details: 'Durably removed 1 entries by retention or onFull policy' });
+      }
+    } finally { resume.release(); await outcome; }
   }));
 
 });

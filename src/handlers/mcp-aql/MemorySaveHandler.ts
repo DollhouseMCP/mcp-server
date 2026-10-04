@@ -180,6 +180,7 @@ export class MemorySaveHandler {
     let removedCount = 0;
     let audit: Parameters<typeof SecurityMonitor.logSecurityEvent>[0];
     if (method === 'addEntry') {
+      await candidate.enforceCandidateLoadRetention();
       const entry = await candidate.addEntry(params.content as string, params.tags as string[] | undefined, params.metadata as Record<string, unknown> | undefined);
       removedCount = candidate.getPolicyRemovedCount() - removedBefore;
       response = { id: entry.id, timestamp: entry.timestamp.toISOString(), trustLevel: entry.trustLevel,

@@ -382,6 +382,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     memory: Memory,
     _filePath: string,
     parsedData?: { data: Record<string, unknown>; content: string },
+    options?: { suppressLoadPolicy?: boolean },
   ): Promise<void> {
     if (!parsedData) return; // Defensive — base always supplies it, but the hook is optional.
 
@@ -404,7 +405,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         metadata: memory.metadata,
         extensions: memory.extensions,
         entries,
-      }));
+      }), options);
     }
 
     // If markdown content exists after frontmatter, add it as a memory entry.
@@ -676,7 +677,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
     }
     const snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot);
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator);
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: true });
     memory.setFilePath(locator);
     this.requireGuardedContext(tenant, contextRoot);
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
