@@ -822,6 +822,14 @@ posix('guarded console existing-owner UPDATE', () => {
     {fullReplacement: true, version: 'invalid'},
     {fullReplacement: false, version: '1.0.0-!'},
     {fullReplacement: true, version: '1.0.0-!'},
+    {fullReplacement: false, version: null},
+    {fullReplacement: true, version: null},
+    {fullReplacement: false, version: false},
+    {fullReplacement: true, version: false},
+    {fullReplacement: false, version: 0},
+    {fullReplacement: true, version: 0},
+    {fullReplacement: false, version: ''},
+    {fullReplacement: true, version: ''},
   ])('refuses invalid persisted version $version before dispatch for full replacement=$fullReplacement', async ({fullReplacement, version}) => {
     const f = await fixture();
     try {
@@ -853,10 +861,12 @@ posix('guarded console existing-owner UPDATE', () => {
   it.each([
     {fullReplacement: false, version: '02.3', expected: '2.3.0'},
     {fullReplacement: true, version: '02.3', expected: '2.3.0'},
-    {fullReplacement: false, version: undefined, expected: '1.0.0'},
-    {fullReplacement: true, version: undefined, expected: '1.0.0'},
+    {fullReplacement: false, version: '0', expected: '0.0.0'},
+    {fullReplacement: true, version: '0', expected: '0.0.0'},
+    {fullReplacement: false, version: undefined, expected: '3.4.5'},
+    {fullReplacement: true, version: undefined, expected: '3.4.5'},
   ])('keeps persisted version $version coherent for full replacement=$fullReplacement', async ({fullReplacement, version, expected}) => {
-    const f = await fixture();
+    const f = await fixture(version === undefined ? {version: '3.4.5'} : {});
     try {
       const {manager} = f.makeManager(); const store = consoleStore(manager);
       const before = await store.findByName(USER, 'memories', 'owned-memory');
@@ -880,6 +890,53 @@ posix('guarded console existing-owner UPDATE', () => {
       const reloaded = await f.makeManager().manager.load('head.yaml');
       expect(reloaded.version).toBe(expected); expect(reloaded.metadata.version).toBe(expected);
       expect(reloaded.validate().valid).toBe(true);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([false, true])('advances captured modification time for full replacement=%s', async fullReplacement => {
+    const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+      const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+      definition.metadata.modified = '2025-01-01T00:00:00.000Z';
+      definition.metadata.custom = {value: 'preserved'};
+      return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      let before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const definition = yaml.load(snapshot.content, {schema: yaml.JSON_SCHEMA}) as {entries: unknown[]};
+      let source: Memory | undefined; let sourceState: string | undefined;
+      const find = manager.findGuardedMemoryForUpdate.bind(manager);
+      jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+        const target = await find(...args);
+        source = target?.memory; sourceState = source?.serialize();
+        return target;
+      });
+      for (const now of [new Date('2026-10-05T12:00:00.000Z'), new Date('2026-10-06T13:00:00.000Z')]) {
+        const metadata = {description: 'Timestamp edit', modified: '1999-01-01T00:00:00.000Z'};
+        const content = fullReplacement ? yaml.dump({metadata, entries: definition.entries}) : undefined;
+        const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+          expectedContentHash: before!.contentHash, now, content, metadata});
+        expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const publication = manager.cached('head.yaml')!;
+        const persisted = await f.owners.readHeadSnapshot('head.yaml');
+        const raw = yaml.load(persisted.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+        expect(publication.metadata.modified).toBe(now.toISOString());
+        expect(raw.metadata.modified).toBe(now.toISOString());
+        expect(response!.metadata.modified).toBe(now.toISOString());
+        expect(response!.updatedAt).toEqual(now);
+        expect(raw.metadata.created).toBe(before!.metadata.created);
+        expect(raw.metadata.unique_id).toBe(before!.metadata.unique_id);
+        expect(raw.metadata.version).toBe('3.4.5'); expect(raw.metadata.custom).toEqual({value: 'preserved'});
+        expect(raw.entries).toEqual(definition.entries);
+        expect(publication.instructions).toBe('Original instructions');
+        expect(publication.extensions).toEqual({nested: {value: 'original'}});
+        const next = await store.findByName(USER, 'memories', 'owned-memory');
+        expect(next!.updatedAt).toEqual(now); expect(next!.metadata.modified).toBe(now.toISOString());
+        expect(next!.contentHash).toBe(response!.contentHash);
+        expect(response!.contentHash).not.toBe(before!.contentHash);
+        before = next;
+      }
     } finally {await f.cleanup();}
   });
 

@@ -410,7 +410,7 @@ function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: 
     if (parsed.instructions !== undefined) result.instructions = parsed.instructions;
   }
   const config = isRecord(body.metadata) ? body.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(body)).filter(([key]) => key !== 'instructions'));
-  const metadata = {...originalMetadata, ...config, ...input.metadata};
+  const metadata: Record<string, unknown> = {...originalMetadata, ...config, ...input.metadata, modified: input.now.toISOString()};
   if (metadata.name !== name) throw new Error('Guarded memory rename is unavailable');
   if (metadata.unique_id !== originalMetadata.unique_id) throw new Error('Guarded memory identity change is unavailable');
   if (input.tags !== undefined) metadata.tags = [...input.tags];

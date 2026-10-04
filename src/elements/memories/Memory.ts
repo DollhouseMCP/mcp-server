@@ -585,6 +585,9 @@ export class Memory extends BaseElement implements IElement {
   /** Complete validated replacement on a quiet preview; constructor-derived config stays coherent. */
   public applyPersistenceReplacement(metadata: MemoryMetadata, entries: unknown[], extensions: unknown, instructions: unknown): void {
     if (!this.appendCandidate) throw new Error('Replacement requires a persistence preview');
+    if (Object.hasOwn(metadata, 'version') && (typeof metadata.version !== 'string' || metadata.version.length === 0)) {
+      throw new Error('Version must be a non-empty string');
+    }
     const configured = new Memory(structuredClone(metadata), this.metadataServiceRef,
       this._memoryManagerRef, this._retentionPolicyRef, true);
     configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: configured.version,
