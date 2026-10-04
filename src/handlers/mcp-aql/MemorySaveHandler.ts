@@ -160,13 +160,18 @@ export class MemorySaveHandler {
     } catch (cause) {
       const pending = candidate && manager.getPendingHeadUpdate(candidate);
       if (accepted || pending) {
-        let status: GuardedMutationPending['status'] = 'refused';
-        if (committed || pending?.status === 'committed-publication-failed') status = 'known-committed';
-        else if (pending?.status === 'unknown') status = 'unknown';
+        const status = this.classifyGuardedOutcome(committed, pending);
         this.guardedMutations.set(context.key, Object.freeze({ status, candidate, manager, cause }));
       } else this.guardedMutations.delete(context.key);
       throw cause;
     }
+  }
+
+  /** Known durable commit takes precedence over pending unknown/refusal evidence. */
+  private classifyGuardedOutcome(committed: boolean, pending: ReturnType<MemoryManager['getPendingHeadUpdate']>): GuardedMutationPending['status'] {
+    if (committed || pending?.status === 'committed-publication-failed') return 'known-committed';
+    if (pending?.status === 'unknown') return 'unknown';
+    return 'refused';
   }
 
   /** Prepare candidate state and plain response fields before any backend attempt. */

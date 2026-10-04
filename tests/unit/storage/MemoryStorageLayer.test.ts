@@ -924,7 +924,7 @@ describe('guarded fresh metadata discovery', () => {
       const entries = await layer.listSummaries({ freshMetadata: true, preserveDuplicates: true });
       expect(entries.map(entry => entry.name)).toEqual(['duplicate', 'duplicate']);
       expect(backend.listFiles).toHaveBeenCalledWith(MEMORIES_DIR, '.yaml');
-      expect((backend.readFile as jest.Mock<any>).mock.calls.map(([value]) => value)).toEqual([`${MEMORIES_DIR}/first.yaml`, `${MEMORIES_DIR}/second.yaml`]);
+      expect((backend.readFile as jest.Mock<any>).mock.calls.map(([value]) => value)).toEqual([path.join(MEMORIES_DIR, 'first.yaml'), path.join(MEMORIES_DIR, 'second.yaml')]);
       expect(fileOps.writeFile).not.toHaveBeenCalled();
     } finally { await layer.dispose(); }
   });
