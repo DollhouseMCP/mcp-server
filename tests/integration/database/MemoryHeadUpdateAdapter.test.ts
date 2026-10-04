@@ -117,7 +117,11 @@ requiredDescribe('dormant central memory UPDATE with owned PostgreSQL', () => {
     if (kind === 'child') {
       await f.layer.addEntry(f.memoryId, { entryId: 'external-child', timestamp: new Date('2026-10-03T12:00:00Z'), content: 'Accepted external child' });
     } else {
-      await f.maintenance`INSERT INTO public.element_tags(element_id,user_id,tag) VALUES (${f.memoryId}::uuid,${f.userId}::uuid,'external-tag')`;
+      // The real tag trigger requires authenticated transaction-local tenant context.
+      await f.ordinary.begin(async tx => {
+        await tx`SELECT pg_catalog.set_config('app.current_user_id',${f.userId},true)`;
+        await tx`INSERT INTO public.element_tags(element_id,user_id,tag) VALUES (${f.memoryId}::uuid,${f.userId}::uuid,'external-tag')`;
+      });
     }
     const changed = await f.snapshot();
     await expect(manager.save(memory)).rejects.toMatchObject({ code: 'ESTALE' });
