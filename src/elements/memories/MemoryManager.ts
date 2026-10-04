@@ -664,7 +664,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     await super.save(element, resolvedRelativePath, options);
   }
 
-  private async loadGuardedMemory(filePath: string): Promise<Memory> {
+  private async loadGuardedMemory(filePath: string, suppressLoadPolicy = false): Promise<Memory> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
     const contextRoot = this.memoriesDir;
@@ -677,7 +677,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
     }
     const snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot);
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: true });
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy });
     memory.setFilePath(locator);
     this.requireGuardedContext(tenant, contextRoot);
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
@@ -706,7 +706,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (matches.length !== 1 || matches[0].name !== name || !matches[0].filePath) {
       throw Object.assign(new Error('Memory name must resolve to one exact owned target'), { code: 'EHEADCONFLICT' });
     }
-    const memory = await this.loadGuardedMemory(matches[0].filePath);
+    const memory = await this.loadGuardedMemory(matches[0].filePath, true);
     this.requireGuardedContext(tenant, contextRoot);
     if (memory.metadata.name !== name) throw Object.assign(new Error('Memory target name changed during lookup'), { code: 'EHEADCONFLICT' });
     return memory;

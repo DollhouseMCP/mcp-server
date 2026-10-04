@@ -459,6 +459,44 @@ posix('immediate guarded MCP-AQL mutations', () => {
       expect((await f.owners.readHeadSnapshot('head.yaml')).token).toMatchObject({ revision: '2' });
     } finally { await f.cleanup(); }
   });
+  it('preserves public guarded on-load behavior while named mutation hydration stays quiet', async () => {
+    const f = await fixture({}, undefined, true);
+    try {
+      const { manager } = f.makeManager();
+      manager.setRetentionPolicyService({ shouldEnforceOnLoad: () => true, isEnabled: () => true });
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        const loaded = await manager.load('head.yaml');
+        expect(loaded.getEntries().size).toBe(0);
+        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(1);
+        audit.mockClear();
+        const mutationSource = await manager.loadGuardedMemoryByName('Owned memory', USER);
+        expect(mutationSource.getEntries().size).toBe(1);
+        expect(mutationSource.getPolicyRemovedCount()).toBe(0);
+        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
+        expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Original entry');
+      } finally { audit.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
+  it('commits below-capacity append when optional load-policy probe throws without fabricated removals', async () => {
+    const f = await fixture({}, undefined, true);
+    try {
+      const { manager } = f.makeManager();
+      const failure = new Error('Disposed optional retention service');
+      manager.setRetentionPolicyService({ shouldEnforceOnLoad: () => { throw failure; }, isEnabled: () => true });
+      const { dispatch } = guardedHandler(manager);
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        const response = await dispatch('addEntry', { content: 'Safe fallback append' });
+        expect(response).not.toHaveProperty('warning');
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        expect(snapshot.content).toContain('Original entry');
+        expect(snapshot.content).toContain('Safe fallback append');
+        expect(snapshot.token).toMatchObject({ revision: '2' });
+        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
+      } finally { audit.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
   it.each(['success', 'conflict', 'clear'])('keeps on-load retention quiet until guarded %s commits', async outcome => {
     const f = await fixture({}, undefined, true);
     try {
@@ -710,6 +748,16 @@ describe('pure working candidate snapshot', () => {
     const legacy = new Memory({ name: 'Policy' }, metadata, undefined, policy);
     legacy.deserialize(original.serialize());
     expect(legacy.getEntries().size).toBe(onLoad ? 0 : 1);
+  });
+  it('does not swallow candidate guard or actual enforcement failures', async () => {
+    const metadata = new MetadataService();
+    const memory = new Memory({ name: 'Policy' }, metadata, undefined,
+      { shouldEnforceOnLoad: () => true, isEnabled: () => true });
+    await expect(memory.enforceCandidateLoadRetention()).rejects.toThrow('requires a persistence candidate');
+    const candidate = memory.createPersistenceCandidate();
+    const failure = new Error('Actual retention mutation failed');
+    jest.spyOn(candidate, 'enforceRetentionPolicy').mockRejectedValue(failure);
+    await expect(candidate.enforceCandidateLoadRetention()).rejects.toBe(failure);
   });
   it('does not replay opted-in load retention and isolates nested state', async () => {
     const metadata = new MetadataService(); let enabled = false;
