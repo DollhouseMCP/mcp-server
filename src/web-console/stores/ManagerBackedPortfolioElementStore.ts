@@ -396,7 +396,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
 }
 
 function guardedMemoryYaml(input: ConsolePortfolioElementUpdateInput, baseline: Record<string, unknown>, name: string): string {
-  if (input.displayName !== undefined && input.displayName !== name) throw new Error('Guarded memory rename is unavailable');
+  if (input.displayName != null && input.displayName !== name) throw new Error('Guarded memory rename is unavailable');
   if (!isRecord(baseline) || !Array.isArray(baseline.entries)) throw new Error('Incomplete memory baseline');
   const originalMetadata = isRecord(baseline.metadata) ? baseline.metadata : Object.fromEntries(Object.entries(pickMemoryConfig(baseline)).filter(([key]) => key !== 'instructions'));
   const result = structuredClone(baseline);

@@ -817,6 +817,99 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
 }
 
 posix('guarded console existing-owner UPDATE', () => {
+  it.each(['lookup', 'update'] as const)('does not resolve unrelated Unicode names through empty filename stems during %s', async operation => {
+    const f = await fixture({name: '記憶'});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', '記憶');
+      expect(before).not.toBeNull();
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      if (operation === 'lookup') expect(await store.findByName(USER, 'memories', '不存在')).toBeNull();
+      else expect(await store.update({userId: USER, type: 'memories', canonicalName: '不存在', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Wrong target'}})).toBeNull();
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+      expect(store.getPendingGuardedUpdate(USER, '不存在')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('preserves exact Unicode canonical-name lookup and conditional update', async () => {
+    const f = await fixture({name: '記憶'});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', '記憶');
+      expect(before!.displayName).toBe('記憶');
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: '記憶', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Exact Unicode edit'}});
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+      expect(raw.metadata.name).toBe('記憶'); expect(raw.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect(raw.metadata.description).toBe('Exact Unicode edit'); expect(response!.displayName).toBe('記憶');
+      expect((await store.findByName(USER, 'memories', '記憶'))!.contentHash).toBe(response!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('refuses duplicate exact Unicode names without dispatch', async () => {
+    const f = await fixture({name: '記憶'});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      await fs.writeFile(path.join(f.tenantRoot, 'duplicate.yaml'), snapshot.content);
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.findByName(USER, 'memories', '記憶')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: '記憶', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Ambiguous edit'}})).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+      expect(await fs.readFile(path.join(f.tenantRoot, 'duplicate.yaml'), 'utf8')).toBe(snapshot.content);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([false, true])('falls back to the unchanged memory name for null displayName and full replacement=%s', async fullReplacement => {
+    const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+      const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+      definition.metadata.custom = {value: 'retained'};
+      return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+      let source: Memory | undefined; let sourceState: string | undefined;
+      const find = manager.findGuardedMemoryForUpdate.bind(manager);
+      jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+        const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+      });
+      const metadata = {description: 'Nullable display-name edit'};
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, displayName: null, now: new Date(), metadata,
+        content: fullReplacement ? yaml.dump({metadata, entries: original.entries}) : undefined});
+      expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+      const publication = manager.cached('head.yaml')!;
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+      expect(raw.metadata.name).toBe('Owned memory'); expect(raw.metadata.unique_id).toBe(original.metadata.unique_id);
+      expect(raw.metadata.created).toBe(original.metadata.created); expect(raw.metadata.version).toBe('3.4.5');
+      expect(raw.metadata.custom).toEqual({value: 'retained'}); expect(raw.entries).toEqual(original.entries);
+      expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      expect(response!.displayName).toBe('Owned memory'); expect(response!.metadata.description).toBe('Nullable display-name edit');
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(response!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('still refuses explicit nonnull displayName renames before dispatch', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, displayName: 'Other name', now: new Date()})).rejects.toThrow('rename');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
   it.each([
     {fullReplacement: false, version: 'invalid'},
     {fullReplacement: true, version: 'invalid'},
