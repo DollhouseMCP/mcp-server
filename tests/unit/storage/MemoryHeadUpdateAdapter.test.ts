@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PortfolioService } from '../../../src/web-console/modules/portfolio/PortfolioService.js';
 import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
 import { InMemoryUserIntegrationStore } from '../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
@@ -822,6 +822,115 @@ function consoleStore(manager: MemoryManager, currentUser = () => USER): Manager
 }
 
 posix('guarded console existing-owner UPDATE', () => {
+  it.each(['delete', 'rename'].flatMap(transition => ['GET', 'initial PATCH', 'store PATCH'].map(operation => ({transition, operation}))))('returns service404 when $transition wins discovery/read race during $operation', async ({transition, operation}) => {
+      const f = await fixture();
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const request = (body: unknown = undefined, etag?: string): ConsoleRequest => ({body, query: {},
+          headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        if (snapshot.token.ownership !== 'owned') throw new Error('Expected real owned transition fixture');
+        const token = snapshot.token;
+        const tree = async () => {
+          const entries = await fs.readdir(f.tenantRoot, {recursive: true});
+          const files: Record<string, string> = {};
+          for (const entry of entries.sort()) {
+            const fullPath = path.join(f.tenantRoot, entry);
+            if ((await fs.lstat(fullPath)).isFile()) files[entry] = (await fs.readFile(fullPath)).toString('base64');
+          }
+          return files;
+        };
+        const read = f.owners.readHeadSnapshot.bind(f.owners);
+        let reads = 0; let transitioned: Record<string, string> | undefined;
+        const raceRead = operation === 'store PATCH' ? 2 : 1;
+        const lookup = jest.spyOn(f.owners, 'readHeadSnapshot').mockImplementation(async locator => {
+          if (++reads === raceRead) {
+            if (transition === 'delete') await f.owners.deleteOwned({operationId: randomUUID(), expectedToken: token});
+            else await f.owners.renameOwned({operationId: randomUUID(), expectedToken: token, destinationLocator: 'moved.yaml'});
+            transitioned = await tree();
+          }
+          return read(locator);
+        });
+        const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const result = operation === 'GET' ? await service.getElement(request(), 'memories', 'owned-memory')
+          : await service.updateElement(request({metadata: {description: 'Must be absent'}}, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(result.status).toBe(404); expect(lookup).toHaveBeenCalledTimes(raceRead);
+        expect(transitioned).toBeDefined(); expect(await tree()).toEqual(transitioned);
+        expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+        if (transition === 'rename') expect(await fs.readFile(path.join(f.tenantRoot, 'moved.yaml'), 'utf8')).toBe(snapshot.content);
+      } finally {await f.cleanup();}
+    });
+
+  it.each(['EACCES', 'EHEADCONFLICT', 'EOWNERRECOVERY', 'EERASURERESIDUAL', undefined])('preserves initial lookup failure identity outside ENOENT: %s', async code => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = {query: {}, headers: {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest;
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const cause = Object.assign(new Error('Controlled lookup failure'), {code});
+      jest.spyOn(f.owners, 'readHeadSnapshot').mockRejectedValueOnce(cause);
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(service.getElement(request, 'memories', 'owned-memory')).rejects.toBe(cause);
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['tenant', 'root'])('preserves original %s context refusal over lookup ENOENT', async drift => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = {query: {}, headers: {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest;
+      const bytes = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      jest.spyOn(f.owners, 'readHeadSnapshot').mockImplementationOnce(async () => {
+        if (drift === 'tenant') f.setTenant('22222222-2222-4222-8222-222222222222');
+        else Object.defineProperty(manager, 'memoriesDir', {configurable: true, get: () => path.join(f.root, 'different-root')});
+        throw Object.assign(new Error('Missing during changed context'), {code: 'ENOENT'});
+      });
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(service.getElement(request, 'memories', 'owned-memory')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(bytes);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['public load', 'hydration'])('preserves ENOENT outside the lookup snapshot stage: %s', async stage => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const cause = Object.assign(new Error('Missing outside lookup read'), {code: 'ENOENT'});
+      if (stage === 'public load') jest.spyOn(f.owners, 'readHeadSnapshot').mockRejectedValueOnce(cause);
+      else jest.spyOn(manager as unknown as {hydrateDefinitionFromContent: () => Promise<Memory>}, 'hydrateDefinitionFromContent').mockRejectedValueOnce(cause);
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(stage === 'public load' ? manager.load('head.yaml') : store.findByName(USER, 'memories', 'owned-memory')).rejects.toBe(cause);
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
+  it('retains a postcommit publication ENOENT instead of converting it to notfound', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = (body: unknown = undefined, etag?: string): ConsoleRequest => ({body, query: {},
+        headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+      const before = await service.getElement(request(), 'memories', 'owned-memory');
+      const cause = Object.assign(new Error('Publication missing after commit'), {code: 'ENOENT'});
+      manager.publicationFailure = {cause};
+      await expect(service.updateElement(request({metadata: {description: 'Known durable update'}}, before.headers!.ETag),
+        'memories', 'owned-memory')).rejects.toBe(cause);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toMatchObject({status: 'committed-publication-failed', cause});
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Known durable update');
+    } finally {await f.cleanup();}
+  });
+
   it.each([false, true].flatMap(body => [false, true].flatMap(missingId => [false, true].map(echo => ({body, missingId, echo})))))('edits frontmatter through the console service body=$body missingId=$missingId echoedContent=$echo', async ({body, missingId, echo}) => {
       const markdown = body ? '# Route memory\n\nPreserved Markdown body.' : '';
       let rawDefinition: Record<string, unknown> = {};

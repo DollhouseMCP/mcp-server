@@ -100,6 +100,8 @@ interface BackupCleanupResult {
   errorDetails: Array<{ file: string; error: string }>;
 }
 
+type GuardedMemoryRead = Readonly<{memory: Memory; content: string; locator: string}>;
+
 export class MemoryManager extends BaseElementManager<Memory> {
   /**
    * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
@@ -677,22 +679,33 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return (await this.readGuardedMemory(filePath, mode)).memory;
   }
 
-  private async readGuardedMemory(filePath: string, mode: 'public' | 'mutation'): Promise<Readonly<{memory: Memory; content: string; locator: string}>> {
+  private readGuardedMemory(filePath: string, mode: 'public' | 'mutation'): Promise<GuardedMemoryRead>;
+  private readGuardedMemory(filePath: string, mode: 'lookup', context: Readonly<{tenant: string; root: string}>): Promise<GuardedMemoryRead | undefined>;
+  private async readGuardedMemory(filePath: string, mode: 'public' | 'mutation' | 'lookup',
+    context?: Readonly<{tenant: string; root: string}>): Promise<GuardedMemoryRead | undefined> {
     const adapter = this.guardedUpdateAdapter!;
-    const tenant = adapter.captureTenant();
-    const contextRoot = this.memoriesDir;
+    const tenant = context?.tenant ?? adapter.captureTenant();
+    const contextRoot = context?.root ?? this.memoriesDir;
     const tenantRoot = isWritableStorageLayer(this.storageLayer) ? contextRoot : await fs.realpath(contextRoot);
     this.requireGuardedContext(tenant, contextRoot);
     let locator = filePath;
     if (!isWritableStorageLayer(this.storageLayer)) {
-      const fullPath = mode === 'mutation'
+      const fullPath = mode !== 'public'
         ? await this.validateAndResolvePath(filePath)
         : await this.resolveMemoryPath(filePath);
       if (!fullPath) throw new Error(`Could not resolve memory path: ${filePath}`);
       locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
     }
-    const snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot);
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode === 'mutation' });
+    let snapshot: Awaited<ReturnType<MemoryHeadUpdateAdapter['readBoundSnapshot']>>;
+    try { snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot); }
+    catch (cause) {
+      if (mode === 'lookup' && (cause as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+        this.requireGuardedContext(tenant, contextRoot);
+        return undefined;
+      }
+      throw cause;
+    }
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode !== 'public' });
     memory.setFilePath(locator);
     this.requireGuardedContext(tenant, contextRoot);
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
@@ -737,8 +750,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const matches = summaries.filter(summary => matchesPortfolioName(summary.name, name));
     if (!matches.length) return undefined;
     if (matches.length !== 1 || !matches[0].filePath) throw Object.assign(new Error('Ambiguous memory name'), {code: 'EHEADCONFLICT'});
-    const observed = await this.readGuardedMemory(matches[0].filePath, 'mutation');
+    const observed = await this.readGuardedMemory(matches[0].filePath, 'lookup', {tenant, root: contextRoot});
     this.requireGuardedContext(tenant, contextRoot);
+    if (!observed) return undefined;
     if (observed.memory.metadata.name !== matches[0].name) throw Object.assign(new Error('Memory name changed during lookup'), {code: 'EHEADCONFLICT'});
     const definition = this.parseContent(observed.content);
     const parsed = definition.data;
