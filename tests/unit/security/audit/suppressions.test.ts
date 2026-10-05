@@ -53,6 +53,30 @@ describe('Security Audit Suppressions', () => {
         expect(shouldSuppress('DMCP-SEC-004', 'src/web-console/ui/invitation-lifecycle-ui.js')).toBe(true);
       });
 
+      it.each([
+        'src/storage/FileMemoryAbortIntentCodec.ts',
+        '/home/runner/work/mcp-server/mcp-server/src/storage/FileMemoryAbortIntentCodec.ts',
+        '/Users/developer/Projects/DollhouseMCP/src/storage/FileMemoryAbortIntentCodec.ts',
+        String.raw`C:\workspace\mcp-server\src\storage\FileMemoryAbortIntentCodec.ts`,
+      ])('should recognize the pure codec audit disposition for %s', file => {
+        expect(shouldSuppress('DMCP-SEC-006', file)).toBe(true);
+      });
+
+      it.each([
+        'src/storage/FileMemoryOwnedHeadEvidence.ts',
+        'src/storage/FileMemoryFence.ts',
+        'src/storage/FileMemoryAbortIntentCodecNeighbor.ts',
+        'src/storage/nested/FileMemoryAbortIntentCodec.ts',
+      ])('should leave operational and neighboring audit findings unsuppressed for %s', file => {
+        expect(shouldSuppress('DMCP-SEC-006', file)).toBe(false);
+      });
+
+      it.each(['DMCP-SEC-004', 'CWE-89-001', 'OWASP-A01-001'])(
+        'should leave the pure codec covered by other rule %s', rule => {
+          expect(shouldSuppress(rule, 'src/storage/FileMemoryAbortIntentCodec.ts')).toBe(false);
+        },
+      );
+
       it('should leave neighboring invitation findings unsuppressed', () => {
         expect(shouldSuppress('DMCP-SEC-006',
           'src/web-console/modules/account-admin/DurableInvitationAdminService.ts')).toBe(false);

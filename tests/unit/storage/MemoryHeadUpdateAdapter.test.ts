@@ -23,7 +23,9 @@ import { Memory, type MemoryMetadata } from '../../../src/elements/memories/Memo
 import { MemorySearchIndex } from '../../../src/elements/memories/MemorySearchIndex.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { logger } from '../../../src/utils/logger.js';
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, TRUST_LEVELS } from '../../../src/elements/memories/constants.js';
+import { BackgroundValidator } from '../../../src/security/validation/BackgroundValidator.js';
+import type { PatternExtractor } from '../../../src/security/validation/PatternExtractor.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
@@ -108,6 +110,48 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
   }
 }
 const posix = process.platform === 'win32' ? describe.skip : describe;
+posix('guarded background validation refusal with an owned file manager', () => {
+  it.each([false, true])('refuses before discovery or mutation with published cache=%s', async (publishCache) => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager();
+      const source = await manager.load('head.yaml');
+      expect([...source.getEntries().values()][0].trustLevel).toBe(TRUST_LEVELS.UNTRUSTED);
+      if (publishCache) await manager.save(source);
+      const cached = manager.cached('head.yaml');
+      const sourceState = source.serialize();
+      const cachedState = cached?.serialize();
+      const original = await f.owners.readHeadSnapshot('head.yaml');
+      const list = jest.spyOn(manager, 'list');
+      const save = jest.spyOn(manager, 'save');
+      const read = jest.spyOn(f.owners, 'readHeadSnapshot');
+      const update = jest.spyOn(f.owners, 'updateOwnedHead');
+      const legacy = jest.spyOn(FileOperationsService.prototype, 'writeFile');
+      const info = jest.spyOn(logger, 'info');
+      const debug = jest.spyOn(logger, 'debug');
+      const extractPatterns = jest.fn(() => { throw new Error('Unexpected guarded extraction'); });
+      const validator = new BackgroundValidator({ extractPatterns } as unknown as PatternExtractor, manager, { enabled: false });
+      try {
+        await validator.processUntrustedMemories();
+        expect({ list: list.mock.calls.length, save: save.mock.calls.length, reads: read.mock.calls.length,
+          writes: update.mock.calls.length, extract: extractPatterns.mock.calls.length })
+          .toEqual({ list: 0, save: 0, reads: 0, writes: 0, extract: 0 });
+        expect(legacy).not.toHaveBeenCalled();
+        expect(source.serialize()).toBe(sourceState);
+        expect(manager.cached('head.yaml')).toBe(cached);
+        expect(cached?.serialize()).toBe(cachedState);
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(original);
+        expect(info.mock.calls.map(call => call[0])).not.toContain('Updated trust levels in memory');
+        expect(info.mock.calls.map(call => call[0])).not.toContain('Validation pass complete');
+        expect(debug.mock.calls.map(call => call[0])).not.toContain('Memory saved successfully');
+        expect(validator.getStats().isProcessing).toBe(false);
+      } finally {
+        validator.stop();
+        for (const spy of [list, save, read, update, legacy, info, debug]) spy.mockRestore();
+      }
+    } finally { await f.cleanup(); }
+  });
+});
 posix('dormant central owned memory UPDATE', () => {
   it('hydrates exact snapshot entries/instructions/extensions and self-saves without a legacy writer', async () => {
     const f = await fixture();

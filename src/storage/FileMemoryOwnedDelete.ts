@@ -142,8 +142,14 @@ export class FileMemoryOwnedDelete {
     return observeEvidenceDirectory(locator, target, full,
       inspect => this.budget.scan(target, inspect), names => this.budget.check(locator, names), fail);
   }
-  private read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true): Promise<Artifact & { links: '1' | '2'; mode: string; uid: string }> {
-    return readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail);
+  private read(target: string, maximum: number, links?: '1' | '2', privateFile?: boolean): Promise<Artifact & { links: '1' | '2'; mode: string; uid: string }>;
+  private read(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
+    options: { optionalInitialAbsence: true }): Promise<(Artifact & { links: '1' | '2'; mode: string; uid: string }) | undefined>;
+  private read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true,
+    options?: { optionalInitialAbsence: true }): Promise<(Artifact & { links: '1' | '2'; mode: string; uid: string }) | undefined> {
+    return options
+      ? readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), { fail, ...options })
+      : readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail);
   }
   private async proof(full = false): Promise<void> {
     for (const before of this.directories) {
@@ -301,15 +307,10 @@ export class FileMemoryOwnedDelete {
     if (this.erasure && registryParent.names.some(value => value.toLowerCase().startsWith(erasurePrefix))) fail();
   }
   private async optional(target: string, limit = LIMIT, privateFile = true): Promise<Artifact | undefined> {
-    try {
-      const value = await this.read(target, limit, '1', privateFile);
-      this.files.set(target, value);
-      return artifact(value.raw, value.identity);
-    }
-    catch (cause) {
-      if (causeCode(cause) === 'ENOENT') return undefined;
-      throw cause;
-    }
+    const value = await this.read(target, limit, '1', privateFile, { optionalInitialAbsence: true });
+    if (!value) return undefined;
+    this.files.set(target, value);
+    return artifact(value.raw, value.identity);
   }
   private async absent(target: string): Promise<void> {
     try { await fs.lstat(target, { bigint: true }); }

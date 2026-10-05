@@ -31,13 +31,19 @@ Synthetic backend ports establish manager publication and error behavior. Actual
 Central UPDATE does not complete the writer inventory. Each remaining family needs its adapter or explicit guarded-mode refusal:
 
 - AQL debounced append, retry/rebase and shutdown durability; the dormant immediate append/clear route below does not enable these paths.
-- Console ETag/update/delete and installer, pull, sync, copy, import and restore paths.
-- Background trust, retention, seeds, name repair and backup replacement.
+- Console delete and installer, pull, sync, copy, import and restore paths; dormant console ETag/UPDATE is delivered in [#2996](https://github.com/DollhouseMCP/mcp-server/pull/2996).
+- Guarded background trust mutation, retention, seeds, name repair and backup replacement; background trust currently refuses as described below.
 - Direct database child mutations and conditional CREATE/RENAME/DELETE, rollover and account purge.
 
 Before file writer activation, adoption, CREATE and UPDATE must exclude physical canonical archive descendants, with alias-safe admission and preservation tests. Shared namespace-refusal audit must redact paths/tokens and preserve the original refusal if delivery fails. These remain the [archive-admission](https://github.com/DollhouseMCP/mcp-server/issues/2906#issuecomment-5945613602) and [refusal-audit](https://github.com/DollhouseMCP/mcp-server/issues/2906#issuecomment-5956682199) follow-ups; merged head DELETE and archive erasure do not establish every writer's admission boundary.
 
 The existing [#2870](https://github.com/DollhouseMCP/mcp-server/issues/2870), [#2871](https://github.com/DollhouseMCP/mcp-server/issues/2871) and [#2907](https://github.com/DollhouseMCP/mcp-server/issues/2907) activation gate retains complete route-or-refuse coverage, legacy-writer drain, qualified data reconciliation, protected backup/restore, ownership-aware rollback and combined lifecycle acceptance. Remaining rename/manual-lease procedures, mixed-expiry retention and practical capacity/concurrency qualification retain their existing scopes. Foundation merges do not authorize activation, maintenance execution or deployment. Separate performance, maintainability and dependency/image remediation follow-ups are not replaced by this adapter.
+
+## Guarded background validation refusal
+
+The [#2906 route-or-refuse contract](https://github.com/DollhouseMCP/mcp-server/issues/2906#issuecomment-5894882753) includes background trust updates. `BackgroundValidator.processUntrustedMemories` checks the manager's required `isGuardedHeadUpdateEnabled()` API inside its existing error/finally boundary, before discovery. An injected guarded manager refuses before list, extraction, trust mutation or save; a selection-probe error also prevents discovery. The static unsupported diagnostic uses existing processing-error reporting, and the finally block resets processing state. Entries remain unchanged for a future supported process.
+
+The existing `Promise<void>` API, configuration and timers remain unchanged. A refused pass is not processed success, accepted queued work or a durable retry promise. Each scheduled or direct pass checks selection independently. Adapter-absent managers retain the ordinary pipeline. This refusal captures no tenant data or ownership because it performs no memory access; it does not cancel a legacy pass already in flight. Activation still requires legacy-writer quiescence and the remaining shared audit prerequisites above.
 
 ## Dormant immediate MCP-AQL mutations (#2993)
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { Dir, type Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -73,34 +73,60 @@ describe('recovery-private resource reservation', () => {
     expect(() => budget.reserve()).toThrow();
     await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('requires room for EOF without creating artifacts', async () => {
-    const started = performance.now();
-    const diagnostic = (phase: string, accounting: object = {}) => process.stderr.write(`ADOPTION EOF ${JSON.stringify({
-      phase, elapsedMs: performance.now() - started, node: process.version, pid: process.pid, noiseFiles: 4096, ...accounting })}\n`);
-    diagnostic('setup-start');
+  // These two fixtures have separate approved 10-second setup bounds. Every
+  // discovery/reservation check and artifact assertion stays in its 10-second case.
+  describe('EOF census fixture', () => {
     let root: string;
-    try {
-      root = await fixture();
-      await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(root, `n${index}`), 'x')));
-    } finally { diagnostic('setup-end'); }
-    const budget = new FileMemoryAdoptionRecoveryScanBudget();
-    try {
-      await expect(budget.discover(root, root, '.head.memory-owner.json', 'owner')).rejects.toMatchObject({ code: 'EHEADRESOURCE' });
-    } finally { diagnostic('discover-end', { chargedReads: budget.consumed, scanLimit: budget.limit }); }
-    expect(budget.consumed).toBe(4096);
-    await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
-    diagnostic('assertions-complete', { chargedReads: budget.consumed, scanLimit: budget.limit });
+    beforeEach(async () => {
+      const started = performance.now();
+      const diagnostic = (phase: string) => process.stderr.write(`ADOPTION EOF ${JSON.stringify({
+        phase, scope: 'fixture', elapsedMs: performance.now() - started, node: process.version, pid: process.pid, noiseFiles: 4096 })}\n`);
+      diagnostic('setup-start');
+      try {
+        root = await fixture();
+        await Promise.all(Array.from({ length: 4096 }, (_, index) => fs.writeFile(path.join(root, `n${index}`), 'x')));
+      } finally { diagnostic('setup-end'); }
+    }, 10000);
+    it('requires room for EOF without creating artifacts', async () => {
+      const started = performance.now();
+      const diagnostic = (phase: string, accounting: object = {}) => process.stderr.write(`ADOPTION EOF ${JSON.stringify({
+        phase, scope: 'operation-verification', elapsedMs: performance.now() - started, node: process.version, pid: process.pid, noiseFiles: 4096, ...accounting })}\n`);
+      const budget = new FileMemoryAdoptionRecoveryScanBudget();
+      diagnostic('discover-start');
+      try {
+        await expect(budget.discover(root, root, '.head.memory-owner.json', 'owner')).rejects.toMatchObject({ code: 'EHEADRESOURCE' });
+      } finally { diagnostic('discover-end', { chargedReads: budget.consumed, scanLimit: budget.limit }); }
+      expect(budget.consumed).toBe(4096);
+      await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+      diagnostic('assertions-complete', { chargedReads: budget.consumed, scanLimit: budget.limit });
+    }, 10000);
   });
-  it('rejects aggregate projection overflow after a complete admitted discovery', async () => {
-    const root = await fixture();
-    await Promise.all(Array.from({ length: 4094 }, (_, index) => fs.writeFile(path.join(root, `n${index}`), 'x')));
-    const budget = new FileMemoryAdoptionRecoveryScanBudget();
-    await budget.discover(root, root, '.head.memory-owner.json', 'owner');
-    expect(budget.consumed).toBe(4095);
-    expect(() => budget.reserve()).toThrow(expect.objectContaining({ code: 'EHEADRESOURCE' }));
-    expect(budget.limit).toBe(4096); expect(budget.consumed).toBe(4095);
-    await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await fs.readdir(root)).toHaveLength(4094);
+  describe('aggregate projection census fixture', () => {
+    let root: string;
+    beforeEach(async () => {
+      const started = performance.now();
+      const diagnostic = (phase: string) => process.stderr.write(`ADOPTION PROJECTION ${JSON.stringify({
+        phase, scope: 'fixture', elapsedMs: performance.now() - started, noiseFiles: 4094 })}\n`);
+      diagnostic('setup-start');
+      root = await fixture();
+      await Promise.all(Array.from({ length: 4094 }, (_, index) => fs.writeFile(path.join(root, `n${index}`), 'x')));
+      diagnostic('setup-end');
+    }, 10000);
+    it('rejects aggregate projection overflow after a complete admitted discovery', async () => {
+      const started = performance.now();
+      const diagnostic = (phase: string) => process.stderr.write(`ADOPTION PROJECTION ${JSON.stringify({
+        phase, scope: 'operation-verification', elapsedMs: performance.now() - started, noiseFiles: 4094 })}\n`);
+      const budget = new FileMemoryAdoptionRecoveryScanBudget();
+      diagnostic('discover-start');
+      await budget.discover(root, root, '.head.memory-owner.json', 'owner');
+      diagnostic('discover-end');
+      expect(budget.consumed).toBe(4095);
+      expect(() => budget.reserve()).toThrow(expect.objectContaining({ code: 'EHEADRESOURCE' }));
+      expect(budget.limit).toBe(4096); expect(budget.consumed).toBe(4095);
+      await expect(fs.lstat(path.join(root, '.memory-owners'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await fs.readdir(root)).toHaveLength(4094);
+      diagnostic('assertions-complete');
+    }, 10000);
   });
   it('does not expand a frozen slot weight when foreign names appear later', async () => {
     const root = await fixture(), budget = new FileMemoryAdoptionRecoveryScanBudget();

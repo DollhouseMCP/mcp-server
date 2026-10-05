@@ -172,9 +172,10 @@ export class BackgroundValidator {
     this.isProcessing = true;
 
     try {
-      // PHASE 1 INCOMPLETE: Memory discovery integration pending
-      // Issue #1314 Phase 1 - This will be connected to Memory loading system
-      // in a follow-up PR once Memory.find() API is available
+      if (this.memoryManager.isGuardedHeadUpdateEnabled()) {
+        throw new Error('Background validation is unavailable for guarded memory updates; no entries were processed.');
+      }
+
       const untrustedMemories = await this.findMemoriesWithUntrustedEntries();
 
       if (untrustedMemories.length === 0) {

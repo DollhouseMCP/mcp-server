@@ -11,6 +11,7 @@ import { FileMemoryOwnerSnapshots, type RenamePublication, type RenameOwnedReque
 import { Dir, type Dirent, type BigIntStats } from 'node:fs';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
 import { FileMemoryOwnedRename, captureRenameRequest } from '../../../src/storage/FileMemoryOwnedRename.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 
@@ -43,6 +44,23 @@ describe('dormant same-parent managed RENAME', () => {
       expect(() => new FileMemoryOwnerSnapshots({ tenantRoot: 'C:\\', getCurrentUserId: () => USER, fence: new FileMemoryFence() })).toThrow('requires POSIX');
     }); return;
   }
+  it('does not report optional initial absence as an audit failure during a successful rename', async () => {
+    const f = await fixture();
+    await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.lstat(f.destinationJournal)).rejects.toMatchObject({ code: 'ENOENT' });
+    const failures: unknown[] = [];
+    const detach = SecurityMonitor.addLogListener(event => {
+      if (event.type === 'OPERATION_FAILED' && ['FileMemoryOwnedHeadEvidence', 'FileMemoryFence'].includes(event.source)) failures.push(event);
+    });
+    try {
+      const moved = await f.store().renameOwned(f.request);
+      expect(moved.ownerId).toBe(f.token.ownerId);
+      expect(moved.locator).toBe(f.request.destinationLocator);
+      expect((await f.store().readHeadSnapshot(moved.locator)).token).toEqual(moved);
+      expect(await fs.readFile(f.destination, 'utf8')).toBe(CONTENT);
+      expect(failures).toEqual([]);
+    } finally { detach(); }
+  });
   it.each([false, true])('preserves owner/content/inode and increments revision nested=%s', async nested => {
     const f = await fixture(nested), before = await fs.lstat(f.source, { bigint: true }), foreign = await evidence(f.foreign);
     const admission = FileMemoryOwnedRename.prototype as unknown as { reserve: () => void };
@@ -135,11 +153,11 @@ describe('dormant same-parent managed RENAME', () => {
     const f = await fixture(), primary = new Error('primary filesystem failure');
     Object.defineProperty(primary, 'code', { get() { throw new Error('code getter failure'); } });
     const before = await evidence(f.source), names = (await fs.readdir(f.root)).sort();
-    const internals = FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean) => Promise<unknown> };
+    const internals = FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<unknown> };
     const originalRead = internals.read; let reached = false;
-    jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile) {
+    jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile, options) {
       if (target === f.destinationJournal) { reached = true; throw primary; }
-      return originalRead.call(this, target, maximum, links, privateFile);
+      return originalRead.call(this, target, maximum, links, privateFile, options);
     });
     const failure = await f.store().renameOwned(f.request).catch(error => error);
     expect(failure).toBeInstanceOf(Error); expect(reached).toBe(true); expect(failure.cause).toBe(primary);
@@ -314,15 +332,15 @@ describe('dormant same-parent managed RENAME', () => {
   });
 
   it('refuses a replaced partial journal before another write on the original descriptor', async () => {
-    const f = await fixture(), originalRead = (FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean) => Promise<unknown> }).read;
+    const f = await fixture(), originalRead = (FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<unknown> }).read;
     const internals = FileMemoryOwnedRename.prototype as unknown as { read: typeof originalRead };
     let intercepted = false; const backup = `${f.sourceJournal}.foreign-backup`;
-    jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile) {
+    jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile, options) {
       if (!intercepted && target === f.sourceJournal && maximum < 8192) {
         intercepted = true; const partial = await fs.readFile(target);
         await fs.rename(target, backup); await fs.writeFile(target, partial, { flag: 'wx', mode: 0o600 });
       }
-      return originalRead.call(this, target, maximum, links, privateFile);
+      return originalRead.call(this, target, maximum, links, privateFile, options);
     });
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     expect(intercepted).toBe(true); expect(await fs.readFile(backup)).toEqual(await fs.readFile(f.sourceJournal));
@@ -330,13 +348,13 @@ describe('dormant same-parent managed RENAME', () => {
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it.each(['link', 'unlink'] as const)('refuses original head mode drift in the actual %s syscall window', async operation => {
-    const f = await fixture(), internals = FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean) => Promise<unknown> };
+    const f = await fixture(), internals = FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<unknown> };
     const originalRead = internals.read; let changed = false;
-    jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile) {
+    jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile, options) {
       if (!changed && ((operation === 'link' && target === f.source && links === '2') || (operation === 'unlink' && target === f.destination && links === '1'))) {
         changed = true; await fs.chmod(target, 0o640);
       }
-      return originalRead.call(this, target, maximum, links, privateFile);
+      return originalRead.call(this, target, maximum, links, privateFile, options);
     });
     const failure = await f.store().renameOwned(f.request).catch(error => error);
     expect(changed).toBe(true); expect(failure).toMatchObject({ code: 'EHEADCOMMITUNKNOWN' });
@@ -395,7 +413,7 @@ describe('dormant same-parent managed RENAME', () => {
     });
     const targeted = FileMemoryOwnedRename.prototype as unknown as {
       observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown>;
-      read: (target: string, maximum: number, links?: '1' | '2', privateFile?: boolean) => Promise<unknown>;
+      read: (target: string, maximum: number, links?: '1' | '2', privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<unknown>;
       absent: (target: string) => Promise<void> };
     const transitionCapture = targeted.observeTransition, read = targeted.read, absent = targeted.absent;
     let inside = false;
@@ -409,9 +427,9 @@ describe('dormant same-parent managed RENAME', () => {
         }
       });
     });
-    const readSpy = jest.spyOn(targeted, 'read').mockImplementation(function(this: typeof targeted, target, maximum, links, privateFile) {
+    const readSpy = jest.spyOn(targeted, 'read').mockImplementation(function(this: typeof targeted, target, maximum, links, privateFile, options) {
       if (inside) counts.targetedFileReads++;
-      return read.call(this, target, maximum, links, privateFile);
+      return read.call(this, target, maximum, links, privateFile, options);
     });
     const absenceSpy = jest.spyOn(targeted, 'absent').mockImplementation(function(this: typeof targeted, target) {
       if (inside) counts.targetedAbsenceChecks++;
