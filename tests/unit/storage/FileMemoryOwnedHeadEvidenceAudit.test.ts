@@ -87,7 +87,7 @@ describe('owned-head evidence failure audit boundaries', () => {
       directory = opened;
       throw primary;
     }, 'directory failure')).rejects.toBe(primary);
-    await expect(directory!.read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+    await expect(Promise.resolve().then(() => directory!.read())).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
     expect(stages()).toEqual(['directory-census']);
   });
 
