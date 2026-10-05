@@ -81,6 +81,7 @@ describe('cleanup-inclusive erasure capacity test lifecycle', () => {
     const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
     const source = `
 const [moduleUrl,root,phase]=process.argv.slice(1);
+const {openSync,writeSync:markerWriteSync,closeSync}=await import('node:fs');
 if(phase==='diagnostic failure'){
  const {createRequire,syncBuiltinESMExports}=await import('node:module');
  createRequire(moduleUrl)('node:fs').writeSync=()=>{throw new Error('diagnostic refused');};syncBuiltinESMExports();
@@ -89,7 +90,16 @@ const {runErasureCapacityLifecycle}=await import(moduleUrl);
 const fs=await import('node:fs/promises');
 await runErasureCapacityLifecycle({deadlineMs:10,watchdogMs:100,label:'actual hanging child'},async scope=>{
  scope.registerCleanup(async()=>{if(phase==='cleanup')await new Promise(()=>{});await fs.rm(root,{recursive:true});},root);
- await fs.writeFile(root+'/started','actual child');
+ const markerFd=openSync(root+'/started','w');
+ const marker=Buffer.from('actual child');
+ try{
+  let offset=0;
+  while(offset<marker.length){
+   const written=markerWriteSync(markerFd,marker,offset,marker.length-offset);
+   if(written<=0)throw new Error('Startup marker made no progress');
+   offset+=written;
+  }
+ }finally{closeSync(markerFd);}
  if(phase!=='cleanup')await new Promise(()=>{});
 });
 await fs.writeFile(root+'/next-case','MUST NOT EXIST');
