@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it as jestIt, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it as jestIt, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import * as os from 'node:os';
@@ -282,31 +282,39 @@ describe('dormant exact head DELETE with owner erasure pending', () => {
     expect(error).toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' } });
     expect(await tree(f.root)).toEqual(before);
   });
-  it('refuses an overflowing admission census before intent publication', async () => {
-    // Diagnostic only: keep setup, snapshots, refusal and equality inside the existing 10-second case bound.
-    const started = process.hrtime.bigint();
-    const mark = (phase: string) => process.stderr.write(`[owned-delete-overflow] ${phase} elapsedMs=${Number(process.hrtime.bigint() - started) / 1e6}\n`);
-    mark('fixture-BEGIN');
-    const f = await fixture();
-    mark('fixture-END');
-    mark('4100-setup-BEGIN');
-    for (let offset = 0; offset < 4100; offset += 16) {
-      const batch = await Promise.allSettled(Array.from({ length: Math.min(16, 4100 - offset) }, (_, index) => fs.writeFile(path.join(f.root, `Foreign${offset + index}`), 'unchanged')));
-      for (const entry of batch) if (entry.status === 'rejected') throw entry.reason;
-    }
-    mark('4100-setup-END');
-    mark('before-tree-BEGIN');
-    const before = await tree(f.root);
-    mark('before-tree-END');
-    mark('delete-refusal-BEGIN');
-    await expect(f.owners.deleteOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' } });
-    mark('delete-refusal-END');
-    mark('after-tree-BEGIN');
-    const after = await tree(f.root);
-    mark('after-tree-END');
-    mark('equality-BEGIN');
-    expect(after).toEqual(before);
-    mark('equality-END');
+  describe('overflowing admission census fixture', () => {
+    let f: Awaited<ReturnType<typeof fixture>>;
+    // Approved scoped contract: fixture creation has its own 10-second bound;
+    // both complete trees, refusal and equality remain in the 10-second case.
+    beforeEach(async () => {
+      const started = process.hrtime.bigint();
+      const mark = (phase: string) => process.stderr.write(`[owned-delete-overflow] scope=fixture ${phase} elapsedMs=${Number(process.hrtime.bigint() - started) / 1e6}\n`);
+      mark('fixture-BEGIN');
+      f = await fixture();
+      mark('fixture-END');
+      mark('4100-setup-BEGIN');
+      for (let offset = 0; offset < 4100; offset += 16) {
+        const batch = await Promise.allSettled(Array.from({ length: Math.min(16, 4100 - offset) }, (_, index) => fs.writeFile(path.join(f.root, `Foreign${offset + index}`), 'unchanged')));
+        for (const entry of batch) if (entry.status === 'rejected') throw entry.reason;
+      }
+      mark('4100-setup-END');
+    }, 10000);
+    it('refuses an overflowing admission census before intent publication', async () => {
+      const started = process.hrtime.bigint();
+      const mark = (phase: string) => process.stderr.write(`[owned-delete-overflow] scope=operation-verification ${phase} elapsedMs=${Number(process.hrtime.bigint() - started) / 1e6}\n`);
+      mark('before-tree-BEGIN');
+      const before = await tree(f.root);
+      mark('before-tree-END');
+      mark('delete-refusal-BEGIN');
+      await expect(f.owners.deleteOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' } });
+      mark('delete-refusal-END');
+      mark('after-tree-BEGIN');
+      const after = await tree(f.root);
+      mark('after-tree-END');
+      mark('equality-BEGIN');
+      expect(after).toEqual(before);
+      mark('equality-END');
+    }, 10000);
   });
 
   it.each(['read', 'update', 'archive'] as const)('pending DELETING owner blocks ordinary %s without changing residual evidence', async action => {
