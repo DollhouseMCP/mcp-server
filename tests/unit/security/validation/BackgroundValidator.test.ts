@@ -5,11 +5,12 @@
  * DI REFACTOR: Adapted for instance-based architecture
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { BackgroundValidator } from '../../../../src/security/validation/BackgroundValidator.js';
 import { PatternExtractor } from '../../../../src/security/validation/PatternExtractor.js';
 import { PatternEncryptor } from '../../../../src/security/encryption/PatternEncryptor.js';
 import { TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
+import { logger } from '../../../../src/utils/logger.js';
 
 describe('BackgroundValidator', () => {
   let validator: BackgroundValidator;
@@ -20,6 +21,7 @@ describe('BackgroundValidator', () => {
   beforeEach(async () => {
     // Create mock memory manager
     mockMemoryManager = {
+      isGuardedHeadUpdateEnabled: () => false,
       findMemoriesWithUntrustedEntries: () => [],
       updateMemory: () => Promise.resolve(),
       list: () => Promise.resolve([]),
@@ -49,6 +51,112 @@ describe('BackgroundValidator', () => {
 
   afterEach(() => {
     validator.stop();
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  describe('guarded background validation refusal', () => {
+    function untrustedSource() {
+      const entry = { id: 'retained-entry', content: 'Ordinary clean prose', trustLevel: TRUST_LEVELS.UNTRUSTED };
+      const memory = { id: 'cached-unbound-memory', getEntriesByTrustLevel: () => [entry] };
+      mockMemoryManager.list = jest.fn(async () => [memory]);
+      mockMemoryManager.save = jest.fn(async () => {});
+      return entry;
+    }
+
+    it('refuses before mutating a cached unbound source or trying its save', async () => {
+      const entry = untrustedSource();
+      mockMemoryManager.isGuardedHeadUpdateEnabled = () => true;
+      mockMemoryManager.save = jest.fn(async () => { throw new Error('No captured ownership'); });
+      const before = structuredClone(entry);
+      const info = jest.spyOn(logger, 'info');
+      const debug = jest.spyOn(logger, 'debug');
+      const error = jest.spyOn(logger, 'error');
+      const extract = jest.spyOn(patternExtractor, 'extractPatterns');
+      await validator.processUntrustedMemories();
+      expect({ list: mockMemoryManager.list.mock.calls.length, save: mockMemoryManager.save.mock.calls.length, entry })
+        .toEqual({ list: 0, save: 0, entry: before });
+      expect(extract).not.toHaveBeenCalled();
+      expect(info.mock.calls.map(call => call[0])).not.toContain('Updated trust levels in memory');
+      expect(info.mock.calls.map(call => call[0])).not.toContain('Validation pass complete');
+      expect(debug.mock.calls.map(call => call[0])).not.toContain('Memory saved successfully');
+      expect(error).toHaveBeenCalledWith('Error during background validation', {
+        error: expect.objectContaining({ message: 'Background validation is unavailable for guarded memory updates; no entries were processed.' }),
+      });
+      expect(validator.getStats().isProcessing).toBe(false);
+    });
+
+    it('contains a selection probe error and refuses before discovery', async () => {
+      const entry = untrustedSource();
+      const cause = new Error('Selection unavailable');
+      mockMemoryManager.isGuardedHeadUpdateEnabled = jest.fn(() => { throw cause; });
+      const error = jest.spyOn(logger, 'error');
+      await validator.processUntrustedMemories();
+      expect(mockMemoryManager.isGuardedHeadUpdateEnabled).toHaveBeenCalledTimes(1);
+      expect(mockMemoryManager.list).not.toHaveBeenCalled();
+      expect(mockMemoryManager.save).not.toHaveBeenCalled();
+      expect(entry.trustLevel).toBe(TRUST_LEVELS.UNTRUSTED);
+      expect(error).toHaveBeenCalledWith('Error during background validation', { error: cause });
+      expect(validator.getStats().isProcessing).toBe(false);
+    });
+
+    it('fails closed when a test double lacks the required selection API', async () => {
+      const entry = untrustedSource();
+      delete mockMemoryManager.isGuardedHeadUpdateEnabled;
+      const error = jest.spyOn(logger, 'error');
+      await validator.processUntrustedMemories();
+      expect(mockMemoryManager.list).not.toHaveBeenCalled();
+      expect(mockMemoryManager.save).not.toHaveBeenCalled();
+      expect(entry.trustLevel).toBe(TRUST_LEVELS.UNTRUSTED);
+      expect(error).toHaveBeenCalledWith('Error during background validation', { error: expect.any(TypeError) });
+      expect(validator.getStats().isProcessing).toBe(false);
+    });
+
+    it('keeps the ordinary false-selection validation and save pipeline', async () => {
+      const entry = untrustedSource();
+      await validator.processUntrustedMemories();
+      expect(mockMemoryManager.list).toHaveBeenCalledTimes(1);
+      expect(entry.trustLevel).toBe(TRUST_LEVELS.VALIDATED);
+      expect(mockMemoryManager.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves enabled timer and stop behavior while each guarded pass refuses', async () => {
+      jest.useFakeTimers();
+      untrustedSource();
+      const probe = jest.fn(() => true);
+      mockMemoryManager.isGuardedHeadUpdateEnabled = probe;
+      const enabled = new BackgroundValidator(patternExtractor, mockMemoryManager, { intervalSeconds: 60 });
+      try {
+        enabled.start();
+        expect(probe).toHaveBeenCalledTimes(1);
+        enabled.start();
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(probe).toHaveBeenCalledTimes(2);
+        expect(mockMemoryManager.list).not.toHaveBeenCalled();
+        expect(mockMemoryManager.save).not.toHaveBeenCalled();
+        expect(enabled.getStats().isProcessing).toBe(false);
+        enabled.stop();
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(probe).toHaveBeenCalledTimes(2);
+      } finally { enabled.stop(); }
+    });
+
+    it('checks selection again before a later scheduled pass', async () => {
+      jest.useFakeTimers();
+      let guarded = false;
+      mockMemoryManager.isGuardedHeadUpdateEnabled = () => guarded;
+      mockMemoryManager.list = jest.fn(async () => []);
+      const enabled = new BackgroundValidator(patternExtractor, mockMemoryManager, { intervalSeconds: 60 });
+      try {
+        enabled.start();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(mockMemoryManager.list).toHaveBeenCalledTimes(1);
+        guarded = true;
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(mockMemoryManager.list).toHaveBeenCalledTimes(1);
+        expect(enabled.getStats().isProcessing).toBe(false);
+      } finally { enabled.stop(); }
+    });
   });
 
   describe('Service Lifecycle', () => {
