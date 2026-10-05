@@ -1,3 +1,12 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { PortfolioService } from '../../../src/web-console/modules/portfolio/PortfolioService.js';
+import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
+import { InMemoryUserIntegrationStore } from '../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
+import { InMemoryPortfolioSyncJobStore } from '../../../src/web-console/stores/InMemoryPortfolioSyncJobStore.js';
+import { ManagerBackedPortfolioElementStore, type ManagerBackedPortfolioManagers } from '../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
+import { problemForConsoleError } from '../../../src/web-console/platform/ProblemResponses.js';
+import { ConsoleStoreValidationError } from '../../../src/web-console/stores/ConsoleStoreValidation.js';
+import { PortfolioElementVersionConflictError } from '../../../src/web-console/stores/IPortfolioElementStore.js';
 import { describe, it, expect, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -13,7 +22,8 @@ import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { Memory, type MemoryMetadata } from '../../../src/elements/memories/Memory.js';
 import { MemorySearchIndex } from '../../../src/elements/memories/MemorySearchIndex.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
-import { MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
+import { logger } from '../../../src/utils/logger.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from '../../../src/elements/memories/constants.js';
 import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
@@ -30,6 +40,7 @@ import type { HandlerRegistry } from '../../../src/handlers/mcp-aql/MCPAQLHandle
 import { ContextTracker, type ExecutionContext } from '../../../src/security/encryption/ContextTracker.js';
 import { createUserIdResolver } from '../../../src/database/UserContext.js';
 import { SessionActivationRegistry } from '../../../src/state/SessionActivationState.js';
+import yaml from 'js-yaml';
 const USER = '11111111-1111-4111-8111-111111111111';
 class ObservedManager extends MemoryManager {
   serializeGate?: Promise<void>;
@@ -50,7 +61,8 @@ class ObservedManager extends MemoryManager {
     return super.afterSave(memory, locator);
   }
 }
-async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string, expired = false) {
+async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string, expired = false,
+  transformSeed?: (raw: string) => string) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-central-owned-'));
   const metadataService = new MetadataService();
   const lock = new FileLockManager();
@@ -72,6 +84,10 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
   try {
     await ordinary.save(memory, 'head.yaml');
     const tenantRoot = await fs.realpath(path.join(root, 'memories'));
+    if (transformSeed) {
+      const seedPath = path.join(tenantRoot, 'head.yaml');
+      await fs.writeFile(seedPath, transformSeed(await fs.readFile(seedPath, 'utf8')));
+    }
     const fence = new FileMemoryFence();
     const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot, getCurrentUserId: currentTenant, fence });
     const owners = new FileMemoryOwnerSnapshots({ coordinator });
@@ -84,7 +100,7 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
       return { manager, adapter };
     };
     const cleanup = async () => { for (const manager of managers) manager.dispose(); await fs.rm(root, { recursive: true, force: true }); };
-    return { root, tenantRoot, owners, fence, makeManager, setTenant: (value: string) => { tenant = value; }, cleanup };
+    return { root, tenantRoot, owners, fence, ordinary, makeManager, setTenant: (value: string) => { tenant = value; }, cleanup };
   } catch (cause) {
     for (const manager of managers) manager.dispose();
     await fs.rm(root, { recursive: true, force: true });
@@ -801,4 +817,1575 @@ describe('pure working candidate snapshot', () => {
     expect(clone.serialize()).not.toContain('changed');
     expect(clone.getEntries().size).toBe(1);
   });
+});
+
+function consoleStore(manager: MemoryManager, currentUser = () => USER): ManagerBackedPortfolioElementStore {
+  return new ManagerBackedPortfolioElementStore({getCurrentUserId: currentUser,
+    managers: {memories: manager} as unknown as ManagerBackedPortfolioManagers});
+}
+
+async function tagBoundaryFixture(rawTags: unknown = ['original'], absent = false) {
+  const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+    const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+    if (absent) delete definition.metadata.tags;
+    else definition.metadata.tags = rawTags;
+    return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+  });
+  const {manager} = f.makeManager(); const store = consoleStore(manager);
+  const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+  const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {},
+    headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+  const get = await service.getElement(request(), 'memories', 'owned-memory');
+  const before = await f.owners.readHeadSnapshot('head.yaml');
+  const definition = yaml.load(before.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+  const tree = async () => {
+    const files: Record<string, string> = {};
+    for (const entry of (await fs.readdir(f.tenantRoot, {recursive: true})).sort()) {
+      const fullPath = path.join(f.tenantRoot, entry);
+      if ((await fs.lstat(fullPath)).isFile()) files[entry] = (await fs.readFile(fullPath)).toString('base64');
+    }
+    return files;
+  };
+  const originalTree = await tree();
+  let source: Memory | undefined; let sourceState: string | undefined;
+  const find = manager.findGuardedMemoryForUpdate.bind(manager);
+  jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+    const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+  });
+  const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+  const prepare = jest.spyOn(manager, 'prepareGuardedMemoryReplacement');
+  const update = (body: unknown) => service.updateElement(request(body, get.headers!.ETag), 'memories', 'owned-memory');
+  const sourceUnchanged = () => { expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState); };
+  const refused = async (preparationAllowed = false) => {
+    sourceUnchanged(); if (!preparationAllowed) expect(prepare).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+    expect(await tree()).toEqual(originalTree); expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+    expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+  };
+  const coherent = async (response: Awaited<ReturnType<typeof update>>, expected: unknown, omitted = false) => {
+    expect(response.status).toBe(200); sourceUnchanged();
+    const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+    const publication = manager.cached('head.yaml')!;
+    if (omitted) expect(raw.metadata).not.toHaveProperty('tags');
+    else expect(raw.metadata.tags).toEqual(expected);
+    expect(publication.metadata.tags).toEqual(expected);
+    expect((response.body as {tags: unknown; metadata: Record<string, unknown>}).tags).toEqual(expected ?? []);
+    expect((response.body as {metadata: Record<string, unknown>}).metadata.tags).toEqual(expected);
+    expect(raw.entries).toEqual(definition.entries);
+    expect(raw.metadata.name).toBe(definition.metadata.name); expect(raw.metadata.unique_id).toBe(definition.metadata.unique_id);
+    expect(raw.metadata.version).toBe('3.4.5'); expect(raw.metadata.created).toBe(definition.metadata.created);
+    expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+    const next = await service.getElement(request(), 'memories', 'owned-memory');
+    expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+  };
+  return {...f, manager, definition, update, refused, coherent, save, write};
+}
+
+posix('guarded console tag boundary', () => {
+  it.each([false, true].flatMap(content => [null, 'invalid', ['alternate']].map(tags => ({content, tags}))))(
+    'ignores request metadata tags $tags with content=$content', async ({content, tags}) => {
+      const f = await tagBoundaryFixture();
+      try {
+        const response = await f.update({metadata: {tags, description: 'Tag metadata edit'},
+          ...(content ? {content: yaml.dump(f.definition)} : {})});
+        await f.coherent(response, ['original']);
+        expect((response.body as {metadata: Record<string, unknown>}).metadata.description).toBe('Tag metadata edit');
+      } finally {await f.cleanup();}
+    });
+  it.each([
+    {label: 'scalar', tags: 'invalid'}, {label: 'null', tags: null}, {label: 'mixed', tags: ['good', 9]},
+    {label: 'empty', tags: ['']}, {label: 'control', tags: ['bad\u0000tag']},
+    {label: 'long', tags: ['x'.repeat(81)]}, {label: 'count', tags: Array.from({length: 51}, (_, i) => `tag-${i}`)},
+  ])('refuses effective structured-content tags $label before preparation', async ({tags}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      const error = await f.update({content: yaml.dump({...f.definition, metadata: {...f.definition.metadata, tags}})}).catch(cause => cause);
+      expect(error).toBeInstanceOf(ConsoleStoreValidationError);
+      expect(problemForConsoleError(error)).toMatchObject({status: 400, code: 'invalid_request'});
+      await f.refused();
+    } finally {await f.cleanup();}
+  });
+  it.each([{flat: false, tags: ['content']}, {flat: true, tags: ['flat']}, {flat: false, tags: []}])(
+    'preserves supported content tags $tags flat=$flat', async ({flat, tags}) => {
+      const f = await tagBoundaryFixture();
+      try {
+        const content = flat ? {...f.definition.metadata, entries: f.definition.entries, tags}
+          : {...f.definition, metadata: {...f.definition.metadata, tags}};
+        await f.coherent(await f.update({content: yaml.dump(content)}), tags);
+      } finally {await f.cleanup();}
+    });
+  it.each([{tags: ['dedicated']}, {tags: []}])('gives dedicated tags $tags precedence over malformed lower-priority tags', async ({tags}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      await f.coherent(await f.update({tags, metadata: {tags: 'invalid'},
+        content: yaml.dump({...f.definition, metadata: {...f.definition.metadata, tags: null}})}), tags);
+    } finally {await f.cleanup();}
+  });
+  it.each([false, true])('refuses malformed original tags unless explicitly repaired=%s', async repair => {
+    const f = await tagBoundaryFixture('original malformed');
+    try {
+      if (repair) await f.coherent(await f.update({tags: ['repaired']}), ['repaired']);
+      else {
+        const error = await f.update({metadata: {description: 'Must refuse'}}).catch(cause => cause);
+        expect(error).toBeInstanceOf(ConsoleStoreValidationError);
+        expect(problemForConsoleError(error)).toMatchObject({status: 400, code: 'invalid_request'});
+        await f.refused();
+      }
+    } finally {await f.cleanup();}
+  });
+  it('keeps an absent original tags field absent', async () => {
+    const f = await tagBoundaryFixture(undefined, true);
+    try {await f.coherent(await f.update({metadata: {description: 'Absent tags edit'}}), undefined, true);}
+    finally {await f.cleanup();}
+  });
+  it.each([{tags: 'invalid'}, {tags: ['']}, {tags: Array.from({length: 51}, (_, i) => `tag-${i}`)}])('retains direct dedicated tags $tags service422', async ({tags}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      expect((await f.update({tags})).status).toBe(422); await f.refused();
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console canonical runtime configuration', () => {
+  const profiles = [
+    {label: 'constructor defaults and clamp', supplied: {maxEntries: 20000, privacyLevel: 'unsupported',
+      retentionDays: 0, storageBackend: null, searchable: null}, expected: {
+      maxEntries: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, privacyLevel: MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
+      retentionDays: MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS, storageBackend: MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND, searchable: true}},
+    {label: 'canonical supported false', supplied: {maxEntries: 7, privacyLevel: 'sensitive', retentionDays: 9,
+      storageBackend: 'file', searchable: false}, expected: {maxEntries: 7, privacyLevel: 'sensitive', retentionDays: 9,
+      storageBackend: 'file', searchable: false}},
+    {label: 'aliases win and normalize', supplied: {maxEntries: 20000, privacyLevel: 'public', privacy_level: 'unsupported',
+      storageBackend: 'memory', storage_backend: 'file', retentionDays: 20, retention_policy: {default: '7 days', custom: 'retained'},
+      searchable: null}, expected: {maxEntries: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, privacyLevel: MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
+      storageBackend: 'file', retentionDays: 7, searchable: true}},
+  ];
+  it.each([false, true].flatMap(content => profiles.map(profile => ({...profile, content}))))(
+    'persists normalized $label for actual service content=$content', async ({supplied, expected, content}) => {
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        delete definition.metadata.tags; definition.metadata.custom = {value: 'retained'};
+        return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-04T20:00:00.000Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {}, headers: etag ? {'if-match': etag} : {},
+          consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {
+          metadata: Record<string, unknown>; entries: unknown[]; instructions: string; extensions: unknown};
+        let source: Memory | undefined; let sourceState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+        });
+        const patch = content ? {content: yaml.dump({...original, metadata: {...original.metadata, ...supplied}})} : {metadata: supplied};
+        const response = await service.updateElement(request(patch, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(response.status).toBe(200);
+        expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const persisted = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof original;
+        const publication = manager.cached('head.yaml')!;
+        const runtime = JSON.parse(publication.captureAppendState().fingerprint) as Record<string, unknown>;
+        const returned = response.body as {metadata: Record<string, unknown>; content: string};
+        const submitted = yaml.load(returned.content, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(expected)) {
+          expect(persisted.metadata[key]).toEqual(value); expect((publication.metadata as unknown as Record<string, unknown>)[key]).toEqual(value);
+          expect(runtime[key]).toEqual(value); expect(returned.metadata[key]).toEqual(value); expect(submitted[key]).toEqual(value);
+        }
+        for (const key of ['privacy_level', 'storage_backend', 'retention_policy']) {
+          if (Object.hasOwn(supplied, key)) expect(persisted.metadata[key]).toEqual((supplied as Record<string, unknown>)[key]);
+        }
+        expect(persisted.metadata).not.toHaveProperty('tags'); expect(publication.metadata).not.toHaveProperty('tags');
+        expect(persisted.metadata.custom).toEqual(original.metadata.custom); expect(publication.metadata.custom).toEqual(original.metadata.custom);
+        expect(persisted.metadata.name).toBe(original.metadata.name); expect(persisted.metadata.unique_id).toBe(original.metadata.unique_id);
+        expect(persisted.metadata.created).toBe(original.metadata.created); expect(persisted.metadata.modified).toBe(now.toISOString());
+        expect(persisted.metadata.version).toBe('3.4.5'); expect(publication.version).toBe('3.4.5');
+        expect(persisted.entries).toEqual(original.entries); expect(persisted.instructions).toBe(original.instructions);
+        expect(persisted.extensions).toEqual(original.extensions);
+        const fresh = f.makeManager().manager; const reloaded = await fresh.load('head.yaml');
+        const reloadRuntime = JSON.parse(reloaded.captureAppendState().fingerprint) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(expected)) {
+          expect((reloaded.metadata as unknown as Record<string, unknown>)[key]).toEqual(value); expect(reloadRuntime[key]).toEqual(value);
+        }
+        expect(reloaded.getEntries().size).toBe(original.entries.length); expect(reloaded.validate().valid).toBe(true);
+        const nextService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const next = await nextService.getElement(request(), 'memories', 'owned-memory');
+        expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+});
+
+posix('guarded console metadata discriminators', () => {
+  it.each([false, true].flatMap(content => [
+    {label: 'conflicting', supplied: {type: 'persona', format_version: 'v999'}},
+    {label: 'valid persisted', supplied: {type: 'memory', format_version: 'v2'}},
+    {label: 'absent', supplied: {}},
+  ].map(profile => ({...profile, content}))))(
+    'uses loader runtime and serializer disk conventions for $label content=$content', async ({supplied, content}) => {
+      const f = await fixture({version: '3.4.5', maxEntries: 3});
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-04T12:00:00Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {},
+          headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const original = await f.owners.readHeadSnapshot('head.yaml');
+        const definition = yaml.load(original.content, {schema: yaml.JSON_SCHEMA}) as {
+          metadata: Record<string, unknown>; entries: unknown[]; instructions: string; extensions: unknown};
+        const authored = {...definition.metadata, ...supplied};
+        if (Object.keys(supplied).length === 0) {delete authored.type; delete authored.format_version;}
+        let updateSource: Memory | undefined; let updateState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); updateSource = target?.memory; updateState = updateSource?.serialize(); return target;
+        });
+        const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const patch = content ? {content: yaml.dump({...definition, metadata: authored})} : {metadata: supplied};
+        const response = await service.updateElement(request(patch, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(response.status).toBe(200);
+        expect(updateSource).toBeDefined(); expect(updateSource!.serialize()).toBe(updateState);
+        const publication = manager.cached('head.yaml')!;
+        expect(publication.type).toBe('memories'); expect(publication.metadata.type).toBe('memories');
+        expect(publication.metadata).not.toHaveProperty('format_version');
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const persisted = yaml.load(snapshot.content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+        expect(persisted.metadata.type).toBe('memory'); expect(persisted.metadata.format_version).toBe('v2');
+        expect((response.body as {metadata: Record<string, unknown>}).metadata).toEqual(persisted.metadata);
+        for (const key of ['name', 'unique_id', 'version', 'created', 'maxEntries', 'retentionDays', 'privacyLevel', 'storageBackend', 'searchable']) {
+          expect(persisted.metadata[key]).toEqual(definition.metadata[key]);
+        }
+        expect(persisted.metadata.modified).toBe(now.toISOString());
+        expect(persisted.entries).toEqual(definition.entries); expect(persisted.instructions).toBe(definition.instructions);
+        expect(persisted.extensions).toEqual(definition.extensions);
+        expect(publication.id).toBe(updateSource!.id); expect(publication.getEntries().size).toBe(definition.entries.length);
+        expect(write).toHaveBeenCalledTimes(1); expect(write.mock.calls[0][0]).toEqual(original.token);
+        expect(write.mock.calls[0][1]).toBe(snapshot.content);
+        expect(response.headers!.ETag).toBe(`"sha256:${createHash('sha256').update(snapshot.content, 'utf8').digest('hex')}"`);
+        const fresh = f.makeManager().manager; const reloaded = (await fresh.findGuardedMemoryForUpdate('owned-memory', USER))!.memory;
+        expect(reloaded.type).toBe(publication.type); expect(reloaded.metadata.type).toBe(publication.metadata.type);
+        expect(reloaded.metadata).not.toHaveProperty('format_version'); expect(reloaded.id).toBe(publication.id);
+        const nextService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const next = await nextService.getElement(request(), 'memories', 'owned-memory');
+        expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+});
+
+posix('guarded console computed metadata handoff', () => {
+  const fields = ['description', 'tags', 'triggers', 'gatekeeper'];
+  const profiles: Array<{label: string; supplied: Record<string, unknown>; expected: Record<string, unknown>; absent?: boolean}> = [
+    {label: 'validated values', supplied: {description: '  Edited description  ', tags: ['a;b'],
+      triggers: [' recall ', 'bad!trigger', ' ', 'x'.repeat(60)],
+      gatekeeper: {allow: ['verify_challenge', 'read_element'], confirm: ['confirm_operation'],
+        deny: ['abort_execution', 'delete_element', 'confirm_operation']}},
+    expected: {description: 'Edited description', tags: ['ab'], triggers: ['recall', 'x'.repeat(50)],
+      gatekeeper: {allow: ['read_element'], confirm: ['confirm_operation'], deny: ['delete_element', 'confirm_operation']}}},
+    {label: 'trigger count limit', supplied: {triggers: Array.from({length: 23}, (_, i) => `recall-${i}`)},
+      expected: {triggers: Array.from({length: 20}, (_, i) => `recall-${i}`)}},
+    {label: 'explicit clears', supplied: {description: null, tags: [], triggers: null, gatekeeper: null},
+      expected: {description: '', tags: [], triggers: [], gatekeeper: undefined}},
+    {label: 'absent fields', supplied: {}, expected: {}, absent: true},
+  ];
+  it.each(['metadata', 'nested', 'flat'].flatMap(mode => profiles.map(profile => ({...profile, mode}))))(
+    'keeps $label coherent for actual service mode=$mode', async ({supplied, expected, absent, mode}) => {
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        definition.metadata.custom = {value: 'retained'};
+        if (absent) for (const field of fields) delete definition.metadata[field];
+        return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-04T20:00:00.000Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {}, headers: etag ? {'if-match': etag} : {},
+          consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {
+          metadata: Record<string, unknown>; entries: unknown[]; instructions: string; extensions: unknown};
+        const metadata = {...original.metadata, ...supplied};
+        const content = mode === 'flat' ? {...metadata, entries: original.entries, instructions: original.instructions, extensions: original.extensions}
+          : {...original, metadata};
+        const patch = mode === 'metadata' ? {metadata: supplied, ...('tags' in supplied ? {tags: supplied.tags} : {})}
+          : {content: yaml.dump(content)};
+        let source: Memory | undefined; let sourceState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+        });
+        const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const response = await service.updateElement(request(patch, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(response.status).toBe(200); expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const persisted = yaml.load(snapshot.content, {schema: yaml.JSON_SCHEMA}) as typeof original;
+        const publication = manager.cached('head.yaml')!;
+        const fresh = f.makeManager().manager; const reloaded = await fresh.load('head.yaml');
+        const returned = response.body as {metadata: Record<string, unknown>; content: string; tags: unknown};
+        // Compare actual persisted, committed and reloaded fields before hash-shape assertions.
+        const pick = (metadata: Record<string, unknown>) => Object.fromEntries(Object.keys(expected).map(field => [field, metadata[field]]));
+        expect({persisted: pick(persisted.metadata), runtime: pick(publication.metadata as unknown as Record<string, unknown>),
+          response: pick(returned.metadata), reloaded: pick(reloaded.metadata as unknown as Record<string, unknown>)})
+          .toEqual({persisted: expected, runtime: expected, response: expected, reloaded: expected});
+        if (absent) for (const field of fields) {
+          expect(persisted.metadata).not.toHaveProperty(field); expect(publication.metadata).not.toHaveProperty(field);
+          expect(returned.metadata).not.toHaveProperty(field);
+        }
+        expect(persisted.entries).toEqual(original.entries); expect(persisted.instructions).toBe(original.instructions);
+        expect(persisted.extensions).toEqual(original.extensions); expect(persisted.metadata.custom).toEqual(original.metadata.custom);
+        for (const field of ['name', 'unique_id', 'version', 'created', 'maxEntries', 'retentionDays', 'privacyLevel', 'storageBackend', 'searchable']) {
+          expect(persisted.metadata[field]).toEqual(original.metadata[field]);
+        }
+        expect(persisted.metadata.modified).toBe(now.toISOString()); expect(publication.version).toBe('3.4.5');
+        expect(reloaded.getEntries().size).toBe(original.entries.length); expect(reloaded.validate().valid).toBe(true);
+        expect(write).toHaveBeenCalledTimes(1); expect(write.mock.calls[0][1]).toBe(snapshot.content);
+        expect(response.headers!.ETag).toBe(`"sha256:${createHash('sha256').update(snapshot.content, 'utf8').digest('hex')}"`);
+        const freshService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const next = await freshService.getElement(request(), 'memories', 'owned-memory');
+        expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+  it.each(['metadata', 'nested', 'flat'].flatMap(mode => [
+    {label: 'malformed authored gatekeeper', supplied: {gatekeeper: {allow: 'not an array'}}},
+    {label: 'sanitizer-empty tag', supplied: {tags: [';;']}},
+  ].map(profile => ({...profile, mode}))))('refuses $label before owned dispatch mode=$mode', async ({supplied, mode, label}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      const metadata = {...f.definition.metadata, ...supplied};
+      const content = mode === 'flat' ? {...metadata, entries: f.definition.entries} : {...f.definition, metadata};
+      const patch = mode === 'metadata' ? {metadata: supplied, ...('tags' in supplied ? {tags: supplied.tags} : {})}
+        : {content: yaml.dump(content)};
+      const error = await f.update(patch).catch(cause => cause);
+      if (label === 'sanitizer-empty tag') {
+        expect(error).toBeInstanceOf(ConsoleStoreValidationError);
+        expect(problemForConsoleError(error)).toMatchObject({status: 400, code: 'invalid_request'});
+      } else expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain(label === 'sanitizer-empty tag' ? 'printable non-empty' : 'Invalid gatekeeper policy');
+      // Normalization reaches preparation, but source/tree/owner and reservation proofs remain strict.
+      await f.refused(true);
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console canonical tag precedence', () => {
+  it.each([false, true].flatMap(flat => [['a;b'], []].map(tags => ({flat, tags}))))(
+    'canonicalizes dedicated tags $tags after precedence flat=$flat', async ({flat, tags}) => {
+      const f = await tagBoundaryFixture();
+      try {
+        const metadata = {...f.definition.metadata, tags: ['lower;priority']};
+        const content = flat ? {...metadata, entries: f.definition.entries} : {...f.definition, metadata};
+        const response = await f.update({content: yaml.dump(content), metadata: {tags: ['ignored;metadata']}, tags});
+        const expected = tags.length ? ['ab'] : [];
+        await f.coherent(response, expected);
+        expect((await f.makeManager().manager.load('head.yaml')).metadata.tags).toEqual(expected);
+      } finally {await f.cleanup();}
+    });
+});
+
+posix('guarded console complete snapshot ETag', () => {
+  it.each([{label: 'nested value', extensions: {nested: {value: 'First extension edit'}}},
+    {label: 'nested modified only', extensions: {nested: {value: 'original', modified: '2026-10-04T21:00:00.000Z'}}}])(
+    'refuses stale extension overwrite at equal captured time for $label', async ({extensions}) => {
+      const now = new Date('2026-10-04T20:00:00.000Z');
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        definition.metadata.modified = now.toISOString(); return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {}, headers: etag ? {'if-match': etag} : {},
+          consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const initial = await f.owners.readHeadSnapshot('head.yaml');
+        const definition = yaml.load(initial.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]; extensions: unknown};
+        const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        let source: Memory | undefined; let sourceState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+        });
+        const first = await service.updateElement(request({content: yaml.dump({...definition, extensions})}, before.headers!.ETag),
+          'memories', 'owned-memory');
+        expect(first.status).toBe(200); expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const accepted = await f.owners.readHeadSnapshot('head.yaml');
+        const parsed = yaml.load(accepted.content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+        expect(parsed.extensions).toEqual(extensions); expect(parsed.metadata.modified).toBe(now.toISOString());
+        expect(parsed.entries).toEqual(definition.entries); expect(parsed.metadata.unique_id).toBe(definition.metadata.unique_id);
+        const tree = async () => {
+          const files: Record<string, string> = {};
+          for (const entry of (await fs.readdir(f.tenantRoot, {recursive: true})).sort()) {
+            const file = path.join(f.tenantRoot, entry);
+            if ((await fs.lstat(file)).isFile()) files[entry] = (await fs.readFile(file)).toString('base64');
+          }
+          return files;
+        };
+        const acceptedTree = await tree(); save.mockClear(); write.mockClear();
+        const stale = await service.updateElement(request({content: yaml.dump(definition)}, before.headers!.ETag), 'memories', 'owned-memory');
+        const afterStale = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+        expect({status: stale.status, dispatched: write.mock.calls.length, persistedExtensions: afterStale.extensions,
+          priorTokenStillMatches: first.headers!.ETag === before.headers!.ETag})
+          .toEqual({status: 412, dispatched: 0, persistedExtensions: extensions, priorTokenStillMatches: false});
+        expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(accepted); expect(await tree()).toEqual(acceptedTree);
+        expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+        expect(first.headers!.ETag).not.toBe(before.headers!.ETag);
+        const after = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(after.body).toEqual(first.body); expect(after.headers!.ETag).toBe(first.headers!.ETag);
+        const second = await service.updateElement(request({content: yaml.dump({...definition, extensions: {nested: {value: 'Second extension edit'}}})},
+          first.headers!.ETag), 'memories', 'owned-memory');
+        expect(second.status).toBe(200); expect(source!.serialize()).toBe(sourceState);
+        expect(write).toHaveBeenCalledTimes(1);
+        const submitted = write.mock.calls[0][1]; const persisted = await f.owners.readHeadSnapshot('head.yaml');
+        expect(persisted.content).toBe(submitted);
+        expect(second.headers!.ETag).toBe(`"sha256:${createHash('sha256').update(submitted, 'utf8').digest('hex')}"`);
+        expect((yaml.load(persisted.content, {schema: yaml.JSON_SCHEMA}) as typeof definition).extensions).toEqual({nested: {value: 'Second extension edit'}});
+        expect(second.headers!.ETag).not.toBe(first.headers!.ETag);
+        expect((await service.getElement(request(), 'memories', 'owned-memory')).headers!.ETag).toBe(second.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+  it('distinguishes raw extensions absence null and empty while retaining legacy and list projections', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+      const hashes: string[] = [];
+      for (const value of [undefined, null, {}]) {
+        const definition = {...original};
+        if (value === undefined) delete definition.extensions; else definition.extensions = value;
+        const before = await f.owners.readHeadSnapshot('head.yaml');
+        if (before.token.ownership !== 'owned') throw new Error('Expected real owned projection fixture');
+        const content = yaml.dump(definition, {lineWidth: -1, noRefs: true});
+        await f.owners.updateOwnedHead(before.token, content);
+        const record = await store.findByName(USER, 'memories', 'owned-memory');
+        expect(record!.contentHash).toBe(createHash('sha256').update(content, 'utf8').digest('hex')); hashes.push(record!.contentHash!);
+      }
+      expect(new Set(hashes).size).toBe(3);
+      const stable = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(stable);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'modified').sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => [key, stable(value)]));
+      };
+      const legacy = consoleStore(f.ordinary); const record = await legacy.findByName(USER, 'memories', 'owned-memory');
+      const expected = createHash('sha256').update(JSON.stringify({type: 'memories', metadata: stable(record!.metadata), content: record!.content})).digest('hex');
+      expect(record!.contentHash).toBe(expected);
+      const runtime = await manager.load('head.yaml');
+      const summary = await (store as unknown as {toRecord: (user: string, type: string, memory: Memory) => Promise<{contentHash: string; metadata: unknown; content: string}>})
+        .toRecord(USER, 'memories', runtime);
+      expect(summary.contentHash).toBe(createHash('sha256').update(JSON.stringify({type: 'memories', metadata: stable(summary.metadata), content: summary.content})).digest('hex'));
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded memory classified refusal audit', () => {
+  const failed = (audit: {mock: {calls: Parameters<typeof SecurityMonitor.logSecurityEvent>[]}}) =>
+    audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED);
+  async function durableTree(root: string) {
+    const snapshot: Record<string, string> = {};
+    for (const entry of (await fs.readdir(root, {recursive: true})).sort()) {
+      const target = path.join(root, entry); const stat = await fs.lstat(target);
+      if (stat.isSymbolicLink()) snapshot[entry] = `symlink:${await fs.readlink(target)}`;
+      else if (stat.isFile()) snapshot[entry] = (await fs.readFile(target)).toString('base64');
+    }
+    return snapshot;
+  }
+  it.each([{throwing: false, warningFailure: false}, {throwing: true, warningFailure: false}, {throwing: true, warningFailure: true}])(
+    'audits a real canonical fence refusal once with audit listener=$throwing warning listener=$warningFailure', async ({throwing, warningFailure}) => {
+    const f = await fixture();
+    let stop = () => {}; let stopWarning = () => {};
+    try {
+      const {manager} = f.makeManager(); const memory = await manager.load('head.yaml');
+      const original = await f.owners.readHeadSnapshot('head.yaml');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const legacy = jest.spyOn(FileOperationsService.prototype, 'writeFile');
+      await fs.symlink(path.join(f.tenantRoot, '.memory-fences'), path.join(f.tenantRoot, 'volumes'), 'dir');
+      const before = await durableTree(f.tenantRoot);
+      SecurityMonitor.clearAllEventsForTesting();
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const warn = jest.spyOn(logger, 'warn');
+      if (throwing) stop = SecurityMonitor.addLogListener(event => {
+        if (event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED) throw new Error('Listener failure must not replace refusal');
+      });
+      if (warningFailure) stopWarning = logger.addLogListener(entry => {
+        if (entry.message === 'Memory save failure audit hook threw; original refusal preserved') throw new Error('Warning listener failure must not replace refusal');
+      });
+      try {
+        const result = await manager.save(memory).then(() => ({cause: undefined}), cause => ({cause}));
+        expect(result.cause).toMatchObject({code: 'EHEADCONFLICT'});
+        expect((result.cause as Error).message).toBe('Canonical memory volumes and fence directories are unsafe or changed');
+        expect(manager.getPendingHeadUpdate(memory)?.status).toBe('refused');
+        expect(manager.getPendingHeadUpdate(memory)?.cause).toBe(result.cause);
+        expect(write).toHaveBeenCalledTimes(1); expect(legacy).not.toHaveBeenCalled();
+        expect(failed(audit)).toHaveLength(1);
+        expect(warn.mock.calls.filter(([message]) => message === 'Memory save failure audit hook threw; original refusal preserved')).toHaveLength(throwing ? 1 : 0);
+        expect(failed(audit)[0][0]).toMatchObject({severity: 'HIGH', source: 'MemoryManager.onSaveError'});
+        expect(audit.mock.calls.some(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVED)).toBe(false);
+        expect(await durableTree(f.tenantRoot)).toEqual(before);
+        expect(SecurityMonitor.getRecentEvents().filter(event => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED)).toHaveLength(1);
+        await fs.unlink(path.join(f.tenantRoot, 'volumes'));
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(original);
+      } finally {stop(); stopWarning(); audit.mockRestore(); warn.mockRestore(); write.mockRestore(); legacy.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('audits an admitted validation refusal but not a pre-admission unbound refusal', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const source = await manager.load('head.yaml'); const before = await durableTree(f.tenantRoot);
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      try {
+        await expect(manager.save(source.createPersistenceCandidate(), 'head.yaml')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+        expect(failed(audit)).toHaveLength(0);
+        manager.rejectValidation = true;
+        await expect(manager.save(source)).rejects.toThrow('controlled candidate validation');
+        expect(manager.getPendingHeadUpdate(source)?.status).toBe('refused'); expect(failed(audit)).toHaveLength(1);
+        expect(write).not.toHaveBeenCalled(); expect(await durableTree(f.tenantRoot)).toEqual(before);
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('retains unknown evidence without labeling it a refused save or replaying', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const memory = await manager.load('head.yaml'); const before = await durableTree(f.tenantRoot);
+      const cause = new Error('Unknown transport'); const write = jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValue(cause);
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        await expect(manager.save(memory)).rejects.toBe(cause);
+        expect(manager.getPendingHeadUpdate(memory)).toMatchObject({status: 'unknown', cause});
+        await expect(manager.save(memory)).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+        expect(write).toHaveBeenCalledTimes(1); expect(failed(audit)).toHaveLength(0);
+        expect(await durableTree(f.tenantRoot)).toEqual(before);
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('retains known committed publication failure without emitting a failed-save event', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const memory = await manager.load('head.yaml');
+      await memory.addEntry('Known committed audit control'); const cause = new Error('Publication failed'); manager.publicationFailure = {cause};
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        await expect(manager.save(memory)).rejects.toBe(cause);
+        expect(manager.getPendingHeadUpdate(memory)).toMatchObject({status: 'committed-publication-failed', cause, committedToken: {revision: '2'}});
+        expect(write).toHaveBeenCalledTimes(1); expect(failed(audit)).toHaveLength(0);
+        expect(audit.mock.calls.some(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVED)).toBe(false);
+        expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Known committed audit control');
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+  it('keeps the ordinary save failure hook single without using the guarded path', async () => {
+    const f = await fixture();
+    try {
+      f.ordinary.clearCache(); const memory = await f.ordinary.load('head.yaml');
+      const cause = new Error('Ordinary writer control');
+      const write = jest.spyOn(FileOperationsService.prototype, 'writeFile').mockRejectedValue(cause);
+      SecurityMonitor.clearAllEventsForTesting(); const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        await expect(f.ordinary.save(memory, 'head.yaml')).rejects.toBe(cause);
+        expect(write).toHaveBeenCalledTimes(1); expect(failed(audit)).toHaveLength(1);
+        expect(f.ordinary.getPendingHeadUpdate(memory)).toBeUndefined();
+      } finally {audit.mockRestore(); write.mockRestore();}
+    } finally {SecurityMonitor.clearAllEventsForTesting(); await f.cleanup();}
+  });
+});
+
+posix('guarded console finite replacement limits', () => {
+  it.each(['maxEntries', 'retentionDays'].flatMap(field => [false, true].flatMap(content =>
+    ['invalid', {}].map(value => ({field, content, value})))))('refuses nonfinite effective $field=$value content=$content before dispatch', async ({field, content, value}) => {
+    const diagnostic = new Memory({name: 'Numeric diagnostic', [field]: value} as unknown as MemoryMetadata, new MetadataService());
+    expect(Number.isFinite(Number((diagnostic.metadata as MemoryMetadata)[field as 'maxEntries' | 'retentionDays']))).toBe(false);
+    expect(diagnostic.validate().valid).toBe(true); // Existing ordinary validation remains unchanged.
+    if (field === 'maxEntries') expect(JSON.parse(diagnostic.serialize()).metadata.maxEntries).toBeNull();
+    const f = await tagBoundaryFixture();
+    try {
+      const body = content ? {content: yaml.dump({metadata: {[field]: value}, entries: f.definition.entries})} : {metadata: {[field]: value}};
+      await expect(f.update(body)).rejects.toThrow('must be finite'); await f.refused(true);
+    } finally {await f.cleanup();}
+  });
+  it.each([false, true].flatMap(content => [
+    {label: 'finite', metadata: {maxEntries: 2, retentionDays: 365, onFull: 'error'}, max: 2, retention: 365},
+    {label: 'numeric entry string', metadata: {maxEntries: '2', retention_policy: {default: '7 days'}, onFull: 'error'}, max: 2, retention: 7},
+    {label: 'numeric retention string', metadata: {maxEntries: 2, retentionDays: '7', onFull: 'error'}, max: 2, retention: '7'},
+    {label: 'clamp', metadata: {maxEntries: 20000, retentionDays: 365}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: 365},
+    {label: 'null defaults', metadata: {maxEntries: null, retentionDays: null}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS},
+    {label: 'zero defaults', metadata: {maxEntries: 0, retentionDays: 0}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS},
+    {label: 'omitted', metadata: {}, max: MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT, retention: 36500},
+  ].map(profile => ({content, ...profile}))))('keeps established $label limits coherent content=$content', async ({content, metadata, max, retention}) => {
+    const f = await tagBoundaryFixture();
+    try {
+      const response = await f.update(content ? {content: yaml.dump({metadata, entries: f.definition.entries})} : {metadata});
+      await f.coherent(response, ['original']);
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content) as {metadata: MemoryMetadata};
+      expect(raw.metadata.maxEntries).toBe(max); expect(raw.metadata.retentionDays).toBe(retention);
+      const publication = f.manager.cached('head.yaml')!; expect((publication.metadata as MemoryMetadata).maxEntries).toBe(max); expect((publication.metadata as MemoryMetadata).retentionDays).toBe(retention);
+      const reload = await f.manager.load('head.yaml');
+      expect((reload.metadata as MemoryMetadata).maxEntries).toBe(max);
+      expect((reload.metadata as MemoryMetadata).retentionDays).toBe(retention);
+      if (retention === '7') {
+        // Preserve the established string-addition expiry behavior, not a new seven-day policy.
+        const ordinary = new Memory({name: 'Ordinary retention control', retentionDays: retention} as unknown as MemoryMetadata, new MetadataService());
+        const control = await ordinary.addEntry('Ordinary expiry');
+        const actual = await reload.addEntry('Reload expiry');
+        expect(actual.expiresAt).toBeInstanceOf(Date);
+        expect(actual.expiresAt!.getTime()).toBeGreaterThan(Date.now());
+        expect(actual.expiresAt!.toISOString().slice(0, 10)).toBe(control.expiresAt!.toISOString().slice(0, 10));
+        expect((reload.metadata as MemoryMetadata).retentionDays).toBe('7');
+      }
+      if (max === 2) {
+        await publication.addEntry('Capacity second'); await expect(publication.addEntry('Capacity overflow')).rejects.toThrow('full'); expect(publication.getEntries().size).toBe(2);
+      }
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console unrelated malformed summary', () => {
+  const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {type: 'memories'},
+    headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+  async function withMalformed() {
+    const f = await fixture();
+    try {
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content) as {metadata: {name: string}}; raw.metadata.name = '!!!';
+      await fs.writeFile(path.join(f.tenantRoot, 'malformed.yaml'), yaml.dump(raw));
+      const snapshot = await f.owners.readHeadSnapshot('malformed.yaml'); if (snapshot.token.ownership !== 'unowned') throw new Error('Expected unowned malformed fixture'); await f.owners.adoptUnowned(snapshot.token);
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      return {...f, manager, store, service};
+    } catch (cause) {await f.cleanup(); throw cause;}
+  }
+  it.each([false, true])('allows actual valid LIST GET PATCH alongside !!! content=%s', async content => {
+    const f = await withMalformed();
+    try {
+      const list = await f.service.listElements(request()); expect(list.status).toBe(200);
+      const records = (list.body as {elements: Array<{name: string}>}).elements; expect(records.some(record => record.name === 'Owned memory')).toBe(true);
+      const get = await f.service.getElement(request(), 'memories', 'owned-memory'); expect(get.status).toBe(200);
+      const before = await f.owners.readHeadSnapshot('head.yaml'); const malformed = await f.owners.readHeadSnapshot('malformed.yaml');
+      const edit = yaml.load((get.body as {content: string}).content) as {entries: Array<{content: string}>}; if (content) edit.entries[0].content = 'Valid edit with unreadable neighbor';
+      const response = await f.service.updateElement(request({metadata: {description: 'Valid neighbor edit'}, ...(content ? {content: yaml.dump(edit)} : {})}, get.headers!.ETag), 'memories', 'owned-memory');
+      expect(response.status).toBe(200); expect(await f.owners.readHeadSnapshot('malformed.yaml')).toEqual(malformed);
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).not.toBe(before.content);
+      const next = await f.service.getElement(request(), 'memories', 'owned-memory'); expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+    } finally {await f.cleanup();}
+  });
+  it('retains strict direct malformed-target refusal without dispatch or mutation', async () => {
+    const f = await withMalformed();
+    try {
+      const snapshot = await f.owners.readHeadSnapshot('malformed.yaml'); const save = jest.spyOn(f.manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(f.service.getElement(request(), 'memories', '!!!')).rejects.toThrow('Invalid memory name');
+      await expect(f.service.updateElement(request({metadata: {description: 'Must not admit'}}, '"v1-old"'), 'memories', '!!!')).rejects.toThrow('Invalid memory name');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(await f.owners.readHeadSnapshot('malformed.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+  it('counts malformed raw matching candidates for ambiguity', async () => {
+    const f = await withMalformed();
+    try {
+      await fs.writeFile(path.join(f.tenantRoot, 'duplicate.yaml'), (await f.owners.readHeadSnapshot('malformed.yaml')).content);
+      const snapshot = await f.owners.readHeadSnapshot('duplicate.yaml'); if (snapshot.token.ownership !== 'unowned') throw new Error('Expected second unowned malformed target'); await f.owners.adoptUnowned(snapshot.token);
+      const write = jest.spyOn(f.owners, 'updateOwnedHead'); await expect(f.manager.findGuardedMemoryForUpdate('!!!', USER)).rejects.toMatchObject({code: 'EHEADCONFLICT'}); expect(write).not.toHaveBeenCalled();
+    } finally {await f.cleanup();}
+  });
+  it('does not swallow unexpected validator errors in unrelated normalization', async () => {
+    const f = await withMalformed();
+    try {
+      const failure = new Error('Unexpected validation infrastructure failure');
+      const validation = (f.manager as unknown as {validationService: ValidationService}).validationService;
+      jest.spyOn(validation, 'validateAndSanitizeInput').mockImplementation(() => {throw failure;});
+      const write = jest.spyOn(f.owners, 'updateOwnedHead'); await expect(f.manager.findGuardedMemoryForUpdate('owned-memory', USER)).rejects.toBe(failure); expect(write).not.toHaveBeenCalled();
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console legacy raw-name identity', () => {
+  const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {type: 'memories'},
+    headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+  const serviceFor = (manager: MemoryManager) => new PortfolioService(consoleStore(manager),
+    new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+  const seed = (name: string, missingId = false) => fixture({}, undefined, false, raw => {
+    const data = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+    data.metadata.name = name; if (missingId) delete data.metadata.unique_id;
+    return yaml.dump(data, {noRefs: true});
+  });
+  it.each(['R&D', 'L'.repeat(105)].flatMap(rawName => [false, true].flatMap(missingId =>
+    [false, true].map(content => ({rawName, missingId, content})))))('edits actual LIST identity without renaming raw=$rawName missingId=$missingId content=$content', async ({rawName, missingId, content}) => {
+    const f = await seed(rawName, missingId);
+    try {
+      const {manager} = f.makeManager(); const service = serviceFor(manager);
+      const listed = await service.listElements(request());
+      const records = (listed.body as {elements: Array<{name: string}>}).elements;
+      expect(records).toHaveLength(1); const logical = rawName === 'R&D' ? 'RD' : 'L'.repeat(100);
+      expect(records[0].name).toBe(logical);
+      const get = await service.getElement(request(), 'memories', records[0].name);
+      expect(get.status).toBe(200);
+      const detail = get.body as {display_name: string; content: string}; expect(detail.display_name).toBe(rawName);
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      expect(get.headers!.ETag).toContain(createHash('sha256').update(before.content).digest('hex'));
+      const parsed = yaml.load(detail.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: Array<{content: string}>};
+      if (content) parsed.entries[0].content = 'Edited legacy entry';
+      const response = await service.updateElement(request({display_name: detail.display_name,
+        metadata: {description: 'Legacy identity edit'}, ...(content ? {content: yaml.dump(parsed)} : {})}, get.headers!.ETag), 'memories', logical);
+      expect(response.status).toBe(200);
+      const first = await f.owners.readHeadSnapshot('head.yaml');
+      const durable = yaml.load(first.content, {schema: yaml.JSON_SCHEMA}) as typeof parsed;
+      expect(durable.metadata.name).toBe(rawName); expect(durable.metadata.unique_id).toEqual(expect.any(String));
+      expect(durable.entries[0].content).toBe(content ? 'Edited legacy entry' : 'Original entry');
+      const publication = manager.cached('head.yaml')!; expect(publication.metadata.name).toBe(rawName === 'R&D' ? 'RD' : 'L'.repeat(100));
+      expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      const next = await service.getElement(request(), 'memories', logical);
+      expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      const second = await service.updateElement(request({metadata: {description: 'Second legacy edit'}}, next.headers!.ETag), 'memories', logical);
+      expect(second.status).toBe(200);
+      const secondRaw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as typeof parsed;
+      expect(secondRaw.metadata.name).toBe(rawName); expect(secondRaw.metadata.unique_id).toBe(durable.metadata.unique_id);
+    } finally {await f.cleanup();}
+  });
+  it('isolates raw-name evidence from public source, generic derivation, publication and ordinary serialization', async () => {
+    const f = await seed('R&D');
+    try {
+      const {manager} = f.makeManager();
+      const target = (await manager.findGuardedMemoryForUpdate('rd', USER))!;
+      const serialize = (memory: Memory) => (manager as unknown as {serializeElement(memory: Memory): Promise<string>}).serializeElement(memory);
+      const name = async (memory: Memory) => (yaml.load(await serialize(memory)) as {metadata: {name: string}}).metadata.name;
+      expect(await name(target.memory)).toBe('RD'); expect(await name(manager.deriveGuardedMutation(target.memory))).toBe('RD');
+      expect(await name(await manager.load('head.yaml'))).toBe('RD'); f.ordinary.clearCache(); expect(await name(await f.ordinary.load('head.yaml'))).toBe('RD');
+      const baseline = structuredClone(target.replacementBaseline); (baseline.metadata as Record<string, unknown>).description = 'Console only';
+      const candidate = await manager.prepareGuardedMemoryReplacement(target.memory, yaml.dump(baseline));
+      expect(await name(candidate)).toBe('R&D'); expect(await name(manager.deriveGuardedMutation(candidate))).toBe('RD');
+      await manager.save(candidate); expect((yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content) as {metadata: {name: string}}).metadata.name).toBe('R&D');
+      expect(await name(manager.cached('head.yaml')!)).toBe('RD');
+      // A separately loaded public writer keeps its existing serialization behavior.
+      const publicMemory = await manager.load('head.yaml'); await manager.save(publicMemory);
+      expect((yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content) as {metadata: {name: string}}).metadata.name).toBe('RD');
+    } finally {await f.cleanup();}
+  });
+  it.each(['display', 'metadata', 'content'] as const)('refuses explicit legacy identity change from %s without dispatch', async mode => {
+    const f = await seed('R&D');
+    try {
+      const {manager} = f.makeManager(); const service = serviceFor(manager); const get = await service.getElement(request(), 'memories', 'rd'); expect(get.status).toBe(200);
+      const before = await f.owners.readHeadSnapshot('head.yaml'); const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const edit = yaml.load((get.body as {content: string}).content) as Record<string, unknown>; edit.name = 'RD';
+      const body = mode === 'display' ? {display_name: 'RD'} : mode === 'metadata' ? {metadata: {name: 'RD'}} : {content: yaml.dump(edit)};
+      await expect(service.updateElement(request(body, get.headers!.ETag), 'memories', 'rd')).rejects.toThrow('rename');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+      const target = (await manager.findGuardedMemoryForUpdate('rd', USER))!; const state = target.memory.serialize();
+      const direct = structuredClone(target.replacementBaseline); (direct.metadata as Record<string, unknown>).name = 'RD';
+      await expect(manager.prepareGuardedMemoryReplacement(target.memory, yaml.dump(direct))).rejects.toThrow('identity'); expect(target.memory.serialize()).toBe(state);
+    } finally {await f.cleanup();}
+  });
+  it.each(['R;D', 'RD', 'R-D'])('refuses all raw/normalized/stem candidate collisions with %s', async otherName => {
+    const f = await seed('R&D');
+    try {
+      const other = new Memory({name: otherName}, new MetadataService()); await f.ordinary.save(other, 'other.yaml');
+      const snapshot = await f.owners.readHeadSnapshot('other.yaml'); if (snapshot.token.ownership !== 'unowned') throw new Error('Expected unowned second file'); await f.owners.adoptUnowned(snapshot.token);
+      const {manager} = f.makeManager(); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      // R-D shares the raw filename stem r-d; other cases share normalized RD.
+      await expect(manager.findGuardedMemoryForUpdate(otherName === 'R-D' ? 'r-d' : 'rd', USER)).rejects.toMatchObject({code: 'EHEADCONFLICT'}); expect(write).not.toHaveBeenCalled();
+    } finally {await f.cleanup();}
+  });
+  it('refuses raw summary drift even when both names normalize to RD', async () => {
+    const f = await seed('R&D');
+    try {
+      const {manager} = f.makeManager(); const storage = (manager as unknown as {storageLayer: {listSummaries: (...args: unknown[]) => Promise<Array<{name: string}>>}}).storageLayer;
+      const list = storage.listSummaries.bind(storage); jest.spyOn(storage, 'listSummaries').mockImplementation(async (...args) => (await list(...args)).map(item => ({...item, name: 'R;D'})));
+      const before = await f.owners.readHeadSnapshot('head.yaml'); const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(manager.findGuardedMemoryForUpdate('rd', USER)).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+    } finally {await f.cleanup();}
+  });
+});
+
+posix('guarded console existing-owner UPDATE', () => {
+  it.each(['delete', 'rename'].flatMap(transition => ['GET', 'initial PATCH', 'store PATCH'].map(operation => ({transition, operation}))))('returns service404 when $transition wins discovery/read race during $operation', async ({transition, operation}) => {
+      const f = await fixture();
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const request = (body: unknown = undefined, etag?: string): ConsoleRequest => ({body, query: {},
+          headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        if (snapshot.token.ownership !== 'owned') throw new Error('Expected real owned transition fixture');
+        const token = snapshot.token;
+        const tree = async () => {
+          const entries = await fs.readdir(f.tenantRoot, {recursive: true});
+          const files: Record<string, string> = {};
+          for (const entry of entries.sort()) {
+            const fullPath = path.join(f.tenantRoot, entry);
+            if ((await fs.lstat(fullPath)).isFile()) files[entry] = (await fs.readFile(fullPath)).toString('base64');
+          }
+          return files;
+        };
+        const read = f.owners.readHeadSnapshot.bind(f.owners);
+        let reads = 0; let transitioned: Record<string, string> | undefined;
+        const raceRead = operation === 'store PATCH' ? 2 : 1;
+        const lookup = jest.spyOn(f.owners, 'readHeadSnapshot').mockImplementation(async locator => {
+          if (++reads === raceRead) {
+            if (transition === 'delete') await f.owners.deleteOwned({operationId: randomUUID(), expectedToken: token});
+            else await f.owners.renameOwned({operationId: randomUUID(), expectedToken: token, destinationLocator: 'moved.yaml'});
+            transitioned = await tree();
+          }
+          return read(locator);
+        });
+        const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const result = operation === 'GET' ? await service.getElement(request(), 'memories', 'owned-memory')
+          : await service.updateElement(request({metadata: {description: 'Must be absent'}}, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(result.status).toBe(404); expect(lookup).toHaveBeenCalledTimes(raceRead);
+        expect(transitioned).toBeDefined(); expect(await tree()).toEqual(transitioned);
+        expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+        if (transition === 'rename') expect(await fs.readFile(path.join(f.tenantRoot, 'moved.yaml'), 'utf8')).toBe(snapshot.content);
+      } finally {await f.cleanup();}
+    });
+
+  it.each(['EACCES', 'EHEADCONFLICT', 'EOWNERRECOVERY', 'EERASURERESIDUAL', undefined])('preserves initial lookup failure identity outside ENOENT: %s', async code => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = {query: {}, headers: {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest;
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const cause = Object.assign(new Error('Controlled lookup failure'), {code});
+      jest.spyOn(f.owners, 'readHeadSnapshot').mockRejectedValueOnce(cause);
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(service.getElement(request, 'memories', 'owned-memory')).rejects.toBe(cause);
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['tenant', 'root'])('preserves original %s context refusal over lookup ENOENT', async drift => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = {query: {}, headers: {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest;
+      const bytes = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      jest.spyOn(f.owners, 'readHeadSnapshot').mockImplementationOnce(async () => {
+        if (drift === 'tenant') f.setTenant('22222222-2222-4222-8222-222222222222');
+        else Object.defineProperty(manager, 'memoriesDir', {configurable: true, get: () => path.join(f.root, 'different-root')});
+        throw Object.assign(new Error('Missing during changed context'), {code: 'ENOENT'});
+      });
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(service.getElement(request, 'memories', 'owned-memory')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(bytes);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['public load', 'hydration'])('preserves ENOENT outside the lookup snapshot stage: %s', async stage => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const cause = Object.assign(new Error('Missing outside lookup read'), {code: 'ENOENT'});
+      if (stage === 'public load') jest.spyOn(f.owners, 'readHeadSnapshot').mockRejectedValueOnce(cause);
+      else jest.spyOn(manager as unknown as {hydrateDefinitionFromContent: () => Promise<Memory>}, 'hydrateDefinitionFromContent').mockRejectedValueOnce(cause);
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(stage === 'public load' ? manager.load('head.yaml') : store.findByName(USER, 'memories', 'owned-memory')).rejects.toBe(cause);
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
+  it('retains a postcommit publication ENOENT instead of converting it to notfound', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = (body: unknown = undefined, etag?: string): ConsoleRequest => ({body, query: {},
+        headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+      const before = await service.getElement(request(), 'memories', 'owned-memory');
+      const cause = Object.assign(new Error('Publication missing after commit'), {code: 'ENOENT'});
+      manager.publicationFailure = {cause};
+      await expect(service.updateElement(request({metadata: {description: 'Known durable update'}}, before.headers!.ETag),
+        'memories', 'owned-memory')).rejects.toBe(cause);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toMatchObject({status: 'committed-publication-failed', cause});
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Known durable update');
+    } finally {await f.cleanup();}
+  });
+
+  it.each([false, true].flatMap(body => [false, true].flatMap(missingId => [false, true].map(echo => ({body, missingId, echo})))))('edits frontmatter through the console service body=$body missingId=$missingId echoedContent=$echo', async ({body, missingId, echo}) => {
+      const markdown = body ? '# Route memory\n\nPreserved Markdown body.' : '';
+      let rawDefinition: Record<string, unknown> = {};
+      const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+        const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+        definition.metadata.custom = {value: 'route retained'};
+        if (missingId) delete definition.metadata.unique_id;
+        rawDefinition = definition;
+        return `---\n${yaml.dump(definition, {lineWidth: -1, noRefs: true})}---\n\n${markdown}\n`;
+      });
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-07T12:00:00.000Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (payload: unknown = undefined, etag?: string): ConsoleRequest => ({body: payload, query: {},
+          headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const get = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(get.status).toBe(200);
+        const original = get.body as {content: string; metadata: Record<string, unknown>};
+        const rawSnapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const rawHash = createHash('sha256').update(rawSnapshot.content, 'utf8').digest('hex');
+        expect(get.headers?.ETag).toBe(`"sha256:${rawHash}"`);
+        const initialSnapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const stale = await service.updateElement(request({metadata: {description: 'Stale route'}}, '"sha256:stale"'), 'memories', 'owned-memory');
+        expect(stale.status).toBe(412); expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(initialSnapshot);
+        const first = await service.updateElement(request({display_name: null, metadata: {description: 'First route edit'}, tags: ['route'],
+          ...(echo ? {content: original.content} : {})}, get.headers!.ETag), 'memories', 'owned-memory');
+        expect(first.status).toBe(200);
+        const initialContent = yaml.load(original.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+        expect(Array.isArray(initialContent.entries)).toBe(true);
+        if (missingId) expect(initialContent.metadata).not.toHaveProperty('unique_id');
+        const firstRaw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: Array<{id: string; content: string}>};
+        const persistedId = firstRaw.metadata.unique_id;
+        expect(typeof persistedId).toBe('string');
+        if (!missingId) expect(persistedId).toBe((rawDefinition.metadata as Record<string, unknown>).unique_id);
+        expect(firstRaw.entries).toHaveLength(body ? 2 : 1);
+        expect(firstRaw.entries.filter(entry => entry.content === markdown)).toHaveLength(body ? 1 : 0);
+        expect(firstRaw.metadata.name).toBe('Owned memory'); expect(firstRaw.metadata.version).toBe('3.4.5');
+        expect(firstRaw.metadata.custom).toEqual({value: 'route retained'}); expect(firstRaw.metadata.modified).toBe(now.toISOString());
+        const next = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(next.headers?.ETag).toBe(first.headers?.ETag); expect(next.body).toEqual(first.body);
+        const returned = next.body as {content: string};
+        const edit = yaml.load(returned.content, {schema: yaml.JSON_SCHEMA}) as {entries: Array<{id: string; content: string}>};
+        edit.entries.find(entry => entry.content === 'Original entry')!.content = 'Edited echoed entry';
+        const second = await service.updateElement(request({content: yaml.dump(edit, {lineWidth: -1, noRefs: true}),
+          metadata: {description: 'Second route edit'}}, next.headers!.ETag), 'memories', 'owned-memory');
+        expect(second.status).toBe(200);
+        const secondSnapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const secondRaw = yaml.load(secondSnapshot.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: Array<{id: string; content: string}>};
+        expect(secondRaw.metadata.unique_id).toBe(persistedId); expect(secondRaw.metadata.created).toBe(firstRaw.metadata.created);
+        expect(secondRaw.entries.find(entry => entry.content === 'Edited echoed entry')?.id).toBe(firstRaw.entries.find(entry => entry.content === 'Original entry')?.id);
+        expect(secondRaw.entries.filter(entry => entry.content === markdown)).toHaveLength(body ? 1 : 0);
+        const publication = manager.cached('head.yaml')!;
+        expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+        expect(publication.version).toBe('3.4.5'); expect(publication.metadata.name).toBe('Owned memory');
+        const finalGet = await service.getElement(request(), 'memories', 'owned-memory');
+        expect(finalGet.headers?.ETag).toBe(second.headers?.ETag); expect(finalGet.body).toEqual(second.body);
+        save.mockClear(); write.mockClear();
+        await expect(service.updateElement(request({metadata: {unique_id: 'wrong-id'}}, finalGet.headers!.ETag), 'memories', 'owned-memory')).rejects.toThrow('identity');
+        expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(secondSnapshot);
+      } finally {await f.cleanup();}
+    });
+
+  it.each([{entries: null}, {entries: [{content: 'Malformed raw entry'}]}])('retains malformed frontmatter entries through service editing projection: $entries', async ({entries}) => {
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as Record<string, unknown>;
+      return `---\n${yaml.dump({...definition, entries})}---\n`;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+      const request = (body: unknown = undefined, etag?: string): ConsoleRequest => ({body, query: {},
+        headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+      const get = await service.getElement(request(), 'memories', 'owned-memory');
+      expect(get.status).toBe(200);
+      const content = (get.body as {content: string}).content;
+      expect((yaml.load(content, {schema: yaml.JSON_SCHEMA}) as {entries: unknown}).entries).toEqual(entries);
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(service.updateElement(request({content, metadata: {description: 'Must refuse'}}, get.headers!.ETag),
+        'memories', 'owned-memory')).rejects.toThrow();
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['lookup', 'update'] as const)('does not resolve unrelated Unicode names through empty filename stems during %s', async operation => {
+    const f = await fixture({name: '記憶'});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', '記憶');
+      expect(before).not.toBeNull();
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      if (operation === 'lookup') expect(await store.findByName(USER, 'memories', '不存在')).toBeNull();
+      else expect(await store.update({userId: USER, type: 'memories', canonicalName: '不存在', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Wrong target'}})).toBeNull();
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+      expect(store.getPendingGuardedUpdate(USER, '不存在')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('preserves exact Unicode canonical-name lookup and conditional update', async () => {
+    const f = await fixture({name: '記憶'});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', '記憶');
+      expect(before!.displayName).toBe('記憶');
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: '記憶', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Exact Unicode edit'}});
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+      expect(raw.metadata.name).toBe('記憶'); expect(raw.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect(raw.metadata.description).toBe('Exact Unicode edit'); expect(response!.displayName).toBe('記憶');
+      expect((await store.findByName(USER, 'memories', '記憶'))!.contentHash).toBe(response!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('refuses duplicate exact Unicode names without dispatch', async () => {
+    const f = await fixture({name: '記憶'});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      await fs.writeFile(path.join(f.tenantRoot, 'duplicate.yaml'), snapshot.content);
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.findByName(USER, 'memories', '記憶')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: '記憶', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Ambiguous edit'}})).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+      expect(await fs.readFile(path.join(f.tenantRoot, 'duplicate.yaml'), 'utf8')).toBe(snapshot.content);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([false, true])('falls back to the unchanged memory name for null displayName and full replacement=%s', async fullReplacement => {
+    const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+      const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+      definition.metadata.custom = {value: 'retained'};
+      return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const original = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+      let source: Memory | undefined; let sourceState: string | undefined;
+      const find = manager.findGuardedMemoryForUpdate.bind(manager);
+      jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+        const target = await find(...args); source = target?.memory; sourceState = source?.serialize(); return target;
+      });
+      const metadata = {description: 'Nullable display-name edit'};
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, displayName: null, now: new Date(), metadata,
+        content: fullReplacement ? yaml.dump({metadata, entries: original.entries}) : undefined});
+      expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+      const publication = manager.cached('head.yaml')!;
+      const raw = yaml.load((await f.owners.readHeadSnapshot('head.yaml')).content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+      expect(raw.metadata.name).toBe('Owned memory'); expect(raw.metadata.unique_id).toBe(original.metadata.unique_id);
+      expect(raw.metadata.created).toBe(original.metadata.created); expect(raw.metadata.version).toBe('3.4.5');
+      expect(raw.metadata.custom).toEqual({value: 'retained'}); expect(raw.entries).toEqual(original.entries);
+      expect(publication.instructions).toBe('Original instructions'); expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      expect(response!.displayName).toBe('Owned memory'); expect(response!.metadata.description).toBe('Nullable display-name edit');
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(response!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('still refuses explicit nonnull displayName renames before dispatch', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, displayName: 'Other name', now: new Date()})).rejects.toThrow('rename');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([
+    {fullReplacement: false, version: 'invalid'},
+    {fullReplacement: true, version: 'invalid'},
+    {fullReplacement: false, version: '1.0.0-!'},
+    {fullReplacement: true, version: '1.0.0-!'},
+    {fullReplacement: false, version: null},
+    {fullReplacement: true, version: null},
+    {fullReplacement: false, version: false},
+    {fullReplacement: true, version: false},
+    {fullReplacement: false, version: 0},
+    {fullReplacement: true, version: 0},
+    {fullReplacement: false, version: ''},
+    {fullReplacement: true, version: ''},
+  ])('refuses invalid persisted version $version before dispatch for full replacement=$fullReplacement', async ({fullReplacement, version}) => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const definition = yaml.load(snapshot.content) as {entries: unknown[]};
+      let source: Memory | undefined; let sourceState: string | undefined;
+      const find = manager.findGuardedMemoryForUpdate.bind(manager);
+      const lookup = jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+        const target = await find(...args);
+        source = target?.memory; sourceState = source?.serialize();
+        return target;
+      });
+      const save = jest.spyOn(manager, 'save'); const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const content = fullReplacement ? yaml.dump({metadata: {version}, entries: definition.entries}) : undefined;
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), content,
+        metadata: fullReplacement ? {description: 'Invalid full replacement'} : {version}})).rejects.toThrow('Version');
+      expect(save).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+      expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(snapshot);
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+      expect(source!.version).toBe('1.0.0'); expect(source!.validate().valid).toBe(true);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(before!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([
+    {fullReplacement: false, version: '02.3', expected: '2.3.0'},
+    {fullReplacement: true, version: '02.3', expected: '2.3.0'},
+    {fullReplacement: false, version: '0', expected: '0.0.0'},
+    {fullReplacement: true, version: '0', expected: '0.0.0'},
+    {fullReplacement: false, version: undefined, expected: '3.4.5'},
+    {fullReplacement: true, version: undefined, expected: '3.4.5'},
+  ])('keeps persisted version $version coherent for full replacement=$fullReplacement', async ({fullReplacement, version, expected}) => {
+    const f = await fixture(version === undefined ? {version: '3.4.5'} : {});
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const definition = yaml.load(snapshot.content) as {entries: unknown[]};
+      const metadata = version === undefined ? {description: 'Omitted version edit'} : {version};
+      const content = fullReplacement ? yaml.dump({metadata, entries: definition.entries}) : undefined;
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), content, metadata: fullReplacement ? undefined : metadata});
+      const publication = manager.cached('head.yaml')!;
+      const persisted = await f.owners.readHeadSnapshot('head.yaml');
+      const raw = yaml.load(persisted.content) as {metadata: Record<string, unknown>; entries: unknown[]};
+      expect(publication.version).toBe(expected); expect(publication.metadata.version).toBe(expected);
+      expect(JSON.parse(publication.serialize()).version).toBe(expected);
+      expect(raw.metadata.version).toBe(expected); expect(response!.metadata.version).toBe(expected);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(response!.contentHash);
+      expect(raw.entries).toEqual(definition.entries);
+      expect(raw.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect(publication.instructions).toBe('Original instructions');
+      expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      const reloaded = await f.makeManager().manager.load('head.yaml');
+      expect(reloaded.version).toBe(expected); expect(reloaded.metadata.version).toBe(expected);
+      expect(reloaded.validate().valid).toBe(true);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([false, true])('advances captured modification time for full replacement=%s', async fullReplacement => {
+    const f = await fixture({version: '3.4.5'}, undefined, false, raw => {
+      const definition = yaml.load(raw, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>};
+      definition.metadata.modified = '2025-01-01T00:00:00.000Z';
+      definition.metadata.custom = {value: 'preserved'};
+      return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      let before = await store.findByName(USER, 'memories', 'owned-memory');
+      const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+      const definition = yaml.load(snapshot.content, {schema: yaml.JSON_SCHEMA}) as {entries: unknown[]};
+      let source: Memory | undefined; let sourceState: string | undefined;
+      const find = manager.findGuardedMemoryForUpdate.bind(manager);
+      jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+        const target = await find(...args);
+        source = target?.memory; sourceState = source?.serialize();
+        return target;
+      });
+      for (const now of [new Date('2026-10-05T12:00:00.000Z'), new Date('2026-10-06T13:00:00.000Z')]) {
+        const metadata = {description: 'Timestamp edit', modified: '1999-01-01T00:00:00.000Z'};
+        const content = fullReplacement ? yaml.dump({metadata, entries: definition.entries}) : undefined;
+        const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+          expectedContentHash: before!.contentHash, now, content, metadata});
+        expect(source).toBeDefined(); expect(source!.serialize()).toBe(sourceState);
+        const publication = manager.cached('head.yaml')!;
+        const persisted = await f.owners.readHeadSnapshot('head.yaml');
+        const raw = yaml.load(persisted.content, {schema: yaml.JSON_SCHEMA}) as {metadata: Record<string, unknown>; entries: unknown[]};
+        expect(publication.metadata.modified).toBe(now.toISOString());
+        expect(raw.metadata.modified).toBe(now.toISOString());
+        expect(response!.metadata.modified).toBe(now.toISOString());
+        expect(response!.updatedAt).toEqual(now);
+        expect(raw.metadata.created).toBe(before!.metadata.created);
+        expect(raw.metadata.unique_id).toBe(before!.metadata.unique_id);
+        expect(raw.metadata.version).toBe('3.4.5'); expect(raw.metadata.custom).toEqual({value: 'preserved'});
+        expect(raw.entries).toEqual(definition.entries);
+        expect(publication.instructions).toBe('Original instructions');
+        expect(publication.extensions).toEqual({nested: {value: 'original'}});
+        const next = await store.findByName(USER, 'memories', 'owned-memory');
+        expect(next!.updatedAt).toEqual(now); expect(next!.metadata.modified).toBe(now.toISOString());
+        expect(next!.contentHash).toBe(response!.contentHash);
+        expect(response!.contentHash).not.toBe(before!.contentHash);
+        before = next;
+      }
+    } finally {await f.cleanup();}
+  });
+
+  it.each([false, true])('keeps legacy config precedence in the committed publication for full replacement=%s', async fullReplacement => {
+    let originalEntries: unknown[] = [];
+    const f = await fixture({maxEntries: 3, onFull: 'error'}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {metadata: Record<string, unknown>; entries: unknown[]};
+      Object.assign(definition.metadata, {storage_backend: 'file', privacy_level: 'sensitive',
+        retention_policy: {default: '7 days', custom: 'retained'}, storageBackend: 'memory', privacyLevel: 'public',
+        retentionDays: 99, custom: {nested: {value: 'unknown metadata retained'}}});
+      originalEntries = definition.entries;
+      return yaml.dump(definition, {lineWidth: -1, noRefs: true});
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const source = await manager.load('head.yaml');
+      expect(source.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7});
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const content = fullReplacement ? yaml.dump({metadata: {description: 'Structured legacy edit'}, entries: originalEntries}) : undefined;
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), content, metadata: {description: 'Legacy edit',
+          storageBackend: 'memory', privacyLevel: 'public', retentionDays: 99}});
+      const publication = manager.cached('head.yaml')!;
+      expect(publication).toBeDefined();
+      expect(publication.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7,
+        storage_backend: 'file', privacy_level: 'sensitive', retention_policy: {default: '7 days', custom: 'retained'},
+        custom: {nested: {value: 'unknown metadata retained'}}, maxEntries: 3, onFull: 'error'});
+      expect(publication.instructions).toBe('Original instructions');
+      expect(publication.extensions).toEqual({nested: {value: 'original'}});
+      expect([...publication.getEntries().values()]).toEqual([...source.getEntries().values()]);
+      expect(response!.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect(response!.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7});
+      const next = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(next!.contentHash).toBe(response!.contentHash);
+      expect(next!.metadata).toMatchObject({storageBackend: 'file', privacyLevel: 'sensitive', retentionDays: 7});
+      const entry = await publication.addEntry('Added using committed runtime config');
+      expect(entry.privacyLevel).toBe('sensitive');
+      const expectedExpiry = new Date(entry.timestamp);
+      expectedExpiry.setDate(expectedExpiry.getDate() + 7);
+      expect(Math.abs(entry.expiresAt!.getTime() - expectedExpiry.getTime())).toBeLessThan(1000);
+      await publication.addEntry('Third entry stays within the original limit');
+      await expect(publication.addEntry('Fourth entry must refuse')).rejects.toThrow('full');
+      expect(publication.getEntries().size).toBe(3);
+    } finally {await f.cleanup();}
+  });
+
+  it.each([
+    {format: 'flat YAML', nested: false, frontmatter: false},
+    {format: 'nested YAML', nested: true, frontmatter: false},
+    {format: 'flat frontmatter', nested: false, frontmatter: true},
+    {format: 'nested frontmatter', nested: true, frontmatter: true},
+  ])('adopts the captured constructor identity for $format without a persisted ID', async ({nested, frontmatter}) => {
+    const body = '# Legacy body without a persisted identity';
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {metadata: Record<string, unknown>};
+      delete definition.metadata.unique_id;
+      const {metadata, ...auxiliary} = definition;
+      const serialized = yaml.dump(nested ? definition : {...metadata, ...auxiliary}, {lineWidth: -1, noRefs: true});
+      return frontmatter ? `---\n${serialized}---\n\n${body}\n` : serialized;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(before!.metadata.unique_id).toBeUndefined();
+      const find = jest.spyOn(manager, 'findGuardedMemoryForUpdate');
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      const response = await store.update({...input, expectedContentHash: before!.contentHash, metadata: {description: 'First edit'}});
+      const found = find.mock.results[0];
+      if (found.type !== 'return') throw new Error('Expected same-read identity capture');
+      const observed = await found.value;
+      expect(response!.metadata.unique_id).toBe(observed!.memory.id);
+      expect(response!.metadata.unique_id).toMatch(/^memories_owned-memory_\d+$/u);
+      const loaded = await manager.load('head.yaml');
+      expect(loaded.instructions).toBe('Original instructions');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      expect([...loaded.getEntries().values()]).toEqual([...observed!.memory.getEntries().values()]);
+      const subsequent = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(subsequent!.contentHash).toBe(response!.contentHash);
+      expect(subsequent!.metadata.unique_id).toBe(response!.metadata.unique_id);
+      const second = await store.update({...input, expectedContentHash: subsequent!.contentHash, metadata: {description: 'Second edit'}});
+      expect(second!.metadata.unique_id).toBe(response!.metadata.unique_id);
+      expect([...((await manager.load('head.yaml')).getEntries().values())]).toEqual([...loaded.getEntries().values()]);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(second!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['unique_id', 'name'] as const)('refuses a changed persisted %s before any owned write', async field => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {[field]: 'Changed identity'}})).rejects.toThrow(field === 'name' ? 'rename' : 'identity change');
+      expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(raw);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it.each([
+    {format: 'nested YAML', nested: true, frontmatter: false, persistedEntries: true},
+    {format: 'flat YAML', nested: false, frontmatter: false, persistedEntries: true},
+    {format: 'nested frontmatter with entries and Markdown', nested: true, frontmatter: true, persistedEntries: true},
+    {format: 'flat frontmatter with entries and Markdown', nested: false, frontmatter: true, persistedEntries: true},
+    {format: 'frontmatter with only a Markdown body', nested: false, frontmatter: true, persistedEntries: false},
+    {format: 'frontmatter without entries or a body', nested: false, frontmatter: true, persistedEntries: false, emptyBody: true},
+  ])('preserves same-read content and ETag preconditions for $format metadata edits', async ({nested, frontmatter, persistedEntries, emptyBody}) => {
+    const body = emptyBody ? '' : '# Legacy memory\n\nRemember the original Markdown body.';
+    let identity: string | undefined;
+    const f = await fixture({maxEntries: 1, onFull: 'error'}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {metadata: Record<string, unknown>};
+      identity = definition.metadata.unique_id as string;
+      definition.metadata.custom = {nested: {value: 'metadata retained'}};
+      if (!persistedEntries) delete definition.entries;
+      const {metadata, ...auxiliary} = definition;
+      const serialized = yaml.dump(nested ? definition : {...metadata, ...auxiliary}, {lineWidth: -1, noRefs: true});
+      return frontmatter ? `---\n${serialized}---\n\n${body}\n` : serialized;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(before).not.toBeNull();
+      if (frontmatter) {
+        const editable = yaml.load(before!.content, {schema: yaml.JSON_SCHEMA}) as {entries: Array<{content: string}>};
+        expect(editable.entries).toHaveLength(Number(persistedEntries) + Number(!emptyBody));
+        if (!emptyBody) expect(editable.entries.filter(entry => entry.content === body)).toHaveLength(1);
+      }
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      await expect(store.update({...input, expectedContentHash: 'stale', metadata: {description: 'Refused'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(write).not.toHaveBeenCalled();
+      const find = jest.spyOn(manager, 'findGuardedMemoryForUpdate');
+      const imported = jest.spyOn(manager, 'importElement');
+      const response = await store.update({...input, expectedContentHash: before!.contentHash,
+        metadata: {description: 'Metadata edit', maxEntries: 3}});
+      const found = find.mock.results[0];
+      if (found.type !== 'return') throw new Error('Expected captured memory lookup');
+      const observed = await found.value;
+      expect(write).toHaveBeenCalledTimes(1); expect(imported).not.toHaveBeenCalled();
+      const loaded = await manager.load('head.yaml');
+      const persisted = yaml.load(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')) as {metadata: Record<string, unknown>};
+      expect(loaded.metadata.description).toBe('Metadata edit');
+      expect(persisted.metadata.unique_id).toBe(identity);
+      expect(persisted.metadata.custom).toEqual({nested: {value: 'metadata retained'}});
+      expect(loaded.instructions).toBe('Original instructions');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      const entries = [...loaded.getEntries().values()];
+      expect(entries).toHaveLength(Number(persistedEntries) + Number(frontmatter && !emptyBody));
+      if (persistedEntries) expect(entries.find(entry => entry.content === 'Original entry')).toBeDefined();
+      if (frontmatter && !emptyBody) {
+        const capturedBody = [...observed!.memory.getEntries().values()].find(entry => entry.content === body)!;
+        expect(capturedBody).toBeDefined();
+        expect(entries.find(entry => entry.id === capturedBody.id)).toEqual(capturedBody);
+        expect(observed!.memory.metadata.description).toBe('Original description');
+      }
+      expect(response!.metadata.description).toBe('Metadata edit');
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(response!.contentHash);
+      await store.update({...input, expectedContentHash: response!.contentHash, metadata: {description: 'Second metadata edit'}});
+      expect((await manager.load('head.yaml')).getEntries().size).toBe(entries.length);
+    } finally {await f.cleanup();}
+  });
+
+  it.each(['invalid', 'duplicate'])('retains %s raw frontmatter array entries for strict replacement refusal', async kind => {
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown> & {entries: unknown[]};
+      definition.entries.push(kind === 'duplicate' ? definition.entries[0] : {id: 'invalid'});
+      return `---\n${yaml.dump(definition, {noRefs: true})}---\n\n# Preserved body\n`;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Must refuse'}})).rejects.toThrow('Replacement contains invalid or duplicate entries');
+      expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(raw);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it.each([null, 'invalid entries', {content: 'Not an array'}])('refuses frontmatter with explicit malformed entries %j before any owned write', async entries => {
+    const f = await fixture({}, undefined, false, raw => {
+      const definition = yaml.load(raw) as Record<string, unknown>;
+      return `---\n${yaml.dump({...definition, entries})}---\n\n# Preserved body\n`;
+    });
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Must refuse'}})).rejects.toThrow('Incomplete memory baseline');
+      expect(write).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(raw);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('updates through same-read ETag and preserves complete state with coherent runtime config', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const originalEntryMetadata = [...(await manager.load('head.yaml')).getEntries().values()][0].metadata;
+      const imported = jest.spyOn(manager, 'importElement');
+      const result = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory',
+        expectedVersion: 1, expectedContentHash: before!.contentHash, now: new Date(),
+        metadata: {description: 'Console change', maxEntries: 7, retentionDays: 9, priority: 8, onFull: 'error'}, tags: []});
+      expect(imported).not.toHaveBeenCalled();
+      expect(result!.metadata.description).toBe('Console change');
+      expect(result!.tags).toEqual([]);
+      expect(result!.content).toContain('Original instructions');
+      const loaded = await manager.load('head.yaml');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      expect(loaded.instructions).toBe('Original instructions');
+      expect((loaded.metadata as MemoryMetadata).retentionDays).toBe(9);
+      for (let i = loaded.getEntries().size; i < 7; i++) await loaded.addEntry(`Capacity entry ${i}`);
+      await expect(loaded.addEntry('Eighth entry')).rejects.toThrow('full');
+      expect([...loaded.getEntries().values()].find(entry => entry.content === 'Original entry')!.metadata).toEqual(originalEntryMetadata);
+      expect(result!.metadata.unique_id).toBe(before!.metadata.unique_id);
+      expect((await store.findByName(USER, 'memories', 'owned-memory'))!.contentHash).toBe(result!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('makes no write for missing targets and failed ETags, then permits a corrected request', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'missing', expectedVersion: 1, now: new Date()};
+      expect(await store.update(input)).toBeNull();
+      await expect(store.update({...input, canonicalName: 'owned-memory', expectedContentHash: 'wrong'})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(write).not.toHaveBeenCalled();
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      await expect(store.update({...input, canonicalName: 'owned-memory', expectedContentHash: before!.contentHash,
+        metadata: {description: 'Accepted'}})).resolves.not.toBeNull();
+    } finally {await f.cleanup();}
+  });
+
+  it('retains a real competing-process conflict and blocks replay through another spelling', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const before = await store.findByName(USER, 'memories', 'owned-memory');
+      const save = manager.save.bind(manager);
+      const saving = jest.spyOn(manager, 'save').mockImplementation(async (memory, locator, options) => {
+        await externalOwnedUpdate(f.tenantRoot);
+        await save(memory, locator, options);
+      });
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        expectedContentHash: before!.contentHash, now: new Date(), metadata: {description: 'Attempted console'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      const pending = store.getPendingGuardedUpdate(USER, 'owned-memory')!;
+      expect(pending.status).toBe('refused'); expect(pending.manager).toBe(manager);
+      expect(manager.getPendingHeadUpdate(pending.candidate!)?.candidate?.content).toContain('Attempted console');
+      const winner = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'Owned memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Replay'}})).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(saving).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8')).toBe(winner);
+    } finally {await f.cleanup();}
+  });
+
+  it('retains known commit publication failures and refuses lifecycle mutations before legacy methods', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const failure = new Error('Publication failed'); manager.publicationFailure = {cause: failure};
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Durable console'}})).rejects.toBe(failure);
+      const pending = store.getPendingGuardedUpdate(USER, 'owned-memory')!;
+      expect(pending.status).toBe('committed-publication-failed'); expect(pending.cause).toBe(failure);
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Durable console');
+      const imported = jest.spyOn(manager, 'importElement'); const removed = jest.spyOn(manager, 'delete');
+      await expect(store.create({userId: USER, type: 'memories', name: 'New', displayName: null, content: '',
+        metadata: {}, tags: [], now: new Date()})).rejects.toThrow('CREATE');
+      await expect(store.delete({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()})).rejects.toThrow('DELETE');
+      expect(imported).not.toHaveBeenCalled(); expect(removed).not.toHaveBeenCalled();
+    } finally {await f.cleanup();}
+  });
+  it('freshly refuses canonical duplicate names without any write', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      await fs.writeFile(path.join(f.tenantRoot, 'duplicate.yaml'), raw.replace('name: Owned memory', 'name: owned-memory'));
+      const save = jest.spyOn(manager, 'save');
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()})).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(save).not.toHaveBeenCalled(); expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('releases invalid preparation but retains an unknown attempt without automatic replay', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      await expect(store.update({...input, content: 'Not a complete memory document'})).rejects.toThrow('YAML content must parse to an object');
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+      const cause = new Error('Unknown transport outcome');
+      const write = jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValue(cause);
+      await expect(store.update({...input, metadata: {description: 'Unknown attempt'}})).rejects.toBe(cause);
+      const pending = store.getPendingGuardedUpdate(USER, 'owned-memory')!;
+      expect(pending.status).toBe('unknown'); expect(pending.cause).toBe(cause);
+      expect(manager.getPendingHeadUpdate(pending.candidate!)?.candidate?.content).toContain('Unknown attempt');
+      await expect(store.update(input)).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {await f.cleanup();}
+  });
+
+  it('refuses captured tenant drift before dispatch and does not return old-tenant GET data', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const actual = manager.validate.bind(manager);
+      const validation = jest.spyOn(manager, 'validate').mockImplementation(memory => {
+        f.setTenant('22222222-2222-4222-8222-222222222222'); return actual(memory);
+      });
+      const write = jest.spyOn(f.owners, 'updateOwnedHead');
+      await expect(store.findByName(USER, 'memories', 'owned-memory')).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      f.setTenant(USER);
+      await expect(store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Not dispatched'}})).rejects.toMatchObject({code: 'EHEADCONFLICT'});
+      expect(write).not.toHaveBeenCalled(); validation.mockRestore(); f.setTenant(USER);
+      expect(store.getPendingGuardedUpdate(USER, 'owned-memory')).toBeUndefined();
+    } finally {await f.cleanup();}
+  });
+
+  it('returns its own committed response instead of rereading a subsequent writer', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const save = manager.save.bind(manager);
+      jest.spyOn(manager, 'save').mockImplementation(async (memory, locator, options) => {
+        await save(memory, locator, options); await externalOwnedUpdate(f.tenantRoot);
+      });
+      const response = await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), metadata: {description: 'Original description'}});
+      expect(response!.metadata.description).toBe('Original description');
+      const current = await store.findByName(USER, 'memories', 'owned-memory');
+      expect(current!.metadata.description).toBe('External description');
+      expect(current!.contentHash).not.toBe(response!.contentHash);
+    } finally {await f.cleanup();}
+  });
+
+  it('edits structured content and then explicitly empties entries without losing omitted auxiliary state', async () => {
+    const f = await fixture();
+    try {
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      const input = {userId: USER, type: 'memories' as const, canonicalName: 'owned-memory', expectedVersion: 1, now: new Date()};
+      await store.update({...input, content: 'entries:\n  - id: edited\n    content: Edited entry\n    timestamp: "2026-01-01T00:00:00.000Z"\n    metadata:\n      nested:\n        value: preserved\n'});
+      const loaded = await manager.load('head.yaml');
+      expect([...loaded.getEntries().values()][0].metadata).toEqual({nested: {value: 'preserved'}});
+      expect(loaded.instructions).toBe('Original instructions');
+      expect(loaded.extensions).toEqual({nested: {value: 'original'}});
+      await store.update({...input, content: 'entries: []'});
+      const empty = await manager.load('head.yaml');
+      expect(empty.getEntries().size).toBe(0); expect(empty.instructions).toBe('Original instructions');
+      expect(empty.extensions).toEqual({nested: {value: 'original'}});
+    } finally {await f.cleanup();}
+  });
+
+  it('uses the discovered exact root locator despite a different logical name at system/head.yaml', async () => {
+    const f = await fixture();
+    try {
+      const raw = await fs.readFile(path.join(f.tenantRoot, 'head.yaml'), 'utf8');
+      const shadow = raw.replace('name: Owned memory', 'name: Different system memory');
+      await fs.mkdir(path.join(f.tenantRoot, 'system')); await fs.writeFile(path.join(f.tenantRoot, 'system', 'head.yaml'), shadow);
+      const {manager} = f.makeManager(); const store = consoleStore(manager);
+      await store.update({userId: USER, type: 'memories', canonicalName: 'owned-memory', expectedVersion: 1,
+        now: new Date(), content: 'entries: []'});
+      expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('entries: []');
+      expect(await fs.readFile(path.join(f.tenantRoot, 'system', 'head.yaml'), 'utf8')).toBe(shadow);
+    } finally {await f.cleanup();}
+  });
+
 });

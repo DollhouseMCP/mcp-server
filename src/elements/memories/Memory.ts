@@ -582,6 +582,43 @@ export class Memory extends BaseElement implements IElement {
     return this.copyPersistenceState(false);
   }
 
+  /** Complete validated replacement on a quiet preview; constructor-derived config stays coherent. */
+  public applyPersistenceReplacement(metadata: MemoryMetadata, entries: unknown[], extensions: unknown, instructions: unknown): void {
+    if (!this.appendCandidate) throw new Error('Replacement requires a persistence preview');
+    if (Object.hasOwn(metadata, 'version') && (typeof metadata.version !== 'string' || metadata.version.length === 0)) {
+      throw new Error('Version must be a non-empty string');
+    }
+    const configured = new Memory(structuredClone(metadata), this.metadataServiceRef,
+      this._memoryManagerRef, this._retentionPolicyRef, true);
+    if (!Number.isFinite(configured.maxEntries)) throw new Error('Invalid memory: Max entries must be finite');
+    // Finiteness only: retain legacy numeric-string representation and expiry behavior.
+    if (!Number.isFinite(Number(configured.retentionDays))) throw new Error('Invalid memory: Retention days must be finite');
+    // Persist the same canonical configuration the constructor uses at runtime,
+    // while retaining raw aliases, unrelated metadata and absent fields.
+    const canonical = configured.metadata as MemoryMetadata;
+    const replacementMetadata = {...metadata, type: canonical.type, version: configured.version,
+      maxEntries: canonical.maxEntries, retentionDays: canonical.retentionDays,
+      privacyLevel: canonical.privacyLevel, storageBackend: canonical.storageBackend, searchable: canonical.searchable};
+    // Runtime uses the constructor discriminator; the loader strips this disk-only marker.
+    delete (replacementMetadata as MemoryMetadata & {format_version?: unknown}).format_version;
+    configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: configured.version,
+      metadata: replacementMetadata, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
+    if (configured.entriesSize !== entries.length) throw new Error('Replacement contains invalid or duplicate entries');
+    if (instructions !== undefined && typeof instructions !== 'string') throw new Error('Invalid memory instructions');
+    const validation = configured.validate();
+    if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
+    this.version = configured.version;
+    this.metadata = structuredClone(configured.metadata);
+    this.extensions = structuredClone(configured.extensions);
+    this.entries = structuredClone(configured.entries);
+    this.instructions = typeof instructions === 'string' ? instructions : '';
+    this.maxEntries = configured.maxEntries;
+    this.retentionDays = configured.retentionDays;
+    this.privacyLevel = configured.privacyLevel;
+    this.storageBackend = configured.storageBackend;
+    this.searchable = configured.searchable;
+  }
+
   private copyPersistenceState(preview: boolean): Memory {
     const copy = new Memory(this.metadata as MemoryMetadata, this.metadataServiceRef,
       this._memoryManagerRef, this._retentionPolicyRef, preview);

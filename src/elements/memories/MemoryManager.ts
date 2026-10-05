@@ -1,3 +1,4 @@
+import { matchesPortfolioName } from '../../utils/portfolioName.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
  * Handles CRUD operations and lifecycle management for memories implementing IElement
@@ -10,7 +11,7 @@
  * 5. MEDIUM: Path validation prevents directory traversal attacks
  */
 
-import type { MemoryMetadata } from './Memory.js';
+import type { MemoryEntry, MemoryMetadata } from './Memory.js';
 import { Memory } from './Memory.js';
 import type { MemoryHeadUpdateAdapter, MemoryUpdateCandidate, PendingMemoryUpdate } from '../../storage/MemoryHeadUpdateAdapter.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
@@ -99,6 +100,8 @@ interface BackupCleanupResult {
   errorDetails: Array<{ file: string; error: string }>;
 }
 
+type GuardedMemoryRead = Readonly<{memory: Memory; content: string; locator: string; definition?: ParsedMemoryData}>;
+
 export class MemoryManager extends BaseElementManager<Memory> {
   /**
    * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
@@ -136,6 +139,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   private readonly _localActiveMemoryNames: Set<string> = new Set();
+  private readonly loadedMarkdownBodyIds = new WeakMap<Memory, string>();
+  // Evidence never changes source/public serialization. Only console preparation
+  // grants an override to its candidate and the private persistence copy.
+  private readonly consoleRawNames = new WeakMap<Memory, string>();
+  private readonly consoleSerializationNames = new WeakMap<Memory, string>();
 
   constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
@@ -413,8 +421,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (parsedData.content.trim()) {
       // Loading existing bytes must not apply append-time capacity or retention
       // policy: a full memory may be read-only, but its body is still data.
-      memory.appendLoadedMarkdownBody(parsedData.content.trim());
+      this.appendLoadedMarkdownBody(memory, parsedData.content.trim());
     }
+  }
+
+  private appendLoadedMarkdownBody(memory: Memory, content: string): void {
+    const existingIds = new Set(memory.getEntries().keys());
+    memory.appendLoadedMarkdownBody(content);
+    const appended = [...memory.getEntries().values()].filter(entry => !existingIds.has(entry.id));
+    if (appended.length === 1) this.loadedMarkdownBodyIds.set(memory, appended[0].id);
   }
 
   /**
@@ -665,26 +680,48 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async loadGuardedMemory(filePath: string, mode: 'public' | 'mutation' = 'public'): Promise<Memory> {
+    return (await this.readGuardedMemory(filePath, mode)).memory;
+  }
+
+  private readGuardedMemory(filePath: string, mode: 'public' | 'mutation'): Promise<GuardedMemoryRead>;
+  private readGuardedMemory(filePath: string, mode: 'lookup', context: Readonly<{tenant: string; root: string}>): Promise<GuardedMemoryRead | undefined>;
+  private async readGuardedMemory(filePath: string, mode: 'public' | 'mutation' | 'lookup',
+    context?: Readonly<{tenant: string; root: string}>): Promise<GuardedMemoryRead | undefined> {
     const adapter = this.guardedUpdateAdapter!;
-    const tenant = adapter.captureTenant();
-    const contextRoot = this.memoriesDir;
+    const tenant = context?.tenant ?? adapter.captureTenant();
+    const contextRoot = context?.root ?? this.memoriesDir;
     const tenantRoot = isWritableStorageLayer(this.storageLayer) ? contextRoot : await fs.realpath(contextRoot);
     this.requireGuardedContext(tenant, contextRoot);
     let locator = filePath;
     if (!isWritableStorageLayer(this.storageLayer)) {
-      const fullPath = mode === 'mutation'
+      const fullPath = mode !== 'public'
         ? await this.validateAndResolvePath(filePath)
         : await this.resolveMemoryPath(filePath);
       if (!fullPath) throw new Error(`Could not resolve memory path: ${filePath}`);
       locator = path.relative(contextRoot, fullPath).split(path.sep).join('/');
     }
-    const snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot);
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode === 'mutation' });
+    let snapshot: Awaited<ReturnType<MemoryHeadUpdateAdapter['readBoundSnapshot']>>;
+    try { snapshot = await adapter.readBoundSnapshot(locator, tenant, tenantRoot); }
+    catch (cause) {
+      if (mode === 'lookup' && (cause as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+        this.requireGuardedContext(tenant, contextRoot);
+        return undefined;
+      }
+      throw cause;
+    }
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode !== 'public' });
     memory.setFilePath(locator);
+    const definition = mode === 'lookup' ? this.parseContent(snapshot.content) : undefined;
+    if (definition) {
+      const metadata = (definition.data.metadata ?? definition.data) as Record<string, unknown>;
+      const rawName = metadata?.name;
+      if (typeof rawName !== 'string' || !rawName) throw new Error('Invalid persisted memory name');
+      this.consoleRawNames.set(memory, rawName);
+    }
     this.requireGuardedContext(tenant, contextRoot);
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
     // The caller receives a mutable working copy, not a durable cache entry.
-    return memory;
+    return Object.freeze({ memory, content: snapshot.content, locator, definition });
   }
 
   isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
@@ -712,6 +749,96 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.requireGuardedContext(tenant, contextRoot);
     if (memory.metadata.name !== name) throw Object.assign(new Error('Memory target name changed during lookup'), { code: 'EHEADCONFLICT' });
     return memory;
+  }
+
+  /** Fresh console spelling resolution; cached/list bytes never acquire authority. */
+  async findGuardedMemoryForUpdate(name: string, expectedUserId: string): Promise<Readonly<{memory: Memory; content: string; locator: string; replacementBaseline: Record<string, unknown>}> | undefined> {
+    const tenant = this.captureGuardedTenant();
+    const contextRoot = this.memoriesDir;
+    if (tenant !== expectedUserId) throw Object.assign(new Error('Memory request tenant mismatch'), {code: 'EHEADCONFLICT'});
+    const summaries = await this.storageLayer.listSummaries({includePublic: false, preserveDuplicates: true, freshMetadata: true});
+    this.requireGuardedContext(tenant, contextRoot);
+    const matches = summaries.filter(summary => {
+      if (matchesPortfolioName(summary.name, name)) return true;
+      const normalized = this.normalizeMemoryName(summary.name, 'skip-invalid');
+      return normalized !== undefined && matchesPortfolioName(normalized, name);
+    });
+    if (!matches.length) return undefined;
+    if (matches.length !== 1 || !matches[0].filePath) throw Object.assign(new Error('Ambiguous memory name'), {code: 'EHEADCONFLICT'});
+    const observed = await this.readGuardedMemory(matches[0].filePath, 'lookup', {tenant, root: contextRoot});
+    this.requireGuardedContext(tenant, contextRoot);
+    if (!observed) return undefined;
+    const expectedName = isWritableStorageLayer(this.storageLayer) ? matches[0].name : this.normalizeMemoryName(matches[0].name);
+    if (observed.memory.metadata.name !== expectedName ||
+      (!isWritableStorageLayer(this.storageLayer) && this.consoleRawNames.get(observed.memory) !== matches[0].name)) {
+      throw Object.assign(new Error('Memory name changed during lookup'), {code: 'EHEADCONFLICT'});
+    }
+    const definition = observed.definition!;
+    const parsed = definition.data;
+    const metadata = parsed.metadata && typeof parsed.metadata === 'object' ? parsed.metadata as Record<string, unknown> : parsed;
+    if (metadata.unique_id !== undefined) {
+      if (typeof metadata.unique_id !== 'string' || !metadata.unique_id) throw new Error('Invalid persisted memory identity');
+      observed.memory.id = metadata.unique_id;
+      (observed.memory.metadata as MemoryMetadata & {unique_id?: string}).unique_id = metadata.unique_id;
+    } else {
+      // Legacy serialization persists this object's constructor identity on
+      // its first save. Keep preparation and response on that same identity.
+      metadata.unique_id = observed.memory.id;
+      (observed.memory.metadata as MemoryMetadata & {unique_id?: string}).unique_id = observed.memory.id;
+    }
+    const replacementBaseline = this.guardedReplacementBaseline(observed.memory, observed.content, definition);
+    return Object.freeze({memory: observed.memory, content: observed.content, locator: observed.locator, replacementBaseline});
+  }
+
+  private guardedReplacementBaseline(memory: Memory, raw: string,
+    definition: {data: Record<string, unknown>; content: string}): Record<string, unknown> {
+    const baseline = structuredClone(definition.data);
+    if (!this.serializationService.hasFrontmatter(raw)) return baseline;
+    if (!Object.hasOwn(baseline, 'entries')) baseline.entries = [];
+    // Preserve malformed fields for UPDATE validation without changing GET.
+    if (!Array.isArray(baseline.entries)) return baseline;
+    if (definition.content.trim()) {
+      // afterLoad appended this body entry to the same-read working object.
+      // Keep raw persisted entries so replacement validation still refuses
+      // malformed/duplicate entries rather than silently dropping them.
+      const bodyId = this.loadedMarkdownBodyIds.get(memory);
+      const serialized = JSON.parse(memory.serialize()) as {entries: MemoryEntry[]};
+      const bodyEntry = serialized.entries.find(entry => entry.id === bodyId);
+      if (bodyEntry?.source !== 'file') {
+        throw new Error('Missing hydrated memory markdown body');
+      }
+      baseline.entries.push(bodyEntry);
+    }
+    return baseline;
+  }
+
+  /** Derive before parsing/validation awaits; never bind an imported replacement. */
+  async prepareGuardedMemoryReplacement(source: Memory, content: string): Promise<Memory> {
+    const candidate = this.deriveGuardedMutation(source);
+    const parsed = SecureYamlParser.parseRawYaml(content, {
+      maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE, schema: 'json', contentPolicy: 'structure-only',
+    });
+    if (!validateMemoryControlFields(parsed)) throw new Error('Invalid replacement control fields');
+    const metadata = parsed.metadata as MemoryMetadata & {unique_id?: unknown};
+    const rawName = this.consoleRawNames.get(source) ?? source.metadata.name;
+    if (metadata?.name !== rawName ||
+      metadata.unique_id !== (source.metadata as MemoryMetadata & {unique_id?: unknown}).unique_id ||
+      !Array.isArray(parsed.entries)) throw new Error('Replacement must preserve memory identity and complete entries');
+    // Validate the authored policy before load-time sanitization can discard it.
+    this.validateSerializedContent(content);
+    // Use established loader values only for present normalized fields, keeping
+    // absent fields, raw aliases and unrelated metadata unchanged.
+    const configured = await this.parseMetadata({metadata});
+    const replacementMetadata = {...metadata, name: source.metadata.name, storageBackend: configured.storageBackend,
+      privacyLevel: configured.privacyLevel, retentionDays: configured.retentionDays,
+      ...(Object.hasOwn(metadata, 'description') ? {description: configured.description} : {}),
+      ...(Object.hasOwn(metadata, 'tags') ? {tags: configured.tags} : {}),
+      ...(Object.hasOwn(metadata, 'triggers') ? {triggers: configured.triggers} : {}),
+      ...(Object.hasOwn(metadata, 'gatekeeper') ? {gatekeeper: configured.gatekeeper} : {})};
+    candidate.applyPersistenceReplacement(replacementMetadata, parsed.entries, parsed.extensions, parsed.instructions);
+    await this.assertPersistable(candidate);
+    if (this.consoleRawNames.has(source)) this.consoleSerializationNames.set(candidate, rawName);
+    return candidate;
   }
 
   /** Capture candidate and original authority synchronously, before mutation/validation awaits. */
@@ -744,6 +871,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     try {
       // Snapshot current state without replaying load-time quarantine or retention.
       const detached = element.createPersistenceCandidate();
+      const rawName = this.consoleSerializationNames.get(element);
+      if (rawName !== undefined) this.consoleSerializationNames.set(detached, rawName);
       const validation = detached.validate();
       if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
       const content = await this.serializeElement(detached);
@@ -771,9 +900,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.afterSave(publication, locator!);
     } catch (cause) {
       adapter.recordFailure(element, candidate, original, cause, committed);
+      if (adapter.getPendingUpdate(element)?.status === 'refused') {
+        this.auditRefusedSave(element, locator!, cause);
+      }
       throw cause;
     } finally {
       adapter.finishUpdate(element);
+    }
+  }
+
+  private auditRefusedSave(element: Memory, locator: string, cause: unknown): void {
+    try {
+      this.onSaveError(element, locator, cause);
+    } catch {
+      try {
+        logger.warn('Memory save failure audit hook threw; original refusal preserved');
+      } catch {
+        // Both audit and warning delivery are best effort; preserve the refusal.
+      }
     }
   }
 
@@ -2081,6 +2225,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const stats = element.getStats();
     // Issue #755: Serialize type as singular and persist unique_id
     const metadata = { ...element.metadata };
+    const rawName = this.consoleSerializationNames.get(element);
+    if (rawName !== undefined) metadata.name = rawName;
     metadata.type = toSingularLabel(ElementType.MEMORY) as any;
     (metadata as any).format_version = 'v2';  // Fix #912/#918: Explicit format marker
     (metadata as any).unique_id = element.id;
@@ -2224,6 +2370,22 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
   }
   
+  /** The same loader normalization used by console discovery hints. */
+  private normalizeMemoryName(input: string): string;
+  private normalizeMemoryName(input: string, mode: 'skip-invalid'): string | undefined;
+  private normalizeMemoryName(input: string, mode?: 'skip-invalid'): string | undefined {
+    const result = this.validationService.validateAndSanitizeInput(input, {
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH, allowSpaces: true,
+    });
+    if (!result.isValid || result.sanitizedValue === undefined) {
+      // Unrelated discovery hints may be unreadable; raw matches still undergo
+      // strict hydration and all genuine matching candidates count for ambiguity.
+      if (mode === 'skip-invalid') return undefined;
+      throw new Error(`Invalid memory name: ${result.errors?.join(', ')}`);
+    }
+    return result.sanitizedValue;
+  }
+
   private parseMemoryFile(parsed: ParsedMemoryData): { metadata: MemoryMetadata; content: string } {
     // FIX: SecureYamlParser returns data in 'data' property, not 'metadata'
     // For markdown files with YAML frontmatter, the structure is:
@@ -2239,14 +2401,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Extract metadata with validation
     // SECURITY FIX: Validate BEFORE sanitization to prevent bypass attacks
     const nameInput = metadataSource.name || 'Unnamed Memory';
-    const nameResult = this.validationService.validateAndSanitizeInput(nameInput, {
-      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
-      allowSpaces: true
-    });
-    const sanitizedName = nameResult.sanitizedValue;
-    if (!nameResult.isValid || sanitizedName === undefined) {
-      throw new Error(`Invalid memory name: ${nameResult.errors?.join(', ')}`);
-    }
+    const sanitizedName = this.normalizeMemoryName(nameInput);
 
     // FIX: Must specify fieldType: 'description' to allow punctuation like colons, semicolons, etc.
     let sanitizedDescription = '';

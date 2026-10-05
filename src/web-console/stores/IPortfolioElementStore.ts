@@ -1,3 +1,4 @@
+import { canonicalizePortfolioName as canonicalizePortfolioElementName } from '../../utils/portfolioName.js';
 import {
   ConsoleStoreValidationError,
   assertDisplayString,
@@ -133,10 +134,7 @@ export function isConsolePortfolioElementType(value: string): value is ConsolePo
   return CONSOLE_PORTFOLIO_ELEMENT_TYPES.includes(value as ConsolePortfolioElementType);
 }
 
-export function canonicalizePortfolioElementName(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  return trimmed.replace(/\.md$|\.ya?ml$/u, '');
-}
+export { canonicalizePortfolioName as canonicalizePortfolioElementName } from '../../utils/portfolioName.js';
 
 export function validatePortfolioElementSummaryRecord(record: ConsolePortfolioElementSummaryRecord): void {
   assertUuid(record.userId, 'userId');
@@ -158,10 +156,18 @@ export function validatePortfolioElementSummaryRecord(record: ConsolePortfolioEl
   if (!['valid', 'invalid', 'unknown'].includes(record.validationStatus)) {
     throw new ConsoleStoreValidationError(`unsupported validation status '${record.validationStatus}'`);
   }
-  if (record.tags.length > PORTFOLIO_ELEMENT_TAGS_MAX) {
+  validatePortfolioElementTags(record.tags);
+}
+
+/** Validate the effective raw value before response projections can filter it. */
+export function validatePortfolioElementTags(tags: unknown): void {
+  if (!Array.isArray(tags)) {
+    throw new ConsoleStoreValidationError('tags must be an array of strings');
+  }
+  if (tags.length > PORTFOLIO_ELEMENT_TAGS_MAX) {
     throw new ConsoleStoreValidationError(`tags must contain at most ${PORTFOLIO_ELEMENT_TAGS_MAX} entries`);
   }
-  for (const tag of record.tags) {
+  for (const tag of tags) {
     assertDisplayString(tag, 'tag', 80);
   }
 }
