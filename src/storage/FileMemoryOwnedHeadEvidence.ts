@@ -40,7 +40,7 @@ async function observeEvidenceFailureAsync<T>(stage: string, body: () => Promise
       throw cause;
     }
   };
-  return nested ? invoke() : evidenceAuditScope.run(true, invoke);
+  return await (nested ? invoke() : evidenceAuditScope.run(true, invoke));
 }
 
 export interface HeadIdentity { device: string; inode: string; size: string; mtimeNs: string; ctimeNs: string }
