@@ -1,10 +1,24 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { isDeepStrictEqual as equal } from 'node:util';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
+import { SecurityMonitor } from '../security/securityMonitor.js';
+import { logger } from '../utils/logger.js';
+
+/** Best-effort boundary observation, never evidence of a storage outcome or durable delivery. */
+function auditFenceFailure(stage: string, callback: string): void {
+  try {
+    SecurityMonitor.logSecurityEvent({
+      type: 'OPERATION_FAILED', severity: 'HIGH', source: 'FileMemoryFence',
+      details: `Fence boundary failed; stage=${stage}; callback=${callback}; storage-outcome=unclassified; invocation=${randomUUID()}`,
+    });
+  } catch {
+    try { logger.warn('Memory fence failure audit observer failed'); } catch { /* Preserve the original failure. */ }
+  }
+}
 
 /**
  * Local-filesystem exclusion primitives for one memory locator or a tenant.
@@ -44,29 +58,34 @@ export interface TenantFenceObservation {
 
 /** Observe the tenant lease without creating its directory or acquiring/releasing it. */
 export async function observeTenantFence(tenantRoot: string): Promise<TenantFenceObservation> {
-  if (process.platform === 'win32') {
-    throw new Error('FileMemoryFence requires POSIX filesystem ownership and mode checks');
+  try {
+    if (process.platform === 'win32') {
+      throw new Error('FileMemoryFence requires POSIX filesystem ownership and mode checks');
+    }
+    const root = await fs.realpath(tenantRoot);
+    const lockRoot = path.join(root, LOCK_DIRECTORY);
+    let directory;
+    try { directory = await fs.lstat(lockRoot); } catch (error) {
+      if (hasCode(error, 'ENOENT')) return { present: false };
+      throw error;
+    }
+    if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0 ||
+      (process.getuid && directory.uid !== process.getuid())) {
+      throw new Error('Memory fence directory is not private');
+    }
+    let lease;
+    try { lease = await fs.lstat(path.join(lockRoot, TENANT_LOCK_NAME), { bigint: true }); } catch (error) {
+      if (hasCode(error, 'ENOENT')) return { present: false };
+      throw error;
+    }
+    return {
+      present: true,
+      identity: `${lease.dev}:${lease.ino}:${lease.ctimeNs}:${lease.mtimeNs}`,
+    };
+  } catch (cause) {
+    auditFenceFailure('observation', 'not-started');
+    throw cause;
   }
-  const root = await fs.realpath(tenantRoot);
-  const lockRoot = path.join(root, LOCK_DIRECTORY);
-  let directory;
-  try { directory = await fs.lstat(lockRoot); } catch (error) {
-    if (hasCode(error, 'ENOENT')) return { present: false };
-    throw error;
-  }
-  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0 ||
-    (process.getuid && directory.uid !== process.getuid())) {
-    throw new Error('Memory fence directory is not private');
-  }
-  let lease;
-  try { lease = await fs.lstat(path.join(lockRoot, TENANT_LOCK_NAME), { bigint: true }); } catch (error) {
-    if (hasCode(error, 'ENOENT')) return { present: false };
-    throw error;
-  }
-  return {
-    present: true,
-    identity: `${lease.dev}:${lease.ino}:${lease.ctimeNs}:${lease.mtimeNs}`,
-  };
 }
 
 function hasCode(error: unknown, code: string): boolean {
@@ -131,36 +150,50 @@ export class FileMemoryFence {
     operation: () => Promise<T> | T,
     options: FileMemoryFenceOptions,
   ): Promise<T> {
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
-      throw new RangeError(`timeoutMs must be finite and between 0 and ${MAX_TIMEOUT_MS}`);
-    }
-    const { root, lockPath } = await resolvePath();
-    const lease = await this.acquire(root, lockPath, timeoutMs);
-
-    let result!: T;
-    let operationError: unknown;
-    let operationFailed = false;
+    let stage = 'configuration';
+    let callback = 'not-started';
     try {
-      result = await operation();
-    } catch (error) {
-      operationError = error;
-      operationFailed = true;
-    }
-    try {
-      await this.release(lease);
-    } catch (releaseError) {
-      if (operationFailed) {
-        throw new AggregateError(
-          [operationError, releaseError],
-          'Memory file operation failed and its fence could not be released',
-          { cause: operationError },
-        );
+      const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
+        throw new RangeError(`timeoutMs must be finite and between 0 and ${MAX_TIMEOUT_MS}`);
       }
-      throw releaseError;
+      stage = 'resolution';
+      const { root, lockPath } = await resolvePath();
+      stage = 'acquisition';
+      const lease = await this.acquire(root, lockPath, timeoutMs);
+
+      stage = 'callback';
+      let result!: T;
+      let operationError: unknown;
+      let operationFailed = false;
+      try {
+        result = await operation();
+        callback = 'completed';
+      } catch (error) {
+        callback = 'failed';
+        operationError = error;
+        operationFailed = true;
+      }
+      stage = 'release';
+      try {
+        await this.release(lease);
+      } catch (releaseError) {
+        if (operationFailed) {
+          throw new AggregateError(
+            [operationError, releaseError],
+            'Memory file operation failed and its fence could not be released',
+            { cause: operationError },
+          );
+        }
+        throw releaseError;
+      }
+      if (operationFailed) { stage = 'callback'; throw operationError; }
+      return result;
+    } catch (cause) {
+      // Release/composed failures are observed only after cleanup has been attempted.
+      auditFenceFailure(stage, callback);
+      throw cause;
     }
-    if (operationFailed) throw operationError;
-    return result;
   }
 
   private async resolveLockPath(target: FileMemoryFenceTarget): Promise<{ root: string; lockPath: string }> {

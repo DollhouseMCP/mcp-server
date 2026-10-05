@@ -787,6 +787,11 @@ export const suppressions: Suppression[] = [
   // ========================================
   {
     rule: RULE_DMCP_SEC_006,
+    file: 'src/storage/FileMemoryAbortIntentCodec.ts',
+    reason: 'FALSE POSITIVE: The internal validate() function only checks bounded UTF-8/JSON schema, revisions, hashes, identities, and locator values, then returns frozen copies or throws TypeError. This value codec performs no filesystem I/O, ownership/authorization decision, or lifecycle mutation; callers retain those responsibilities and their operational audit boundary. Re-review this exact-file disposition if side effects or authority are added.'
+  },
+  {
+    rule: RULE_DMCP_SEC_006,
     file: 'src/types/*.ts',
     reason: 'Type definition files do not perform security operations'
   },
