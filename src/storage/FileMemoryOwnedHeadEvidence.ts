@@ -226,14 +226,15 @@ export function readEvidenceFile(target: string, maximum: number, links: '1' | '
 /** Only an absent initial open is optional; every failure after opening remains a refusal. */
 // eslint-disable-next-line no-redeclare -- TypeScript overload keeps mandatory reads non-optional.
 export function readEvidenceFile(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
-  active: () => void, closed: EvidenceClose, fail: EvidenceFail,
-  options: { readonly optionalInitialAbsence: true }): Promise<HeadFileEvidence | undefined>;
+  active: () => void, closed: EvidenceClose,
+  options: { readonly fail: EvidenceFail; readonly optionalInitialAbsence: true }): Promise<HeadFileEvidence | undefined>;
 // eslint-disable-next-line no-redeclare -- Implementation of the mandatory and optional overloads.
 export async function readEvidenceFile(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
-  active: () => void, closed: EvidenceClose, fail: EvidenceFail,
-  options?: { readonly optionalInitialAbsence: true }): Promise<HeadFileEvidence | undefined> {
+  active: () => void, closed: EvidenceClose,
+  failure: EvidenceFail | { readonly fail: EvidenceFail; readonly optionalInitialAbsence: true }): Promise<HeadFileEvidence | undefined> {
+  const fail = typeof failure === 'function' ? failure : failure.fail;
+  const optionalInitialAbsence = typeof failure !== 'function' && failure.optionalInitialAbsence === true;
   return observeEvidenceFailureAsync('file-read', async () => {
-    const optionalInitialAbsence = options?.optionalInitialAbsence === true;
     let handle: fs.FileHandle;
     try {
       handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);

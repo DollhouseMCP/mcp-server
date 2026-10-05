@@ -212,7 +212,7 @@ export class FileMemoryOwnedRename {
   private read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true,
     options?: { optionalInitialAbsence: true }): Promise<(Artifact & { links: '1' | '2'; mode: string; uid: string }) | undefined> {
     return options
-      ? readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail, options)
+      ? readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), { fail, ...options })
       : readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail);
   }
   private async proof(full = false): Promise<void> {

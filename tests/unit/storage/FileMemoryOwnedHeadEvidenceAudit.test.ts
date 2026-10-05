@@ -70,8 +70,8 @@ describe('owned-head evidence failure audit boundaries', () => {
     const root = await fixture(), target = path.join(root, 'absent-private-file');
     const active = jest.fn(), closeSeen = jest.fn();
     const close: EvidenceClose = (handle, body) => { closeSeen(); return closed(handle, body); };
-    await expect(readEvidenceFile(target, 20, '1', false, active, close, fail,
-      { optionalInitialAbsence: true })).resolves.toBeUndefined();
+    await expect(readEvidenceFile(target, 20, '1', false, active, close,
+      { fail, optionalInitialAbsence: true })).resolves.toBeUndefined();
     expect(active).not.toHaveBeenCalled();
     expect(closeSeen).not.toHaveBeenCalled();
     expect(events()).toEqual([]);
@@ -136,8 +136,8 @@ describe('owned-head evidence failure audit boundaries', () => {
     const root = await fixture(), target = path.join(root, 'symlink');
     await fs.writeFile(path.join(root, 'actual'), 'private-content');
     await fs.symlink(path.join(root, 'actual'), target);
-    await expect(readEvidenceFile(target, 20, '1', false, () => {}, closed, fail,
-      { optionalInitialAbsence: true })).rejects.toMatchObject({ code: 'ELOOP' });
+    await expect(readEvidenceFile(target, 20, '1', false, () => {}, closed,
+      { fail, optionalInitialAbsence: true })).rejects.toMatchObject({ code: 'ELOOP' });
     expect(stages()).toEqual(['file-read']);
   });
 
@@ -161,8 +161,8 @@ describe('owned-head evidence failure audit boundaries', () => {
       }
       return closed(handle, body);
     };
-    const caught = await readEvidenceFile(target, 20, '1', true, () => {}, observeClose, fail,
-      { optionalInitialAbsence: true }).catch(cause => cause);
+    const caught = await readEvidenceFile(target, 20, '1', true, () => {}, observeClose,
+      { fail, optionalInitialAbsence: true }).catch(cause => cause);
     if (closeFailed) {
       expect(caught).toBeInstanceOf(AggregateError);
       expect(caught.cause).toMatchObject({ code: 'ENOENT', path: target });
@@ -184,8 +184,8 @@ describe('owned-head evidence failure audit boundaries', () => {
       jest.spyOn(handle, 'close').mockImplementation(async () => { await realClose(); throw secondary; });
       return closed(handle, body);
     };
-    await expect(readEvidenceFile(target, 20, '1', true, () => {}, observeClose, fail,
-      { optionalInitialAbsence: true })).rejects.toBe(secondary);
+    await expect(readEvidenceFile(target, 20, '1', true, () => {}, observeClose,
+      { fail, optionalInitialAbsence: true })).rejects.toBe(secondary);
     await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' });
     expect(stages()).toEqual(['file-read']);
   });
@@ -193,12 +193,12 @@ describe('owned-head evidence failure audit boundaries', () => {
   posixIt('keeps optional decode and active-context failures audited after opening', async () => {
     const root = await fixture(), target = path.join(root, 'private-file');
     await fs.writeFile(target, Buffer.from([255]), { mode: 0o600 });
-    await expect(readEvidenceFile(target, 20, '1', true, () => {}, closed, fail,
-      { optionalInitialAbsence: true })).rejects.toMatchObject({ code: 'ERR_ENCODING_INVALID_ENCODED_DATA' });
+    await expect(readEvidenceFile(target, 20, '1', true, () => {}, closed,
+      { fail, optionalInitialAbsence: true })).rejects.toMatchObject({ code: 'ERR_ENCODING_INVALID_ENCODED_DATA' });
     await fs.writeFile(target, 'private-content');
     const primary = Object.assign(new Error('private-authority-sentinel'), { code: 'ENOENT' });
-    await expect(readEvidenceFile(target, 20, '1', true, () => { throw primary; }, closed, fail,
-      { optionalInitialAbsence: true })).rejects.toBe(primary);
+    await expect(readEvidenceFile(target, 20, '1', true, () => { throw primary; }, closed,
+      { fail, optionalInitialAbsence: true })).rejects.toBe(primary);
     expect(stages()).toEqual(['file-read', 'file-read']);
   });
 
