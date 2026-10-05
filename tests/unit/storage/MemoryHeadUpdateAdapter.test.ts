@@ -1017,6 +1017,63 @@ posix('guarded console canonical runtime configuration', () => {
     });
 });
 
+posix('guarded console metadata discriminators', () => {
+  it.each([false, true].flatMap(content => [
+    {label: 'conflicting', supplied: {type: 'persona', format_version: 'v999'}},
+    {label: 'valid persisted', supplied: {type: 'memory', format_version: 'v2'}},
+    {label: 'absent', supplied: {}},
+  ].map(profile => ({...profile, content}))))(
+    'uses loader runtime and serializer disk conventions for $label content=$content', async ({supplied, content}) => {
+      const f = await fixture({version: '3.4.5', maxEntries: 3});
+      try {
+        const {manager} = f.makeManager(); const store = consoleStore(manager);
+        const now = new Date('2026-10-04T12:00:00Z');
+        const service = new PortfolioService(store, new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore(), () => now);
+        const request = (body?: unknown, etag?: string): ConsoleRequest => ({body, query: {},
+          headers: etag ? {'if-match': etag} : {}, consoleAuthentication: {userId: USER}} as unknown as ConsoleRequest);
+        const before = await service.getElement(request(), 'memories', 'owned-memory');
+        const original = await f.owners.readHeadSnapshot('head.yaml');
+        const definition = yaml.load(original.content, {schema: yaml.JSON_SCHEMA}) as {
+          metadata: Record<string, unknown>; entries: unknown[]; instructions: string; extensions: unknown};
+        const authored = {...definition.metadata, ...supplied};
+        if (Object.keys(supplied).length === 0) {delete authored.type; delete authored.format_version;}
+        let updateSource: Memory | undefined; let updateState: string | undefined;
+        const find = manager.findGuardedMemoryForUpdate.bind(manager);
+        jest.spyOn(manager, 'findGuardedMemoryForUpdate').mockImplementation(async (...args) => {
+          const target = await find(...args); updateSource = target?.memory; updateState = updateSource?.serialize(); return target;
+        });
+        const write = jest.spyOn(f.owners, 'updateOwnedHead');
+        const patch = content ? {content: yaml.dump({...definition, metadata: authored})} : {metadata: supplied};
+        const response = await service.updateElement(request(patch, before.headers!.ETag), 'memories', 'owned-memory');
+        expect(response.status).toBe(200);
+        expect(updateSource).toBeDefined(); expect(updateSource!.serialize()).toBe(updateState);
+        const publication = manager.cached('head.yaml')!;
+        expect(publication.type).toBe('memories'); expect(publication.metadata.type).toBe('memories');
+        expect(publication.metadata).not.toHaveProperty('format_version');
+        const snapshot = await f.owners.readHeadSnapshot('head.yaml');
+        const persisted = yaml.load(snapshot.content, {schema: yaml.JSON_SCHEMA}) as typeof definition;
+        expect(persisted.metadata.type).toBe('memory'); expect(persisted.metadata.format_version).toBe('v2');
+        expect((response.body as {metadata: Record<string, unknown>}).metadata).toEqual(persisted.metadata);
+        for (const key of ['name', 'unique_id', 'version', 'created', 'maxEntries', 'retentionDays', 'privacyLevel', 'storageBackend', 'searchable']) {
+          expect(persisted.metadata[key]).toEqual(definition.metadata[key]);
+        }
+        expect(persisted.metadata.modified).toBe(now.toISOString());
+        expect(persisted.entries).toEqual(definition.entries); expect(persisted.instructions).toBe(definition.instructions);
+        expect(persisted.extensions).toEqual(definition.extensions);
+        expect(publication.id).toBe(updateSource!.id); expect(publication.getEntries().size).toBe(definition.entries.length);
+        expect(write).toHaveBeenCalledTimes(1); expect(write.mock.calls[0][0]).toEqual(original.token);
+        expect(write.mock.calls[0][1]).toBe(snapshot.content);
+        expect(response.headers!.ETag).toBe(`"sha256:${createHash('sha256').update(snapshot.content, 'utf8').digest('hex')}"`);
+        const fresh = f.makeManager().manager; const reloaded = (await fresh.findGuardedMemoryForUpdate('owned-memory', USER))!.memory;
+        expect(reloaded.type).toBe(publication.type); expect(reloaded.metadata.type).toBe(publication.metadata.type);
+        expect(reloaded.metadata).not.toHaveProperty('format_version'); expect(reloaded.id).toBe(publication.id);
+        const nextService = new PortfolioService(consoleStore(fresh), new InMemoryUserIntegrationStore(), new InMemoryPortfolioSyncJobStore());
+        const next = await nextService.getElement(request(), 'memories', 'owned-memory');
+        expect(next.body).toEqual(response.body); expect(next.headers!.ETag).toBe(response.headers!.ETag);
+      } finally {await f.cleanup();}
+    });
+});
+
 posix('guarded console computed metadata handoff', () => {
   const fields = ['description', 'tags', 'triggers', 'gatekeeper'];
   const profiles: Array<{label: string; supplied: Record<string, unknown>; expected: Record<string, unknown>; absent?: boolean}> = [

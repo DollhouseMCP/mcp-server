@@ -596,9 +596,11 @@ export class Memory extends BaseElement implements IElement {
     // Persist the same canonical configuration the constructor uses at runtime,
     // while retaining raw aliases, unrelated metadata and absent fields.
     const canonical = configured.metadata as MemoryMetadata;
-    const replacementMetadata = {...metadata, version: configured.version,
+    const replacementMetadata = {...metadata, type: canonical.type, version: configured.version,
       maxEntries: canonical.maxEntries, retentionDays: canonical.retentionDays,
       privacyLevel: canonical.privacyLevel, storageBackend: canonical.storageBackend, searchable: canonical.searchable};
+    // Runtime uses the constructor discriminator; the loader strips this disk-only marker.
+    delete (replacementMetadata as MemoryMetadata & {format_version?: unknown}).format_version;
     configured.deserialize(JSON.stringify({id: this.id, type: this.type, version: configured.version,
       metadata: replacementMetadata, entries, extensions: extensions ?? {}}), {suppressLoadPolicy: true});
     if (configured.entriesSize !== entries.length) throw new Error('Replacement contains invalid or duplicate entries');
