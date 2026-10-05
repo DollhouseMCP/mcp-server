@@ -4,6 +4,7 @@ import type { BigIntStats } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type DeletePublication, type UnownedFileMemoryToken, type FileMemorySnapshot } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
@@ -36,6 +37,22 @@ async function tree(root: string): Promise<unknown[]> {
 }
 afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
 describe('dormant exact head DELETE with owner erasure pending', () => {
+  it('does not report optional initial absence as an audit failure during a successful delete', async () => {
+    const f = await fixture();
+    const prefix = `.${createHash('sha256').update(path.basename(f.token.locator)).digest('hex')}`;
+    await expect(fs.lstat(path.join(f.root, `${prefix}.memory-write.json`))).rejects.toMatchObject({ code: 'ENOENT' });
+    const failures: unknown[] = [];
+    const detach = SecurityMonitor.addLogListener(event => {
+      if (event.type === 'OPERATION_FAILED' && ['FileMemoryOwnedHeadEvidence', 'FileMemoryFence'].includes(event.source)) failures.push(event);
+    });
+    try {
+      const result = await f.owners.deleteOwned(f.request);
+      expect(result).toMatchObject({ status: 'head-deleted', erasure: 'pending' });
+      await expect(fs.lstat(path.join(f.root, f.token.locator))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await f.owners.deleteOwned(f.request)).toMatchObject({ status: 'already-head-deleted' });
+      expect(failures).toEqual([]);
+    } finally { detach(); }
+  });
   it.each([false, true])('deletes only the exact head and leaves minimal old-owner tombstone, nested=%s', async nested => {
     const f = await fixture(nested);
     await fs.mkdir(path.join(f.archiveRoot, 'v99.partial'), { mode: 0o700 });
@@ -78,15 +95,15 @@ describe('dormant exact head DELETE with owner erasure pending', () => {
     const before = await tree(f.root), target = path.join(f.token.tenantRoot, f.token.locator);
     type Identity = typeof f.token.fileIdentity;
     type Actual = { identity: Identity; [key: string]: unknown };
-    type Internals = { read: (target: string, limit: number, links?: string, privateFile?: boolean) => Promise<Actual> };
+    type Internals = { read: (target: string, limit: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<Actual> };
     const internals = FileMemoryOwnedDelete.prototype as unknown as Internals, originalRead = internals.read;
     let observations = 0, ordinaryReads = 0;
     const reused = (actual: Identity): Identity => exactOriginal ? { ...f.token.fileIdentity } :
       { ...actual, device: f.token.fileIdentity.device, inode: f.token.fileIdentity.inode };
     // Disclosed descriptor/token observation injection, not a real inode-allocation guarantee.
     // All tracked head rereads agree; full real-tree verification stays outside the spy.
-    jest.spyOn(internals, 'read').mockImplementation(async function(this: Internals, named, limit, links, privateFile) {
-      const actual = await originalRead.call(this, named, limit, links, privateFile);
+    jest.spyOn(internals, 'read').mockImplementation(async function(this: Internals, named, limit, links, privateFile, options) {
+      const actual = await originalRead.call(this, named, limit, links, privateFile, options);
       if (named !== target) return actual;
       observations++; return { ...actual, identity: reused(actual.identity) };
     });
@@ -429,11 +446,11 @@ describe('dormant exact head DELETE with owner erasure pending', () => {
     }
     const before = await tree(f.root); let injected = false;
     type Artifact = { identity: { device: string }; [key: string]: unknown };
-    type Internals = { read: (target: string, limit: number, links?: string, privateFile?: boolean) => Promise<Artifact> };
+    type Internals = { read: (target: string, limit: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<Artifact> };
     const internals = FileMemoryOwnedDelete.prototype as unknown as Internals, original = internals.read;
     // Consistent actual-read descriptor injection plus persisted generated history, not a real mount.
-    jest.spyOn(internals, 'read').mockImplementation(async function(this: Internals, named, limit, links, privateFile) {
-      const actual = await original.call(this, named, limit, links, privateFile);
+    jest.spyOn(internals, 'read').mockImplementation(async function(this: Internals, named, limit, links, privateFile, options) {
+      const actual = await original.call(this, named, limit, links, privateFile, options);
       if (named !== target) return actual;
       injected = true; return { ...actual, identity: { ...actual.identity, device: foreignDevice } };
     });

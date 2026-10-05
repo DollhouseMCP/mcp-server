@@ -66,6 +66,20 @@ describe('owned-head evidence failure audit boundaries', () => {
     expect(events()[0].additionalData).toBeUndefined();
   });
 
+  it('treats only explicitly optional initial-open absence as a quiet normal probe', async () => {
+    const root = await fixture(), target = path.join(root, 'absent-private-file');
+    const active = jest.fn(), closeSeen = jest.fn();
+    const close: EvidenceClose = (handle, body) => { closeSeen(); return closed(handle, body); };
+    await expect(readEvidenceFile(target, 20, '1', false, active, close, fail,
+      { optionalInitialAbsence: true })).resolves.toBeUndefined();
+    expect(active).not.toHaveBeenCalled();
+    expect(closeSeen).not.toHaveBeenCalled();
+    expect(events()).toEqual([]);
+    await expect(readEvidenceFile(target, 20, '1', false, active, close, fail))
+      .rejects.toMatchObject({ code: 'ENOENT', path: target });
+    expect(stages()).toEqual(['file-read']);
+  });
+
   it.each([null, undefined])('audits a failed census after closing its actual directory, preserving primitive %s', async primary => {
     const root = await fixture();
     let directory: Dir | undefined;
@@ -117,6 +131,76 @@ describe('owned-head evidence failure audit boundaries', () => {
   });
 
   const posixIt = process.platform === 'win32' || !process.getuid ? it.skip : it;
+
+  posixIt('audits optional initial-open symlink refusal instead of treating it as absence', async () => {
+    const root = await fixture(), target = path.join(root, 'symlink');
+    await fs.writeFile(path.join(root, 'actual'), 'private-content');
+    await fs.symlink(path.join(root, 'actual'), target);
+    await expect(readEvidenceFile(target, 20, '1', false, () => {}, closed, fail,
+      { optionalInitialAbsence: true })).rejects.toMatchObject({ code: 'ELOOP' });
+    expect(stages()).toEqual(['file-read']);
+  });
+
+  posixIt.each([false, true])('retains optional post-open named ENOENT with close failure=%s', async closeFailed => {
+    const root = await fixture(), target = path.join(root, 'private-file');
+    await fs.writeFile(target, 'private-content', { mode: 0o600 });
+    let opened: fs.FileHandle | undefined;
+    const secondary = Object.assign(new Error('private-close-sentinel'), { code: 'ENOENT' });
+    const observeClose: EvidenceClose = async (handle, body) => {
+      opened = handle;
+      const realStat = handle.stat.bind(handle);
+      jest.spyOn(handle, 'stat').mockImplementationOnce(() => realStat({ bigint: true }))
+        .mockImplementationOnce(async () => {
+          const stat = await realStat({ bigint: true });
+          await fs.unlink(target);
+          return stat;
+        });
+      if (closeFailed) {
+        const realClose = handle.close.bind(handle);
+        jest.spyOn(handle, 'close').mockImplementation(async () => { await realClose(); throw secondary; });
+      }
+      return closed(handle, body);
+    };
+    const caught = await readEvidenceFile(target, 20, '1', true, () => {}, observeClose, fail,
+      { optionalInitialAbsence: true }).catch(cause => cause);
+    if (closeFailed) {
+      expect(caught).toBeInstanceOf(AggregateError);
+      expect(caught.cause).toMatchObject({ code: 'ENOENT', path: target });
+      expect(caught.errors).toEqual([caught.cause, secondary]);
+    } else expect(caught).toMatchObject({ code: 'ENOENT', path: target });
+    await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' });
+    expect(stages()).toEqual(['file-read']);
+    expect(JSON.stringify(events())).not.toContain(root);
+  });
+
+  posixIt('retains optional read close ENOENT after a successful body', async () => {
+    const root = await fixture(), target = path.join(root, 'private-file');
+    await fs.writeFile(target, 'private-content', { mode: 0o600 });
+    const secondary = Object.assign(new Error('private-close-sentinel'), { code: 'ENOENT' });
+    let opened: fs.FileHandle | undefined;
+    const observeClose: EvidenceClose = async (handle, body) => {
+      opened = handle;
+      const realClose = handle.close.bind(handle);
+      jest.spyOn(handle, 'close').mockImplementation(async () => { await realClose(); throw secondary; });
+      return closed(handle, body);
+    };
+    await expect(readEvidenceFile(target, 20, '1', true, () => {}, observeClose, fail,
+      { optionalInitialAbsence: true })).rejects.toBe(secondary);
+    await expect(opened!.stat()).rejects.toMatchObject({ code: 'EBADF' });
+    expect(stages()).toEqual(['file-read']);
+  });
+
+  posixIt('keeps optional decode and active-context failures audited after opening', async () => {
+    const root = await fixture(), target = path.join(root, 'private-file');
+    await fs.writeFile(target, Buffer.from([255]), { mode: 0o600 });
+    await expect(readEvidenceFile(target, 20, '1', true, () => {}, closed, fail,
+      { optionalInitialAbsence: true })).rejects.toMatchObject({ code: 'ERR_ENCODING_INVALID_ENCODED_DATA' });
+    await fs.writeFile(target, 'private-content');
+    const primary = Object.assign(new Error('private-authority-sentinel'), { code: 'ENOENT' });
+    await expect(readEvidenceFile(target, 20, '1', true, () => { throw primary; }, closed, fail,
+      { optionalInitialAbsence: true })).rejects.toBe(primary);
+    expect(stages()).toEqual(['file-read', 'file-read']);
+  });
 
   posixIt('records one outer read refusal after nested close and before a throwing real audit listener', async () => {
     const root = await fixture(), target = path.join(root, 'private-file');

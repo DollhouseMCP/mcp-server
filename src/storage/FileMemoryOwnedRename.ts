@@ -206,8 +206,14 @@ export class FileMemoryOwnedRename {
     return observeEvidenceDirectory(locator, target, full,
       inspect => this.budget.scan(target, inspect), names => this.budget.check(locator, names), fail);
   }
-  private read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true): Promise<Artifact & { links: '1' | '2'; mode: string; uid: string }> {
-    return readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail);
+  private read(target: string, maximum: number, links?: '1' | '2', privateFile?: boolean): Promise<Artifact & { links: '1' | '2'; mode: string; uid: string }>;
+  private read(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
+    options: { optionalInitialAbsence: true }): Promise<(Artifact & { links: '1' | '2'; mode: string; uid: string }) | undefined>;
+  private read(target: string, maximum: number, links: '1' | '2' = '1', privateFile = true,
+    options?: { optionalInitialAbsence: true }): Promise<(Artifact & { links: '1' | '2'; mode: string; uid: string }) | undefined> {
+    return options
+      ? readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail, options)
+      : readEvidenceFile(target, maximum, links, privateFile, () => this.active(), (handle, body) => this.closed(handle, body), fail);
   }
   private async proof(full = false): Promise<void> {
     for (const before of this.directories) {
@@ -341,9 +347,10 @@ export class FileMemoryOwnedRename {
       locator: this.binding.destinationLocator, revision: this.binding.newRevision, contentHash: this.binding.contentHash, fileIdentity: head });
   }
   private async optional(target: string): Promise<Artifact | undefined> {
-    try { const file = await this.read(target, LIMIT); this.files.set(target, file); return artifact(file.raw, file.identity); }
-    catch (cause) { if (causeCode(cause) === 'ENOENT') return undefined;
-      throw cause; }
+    const file = await this.read(target, LIMIT, '1', true, { optionalInitialAbsence: true });
+    if (!file) return undefined;
+    this.files.set(target, file);
+    return artifact(file.raw, file.identity);
   }
   private confined(): Promise<void> {
     return captureEvidenceConfinement({

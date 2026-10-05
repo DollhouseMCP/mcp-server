@@ -221,10 +221,26 @@ export async function observeEvidenceDirectory(locator: string, target: string, 
     return full ? { ...base, children } : base;
   });
 }
+export function readEvidenceFile(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
+  active: () => void, closed: EvidenceClose, fail: EvidenceFail): Promise<HeadFileEvidence>;
+/** Only an absent initial open is optional; every failure after opening remains a refusal. */
+// eslint-disable-next-line no-redeclare -- TypeScript overload keeps mandatory reads non-optional.
+export function readEvidenceFile(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
+  active: () => void, closed: EvidenceClose, fail: EvidenceFail,
+  options: { readonly optionalInitialAbsence: true }): Promise<HeadFileEvidence | undefined>;
+// eslint-disable-next-line no-redeclare -- Implementation of the mandatory and optional overloads.
 export async function readEvidenceFile(target: string, maximum: number, links: '1' | '2', privateFile: boolean,
-  active: () => void, closed: EvidenceClose, fail: EvidenceFail): Promise<HeadFileEvidence> {
+  active: () => void, closed: EvidenceClose, fail: EvidenceFail,
+  options?: { readonly optionalInitialAbsence: true }): Promise<HeadFileEvidence | undefined> {
   return observeEvidenceFailureAsync('file-read', async () => {
-    const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const optionalInitialAbsence = options?.optionalInitialAbsence === true;
+    let handle: fs.FileHandle;
+    try {
+      handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (cause) {
+      if (optionalInitialAbsence && evidenceCauseCode(cause) === 'ENOENT') return undefined;
+      throw cause;
+    }
     return closed(handle, async () => {
       const before = await handle.stat({ bigint: true });
       if (!before.isFile() || before.nlink !== BigInt(links) || before.uid !== BigInt(process.getuid!()) ||
