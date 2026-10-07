@@ -23,6 +23,8 @@ import type { VerificationNotifier } from '../../../src/services/VerificationNot
 
 const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const TEST_ADMIN_TOKEN = 'integration-clear-all-token';
+
 describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
   let env: PortfolioTestEnvironment;
   let container: DollhouseContainer;
@@ -41,6 +43,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
     verificationStore = container.resolve<VerificationStore>('VerificationStore');
     dangerZoneEnforcer = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    dangerZoneEnforcer.setAdminToken(TEST_ADMIN_TOKEN);
 
     // Issue #522: Mock showCode to prevent real OS dialogs during tests
     const notifier = container.resolve<VerificationNotifier>('VerificationNotifier');
@@ -49,7 +52,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
 
   afterEach(async () => {
     verificationStore.clear();
-    dangerZoneEnforcer.clearAll();
+    dangerZoneEnforcer.clearAll(TEST_ADMIN_TOKEN);
     await server.dispose();
     await env.cleanup();
   });
