@@ -85,11 +85,11 @@ describe('Memory Element', () => {
       await smallMemory.addEntry('Entry 2');
       await smallMemory.addEntry('Entry 3');
       
-      // Should enforce retention and allow new entry
-      await expect(smallMemory.addEntry('Entry 4')).resolves.toBeDefined();
+      // Permanent memory additions fail without deleting existing entries.
+      await expect(smallMemory.addEntry('Entry 4')).rejects.toThrow('Memory is full');
       
       const stats = smallMemory.getStats();
-      expect(stats.totalEntries).toBeLessThanOrEqual(3);
+      expect(stats.totalEntries).toBe(3);
     });
     
     it('should limit number of tags per entry', async () => {
@@ -175,7 +175,7 @@ describe('Memory Element', () => {
     });
     
     it('should remove oldest entries when over capacity', async () => {
-      const smallMemory = new Memory({ maxEntries: 2 }, metadataService);
+      const smallMemory = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadataService);
       
       await smallMemory.addEntry('First');
       await new Promise(resolve => setTimeout(resolve, 10)); // Small delay

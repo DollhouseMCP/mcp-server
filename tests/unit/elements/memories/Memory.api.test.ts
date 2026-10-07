@@ -75,13 +75,10 @@ describe('Memory API Integration (Issue #1320)', () => {
 
       // Add entries with different trust levels
       const entry1 = await memory.addEntry('Untrusted content', ['test'], {}, 'test-source');
-      const _entry2 = await memory.addEntry('More untrusted', ['test'], {}, 'test-source');
+      const entry2 = await memory.addEntry('More untrusted', ['test'], {}, 'test-source');
 
       // Manually set one to VALIDATED for testing
-      // NOTE: getAllEntries() uses values() which returns in MRU order (most recent first)
-      // So allEntries[0] is entry2, allEntries[1] is entry1
-      const allEntries = memory.getAllEntries();
-      allEntries[0].trustLevel = TRUST_LEVELS.VALIDATED; // Set entry2 to VALIDATED
+      entry2.trustLevel = TRUST_LEVELS.VALIDATED;
 
       // Get untrusted entries (should only return entry1)
       const untrustedEntries = memory.getEntriesByTrustLevel(TRUST_LEVELS.UNTRUSTED);

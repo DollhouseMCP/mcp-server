@@ -24,7 +24,7 @@ import { sanitizeInput } from '../../security/InputValidator.js';
 import { MetadataService } from '../../services/MetadataService.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, MemoryOnFullPolicy, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
 import { MemoryType } from './types.js';
 import { generateMemoryId } from './utils.js';
 import { MemorySearchIndex, SearchQuery, SearchIndexConfig } from './MemorySearchIndex.js';
@@ -88,6 +88,8 @@ export interface MemoryMetadata extends IElementMetadata {
   privacyLevel?: PrivacyLevel;
   searchable?: boolean;
   maxEntries?: number;
+  /** Permanent memories reject additions at capacity; expiring memories evict by default. */
+  onFull?: MemoryOnFullPolicy;
   encryptionEnabled?: boolean;
   // Search index configuration (Issue #984)
   indexThreshold?: number;
@@ -226,12 +228,14 @@ export class Memory extends BaseElement implements IElement {
     return manager;
   }
   // Memory-specific properties (with size limits to prevent memory leaks)
-  private entries: LRUCache<MemoryEntry>;
+  // Authoritative data must not be subject to cache eviction, including on load.
+  private entries: Map<string, MemoryEntry>;
   private storageBackend: StorageBackend;
   private retentionDays: number;
   private privacyLevel: PrivacyLevel;
   private searchable: boolean;
   private maxEntries: number;
+  private oversizedLegacyReadOnly = false;
 
   // Search index for performance (Issue #984)
   private searchIndex: MemorySearchIndex;
@@ -283,13 +287,9 @@ export class Memory extends BaseElement implements IElement {
       MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT
     );
 
-    // Initialize LRU caches with size limits to prevent memory leaks
-    this.entries = new LRUCache<MemoryEntry>({
-      name: 'memory-entries',
-      maxSize: this.maxEntries,
-      maxMemoryMB: 25, // Max 25MB for memory entries
-    });
+    this.entries = new Map<string, MemoryEntry>();
 
+    // Only derived sanitization results are cacheable.
     this.sanitizationCache = new LRUCache<string>({
       name: 'memory-sanitization',
       maxSize: Memory.MAX_SANITIZATION_CACHE_SIZE,
@@ -306,6 +306,7 @@ export class Memory extends BaseElement implements IElement {
       privacyLevel: this.privacyLevel,
       searchable: this.searchable,
       maxEntries: this.maxEntries,
+      onFull: Memory.rawOnFullPolicy(metadata) === undefined ? undefined : this.getRequestedOnFullPolicy(metadata),
       autoLoad: metadata.autoLoad,
       priority: metadata.priority,
       encryptionEnabled: metadata.encryptionEnabled || false
@@ -345,10 +346,9 @@ export class Memory extends BaseElement implements IElement {
 
   /**
    * Helper method to get the current number of entries
-   * Compatible with LRUCache
    */
   private get entriesSize(): number {
-    return this.entries.getStats().size;
+    return this.entries.size;
   }
 
   /**
@@ -366,6 +366,9 @@ export class Memory extends BaseElement implements IElement {
     metadata?: Record<string, any>,
     source: string = 'unknown'
   ): Promise<MemoryEntry> {
+    if (this.oversizedLegacyReadOnly) {
+      throw new Error('Oversized legacy memory is read-only; split it into smaller memories before adding entries.');
+    }
     // SECURITY: Sanitize source parameter before use
     const sanitizedSource = sanitizeInput(source, 50);
 
@@ -397,6 +400,10 @@ export class Memory extends BaseElement implements IElement {
       trustLevel: TRUST_LEVELS.UNTRUSTED, // Always UNTRUSTED until background validation
       source: sanitizedSource
     };
+
+    // No await between admission and insertion: concurrent calls cannot overfill
+    // a permanent memory and silently erase an already accepted entry.
+    this.assertCapacityAvailable();
 
     // Store entry
     this.entries.set(entry.id, entry);
@@ -436,7 +443,7 @@ export class Memory extends BaseElement implements IElement {
    * This is called AFTER adding an entry to ensure we never exceed maxEntries
    */
   private enforceCapacitySync(): void {
-    if (this.entriesSize <= this.maxEntries) {
+    if (this.entriesSize <= this.maxEntries || this.getOnFullPolicy() !== 'evict_oldest') {
       return; // Within capacity
     }
 
@@ -454,6 +461,48 @@ export class Memory extends BaseElement implements IElement {
       this.entries.delete(sortedEntries[i].id);
       this.searchIndex.removeEntry(sortedEntries[i].id);
     }
+  }
+
+  private static rawOnFullPolicy(metadata: Partial<MemoryMetadata>): unknown {
+    const source = metadata as Record<string, unknown>;
+    return Object.hasOwn(source, 'onFull') ? source.onFull : source.on_full;
+  }
+
+  private getRequestedOnFullPolicy(metadata: Partial<MemoryMetadata>): MemoryOnFullPolicy {
+    // Malformed explicit policies fail safe rather than enabling eviction.
+    return Memory.rawOnFullPolicy(metadata) === 'evict_oldest' ? 'evict_oldest' : 'error';
+  }
+
+  public getOnFullPolicy(): MemoryOnFullPolicy {
+    const metadata = this.metadata as MemoryMetadata;
+    if (Memory.rawOnFullPolicy(metadata) !== undefined) return this.getRequestedOnFullPolicy(metadata);
+    return (metadata.retentionDays ?? this.retentionDays) < MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS
+      ? 'evict_oldest' : 'error';
+  }
+
+  private assertCapacityAvailable(): void {
+    if (this.entriesSize < this.maxEntries || this.getOnFullPolicy() === 'evict_oldest') return;
+    throw new Error(`Memory is full (${this.entriesSize}/${this.maxEntries} entries). ` +
+      `Start a new memory, or explicitly set onFull: 'evict_oldest' to allow removal of old entries.`);
+  }
+
+  /** Recovery loading never invokes append-time retention or capacity eviction. */
+  public appendLoadedMarkdownBody(content: string): void {
+    if (content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+      throw new Error('Memory markdown body exceeds the legacy recovery limit');
+    }
+    const entry: MemoryEntry = {
+      id: generateMemoryId(), timestamp: new Date(),
+      content: sanitizeMemoryContent(content, MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE),
+      tags: [], privacyLevel: this.privacyLevel, trustLevel: TRUST_LEVELS.UNTRUSTED,
+      source: 'file',
+    };
+    this.entries.set(entry.id, entry);
+    this.searchIndex.addEntry(entry);
+  }
+
+  public markOversizedLegacyReadOnly(): void {
+    this.oversizedLegacyReadOnly = true;
   }
 
   /**
@@ -745,12 +794,13 @@ export class Memory extends BaseElement implements IElement {
     for (const [id, entry] of this.entries.entries()) {
       if (entry.expiresAt && entry.expiresAt < now) {
         this.entries.delete(id);
+        this.searchIndex.removeEntry(id);
         deletedCount++;
       }
     }
     
     // If still at or over capacity, remove oldest entries to make room for one more
-    if (this.entriesSize >= this.maxEntries) {
+    if (this.getOnFullPolicy() === 'evict_oldest' && this.entriesSize >= this.maxEntries) {
       const sortedEntries = Array.from(this.entries.entries())
         .sort((a, b) => {
           // FIX #1069: Ensure timestamps are Date objects for sorting
@@ -763,6 +813,7 @@ export class Memory extends BaseElement implements IElement {
       const toDelete = Math.max(1, this.entriesSize - this.maxEntries + 1);
       for (let i = 0; i < toDelete && i < sortedEntries.length; i++) {
         this.entries.delete(sortedEntries[i][0]);
+        this.searchIndex.removeEntry(sortedEntries[i][0]);
         deletedCount++;
       }
     }
@@ -1011,8 +1062,11 @@ export class Memory extends BaseElement implements IElement {
       this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
       this.metadata = parsed.metadata || {};
       this.extensions = parsed.extensions || {};
+      this.maxEntries = Math.min((this.metadata as MemoryMetadata).maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+        MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT);
 
       // Clear and reload entries
+      for (const id of this.entries.keys()) this.searchIndex.removeEntry(id);
       this.entries.clear();
       let quarantinedCount = 0;
 

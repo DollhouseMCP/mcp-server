@@ -17,10 +17,9 @@ import { logger } from '../utils/logger.js';
 
 export class MemoryMetadataExtractor {
   /**
-   * Align with the memory save/load limit (256KB). Issue #2329: this was 64KB,
-   * so memories that grew past it indexed as 'unnamed' with default metadata.
+   * Discovery retains names of oversized legacy memories without raising write limits.
    */
-  private static readonly MAX_YAML_SIZE = MEMORY_CONSTANTS.MAX_YAML_SIZE;
+  private static readonly MAX_YAML_SIZE = MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE;
 
   /**
    * Extract index-relevant metadata from raw YAML memory content.

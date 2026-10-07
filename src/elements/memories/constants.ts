@@ -25,6 +25,7 @@ export const MEMORY_CONSTANTS = {
   MAX_MEMORY_SIZE: 1024 * 1024,        // 1MB total memory size
   MAX_ENTRY_SIZE: 100 * 1024,          // 100KB per entry
   MAX_ENTRIES_DEFAULT: 1000,           // Maximum number of entries
+  ON_FULL_POLICIES: ['error', 'evict_oldest'] as const,
 
   // Entry limits
   MAX_TAGS_PER_ENTRY: 20,              // Maximum tags per memory entry
@@ -56,7 +57,8 @@ export const MEMORY_CONSTANTS = {
    * - 1MB: Parse time ~50-100ms (acceptable but not ideal)
    * - >5MB: Parse time >500ms (unacceptable, blocks UI)
    */
-  MAX_YAML_SIZE: 256 * 1024,           // 256KB max serialized memory YAML — enforced on save, load, import, and index extraction (#2329)
+  MAX_YAML_SIZE: 256 * 1024,           // Ordinary save/import limit (JavaScript string units)
+  LEGACY_MAX_YAML_SIZE: 2 * 1024 * 1024, // Read-only recovery limit for older memory files
 
   /**
    * Privacy Level Hierarchy:
@@ -92,6 +94,7 @@ export const MEMORY_CONSTANTS = {
 
 // Type exports for privacy levels and storage backends
 export type PrivacyLevel = typeof MEMORY_CONSTANTS.PRIVACY_LEVELS[number];
+export type MemoryOnFullPolicy = typeof MEMORY_CONSTANTS.ON_FULL_POLICIES[number];
 export type StorageBackend = typeof MEMORY_CONSTANTS.SUPPORTED_STORAGE_BACKENDS[number];
 
 /**

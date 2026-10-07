@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.43] - Unreleased
+
+- **Behavior change:** permanent memories now default to `onFull: error`. Adding an entry at the 1,000-entry default capacity rejects with an actionable error and preserves existing entries. Set `onFull: evict_oldest` explicitly to retain cache-style eviction; memories with an expiring `retentionDays` policy retain their eviction default. (#2859, #2999)
+- Preserve all valid entries when loading legacy memories above the entry count limit. Recover older YAML/frontmatter memory files up to 2 × 1024 × 1024 JavaScript string units with an oversized-memory warning; additions to files above the ordinary limit are rejected until split. The ordinary 256 × 1024 string-unit save/import limit remains unchanged. This release does not add rollover or cross-session/process conditional memory persistence. (#2864, #2999)
+
 ## [2.0.42] - 2026-09-04
 
 - Harden macOS verification dialogs by keeping dynamic display values out of AppleScript source and passing them as direct process arguments.
