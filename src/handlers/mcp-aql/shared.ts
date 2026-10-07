@@ -40,12 +40,24 @@ const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
  * Rejects obviously invalid IDs before hitting the store to prevent enumeration.
  */
 export function validateChallengeIdFormat(challengeId: string): void {
-  if (!UUID_V4_REGEX.test(challengeId)) {
+  if (challengeId.length !== 36 || !UUID_V4_REGEX.test(challengeId)) {
     throw new VerificationError(
       GatekeeperErrorCode.VERIFICATION_FAILED,
       `Invalid challenge_id format. Expected UUID v4 (e.g., "550e8400-e29b-41d4-a716-446655440000").`
     );
   }
+}
+
+/**
+ * #2656: accept the previous safety package's exact ID shape for existing
+ * challenges during the 2.1 compatibility window. Store lookup, expiry,
+ * session ownership and one-time code verification still authorize the request.
+ * Deadlock relief continues to use the UUID-only validator above.
+ */
+export function validateVerificationChallengeIdFormat(challengeId: string): void {
+  const legacyFormat = /^challenge_[1-9]\d{12}_[0-9a-f]{12}$/;
+  if (challengeId.length === 36 && legacyFormat.test(challengeId)) return;
+  validateChallengeIdFormat(challengeId);
 }
 
 /**
