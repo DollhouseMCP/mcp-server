@@ -121,7 +121,16 @@ function matchesReviewedSafety104(cwd, localVersion, publishedGitHead) {
     return false;
   }
 
-  for (const file of REVIEWED_SAFETY_104.files) {
+  return compareRecordedSafetyTree(cwd, publishedGitHead, REVIEWED_SAFETY_104.files);
+}
+
+// Read-only structural comparison for offline Git fixtures. This does not grant
+// publication permission: only the production entry point selects the private
+// version/head record above, after checking trusted-main ancestry. Synthetic
+// tests prove comparison semantics; the full-history workflow proves that actual
+// published record against the real safety tree.
+export function compareRecordedSafetyTree(cwd, publishedGitHead, files) {
+  for (const file of files) {
     for (const [ref, blob] of [[publishedGitHead, file.published], ['HEAD', file.beta]]) {
       const entry = run('git', ['ls-tree', ref, '--', file.path], cwd);
       assertGitSuccess(entry, 'Reading reviewed safety tree entry');
@@ -133,7 +142,7 @@ function matchesReviewedSafety104(cwd, localVersion, publishedGitHead) {
 
   const remainingTree = run('git', [
     'diff', '--exit-code', publishedGitHead, 'HEAD', '--', PACKAGE_PATH,
-    ...REVIEWED_SAFETY_104.files.map(file => `:(exclude)${file.path}`),
+    ...files.map(file => `:(exclude)${file.path}`),
   ], cwd);
   if (remainingTree.status === 1 && !remainingTree.error) {
     return false;

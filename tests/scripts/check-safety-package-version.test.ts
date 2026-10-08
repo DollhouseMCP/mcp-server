@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 interface CommandResult {
@@ -18,7 +18,14 @@ interface CheckResult {
   gitHead?: string;
 }
 
+interface RecordedFile {
+  path: string;
+  published: string;
+  beta: string;
+}
+
 interface SafetyVersionModule {
+  compareRecordedSafetyTree(cwd: string, publishedGitHead: string, files: RecordedFile[]): boolean;
   checkSafetyPackageVersion(options: {
     cwd: string;
     runNpm: (args: string[]) => CommandResult;
@@ -29,13 +36,7 @@ interface SafetyVersionModule {
 const helperUrl = pathToFileURL(
   join(process.cwd(), 'scripts', 'check-safety-package-version.mjs')
 ).href;
-const { checkSafetyPackageVersion } = await import(helperUrl) as SafetyVersionModule;
-
-const REVIEWED_PUBLISHED_HEAD = 'b2b93accf670c8c3dfa884e9f6c379bf93768001';
-const REVIEWED_BETA_BLOBS = [
-  ['package.json', '4af547d2bd1cd53e7b3390e5de7b370abd8db516'],
-  ['package-lock.json', '210e1c3868d9f1d3274c710b52b85a1b708c02f5'],
-];
+const { checkSafetyPackageVersion, compareRecordedSafetyTree } = await import(helperUrl) as SafetyVersionModule;
 
 function git(repo: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -57,6 +58,7 @@ describe('check-safety-package-version', () => {
   let repo: string;
   let publishedGitHead: string;
   let trustedMainHead: string;
+  let recordedFiles: RecordedFile[];
 
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'safety-version-check-'));
@@ -89,37 +91,59 @@ describe('check-safety-package-version', () => {
     await rm(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
-  async function prepareReviewedBeta(): Promise<void> {
-    // Borrow existing local Git objects read-only; no network, install, or
-    // fabricated published commit. Only the safety subtree is checked out.
-    const objects = resolve(process.cwd(), git(process.cwd(), ['rev-parse', '--git-common-dir']), 'objects');
-    await writeFile(join(repo, '.git', 'objects', 'info', 'alternates'), `${objects}\n`);
-    git(repo, ['read-tree', REVIEWED_PUBLISHED_HEAD]);
-    git(repo, ['update-ref', 'HEAD', REVIEWED_PUBLISHED_HEAD]);
-    git(repo, ['update-ref', 'refs/remotes/origin/main', REVIEWED_PUBLISHED_HEAD]);
-    git(repo, ['checkout', REVIEWED_PUBLISHED_HEAD, '--', 'packages/safety']);
-    for (const [file, blob] of REVIEWED_BETA_BLOBS) {
-      await writeFile(join(repo, 'packages', 'safety', file), execFileSync('git', ['cat-file', 'blob', blob], { cwd: process.cwd() }));
-    }
+  async function prepareRecordedTree(): Promise<void> {
+    // Own every Git object: no network, alternates, or checkout-history dependency.
+    // These controls prove structural comparison, not the actual pinned record.
+    const safety = join(repo, 'packages', 'safety');
+    await writeFile(join(safety, 'package.json'), JSON.stringify({
+      name: '@dollhousemcp/safety', version: '1.0.4',
+      dependencies: { runtime: '1.0.0' }, exports: { '.': './dist/index.js' },
+      files: ['dist'], scripts: { build: 'tsc' },
+    }));
+    await writeFile(join(safety, 'package-lock.json'), JSON.stringify({
+      packages: { 'node_modules/typescript': { version: '5.9.3' } },
+    }));
+    await writeFile(join(safety, 'tsconfig.json'), '{"compilerOptions":{"strict":true}}');
+    await writeFile(join(safety, 'README.md'), 'owned safety documentation\n');
     git(repo, ['add', 'packages/safety']);
-    git(repo, ['commit', '-m', 'retain exact reviewed beta development pins']);
+    git(repo, ['commit', '-m', 'own synthetic published tree']);
+    publishedGitHead = git(repo, ['rev-parse', 'HEAD']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', publishedGitHead]);
+    const manifestPath = join(safety, 'package.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    manifest.overrides = { tool: '2.0.0' };
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const lockPath = join(safety, 'package-lock.json');
+    const lock = JSON.parse(await readFile(lockPath, 'utf8'));
+    lock.packages['node_modules/tool'] = { version: '2.0.0' };
+    await writeFile(lockPath, JSON.stringify(lock));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'own synthetic development metadata']);
+    recordedFiles = ['package.json', 'package-lock.json'].map(file => {
+      const path = `packages/safety/${file}`;
+      return {
+        path,
+        published: git(repo, ['rev-parse', `${publishedGitHead}:${path}`]),
+        beta: git(repo, ['rev-parse', `HEAD:${path}`]),
+      };
+    });
   }
 
-  function checkReviewedBeta(gitHead = REVIEWED_PUBLISHED_HEAD): CheckResult {
+  function compareRecordedTree(): boolean {
+    return compareRecordedSafetyTree(repo, publishedGitHead, recordedFiles);
+  }
+
+  function checkSyntheticPublishedVersion(version: string): CheckResult {
     return checkSafetyPackageVersion({
       cwd: repo,
-      runNpm: () => registryResult({ version: '1.0.4', gitHead }),
+      runNpm: () => registryResult({ version, gitHead: publishedGitHead }),
       log: () => undefined,
     });
   }
 
-  it('recognizes only the exact reviewed 1.0.4 beta metadata divergence', async () => {
-    await prepareReviewedBeta();
-    expect(checkReviewedBeta()).toEqual({
-      status: 'published-reviewed-equivalent',
-      version: '1.0.4',
-      gitHead: REVIEWED_PUBLISHED_HEAD,
-    });
+  it('compares exact recorded blobs and every remaining tree entry offline', async () => {
+    await prepareRecordedTree();
+    expect(compareRecordedTree()).toBe(true);
   });
 
   it.each([
@@ -129,68 +153,71 @@ describe('check-safety-package-version', () => {
     ['build script', 'scripts', { build: 'different-compiler' }],
     ['extra development override', 'overrides', { typescript: '5.0.0' }],
   ])('rejects a %s change to the reviewed manifest', async (_label, field, value) => {
-    await prepareReviewedBeta();
+    await prepareRecordedTree();
     const path = join(repo, 'packages', 'safety', 'package.json');
     const manifest = JSON.parse(await readFile(path, 'utf8'));
     manifest[field as string] = value;
     await writeFile(path, JSON.stringify(manifest));
     git(repo, ['add', 'packages/safety']);
     git(repo, ['commit', '-m', 'mutate reviewed manifest']);
-    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+    expect(compareRecordedTree()).toBe(false);
   });
 
   it.each(['src/index.ts', 'tsconfig.json', 'README.md'])('rejects any other safety path change: %s', async file => {
-    await prepareReviewedBeta();
+    await prepareRecordedTree();
     const path = join(repo, 'packages', 'safety', file);
     await writeFile(path, `${await readFile(path, 'utf8')}\nchanged\n`);
     git(repo, ['add', 'packages/safety']);
     git(repo, ['commit', '-m', 'mutate safety source or build input']);
-    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+    expect(compareRecordedTree()).toBe(false);
   });
 
   it('rejects a changed compiler entry in the standalone lock', async () => {
-    await prepareReviewedBeta();
+    await prepareRecordedTree();
     const path = join(repo, 'packages', 'safety', 'package-lock.json');
     const lock = JSON.parse(await readFile(path, 'utf8'));
     lock.packages['node_modules/typescript'].version = '5.0.0';
     await writeFile(path, JSON.stringify(lock));
     git(repo, ['add', 'packages/safety']);
     git(repo, ['commit', '-m', 'change locked compiler']);
-    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+    expect(compareRecordedTree()).toBe(false);
   });
 
   it('rejects a reviewed blob with a changed tree mode', async () => {
-    await prepareReviewedBeta();
+    await prepareRecordedTree();
     git(repo, ['update-index', '--chmod=+x', 'packages/safety/package.json']);
     git(repo, ['commit', '-m', 'change reviewed entry mode']);
-    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+    expect(compareRecordedTree()).toBe(false);
   });
 
   it('rejects a deleted reviewed file', async () => {
-    await prepareReviewedBeta();
+    await prepareRecordedTree();
     git(repo, ['rm', 'packages/safety/package-lock.json']);
     git(repo, ['commit', '-m', 'remove reviewed lock']);
-    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+    expect(compareRecordedTree()).toBe(false);
   });
 
-  it('does not extend the record to another trusted published head', async () => {
-    await prepareReviewedBeta();
-    expect(() => checkReviewedBeta(git(repo, ['rev-parse', `${REVIEWED_PUBLISHED_HEAD}^1`]))).toThrow('Safety package source changed');
+  it('does not authorize a synthetic record through the production guard', async () => {
+    await prepareRecordedTree();
+    expect(compareRecordedTree()).toBe(true);
+    expect(() => checkSyntheticPublishedVersion('1.0.4')).toThrow('Safety package source changed');
   });
 
-  it('does not extend the record to another version', async () => {
-    await prepareReviewedBeta();
+  it('does not authorize another version through the production guard', async () => {
+    await prepareRecordedTree();
     const path = join(repo, 'packages', 'safety', 'package.json');
     const manifest = JSON.parse(await readFile(path, 'utf8'));
     manifest.version = '1.0.5';
     await writeFile(path, JSON.stringify(manifest));
     git(repo, ['add', 'packages/safety']);
     git(repo, ['commit', '-m', 'change package version']);
-    expect(() => checkSafetyPackageVersion({
-      cwd: repo,
-      runNpm: () => registryResult({ version: '1.0.5', gitHead: REVIEWED_PUBLISHED_HEAD }),
-      log: () => undefined,
-    })).toThrow('Safety package source changed');
+    expect(() => checkSyntheticPublishedVersion('1.0.5')).toThrow('Safety package source changed');
+  });
+
+  it('fails closed when the recorded commit is unavailable', async () => {
+    await prepareRecordedTree();
+    expect(() => compareRecordedSafetyTree(repo, 'f'.repeat(40), recordedFiles))
+      .toThrow('Reading reviewed safety tree entry failed');
   });
 
   it('allows an exact published version when its trusted source tree is identical', () => {
