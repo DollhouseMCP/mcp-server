@@ -20,7 +20,7 @@
  */
 
 import * as path from 'path';
-import { dump as yamlDump, load as yamlLoad } from 'js-yaml';
+import { CORE_SCHEMA, dump as yamlDump, load as yamlLoad } from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { PortfolioIndexManager } from './PortfolioIndexManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -249,7 +249,8 @@ export class EnhancedIndexManager {
 
       let loadedData;
       try {
-        loadedData = yamlLoad(yamlContent);
+        // Derived indexes need ordinary scalar/container types, not merge or omap processing.
+        loadedData = yamlLoad(yamlContent, { schema: CORE_SCHEMA });
       } catch (yamlError) {
         // Handle YAML parse errors gracefully
         logger.warn('Failed to parse YAML, rebuilding index', yamlError);

@@ -308,6 +308,8 @@ export class SerializationService {
   // Default limits
   private static readonly DEFAULT_MAX_YAML_SIZE = 64 * 1024; // 64KB
   private static readonly DEFAULT_MAX_CONTENT_SIZE = 1024 * 1024; // 1MB
+  private static readonly MAX_FRONTMATTER_NODES = 10000;
+  private static readonly MAX_FRONTMATTER_DEPTH = 40;
 
   constructor() {
     // No configuration needed - stateless service
@@ -620,6 +622,8 @@ export class SerializationService {
       noRefs = true
     } = options;
 
+    if (method === 'matter') this.validateFrontmatterGraph(metadata);
+
     // Clean metadata if requested
     let processedMetadata = cleanMetadata
       ? this.cleanMetadata(metadata, { strategy: cleaningStrategy })
@@ -629,8 +633,9 @@ export class SerializationService {
     processedMetadata = orderMetadataFields(processedMetadata);
 
     if (method === 'matter') {
-      // Use matter.stringify() (SkillManager pattern)
-      return matter.stringify(content, processedMetadata);
+      return this.stringifySafeFrontmatter(content, processedMetadata, {
+        schema: options.schema ?? 'json', skipInvalid, noRefs
+      });
     } else {
       // Manual construction (other managers)
       const yamlString = this.dumpYaml(processedMetadata, {
@@ -647,6 +652,69 @@ export class SerializationService {
         return `---\n${yamlString}---\n`;
       }
     }
+  }
+
+  /** Keep gray-matter's body unwrapping without its executable/default engines. */
+  private stringifySafeFrontmatter(content: string, metadata: any, options: YamlDumpOptions): string {
+    if (options.schema === 'default') {
+      throw new Error('Default YAML schema is not supported for frontmatter serialization');
+    }
+    // gray-matter chooses a body-declared language before invoking the engine.
+    // Its defaults retain built-in engines, so overriding YAML alone is insufficient.
+    // Match gray-matter's single leading BOM removal before checking its delimiter.
+    const parserContent = content.charAt(0) === '\ufeff' ? content.slice(1) : content;
+    if (parserContent.startsWith('---') && parserContent[3] !== '-') {
+      const language = matter.language(parserContent.slice(3)).name;
+      if (language && !['yaml', 'yml'].includes(language.toLowerCase()) && language !== 'json') {
+        throw new Error('Unsupported frontmatter language');
+      }
+    }
+    const yamlEngine = {
+      parse: (input: string) => {
+        const parsed = this.parsePureYaml(input, { schema: options.schema, validateStructure: false });
+        this.validateFrontmatterGraph(parsed);
+        return parsed;
+      },
+      stringify: (data: any) => {
+        this.validateFrontmatterGraph(data);
+        return this.dumpYaml(data, { ...options, sortKeys: false });
+      }
+    };
+    const jsonEngine = {
+      parse: (input: string) => {
+        this.validateSize(input, SerializationService.DEFAULT_MAX_YAML_SIZE, 'JSON frontmatter');
+        const parsed: any = JSON.parse(input);
+        this.validateFrontmatterGraph(parsed);
+        return parsed;
+      },
+      stringify: (data: any) => {
+        this.validateFrontmatterGraph(data);
+        return JSON.stringify(data, null, 2);
+      }
+    };
+    // Options also prevent gray-matter's unconfigured global parse cache from being used.
+    return matter.stringify(content, metadata, { engines: { yaml: yamlEngine, json: jsonEngine } });
+  }
+
+  /** Count repeated aliases as expanded occurrences before cleaning or noRefs dumping. */
+  private validateFrontmatterGraph(value: unknown): void {
+    let remainingNodes = SerializationService.MAX_FRONTMATTER_NODES;
+    let remainingText = SerializationService.DEFAULT_MAX_CONTENT_SIZE;
+    const ancestors = new Set<object>();
+    const visit = (current: unknown, depth: number): void => {
+      if (--remainingNodes < 0 || depth > SerializationService.MAX_FRONTMATTER_DEPTH) throw new Error('Frontmatter structure limit exceeded');
+      if (typeof current === 'string') remainingText -= current.length;
+      if (remainingText < 0) throw new Error('Frontmatter structure limit exceeded');
+      if (typeof current !== 'object' || current === null) return;
+      if (ancestors.has(current)) throw new Error('Frontmatter contains a cyclic structure');
+      ancestors.add(current);
+      for (const [key, child] of Object.entries(current)) {
+        remainingText -= key.length;
+        visit(child, depth + 1);
+      }
+      ancestors.delete(current);
+    };
+    visit(value, 0);
   }
 
   // ========================================================================
