@@ -415,18 +415,46 @@ export interface WebConsoleComposition {
 export class WebConsoleRegistrar {
   constructor(private readonly options: WebConsoleRegistrarOptions = {}) {}
 
-  async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
-    const onboardingConfiguration = this.options.onboardingConfiguration ? structuredClone(this.options.onboardingConfiguration) : null;
-    const database = resolveConsoleDatabase(container);
-    const memoryProvider = resolveConsoleMemoryProvider(container);
-    const memoryDeletionBoundary = memoryProvider
-      ? container.resolve<DatabaseMemoryAccountDeletionBoundary>('DatabaseMemoryAccountDeletionBoundary') : undefined;
-    if (memoryProvider) {
-      if (!(memoryDeletionBoundary instanceof DatabaseMemoryAccountDeletionBoundary) || !database) {
-        throw new Error('Configured console account deletion requires its actual system database boundary');
-      }
-      memoryDeletionBoundary.requireDatabase(database);
+  private resolveMemoryDeletionBoundary(
+    container: DiContainerFacade,
+    database: ReturnType<typeof resolveConsoleDatabase>,
+    memoryProvider: ReturnType<typeof resolveConsoleMemoryProvider>,
+  ): DatabaseMemoryAccountDeletionBoundary | undefined {
+    if (!memoryProvider) return undefined;
+    const boundary = container.resolve<DatabaseMemoryAccountDeletionBoundary>('DatabaseMemoryAccountDeletionBoundary');
+    if (!(boundary instanceof DatabaseMemoryAccountDeletionBoundary) || !database) {
+      throw new Error('Configured console account deletion requires its actual system database boundary');
     }
+    boundary.requireDatabase(database);
+    return boundary;
+  }
+
+  private resolveIntegrationProviderOutbound(container: DiContainerFacade) {
+    return {
+      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory)
+        ? { pinnedOutbound: container.resolve<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory) }
+        : {}),
+      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup)
+        ? { dnsLookup: container.resolve<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup) }
+        : {}),
+    };
+
+  }
+
+  private cloneOnboardingConfiguration() {
+    return this.options.onboardingConfiguration ? structuredClone(this.options.onboardingConfiguration) : null;
+  }
+
+  private consoleStorageBackend(database: ReturnType<typeof resolveConsoleDatabase>): 'postgres' | 'memory' {
+    return database ? 'postgres' : 'memory';
+  }
+
+  async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
+    const onboardingConfiguration = this.cloneOnboardingConfiguration();
+    const database = resolveConsoleDatabase(container);
+    const storageBackend = this.consoleStorageBackend(database);
+    const memoryProvider = resolveConsoleMemoryProvider(container);
+    const memoryDeletionBoundary = this.resolveMemoryDeletionBoundary(container, database, memoryProvider);
     const baseStores = await createConsoleStores(database, memoryDeletionBoundary);
     const stores = {
       ...baseStores,
@@ -499,7 +527,7 @@ export class WebConsoleRegistrar {
       container,
       options: this.options,
       stores,
-      storageBackend: database ? 'postgres' : 'memory',
+      storageBackend: storageBackend,
     });
     const securityInvalidationReadiness = securityInvalidationRuntime.readiness;
     const portfolioSyncWorker = resolvePortfolioSyncWorker({
@@ -508,7 +536,7 @@ export class WebConsoleRegistrar {
       options: this.options,
       stores,
       secretEncryption,
-      storageBackend: database ? 'postgres' : 'memory',
+      storageBackend: storageBackend,
     });
     const productionReadiness = await resolveProductionReadinessForActivation(
       activationProfile,
@@ -634,14 +662,7 @@ export class WebConsoleRegistrar {
     // Same outbound overrides the gateway/bridge honor, so curated and
     // per-request-built provider OAuth token-endpoint calls share one guarded
     // transport (and wired tests can route them to a local upstream).
-    const integrationProviderOutbound = {
-      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory)
-        ? { pinnedOutbound: container.resolve<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory) }
-        : {}),
-      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup)
-        ? { dnsLookup: container.resolve<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup) }
-        : {}),
-    };
+    const integrationProviderOutbound = this.resolveIntegrationProviderOutbound(container);
     // Curated, data-driven providers: load descriptor seed files into the store and
     // build their connect/callback providers so the generic /:provider routes activate.
     // Requires secret encryption (to decrypt deployment OAuth client secrets); without
@@ -737,7 +758,7 @@ export class WebConsoleRegistrar {
     }
     assertWebConsoleProductionActivation({
       activationProfile,
-      storageBackend: database ? 'postgres' : 'memory',
+      storageBackend: storageBackend,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       requireExplicitProductionAdapterMetadata: this.options.requireExplicitProductionAdapterMetadata === true,
       readiness: productionReadiness,
@@ -841,7 +862,7 @@ export class WebConsoleRegistrar {
       portfolioSyncWorker,
       apiV1Mount,
       cleanupScheduler,
-      storageBackend: database ? 'postgres' : 'memory',
+      storageBackend: storageBackend,
       get routesMounted() {
         return apiV1MountState.mounted();
       },

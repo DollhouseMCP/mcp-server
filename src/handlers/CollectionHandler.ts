@@ -35,7 +35,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
  * @security-audit-suppress DMCP-SEC-006
  */
 export class CollectionHandler {
-    private memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies };
+    private readonly memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies };
     private boundOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
     private originalBindingFailure?: { readonly cause: unknown };
     private assertMemoryOperation(): void {
@@ -402,18 +402,7 @@ export class CollectionHandler {
         return this.withMemoryOperation(bound => bound.submitContentBody(contentIdentifier));
     }
 
-    private async submitContentBody(contentIdentifier: string) {
-        this.assertMemoryOperation();
-        try {
-        // Try to find the content across all element types
-        let elementType: ElementType | undefined;
-        let foundPath: string | null = null;
-        
-        // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
-        // NOTE: This dynamically handles ALL element types from the ElementType enum
-        // No hardcoded count - if you add 10 more element types tomorrow, this code
-        // will automatically search all 16 types without any changes needed here
-        const searchPromises = Object.values(ElementType).map(async (type) => {
+    private async findSubmissionType(contentIdentifier: string, type: ElementType) {
           this.assertMemoryOperation();
           if (type === ElementType.MEMORY && this.boundOperation?.operation.manager.isGuardedHeadUpdateEnabled()) {
             const entry = await this.boundPortfolioIndex!.findByName(contentIdentifier, { elementType: type, fuzzyMatch: true });
@@ -448,7 +437,18 @@ export class CollectionHandler {
             }
             return null;
           }
-        });
+    }
+
+    private async findContentForSubmission(contentIdentifier: string) {
+        // Try to find the content across all element types
+        let elementType: ElementType | undefined;
+        let foundPath: string | null = null;
+
+        // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+        // NOTE: This dynamically handles ALL element types from the ElementType enum
+        // No hardcoded count - if you add 10 more element types tomorrow, this code
+        // will automatically search all 16 types without any changes needed here
+        const searchPromises = Object.values(ElementType).map(type => this.findSubmissionType(contentIdentifier, type));
         
         // Wait for all searches to complete and find the first match
         const searchResults = await Promise.allSettled(searchPromises);
@@ -479,22 +479,10 @@ export class CollectionHandler {
           }
         }
         
-        // CRITICAL FIX: Never default to any element type when content is not found
-        // This prevents incorrect submissions and forces proper type detection or user specification
-        if (!elementType) {
-          // Content not found in any element directory - provide helpful error with suggestions
-          const availableTypes = Object.values(ElementType).join(', ');
-          logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, {
-            contentIdentifier,
-            searchedTypes: Object.values(ElementType) 
-          });
-          
-          // UX IMPROVEMENT: Enhanced error message with smart suggestions
-          let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
-          errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
-          
-          // Try to provide smart suggestions based on partial matches
-          try {
+        return { elementType, foundPath };
+    }
+
+    private async submissionNameSuggestions(contentIdentifier: string): Promise<string[]> {
             const suggestions: string[] = [];
             
             // Search for similar names across all element types
@@ -524,6 +512,26 @@ export class CollectionHandler {
               }
             }
             
+            return suggestions;
+    }
+
+    private async submissionNotFound(contentIdentifier: string) {
+          // Content not found in any element directory - provide helpful error with suggestions
+          const availableTypes = Object.values(ElementType).join(', ');
+          logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, {
+            contentIdentifier,
+            searchedTypes: Object.values(ElementType)
+          });
+
+          // UX IMPROVEMENT: Enhanced error message with smart suggestions
+          let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
+          errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
+
+          // Try to provide smart suggestions based on partial matches
+          try {
+            const suggestions = await this.submissionNameSuggestions(contentIdentifier);
+            this.assertMemoryOperation();
+
             if (suggestions.length > 0) {
               errorMessage += `💡 **Did you mean one of these?**\n`;
               for (const suggestion of suggestions.slice(0, 5)) {
@@ -555,17 +563,9 @@ export class CollectionHandler {
               },
             ],
           };
-        }
-        
-        // Check for duplicates across all sources before submission
-        try {
-          // Extract the actual element name from the content path
-          const basename = path.basename(foundPath!, path.extname(foundPath!));
-          const duplicates = await this.unifiedIndexManager.checkDuplicates(basename);
-          this.assertMemoryOperation();
-          
-          if (duplicates.length > 0) {
-            const duplicate = duplicates[0];
+    }
+
+    private formatDuplicateWarning(duplicate: Awaited<ReturnType<UnifiedIndexManager['checkDuplicates']>>[number]): string {
             let warningText = `⚠️ **Duplicate Detection Alert**\n\n`;
             warningText += `Found "${duplicate.name}" in multiple sources:\n\n`;
             
@@ -594,6 +594,76 @@ export class CollectionHandler {
 `;
             warningText += `**Proceeding with submission anyway...**\n\n`;
             
+            return warningText;
+    }
+
+    private formatSubmissionFailure(error: any) {
+          let errorMessage = `${this.indicatorService.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
+          errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
+
+          // Provide contextual troubleshooting based on error type
+          if (error.message?.includes('auth') || error.message?.includes('token')) {
+            errorMessage += `🔐 **Authentication Issue**:\n`;
+            errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
+            errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
+          }
+
+          if (error.message?.includes('network') || error.message?.includes('connection')) {
+            errorMessage += `🌐 **Network Issue**:\n`;
+            errorMessage += `• Check your internet connection
+`;
+            errorMessage += `• Try again in a few minutes
+`;
+            errorMessage += `• Check GitHub status: https://status.github.com
+
+`;
+          }
+
+          errorMessage += `🚑 **Emergency Alternatives**:\n`;
+          errorMessage += `1. 🔄 **Retry**: Try the same command again
+`;
+          errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
+          errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
+          errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface
+
+`;
+          errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: errorMessage,
+              },
+            ],
+          };
+    }
+
+    private async submitContentBody(contentIdentifier: string) {
+        this.assertMemoryOperation();
+        try {
+        const { elementType, foundPath } = await this.findContentForSubmission(contentIdentifier);
+        this.assertMemoryOperation();
+
+        // CRITICAL FIX: Never default to any element type when content is not found
+        // This prevents incorrect submissions and forces proper type detection or user specification
+        if (!elementType) {
+          const result = await this.submissionNotFound(contentIdentifier);
+          this.assertMemoryOperation();
+          return result;
+        }
+
+        // Check for duplicates across all sources before submission
+        try {
+          // Extract the actual element name from the content path
+          const basename = path.basename(foundPath!, path.extname(foundPath!));
+          const duplicates = await this.unifiedIndexManager.checkDuplicates(basename);
+          this.assertMemoryOperation();
+
+          if (duplicates.length > 0) {
+            const duplicate = duplicates[0];
+            const warningText = this.formatDuplicateWarning(duplicate);
+
             // Log the duplicate detection for monitoring
             logger.warn('Duplicate content detected during submission', {
               contentIdentifier,
@@ -658,45 +728,7 @@ export class CollectionHandler {
             stack: error.stack
           });
           
-          let errorMessage = `${this.indicatorService.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
-          errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
-          
-          // Provide contextual troubleshooting based on error type
-          if (error.message?.includes('auth') || error.message?.includes('token')) {
-            errorMessage += `🔐 **Authentication Issue**:\n`;
-            errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
-            errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
-          }
-          
-          if (error.message?.includes('network') || error.message?.includes('connection')) {
-            errorMessage += `🌐 **Network Issue**:\n`;
-            errorMessage += `• Check your internet connection
-`;
-            errorMessage += `• Try again in a few minutes
-`;
-            errorMessage += `• Check GitHub status: https://status.github.com
-
-`;
-          }
-          
-          errorMessage += `🚑 **Emergency Alternatives**:\n`;
-          errorMessage += `1. 🔄 **Retry**: Try the same command again
-`;
-          errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
-          errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
-          errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface
-
-`;
-          errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
-          
-          return {
-            content: [
-              {
-                type: "text",
-                text: errorMessage,
-              },
-            ],
-          };
+          return this.formatSubmissionFailure(error);
         }
     }
 
@@ -708,7 +740,12 @@ export class CollectionHandler {
         return this.withMemoryOperation(bound => bound.configureCollectionSubmissionBody(autoSubmit));
     }
 
-    private async configureCollectionSubmissionBody(autoSubmit: boolean) {
+    private configureCollectionSubmissionBody(autoSubmit: boolean) {
+        // Execute synchronously; the native executor retains rejection for thrown failures.
+        return new Promise<ReturnType<CollectionHandler['configureCollectionSubmissionResult']>>(resolve => resolve(this.configureCollectionSubmissionResult(autoSubmit)));
+    }
+
+    private configureCollectionSubmissionResult(autoSubmit: boolean) {
         this.assertMemoryOperation();
       try {
         this.setAutoSubmitEnabled(autoSubmit);
@@ -747,7 +784,12 @@ export class CollectionHandler {
         return this.withMemoryOperation(bound => bound.getCollectionSubmissionConfigBody());
     }
 
-    private async getCollectionSubmissionConfigBody() {
+    private getCollectionSubmissionConfigBody() {
+        // Execute synchronously; the native executor retains rejection for thrown failures.
+        return new Promise<ReturnType<CollectionHandler['getCollectionSubmissionConfigResult']>>(resolve => resolve(this.getCollectionSubmissionConfigResult()));
+    }
+
+    private getCollectionSubmissionConfigResult() {
         this.assertMemoryOperation();
       const autoSubmitEnabled = this.isAutoSubmitEnabled();
 
@@ -771,6 +813,26 @@ export class CollectionHandler {
 
     getCollectionCacheHealth(): ReturnType<CollectionHandler['getCollectionCacheHealthBody']> {
         return this.withMemoryOperation(bound => bound.getCollectionCacheHealthBody());
+    }
+
+    private formatCacheAge(ageMs: number): string {
+            if (ageMs === 0) return 'Not cached';
+            const hours = Math.floor(ageMs / (1000 * 60 * 60));
+            const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
+            if (hours > 0) {
+              return `${hours}h ${minutes}m old`;
+            }
+            return `${minutes}m old`;
+    }
+
+    private cacheHealthStatus(valid: boolean, exists: boolean): string {
+        if (valid) return 'healthy';
+        return exists ? 'expired' : 'empty';
+    }
+
+    private cacheHealthIcon(status: string): string {
+        if (status === 'healthy') return '✅';
+        return status === 'expired' ? '⚠️' : '📦';
     }
 
     private async getCollectionCacheHealthBody() {
@@ -797,37 +859,26 @@ export class CollectionHandler {
             // Cache file doesn't exist yet
           }
           
-          // Format cache age
-          const formatAge = (ageMs: number): string => {
-            if (ageMs === 0) return 'Not cached';
-            const hours = Math.floor(ageMs / (1000 * 60 * 60));
-            const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
-            if (hours > 0) {
-              return `${hours}h ${minutes}m old`;
-            }
-            return `${minutes}m old`;
-          };
-          
           // Build health report with both cache systems
           const healthReport = {
             collection: {
-              status: collectionStats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
+              status: this.cacheHealthStatus(collectionStats.isValid, cacheFileExists),
               cacheExists: cacheFileExists,
               itemCount: collectionStats.itemCount,
-              cacheAge: formatAge(collectionStats.cacheAge),
+              cacheAge: this.formatCacheAge(collectionStats.cacheAge),
               cacheAgeMs: collectionStats.cacheAge,
               isValid: collectionStats.isValid,
               cacheFileSize: cacheFileSize,
               cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
-              ttlRemaining: collectionStats.isValid ? formatAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
+              ttlRemaining: collectionStats.isValid ? this.formatCacheAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
             },
             index: {
-              status: searchStats.index.isValid ? 'healthy' : (searchStats.index.hasCache ? 'expired' : 'empty'),
+              status: this.cacheHealthStatus(searchStats.index.isValid, searchStats.index.hasCache),
               hasCache: searchStats.index.hasCache,
               elements: searchStats.index.elements,
-              cacheAge: formatAge(searchStats.index.age),
+              cacheAge: this.formatCacheAge(searchStats.index.age),
               isValid: searchStats.index.isValid,
-              ttlRemaining: searchStats.index.isValid ? formatAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
+              ttlRemaining: searchStats.index.isValid ? this.formatCacheAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
             },
             overall: {
               recommendation: (collectionStats.isValid || searchStats.index.isValid)
@@ -842,13 +893,13 @@ export class CollectionHandler {
                 type: "text",
                 text: `${this.indicatorService.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
                   `## 🗄️ Collection Cache (Legacy)\n` +
-                  `**Status**: ${healthReport.collection.status === 'healthy' ? '✅' : healthReport.collection.status === 'expired' ? '⚠️' : '📦'} ${healthReport.collection.status.toUpperCase()}\n` +
+                  `**Status**: ${this.cacheHealthIcon(healthReport.collection.status)} ${healthReport.collection.status.toUpperCase()}\n` +
                   `**Items Cached**: ${healthReport.collection.itemCount}\n` +
                   `**Cache Age**: ${healthReport.collection.cacheAge}\n` +
                   `**Cache Size**: ${healthReport.collection.cacheFileSizeFormatted}\n` +
                   `**TTL Remaining**: ${healthReport.collection.ttlRemaining}\n\n` +
                   `## 🚀 Index Cache (Enhanced Search)\n` +
-                  `**Status**: ${healthReport.index.status === 'healthy' ? '✅' : healthReport.index.status === 'expired' ? '⚠️' : '📦'} ${healthReport.index.status.toUpperCase()}\n` +
+                  `**Status**: ${this.cacheHealthIcon(healthReport.index.status)} ${healthReport.index.status.toUpperCase()}\n` +
                   `**Elements Indexed**: ${healthReport.index.elements}\n` +
                   `**Cache Age**: ${healthReport.index.cacheAge}\n` +
                   `**TTL Remaining**: ${healthReport.index.ttlRemaining}\n\n` +

@@ -1,3 +1,4 @@
+import { logger } from '../../src/utils/logger.js';
 /**
  * Unit tests for Memory auto-load functionality (Issue #1430)
  * Verifies that MemoryManager properly identifies and loads memories marked for auto-load
@@ -12,7 +13,7 @@
  * See: InstallMemoryBug.md for details on the content loss bug
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
 import { createRealMemoryManager } from '../helpers/di-mocks.js';
 import type { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import * as path from 'node:path';
@@ -637,6 +638,44 @@ entries: []
   });
 
   describe('loadAndActivateAutoLoadMemories', () => {
+    it('retains activated counts if an ordinary observer fails after activation', async () => {
+      await fs.writeFile(path.join(memoriesDir, 'observer-autoload.yaml'), `---
+name: observer-autoload
+type: memory
+description: Observer accounting control
+version: 1.0.0
+autoLoad: true
+---
+Observer accounting content.
+`);
+      const memory = requireDefined((await memoryManager.getAutoLoadMemories())[0]);
+      const seed = jest.spyOn(memoryManager, 'installSeedMemories').mockResolvedValue(undefined);
+      const listed = jest.spyOn(memoryManager, 'getAutoLoadMemories').mockResolvedValue([memory]);
+      const originalInfo = logger.info.bind(logger);
+      const cause = new Error('Controlled activated observer failure');
+      let threw = false;
+      const info = jest.spyOn(logger, 'info').mockImplementation((message, ...args) => {
+        if (!threw && message.startsWith('[MemoryManager] Auto-loaded:')) {
+          threw = true;
+          throw cause;
+        }
+        originalInfo(message, ...args);
+      });
+      try {
+        const result = await memoryManager.loadAndActivateAutoLoadMemories();
+        expect(threw).toBe(true);
+        expect(memory.getStatus()).toBe('active');
+        expect(result.loaded).toBe(1);
+        expect(result.skipped).toBe(1);
+        expect(result.totalTokens).toBeGreaterThan(0);
+        expect(result.errors).toEqual(["Failed to load 'observer-autoload': Controlled activated observer failure"]);
+      } finally {
+        info.mockRestore();
+        listed.mockRestore();
+        seed.mockRestore();
+      }
+    });
+
     it('should install seed and load at least one auto-load memory', async () => {
       // Note: loadAndActivateAutoLoadMemories() always installs seed memories first
       // So we expect at least the seed memory to be loaded

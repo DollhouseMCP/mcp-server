@@ -1,3 +1,4 @@
+import type { Memory } from '../memories/Memory.js';
 /**
  * AgentManager - Refactored to extend BaseElementManager
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
@@ -2375,68 +2376,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     return { cyclePath: null, foundUnexplored };
   }
 
-  /**
-   * Get content from an element (element-agnostic)
-   * @private
-   */
-  private async getElementContent(
+  private findActivationElement(
+    elements: Array<Awaited<ReturnType<ResolvedElementManager['list']>>[number] | Memory>,
     elementType: string,
     elementName: string,
-    executionContext?: ExecutionContext,
-    memoryScope?: AgentMemoryReadScope,
-  ): Promise<string> {
-    memoryScope?.assertCurrent();
-    // Issue #1948: Use instance-injected resolver instead of static
-    const resolver = this._elementManagerResolver;
-    if (!resolver && !(memoryScope && elementType === 'memories')) {
-      logger.warn(`Element manager resolver not configured - cannot activate ${elementType}/${elementName}`);
-      return `[Element manager resolver not configured for ${elementType}/${elementName}]`;
-    }
-
-    // Layer 2 (defense-in-depth): Runtime circular activation detection (Issue #109)
-    // The static pre-flight check (detectActivationCycles, layer 1) catches most cycles
-    // before execution begins. This runtime check guards against edge cases such as
-    // dynamically-constructed activation chains or agents modified between the static
-    // check and actual execution. Uses executionContext.agentChain which tracks the
-    // current execution path — effective for direct and multi-hop chains within a
-    // single execution context.
-    if (elementType === 'agents' && executionContext?.agentChain) {
-      const chainSet = new Set(executionContext.agentChain.map(name => name.toLowerCase()));
-      const normalizedName = elementName.toLowerCase();
-
-      if (chainSet.has(normalizedName)) {
-        const cyclePath = [...executionContext.agentChain, elementName];
-        throw new Error(AgentManager.formatCircularActivationError(cyclePath));
-      }
-    }
-
-    try {
-      // Map plural element types to manager names
-      const managerNameMap: Record<string, string> = {
-        personas: 'PersonaManager',
-        skills: 'SkillManager',
-        memories: 'MemoryManager',
-        templates: 'TemplateManager',
-        ensembles: 'EnsembleManager',
-        agents: 'AgentManager'
-      };
-
-      const managerName = managerNameMap[elementType];
-      if (!managerName) {
-        logger.warn(`Unknown element type: ${elementType}`);
-        return `[Unknown element type: ${elementType}]`;
-      }
-
-      const manager = memoryScope && elementType === 'memories' ? memoryScope.manager : resolver?.(managerName);
-      if (!manager) {
-        logger.warn(`Manager not found for element type: ${elementType}`);
-        return `[Manager not found: ${managerName}]`;
-      }
-
-      // Get all elements of this type
-      const elements = memoryScope && elementType === 'memories'
-        ? await memoryScope.manager.list({ strictDatabase: true }) : await manager.list();
-      memoryScope?.assertCurrent();
+  ): Awaited<ReturnType<ResolvedElementManager['list']>>[number] | Memory {
       // Issue #2432: activates: references use canonical filename slugs (e.g.
       // 'security-analyst', 'bug-report') while element metadata carries display
       // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
@@ -2462,6 +2406,14 @@ export class AgentManager extends BaseElementManager<Agent> {
         throw new Error(`${elementType} '${elementName}' not found`);
       }
 
+      return element;
+  }
+
+  private formatActivationElementContent(
+    element: Awaited<ReturnType<ResolvedElementManager['list']>>[number] | Memory,
+    elementType: string,
+    elementName: string,
+  ): string {
       // Return appropriate content based on element type
       switch (elementType) {
         case 'personas':
@@ -2494,6 +2446,77 @@ export class AgentManager extends BaseElementManager<Agent> {
         default:
           return `[Content not available for ${elementType}]`;
       }
+  }
+
+  private assertNoRuntimeActivationCycle(elementType: string, elementName: string, executionContext?: ExecutionContext): void {
+    // Layer 2 (defense-in-depth): Runtime circular activation detection (Issue #109)
+    // The static pre-flight check (detectActivationCycles, layer 1) catches most cycles
+    // before execution begins. This runtime check guards against edge cases such as
+    // dynamically-constructed activation chains or agents modified between the static
+    // check and actual execution. Uses executionContext.agentChain which tracks the
+    // current execution path — effective for direct and multi-hop chains within a
+    // single execution context.
+    if (elementType === 'agents' && executionContext?.agentChain) {
+      const chainSet = new Set(executionContext.agentChain.map(name => name.toLowerCase()));
+      const normalizedName = elementName.toLowerCase();
+
+      if (chainSet.has(normalizedName)) {
+        const cyclePath = [...executionContext.agentChain, elementName];
+        throw new Error(AgentManager.formatCircularActivationError(cyclePath));
+      }
+    }
+
+  }
+
+  /**
+   * Get content from an element (element-agnostic)
+   * @private
+   */
+  private async getElementContent(
+    elementType: string,
+    elementName: string,
+    executionContext?: ExecutionContext,
+    memoryScope?: AgentMemoryReadScope,
+  ): Promise<string> {
+    memoryScope?.assertCurrent();
+    // Issue #1948: Use instance-injected resolver instead of static
+    const resolver = this._elementManagerResolver;
+    if (!resolver && !(memoryScope && elementType === 'memories')) {
+      logger.warn(`Element manager resolver not configured - cannot activate ${elementType}/${elementName}`);
+      return `[Element manager resolver not configured for ${elementType}/${elementName}]`;
+    }
+
+    this.assertNoRuntimeActivationCycle(elementType, elementName, executionContext);
+
+    try {
+      // Map plural element types to manager names
+      const managerNameMap: Record<string, string> = {
+        personas: 'PersonaManager',
+        skills: 'SkillManager',
+        memories: 'MemoryManager',
+        templates: 'TemplateManager',
+        ensembles: 'EnsembleManager',
+        agents: 'AgentManager'
+      };
+
+      const managerName = managerNameMap[elementType];
+      if (!managerName) {
+        logger.warn(`Unknown element type: ${elementType}`);
+        return `[Unknown element type: ${elementType}]`;
+      }
+
+      const manager = memoryScope && elementType === 'memories' ? memoryScope.manager : resolver?.(managerName);
+      if (!manager) {
+        logger.warn(`Manager not found for element type: ${elementType}`);
+        return `[Manager not found: ${managerName}]`;
+      }
+
+      // Get all elements of this type
+      const elements = memoryScope && elementType === 'memories'
+        ? await memoryScope.manager.list({ strictDatabase: true }) : await manager.list();
+      memoryScope?.assertCurrent();
+      const element = this.findActivationElement(elements, elementType, elementName);
+      return this.formatActivationElementContent(element, elementType, elementName);
     } catch (error) {
       if (memoryScope) throw error;
       logger.error(`Error getting content for ${elementType} '${elementName}':`, error);

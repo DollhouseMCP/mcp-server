@@ -1082,6 +1082,13 @@ export class DollhouseContainer {
     }
   }
 
+  private resolveCrudCallerOptions(memoryProvider?: TenantMemoryOperationProvider): ConstructorParameters<typeof ElementCRUDHandler>[18] {
+    const forkOnEditStrategy = this.hasRegistration('ForkOnEditStrategy')
+      ? this.resolve<import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy>('ForkOnEditStrategy') : undefined;
+    if (memoryProvider) return { memoryProvider, forkOnEditStrategy };
+    return forkOnEditStrategy;
+  }
+
   /**
    * Bootstrap all handlers without registering MCP tools.
    * Used by web-only mode (--web) to get MCPAQLHandler without an MCP Server.
@@ -1152,9 +1159,7 @@ export class DollhouseContainer {
       this.resolve('PolicyExportService'),
       this.resolve('SessionActivationRegistry'),
       this.resolve('ContextTracker'),
-      memoryProvider ? { memoryProvider, forkOnEditStrategy: this.hasRegistration('ForkOnEditStrategy')
-        ? this.resolve('ForkOnEditStrategy') : undefined }
-        : this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
+      this.resolveCrudCallerOptions(memoryProvider),
     );
     // Register for lazy resolution by PolicyExportService
     this.register('ElementCRUDHandler', () => elementCrudHandler);
@@ -1756,9 +1761,7 @@ export class DollhouseContainer {
       this.resolve('PolicyExportService'),
       this.resolve('SessionActivationRegistry'),
       this.resolve('ContextTracker'),
-      memoryProvider ? { memoryProvider, forkOnEditStrategy: this.hasRegistration('ForkOnEditStrategy')
-        ? this.resolve('ForkOnEditStrategy') : undefined }
-        : this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
+      this.resolveCrudCallerOptions(memoryProvider),
     );
 
     const collectionHandler = new CollectionHandler(

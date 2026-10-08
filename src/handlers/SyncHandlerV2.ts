@@ -32,7 +32,7 @@ export interface SyncOperationOptions {
 }
 
 export class SyncHandler {
-  private memoryComposition?: TenantMemoryOperationProvider;
+  private readonly memoryComposition?: TenantMemoryOperationProvider;
   private boundOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
   withCapturedMemoryOperation<T>(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
     action: (handler: SyncHandler) => Promise<T>): Promise<T> {

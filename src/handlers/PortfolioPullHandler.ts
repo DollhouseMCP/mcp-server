@@ -160,6 +160,32 @@ export class PortfolioPullHandler {
     this.storageLayerFactory = dependencies.storageLayerFactory;
   }
 
+  private requiresDeletionConfirmation(actions: SyncActions, mode: SyncMode, options: PullOptions): boolean {
+    return actions.toDelete.length > 0 && mode === 'mirror' && !options.force && options.confirmDeletions !== false;
+  }
+
+  private formatPullCompletion(
+    results: Awaited<ReturnType<PortfolioPullHandler['executeSyncActions']>>,
+    progressMessages: string[],
+    personaIndicator: string,
+  ): PullResult {
+      // Step 8: Return success summary
+      return {
+        content: [{
+          type: "text",
+          text: `${personaIndicator}✅ **Portfolio Pull Complete**\n\n` +
+                progressMessages.join('\n') + '\n\n' +
+                `**Summary:**\n` +
+                `  📥 Added: ${results.added}\n` +
+                `  🔄 Updated: ${results.updated}\n` +
+                `  🔗 Skipped: ${results.skipped}\n` +
+                (results.deleted > 0 ? `  🗑️ Deleted: ${results.deleted}\n` : '') +
+                `\nYour local portfolio is now synchronized with GitHub!`
+        }]
+      };
+
+  }
+
   /**
    * Execute the pull operation from GitHub to local portfolio
    */
@@ -212,10 +238,7 @@ export class PortfolioPullHandler {
       }
       
       // Step 6: Check for deletions requiring confirmation
-      if (syncActions.toDelete.length > 0 && 
-          syncMode === 'mirror' && 
-          !options.force && 
-          options.confirmDeletions !== false) {
+      if (this.requiresDeletionConfirmation(syncActions, syncMode, options)) {
         return {
           content: [{
             type: "text",
@@ -243,20 +266,7 @@ export class PortfolioPullHandler {
       );
       
       this.assertMemoryOperation();
-      // Step 8: Return success summary
-      return {
-        content: [{
-          type: "text",
-          text: `${personaIndicator}✅ **Portfolio Pull Complete**\n\n` +
-                progressMessages.join('\n') + '\n\n' +
-                `**Summary:**\n` +
-                `  📥 Added: ${results.added}\n` +
-                `  🔄 Updated: ${results.updated}\n` +
-                `  🔗 Skipped: ${results.skipped}\n` +
-                (results.deleted > 0 ? `  🗑️ Deleted: ${results.deleted}\n` : '') +
-                `\nYour local portfolio is now synchronized with GitHub!`
-        }]
-      };
+      return this.formatPullCompletion(results, progressMessages, personaIndicator);
       
     } catch (error) {
       if (this.memoryOperation) throw error;

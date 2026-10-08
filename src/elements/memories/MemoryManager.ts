@@ -2572,6 +2572,48 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return Math.ceil(words / 0.75);
   }
 
+  private async activateAutoLoadMemory(memory: Memory, errors: string[], counts: {loaded: number; skipped: number; totalTokens: number}, assertCurrent?: () => void): Promise<void> {
+        try {
+          const memoryName = memory.metadata.name || 'unknown';
+
+          // Validate memory before loading
+          const validation = memory.validate();
+          if (!validation.valid) {
+            const errorMsg = `Validation failed for '${memoryName}': ${validation.errors?.map(e => e.message).join(', ')}`;
+            errors.push(errorMsg);
+            logger.warn(`[MemoryManager] ${errorMsg}`);
+            counts.skipped++;
+            return;
+          }
+
+          // Estimate tokens
+          const estimatedTokens = this.estimateTokens(memory.content || '');
+
+          // Activate the memory
+          // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
+          assertCurrent?.();
+          this.getActivationSet().add(memoryName);
+          await memory.activate();
+          assertCurrent?.();
+          counts.loaded++;
+          counts.totalTokens += estimatedTokens;
+
+          logger.info(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens)`);
+
+          // Routine auto-load — debug only (was flooding security buffer)
+          logger.debug(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${(memory.metadata as any).priority})`);
+
+
+        } catch (error) {
+          if (assertCurrent) throw error;
+          const memoryName = memory.metadata.name || 'unknown';
+          const errorMsg = `Failed to load '${memoryName}': ${error instanceof Error ? error.message : String(error)}`;
+          errors.push(errorMsg);
+          logger.warn(`[MemoryManager] ${errorMsg}`);
+          counts.skipped++;
+        }
+  }
+
   /**
    * Load and activate auto-load memories during server initialization
    * Issue #1430: Auto-load baseline memories feature
@@ -2594,9 +2636,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }> {
     assertCurrent?.();
     const startTime = Date.now();
-    let loaded = 0;
-    let skipped = 0;
-    let totalTokens = 0;
+    const counts = { loaded: 0, skipped: 0, totalTokens: 0 };
     const errors: string[] = [];
 
     try {
@@ -2634,48 +2674,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       logger.info(`[MemoryManager] Found ${autoLoadMemories.length} auto-load memories`);
 
-      // Process each auto-load memory
+      // Complete each activation and its binding checks before starting the next.
       for (const memory of autoLoadMemories) {
-        try {
-          const memoryName = memory.metadata.name || 'unknown';
-
-          // Validate memory before loading
-          const validation = memory.validate();
-          if (!validation.valid) {
-            const errorMsg = `Validation failed for '${memoryName}': ${validation.errors?.map(e => e.message).join(', ')}`;
-            errors.push(errorMsg);
-            logger.warn(`[MemoryManager] ${errorMsg}`);
-            skipped++;
-            continue;
-          }
-
-          // Estimate tokens
-          const estimatedTokens = this.estimateTokens(memory.content || '');
-
-          // Activate the memory
-          // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
-          assertCurrent?.();
-          this.getActivationSet().add(memoryName);
-          await memory.activate();
-          assertCurrent?.();
-          loaded++;
-          totalTokens += estimatedTokens;
-
-          logger.info(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens)`);
-
-          // Routine auto-load — debug only (was flooding security buffer)
-          logger.debug(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${(memory.metadata as any).priority})`);
-
-        } catch (error) {
-          if (assertCurrent) throw error;
-          const memoryName = memory.metadata.name || 'unknown';
-          const errorMsg = `Failed to load '${memoryName}': ${error instanceof Error ? error.message : String(error)}`;
-          errors.push(errorMsg);
-          logger.warn(`[MemoryManager] ${errorMsg}`);
-          skipped++;
-        }
+        await this.activateAutoLoadMemory(memory, errors, counts, assertCurrent);
+        assertCurrent?.();
       }
 
+      const { loaded, skipped, totalTokens } = counts;
       const elapsedTime = Date.now() - startTime;
       logger.info(
         `[MemoryManager] Auto-load complete: ${loaded} memories activated ` +
