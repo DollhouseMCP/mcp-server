@@ -190,6 +190,9 @@ export class DangerZoneOfflineRecovery {
       }
       const evidence = await this.evidence(namespace);
       const original = await this.read(path.join(namespace, 'blocked-agents.json'));
+      // Replacement is created by this operator as 0600. Root read authority
+      // does not permit changing the service-owned target's effective owner.
+      if (original.identity.uid !== this.options.operator.uid) refuse();
       const proposal = prepareDangerZoneBlockClear(this.text(original.bytes), agentName);
       binding = { ...binding, originalSha256: proposal.originalSha256, blockSha256: proposal.blockSha256,
         evidenceSha256: digest(evidence.bytes) };

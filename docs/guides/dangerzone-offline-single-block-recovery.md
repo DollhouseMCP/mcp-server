@@ -26,7 +26,7 @@ Create a privately owned mode 0600 UTF8 JSON evidence file, using the canonical 
 
 The file is limited to 64 KiB, with one to 100 inventory entries. Protect references containing operational details. The executor checks structure, ownership, mode, exact namespace and unchanged bytes/identity; it does not independently verify the observations.
 
-Use the existing configured `DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN` from the selected service's approved credential configuration. Do not mint a replacement token or choose a new value to authorize recovery. Existing host/SSH access and OS ownership/root authority are also prerequisites. The CLI asks for the token without echo; never place it in command arguments, shell history, evidence or audit data. An absent/empty configured token refuses.
+Use the existing configured `DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN` from the selected service's approved credential configuration. Do not mint a replacement token or choose a new value to authorize recovery. Existing host/SSH access and execution as the target file's actual OS owner are also prerequisites. Root authority can provision approved access, but cannot run replacement for a target owned by another UID: the staged 0600 file must remain readable by the same service owner after restart. The CLI refuses cross-owner targets before confirmation or replacement. The CLI asks for the token without echo; never place it in command arguments, shell history, evidence or audit data. An absent/empty configured token refuses.
 
 ## Run locally on the excluded namespace
 

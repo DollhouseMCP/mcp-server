@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import type { FileHandle } from 'node:fs/promises';
+import type { Stats, BigIntStats } from 'node:fs';
 import { DangerZoneOfflineRecovery, type OfflineRecoveryConfirmation } from '../../../src/security/DangerZoneOfflineRecovery.js';
 
 const token = 'configured-token-secret';
@@ -40,6 +41,32 @@ function wrapHandle(handle: FileHandle, overrides: Partial<FileHandle>): FileHan
 // The operator CLI requires POSIX uid/permissions, O_NOFOLLOW and directory sync.
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
 describePosix('Authenticated offline one-block recovery (external exclusion is a prerequisite)', () => {
+  it('refuses root cross-owner replacement before confirmation while retaining exact target bytes', async () => {
+    const f = await fixture(); const confirm = jest.fn(f.options.confirm);
+    const rename = jest.fn<typeof fs.rename>(fs.rename);
+    // Controlled target identity models a service-owned file under a root operator.
+    const foreignUid = (await fs.stat(f.filename)).uid === 1001 ? 1002 : 1001;
+    const identity = <T extends Stats | BigIntStats>(stat: T): T => Object.assign(stat,
+      { uid: typeof stat.uid === 'bigint' ? BigInt(foreignUid) : foreignUid });
+    const io = { ...fs, rename,
+      lstat: (async (...args: Parameters<typeof fs.lstat>) => {
+        const stat = await fs.lstat(...args);
+        return String(args[0]) === f.filename ? identity(stat) : stat;
+      }) as typeof fs.lstat,
+      open: async (...args: Parameters<typeof fs.open>) => {
+        const handle = await fs.open(...args);
+        return String(args[0]) === f.filename
+          ? wrapHandle(handle, { stat: (async (options?: Parameters<FileHandle['stat']>[0]) =>
+            identity(await handle.stat(options))) as FileHandle['stat'] }) : handle;
+      },
+    } as typeof fs;
+    const result = await new DangerZoneOfflineRecovery({ ...f.options,
+      operator: { ...f.options.operator, uid: 0 }, confirm }, io).run(token, target);
+    expect(result.status).toBe('refused'); expect(confirm).not.toHaveBeenCalled();
+    expect(rename).not.toHaveBeenCalled(); expect(await fs.readFile(f.filename, 'utf8')).toBe(snapshot);
+    expect(await fs.readFile(f.activation, 'utf8')).toBe('ACTIVATION-MUST-NOT-CHANGE');
+  });
+
   it('backs up exact original bytes, preserves bystanders/activation and persists redacted outcome', async () => {
     const f = await fixture(); let displayedCode = '';
     const result = await new DangerZoneOfflineRecovery({ ...f.options, confirm: async proposal => { displayedCode = proposal.code; return proposal.code; } }).run(token, target);
