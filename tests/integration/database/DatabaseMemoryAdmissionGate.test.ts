@@ -1,6 +1,9 @@
 /** Dormant admission authority only; not head eligibility or activation proof. */
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import * as schema from '../../../src/database/schema/index.js';
+import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
 import { MemoryHeadUpdateAdapter } from '../../../src/storage/MemoryHeadUpdateAdapter.js';
 import { DatabaseMemoryAdmissionGate, DATABASE_MEMORY_ADMISSION_PROFILE as profile,
   type DatabaseMemoryAdmissionBinding } from '../../../src/storage/DatabaseMemoryAdmissionGate.js';
@@ -101,12 +104,29 @@ describe('required PostgreSQL dormant DB admission', () => {
     const [{ pid }] = await f.competitor`SELECT pg_backend_pid() AS pid`;
     let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
     let entered!: () => void; const entry = new Promise<void>(resolve => { entered = resolve; });
+    let firstCompleted = false;
     const operation = f.gate.withAdmission(c, async tx => {
       expect(tx).toBeDefined(); entered(); await held; return 'completed';
-    });
+    }).then(result => { firstCompleted = true; return result; });
     await entry;
-    const transition = f.competitor`UPDATE public.memory_backend_modes SET mode='read_only' WHERE user_id=${f.userId}::uuid`.execute();
+    let transition: PromiseLike<unknown> | undefined;
     try {
+      // This is an effective ordinary SET ROLE actor, not a second app login.
+      // The other cases independently prove minimal/broad real app privileges.
+      await f.competitor`SET ROLE ${f.competitor(f.roleName)}`;
+      try {
+        const secondDb = drizzle(f.competitor, { schema });
+        const secondStore = new DatabaseMemoryStorageLayer(secondDb, () => f.userId);
+        const secondAdapter = new MemoryHeadUpdateAdapter({ backend: 'database', store: secondStore }, () => f.userId);
+        const secondGate = new DatabaseMemoryAdmissionGate(secondDb, secondStore, () => ({
+          tenant: f.userId, backend: 'database', db: secondDb, store: secondStore,
+          adapter: secondAdapter, enabled: true, profile,
+        }));
+        const secondCapture = await secondGate.capture();
+        expect(await secondGate.withAdmission(secondCapture, async () => 'concurrent callback')).toBe('concurrent callback');
+        expect(firstCompleted).toBe(false);
+      } finally { await f.competitor`RESET ROLE`; }
+      transition = f.competitor`UPDATE public.memory_backend_modes SET mode='read_only' WHERE user_id=${f.userId}::uuid`.execute();
       let observed = false;
       for (let attempt = 0; attempt < 1000; attempt++) {
         const [{ blocked }] = await f.maintenance`SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks WHERE pid=${pid} AND NOT granted) AS blocked`;
@@ -116,7 +136,7 @@ describe('required PostgreSQL dormant DB admission', () => {
       expect(observed).toBe(true);
       const [row] = await f.maintenance`SELECT mode,generation::text FROM public.memory_backend_modes WHERE user_id=${f.userId}::uuid`;
       expect(row).toMatchObject({ mode: 'guarded', generation: '1' });
-    } finally { release(); await operation; await transition; }
+    } finally { release(); await operation; if (transition) await transition; }
     await expect(f.gate.capture()).rejects.toMatchObject({ code: 'EMEMORYADMISSION' });
     phase('mode-exclusion', 'assertions-complete');
   });

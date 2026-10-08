@@ -114,13 +114,14 @@ export class DatabaseMemoryAdmissionGate {
     if (rows.length !== 1 || rows[0].rolsuper !== false || rows[0].rolbypassrls !== false) refuse();
   }
   private async readMode(tx: DrizzleTx, tenant: string, lock: boolean): Promise<string> {
+    const lockClause = lock ? sql`FOR SHARE` : sql``;
     const rows = await tx.execute(sql`SELECT protocol_version, profile, mode, generation::text AS generation
       FROM public.memory_backend_modes WHERE user_id=${tenant}::uuid AND backend='database'
-      ${lock ? sql`FOR SHARE` : sql``}`);
+      ${lockClause}`);
     if (rows.length !== 1) refuse();
     const row = rows[0];
     if (row.protocol_version !== 1 || row.profile !== DATABASE_MEMORY_ADMISSION_PROFILE || row.mode !== 'guarded' ||
-      typeof row.generation !== 'string' || !/^[1-9][0-9]*$/u.test(row.generation) ||
+      typeof row.generation !== 'string' || !/^[1-9]\d*$/u.test(row.generation) ||
       BigInt(row.generation) > 9223372036854775807n) refuse();
     return row.generation;
   }
