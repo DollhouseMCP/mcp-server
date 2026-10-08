@@ -164,6 +164,17 @@ export class AccountAdminDeletionService {
       throw error;
     }
 
+    return this.buildDeletionResult(userId, occurredAt, deletion, browserSessionsRevoked, oauthGrantsRevoked, runtimeSummary);
+  }
+
+  private buildDeletionResult(
+    userId: string,
+    occurredAt: Date,
+    deletion: PrincipalDeletionOutcome,
+    browserSessionsRevoked: number,
+    oauthGrantsRevoked: number,
+    runtimeSummary: AccountRuntimeTerminationSummary,
+  ): ConsoleHandlerResult {
     const runtimeFailed = runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0;
     const body: AccountDeletionDto = serializeAccountDeletion({
       userId,

@@ -741,8 +741,9 @@ export class CollectionHandler {
     }
 
     private configureCollectionSubmissionBody(autoSubmit: boolean) {
-        // Execute synchronously; the native executor retains rejection for thrown failures.
-        return new Promise<ReturnType<CollectionHandler['configureCollectionSubmissionResult']>>(resolve => resolve(this.configureCollectionSubmissionResult(autoSubmit)));
+        // Evaluate immediately; thrown failures remain rejected Promises.
+        try { return Promise.resolve(this.configureCollectionSubmissionResult(autoSubmit)); }
+        catch (cause) { return Promise.reject(cause); }
     }
 
     private configureCollectionSubmissionResult(autoSubmit: boolean) {
@@ -785,8 +786,9 @@ export class CollectionHandler {
     }
 
     private getCollectionSubmissionConfigBody() {
-        // Execute synchronously; the native executor retains rejection for thrown failures.
-        return new Promise<ReturnType<CollectionHandler['getCollectionSubmissionConfigResult']>>(resolve => resolve(this.getCollectionSubmissionConfigResult()));
+        // Evaluate immediately; thrown failures remain rejected Promises.
+        try { return Promise.resolve(this.getCollectionSubmissionConfigResult()); }
+        catch (cause) { return Promise.reject(cause); }
     }
 
     private getCollectionSubmissionConfigResult() {

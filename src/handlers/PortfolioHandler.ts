@@ -633,7 +633,7 @@ export class PortfolioHandler {
               progress.syncText += `\n🚀 **Starting sync process...**\n\n`;
               
             } catch (error: any) {
-          if (this.boundOperation) throw error;
+              if (this.boundOperation) throw error;
               progress.syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
             }
             
@@ -646,7 +646,7 @@ export class PortfolioHandler {
                   progress.elementCounts[elementType] = elements.length;
                   progress.totalElements += elements.length;
                 } catch (error: any) {
-          if (this.boundOperation) throw error;
+                  if (this.boundOperation) throw error;
 
                   progress.elementCounts[elementType] = 0;
                   logger.warn(`Failed to count ${elementType}`, { error: error.message });
@@ -677,8 +677,8 @@ export class PortfolioHandler {
                 const statusIcon = this.syncTypeStatusIcon(successRate);
                 progress.syncText += `  ${statusIcon} **${elementType} complete**: ${typeProgress.successCount}/${elements.length} synced (${successRate}%)\n\n`;
               } catch (listError: any) {
-          this.assertMemoryOperation();
-          if (this.boundOperation) throw listError;
+                this.assertMemoryOperation();
+                if (this.boundOperation) throw listError;
                 // UX IMPROVEMENT: Better error reporting for list failures
                 const errorMessage = listError.message || 'Failed to get elements list';
                 progress.syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
@@ -697,7 +697,7 @@ export class PortfolioHandler {
                   
                   try {
                     // UX IMPROVEMENT: Show individual element progress
-                    progress.syncText += `  ${position} 🔄 Syncing \"${elementName}\"...`;
+                    progress.syncText += `  ${position} 🔄 Syncing "${elementName}"...`;
                     
                     // Load element and save to portfolio
                     const element = await this.loadElementByType(elementName, elementType);
@@ -718,8 +718,8 @@ export class PortfolioHandler {
                       });
                     }
                   } catch (elementError: any) {
-          this.assertMemoryOperation();
-          if (this.boundOperation) throw elementError;
+                    this.assertMemoryOperation();
+                    if (this.boundOperation) throw elementError;
                     this.appendSyncElementError(progress, elementType, elementName, elementError);
                   }
     }
@@ -812,7 +812,7 @@ export class PortfolioHandler {
                   if (failure.name === 'ALL') {
                     progress.syncText += `  ❌ ${failure.error}\n`;
                   } else {
-                    progress.syncText += `  ❌ \"${failure.name}\": ${failure.error}\n`;
+                    progress.syncText += `  ❌ "${failure.name}": ${failure.error}\n`;
                   }
                 }
                 progress.syncText += `\n`;
@@ -825,7 +825,7 @@ export class PortfolioHandler {
               progress.syncText += `💡 **Troubleshooting Tips**:\n`;
               
               // Check for specific error codes and provide targeted advice
-              const errorCodes = progress.failedElements.map(f => f.error.match(/^([A-Z_]+_\d+):/)?.[1]).filter(Boolean);
+              const errorCodes = progress.failedElements.map(f => /^([A-Z_]+_\d+):/.exec(f.error)?.[1]).filter(Boolean);
               const uniqueErrorCodes = [...new Set(errorCodes)];
               
               if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_001')) {
@@ -1050,7 +1050,7 @@ export class PortfolioHandler {
     private formatPortfolioSearch(query: string, results: Awaited<ReturnType<PortfolioIndexManager['search']>>, elementType: ElementType | undefined, maxResults: number) {
           // Format the results
           let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
-          text += `**Query**: \"${query}\"\n`;
+          text += `**Query**: "${query}"\n`;
 
           if (elementType) {
             text += `**Type Filter**: ${elementType}\n`;
@@ -1209,7 +1209,7 @@ export class PortfolioHandler {
     private formatUnifiedSearch(query: string, results: Awaited<ReturnType<UnifiedIndexManager['search']>>, elementType: ElementType | undefined, sources: string[], page: number, pageSize: number) {
           // Format the results
           let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
-          text += `**Query**: \"${query}\"\n`;
+          text += `**Query**: "${query}"\n`;
           text += `**Sources**: ${sources.join(', ')}
 `;
           
