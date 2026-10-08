@@ -1,6 +1,6 @@
 # Offline single-block DangerZone recovery
 
-This operator tool implements the offline workaround in #2431 and #3000. It removes one explicitly selected block from an existing version1 `blocked-agents.json`; it does not clear activation state, reset all agents, prove an orphan's liveness, stop processes, or implement online recovery. Online recovery remains open under #2431.
+This operator tool implements the offline workaround in #2431 and #3000. It removes one explicitly selected block from an existing version 1 `blocked-agents.json`; it does not clear activation state, reset all agents, prove an orphan's liveness, stop processes, or implement online recovery. Online recovery remains open under #2431.
 
 ## Obtain operational authorization first
 
@@ -12,7 +12,7 @@ Select the actual configured `securityDir`, not a guessed user path. The stdio r
 
 ## Protected operator evidence and credentials
 
-Create a privately owned mode0600 UTF8 JSON evidence file, using the canonical namespace path. Its bounded contents record the actual reviewed observations; values below are examples, not an instruction to assert shutdown without proof:
+Create a privately owned mode 0600 UTF8 JSON evidence file, using the canonical namespace path. Its bounded contents record the actual reviewed observations; values below are examples, not an instruction to assert shutdown without proof:
 
 ```json
 {
@@ -24,7 +24,7 @@ Create a privately owned mode0600 UTF8 JSON evidence file, using the canonical n
 }
 ```
 
-The file is limited to64KiB, with one to100 inventory entries. Protect references containing operational details. The executor checks structure, ownership, mode, exact namespace and unchanged bytes/identity; it does not independently verify the observations.
+The file is limited to 64 KiB, with one to 100 inventory entries. Protect references containing operational details. The executor checks structure, ownership, mode, exact namespace and unchanged bytes/identity; it does not independently verify the observations.
 
 Use the existing configured `DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN` from the selected service's approved credential configuration. Do not mint a replacement token or choose a new value to authorize recovery. Existing host/SSH access and OS ownership/root authority are also prerequisites. The CLI asks for the token without echo; never place it in command arguments, shell history, evidence or audit data. An absent/empty configured token refuses.
 
@@ -43,7 +43,7 @@ Run only from an interactive POSIX operator terminal on a filesystem supporting 
 
 ## Evidence and outcomes
 
-Each attempt creates a unique mode0700 `offline-recovery-<invocation>` directory inside the selected namespace. `audit.jsonl` is mode0600 and records redacted invocation/outcome/operator/proposal digests. The exact original bytes are backed up exclusively as `original.json` mode0600 before replacement. Backup and audit files are **evidence**, not the target to modify. A fully written/synced unique `.blocked-agents-recovery-<invocation>.tmp` is staged in the same directory. The executor revalidates target, evidence, backup, stage and directory identities after the prompt and again immediately before rename. It refuses symlinks, alias paths, multi-linked files, untrusted writable directories/files, corrupt UTF8, unsupported or ambiguous JSON, absent targets and changed snapshots. Unknown bystander metadata is preserved semantically; the replacement uses normal JSON formatting. The backup preserves original bytes exactly.
+Each attempt creates a unique mode 0700 `offline-recovery-<invocation>` directory inside the selected namespace. `audit.jsonl` is mode 0600 and records redacted invocation/outcome/operator/proposal digests. The exact original bytes are backed up exclusively as `original.json` mode 0600 before replacement. Backup and audit files are **evidence**, not the target to modify. A fully written/synced unique `.blocked-agents-recovery-<invocation>.tmp` is staged in the same directory. The executor revalidates target, evidence, backup, stage and directory identities after the prompt and again immediately before rename. It refuses symlinks, alias paths, multi-linked files, untrusted writable directories/files, corrupt UTF8, unsupported or ambiguous JSON, absent targets and changed snapshots. Unknown bystander metadata is preserved semantically; the replacement uses normal JSON formatting. The backup preserves original bytes exactly.
 
 Status is reported without raw error details or credentials:
 

@@ -23,7 +23,7 @@ export function prepareDangerZoneBlockClear(original: string, agentName: string)
   if (Buffer.byteLength(original, 'utf8') > MAX_RECOVERY_BYTES) {
     throw new Error('DangerZone recovery snapshot exceeds the 10 MiB byte limit');
   }
-  if (!agentName || agentName.trim() !== agentName || agentName.length > 256) {
+  if (!agentName?.length || agentName.trim() !== agentName || agentName.length > 256) {
     throw new Error('An exact existing agent name is required');
   }
   const parsed: unknown = JSON.parse(original);

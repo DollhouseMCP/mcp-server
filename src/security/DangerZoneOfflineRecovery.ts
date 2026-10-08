@@ -11,6 +11,7 @@ const LIMIT = 10 * 1024 * 1024;
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 class RecoveryRefusal extends Error {}
 function refuse(): never { throw new RecoveryRefusal('Offline recovery prerequisites are unavailable or changed'); }
+interface RecoveryProgress { renameStarted: boolean; replaced: boolean; verified: boolean }
 interface CapturedFile { readonly bytes: Buffer; readonly identity: Stats; readonly filename: string }
 export interface OfflineRecoveryConfirmation {
   readonly namespace: string; readonly agentName: string; readonly originalSha256: string;
@@ -58,11 +59,13 @@ export class DangerZoneOfflineRecovery {
     try {
       const opened = await handle.stat(); this.requireOwner(opened);
       if (!sameIdentity(named, opened)) refuse();
+      // One extra byte detects growth beyond the bounded snapshot.
       const storage = Buffer.alloc(maximum + 1);
       let offset = 0;
       while (offset < storage.length) {
         const { bytesRead } = await handle.read(storage, offset, storage.length-offset, offset);
-        if (!bytesRead) break; offset += bytesRead;
+        if (!bytesRead) break;
+        offset += bytesRead;
       }
       const bytes = storage.subarray(0, offset);
       if (bytes.length > maximum || !sameIdentity(opened, await handle.stat()) ||
@@ -75,7 +78,10 @@ export class DangerZoneOfflineRecovery {
   }
   private async close(handle: Awaited<ReturnType<typeof fs.open>>, failure?: { cause: unknown }): Promise<void> {
     try { await handle.close(); }
-    catch (cause) { if (failure) throw new AggregateError([failure.cause, cause], 'Recovery I/O and close failed'); throw cause; }
+    catch (cause) {
+      if (failure) throw new AggregateError([failure.cause, cause], 'Recovery I/O and close failed');
+      throw cause;
+    }
     if (failure) throw failure.cause;
   }
   private async unchanged(file: CapturedFile): Promise<void> {
@@ -102,7 +108,8 @@ export class DangerZoneOfflineRecovery {
       let offset = 0;
       while (offset < bytes.length) {
         const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, offset);
-        if (bytesWritten <= 0) refuse(); offset += bytesWritten;
+        if (bytesWritten <= 0) refuse();
+        offset += bytesWritten;
       }
       await handle.sync();
     } catch (cause) { failure = { cause }; }
@@ -122,6 +129,29 @@ export class DangerZoneOfflineRecovery {
     return file;
   }
 
+  private authorized(provided: string): boolean {
+    const expected = this.options.configuredAdminToken;
+    return Boolean(expected && provided && timingSafeEqual(Buffer.from(digest(expected), 'hex'), Buffer.from(digest(provided), 'hex')));
+  }
+  private failureStatus(progress: RecoveryProgress, refused = false): OfflineRecoveryResult['status'] {
+    if (progress.verified) return 'committed-audit-incomplete';
+    if (progress.renameStarted) return 'replacement-unknown';
+    if (refused) return 'refused';
+    return 'failed';
+  }
+  private failureRecord(progress: RecoveryProgress): string {
+    if (progress.replaced) return 'replacement-observed-audit-incomplete';
+    if (progress.renameStarted) return 'replacement-unknown';
+    return 'failed-or-refused';
+  }
+  private async finishAudit(audit: Awaited<ReturnType<typeof fs.open>>, result: OfflineRecoveryResult,
+    progress: RecoveryProgress): Promise<OfflineRecoveryResult> {
+    try { await audit.close(); return result; }
+    catch (cause) {
+      return { ...result, status: this.failureStatus(progress),
+        cause: Object.hasOwn(result, 'cause') ? new AggregateError([result.cause, cause], 'Recovery outcome and audit close failed') : cause };
+    }
+  }
   async run(providedAdminToken: string, agentName: string): Promise<OfflineRecoveryResult> {
     const namespace = path.resolve(this.options.securityDir);
     const parent = await this.directory(namespace);
@@ -132,9 +162,10 @@ export class DangerZoneOfflineRecovery {
     const auditPath = path.join(artifacts, 'audit.jsonl');
     const audit = await this.io.open(auditPath, 'wx', 0o600);
     let backupPath: string | undefined;
-    let renameStarted = false; let replaced = false; let verified = false;
+    const progress: RecoveryProgress = { renameStarted: false, replaced: false, verified: false };
     let binding: Record<string, unknown> = { operatorUid: this.options.operator.uid,
       operatorSha256: digest(this.options.operator.username), namespaceSha256: digest(namespace), agentSha256: digest(agentName) };
+    // Binding is enriched after capture; later records include the approved digests.
     const record = async (outcome: string) => {
       if (!sameIdentity(artifactsIdentity, await this.directory(artifacts))) refuse();
       const named = await this.io.lstat(auditPath);
@@ -143,25 +174,19 @@ export class DangerZoneOfflineRecovery {
       const bytes = Buffer.from(JSON.stringify({ version: 1, invocationId, occurredAt: new Date().toISOString(), outcome, ...binding })+'\n');
       let offset = 0;
       while (offset < bytes.length) {
+        // null advances this descriptor's cursor; iterations depend on bytesWritten.
         const { bytesWritten } = await audit.write(bytes, offset, bytes.length-offset, null);
-        if (bytesWritten <= 0) refuse(); offset += bytesWritten;
+        if (bytesWritten <= 0) refuse();
+        offset += bytesWritten;
       }
       await audit.sync(); await this.syncDirectory(artifacts);
-    };
-    const finish = async (result: OfflineRecoveryResult): Promise<OfflineRecoveryResult> => {
-      try { await audit.close(); return result; }
-      catch (cause) {
-        return { ...result, status: verified ? 'committed-audit-incomplete' : renameStarted ? 'replacement-unknown' : 'failed',
-          cause: Object.hasOwn(result, 'cause') ? new AggregateError([result.cause, cause], 'Recovery outcome and audit close failed') : cause };
-      }
     };
     try {
       await record('requested');
       // Persist the new artifact directory's name in its parent before mutation.
       await this.syncDirectory(namespace);
-      const expected = this.options.configuredAdminToken;
-      if (!expected || !providedAdminToken || !timingSafeEqual(Buffer.from(digest(expected), 'hex'), Buffer.from(digest(providedAdminToken), 'hex'))) {
-        await record('denied'); return await finish({ status: 'refused', invocationId, auditPath });
+      if (!this.authorized(providedAdminToken)) {
+        await record('denied'); return await this.finishAudit(audit, { status: 'refused', invocationId, auditPath }, progress);
       }
       const evidence = await this.evidence(namespace);
       const original = await this.read(path.join(namespace, 'blocked-agents.json'));
@@ -193,19 +218,19 @@ export class DangerZoneOfflineRecovery {
       // External exclusive operational authority covers the final compare/rename gap.
       await this.unchanged(original); await this.unchanged(evidence); await this.unchanged(backup); await this.unchanged(staged);
       if (!sameIdentity(parent, await this.directory(namespace))) refuse();
-      renameStarted = true;
-      await this.io.rename(temp, original.filename); replaced = true;
+      progress.renameStarted = true;
+      await this.io.rename(temp, original.filename); progress.replaced = true;
       const result = await this.read(original.filename);
       if (!sameIdentity(staged.identity, result.identity) || !result.bytes.equals(replacement)) refuse();
-      verified = true;
+      progress.verified = true;
       await this.syncDirectory(namespace);
       await record('completed');
-      return await finish({ status: 'completed', invocationId, auditPath, backupPath });
+      return await this.finishAudit(audit, { status: 'completed', invocationId, auditPath, backupPath }, progress);
     } catch (cause) {
-      const status = verified ? 'committed-audit-incomplete' : renameStarted ? 'replacement-unknown' : cause instanceof RecoveryRefusal ? 'refused' : 'failed';
-      try { await record(replaced ? 'replacement-observed-audit-incomplete' : renameStarted ? 'replacement-unknown' : 'failed-or-refused'); }
+      const status = this.failureStatus(progress, cause instanceof RecoveryRefusal);
+      try { await record(this.failureRecord(progress)); }
       catch { /* Preserve original cause; no claim that a failed audit was delivered. */ }
-      return await finish({ status, invocationId, auditPath, backupPath, cause });
+      return await this.finishAudit(audit, { status, invocationId, auditPath, backupPath, cause }, progress);
     } finally {
       this.challenges.clear();
     }

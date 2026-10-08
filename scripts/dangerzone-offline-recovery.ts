@@ -12,8 +12,8 @@ export async function readRecoveryCredential(): Promise<string> {
   if (!stdin.isTTY || !stderr.isTTY) throw new Error('Interactive operator terminal required');
   stderr.write('Configured DangerZone administrator token (hidden): ');
   const previous = stdin.isRaw;
-  stdin.setRawMode(true); stdin.resume();
   try {
+    stdin.setRawMode(true); stdin.resume();
     return await new Promise<string>((resolve, reject) => {
       const chunks: Buffer[] = []; let length = 0;
       const cleanup = () => { stdin.off('data', receive); stdin.off('end', ended); stdin.off('error', failed); };
@@ -62,8 +62,9 @@ export async function runOfflineRecoveryCli(argv: readonly string[]): Promise<vo
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  runOfflineRecoveryCli(process.argv.slice(2)).catch(() => {
+  try { await runOfflineRecoveryCli(process.argv.slice(2)); }
+  catch {
     stderr.write('Offline recovery did not complete. Preserve evidence and keep writers stopped.\n');
     process.exitCode = 1;
-  });
+  }
 }
