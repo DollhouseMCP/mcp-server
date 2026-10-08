@@ -168,6 +168,7 @@ describe('TieredSafetyService', () => {
       expect(challenge.prompt).toContain('verification code');
       expect(challenge.displayCode).toBeDefined();
       expect(challenge.displayCode).toHaveLength(6);
+      expect(challenge.challengeId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     });
 
     it('should create passphrase challenge', () => {

@@ -35,7 +35,7 @@ import { normalizeMCPAQLElementType } from './types.js';
 import {
   type ExecutingAgentEntry,
   validateRequiredString,
-  validateChallengeIdFormat,
+  validateVerificationChallengeIdFormat,
   VerificationError,
 } from './shared.js';
 import {
@@ -271,7 +271,7 @@ export class GatekeeperHandler {
 
   private validateChallengeId(challengeId: string): void {
     try {
-      validateChallengeIdFormat(challengeId);
+      validateVerificationChallengeIdFormat(challengeId);
     } catch (error) {
       this.deps.verificationMetrics.recordInvalidFormat();
       this.deps.resolveVerificationRateLimiter().recordFailure();
