@@ -17,6 +17,23 @@ function knownIdentity(row: Record<string, unknown> | undefined): boolean {
     typeof row.port === 'number' && Number.isInteger(row.port) && row.port > 0 && row.port <= 65535;
 }
 
+/** Actual connection facts, not URL/hostname inference. Caller owns its transaction. */
+export async function readMemoryDatabaseIdentity(tx: import('../database/db-utils.js').DrizzleTx): Promise<Record<string, unknown>> {
+  const rows = await tx.execute(sql`SELECT pg_catalog.current_database() AS database,
+    (SELECT oid::text FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()) AS oid,
+    pg_catalog.host(pg_catalog.inet_server_addr()) AS address, pg_catalog.inet_server_port() AS port,
+    extract(epoch from pg_catalog.pg_postmaster_start_time())::text AS started`);
+  if (rows.length !== 1 || !knownIdentity(rows[0])) throw new Error('Known memory database identity required');
+  return Object.freeze({ ...rows[0] });
+}
+
+export function assertSameMemoryDatabaseIdentity(application: Record<string, unknown>, system: Record<string, unknown>): void {
+  if (!knownIdentity(application) || !knownIdentity(system) ||
+      !['database', 'oid', 'address', 'port', 'started'].every(key => application[key] === system[key])) {
+    throw new Error('Authoritative memory startup inspection must use the application database');
+  }
+}
+
 export async function requireDatabaseMemoryStartupAdmission(
   appDb: DatabaseInstance, systemDb: DatabaseInstance, hasTrustedComposition: boolean,
 ): Promise<void> {

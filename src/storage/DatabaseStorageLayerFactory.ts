@@ -77,7 +77,8 @@ export class DatabaseStorageLayerFactory implements IStorageLayerFactory {
     const boot = new DatabaseMemoryBootQualification();
     const identity = () => ({ tenant: this.getCurrentUserId(), store: layer, backend: 'database' as const });
     const adapter = new MemoryHeadUpdateAdapter({ backend: 'database', store: layer }, this.getCurrentUserId,
-      () => gate, getAttribution ? () => handoff : undefined);
+      () => gate, getAttribution ? () => handoff : undefined,
+      getAttribution ? (candidate, token) => layer.assertGuardedReadCandidate(candidate.content, token.locator, candidate.name) : undefined);
     gate = new DatabaseMemoryAdmissionGate(this.db, layer, () => ({
       tenant: this.getCurrentUserId(), backend: 'database', db: this.db,
       store: layer, adapter, enabled: getAttribution ? boot.isQualified(identity()) : true, profile: DATABASE_MEMORY_ADMISSION_PROFILE,
@@ -87,6 +88,8 @@ export class DatabaseStorageLayerFactory implements IStorageLayerFactory {
     const manager = new MemoryManager({ ...deps, storageLayerFactory: {
       createForElement: (type, options) => type === ElementType.MEMORY ? layer : this.createForElement(type, options),
     } }, adapter);
+    if (getAttribution) layer.bindGuardedReadFidelity((content, locator, name) =>
+      manager.assertGuardedReadFidelity(content, locator, name));
     return {
       manager,
       close: () => boot.close(),

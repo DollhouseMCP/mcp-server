@@ -57,7 +57,8 @@ export class MemoryHeadUpdateAdapter {
   constructor(private readonly port: MemoryUpdatePort, private readonly getCurrentUserId: () => string,
     /** Trusted dormant composition only; production DI remains unchanged. */
     private readonly resolveDatabaseAdmission?: () => DatabaseMemoryAdmissionGate,
-    private readonly resolveCandidateHandoff?: () => DatabaseMemoryCandidateHandoff) {
+    private readonly resolveCandidateHandoff?: () => DatabaseMemoryCandidateHandoff,
+    private readonly checkReadCandidate?: (candidate: MemoryUpdateCandidate, token: MemoryUpdateToken) => Promise<void>) {
     if (resolveDatabaseAdmission && port.backend !== 'database') throw refusal('Database admission requires database storage');
     if (resolveCandidateHandoff && !resolveDatabaseAdmission) throw refusal('Candidate handoff requires database admission');
   }
@@ -136,6 +137,15 @@ export class MemoryHeadUpdateAdapter {
     if (state.lineage.unresolved) throw refusal('Memory has an unresolved related update');
     let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
+      if (this.checkReadCandidate) {
+        try {
+          await this.checkReadCandidate(captured, originalToken);
+          this.requireTenant(tenant);
+        } catch (cause) {
+          // No handoff or head transaction has been dispatched at this point.
+          return this.recordPending(state, captured, originalToken, { status: 'refused', cause });
+        }
+      }
       if (this.resolveDatabaseAdmission) {
         const handoff = this.resolveCandidateHandoff
           ? await this.prepareCandidateHandoff(state, captured, originalToken) : undefined;
