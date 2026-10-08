@@ -1,0 +1,15 @@
+# Dormant database memory account-deletion refusal
+
+This #2906 / #2998 slice closes the configured account-delete cascade boundary; it does not activate guarded storage or install a production account-deletion boundary.
+
+`DatabaseMemoryAccountDeletionBoundary` is bound to the actual system database. A protected account store, mutation runner and deletion service must all retain the exact same boundary object. Different databases/boundaries or missing assertion capability refuse at construction. Ordinary unconfigured construction remains compatible and explicitly unprotected; it is not an approved fallback for guarded data.
+
+The configured service inspects the target's exact durable database mode before integration credential abandonment, browser/OAuth revocation, runtime commands or deletion. Only protocol 1, `legacy-memory-writes-v1`, `legacy`, and a valid positive generation permit continuing. Missing, corrupt, unsupported, guarded and read-only states refuse. Expected denial uses the existing redacted administrative audit and closed conflict response; unexpected inspection/transport failures preserve their original cause even if refusal auditing fails.
+
+The early inspection transaction settles before existing revocation helpers run. No connection is held while those independent helpers or remote acknowledgements execute, and their ordering is unchanged. This supports the existing pool-size-one configuration without creating a nested acquisition requirement.
+
+The actual privileged deletion transaction repeats that exact mode check under `FOR SHARE`, before user locking, credential purge or destructive DML. Its lock remains through the hard-delete cascade or the RESTRICT tombstone fallback (which directly purges user elements), and through transaction settlement. The protected store/runner supply the trusted actual transaction; the internal helper does not prove the provenance of an arbitrary caller-provided transaction. Ordinary memory-write guard role/context checks remain unchanged.
+
+The released early inspection is **not** a hot-promotion barrier. Migration 0060 forbids protected-to-legacy downgrade. Legacy-to-guarded promotion for this profile still requires qualified cold exclusion of every in-flight account/admin request, process, queued write and privileged/direct writer on every replica. Current socket/session/timer shutdown does not establish this exclusion. That prerequisite and mandatory production composition remain open; this change does not undo revocations if an unqualified hot promotion occurs between the released inspection and the locked deletion check.
+
+Unit controls cover refusal before effects, same-boundary construction, cause preservation, and legacy ordering. Six required disposable PostgreSQL cases cover account/memory preservation, real pool-one legacy hard deletion and RESTRICT fallback, both direct configured callers, mode-transition lock exclusion, and known callback rollback. Hosted assertions and cleanup must complete before merge. No live inspection, migration, mode provisioning, purge, restart or activation is authorized by these tests or this document.
