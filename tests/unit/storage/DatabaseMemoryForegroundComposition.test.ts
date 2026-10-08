@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import type { IStorageLayer } from '../../../src/storage/IStorageLayer.js';
 import type { DatabaseInstance } from '../../../src/database/connection.js';
 import type { ElementManagerDeps } from '../../../src/elements/base/BaseElementManager.js';
 import type { ElementCrudContext } from '../../../src/handlers/element-crud/types.js';
@@ -52,6 +53,12 @@ describe('normal registrar dormant admitted foreground composition', () => {
       : { getCurrentUserId: () => f.deps().getCurrentUserId!() }) };
     expect(() => f.factory.createAdmittedMemoryManager(deps)).toThrow('actual database factory and user resolver');
     expect(create).not.toHaveBeenCalled(); expect(f.transaction).not.toHaveBeenCalled();
+  });
+  it('rejects a non-database virtual memory layer before database access', async () => {
+    const f = await fixture(); f.manager();
+    jest.spyOn(f.factory, 'createForElement').mockReturnValue({} as IStorageLayer);
+    expect(() => f.factory.createAdmittedMemoryManager(f.deps())).toThrow(TypeError);
+    expect(f.transaction).not.toHaveBeenCalled();
   });
   it.each(['edit', 'upgrade', 'upgrade-preview'] as const)('refuses unsupported %s before initialization, discovery or mutation', async operation => {
     const f = await fixture(); const manager = f.manager();

@@ -50,8 +50,9 @@ export class DatabaseStorageLayerFactory implements IStorageLayerFactory {
       fileExtension: '.yaml', scanCooldownMs: getValidatedScanCooldown(),
     });
     if (!(layer instanceof DatabaseMemoryStorageLayer)) {
-      throw new Error('Admitted memory composition requires a database memory layer');
+      throw new TypeError('Admitted memory composition requires a database memory layer');
     }
+    // The adapter resolves this gate only at request time, after construction.
     let gate: DatabaseMemoryAdmissionGate;
     const adapter = new MemoryHeadUpdateAdapter({ backend: 'database', store: layer }, this.getCurrentUserId, () => gate);
     gate = new DatabaseMemoryAdmissionGate(this.db, layer, () => ({
