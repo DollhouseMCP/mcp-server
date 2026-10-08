@@ -33,6 +33,7 @@
 
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
+import { assertSupportedFrontmatterLanguage } from '../security/frontmatterLanguage.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityMonitor, SecurityEvent } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
@@ -659,17 +660,8 @@ export class SerializationService {
     if (options.schema === 'default') {
       throw new Error('Default YAML schema is not supported for frontmatter serialization');
     }
-    // gray-matter chooses a body-declared language before invoking the engine.
-    // Its defaults retain built-in engines, so overriding YAML alone is insufficient.
-    // Match gray-matter's single leading BOM removal before checking its delimiter.
-    const parserContent = content.startsWith('\ufeff') ? content.slice(1) : content;
-    if (parserContent.startsWith('---') && parserContent[3] !== '-') {
-      const language = matter.language(parserContent.slice(3)).name;
-      // gray-matter aliases YAML case-insensitively; its JSON engine uses the exact name.
-      if (language && !['yaml', 'yml'].includes(language.toLowerCase()) && language !== 'json') {
-        throw new Error('Unsupported frontmatter language');
-      }
-    }
+    // Defaults retain executable engines; admission must precede gray-matter's body parse.
+    assertSupportedFrontmatterLanguage(content);
     const yamlEngine = {
       parse: (input: string) => {
         const parsed = this.parsePureYaml(input, { schema: options.schema, validateStructure: false });
