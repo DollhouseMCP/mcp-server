@@ -2,6 +2,11 @@
 
 ## [2.0.43] - Unreleased
 
+- Harden the shipped element file helper with the same nonexecuting frontmatter admission and restricted YAML/JSON serialization used by element managers. Preserve ordinary Markdown/body handling; reject unsupported metadata values before writing.
+- Extract converted ZIP input into a private temporary directory, refuse archive symlinks before extraction, and clean only the owned directory after conversion completes.
+- Serialize overlapping DangerZone persistence operations so an older snapshot cannot overwrite newer retained blocks.
+- Pin the transitive `proxy-addr` override to 2.0.8 and `shell-quote` to 1.11.0. Other dependency audit findings remain subject to the documented release profile assessment.
+
 - Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
 
 - **Behavior change:** permanent memories now default to `onFull: error`. Adding an entry at the 1,000-entry default capacity rejects with an actionable error and preserves existing entries. Set `onFull: evict_oldest` explicitly to retain cache-style eviction; memories with an expiring `retentionDays` policy retain their eviction default. (#2859, #2999)
