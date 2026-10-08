@@ -62,6 +62,7 @@ async function fixture(name: string) {
   await expect(manager.load(f.memoryId)).rejects.toMatchObject({ code: 'EMEMORYADMISSION' });
   await composition.qualify(async identity => { expect(identity.tenant).toBe(f.userId); expect(identity.store).toBe(layer); });
   const legacy = jest.spyOn(layer, 'writeContent'); const ordinary = jest.spyOn(layer, 'writeHeadIfCurrent');
+  const prepare = layer.prepareHeadWriteInAdmission.bind(layer);
   const admitted = jest.spyOn(layer, 'prepareHeadWriteInAdmission');
   const request = new MemorySaveHandler({ memoryManager: manager } as unknown as ConstructorParameters<typeof MemorySaveHandler>[0],
     memoryName => `handoff:${memoryName}`, { getContext: () => ({ type: 'test', timestamp: Date.now(),
@@ -92,21 +93,20 @@ async function fixture(name: string) {
   }
   phase(name, 'fixture-end');
   return { ...f, manager, composition, root, layer, request, consoleStore, service, rows, quota, consoleUpdate,
-    tenant: (next: string) => { tenant = next; }, legacy, ordinary, admitted,
+    tenant: (next: string) => { tenant = next; }, legacy, ordinary, admitted, prepare,
     done: () => { expect(legacy).not.toHaveBeenCalled(); expect(ordinary).not.toHaveBeenCalled(); phase(name, 'assertions-complete'); } };
 }
 
 required('bounded candidate handoff and owning publication on PostgreSQL', () => {
   it('reuses slots beyond 64 successful central saves and completes actual AQL/console tails', async () => {
     const f = await fixture('success-slot-reuse'); const memory = await f.manager.load(f.memoryId);
-    const prepare = f.layer.prepareHeadWriteInAdmission.bind(f.layer);
     f.admitted.mockImplementationOnce(async (...args) => {
       // Independently visible prepared evidence proves the handoff COMMIT
       // preceded this actual conditional-write callback.
       const rows = await f.rows(); expect(rows).toHaveLength(1); expect(rows[0].status).toBe('prepared');
       expect(decodeMemoryCandidate({ bytes: rows[0].envelope, digest: rows[0].digest }))
         .toMatchObject({ name: args[2], content: args[3], metadata: args[4] });
-      return await prepare(...args);
+      return await f.prepare(...args);
     });
     for (let index = 0; index < 65; index++) {
       await memory.addEntry(`Known successful save ${index}`); await memory.save();
