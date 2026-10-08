@@ -129,7 +129,12 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
     expect(await f.snapshot()).toEqual(before); const rows = await f.rows(); expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe('prepared'); expect(rows[0].committed_token).toBeNull();
     const candidate = decodeMemoryCandidate({ bytes: rows[0].envelope, digest: rows[0].digest });
-    expect(candidate.content).toContain('Exact refused multibyte candidate λ🦋');
+    // Memory admission validates/normalizes the entry before serializing it.
+    // Durable evidence must equal the actual complete CAS argument, not raw input.
+    expect(f.admitted).toHaveBeenCalledTimes(1);
+    const submitted = f.admitted.mock.calls[0];
+    expect({ name: candidate.name, content: candidate.content, metadata: candidate.metadata })
+      .toStrictEqual({ name: submitted[2], content: submitted[3], metadata: submitted[4] });
     expect(f.manager.getPendingHeadUpdate(memory)?.candidate).toMatchObject({ name: candidate.name, content: candidate.content, metadata: candidate.metadata });
     await withUserContext(f.db, f.userId, async tx => {
       expect(await tx.execute(sql`DELETE FROM public.memory_candidate_handoffs WHERE user_id=${f.userId}::uuid`)).toHaveLength(0);
@@ -147,7 +152,10 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
       .rejects.toThrow();
     await f.maintenance`DELETE FROM public.memory_candidate_quotas WHERE user_id=${f.userId}::uuid`;
     const memory = await f.manager.load(f.memoryId); await memory.addEntry('Unaccepted missing quota');
-    await expect(memory.save()).rejects.toThrow('quota'); expect(f.admitted).not.toHaveBeenCalled();
+    await expect(memory.save()).rejects.toMatchObject({ cause: {
+      code: '23514', message: 'Candidate handoff quota is unavailable'
+    } });
+    expect(f.admitted).not.toHaveBeenCalled();
     expect(await f.rows()).toHaveLength(0); expect(await f.snapshot()).toEqual(before); f.done();
   });
 
@@ -174,7 +182,9 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
       content: 'Exact bounded retained copy', metadata: { author: 'test', version: '1', description: '', tags: [],
         extension: { undefinedValue: undefined, unicode: 'λ\ud800' } } });
     await expect(withUserContext(f.db, f.userId, tx => tx.execute(sql`UPDATE public.memory_candidate_handoffs
-      SET envelope=${Buffer.from('substitution')} WHERE id=${rows[0].id}::uuid`))).rejects.toThrow('immutable');
+      SET envelope=${Buffer.from('substitution')} WHERE id=${rows[0].id}::uuid`))).rejects.toMatchObject({ cause: {
+        code: '23514', message: 'Candidate handoff evidence is immutable'
+      } });
     await expect(withUserContext(f.db, f.userId, tx => tx.execute(sql`UPDATE public.memory_candidate_handoffs
       SET status='published' WHERE id=${rows[0].id}::uuid`))).rejects.toThrow();
     await withUserContext(f.db, f.foreignUserId, async tx => {
