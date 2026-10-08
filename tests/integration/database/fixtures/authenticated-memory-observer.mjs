@@ -26,7 +26,7 @@ function invalidate(record) {
   record.release();
 }
 function requireActive(record) {
-  if (!record || !record.active || !process.connected) throw new Error('Live child-local invocation handle required');
+  if (!record?.active || !process.connected) throw new Error('Live child-local invocation handle required');
   record.provider.assertOperation(record.operation);
 }
 const originalResolve = TenantMemoryOperationProvider.prototype.resolve;
@@ -36,16 +36,15 @@ TenantMemoryOperationProvider.prototype.resolve = function (capture) {
   const original = Reflect.apply(originalResolve, this, [capture]);
   if (!armed || context?.session?.transport !== 'http' || context.metadata?.toolName !== 'mcp_aql_read') return original;
   armed = false;
-  const provider = this;
   return original.then(async operation => {
     // This observer delays only the genuine resolve return; the original
     // request is STILL awaiting inside its original ContextTracker scope.
-    provider.assertOperation(operation);
+    this.assertOperation(operation);
     if (!Object.isFrozen(context.session)) throw new Error('Expected server-created frozen session');
     const handle = randomUUID();
     let release;
     const held = new Promise(resolve => { release = resolve; });
-    const record = { handle, active: true, busy: false, provider, operation, tracker, context, release, memory: undefined };
+    const record = { handle, active: true, busy: false, provider: this, operation, tracker, context, release, memory: undefined };
     handles.set(handle, record);
     if (!managerIds.has(operation.manager)) managerIds.set(operation.manager, randomUUID());
     send({ event: 'invocation-held', handle, manager: managerIds.get(operation.manager),
@@ -65,7 +64,7 @@ DollhouseContainer.prototype.createServerForHttpSession = function (session) {
   return result.then(attachment => {
     const dispose = attachment.dispose;
     attachment.dispose = function (...args) {
-      for (const record of [...handles.values()]) {
+      for (const record of handles.values()) {
         if (record.context.session.sessionId === session.sessionId) invalidate(record);
       }
       return Reflect.apply(dispose, this, args);
@@ -85,7 +84,7 @@ async function command(message) {
   if (message.command === 'arm') { armed = true; return { armed: true }; }
   if (message.command === 'stats') return { active: handles.size, rootMemoryResolutions, rootMemoryAttempts };
   const record = handles.get(message.handle);
-  if (!record || !record.active) throw new Error('Live child-local invocation handle required');
+  if (!record?.active) throw new Error('Live child-local invocation handle required');
   if (record.busy) throw new Error('An internal command still owns this live invocation');
   if (message.command === 'release') { invalidate(record); return { released: true }; }
   record.busy = true;
@@ -130,9 +129,9 @@ process.on('message', message => {
   command(message).then(result => send({ id: message.id, result }), cause => send({ id: message.id, error: serializeError(cause) }));
 });
 process.once('disconnect', () => {
-  for (const record of [...handles.values()]) invalidate(record);
+  for (const record of handles.values()) invalidate(record);
 });
 process.once('exit', () => {
-  for (const record of [...handles.values()]) invalidate(record);
+  for (const record of handles.values()) invalidate(record);
 });
 send({ event: 'observer-ready' });

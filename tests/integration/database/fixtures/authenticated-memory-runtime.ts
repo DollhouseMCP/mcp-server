@@ -145,7 +145,10 @@ export class CompiledMemoryRuntime {
       await Promise.race([termination, new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('Owned SDK termination remained unsettled after transport close')), 5000);
       })]).catch(cause => { causes.push(cause); });
-    } finally { if (timer) clearTimeout(timer); this.transports.delete(client); }
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.transports.delete(client);
+    }
     if (causes.length === 1) throw causes[0];
     if (causes.length) throw new AggregateError(causes, 'Owned SDK termination and transport close failed');
   }

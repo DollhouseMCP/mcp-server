@@ -250,9 +250,7 @@ export class PortfolioPullHandler {
       }
       
       // Discover the entire mutation set before launching any partial write.
-      for (const action of [...syncActions.toAdd, ...syncActions.toUpdate, ...syncActions.toDelete]) {
-        this.assertMutationType(action.type);
-      }
+      this.assertPullMutationTypes(syncActions);
       if (this.memoryOperation) {
         await this.portfolioManager.initialize();
         this.assertMemoryOperation();
@@ -277,6 +275,12 @@ export class PortfolioPullHandler {
           text: `${personaIndicator}❌ Failed to pull portfolio: ${error instanceof Error ? error.message : String(error)}`
         }]
       };
+    }
+  }
+
+  private assertPullMutationTypes(syncActions: SyncActions): void {
+    for (const action of [...syncActions.toAdd, ...syncActions.toUpdate, ...syncActions.toDelete]) {
+      this.assertMutationType(action.type);
     }
   }
 
