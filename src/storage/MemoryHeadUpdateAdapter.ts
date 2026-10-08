@@ -2,6 +2,8 @@
 import type { IMemoryHeadStore, MemoryHeadToken } from './IMemoryHeadStore.js';
 import type { FileMemoryOwnerSnapshots, OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
 import type { ElementWriteMetadata } from './IStorageLayer.js';
+import type { DatabaseMemoryAdmission, DatabaseMemoryAdmissionGate } from './DatabaseMemoryAdmissionGate.js';
+import type { DatabaseMemoryStorageLayer } from './DatabaseMemoryStorageLayer.js';
 
 export type MemoryUpdateToken = MemoryHeadToken | OwnedFileMemoryToken;
 export type MemoryUpdateSnapshot = { readonly content: string; readonly token: MemoryUpdateToken };
@@ -19,7 +21,9 @@ export interface PendingMemoryUpdate {
   readonly cause: unknown;
   readonly committedToken?: MemoryUpdateToken;
 }
+interface BoundAdmission { readonly gate: DatabaseMemoryAdmissionGate; readonly capture: DatabaseMemoryAdmission }
 interface BoundState {
+  admission?: BoundAdmission;
   token: MemoryUpdateToken;
   name: string;
   contextRoot: string;
@@ -30,7 +34,7 @@ interface BoundState {
 }
 export type MemoryUpdateOutcome = { status: 'committed'; token: MemoryUpdateToken; cause?: unknown } |
   { status: 'refused' | 'unknown'; cause: unknown };
-const refusalCodes = new Set(['ESTALE', 'EHEADOUTOFSYNC', 'EHEADCONFLICT', 'EINVALIDHEAD', 'EHEADRESOURCE']);
+const refusalCodes = new Set(['ESTALE', 'EHEADOUTOFSYNC', 'EHEADCONFLICT', 'EINVALIDHEAD', 'EHEADRESOURCE', 'EMEMORYADMISSION']);
 function refusal(message: string): Error {
   return Object.assign(new Error(message), { code: 'EHEADCONFLICT' });
 }
@@ -45,7 +49,12 @@ function copyCandidate(candidate: MemoryUpdateCandidate): MemoryUpdateCandidate 
 }
 export class MemoryHeadUpdateAdapter {
   private readonly bindings = new WeakMap<object, BoundState>();
-  constructor(private readonly port: MemoryUpdatePort, private readonly getCurrentUserId: () => string) {}
+  private readonly snapshotAdmissions = new WeakMap<MemoryUpdateSnapshot, BoundAdmission>();
+  constructor(private readonly port: MemoryUpdatePort, private readonly getCurrentUserId: () => string,
+    /** Trusted dormant composition only; production DI remains unchanged. */
+    private readonly resolveDatabaseAdmission?: () => DatabaseMemoryAdmissionGate) {
+    if (resolveDatabaseAdmission && port.backend !== 'database') throw refusal('Database admission requires database storage');
+  }
   /** Internal composition identity check; exposes no backend port or token. */
   matchesDatabaseStore(store: IMemoryHeadStore): boolean {
     return this.port.backend === 'database' && this.port.store === store;
@@ -60,18 +69,26 @@ export class MemoryHeadUpdateAdapter {
   }
   async readBoundSnapshot(locator: string, tenant: string, tenantRoot: string): Promise<MemoryUpdateSnapshot> {
     this.requireTenant(tenant);
+    const gate = this.resolveDatabaseAdmission?.();
+    if (this.resolveDatabaseAdmission && !gate) throw refusal('Database admission is unavailable');
+    const admission = gate && { gate, capture: await gate.capture() };
     const snapshot = await this.port.store.readHeadSnapshot(locator);
     this.requireTenant(tenant);
     if (snapshot.token.backend !== this.port.backend || snapshot.token.userId !== tenant ||
       snapshot.token.locator !== locator || ('tenantRoot' in snapshot.token && snapshot.token.tenantRoot !== tenantRoot) || ('ownership' in snapshot.token && snapshot.token.ownership !== 'owned')) {
       throw refusal('Existing owned memory snapshot required');
     }
-    return Object.freeze({ content: snapshot.content, token: copyToken(snapshot.token as MemoryUpdateToken) });
+    const bound = Object.freeze({ content: snapshot.content, token: copyToken(snapshot.token as MemoryUpdateToken) });
+    if (admission) this.snapshotAdmissions.set(bound, admission);
+    return bound;
   }
   bindLoaded(memory: object, snapshot: MemoryUpdateSnapshot, name: string, contextRoot: string): void {
     this.requireTenant(snapshot.token.userId);
     if ('name' in snapshot.token && snapshot.token.name !== name) throw refusal('Memory name does not match its owner snapshot');
-    this.bindings.set(memory, { token: copyToken(snapshot.token), name, contextRoot, busy: false, unknown: false, lineage: { unresolved: false } });
+    const admission = this.snapshotAdmissions.get(snapshot);
+    if (this.resolveDatabaseAdmission && !admission) throw refusal('Memory has no captured database admission');
+    this.bindings.set(memory, { token: copyToken(snapshot.token), name, contextRoot, busy: false, unknown: false,
+      lineage: { unresolved: false }, ...(admission ? { admission } : {}) });
   }
   /** Internal manager derivation: no refreshed read and no advancement of source authority. */
   deriveBinding(source: object, candidate: object, tenant: string, locator: string | undefined, name: string, contextRoot: string): void {
@@ -107,12 +124,37 @@ export class MemoryHeadUpdateAdapter {
     const originalToken = state.token;
     this.requireTenant(tenant);
     if (state.lineage.unresolved) throw refusal('Memory has an unresolved related update');
+    let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
+      if (this.resolveDatabaseAdmission) {
+        const admission = state.admission;
+        if (!admission || this.resolveDatabaseAdmission() !== admission.gate || this.port.backend !== 'database') {
+          throw refusal('Original database admission gate required');
+        }
+        const store = this.port.store as DatabaseMemoryStorageLayer;
+        const outcome = await admission.gate.withAdmittedWrite(admission.capture, async authority => {
+          const prepared = await store.prepareHeadWriteInAdmission(authority,
+            originalToken as MemoryHeadToken, captured.name, captured.content, captured.metadata);
+          // An invalid prospective receipt must roll back, never become a committed token.
+          this.validateReceipt(prepared.token, originalToken);
+          return prepared;
+        });
+        if (outcome.status !== 'committed') return this.recordPending(state, captured, originalToken, outcome);
+        committed = this.recordCommit(state, outcome.value.token, originalToken);
+        this.requireTenant(tenant);
+        outcome.value.publish();
+        return committed;
+      }
       const token = this.port.backend === 'database'
         ? await this.port.store.writeHeadIfCurrent(originalToken as MemoryHeadToken, captured.name, captured.content, captured.metadata)
         : await this.port.store.updateOwnedHead(originalToken as OwnedFileMemoryToken, captured.content);
       return this.recordCommit(state, token, originalToken);
     } catch (cause) {
+      if (committed) {
+        state.pending = Object.freeze({ status: 'committed-publication-failed', candidate: captured,
+          originalToken, committedToken: state.token, cause });
+        return { ...committed, cause };
+      }
       const error = cause as { committed?: boolean; token?: MemoryUpdateToken; code?: string; residual?: boolean } | null;
       if (this.port.backend === 'file' && error?.committed === true && error.token) {
         const outcome = this.recordCommit(state, error.token, originalToken);
@@ -127,9 +169,19 @@ export class MemoryHeadUpdateAdapter {
       return { status, cause };
     }
   }
-  private recordCommit(state: BoundState, token: MemoryUpdateToken, original: MemoryUpdateToken): { status: 'committed'; token: MemoryUpdateToken } {
+  private recordPending(state: BoundState, captured: MemoryUpdateCandidate, originalToken: MemoryUpdateToken,
+    outcome: { status: 'refused' | 'unknown'; cause: unknown }): MemoryUpdateOutcome {
+    state.unknown = outcome.status === 'unknown';
+    if (state.unknown) state.lineage.unresolved = true;
+    state.pending = Object.freeze({ ...outcome, candidate: captured, originalToken });
+    return outcome;
+  }
+  private validateReceipt(token: MemoryUpdateToken, original: MemoryUpdateToken): void {
     if (token.backend !== original.backend || token.userId !== original.userId || token.ownerId !== original.ownerId ||
       token.locator !== original.locator || token.revision === original.revision) throw new Error('Invalid committed memory receipt');
+  }
+  private recordCommit(state: BoundState, token: MemoryUpdateToken, original: MemoryUpdateToken): { status: 'committed'; token: MemoryUpdateToken } {
+    this.validateReceipt(token, original);
     state.token = copyToken(token);
     state.pending = undefined;
     state.unknown = false;

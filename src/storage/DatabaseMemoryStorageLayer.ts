@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { eq, and, gt, lt, sql, desc, inArray, arrayOverlaps } from 'drizzle-orm';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
+import { requireDatabaseMemoryWriteAuthority, requireDatabaseMemoryCommittedWriteAuthority, type DatabaseMemoryWriteAuthority } from './DatabaseMemoryAdmissionGate.js';
 import { elements } from '../database/schema/elements.js';
 import { memoryEntries } from '../database/schema/memories.js';
 import type { UserIdResolver } from '../database/UserContext.js';
@@ -80,6 +81,12 @@ export interface MemoryEntryQueryOptions {
 }
 
 // ── Implementation ──────────────────────────────────────────────────
+
+/** Internal prospective write; neither its token nor publication proves COMMIT. */
+export interface PreparedDatabaseMemoryHeadWrite {
+  readonly token: MemoryHeadToken;
+  readonly publish: () => void;
+}
 
 export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer implements IMemoryHeadStore {
   constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver) {
@@ -208,24 +215,57 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       result = await this.persistMemoryContent(userId, nextName, content, inputMetadata, undefined, {
         token, revision,
       });
-    } catch (cause) {
-      if (isSerializationFailure(cause)) {
-        // PostgreSQL rolled back the whole transaction. The caller must
-        // retain its unsaved head and reread before deciding to retry.
-        const error = new Error('Memory head save conflicted; keep the pending changes and reload before retrying',
-          { cause }) as NodeJS.ErrnoException;
-        error.code = 'EHEADCONFLICT';
-        throw error;
-      }
-      if (CANDIDATE_VALUE_SQLSTATES.has(getErrorCode(cause) ?? '')) {
-        throw this.createInvalidHeadError('Memory head has an unsupported field value; check length, date, and text encoding', cause);
-      }
-      throw cause;
-    }
+    } catch (cause) { throw this.headWriteFailure(cause); }
     return {
       backend: 'database', userId, ownerId: result.id, locator: result.id,
       name: nextName, revision: result.revision!.toString(),
     };
+  }
+
+  private headWriteFailure(cause: unknown): unknown {
+      if (isSerializationFailure(cause)) {
+        // Retain the attempt. Admitted callers still await outer transaction
+        // completion before deciding whether rollback is known or uncertain.
+        const error = new Error('Memory head save conflicted; keep the pending changes and reload before retrying',
+          { cause }) as NodeJS.ErrnoException;
+        error.code = 'EHEADCONFLICT';
+        return error;
+      }
+      if (CANDIDATE_VALUE_SQLSTATES.has(getErrorCode(cause) ?? '')) {
+        return this.createInvalidHeadError('Memory head has an unsupported field value; check length, date, and text encoding', cause);
+      }
+      return cause;
+  }
+
+  /** Dormant internal seam: all parent/tag/child writes use the gate-owned transaction. */
+  async prepareHeadWriteInAdmission(
+    authority: DatabaseMemoryWriteAuthority, expected: MemoryHeadToken, nextName: string,
+    content: string, metadata: ElementWriteMetadata,
+  ): Promise<PreparedDatabaseMemoryHeadWrite> {
+    const userId = this.userId;
+    const tx = requireDatabaseMemoryWriteAuthority(authority, this, userId);
+    const token = { ...expected };
+    const revision = this.parseExpectedRevision(token, userId);
+    if (nextName !== token.name) throw this.createStaleWriteError(nextName, token.ownerId);
+    if (typeof content !== 'string' || !content.trim()) {
+      throw this.createInvalidHeadError('Memory head YAML must be non-empty');
+    }
+    const inputMetadata = { ...metadata, tags: [...metadata.tags] };
+    const expectedHead = { token, revision };
+    const prepared = this.prepareMemoryContent(userId, nextName, content, inputMetadata, undefined, expectedHead);
+    let saved: { id: string; revision?: bigint };
+    try { saved = await prepared.write(tx); }
+    catch (cause) { throw this.headWriteFailure(cause); }
+    // This value is prospective until the enclosing admitted transaction resolves.
+    const prospective = Object.freeze({ backend: 'database' as const, userId, ownerId: saved.id,
+      locator: saved.id, name: nextName, revision: saved.revision!.toString() });
+    let published = false;
+    return Object.freeze({ token: prospective, publish: () => {
+      requireDatabaseMemoryCommittedWriteAuthority(authority, this, this.userId);
+      if (published) throw new Error('Memory write publication was already attempted');
+      published = true;
+      this.publishMemoryContent(userId, prepared.elementName, saved, expectedHead);
+    } });
   }
 
   async writeContent(
@@ -246,13 +286,19 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
   }
 
   private async persistMemoryContent(
-    userId: string,
-    name: string,
-    content: string,
-    metadata: ElementWriteMetadata,
-    options?: WriteContentOptions,
-    expectedHead?: ExpectedHeadWrite,
+    userId: string, name: string, content: string, metadata: ElementWriteMetadata,
+    options?: WriteContentOptions, expectedHead?: ExpectedHeadWrite,
   ): Promise<{ id: string; revision?: bigint }> {
+    const prepared = this.prepareMemoryContent(userId, name, content, metadata, options, expectedHead);
+    const saved = await withUserContext(this.db, userId, prepared.write);
+    this.publishMemoryContent(userId, prepared.elementName, saved, expectedHead);
+    return saved;
+  }
+
+  private prepareMemoryContent(
+    userId: string, name: string, content: string, metadata: ElementWriteMetadata,
+    options?: WriteContentOptions, expectedHead?: ExpectedHeadWrite,
+  ) {
     const extracted = MemoryMetadataExtractor.extractMetadata(content, name);
     const contentHash = createHash('sha256').update(content, 'utf8').digest('hex');
     const byteSize = Buffer.byteLength(content, 'utf8');
@@ -260,7 +306,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     // Use the caller-provided name as authoritative, falling back to extracted
     const elementName = name || extracted.name || 'unnamed';
 
-    const saved = await withUserContext(this.db, userId, async (tx) => {
+    const write = async (tx: DrizzleTx): Promise<{ id: string; revision?: bigint }> => {
       // Build the column values once; both insert and upsert-SET reuse the
       // same object so adding a column is a one-line change, not two.
       const values = {
@@ -306,7 +352,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       if (!expectedHead) return { id: row.id };
       // Tag and child-entry triggers advance the revision after the parent UPDATE.
       // Read the final value inside this transaction, then return it only once
-      // withUserContext has committed the whole head, tags, and entries.
+      // the enclosing transaction has committed the whole head, tags, and entries.
       const revisionRows = await tx
         .select({ revision: elements.storageRevision })
         .from(elements)
@@ -317,7 +363,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
         throw this.createStaleWriteError(elementName, row.id);
       }
       return { id: row.id, revision };
-    });
+    };
+    return { elementName, write };
+  }
+
+  private publishMemoryContent(userId: string, elementName: string,
+    saved: { id: string; revision?: bigint }, expectedHead?: ExpectedHeadWrite): void {
 
     if (expectedHead && expectedHead.token.name !== elementName) {
       this.removeIndexById(saved.id, userId);
@@ -328,7 +379,6 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
       `Memory persisted to database: ${elementName}`,
       { elementId: saved.id, name: elementName });
 
-    return saved;
   }
 
   private async writeElementRow(
