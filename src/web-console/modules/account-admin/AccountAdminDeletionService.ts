@@ -1,3 +1,5 @@
+import type { DatabaseMemoryAccountDeletionBoundary } from '../../../storage/DatabaseMemoryAccountDeletionBoundary.js';
+import { DatabaseMemoryLegacyPermissionError } from '../../../storage/DatabaseMemoryLegacyMutationGuard.js';
 import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
 import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
@@ -18,6 +20,7 @@ const INTEGRATION_CREDENTIAL_CLEANUP_OVERRIDE = 'abandon_unrevoked_provider_cred
 
 export interface AccountAdminDeletionServiceOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary;
   readonly sessionStore: IConsoleSessionStore;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
@@ -33,7 +36,15 @@ export interface AccountAdminDeletionServiceOptions {
  * scrubbed to a PII-free tombstone that anchors the tamper-evident audit chain.
  */
 export class AccountAdminDeletionService {
-  constructor(private readonly options: AccountAdminDeletionServiceOptions) {}
+  constructor(private readonly options: AccountAdminDeletionServiceOptions) {
+    if (options.memoryDeletionBoundary) {
+      if (!options.accountAdminStore.requireMemoryDeletionBoundary || !options.transactionRunner.requireMemoryDeletionBoundary) {
+        throw new Error('Protected account deletion requires matching store and transaction runner boundaries');
+      }
+      options.accountAdminStore.requireMemoryDeletionBoundary(options.memoryDeletionBoundary);
+      options.transactionRunner.requireMemoryDeletionBoundary(options.memoryDeletionBoundary);
+    }
+  }
 
   async deletePrincipal(
     req: ConsoleRequest,
@@ -67,6 +78,15 @@ export class AccountAdminDeletionService {
         'Validation failed',
         'Deleting this principal would leave zero enabled account administrators.',
       );
+    }
+    try {
+      await this.options.memoryDeletionBoundary?.checkBeforeAuthMutation(userId);
+    } catch (cause) {
+      // A failed refusal audit must not replace the original check/transport cause.
+      try { await this.writeAttemptAudit(req, route, cause instanceof DatabaseMemoryLegacyPermissionError ? 'rejected' : 'failed', 'memory_deletion_unavailable', userId, {}); }
+      catch { throw cause; }
+      if (!(cause instanceof DatabaseMemoryLegacyPermissionError)) throw cause;
+      return problem(409, 'memory_deletion_unavailable', 'Conflict', 'Account deletion is unavailable for this memory storage mode.');
     }
     const cleanupPreparation = await this.prepareIntegrationCredentialDeletion(req, route, userId);
     if (cleanupPreparation.blockedResult) return cleanupPreparation.blockedResult;

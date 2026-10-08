@@ -11,8 +11,23 @@ import type { DatabaseMemoryStorageLayer } from './DatabaseMemoryStorageLayer.js
 
 export const DATABASE_MEMORY_LEGACY_PROFILE = 'legacy-memory-writes-v1';
 
-function refuse(): never {
-  throw Object.assign(new Error('Explicit database memory legacy permission required'), { code: 'EMEMORYLEGACYDENIED' });
+export class DatabaseMemoryLegacyPermissionError extends Error {
+  readonly code = 'EMEMORYLEGACYDENIED';
+  constructor() { super('Explicit database memory legacy permission required'); }
+}
+
+function refuse(): never { throw new DatabaseMemoryLegacyPermissionError(); }
+
+/** Internal mode check only; callers separately establish DB, role and transaction provenance. */
+export async function requireDatabaseMemoryLegacyMode(tx: DrizzleTx, tenant: string): Promise<void> {
+  try { validateUserId(tenant); } catch { refuse(); }
+  const rows = await tx.execute(sql`SELECT protocol_version, profile, mode, generation::text AS generation
+    FROM public.memory_backend_modes WHERE user_id=${tenant}::uuid AND backend='database' FOR SHARE`);
+  if (rows.length !== 1) refuse();
+  const row = rows[0];
+  if (row.protocol_version !== 1 || row.profile !== DATABASE_MEMORY_LEGACY_PROFILE || row.mode !== 'legacy') refuse();
+  if (typeof row.generation !== 'string' || !/^[1-9]\d*$/u.test(row.generation) ||
+    BigInt(row.generation) > 9223372036854775807n) refuse();
 }
 
 export class DatabaseMemoryLegacyMutationGuard {
@@ -29,13 +44,7 @@ export class DatabaseMemoryLegacyMutationGuard {
     const roles = await tx.execute(sql`SELECT rolsuper, rolbypassrls FROM pg_catalog.pg_roles WHERE rolname=current_user`);
     if (roles.length !== 1 || roles[0].rolsuper !== false || roles[0].rolbypassrls !== false) refuse();
     this.requireContext(store, tenant);
-    const rows = await tx.execute(sql`SELECT protocol_version, profile, mode, generation::text AS generation
-      FROM public.memory_backend_modes WHERE user_id=${tenant}::uuid AND backend='database' FOR SHARE`);
-    if (rows.length !== 1) refuse();
-    const row = rows[0];
-    if (row.protocol_version !== 1 || row.profile !== DATABASE_MEMORY_LEGACY_PROFILE || row.mode !== 'legacy') refuse();
-    if (typeof row.generation !== 'string' || !/^[1-9]\d*$/u.test(row.generation) ||
-      BigInt(row.generation) > 9223372036854775807n) refuse();
+    await requireDatabaseMemoryLegacyMode(tx, tenant);
     this.requireContext(store, tenant);
   }
 
