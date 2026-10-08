@@ -47,6 +47,9 @@ export class DatabaseTenantMemoryRegistry {
   /** Recheck an existing trusted slot without a new selection or asynchronous work. */
   assertCurrent(capture: TenantMemoryCapture): void { this.requireCapture(capture); }
 
+  /** Existing authentic selection only; this grants no new selection or boot authority. */
+  getCapturedTenant(capture: TenantMemoryCapture): string { return this.requireCapture(capture).tenant; }
+
   /** Capture trusted effective context synchronously; the opaque slot is not a tenant selector. */
   capture(): TenantMemoryCapture {
     try { return this.captureBound(); }

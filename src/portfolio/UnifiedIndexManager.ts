@@ -249,6 +249,8 @@ export interface UnifiedIndexStats {
 }
 
 export interface UnifiedIndexManagerDependencies {
+  /** Trusted invocation-bound view only; ordinary callers omit. */
+  assertCurrent?: () => void;
   portfolioIndexManager: PortfolioIndexManager;
   githubIndexer: GitHubPortfolioIndexer;
   collectionIndexCache: CollectionIndexCache;
@@ -262,6 +264,7 @@ export interface UnifiedIndexManagerDependencies {
 }
 
 export class UnifiedIndexManager {
+  private readonly assertCurrent?: () => void;
   private localIndexManager: PortfolioIndexManager;
   private githubIndexer: GitHubPortfolioIndexer;
   private collectionIndexCache: CollectionIndexCache;
@@ -308,6 +311,8 @@ export class UnifiedIndexManager {
   }> = new Map();
 
   constructor(dependencies: UnifiedIndexManagerDependencies) {
+    this.assertCurrent = dependencies.assertCurrent;
+    this.assertCurrent?.();
     this.localIndexManager = dependencies.portfolioIndexManager;
     this.ownsLocalIndexManager = false;
     this.githubIndexer = dependencies.githubIndexer;
@@ -365,6 +370,7 @@ export class UnifiedIndexManager {
    * - includeAll option forces search of all sources for comprehensive results
    */
   public async search(searchOptions: UnifiedSearchOptions): Promise<UnifiedSearchResult[]> {
+    this.assertCurrent?.();
     const startTime = Date.now();
     const memoryBefore = process.memoryUsage().heapUsed;
 
@@ -378,6 +384,7 @@ export class UnifiedIndexManager {
 
     // Check cache first
     const cachedResult = await this.checkSearchCache(normalizedOptions, startTime, memoryBefore);
+    this.assertCurrent?.();
     if (cachedResult) {
       return cachedResult;
     }
@@ -385,7 +392,9 @@ export class UnifiedIndexManager {
     try {
       // Handle streaming search separately
       if (normalizedOptions.streamResults) {
-        return await this.streamSearch(normalizedOptions);
+        const streamed = await this.streamSearch(normalizedOptions);
+        this.assertCurrent?.();
+        return streamed;
       }
 
       // Perform priority-based search
@@ -401,10 +410,12 @@ export class UnifiedIndexManager {
         enabledSources
       );
 
+      this.assertCurrent?.();
       return finalResults;
 
     } catch (error) {
       const duration = Date.now() - startTime;
+      if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.search', error, { query: normalizedOptions, duration });
       throw ErrorHandler.wrapError(error, 'Failed to perform unified portfolio search', ErrorCategory.SYSTEM_ERROR);
     }
@@ -564,6 +575,8 @@ export class UnifiedIndexManager {
         }
       }
     } catch (error) {
+      this.assertCurrent?.();
+      if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
       const shouldFallback = this.sourcePriorityConfig.fallbackOnError;
 
       if (shouldFallback) {
@@ -649,6 +662,7 @@ export class UnifiedIndexManager {
    * Find element by name across all portfolios
    */
   public async findByName(name: string, options: Partial<UnifiedSearchOptions> = {}): Promise<UnifiedIndexEntry | null> {
+    this.assertCurrent?.();
     try {
       const searchOptions: UnifiedSearchOptions = {
         query: name,
@@ -660,6 +674,7 @@ export class UnifiedIndexManager {
       };
       
       const results = await this.search(searchOptions);
+      this.assertCurrent?.();
       
       // Return exact name match first, then best match
       const exactMatch = results.find(result => 
@@ -669,6 +684,7 @@ export class UnifiedIndexManager {
       return exactMatch?.entry || results[0]?.entry || null;
       
     } catch (error) {
+      if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.findByName', error, { name });
       return null;
     }
@@ -678,6 +694,7 @@ export class UnifiedIndexManager {
    * Get elements by type from all portfolios
    */
   public async getElementsByType(elementType: ElementType, options: Partial<UnifiedSearchOptions> = {}): Promise<UnifiedIndexEntry[]> {
+    this.assertCurrent?.();
     try {
       const searchOptions: UnifiedSearchOptions = {
         query: '', // Empty query to get all elements
@@ -690,10 +707,12 @@ export class UnifiedIndexManager {
       };
       
       const results = await this.getAllElementsByType(elementType, searchOptions);
+      this.assertCurrent?.();
       
       return this.deduplicateEntries(results.map(r => r.entry));
       
     } catch (error) {
+      if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.getElementsByType', error, { elementType });
       return [];
     }
@@ -703,6 +722,7 @@ export class UnifiedIndexManager {
    * Check for duplicates across all sources
    */
   public async checkDuplicates(name: string): Promise<DuplicateInfo[]> {
+    this.assertCurrent?.();
     try {
       const searchOptions: UnifiedSearchOptions = {
         query: name,
@@ -713,6 +733,7 @@ export class UnifiedIndexManager {
       };
       
       const results = await this.search(searchOptions);
+      this.assertCurrent?.();
       const duplicateMap = new Map<string, DuplicateInfo>();
       
       for (const result of results) {
@@ -751,6 +772,7 @@ export class UnifiedIndexManager {
       return actualDuplicates;
       
     } catch (error) {
+      if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.checkDuplicates', error, { name });
       return [];
     }
@@ -760,8 +782,10 @@ export class UnifiedIndexManager {
    * Get version comparison across all sources
    */
   public async getVersionComparison(name: string): Promise<VersionInfo | null> {
+    this.assertCurrent?.();
     try {
       const duplicates = await this.checkDuplicates(name);
+      this.assertCurrent?.();
       
       if (duplicates.length === 0) {
         return null;
@@ -806,6 +830,7 @@ export class UnifiedIndexManager {
       };
       
     } catch (error) {
+      if (this.assertCurrent) throw error;
       ErrorHandler.logError('UnifiedIndexManager.getVersionComparison', error, { name });
       return null;
     }
@@ -815,6 +840,7 @@ export class UnifiedIndexManager {
    * Get comprehensive statistics across all sources
    */
   public async getStats(): Promise<UnifiedIndexStats> {
+    this.assertCurrent?.();
     try {
       const [localStats, githubStats, collectionStats] = await Promise.allSettled([
         this.getLocalStats(),
@@ -822,6 +848,8 @@ export class UnifiedIndexManager {
         this.getCollectionStats()
       ]);
       
+      this.assertCurrent?.();
+      if (this.assertCurrent && localStats.status === 'rejected') throw localStats.reason;
       const local = localStats.status === 'fulfilled' ? localStats.value : {
         totalElements: 0,
         elementsByType: {} as Record<ElementType, number>,
@@ -846,6 +874,7 @@ export class UnifiedIndexManager {
       // Calculate combined statistics
       const totalElements = local.totalElements + github.totalElements + collection.totalElements;
       const duplicatesCount = await this.calculateDuplicatesCount();
+      this.assertCurrent?.();
       const uniqueElements = totalElements - duplicatesCount;
       
       return {
@@ -874,6 +903,7 @@ export class UnifiedIndexManager {
    * Invalidate caches after user actions with performance monitoring
    */
   public invalidateAfterAction(action: string): void {
+    this.assertCurrent?.();
     logger.info('Invalidating unified portfolio caches after user action', { action });
     
     // Clear result and index caches
@@ -907,6 +937,7 @@ export class UnifiedIndexManager {
    * Force rebuild of all indexes with performance optimization
    */
   public async rebuildAll(): Promise<void> {
+    this.assertCurrent?.();
     const startTime = Date.now();
     logger.info('Rebuilding all portfolio indexes with optimization...');
     
@@ -926,6 +957,7 @@ export class UnifiedIndexManager {
       ];
       
       await Promise.all(rebuildPromises);
+      this.assertCurrent?.();
       
       // Trigger cleanup
       this.triggerMemoryCleanup();
@@ -970,6 +1002,7 @@ export class UnifiedIndexManager {
       return results;
       
     } catch (error) {
+      if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
       logger.debug(`${source} search failed, attempting fallback`, {
         error: error instanceof Error ? error.message : String(error)
       });
@@ -1428,6 +1461,8 @@ export class UnifiedIndexManager {
     const results = await Promise.allSettled(promises);
     const allResults: UnifiedSearchResult[] = [];
     
+    this.assertCurrent?.();
+    if (options.includeLocal && this.assertCurrent && results[0]?.status === 'rejected') throw results[0].reason;
     results.forEach(result => {
       if (result.status === 'fulfilled') {
         allResults.push(...result.value);
@@ -1450,7 +1485,8 @@ export class UnifiedIndexManager {
         score: 1,
         version: entry.metadata.version
       }));
-    } catch {
+    } catch (cause) {
+      if (this.localIndexManager.hasBoundMemorySource?.()) throw cause;
       return [];
     }
   }
@@ -1552,12 +1588,14 @@ export class UnifiedIndexManager {
    */
   private async calculateDuplicatesCount(): Promise<number> {
     const elementSources = new Map<string, Set<string>>();
-
+    // A bound local failure is authority/data refusal, not a zero-duplicates fallback.
+    if (this.assertCurrent) await this.addLocalDuplicateSources(elementSources);
     try {
-      await this.addLocalDuplicateSources(elementSources);
+      if (!this.assertCurrent) await this.addLocalDuplicateSources(elementSources);
       await this.addGitHubDuplicateSources(elementSources);
       await this.addCollectionDuplicateSources(elementSources);
     } catch (error) {
+      this.assertCurrent?.();
       logger.debug('Error calculating duplicates count', error);
       return 0;
     }
@@ -2005,6 +2043,8 @@ export class UnifiedIndexManager {
         });
         
       } catch (error) {
+        this.assertCurrent?.();
+        if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
         logger.warn(`Streaming search failed for source ${source}`, {
           error: error instanceof Error ? error.message : String(error)
         });
@@ -2394,6 +2434,7 @@ export class UnifiedIndexManager {
     totalDuration: number;
     lastUsed: Date;
   }> {
+    this.assertCurrent?.();
     return new Map(this.sourceUsageTelemetry);
   }
 
@@ -2403,6 +2444,7 @@ export class UnifiedIndexManager {
    * Used for testing and periodic cleanup
    */
   public resetSourceUsageTelemetry(): void {
+    this.assertCurrent?.();
     this.sourceUsageTelemetry.clear();
   }
 
@@ -2415,6 +2457,7 @@ export class UnifiedIndexManager {
     cacheStats: any;
     trends: any;
   } {
+    this.assertCurrent?.();
     return {
       searchStats: this.performanceMonitor.getSearchStats(),
       memoryStats: this.performanceMonitor.getMemoryStats(),

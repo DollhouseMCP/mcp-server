@@ -29,7 +29,7 @@ interface CapturedInvocation {
 
 export class TenantMemoryOperationProvider {
   private readonly captures = new WeakMap<MemoryOperationCapture, CapturedInvocation>();
-  private readonly operations = new WeakSet<BoundMemoryOperation>();
+  private readonly operations = new WeakMap<BoundMemoryOperation, CapturedInvocation>();
   constructor(private readonly registry: DatabaseTenantMemoryRegistry,
     private readonly tracker: ContextTracker) {}
 
@@ -67,7 +67,7 @@ export class TenantMemoryOperationProvider {
       const manager = await this.registry.resolve(invocation.slot);
       this.requireCurrent(invocation);
       const operation = Object.freeze({ manager, assertCurrent: () => this.requireCurrent(invocation) });
-      this.operations.add(operation);
+      this.operations.set(operation, invocation);
       return operation;
     } catch (cause) { this.observeFailure('resolve'); throw cause; }
   }
@@ -76,6 +76,12 @@ export class TenantMemoryOperationProvider {
   assertOperation(operation: BoundMemoryOperation): void {
     if (!this.operations.has(operation)) throw new Error('Authentic bound memory operation required');
     operation.assertCurrent();
+  }
+
+  /** Bind derived namespace paths to this operation's actual selected DB tenant. */
+  getOperationTenant(operation: BoundMemoryOperation): string {
+    this.assertOperation(operation);
+    return this.registry.getCapturedTenant(this.operations.get(operation)!.slot);
   }
 
   private requireCurrent(invocation: CapturedInvocation): void {

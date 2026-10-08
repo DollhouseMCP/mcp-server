@@ -58,12 +58,13 @@ export class ElementListOperations<T extends IElement> {
    * List all available elements.
    * Identical to the former BaseElementManager.list() body.
    */
-  async list(options?: { includePublic?: boolean }): Promise<T[]> {
+  async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
     try {
       if (isWritableStorageLayer(this.storageLayer)) {
         return this.listFromDatabase(options);
       }
 
+      if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
       await this.fileOperations.createDirectory(this.host.elementDir);
 
       try {
@@ -122,6 +123,7 @@ export class ElementListOperations<T extends IElement> {
 
       return userElements;
     } catch (error) {
+      if (options?.strictDatabase) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         const label = this.host.getElementLabelCapitalized();
         logger.debug(`${label}s directory does not exist yet, returning empty array`);
@@ -135,7 +137,7 @@ export class ElementListOperations<T extends IElement> {
   /**
    * Database-mode list: query summaries from storage layer, then load each element.
    */
-  private async listFromDatabase(options?: { includePublic?: boolean }): Promise<T[]> {
+  private async listFromDatabase(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
     try {
       const diff = await this.storageLayer.scan();
       for (const id of [...diff.modified, ...diff.removed]) {
@@ -149,6 +151,7 @@ export class ElementListOperations<T extends IElement> {
         try {
           currentUserId = this.getCurrentUserId() ?? '';
         } catch (err) {
+          if (options?.strictDatabase) throw err;
           logger.warn(
             `[${this.host.constructor.name}] getCurrentUserId threw during listFromDatabase; foreign-row cache eviction skipped`,
             { error: err instanceof Error ? err.message : String(err) },
@@ -162,7 +165,8 @@ export class ElementListOperations<T extends IElement> {
             const cached = this.cache.getCachedByPath(summary.filePath);
             if (cached) return cached;
             return await this.host.load(summary.filePath);
-          } catch {
+          } catch (cause) {
+            if (options?.strictDatabase) throw cause;
             return null;
           }
         }),
@@ -174,6 +178,7 @@ export class ElementListOperations<T extends IElement> {
 
       return elements.filter((e): e is Awaited<T> => e !== null) as T[];
     } catch (error) {
+      if (options?.strictDatabase) throw error;
       logger.error(`Failed to list ${this.host.elementType}s from database:`, error);
       return [];
     }
