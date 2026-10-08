@@ -25,6 +25,8 @@ const DZ_CURRENT_AGENT_NAME = 'dz-current-agent';
 const DZ_GOAL_SCOPE_AGENT_NAME = 'dz-goal-scope-agent';
 const DZ_SESSION_SCOPE_AGENT_NAME = 'dz-session-scope-agent';
 
+const TEST_ADMIN_TOKEN = 'integration-clear-all-token';
+
 describe('Agent Notification System', () => {
   let env: PortfolioTestEnvironment;
   let container: DollhouseContainer;
@@ -45,7 +47,8 @@ describe('Agent Notification System', () => {
     // Ensure persisted DangerZone state from prior suites/sessions does not leak into this suite.
     try {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
-      dangerZone.clearAll();
+      dangerZone.setAdminToken(TEST_ADMIN_TOKEN);
+      dangerZone.clearAll(TEST_ADMIN_TOKEN);
     } catch {
       // Non-fatal: enforcer may not be registered
     }
@@ -55,7 +58,8 @@ describe('Agent Notification System', () => {
     // Clean up any DangerZone blocks to prevent cross-test leakage via persisted file
     try {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
-      dangerZone.clearAll();
+      dangerZone.setAdminToken(TEST_ADMIN_TOKEN);
+      dangerZone.clearAll(TEST_ADMIN_TOKEN);
     } catch {
       // Non-fatal: enforcer may not be registered
     }
@@ -368,7 +372,7 @@ describe('Agent Notification System', () => {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
 
       // Ensure no stale blocks from prior runs
-      dangerZone.clearAll();
+      dangerZone.clearAll(TEST_ADMIN_TOKEN);
 
       // Create two agents
       await createAgent(DZ_BLOCKED_AGENT_NAME, {

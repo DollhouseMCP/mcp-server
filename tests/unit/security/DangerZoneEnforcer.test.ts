@@ -12,6 +12,7 @@ import path from 'path';
 const TEST_SECURITY_DIR = path.join(tmpdir(), 'test-security');
 const TEST_AGENT_NAME = 'test-agent';
 const TEST_VERIFICATION_CODE = 'verify-123';
+const TEST_ADMIN_TOKEN = 'test-clear-all-token';
 
 // Create mock function for SecurityMonitor
 const mockLogSecurityEvent = jest.fn();
@@ -85,7 +86,7 @@ describe('DangerZoneEnforcer', () => {
     jest.clearAllMocks();
     mockFileOps = createMockFileOps();
     enforcer = new DangerZoneEnforcer(mockFileOps, TEST_SECURITY_DIR);
-    enforcer.setAdminToken(null); // Disable admin token for most tests
+    enforcer.setAdminToken(TEST_ADMIN_TOKEN);
   });
 
   describe('block()', () => {
@@ -287,7 +288,7 @@ describe('DangerZoneEnforcer', () => {
 
       expect(enforcer.hasBlockedAgents()).toBe(true);
 
-      enforcer.clearAll();
+      expect(enforcer.clearAll(TEST_ADMIN_TOKEN)).toBe(true);
 
       expect(enforcer.hasBlockedAgents()).toBe(false);
       expect(enforcer.getBlockedAgents()).toEqual([]);
@@ -313,13 +314,30 @@ describe('DangerZoneEnforcer', () => {
       expect(enforcer.hasBlockedAgents()).toBe(false);
     });
 
-    it('should work without token when not configured', () => {
+    it.each([undefined, '', 'unconfigured-token-sentinel'])('should refuse an unconfigured reset with token %p', async (token) => {
       enforcer.setAdminToken(null);
       enforcer.block('agent1', 'Reason', []);
+      enforcer.block('agent2', 'Other reason', ['pattern']);
+      // Finish the existing block writes before observing the attempted reset.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const contexts = enforcer.getBlockedAgents().map(name => enforcer.check(name));
+      const metrics = enforcer.getMetrics();
+      const writes = mockFileOps.writeFile.mock.calls.length;
+      mockLogSecurityEvent.mockClear();
 
-      const result = enforcer.clearAll();
-      expect(result).toBe(true);
-      expect(enforcer.hasBlockedAgents()).toBe(false);
+      expect(enforcer.clearAll(token)).toBe(false);
+
+      expect(enforcer.getBlockedAgents().map(name => enforcer.check(name))).toEqual(contexts);
+      expect(enforcer.getMetrics()).toEqual(metrics);
+      expect(mockFileOps.writeFile).toHaveBeenCalledTimes(writes);
+      expect(mockLogSecurityEvent).toHaveBeenCalledTimes(1);
+      expect(mockLogSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AUTONOMY_DENIED',
+        severity: 'HIGH',
+        source: 'DangerZoneEnforcer.clearAll',
+        additionalData: { tokenConfigured: false, tokenProvided: !!token },
+      }));
+      expect(JSON.stringify(mockLogSecurityEvent.mock.calls)).not.toContain('unconfigured-token-sentinel');
     });
 
     it('should log enriched clearAll event with agent names', () => {
@@ -327,7 +345,7 @@ describe('DangerZoneEnforcer', () => {
       enforcer.block('agent-b', 'Reason', []);
       mockLogSecurityEvent.mockClear();
 
-      enforcer.clearAll();
+      enforcer.clearAll(TEST_ADMIN_TOKEN);
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -428,8 +446,8 @@ describe('DangerZoneEnforcer', () => {
 
     it('should track clearAll calls', () => {
       enforcer.block('agent1', 'Reason', []);
-      enforcer.clearAll();
-      enforcer.clearAll();
+      enforcer.clearAll(TEST_ADMIN_TOKEN);
+      enforcer.clearAll(TEST_ADMIN_TOKEN);
 
       const metrics = enforcer.getMetrics();
       expect(metrics.totalClearAllCalls).toBe(2);
