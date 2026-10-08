@@ -175,6 +175,7 @@ export class DangerZoneEnforcer {
   private readonly fileOps: FileOperationsService;
   private readonly securityDir: string;
   private readonly persistPath: string;
+  private persistenceTail: Promise<void> = Promise.resolve();
 
   constructor(fileOps: FileOperationsService, securityDir?: string) {
     this.fileOps = fileOps;
@@ -515,16 +516,16 @@ export class DangerZoneEnforcer {
   /**
    * Clear all blocks (for testing or admin reset)
    *
-   * When DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN is set, requires matching token.
-   * Without environment variable, clearAll is unrestricted (for testing).
+   * Requires a configured DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN and matching token.
+   * Refuses when no token is configured. Tests can configure one with setAdminToken.
    *
-   * @param adminToken - Admin token for authorization (required if env var is set)
+   * @param adminToken - Required matching admin token for authorization
    * @returns Whether the clear was successful
    *
    * @example
    * ```ts
    * // Without admin token configured
-   * enforcer.clearAll(); // true
+   * enforcer.clearAll(); // false
    *
    * // With admin token configured
    * enforcer.clearAll('wrong-token'); // false
@@ -532,11 +533,11 @@ export class DangerZoneEnforcer {
    * ```
    */
   clearAll(adminToken?: string): boolean {
-    // If admin token is configured, require it
-    if (this.adminToken && adminToken !== this.adminToken) {
+    if (!this.adminToken || adminToken !== this.adminToken) {
       logger.warn(
-        'clearAll failed: admin token required but not provided (or incorrect)',
+        'clearAll denied: configured admin token required',
         {
+          tokenConfigured: !!this.adminToken,
           tokenProvided: !!adminToken,
         }
       );
@@ -544,8 +545,8 @@ export class DangerZoneEnforcer {
         type: 'AUTONOMY_DENIED',
         severity: 'HIGH',
         source: 'DangerZoneEnforcer.clearAll',
-        details: 'clearAll failed: admin token required but not provided (or incorrect)',
-        additionalData: { tokenProvided: !!adminToken },
+        details: 'clearAll denied: configured admin token required',
+        additionalData: { tokenConfigured: !!this.adminToken, tokenProvided: !!adminToken },
       });
       return false;
     }
@@ -627,7 +628,11 @@ export class DangerZoneEnforcer {
    * Fire-and-forget persistence. Disk failure does not block enforcement.
    */
   private persistAsync(): void {
-    this.persist().catch(error => {
+    // Order the complete snapshot/write operation, including asynchronous directory setup.
+    // A failed write must not prevent later state from being persisted.
+    const operation = this.persistenceTail.then(() => this.persist());
+    this.persistenceTail = operation.catch(() => undefined);
+    void operation.catch(error => {
       logger.warn('Failed to persist danger zone blocks to disk', { error });
 
       SecurityMonitor.logSecurityEvent({

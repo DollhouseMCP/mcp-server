@@ -20,6 +20,8 @@ import { VerificationStore } from '@dollhousemcp/safety';
 import type { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 import crypto from 'crypto';
 
+const TEST_ADMIN_TOKEN = 'integration-clear-all-token';
+
 describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
   let env: PortfolioTestEnvironment;
   let container: DollhouseContainer;
@@ -38,11 +40,12 @@ describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
     verificationStore = container.resolve<VerificationStore>('VerificationStore');
     dangerZoneEnforcer = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    dangerZoneEnforcer.setAdminToken(TEST_ADMIN_TOKEN);
   });
 
   afterEach(async () => {
     verificationStore.clear();
-    dangerZoneEnforcer.clearAll();
+    dangerZoneEnforcer.clearAll(TEST_ADMIN_TOKEN);
     await server.dispose();
     await env.cleanup();
   });
