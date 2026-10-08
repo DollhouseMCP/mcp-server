@@ -44,6 +44,9 @@ export class DatabaseTenantMemoryRegistry {
 
   matchesDatabase(db: DatabaseInstance): boolean { return db === this.deps.db; }
 
+  /** Recheck an existing trusted slot without a new selection or asynchronous work. */
+  assertCurrent(capture: TenantMemoryCapture): void { this.requireCapture(capture); }
+
   /** Capture trusted effective context synchronously; the opaque slot is not a tenant selector. */
   capture(): TenantMemoryCapture {
     try { return this.captureBound(); }
