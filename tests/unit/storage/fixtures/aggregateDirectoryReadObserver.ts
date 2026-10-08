@@ -21,7 +21,7 @@ export function observeDirectoryReads(owner: object = Dir.prototype) {
     if (restored) return;
     try {
       const current = Object.getOwnPropertyDescriptor(owner, 'read');
-      if (!current || current.value !== observed || current.writable !== original.writable ||
+      if (current?.value !== observed || current.writable !== original.writable ||
           current.enumerable !== original.enumerable || current.configurable !== original.configurable) {
         throw new Error('Directory read observer no longer owns the method');
       }
