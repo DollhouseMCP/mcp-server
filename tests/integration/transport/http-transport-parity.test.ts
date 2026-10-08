@@ -331,16 +331,15 @@ describe('HTTP Transport — HTTP-Specific Behaviors', () => {
       const res = await request(env.runtime.app).get('/healthz');
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
-      expect(res.body.transport).toBe('streamable-http');
-      expect(res.body.sessions).toBeDefined();
-      expect(typeof res.body.sessions.active).toBe('number');
+      expect(typeof res.body.version).toBe('string');
+      expect(Object.keys(res.body).sort()).toEqual(['ok', 'version']);
     });
 
     it('GET /readyz returns readiness status', async () => {
       const res = await request(env.runtime.app).get('/readyz');
       expect(res.status).toBe(200);
       expect(res.body.ready).toBe(true);
-      expect(res.body.sessionTelemetry).toBeDefined();
+      expect(Object.keys(res.body).sort()).toEqual(['ready', 'version']);
     });
 
     it('GET / returns server info', async () => {
@@ -463,8 +462,8 @@ describe('HTTP Transport — HTTP-Specific Behaviors', () => {
         }
 
         // Telemetry should reflect creations
-        const healthRes = await request(env.runtime.app).get('/healthz');
-        expect(healthRes.body.sessions.created).toBeGreaterThanOrEqual(3);
+        const metrics = env.runtime.getOperationalMetrics();
+        expect((metrics.sessions as { created: number }).created).toBeGreaterThanOrEqual(3);
       } finally {
         await Promise.all(handles.map(h => h.disconnect()));
       }
@@ -494,8 +493,8 @@ describe('HTTP Transport — HTTP-Specific Behaviors', () => {
       const handle = await connectHttpClient(env.runtime);
 
       try {
-        const readyRes = await request(env.runtime.app).get('/readyz');
-        expect(readyRes.body.sessionTelemetry.poolHits).toBeGreaterThanOrEqual(1);
+        const metrics = env.runtime.getOperationalMetrics();
+        expect((metrics.sessions as { poolHits: number }).poolHits).toBeGreaterThanOrEqual(1);
       } finally {
         await handle.disconnect();
       }
