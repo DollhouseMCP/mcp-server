@@ -29,6 +29,7 @@ import { logger } from '../utils/logger.js';
 import type { ElementIndexEntry } from './types.js';
 import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
 import type { IMemoryHeadStore, MemoryHeadSnapshot, MemoryHeadToken } from './IMemoryHeadStore.js';
+import type { DatabaseMemoryLegacyMutationGuard } from './DatabaseMemoryLegacyMutationGuard.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -89,7 +90,8 @@ export interface PreparedDatabaseMemoryHeadWrite {
 }
 
 export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer implements IMemoryHeadStore {
-  constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver) {
+  constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver,
+    private readonly legacyMutationGuard?: DatabaseMemoryLegacyMutationGuard) {
     super(db, getCurrentUserId, 'memories');
   }
 
@@ -290,7 +292,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     options?: WriteContentOptions, expectedHead?: ExpectedHeadWrite,
   ): Promise<{ id: string; revision?: bigint }> {
     const prepared = this.prepareMemoryContent(userId, name, content, metadata, options, expectedHead);
-    const saved = await withUserContext(this.db, userId, prepared.write);
+    const saved = await this.withLegacyMutation(userId, prepared.write);
     this.publishMemoryContent(userId, prepared.elementName, saved, expectedHead);
     return saved;
   }
@@ -503,17 +505,49 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     await this.deleteContentByIdentity('memories', name);
   }
 
+  protected override async beforeLegacyIdentityDelete(tx: DrizzleTx, userId: string, elementType: string): Promise<void> {
+    if (!this.legacyMutationGuard) return;
+    if (elementType !== 'memories') {
+      throw Object.assign(new Error('Memory legacy deletion type mismatch'), { code: 'EMEMORYLEGACYDENIED' });
+    }
+    await this.legacyMutationGuard.requireLegacyInTransaction(tx, this, userId);
+  }
+
+  protected override afterLegacyIdentityDelete(userId: string): void {
+    this.legacyMutationGuard?.requireContext(this, userId);
+  }
+
+  protected override observeLegacyIdentityDeleteFailure(): void {
+    this.legacyMutationGuard?.observeFailure('identity-delete');
+  }
+
+  private async withLegacyMutation<T>(userId: string, body: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+    try {
+      this.legacyMutationGuard?.requireContext(this, userId);
+      return await withUserContext(this.db, userId, async tx => {
+        await this.legacyMutationGuard?.requireLegacyInTransaction(tx, this, userId);
+        const result = await body(tx);
+        this.legacyMutationGuard?.requireContext(this, userId);
+        return result;
+      });
+    } catch (cause) {
+      this.legacyMutationGuard?.observeFailure('legacy-write');
+      throw cause;
+    }
+  }
+
   // ── Entry-Level Operations ────────────────────────────────────────
 
   async addEntry(memoryElementId: string, entry: MemoryEntryData): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    await this.withLegacyMutation(userId, async (tx) => {
       // Single source of truth for the column values — both the insert values
       // and the upsert SET reuse it. Identity columns (memoryId, entryId) are
       // stripped from the SET via the buildUpdateSet closure pattern (same
       // approach as writeContent), so adding a column to `values` is a one-
       // line change rather than two.
       const values = {
-        userId: this.userId,
+        userId,
         memoryId: memoryElementId,
         entryId: entry.entryId,
         timestamp: entry.timestamp,
@@ -606,12 +640,13 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
   }
 
   async removeEntry(memoryElementId: string, entryId: string): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    await this.withLegacyMutation(userId, async (tx) => {
       // Defense-in-depth: include userId even though RLS enforces it.
       await tx
         .delete(memoryEntries)
         .where(and(
-          eq(memoryEntries.userId, this.userId),
+          eq(memoryEntries.userId, userId),
           eq(memoryEntries.memoryId, memoryElementId),
           eq(memoryEntries.entryId, entryId),
         ));
@@ -619,11 +654,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
   }
 
   async purgeExpiredEntries(): Promise<number> {
-    return withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    return this.withLegacyMutation(userId, async (tx) => {
       const deleted = await tx
         .delete(memoryEntries)
         .where(and(
-          eq(memoryEntries.userId, this.userId),
+          eq(memoryEntries.userId, userId),
           sql`${memoryEntries.expiresAt} IS NOT NULL AND ${memoryEntries.expiresAt} < NOW()`,
         ))
         .returning({ id: memoryEntries.id });
