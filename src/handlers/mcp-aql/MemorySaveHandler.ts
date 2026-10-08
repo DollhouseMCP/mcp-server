@@ -174,16 +174,20 @@ export class MemorySaveHandler {
       await manager.assertPersistable(candidate);
       context.check();
       accepted = true;
-      await manager.save(candidate);
+      if (manager.saveForGuardedOperation) await manager.saveForGuardedOperation(candidate);
+      else await manager.save(candidate);
       committed = true;
-      context.check();
-      SecurityMonitor.logSecurityEvent(audit);
-      if (removedCount > 0) SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED, severity: 'MEDIUM',
-        source: 'MemorySaveHandler.guardedMutation', details: `Durably removed ${removedCount} entries by retention or onFull policy`,
-      });
-      this.guardedMutations.delete(context.key);
-      return response;
+      const publish = () => {
+        context.check();
+        SecurityMonitor.logSecurityEvent(audit);
+        if (removedCount > 0) SecurityMonitor.logSecurityEvent({
+          type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED, severity: 'MEDIUM',
+          source: 'MemorySaveHandler.guardedMutation', details: `Durably removed ${removedCount} entries by retention or onFull policy`,
+        });
+        this.guardedMutations.delete(context.key);
+        return Promise.resolve(response);
+      };
+      return manager.completeGuardedOperation ? await manager.completeGuardedOperation(candidate, publish) : await publish();
     } catch (cause) {
       const pending = candidate && manager.getPendingHeadUpdate(candidate);
       if (accepted || pending) {

@@ -421,6 +421,13 @@
       "when": 1791417600000,
       "tag": "0059_memory_backend_modes",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1791417602000,
+      "tag": "0061_memory_candidate_handoff",
+      "breakpoints": true
     }
   ]
 }

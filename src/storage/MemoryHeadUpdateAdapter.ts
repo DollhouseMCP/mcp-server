@@ -4,6 +4,8 @@ import type { FileMemoryOwnerSnapshots, OwnedFileMemoryToken } from './FileMemor
 import type { ElementWriteMetadata } from './IStorageLayer.js';
 import type { DatabaseMemoryAdmission, DatabaseMemoryAdmissionGate, DatabaseMemoryAdmittedWriteOutcome } from './DatabaseMemoryAdmissionGate.js';
 import type { DatabaseMemoryStorageLayer, PreparedDatabaseMemoryHeadWrite } from './DatabaseMemoryStorageLayer.js';
+import type { DatabaseMemoryCandidateHandoff, MemoryCandidateHandoffReceipt } from './DatabaseMemoryCandidateHandoff.js';
+import { encodeMemoryCandidate, decodeMemoryCandidate } from './DatabaseMemoryCandidateEnvelope.js';
 
 export type MemoryUpdateToken = MemoryHeadToken | OwnedFileMemoryToken;
 export type MemoryUpdateSnapshot = { readonly content: string; readonly token: MemoryUpdateToken };
@@ -23,6 +25,8 @@ export interface PendingMemoryUpdate {
 }
 interface BoundAdmission { readonly gate: DatabaseMemoryAdmissionGate; readonly capture: DatabaseMemoryAdmission }
 interface BoundState {
+  handoff?: { readonly store: DatabaseMemoryCandidateHandoff; readonly receipt: MemoryCandidateHandoffReceipt;
+    readonly candidate: MemoryUpdateCandidate; readonly originalToken: MemoryUpdateToken; completed: boolean };
   admission?: BoundAdmission;
   token: MemoryUpdateToken;
   name: string;
@@ -52,8 +56,10 @@ export class MemoryHeadUpdateAdapter {
   private readonly snapshotAdmissions = new WeakMap<MemoryUpdateSnapshot, BoundAdmission>();
   constructor(private readonly port: MemoryUpdatePort, private readonly getCurrentUserId: () => string,
     /** Trusted dormant composition only; production DI remains unchanged. */
-    private readonly resolveDatabaseAdmission?: () => DatabaseMemoryAdmissionGate) {
+    private readonly resolveDatabaseAdmission?: () => DatabaseMemoryAdmissionGate,
+    private readonly resolveCandidateHandoff?: () => DatabaseMemoryCandidateHandoff) {
     if (resolveDatabaseAdmission && port.backend !== 'database') throw refusal('Database admission requires database storage');
+    if (resolveCandidateHandoff && !resolveDatabaseAdmission) throw refusal('Candidate handoff requires database admission');
   }
   /** Internal composition identity check; exposes no backend port or token. */
   matchesDatabaseStore(store: IMemoryHeadStore): boolean {
@@ -94,11 +100,11 @@ export class MemoryHeadUpdateAdapter {
   deriveBinding(source: object, candidate: object, tenant: string, locator: string | undefined, name: string, contextRoot: string): void {
     this.requireTenant(tenant);
     const state = this.requiredState(source);
-    if (state.busy || state.unknown || state.lineage.unresolved || state.token.userId !== tenant ||
+    if (state.busy || state.unknown || state.lineage.unresolved || (state.handoff && !state.handoff.completed) || state.token.userId !== tenant ||
       state.token.locator !== locator || state.name !== name || state.contextRoot !== contextRoot || this.bindings.has(candidate)) {
       throw refusal('Cannot derive a current owned memory mutation');
     }
-    this.bindings.set(candidate, { ...state, token: copyToken(state.token), busy: false, pending: undefined });
+    this.bindings.set(candidate, { ...state, token: copyToken(state.token), busy: false, pending: undefined, handoff: undefined });
   }
 
   /** A committed publication shares unresolved sibling state without changing source bytes/token. */
@@ -113,23 +119,39 @@ export class MemoryHeadUpdateAdapter {
     if (state?.token.userId !== tenant || state.token.locator !== locator || state.name !== name || state.contextRoot !== contextRoot) {
       throw refusal('UPDATE requires original instance ownership, name and locator');
     }
-    if (state.busy || state.unknown || state.lineage.unresolved) throw refusal('Memory has an in-flight or unresolved update');
+    if (state.busy || state.unknown || state.lineage.unresolved || (state.handoff && !state.handoff.completed)) throw refusal('Memory has an in-flight or unresolved update');
+    state.handoff = undefined;
     state.busy = true;
     state.pending = undefined;
     return state.token;
   }
   async write(memory: object, tenant: string, candidate: MemoryUpdateCandidate): Promise<MemoryUpdateOutcome> {
     const state = this.requiredState(memory);
-    const captured = copyCandidate(candidate);
+    // Validate before spreads can invoke arbitrary metadata accessors. The exact
+    // data clone also prevents caller-owned nested data changing during handoff.
+    const captured = copyCandidate(this.resolveCandidateHandoff
+      ? decodeMemoryCandidate(encodeMemoryCandidate(candidate)) : candidate);
     const originalToken = state.token;
     this.requireTenant(tenant);
     if (state.lineage.unresolved) throw refusal('Memory has an unresolved related update');
     let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
       if (this.resolveDatabaseAdmission) {
+        if (this.resolveCandidateHandoff) {
+          const store = this.resolveCandidateHandoff();
+          if (!state.admission || !store || state.handoff) throw refusal('Original candidate handoff required');
+          const handoff = await store.handoff(state.admission.capture, captured, originalToken as MemoryHeadToken);
+          if (handoff.status !== 'committed') return this.recordPending(state, captured, originalToken, handoff);
+          state.handoff = { store, receipt: handoff.value, candidate: captured, originalToken, completed: false };
+          store.consume(handoff.value);
+        }
         const outcome = await this.prepareAdmittedWrite(state, captured, originalToken);
-        if (outcome.status !== 'committed') return this.recordPending(state, captured, originalToken, outcome);
+        if (outcome.status !== 'committed') {
+          if (outcome.status === 'unknown') state.handoff?.store.close();
+          return this.recordPending(state, captured, originalToken, outcome);
+        }
         committed = this.recordCommit(state, outcome.value.token, originalToken);
+        state.handoff?.store.noteKnownCommit(state.handoff.receipt);
         this.requireTenant(tenant);
         outcome.value.publish();
         return committed;
@@ -163,10 +185,12 @@ export class MemoryHeadUpdateAdapter {
     }
     const store = this.port.store as DatabaseMemoryStorageLayer;
     return await admission.gate.withAdmittedWrite(admission.capture, async authority => {
+      if (state.handoff) await state.handoff.store.requireBeforeDispatch(authority, state.handoff.receipt, captured);
       const prepared = await store.prepareHeadWriteInAdmission(authority,
         originalToken as MemoryHeadToken, captured.name, captured.content, captured.metadata);
       // An invalid prospective receipt must roll back, never become a committed token.
       this.validateReceipt(prepared.token, originalToken);
+      if (state.handoff) await state.handoff.store.recordCommitted(authority, state.handoff.receipt, captured, prepared.token);
       return prepared;
     });
   }
@@ -196,6 +220,23 @@ export class MemoryHeadUpdateAdapter {
       ...(committed ? { committedToken: state.token } : {}) });
   }
   finishUpdate(memory: object): void { this.requiredState(memory).busy = false; }
+  /** The owning operation supplies its real publication tail, never a completion boolean. */
+  async completePublication<T>(memory: object, publish: () => Promise<T>): Promise<T> {
+    const state = this.requiredState(memory);
+    if (!this.resolveCandidateHandoff) return publish();
+    if (!state.handoff || state.pending) throw refusal('Known committed handoff publication required');
+    const handoff = state.handoff;
+    try {
+      const result = await handoff.store.completePublication(handoff.receipt, publish);
+      handoff.completed = true;
+      state.handoff = undefined;
+      return result;
+    } catch (cause) {
+      state.pending = Object.freeze({ status: 'committed-publication-failed', candidate: handoff.candidate,
+        originalToken: handoff.originalToken, committedToken: state.token, cause });
+      throw cause;
+    }
+  }
   getPendingUpdate(memory: object): PendingMemoryUpdate | undefined { return this.bindings.get(memory)?.pending; }
   private requiredState(memory: object): BoundState {
     const state = this.bindings.get(memory);

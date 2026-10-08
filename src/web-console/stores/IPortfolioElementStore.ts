@@ -57,6 +57,8 @@ export interface IPortfolioElementStore {
   ): Promise<ConsolePortfolioElementDetailRecord | null>;
   create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord>;
   update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null>;
+  /** Internal manager-backed completion seam; never a client-supplied receipt. */
+  completeUpdatePublication?<T>(record: ConsolePortfolioElementDetailRecord, publish: () => Promise<T>): Promise<T>;
   delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null>;
 }
 
