@@ -58,7 +58,7 @@ async function fixture(name: string) {
     revokedAt: null, lastIp: null, userAgent: null });
   await auth.genericSet('Grant', 'fixture-grant', { accountId: sub });
   await f.maintenance`INSERT INTO public.memory_volumes(user_id,memory_id,volume,raw_content,sha256,entry_count,sealed_at)
-    VALUES (${f.userId}::uuid,${f.memoryId}::uuid,1,'fixture archive',${'a'.repeat(64)},0,${now})`;
+    VALUES (${f.userId}::uuid,${f.memoryId}::uuid,1,'fixture archive',${'a'.repeat(64)},0,${now.toISOString()}::timestamptz)`;
   const seed = (mode = 'legacy', profile = legacyProfile) => f.maintenance`INSERT INTO public.memory_backend_modes
     (user_id,backend,protocol_version,profile,mode,generation) VALUES (${f.userId}::uuid,'database',1,${profile},${mode},1)`;
   const accountSnapshot = async () => {
