@@ -546,12 +546,7 @@ export class MemorySaveHandler {
         await this.runInOrigin(failure, () => this.saveMemoryTracked(saveKey, targetMemory, failure.manager, failure));
         this.checkOrigin(origin);
       } catch (retryErr) {
-        if (failure.bindingCheck) throw retryErr;
-        throw new Error(
-          `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
-          `(${failure.error.message}) and the retry also failed: ` +
-          `${retryErr instanceof Error ? retryErr.message : retryErr}`
-        );
+        throw this.retainedSaveRetryCause(memoryName, failure, retryErr);
       }
     }
 
@@ -597,6 +592,16 @@ export class MemorySaveHandler {
       trustLevel: entryResult.trustLevel,
       ...this.removalWarningFields(memoryName, removedCount),
     };
+  }
+
+  /** Bound work preserves its original cause; ordinary retries retain the existing explanation. */
+  private retainedSaveRetryCause(memoryName: string, failure: FailedSave, retryErr: unknown): unknown {
+    if (failure.bindingCheck) return retryErr;
+    return new Error(
+      `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
+      `(${failure.error.message}) and the retry also failed: ` +
+      `${retryErr instanceof Error ? retryErr.message : retryErr}`
+    );
   }
 
   private removalWarningFields(memoryName: string, removedCount: number): { warning?: string } {
@@ -736,7 +741,7 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
-          probeToken: this.deferredSavesRefused ? null : origin.bindingCheck ? originalProbeToken : manager.getMemoryProbeToken(memory),
+          probeToken: this.failedSaveProbeToken(origin, manager, memory, originalProbeToken),
           // getContext() here returns the ambient context on the normal debounced
           // path, and the re-established context when retried from the shutdown
           // flush (flushOne runs saveMemoryTracked inside runInSaveContext).
@@ -746,6 +751,12 @@ export class MemorySaveHandler {
       }
       throw err;
     }
+  }
+
+  private failedSaveProbeToken(origin: SaveOrigin, manager: MemoryManager, memory: Memory,
+    originalProbeToken: string | null): string | null {
+    if (this.deferredSavesRefused) return null;
+    return origin.bindingCheck ? originalProbeToken : manager.getMemoryProbeToken(memory);
   }
 
   /**
