@@ -152,10 +152,7 @@ export class MemoryHeadUpdateAdapter {
         return { ...outcome, cause };
       }
       const status = error?.residual !== true && refusalCodes.has(error?.code ?? '') ? 'refused' : 'unknown';
-      state.unknown = status === 'unknown';
-      if (state.unknown) state.lineage.unresolved = true;
-      state.pending = Object.freeze({ status, candidate: captured, originalToken, cause });
-      return { status, cause };
+      return this.recordPending(state, captured, originalToken, { status, cause });
     }
   }
   private async prepareAdmittedWrite(state: BoundState, captured: MemoryUpdateCandidate,
