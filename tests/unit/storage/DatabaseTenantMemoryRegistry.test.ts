@@ -56,8 +56,8 @@ async function fixture() {
   });
   root.manager();
   owned.push({ directory, dispose: () => root.container.dispose() });
-  const builds = jest.fn((factory: ElementManagerDeps['storageLayerFactory'], resolver: () => string) =>
-    ({ ...template, storageLayerFactory: factory, getCurrentUserId: resolver }));
+  const builds = jest.fn((factory: ElementManagerDeps['storageLayerFactory'], resolver: () => string): ElementManagerDeps =>
+    ({ ...template, fileWatchService: undefined, storageLayerFactory: factory, getCurrentUserId: resolver }));
   const registry = new DatabaseTenantMemoryRegistry({ db, getEffectiveTenant: getTenant,
     createManagerDeps: builds, getAttribution: () => ({ contextRoot: 'trusted-test-root', sessionId: 'test-session', transport: 'http' }) });
   return { registry, db, scope, first, second, modes, builds, execute, transaction,

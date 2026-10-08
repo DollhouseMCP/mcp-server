@@ -17,10 +17,16 @@ import { validateRequiredString } from './shared.js';
  */
 export interface SaveContextScope {
   getContext?(): ExecutionContext | undefined;
+  run?<T>(context: ExecutionContext, fn: () => T): T;
   runAsync?<T>(context: ExecutionContext, fn: () => Promise<T>): Promise<T>;
 }
 
-interface PendingSave {
+interface SaveOrigin {
+  context?: ExecutionContext;
+  bindingCheck?: () => void;
+}
+
+interface PendingSave extends SaveOrigin {
   timer: ReturnType<typeof setTimeout>;
   memory: Memory;
   manager: MemoryManager;
@@ -40,7 +46,7 @@ interface SaveFrequencyCounter {
  * in that instance, so recovery must retry it (a freshly loaded instance would
  * lack them).
  */
-interface FailedSave {
+interface FailedSave extends SaveOrigin {
   error: Error;
   memory: Memory;
   manager: MemoryManager;
@@ -80,9 +86,12 @@ export class MemorySaveHandler {
     private readonly handlers: HandlerRegistry,
     private readonly sessionKey: (name: string) => string,
     private readonly contextScope?: SaveContextScope,
+    private readonly requiresOriginBinding = false,
   ) {}
 
-  async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+  async dispatch(method: string, params: Record<string, unknown>, bindingCheck?: () => void): Promise<unknown> {
+    const origin: SaveOrigin = { context: this.contextScope?.getContext?.(), bindingCheck };
+    this.checkOrigin(origin);
     const manager = this.handlers.memoryManager;
     const memoryName = validateRequiredString(
       params,
@@ -93,23 +102,60 @@ export class MemorySaveHandler {
     if (manager.isGuardedHeadUpdateEnabled?.()) {
       this.observeDeferredRefusal(manager);
       if (this.pendingSaves.size || this.failedMemorySaves.size) throw this.deferredRefusal();
-      return this.dispatchGuarded(method, memoryName, manager, params);
+      return this.dispatchGuarded(method, memoryName, manager, params, origin);
     }
     this.requireLegacyDeferred(manager);
 
     const memory = await manager.find(m => m.metadata.name === memoryName);
+    this.checkOrigin(origin);
     if (!memory) {
       throw new Error(`Memory '${memoryName}' not found. Use list_elements to see available memories.`);
     }
 
     switch (method) {
       case 'addEntry':
-        return this.addEntry(memoryName, memory, manager, params);
+        return this.addEntry(memoryName, memory, manager, params, origin);
       case 'clear':
-        return this.clear(memoryName, memory, manager);
+        return this.clear(memoryName, memory, manager, origin);
       default:
         throw new Error(`Unknown Memory method: ${method}`);
     }
+  }
+
+  private checkOrigin(origin: SaveOrigin): void {
+    if (this.requiresOriginBinding && typeof origin.bindingCheck !== 'function') {
+      throw new TypeError('Authenticated memory operation binding required');
+    }
+    origin.bindingCheck?.();
+  }
+
+  /** Check old evidence in its own scope without an await before RAM application. */
+  private checkRetainedOrigin(origin: SaveOrigin): void {
+    if (!origin.bindingCheck) return;
+    if (!origin.context || !this.contextScope?.run) {
+      throw new Error('Original memory operation context cannot be restored synchronously');
+    }
+    this.contextScope.run(origin.context, () => this.checkOrigin(origin));
+  }
+
+  private checkCurrentRetained(key: string, memory: Memory): void {
+    const retained = this.failedMemorySaves.get(key) ?? this.pendingSaves.get(key);
+    if (!retained) return;
+    if (retained.memory !== memory) throw new Error('Retained memory instance changed; explicit resolution required');
+    this.checkRetainedOrigin(retained);
+  }
+
+  private runInOrigin<T>(origin: SaveOrigin, body: () => Promise<T>): Promise<T> {
+    if (!origin.bindingCheck) return this.runInSaveContext(origin.context, body);
+    if (!origin.context || !this.contextScope?.runAsync) {
+      return Promise.reject(new Error('Original memory operation context cannot be restored'));
+    }
+    return this.runInSaveContext(origin.context, async () => {
+      this.checkOrigin(origin);
+      const result = await body();
+      this.checkOrigin(origin);
+      return result;
+    });
   }
 
   /** Conservative whole-handler latch; never an inference of another process's durable mode. */
@@ -148,11 +194,12 @@ export class MemorySaveHandler {
   }
 
   /** Retained request evidence only; never authorizes retry or token refresh. */
-  getPendingGuardedMutation(memoryName: string): GuardedMutationPending | undefined {
+  getPendingGuardedMutation(memoryName: string, bindingCheck?: () => void): GuardedMutationPending | undefined {
+    this.checkOrigin({ bindingCheck });
     return this.guardedMutations.get(this.guardedContext(memoryName, this.handlers.memoryManager).key);
   }
 
-  private async dispatchGuarded(method: string, memoryName: string, manager: MemoryManager, params: Record<string, unknown>): Promise<unknown> {
+  private async dispatchGuarded(method: string, memoryName: string, manager: MemoryManager, params: Record<string, unknown>, origin: SaveOrigin): Promise<unknown> {
     const context = this.guardedContext(memoryName, manager);
     if (this.guardedMutations.has(context.key)) throw Object.assign(new Error('Memory mutation is pending; retain changes and resolve before another request'), { code: 'EHEADCONFLICT' });
     this.guardedMutations.set(context.key, Object.freeze({ status: 'preparing', manager }));
@@ -166,18 +213,21 @@ export class MemorySaveHandler {
         this.validateContent(memoryName, params);
       }
       const source = await manager.loadGuardedMemoryByName(memoryName, context.userId);
+      this.checkOrigin(origin);
       context.check();
       candidate = manager.deriveGuardedMutation(source);
       const removedBefore = candidate.getPolicyRemovedCount();
       const clearCount = candidate.getEntries().size;
       const { response, audit, removedCount } = await this.prepareGuardedMutation(method, memoryName, candidate, params, removedBefore, clearCount);
       await manager.assertPersistable(candidate);
+      this.checkOrigin(origin);
       context.check();
       accepted = true;
       if (manager.saveForGuardedOperation) await manager.saveForGuardedOperation(candidate);
       else await manager.save(candidate);
       committed = true;
       const publish = () => {
+        this.checkOrigin(origin);
         context.check();
         SecurityMonitor.logSecurityEvent(audit);
         if (removedCount > 0) SecurityMonitor.logSecurityEvent({
@@ -259,7 +309,7 @@ export class MemorySaveHandler {
 
     for (const [key, entry] of this.failedMemorySaves) {
       if (!key.startsWith(prefix)) continue;
-      void this.runInSaveContext(entry.context, () =>
+      void this.runInOrigin(entry, () =>
         this.retryLedgerEntryIfAlive(key, entry, 'Session cleanup')
       ).catch((error) => {
         // The retry helper handles storage failures itself, but retain the ledger
@@ -302,9 +352,9 @@ export class MemorySaveHandler {
     }
     const flushedKeys = new Set<string>();
     for (const [key, entry] of pending) {
-      const { memory, manager, context } = entry;
+      const { memory, manager } = entry;
       flushedKeys.add(key);
-      const saved = await this.flushOne(key, memory, manager, 'shutdown', context);
+      const saved = await this.flushOne(key, memory, manager, 'shutdown', entry);
       // A closed boundary/context failure must not drop this or later queued
       // candidates. Preserve newer coalesced work under the same key too.
       if (this.pendingSaves.get(key) === entry &&
@@ -315,7 +365,7 @@ export class MemorySaveHandler {
     // success, which the iteration protocol tolerates.
     for (const [key, entry] of this.failedMemorySaves) {
       if (flushedKeys.has(key)) continue;
-      const recovered = await this.runInSaveContext(entry.context, () =>
+      const recovered = await this.runInOrigin(entry, () =>
         this.retryLedgerEntryIfAlive(key, entry, 'Shutdown retry')
       );
       if (recovered) {
@@ -325,16 +375,16 @@ export class MemorySaveHandler {
   }
 
   /** Write one tracked save during shutdown flush, reporting unrecoverable loss. */
-  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string, context?: ExecutionContext): Promise<boolean> {
+  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string, origin: SaveOrigin = {}): Promise<boolean> {
     try {
       // Re-establish the save's originating per-user context. Shutdown runs with
       // no ambient AsyncLocalStorage context, so without this a file-mode
       // per-user save would resolve to the shared baseDir instead of the owner's.
-      await this.runInSaveContext(context, () => this.saveMemoryTracked(key, memory, manager));
+      await this.runInOrigin(origin, () => this.saveMemoryTracked(key, memory, manager, origin));
       this.debounceMetrics.written++;
       return true;
     } catch (err) {
-      if (this.observeDeferredRefusal(manager)) throw err;
+      if (this.observeDeferredRefusal(manager) || origin.bindingCheck) throw err;
       const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
       logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
       return false;
@@ -360,6 +410,7 @@ export class MemorySaveHandler {
     entry: FailedSave,
     context: string,
   ): Promise<boolean> {
+    this.checkOrigin(entry);
     this.requireLegacyDeferred(entry.manager);
     let confirmedDeleted = false;
     try {
@@ -370,6 +421,7 @@ export class MemorySaveHandler {
         `(${probeError instanceof Error ? probeError.message : probeError}); retrying the save`
       );
     }
+    this.checkOrigin(entry);
     this.requireLegacyDeferred(entry.manager);
     if (confirmedDeleted) {
       logger.info(
@@ -380,9 +432,10 @@ export class MemorySaveHandler {
       return false;
     }
     try {
-      await this.saveMemoryTracked(key, entry.memory, entry.manager);
+      await this.saveMemoryTracked(key, entry.memory, entry.manager, entry);
       return true;
     } catch (error) {
+      if (entry.bindingCheck) throw error;
       logger.error(
         `[MCPAQLHandler] ${context} retry failed for memory '${key}': ${error}`
       );
@@ -390,11 +443,13 @@ export class MemorySaveHandler {
     }
   }
 
-  getSaveFrequencyCountersForTesting(): Map<string, SaveFrequencyCounter> {
+  getSaveFrequencyCountersForTesting(bindingCheck?: () => void): Map<string, SaveFrequencyCounter> {
+    this.checkOrigin({ bindingCheck });
     return this.saveFrequencyCounters;
   }
 
-  trackSaveFrequencyForTesting(memoryName: string): void {
+  trackSaveFrequencyForTesting(memoryName: string, bindingCheck?: () => void): void {
+    this.checkOrigin({ bindingCheck });
     this.trackSaveFrequency(memoryName);
   }
 
@@ -406,7 +461,8 @@ export class MemorySaveHandler {
    * can still race the file back — that narrow window is inherent to
    * fire-and-forget writes and unchanged here.
    */
-  cleanupDeletedMemory(memoryName: string): void {
+  cleanupDeletedMemory(memoryName: string, bindingCheck?: () => void): void {
+    this.checkOrigin({ bindingCheck });
     this.requireLegacyDeferred(this.handlers.memoryManager);
     const key = this.memorySaveKey(memoryName);
     const pending = this.pendingSaves.get(key);
@@ -423,7 +479,8 @@ export class MemorySaveHandler {
     memoryName: string,
     memory: Memory,
     manager: MemoryManager,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    origin: SaveOrigin,
   ): Promise<unknown> {
     if (params.entry !== undefined && params.content === undefined) {
       params.content = params.entry;
@@ -440,10 +497,13 @@ export class MemorySaveHandler {
     // recovered state.
     const saveKey = this.memorySaveKey(memoryName);
     const priorFailure = this.failedMemorySaves.get(saveKey);
-    const targetMemory = priorFailure?.memory ?? this.pendingSaves.get(saveKey)?.memory ?? memory;
+    const priorPending = this.pendingSaves.get(saveKey);
+    if (priorPending) this.checkRetainedOrigin(priorPending);
+    this.checkOrigin(origin);
+    const targetMemory = priorFailure?.memory ?? priorPending?.memory ?? memory;
 
     return MemorySaveHandler.withMemoryMutation(targetMemory, () =>
-      this.appendValidated(memoryName, targetMemory, manager, saveKey, priorFailure, content, tags, metadata)
+      this.appendValidated(memoryName, targetMemory, manager, saveKey, priorFailure, { content, tags, metadata, origin })
     );
   }
 
@@ -470,22 +530,26 @@ export class MemorySaveHandler {
     manager: MemoryManager,
     saveKey: string,
     priorFailure: FailedSave | undefined,
-    content: string,
-    tags: string[] | undefined,
-    metadata: Record<string, unknown> | undefined,
+    input: { content: string; tags?: string[]; metadata?: Record<string, unknown>; origin: SaveOrigin },
   ): Promise<unknown> {
+    const { content, tags, metadata, origin } = input;
+    const failure = origin.bindingCheck ? this.failedMemorySaves.get(saveKey) : priorFailure;
+    if (origin.bindingCheck) this.checkCurrentRetained(saveKey, targetMemory);
 
     // Issue #2329: if a previous save of this memory failed (e.g. disk error),
     // recover before accepting more entries — otherwise they pile up in RAM
     // behind the same failure and are lost on restart.
+    this.checkOrigin(origin);
     this.requireLegacyDeferred(manager);
-    if (priorFailure) {
+    if (failure) {
       try {
-        await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
+        await this.runInOrigin(failure, () => this.saveMemoryTracked(saveKey, targetMemory, failure.manager, failure));
+        this.checkOrigin(origin);
       } catch (retryErr) {
+        if (failure.bindingCheck) throw retryErr;
         throw new Error(
           `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
-          `(${priorFailure.error.message}) and the retry also failed: ` +
+          `(${failure.error.message}) and the retry also failed: ` +
           `${retryErr instanceof Error ? retryErr.message : retryErr}`
         );
       }
@@ -510,6 +574,8 @@ export class MemorySaveHandler {
       );
     }
 
+    if (origin.bindingCheck) this.checkCurrentRetained(saveKey, targetMemory);
+    this.checkOrigin(origin);
     this.requireLegacyDeferred(manager);
     if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {
       throw new Error(
@@ -519,7 +585,7 @@ export class MemorySaveHandler {
     }
 
     this.trackSaveFrequency(memoryName);
-    this.debouncedMemorySave(memoryName, targetMemory, manager);
+    this.debouncedMemorySave(memoryName, targetMemory, manager, origin);
     // Issue #2859: removals are never silent. Expired entries and, for memories
     // with onFull 'evict_oldest', the oldest entries can be removed by this add.
     const removedCount = targetMemory.getPolicyRemovedCount() - policyRemovedBefore;
@@ -558,24 +624,33 @@ export class MemorySaveHandler {
     );
   }
 
-  private async clear(memoryName: string, memory: Memory, manager: MemoryManager): Promise<unknown> {
+  private async clear(memoryName: string, memory: Memory, manager: MemoryManager, origin: SaveOrigin): Promise<unknown> {
     const clearKey = this.memorySaveKey(memoryName);
-    const targetMemory = this.failedMemorySaves.get(clearKey)?.memory
-      ?? this.pendingSaves.get(clearKey)?.memory
-      ?? memory;
+    const retained = this.failedMemorySaves.get(clearKey) ?? this.pendingSaves.get(clearKey);
+    if (origin.bindingCheck && retained) {
+      throw new Error('Retained deferred memory work must be resolved before a composed legacy clear');
+    }
+    this.checkOrigin(origin);
+    const targetMemory = retained?.memory ?? memory;
     return MemorySaveHandler.withMemoryMutation(targetMemory, async () => {
+      if (origin.bindingCheck && (this.failedMemorySaves.has(clearKey) || this.pendingSaves.has(clearKey))) {
+        throw new Error('Retained deferred memory work must be resolved before a composed legacy clear');
+      }
+      this.checkOrigin(origin);
       this.requireLegacyDeferred(manager);
       // Issue #2329: cancel any pending debounced save first — a stale timer
       // firing after the clear would resurrect the pre-clear entries on disk.
       const pendingClear = this.pendingSaves.get(clearKey);
       if (pendingClear) {
         clearTimeout(pendingClear.timer);
-        this.pendingSaves.delete(clearKey);
+        if (!origin.bindingCheck) this.pendingSaves.delete(clearKey);
       }
       const clearResult = await targetMemory.clearAll(true);
       // Fix #438: persist so cleared state survives restart. Tracked so a success
       // clears any stale failure record for this memory.
-      await this.saveMemoryTracked(clearKey, targetMemory, manager);
+      this.checkOrigin(origin);
+      await this.saveMemoryTracked(clearKey, targetMemory, manager, origin);
+      if (this.pendingSaves.get(clearKey) === pendingClear) this.pendingSaves.delete(clearKey);
       return clearResult;
     });
   }
@@ -584,31 +659,43 @@ export class MemorySaveHandler {
     memoryName: string,
     memory: Memory,
     manager: MemoryManager,
+    origin: SaveOrigin,
   ): void {
     this.requireLegacyDeferred(manager);
     const key = this.memorySaveKey(memoryName);
     // Capture the originating per-user context now, while a request context is
     // active, so a shutdown flush (which runs with none) can re-establish it.
-    const context = this.contextScope?.getContext?.();
+    this.checkOrigin(origin);
     const existing = this.pendingSaves.get(key);
     if (existing) {
       clearTimeout(existing.timer);
       this.debounceMetrics.coalesced++;
       logger.debug(`[MCPAQLHandler] Coalesced save for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
     }
+    let queued!: PendingSave;
     const timer = setTimeout(() => {
       if (this.observeDeferredRefusal(manager)) return;
-      this.pendingSaves.delete(key);
-      this.debounceMetrics.written++;
-      logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
-      this.saveMemoryTracked(key, memory, manager).catch((err) => {
-        logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);
+      if (!origin.bindingCheck) {
+        this.pendingSaves.delete(key);
+        this.debounceMetrics.written++;
+        logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
+        this.saveMemoryTracked(key, memory, manager, origin).catch(err => {
+          logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);
+        });
+        return;
+      }
+      void this.flushOne(key, memory, manager, 'debounce timer', origin).then(saved => {
+        if (this.pendingSaves.get(key) === queued &&
+          (saved || this.failedMemorySaves.get(key)?.memory === memory)) this.pendingSaves.delete(key);
+      }).catch(err => {
+        logger.error(`[MCPAQLHandler] Debounced save retained for memory '${memoryName}': ${err}`);
       });
     }, STORAGE_LAYER_CONFIG.MEMORY_SAVE_DEBOUNCE_MS);
     if (typeof timer === 'object' && 'unref' in timer) {
       timer.unref();
     }
-    this.pendingSaves.set(key, { timer, memory, manager, context });
+    queued = { timer, memory, manager, ...origin };
+    this.pendingSaves.set(key, queued);
   }
 
   /**
@@ -622,12 +709,17 @@ export class MemorySaveHandler {
     key: string,
     memory: Memory,
     manager: MemoryManager,
+    origin: SaveOrigin = {},
   ): Promise<void> {
+    this.checkOrigin(origin);
     const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;
     this.memorySaveAttempts.set(key, attempt);
+    let originalProbeToken: string | null = null;
     try {
       this.requireLegacyDeferred(manager);
+      if (origin.bindingCheck) originalProbeToken = manager.getMemoryProbeToken(memory);
       await manager.save(memory);
+      this.checkOrigin(origin);
       // A save already in flight cannot be cancelled. Keep its evidence if the
       // boundary closes before bookkeeping; never claim that it rolled back.
       this.requireLegacyDeferred(manager);
@@ -644,11 +736,12 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
-          probeToken: this.deferredSavesRefused ? null : manager.getMemoryProbeToken(memory),
+          probeToken: this.deferredSavesRefused ? null : origin.bindingCheck ? originalProbeToken : manager.getMemoryProbeToken(memory),
           // getContext() here returns the ambient context on the normal debounced
           // path, and the re-established context when retried from the shutdown
           // flush (flushOne runs saveMemoryTracked inside runInSaveContext).
-          context: this.contextScope?.getContext?.(),
+          context: origin.context ?? this.contextScope?.getContext?.(),
+          bindingCheck: origin.bindingCheck,
         });
       }
       throw err;

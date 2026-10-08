@@ -154,6 +154,9 @@ export class DatabaseTenantMemoryRegistry {
     if (deps.storageLayerFactory !== factory || deps.getCurrentUserId !== resolver) {
       throw new Error('Tenant memory dependencies must preserve actual factory and resolver');
     }
+    // Captures can start this flight before operation authorization. DB-only
+    // construction must never register file watchers or auto-reload callbacks.
+    if (deps.fileWatchService !== undefined) throw new Error('Tenant DB memory construction excludes filesystem watchers');
     this.requireTenant(tenant);
     if (legacy) return { manager: new MemoryManager(deps) };
     const durable = factory.createDurableAdmittedMemoryManager(deps, this.deps.getAttribution);

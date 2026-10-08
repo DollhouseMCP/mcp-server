@@ -25,7 +25,7 @@ import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
 import { AgentManager } from '../elements/agents/AgentManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
-import { TenantMemoryOperationProvider } from '../storage/TenantMemoryOperationProvider.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 import { EnsembleManager } from '../elements/ensembles/EnsembleManager.js';
 import { logger } from '../utils/logger.js';
 import { ElementNotFoundError } from '../utils/ErrorHandler.js';
@@ -186,7 +186,13 @@ export class ElementCRUDHandler {
     if (!this.memoryProvider) throw new Error('Trusted memory provider required');
     const capture = this.memoryProvider.capture();
     const operation = await this.memoryProvider.resolve(capture);
-    operation.assertCurrent();
+    return this.bindCapturedMemoryOperation(this.memoryProvider, operation);
+  }
+
+  /** Internal same-provider caller composition. Never accepts a structural manager or reselects. */
+  bindCapturedMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation): ElementCRUDHandler {
+    if (provider !== this.memoryProvider) throw new Error('Memory caller provider binding mismatch');
+    provider.assertOperation(operation);
     const bound = new ElementCRUDHandler(this.skillManager, this.templateManager, this.templateRenderer,
       this.agentManager, operation.manager, this.ensembleManager, this.personaManager,
       this.portfolioManager, this.initService, this.indicatorService, this.fileOperations,

@@ -23,7 +23,12 @@ import type { SkillManager } from '../../../src/elements/skills/SkillManager.js'
 import { Ensemble } from '../../../src/elements/ensembles/Ensemble.js';
 import type { EnsembleManager } from '../../../src/elements/ensembles/EnsembleManager.js';
 import type { AgentManager } from '../../../src/elements/agents/AgentManager.js';
-import type { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
+import { MCPAQLHandler, type HandlerRegistry } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
+import { PermissionLevel } from '../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import { SchemaDispatcher } from '../../../src/handlers/mcp-aql/SchemaDispatcher.js';
+import { DATABASE_MEMORY_LEGACY_PROFILE } from '../../../src/storage/DatabaseMemoryLegacyMutationGuard.js';
+import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 
 const owned: { directory: string; dispose: () => Promise<void> }[] = [];
 afterEach(async () => {
@@ -66,8 +71,8 @@ async function fixture() {
   });
   root.manager();
   owned.push({ directory, dispose: () => root.container.dispose() });
-  const builds = jest.fn((factory: ElementManagerDeps['storageLayerFactory'], resolver: () => string) =>
-    ({ ...template, storageLayerFactory: factory, getCurrentUserId: resolver }));
+  const builds = jest.fn((factory: ElementManagerDeps['storageLayerFactory'], resolver: () => string): ElementManagerDeps =>
+    ({ ...template, fileWatchService: undefined, storageLayerFactory: factory, getCurrentUserId: resolver }));
   const registry = new DatabaseTenantMemoryRegistry({ db, getEffectiveTenant: getTenant,
     createManagerDeps: builds, getAttribution: () => ({ contextRoot: 'trusted-test-root', sessionId: 'test-session', transport: 'http' }) });
   return { registry, container: root.container, tracker: root.container.resolve<ContextTracker>('ContextTracker'), db, scope, first, second, modes, builds, execute, transaction,
@@ -286,6 +291,154 @@ describe('actual CRUD and activation caller plumbing (transport reads controlled
     expect([...state.get(second.session!.sessionId)!.memories]).toEqual(['session-two-memory']);
     await tracker.runAsync(first,async()=>expect((await manager.getActiveMemories()).map(memory=>memory.metadata.name)).toEqual(['session-one-memory']));
     await tracker.runAsync(second,async()=>expect((await manager.getActiveMemories()).map(memory=>memory.metadata.name)).toEqual(['session-two-memory']));
+  });
+
+});
+
+
+function aql(f: Awaited<ReturnType<typeof fixture>>, provider: TenantMemoryOperationProvider,
+  fixed: MemoryManager, gatekeeper: Gatekeeper, extra: Partial<HandlerRegistry> = {}): MCPAQLHandler {
+  const c = f.container;
+  const handlers: HandlerRegistry = { elementCRUD: crud(f,provider,f.tracker), memoryManager: fixed,
+    agentManager: c.resolve('AgentManager'), templateRenderer: c.resolve('TemplateRenderer'),
+    elementQueryService: c.resolve('ElementQueryService'), portfolioManager: c.resolve('PortfolioManager'), gatekeeper, ...extra };
+  return new MCPAQLHandler(handlers, f.tracker, provider);
+}
+function permissiveGate(): Gatekeeper {
+  const gate = new Gatekeeper(undefined, { enableAuditLogging: false });
+  const enforce = gate.enforce.bind(gate);
+  jest.spyOn(gate, 'enforce').mockImplementation((input, operations) => {
+    const decision = enforce(input,operations);
+    if (decision.errorCode === 'ENDPOINT_MISMATCH' || decision.errorCode === 'UNKNOWN_OPERATION') return decision;
+    return { allowed:true,permissionLevel:PermissionLevel.AUTO_APPROVE,reason:'Owned test authorization' };
+  });
+  return gate;
+}
+describe('actual AQL local caller view and inert pre-gate DB construction', () => {
+  it.each(['legacy','guarded'] as const)('refuses supplied filesystem watcher before %s manager construction', async mode => {
+    const f=await fixture();const original=f.builds.getMockImplementation()!;
+    f.modes.set(f.first,[{protocol_version:1,profile:mode==='legacy'?DATABASE_MEMORY_LEGACY_PROFILE:DATABASE_MEMORY_ADMISSION_PROFILE,mode,generation:'1'}]);
+    const watchDirectory=jest.fn(()=>()=>{});
+    f.builds.mockImplementation((factory,resolver)=>({...original(factory,resolver),fileWatchService:{watchDirectory} as unknown as ElementManagerDeps['fileWatchService']}));
+    await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
+      const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
+      await expect(provider.resolve(provider.capture())).rejects.toThrow('excludes filesystem watchers');
+    });
+    expect(watchDirectory).not.toHaveBeenCalled();
+  });
+  it('preserves ordinary standalone manager watcher registration when enabled', async()=>{
+    const f=await fixture();const original=f.builds.getMockImplementation()!;const watchDirectory=jest.fn(()=>()=>{});
+    const previous=process.env.DOLLHOUSE_ENABLE_FILE_WATCHER;process.env.DOLLHOUSE_ENABLE_FILE_WATCHER='true';
+    let manager:MemoryManager|undefined;
+    try {
+      manager=new MemoryManager({...original(f.container.resolve('StorageLayerFactory'),()=>f.first),
+        fileWatchService:{watchDirectory} as unknown as ElementManagerDeps['fileWatchService']});
+      expect(watchDirectory).toHaveBeenCalledTimes(1);
+    } finally { if(previous===undefined)delete process.env.DOLLHOUSE_ENABLE_FILE_WATCHER;else process.env.DOLLHOUSE_ENABLE_FILE_WATCHER=previous;await manager?.dispose(); }
+  });
+  it('requires a genuine operation minted by the same provider for nested CRUD binding',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
+    const other=new TenantMemoryOperationProvider(f.registry,f.tracker);const handler=crud(f,provider,f.tracker);
+    await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
+      const operation=await provider.resolve(provider.capture());
+      expect(()=>handler.bindCapturedMemoryOperation(provider,{...operation})).toThrow('Authentic bound');
+      expect(()=>handler.bindCapturedMemoryOperation(other,operation)).toThrow('provider binding mismatch');
+      expect(handler.bindCapturedMemoryOperation(provider,operation)).toBeInstanceOf(ElementCRUDHandler);
+    });
+  });
+  it('dispatches actual schema CRUD and legacy search through one selected manager without root use or recapture',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
+    const fixed=await f.registry.resolve(f.registry.capture());const selected=await f.scope.run(f.second,()=>f.registry.resolve(f.registry.capture()));
+    const rootList=jest.spyOn(fixed,'list').mockResolvedValue([]);
+    const list=jest.spyOn(selected,'list').mockResolvedValue([new Memory({name:'selected-owner',description:'selected-description'},f.container.resolve('MetadataService'))]);
+    const resolve=jest.spyOn(provider,'resolve');const handler=aql(f,provider,fixed,permissiveGate());
+    expect(SchemaDispatcher.canDispatch('list_elements',handler.operations)).toBe(true);
+    expect(SchemaDispatcher.canDispatch('query_elements',handler.operations)).toBe(false);
+    await f.scope.run(f.second,()=>f.tracker.runAsync(invocation(f.tracker,f.second),async()=>{
+      const schema=await handler.handleRead({operation:'list_elements',params:{element_type:'memory'}});
+      expect(schema.success).toBe(true);expect(JSON.stringify(schema)).toContain('selected-owner');
+      const legacy=await handler.handleRead({operation:'query_elements',element_type:'memory',params:{}});
+      expect(legacy.success).toBe(true);expect(JSON.stringify(legacy)).toContain('selected-owner');
+    }));
+    expect(rootList).not.toHaveBeenCalled();expect(list).toHaveBeenCalledTimes(2);expect(resolve).toHaveBeenCalledTimes(2);
+  });
+  it('denies the real gate before any tenant memory initialization, reads, repair, seed, candidate or persistence effects',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);
+    const fixed=await f.registry.resolve(f.registry.capture());const gate=new Gatekeeper(undefined,{enableAuditLogging:false});
+    jest.spyOn(gate,'enforce').mockReturnValue({allowed:false,permissionLevel:PermissionLevel.DENY,reason:'Owned denial'});
+    const effects=['list','load','save','find','assertPersistable','repairCorruptedNames','installSeedMemories','loadAndActivateAutoLoadMemories'] as const;
+    const spies=effects.map(method=>jest.spyOn(MemoryManager.prototype,method));
+    const handler=aql(f,provider,fixed,gate);
+    await f.scope.run(f.second,()=>f.tracker.runAsync(invocation(f.tracker,f.second),async()=>{
+      const result=await handler.handleCreate({operation:'addEntry',params:{element_name:'untouched',content:'unaccepted'}});
+      expect(result.success).toBe(false);
+    }));
+    expect(gate.enforce).toHaveBeenCalledTimes(1);expect(f.builds).toHaveBeenCalledTimes(2);
+    for(const spy of spies)expect(spy).not.toHaveBeenCalled();
+  });
+  it('refuses changed original invocation during the policy barrier before selected-memory dispatch',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);const fixed=await f.registry.resolve(f.registry.capture());
+    const gate=permissiveGate();const context=invocation(f.tracker,f.first);const handler=aql(f,provider,fixed,gate);
+    const list=jest.spyOn(fixed,'list').mockResolvedValue([]);
+    jest.spyOn(gate,'enforce').mockImplementation(()=>{context.requestId=randomUUID();return {allowed:true,permissionLevel:PermissionLevel.AUTO_APPROVE,reason:'Controlled drift'};});
+    await f.tracker.runAsync(context,async()=>{
+      const result=await handler.handleRead({operation:'list_elements',params:{element_type:'memory'}});
+      expect(result.success).toBe(false);expect(JSON.stringify(result)).toContain('context changed');
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+  it('refuses direct and schema/execution agent routes before independent cached memory-resolver effects',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);const fixed=await f.registry.resolve(f.registry.capture());
+    const agent=f.container.resolve<AgentManager>('AgentManager');const execute=jest.spyOn(agent,'executeAgent');const resume=jest.spyOn(agent,'continueAgentExecution');
+    const handler=aql(f,provider,fixed,permissiveGate());
+    await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
+      for(const operation of ['execute_agent','continue_execution','resume_from_handoff']) {
+        const result=await handler.handleExecute({operation,params:{element_name:'unexecuted'}});
+        expect(result.success).toBe(false);expect(JSON.stringify(result)).toContain('composition is required');
+      }
+    });
+    expect(execute).not.toHaveBeenCalled();expect(resume).not.toHaveBeenCalled();
+  });
+  it('refuses explicit configured provider absence while preserving ordinary two-argument construction',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);const fixed=await f.registry.resolve(f.registry.capture());
+    const configured=aql(f,provider,fixed,permissiveGate());
+    const handlers=(configured as unknown as {handlers:HandlerRegistry}).handlers;
+    for(const missing of [undefined,null,false])expect(()=>new MCPAQLHandler(handlers,f.tracker,missing as unknown as TenantMemoryOperationProvider)).toThrow('Actual trusted memory provider');
+    expect(()=>new MCPAQLHandler(handlers,f.tracker)).not.toThrow();
+    expect(f.builds).toHaveBeenCalledTimes(1);
+  });
+  it('refuses cached portfolio/index and local collection paths before effects, including explicit non-memory filters',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);const fixed=await f.registry.resolve(f.registry.capture());
+    const invoke=jest.fn(async()=>({content:[{type:'text',text:'unexpected cached operation'}]}));
+    const extra={collectionHandler:{installContent:invoke,submitContent:invoke},
+      portfolioHandler:{portfolioStatus:invoke,portfolioConfig:invoke,searchPortfolio:invoke,searchAll:invoke,initPortfolio:invoke,syncPortfolio:invoke},
+      syncHandler:{handleSyncOperation:invoke},
+      enhancedIndexHandler:{findSimilarElements:invoke,getElementRelationships:invoke,searchByVerb:invoke,getRelationshipStats:invoke}} as unknown as Partial<HandlerRegistry>;
+    const handler=aql(f,provider,fixed,permissiveGate(),extra);
+    const operations=[['install_collection_content','CREATE'],['submit_collection_content','CREATE'],
+      ['portfolio_status','READ'],['portfolio_config','READ'],['search_portfolio','READ'],['search_all','READ'],
+      ['init_portfolio','CREATE'],['sync_portfolio','CREATE'],['portfolio_element_manager','CREATE'],
+      ['find_similar_elements','READ'],['get_element_relationships','READ'],['search_by_verb','READ'],['get_relationship_stats','READ']] as const;
+    await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
+      for(const [operation,endpoint] of operations){
+        const input={operation,params:{element_type:'persona',type:'persona',path:'personas/unknown.yaml',content:'unknown',query:'test',verb:'test',element_name:'test',operation:'download'}};
+        const result=endpoint==='CREATE'?await handler.handleCreate(input):await handler.handleRead(input);
+        expect(result.success).toBe(false);expect(JSON.stringify(result)).toContain('portfolio/index memory composition');
+      }
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('preserves remote-only collection reads in configured mode',async()=>{
+    const f=await fixture();const provider=new TenantMemoryOperationProvider(f.registry,f.tracker);const fixed=await f.registry.resolve(f.registry.capture());
+    const invoke=jest.fn(async()=>({content:[{type:'text',text:'remote-only collection'}]}));
+    const handler=aql(f,provider,fixed,permissiveGate(),{collectionHandler:{browseCollection:invoke,searchCollection:invoke,searchCollectionEnhanced:invoke,getCollectionContent:invoke,getCollectionCacheHealth:invoke} as unknown as HandlerRegistry['collectionHandler']});
+    await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
+      for(const operation of ['browse_collection','search_collection','search_collection_enhanced','get_collection_content','get_collection_cache_health']){
+        const result=await handler.handleRead({operation,params:{query:'test',path:'remote/path'}});
+        expect(result.success).toBe(true);expect(JSON.stringify(result)).toContain('remote-only collection');
+      }
+    });
+    expect(invoke).toHaveBeenCalledTimes(5);
   });
 
 });

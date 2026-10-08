@@ -44,7 +44,7 @@ required('required PostgreSQL trusted CRUD and activation caller', () => {
     try {
       root.manager();
       const registry=new DatabaseTenantMemoryRegistry({db:f.db,getEffectiveTenant:getTenant,
-        createManagerDeps:(factory,resolver)=>({...deps,storageLayerFactory:factory,getCurrentUserId:resolver}),
+        createManagerDeps:(factory,resolver)=>({...deps,fileWatchService:undefined,storageLayerFactory:factory,getCurrentUserId:resolver}),
         getAttribution:()=>({contextRoot:'owned-caller-fixture',sessionId:'fixture',transport:'http'})});
       const fixed=await registry.resolve(registry.capture());
       const tracker=root.container.resolve<ContextTracker>('ContextTracker');const provider=new TenantMemoryOperationProvider(registry,tracker);
