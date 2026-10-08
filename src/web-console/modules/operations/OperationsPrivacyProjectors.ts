@@ -310,3 +310,58 @@ function systemMetricTypeField(record: UnknownRecord, key: string): SystemMetric
   const value = record[key];
   return value === 'counter' || value === 'gauge' || value === 'histogram' ? value : 'gauge';
 }
+
+/** Closed projection of HTTP/auth aggregates, without session identities or raw errors. */
+export function projectHttpRuntimeMetrics(value: unknown): Record<string, unknown> {
+  const record = objectValue(value);
+  const sessions = objectValue(record.sessions);
+  const memory = objectValue(record.memory);
+  const authorization = objectValue(record.authAuthorization);
+  const reasons = objectValue(authorization.failuresByReason);
+  const auth = Object.fromEntries(Object.entries(objectValue(record.auth))
+    .filter(([op]) => ['auth.validateToken', 'auth.beginInteraction', 'auth.completeInteraction', 'auth.findAccount'].includes(op))
+    .map(([op, value]) => {
+    const stats = objectValue(value);
+    return [op, {
+      count: numberField(stats, 'count'),
+      successCount: numberField(stats, 'successCount'),
+      errorCount: numberField(stats, 'errorCount'),
+      successRate: numberField(stats, 'successRate'),
+      avgMs: numberField(stats, 'avgMs'),
+      p50Ms: numberField(stats, 'p50Ms'),
+      p95Ms: numberField(stats, 'p95Ms'),
+      p99Ms: numberField(stats, 'p99Ms'),
+    }];
+  }));
+  return {
+    available: record.available === true,
+    version: stringField(record, 'version'),
+    sessions: {
+      active: numberField(sessions, 'active'),
+      pooled: numberField(sessions, 'pooled'),
+      created: numberField(sessions, 'created'),
+      disposed: numberField(sessions, 'disposed'),
+      expired: numberField(sessions, 'expired'),
+      poolHits: numberField(sessions, 'poolHits'),
+      poolMisses: numberField(sessions, 'poolMisses'),
+      rateLimitedRequests: numberField(sessions, 'rateLimitedRequests'),
+    },
+    auth,
+    authAuthorization: {
+      failureCount: numberField(authorization, 'failureCount'),
+      failuresByReason: {
+        no_scope_granted: numberField(reasons, 'no_scope_granted'),
+        end_user_denied: numberField(reasons, 'end_user_denied'),
+        oauth_error: numberField(reasons, 'oauth_error'),
+        server_error: numberField(reasons, 'server_error'),
+      },
+    },
+    memory: {
+      rss: numberField(memory, 'rss'),
+      heapTotal: numberField(memory, 'heapTotal'),
+      heapUsed: numberField(memory, 'heapUsed'),
+      external: numberField(memory, 'external'),
+      arrayBuffers: numberField(memory, 'arrayBuffers'),
+    },
+  };
+}
