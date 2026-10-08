@@ -31,6 +31,7 @@ import {
   projectOperationalMetric,
   projectOperationalMetrics,
   projectSystemMetrics,
+  projectHttpRuntimeMetrics,
 } from './OperationsPrivacyProjectors.js';
 import type { ISystemMetricsSource } from './SystemMetricsSource.js';
 import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
@@ -49,6 +50,7 @@ const OPERATION_AUDIT_IDS = [
   'operate.metrics.show',
   'operate.metrics.stream',
   'operate.metrics.system',
+  'operate.metrics.http',
 ] as const;
 
 const OPERATIONS_STREAM_POLICY = {
@@ -68,6 +70,8 @@ export interface OperationsModuleOptions {
   readonly operatorConfigDefinitions?: readonly OperatorConfigSettingDefinition[];
   /** In-process System A metrics sink; absent when metrics collection is off. */
   readonly systemMetrics?: ISystemMetricsSource;
+  /** Trusted transport snapshot, resolved only after admin authorization. */
+  readonly httpMetrics?: () => unknown;
   readonly now?: () => Date;
 }
 
@@ -264,6 +268,18 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
             },
           });
         },
+      },
+      {
+        method: 'GET',
+        path: '/api/v1/admin/operate/metrics/http',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.metrics.http',
+        privacyProjector: projectHttpRuntimeMetrics,
+        handler: () => ({ status: 200, body: options.httpMetrics?.() ?? { available: false } }),
       },
       {
         // System A: the MCP server's in-process operational metrics
