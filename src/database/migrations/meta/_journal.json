@@ -423,6 +423,13 @@
       "breakpoints": true
     },
     {
+      "idx": 60,
+      "version": "7",
+      "when": 1791504000000,
+      "tag": "0060_memory_legacy_mutation_permission",
+      "breakpoints": true
+    },
+    {
       "idx": 61,
       "version": "7",
       "when": 1791417602000,
