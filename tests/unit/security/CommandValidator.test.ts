@@ -80,8 +80,10 @@ describe('CommandValidator', () => {
       // CommandValidator restricts PATH to Unix-only paths (/usr/bin:/bin:/usr/local/bin).
       // On Windows, git is not on that restricted PATH, so skip this test.
       if (process.platform === 'win32') return;
-      const result = await CommandValidator.secureExec('git', ['status']);
+      // Exercise actual execution/output without scanning the CI checkout.
+      const result = await CommandValidator.secureExec('git', ['--version']);
       expect(typeof result).toBe('string');
+      expect(result).toMatch(/^git version /);
     });
 
     it('should reject shell metacharacters before execution', async () => {
