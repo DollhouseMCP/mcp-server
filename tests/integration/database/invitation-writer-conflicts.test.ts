@@ -64,7 +64,8 @@ async function observeLifetimeLockFailure(cause: unknown): Promise<void> {
       FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
       JOIN pg_namespace n ON n.oid = c.relnamespace
       LEFT JOIN pg_stat_activity a ON a.pid = l.pid
-      WHERE n.nspname = 'public' AND c.relname IN ('users', 'auth_accounts',
+      WHERE l.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+        AND n.nspname = 'public' AND c.relname IN ('users', 'auth_accounts',
         'user_admin_roles', 'account_allowlist_entries', 'admin_audit_chain_heads',
         'admin_audit_events', 'security_invalidation_events')
       ORDER BY c.relname, l.pid, l.mode, l.granted LIMIT 128`);
