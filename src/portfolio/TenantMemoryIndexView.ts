@@ -1,4 +1,4 @@
-/** Dormant caller compatibility. No production registration or qualification authority. */
+/** Invocation-bound index compatibility; grants no boot qualification or write authority. */
 import path from 'node:path';
 import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 import type { PathService } from '../paths/PathService.js';

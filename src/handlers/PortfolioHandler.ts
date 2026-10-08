@@ -1,3 +1,5 @@
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import { bindTenantMemoryIndexView, type TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
 
 import { GitHubAuthManager } from '../auth/GitHubAuthManager.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
@@ -36,6 +38,71 @@ import { normalizeElementType, formatElementTypesList } from '../utils/elementTy
  * @security-audit-suppress DMCP-SEC-006
  */
 export class PortfolioHandler {
+    private memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies };
+    private boundOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+    private originalBindingFailure?: { readonly cause: unknown };
+    private assertMemoryOperation(): void {
+        if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+        if (!this.boundOperation) return;
+        try { this.boundOperation.provider.assertOperation(this.boundOperation.operation); }
+        catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+    }
+
+    private withMemoryOperation<T>(action: (handler: PortfolioHandler) => Promise<T>): Promise<T> {
+        if (!this.memoryComposition) return action(this);
+        const provider = this.memoryComposition.provider;
+        const capture = provider.capture();
+        return provider.resolve(capture).then(operation => this.withCapturedMemoryOperation(provider, operation, action));
+    }
+
+    async withCapturedMemoryOperation<T>(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+        action: (handler: PortfolioHandler) => Promise<T>): Promise<T> {
+        if (provider !== this.memoryComposition?.provider) throw new Error('Memory caller provider binding mismatch');
+        provider.assertOperation(operation);
+        const view = bindTenantMemoryIndexView(provider, operation, this.memoryComposition.dependencies);
+        let result: T;
+        try {
+            if (!view.unifiedIndex) throw new Error('Selected remote index collaborators required');
+            const bound = this.bindMemoryOperation(provider, operation, view);
+            result = await action(bound);
+            bound.assertMemoryOperation();
+            provider.assertOperation(operation);
+        } catch (cause) {
+            try { await view.dispose(); } catch { /* Preserve the original action refusal. */ }
+            throw cause;
+        }
+        await view.dispose();
+        this.assertMemoryOperation();
+        provider.assertOperation(operation);
+        return result;
+    }
+
+    private readonly fixedPortfolioIndex?: PortfolioIndexManager;
+    private readonly fixedUnifiedIndex?: UnifiedIndexManager;
+    private get portfolioIndexManager(): PortfolioIndexManager {
+        this.assertMemoryOperation();
+        if (!this.fixedPortfolioIndex) throw new Error('Selected portfolio index required');
+        return this.fixedPortfolioIndex;
+    }
+    private get unifiedIndexManager(): UnifiedIndexManager {
+        this.assertMemoryOperation();
+        if (!this.fixedUnifiedIndex) throw new Error('Selected unified index required');
+        return this.fixedUnifiedIndex;
+    }
+
+    private bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+        view: ReturnType<typeof bindTenantMemoryIndexView>): PortfolioHandler {
+        provider.assertOperation(operation); view.assertCurrent();
+        if (!view.unifiedIndex) throw new Error('Selected remote index collaborators required');
+        const bound = new PortfolioHandler(this.githubAuthManager, this.portfolioManager,
+            this.portfolioPullHandler.bindMemoryOperation(provider, operation, view.portfolioIndex),
+            view.portfolioIndex, view.unifiedIndex, this.initService, this.indicatorService,
+            this.configManager, this.fileOperations, this.tokenManager, this.portfolioRepoManager,
+            this.collectionHandler?.bindMemoryOperation(provider, operation, view));
+        bound.boundOperation = Object.freeze({ provider, operation });
+        return bound;
+    }
+
     private readonly fileOperations: FileOperationsService;
     private readonly tokenManager: TokenManager;
     private readonly portfolioRepoManager: PortfolioRepoManager;
@@ -44,24 +111,32 @@ export class PortfolioHandler {
         private readonly githubAuthManager: GitHubAuthManager,
         private readonly portfolioManager: PortfolioManager,
         private readonly portfolioPullHandler: PortfolioPullHandler,
-        private readonly portfolioIndexManager: PortfolioIndexManager,
-        private readonly unifiedIndexManager: UnifiedIndexManager,
+        portfolioIndexManager: PortfolioIndexManager | undefined,
+        unifiedIndexManager: UnifiedIndexManager | undefined,
         private readonly initService: InitializationService,
         private readonly indicatorService: PersonaIndicatorService,
         private readonly configManager: ConfigManager,
         fileOperations: FileOperationsService,
         tokenManager: TokenManager,
         portfolioRepoManager: PortfolioRepoManager,
-        private readonly collectionHandler?: CollectionHandler
+        private readonly collectionHandler?: CollectionHandler,
+        memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies }
     ) {
+        if (arguments.length >= 13) {
+            if (!(memoryComposition?.provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory caller provider required');
+            this.memoryComposition = Object.freeze({ ...memoryComposition });
+        } else {
+            this.fixedPortfolioIndex = portfolioIndexManager;
+            this.fixedUnifiedIndex = unifiedIndexManager;
+        }
         // Validation moved to constructor parameters with readonly
         if (!portfolioPullHandler) {
             throw new Error('PortfolioHandler requires a PortfolioPullHandler instance');
         }
-        if (!portfolioIndexManager) {
+        if (!portfolioIndexManager && !this.memoryComposition) {
             throw new Error('PortfolioHandler requires a PortfolioIndexManager instance');
         }
-        if (!unifiedIndexManager) {
+        if (!unifiedIndexManager && !this.memoryComposition) {
             throw new Error('PortfolioHandler requires a UnifiedIndexManager instance');
         }
         if (!portfolioRepoManager) {
@@ -74,12 +149,20 @@ export class PortfolioHandler {
     }
 
     private async countElementsInDir(dirPath: string): Promise<number> {
+        this.assertMemoryOperation();
+        if (this.boundOperation && dirPath === this.portfolioManager.getElementDir(ElementType.MEMORY)) {
+            const memories = await this.boundOperation.operation.manager.list({ strictDatabase: true });
+            this.assertMemoryOperation();
+            return memories.length;
+        }
         try {
             const exists = await this.fileOperations.exists(dirPath);
+            this.assertMemoryOperation();
             if (!exists) {
                 return 0;
             }
             const files = await this.fileOperations.listDirectory(dirPath);
+            this.assertMemoryOperation();
             return files.filter(file =>
                 file.endsWith('.md') ||
                 file.endsWith('.json') ||
@@ -100,16 +183,19 @@ export class PortfolioHandler {
 
         try {
             const exists = await this.fileOperations.exists(dirPath);
+            this.assertMemoryOperation();
             if (!exists) {
                 logger.debug(`[PortfolioHandler] Element directory doesn't exist yet: ${dirPath}`);
                 return [];
             }
             const files = await this.fileOperations.listDirectory(dirPath);
+            this.assertMemoryOperation();
 
             return files
                 .filter(file => file.endsWith('.md') || file.endsWith('.json') || file.endsWith('.yaml'))
                 .map(file => file.replace(/\.(md|json|yaml)$/i, ''));
         } catch (error: any) {
+          if (this.boundOperation) throw error;
             if (error.code === 'ENOENT') {
                 logger.debug(`[PortfolioHandler] Element directory doesn't exist yet: ${dirPath}`);
                 return [];
@@ -148,6 +234,7 @@ export class PortfolioHandler {
             const filePath = path.join(dirPath, `${sanitizedName}${ext}`);
             try {
                 const stats = await this.fileOperations.stat(filePath);
+                this.assertMemoryOperation();
                 if (stats.size > MAX_FILE_SIZE) {
                     throw new Error(`File size exceeds limit of 10MB: ${stats.size} bytes`);
                 }
@@ -159,6 +246,8 @@ export class PortfolioHandler {
                 foundFile = filePath;
                 break;
             } catch (err: any) {
+          this.assertMemoryOperation();
+          if (this.boundOperation) throw err;
                 if (err.code !== 'ENOENT') {
                     throw err;
                 }
@@ -194,7 +283,12 @@ export class PortfolioHandler {
         } as any;
     }
 
-    async portfolioStatus(username?: string) {
+    portfolioStatus(username?: string): ReturnType<PortfolioHandler['portfolioStatusBody']> {
+        return this.withMemoryOperation(bound => bound.portfolioStatusBody(username));
+    }
+
+    private async portfolioStatusBody(username?: string) {
+        this.assertMemoryOperation();
         try {
           // FIX: DMCP-SEC-006 - Add security audit logging for portfolio access
           SecurityMonitor.logSecurityEvent({
@@ -209,6 +303,7 @@ export class PortfolioHandler {
             try {
               validateUsername(username);
             } catch (error) {
+          if (this.boundOperation) throw error;
               return {
                 content: [{
                   type: "text",
@@ -222,6 +317,7 @@ export class PortfolioHandler {
           let targetUsername = username;
           if (!targetUsername) {
             const authStatus = await this.githubAuthManager.getAuthStatus();
+            this.assertMemoryOperation();
             if (!authStatus.isAuthenticated || !authStatus.username) {
               return {
                 content: [{
@@ -243,6 +339,7 @@ export class PortfolioHandler {
     
           // Check if portfolio exists
           const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(targetUsername);
+          this.assertMemoryOperation();
 
           let statusText = `${this.indicatorService.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
 
@@ -266,6 +363,7 @@ export class PortfolioHandler {
               this.countElementsInDir(memoriesPath),
               this.countElementsInDir(ensemblesPath)
             ]);
+            this.assertMemoryOperation();
     
             const totalElements = personas + skills + templates + agents + memories + ensembles;
             statusText += `📈 **Local Elements**:\n`;
@@ -297,6 +395,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           return {
             content: [{
               type: "text",
@@ -306,10 +405,16 @@ export class PortfolioHandler {
         }
     }
 
-    async initPortfolio(_options: {repositoryName?: string; private?: boolean; description?: string}) {
+    initPortfolio(_options: {repositoryName?: string; private?: boolean; description?: string}): ReturnType<PortfolioHandler['initPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.initPortfolioBody(_options));
+    }
+
+    private async initPortfolioBody(_options: {repositoryName?: string; private?: boolean; description?: string}) {
+        this.assertMemoryOperation();
         try {
           // Check authentication
           const authStatus = await this.githubAuthManager.getAuthStatus();
+          this.assertMemoryOperation();
           if (!authStatus.isAuthenticated || !authStatus.username) {
             return {
               content: [{
@@ -331,6 +436,7 @@ export class PortfolioHandler {
 
           // Check if portfolio already exists
           const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
+          this.assertMemoryOperation();
 
           if (portfolioExists) {
             return {
@@ -343,6 +449,7 @@ export class PortfolioHandler {
 
           // Create portfolio with explicit consent
           await this.portfolioRepoManager.createPortfolio(username, true);
+          this.assertMemoryOperation();
 
           // FIX: DMCP-SEC-006 - Add security audit logging for portfolio initialization
           SecurityMonitor.logSecurityEvent({
@@ -366,6 +473,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           return {
             content: [{
               type: "text",
@@ -375,7 +483,12 @@ export class PortfolioHandler {
         }
     }
 
-    async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
+    portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}): ReturnType<PortfolioHandler['portfolioConfigBody']> {
+        return this.withMemoryOperation(bound => bound.portfolioConfigBody(options));
+    }
+
+    private async portfolioConfigBody(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
+        this.assertMemoryOperation();
         try {
           // FIX: DMCP-SEC-006 - Add security audit logging for configuration changes
           SecurityMonitor.logSecurityEvent({
@@ -393,6 +506,7 @@ export class PortfolioHandler {
 
           const configManager = this.configManager;
           await configManager.initialize();
+          this.assertMemoryOperation();
     
           let statusText = `${this.indicatorService.getPersonaIndicator()}⚙️ **Portfolio Configuration**\n\n`;
     
@@ -437,6 +551,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           return {
             content: [{
               type: "text",
@@ -446,16 +561,28 @@ export class PortfolioHandler {
         }
     }
 
-    async syncPortfolio(options: {
+    syncPortfolio(options: {
+        direction: string;
+        mode?: string;
+        force: boolean;
+        dryRun: boolean;
+        confirmDeletions?: boolean;
+      }): ReturnType<PortfolioHandler['syncPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.syncPortfolioBody(options));
+    }
+
+    private async syncPortfolioBody(options: {
         direction: string; 
         mode?: string;
         force: boolean; 
         dryRun: boolean;
         confirmDeletions?: boolean;
       }) {
+        this.assertMemoryOperation();
         try {
           // Check authentication
           const authStatus = await this.githubAuthManager.getAuthStatus();
+          this.assertMemoryOperation();
           if (!authStatus.isAuthenticated || !authStatus.username) {
             return {
               content: [{
@@ -477,6 +604,7 @@ export class PortfolioHandler {
 
           // Check if portfolio exists (PortfolioRepoManager is injected with TokenManager)
           const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
+          this.assertMemoryOperation();
 
           if (!portfolioExists) {
             return {
@@ -505,8 +633,10 @@ export class PortfolioHandler {
             for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
               try {
                 const elements = await this.getElementsList(elementType);
+                this.assertMemoryOperation();
                 elementTypeCounts[elementType] = elements.length;
               } catch (error: any) {
+          if (this.boundOperation) throw error;
                 elementTypeCounts[elementType] = 'ERROR';
                 elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
               }
@@ -540,6 +670,10 @@ export class PortfolioHandler {
           }
     
           // For now, implement basic push functionality
+          if (this.boundOperation && options.direction === 'both') {
+            await this.portfolioPullHandler.preflightCombinedPull(options);
+            this.assertMemoryOperation();
+          }
           if (options.direction === 'push' || options.direction === 'both') {
             let syncCount = 0;
             let totalElements = 0;
@@ -556,9 +690,11 @@ export class PortfolioHandler {
               for (const elementType of elementTypes) {
                 try {
                   const elements = await this.getElementsList(elementType);
+                  this.assertMemoryOperation();
                   elementCounts[elementType] = elements.length;
                   totalElements += elements.length;
                 } catch (error: any) {
+          if (this.boundOperation) throw error;
                   elementCounts[elementType] = 0;
                   logger.warn(`Failed to count ${elementType}`, { error: error.message });
                 }
@@ -572,6 +708,7 @@ export class PortfolioHandler {
               syncText += `\n🚀 **Starting sync process...**\n\n`;
               
             } catch (error: any) {
+          if (this.boundOperation) throw error;
               syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
             }
             
@@ -588,6 +725,7 @@ export class PortfolioHandler {
               
               try {
                 const elements = await this.getElementsList(elementType);
+                this.assertMemoryOperation();
                 
                 for (let i = 0; i < elements.length; i++) {
                   const elementName = elements[i];
@@ -599,8 +737,10 @@ export class PortfolioHandler {
                     
                     // Load element and save to portfolio
                     const element = await this.loadElementByType(elementName, elementType);
+                    this.assertMemoryOperation();
                     if (element) {
-                      await this.portfolioRepoManager.saveElement(element, true); // Explicit consent
+                      await this.portfolioRepoManager.saveElement(element, true);
+                      this.assertMemoryOperation(); // Explicit consent
                       syncCount++;
                       typeSuccessCount++;
                       syncText += ` ✅\n`;
@@ -614,6 +754,8 @@ export class PortfolioHandler {
                       });
                     }
                   } catch (elementError: any) {
+          this.assertMemoryOperation();
+          if (this.boundOperation) throw elementError;
                     // Extract error code if present
                     const errorCode = elementError.code || (elementError.message?.match(/([A-Z_]+_\d+)/)?.[1]) || '';
                     const errorMessage = elementError.message || 'Unknown error during element sync';
@@ -648,6 +790,8 @@ export class PortfolioHandler {
                 const statusIcon = successRate === 100 ? '🎉' : successRate > 50 ? '⚠️' : '❌';
                 syncText += `  ${statusIcon} **${elementType} complete**: ${typeSuccessCount}/${elements.length} synced (${successRate}%)\n\n`;
               } catch (listError: any) {
+          this.assertMemoryOperation();
+          if (this.boundOperation) throw listError;
                 // UX IMPROVEMENT: Better error reporting for list failures
                 const errorMessage = listError.message || 'Failed to get elements list';
                 syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
@@ -769,6 +913,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           // IMPROVED ERROR HANDLING: Ensure we always have a meaningful error message
           const sanitizedError = SecureErrorHandler.sanitizeError(error);
           const errorMessage = sanitizedError?.message || (error as any)?.message || String(error) || 'Unknown error occurred';
@@ -782,7 +927,20 @@ export class PortfolioHandler {
         }
     }
 
-    async searchPortfolio(options: {
+    searchPortfolio(options: {
+        query: string;
+        elementType?: string;
+        fuzzyMatch?: boolean;
+        maxResults?: number;
+        includeKeywords?: boolean;
+        includeTags?: boolean;
+        includeTriggers?: boolean;
+        includeDescriptions?: boolean;
+      }): ReturnType<PortfolioHandler['searchPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.searchPortfolioBody(options));
+    }
+
+    private async searchPortfolioBody(options: {
         query: string; 
         elementType?: string; 
         fuzzyMatch?: boolean; 
@@ -792,6 +950,7 @@ export class PortfolioHandler {
         includeTriggers?: boolean; 
         includeDescriptions?: boolean;
       }) {
+        this.assertMemoryOperation();
         try {
           // Validate the query parameter
           if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
@@ -831,6 +990,7 @@ export class PortfolioHandler {
     
           // Perform the search
           const results = await this.portfolioIndexManager.search(options.query, searchOptions);
+          this.assertMemoryOperation();
     
           // Format the results
           let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
@@ -896,6 +1056,7 @@ export class PortfolioHandler {
           };
     
         } catch (error: any) {
+          if (this.boundOperation) throw error;
           ErrorHandler.logError('PortfolioHandler.searchPortfolio', error, { 
             query: options.query,
             elementType: options.elementType 
@@ -910,7 +1071,18 @@ export class PortfolioHandler {
         }
     }
 
-    async searchAll(options: {
+    searchAll(options: {
+        query: string;
+        sources?: string[];
+        elementType?: string;
+        page?: number;
+        pageSize?: number;
+        sortBy?: string;
+      }): ReturnType<PortfolioHandler['searchAllBody']> {
+        return this.withMemoryOperation(bound => bound.searchAllBody(options));
+    }
+
+    private async searchAllBody(options: {
         query: string;
         sources?: string[];
         elementType?: string;
@@ -918,6 +1090,7 @@ export class PortfolioHandler {
         pageSize?: number;
         sortBy?: string;
       }) {
+        this.assertMemoryOperation();
         try {
           // Validate the query parameter
           if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
@@ -964,6 +1137,7 @@ export class PortfolioHandler {
     
           // Perform the unified search
           const results = await this.unifiedIndexManager.search(searchOptions);
+          this.assertMemoryOperation();
     
           // Format the results
           let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
@@ -1041,6 +1215,7 @@ export class PortfolioHandler {
           };
     
         } catch (error: any) {
+          if (this.boundOperation) throw error;
           ErrorHandler.logError('PortfolioHandler.searchAll', error, { 
             query: options.query,
             sources: options.sources,

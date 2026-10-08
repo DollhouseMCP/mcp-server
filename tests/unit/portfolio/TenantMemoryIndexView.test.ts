@@ -28,6 +28,12 @@ import { CacheFactory } from '../../../src/cache/LRUCache.js';
 import { Memory } from '../../../src/elements/memories/Memory.js';
 import type { TenantMemoryIndexDependencies } from '../../../src/portfolio/TenantMemoryIndexView.js';
 import { bindTenantMemoryIndexView } from '../../../src/portfolio/TenantMemoryIndexView.js';
+import { EnhancedIndexHandler } from '../../../src/handlers/EnhancedIndexHandler.js';
+import { ElementCRUDHandler } from '../../../src/handlers/ElementCRUDHandler.js';
+import { MCPAQLHandler, type HandlerRegistry } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
+import { PermissionLevel } from '../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import { EnhancedIndexManager } from '../../../src/portfolio/EnhancedIndexManager.js';
 
 const owned: Array<() => Promise<void>> = [];
 afterEach(async () => { try { for (const cleanup of owned.splice(0)) await cleanup(); } finally { jest.restoreAllMocks(); } });
@@ -73,6 +79,93 @@ function remoteDependencies(f: Awaited<ReturnType<typeof fixture>>): NonNullable
     performanceMonitor: f.container.resolve('PerformanceMonitor'), fileOperations: f.deps.fileOperations,
   };
 }
+
+function indexCaller(f:Awaited<ReturnType<typeof fixture>>) {
+  return new EnhancedIndexHandler(undefined,f.container.resolve('PersonaIndicatorService'),{provider:f.provider,dependencies:f.deps});
+}
+
+function indexAql(f:Awaited<ReturnType<typeof fixture>>,enhanced:EnhancedIndexHandler,gatekeeper:Gatekeeper) {
+  const c=f.container;
+  const elementCRUD=new ElementCRUDHandler(c.resolve('SkillManager'),c.resolve('TemplateManager'),c.resolve('TemplateRenderer'),
+    c.resolve('AgentManager'),undefined,c.resolve('EnsembleManager'),c.resolve('PersonaManager'),f.deps.portfolioManager,
+    c.resolve('InitializationService'),c.resolve('PersonaIndicatorService'),c.resolve('FileOperationsService'),
+    c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),undefined,undefined,undefined,c.resolve('SessionActivationRegistry'),f.tracker,
+    {memoryProvider:f.provider});
+  const handlers:Omit<HandlerRegistry,'memoryManager'>={elementCRUD,agentManager:c.resolve('AgentManager'),
+    templateRenderer:c.resolve('TemplateRenderer'),elementQueryService:c.resolve('ElementQueryService'),
+    portfolioManager:f.deps.portfolioManager,gatekeeper,enhancedIndexHandler:enhanced};
+  const handler=new MCPAQLHandler(handlers,f.tracker,f.provider);
+  owned.push(()=>handler.dispose());return handler;
+}
+
+describe('actual configured enhanced index callers (selected DB transport controlled)',()=>{
+  it('retains one original operation through all four direct guarded discovery methods without a fixed index',async()=>{
+    const f=await fixture();const enhanced=indexCaller(f);const resolve=jest.spyOn(f.provider,'resolve');
+    await f.tracker.runAsync(f.context,async()=>{
+      const operation=await f.provider.resolve(f.provider.capture()); resolve.mockClear();
+      const memory=new Memory({name:'Selected memory',description:'Owned selected notes',triggers:['remember']},f.container.resolve('MetadataService'));
+      memory.setFilePath(randomUUID());const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      const write=jest.spyOn(f.deps.fileOperations,'writeFile');
+      const results=await Promise.all([
+        enhanced.findSimilarElements({elementName:'Selected memory',elementType:'memory',limit:5,threshold:0}),
+        enhanced.getElementRelationships({elementName:'Selected memory',elementType:'memory'}),
+        enhanced.searchByVerb({verb:'remember',limit:5}),enhanced.getRelationshipStats(),
+      ]);
+      expect(results).toHaveLength(4);expect(results.every(result=>result.content[0].text.length>0)).toBe(true);
+      expect(results[3].content[0].text).toContain('Total Elements: 1');
+      expect(list).toHaveBeenCalledTimes(4);expect(resolve).toHaveBeenCalledTimes(4);expect(write).not.toHaveBeenCalled();
+    });
+  });
+  it('preserves the exact selected read failure before recovery and even a throwing logger observer',async()=>{
+    const f=await fixture();const enhanced=indexCaller(f);
+    await f.tracker.runAsync(f.context,async()=>{
+      const operation=await f.provider.resolve(f.provider.capture());const cause=new Error('Original selected index read failure');
+      const list=jest.spyOn(operation.manager,'list').mockRejectedValue(cause);
+      const {logger}=await import('../../../src/utils/logger.js');
+      jest.spyOn(logger,'error').mockImplementation(()=>{throw new Error('Secondary logging failure');});
+      await expect(enhanced.findSimilarElements({elementName:'Selected memory',limit:5,threshold:0})).rejects.toBe(cause);
+      expect(list).toHaveBeenCalledTimes(1);
+    });
+  });
+  it('creates the real selected index only after AQL authorization and reuses the already captured operation',async()=>{
+    const f=await fixture();const enhanced=indexCaller(f);const gate=new Gatekeeper(undefined,{enableAuditLogging:false});
+    const enforce=jest.spyOn(gate,'enforce').mockReturnValue({allowed:false,permissionLevel:PermissionLevel.DENY,reason:'Owned denial'});
+    const enter=jest.spyOn(enhanced,'withCapturedMemoryOperation');const handler=indexAql(f,enhanced,gate);
+    await f.tracker.runAsync(f.context,async()=>{
+      const operation=await f.provider.resolve(f.provider.capture());
+      const memory=new Memory({name:'Selected memory'},f.container.resolve('MetadataService'));memory.setFilePath(randomUUID());
+      const list=jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);const resolve=jest.spyOn(f.provider,'resolve');
+      const denied=await handler.handleRead({operation:'get_relationship_stats',params:{}});
+      expect(denied.success).toBe(false);expect(enter).not.toHaveBeenCalled();expect(list).not.toHaveBeenCalled();
+      enforce.mockReturnValue({allowed:true,permissionLevel:PermissionLevel.AUTO_APPROVE,reason:'Owned authorization'});resolve.mockClear();
+      const result=await handler.handleRead({operation:'get_relationship_stats',params:{}});
+      expect(result.success).toBe(true);expect(JSON.stringify(result)).toContain('Total Elements: 1');
+      expect(enter).toHaveBeenCalledTimes(1);expect(resolve).toHaveBeenCalledTimes(1);expect(list).toHaveBeenCalledTimes(1);
+    });
+  });
+  it('rechecks original invocation after successful awaited LEGACY index disposal before delivering the result',async()=>{
+    const f=await fixture();
+    f.execute.mockImplementation(async(statement:SQL)=>{
+      const query=new PgDialect().sqlToQuery(statement);
+      if(query.sql.includes('pg_roles'))return [{rolsuper:false,rolbypassrls:false}];
+      if(query.sql.includes('memory_backend_modes'))return [{protocol_version:1,profile:DATABASE_MEMORY_LEGACY_PROFILE,mode:'legacy',generation:'1'}];
+      return [];
+    });
+    await mkdir(f.deps.pathService.getUserPortfolioDir(f.tenant),{recursive:true});
+    const enhanced=indexCaller(f);
+    await f.tracker.runAsync(f.context,async()=>{
+      const operation=await f.provider.resolve(f.provider.capture());
+      const memory=new Memory({name:'Selected legacy memory'},f.container.resolve('MetadataService'));memory.setFilePath(randomUUID());
+      jest.spyOn(operation.manager,'list').mockResolvedValue([memory]);
+      const original=EnhancedIndexManager.prototype.dispose;
+      const dispose=jest.spyOn(EnhancedIndexManager.prototype,'dispose').mockImplementation(async function(this:EnhancedIndexManager){
+        await original.call(this);f.context.requestId=randomUUID();
+      });
+      await expect(enhanced.getRelationshipStats()).rejects.toThrow('context changed');
+      expect(dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+});
 
 describe('authentic per-operation DB memory index view', () => {
   it('discovers actual selected memory metadata before any absent filesystem memory scan', async () => {

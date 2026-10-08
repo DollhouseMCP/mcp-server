@@ -299,6 +299,7 @@ export class EnhancedIndexManager {
       this.boundMode?.assertCurrent();
       return this.index!;
     } catch (error) {
+      if (this.boundMode) throw error;
       logger.error('Failed to get Enhanced Index', error);
       throw error;
     }

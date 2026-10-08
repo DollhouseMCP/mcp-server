@@ -74,6 +74,16 @@ describe('SharedPoolServiceRegistrar', () => {
       mutableEnv.DOLLHOUSE_SHARED_POOL_ENABLED = true;
     });
 
+    it.each([undefined, null])('refuses an explicitly registered missing memory registry %j before shared database effects', async value => {
+      const container = createMockContainer();
+      container.register('DatabaseTenantMemoryRegistry', () => value);
+      container.register('DatabaseInstance', () => ({}));
+      container.register('SystemDatabaseInstance', () => ({}));
+      await expect(registrar.bootstrapAndRegister(container)).rejects.toThrow('Actual paired database memory registry');
+      expect(container.registrations.has('SystemUserProvisioner')).toBe(false);
+      expect(container.registrations.has('SharedPoolInstaller')).toBe(false);
+    });
+
     it('returns true', async () => {
       const container = createMockContainer();
       const result = await registrar.bootstrapAndRegister(container);

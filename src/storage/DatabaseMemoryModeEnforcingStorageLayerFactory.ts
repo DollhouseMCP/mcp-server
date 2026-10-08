@@ -1,4 +1,4 @@
-/** Dormant composition only. The production registrar does not select this factory. */
+/** Trusted database memory composition; every legacy mutation requires an explicit durable mode. */
 import type { DatabaseInstance } from '../database/connection.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import type { FileStorageOptions } from './IStorageLayerFactory.js';

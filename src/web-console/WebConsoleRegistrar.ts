@@ -1,3 +1,6 @@
+import { TenantMemoryOperationProvider } from '../storage/TenantMemoryOperationProvider.js';
+import { DatabaseTenantMemoryRegistry } from '../storage/DatabaseTenantMemoryRegistry.js';
+import { DatabaseMemoryAccountDeletionBoundary } from '../storage/DatabaseMemoryAccountDeletionBoundary.js';
 import { bootstrapWebConsoleOnboarding } from './WebConsoleOnboardingBootstrap.js';
 import type { PrivateBetaOnboardingConfiguration } from '../invitations/onboarding/PrivateBetaOnboardingConfiguration.js';
 import type { OnboardingHttpRouters } from '../server/createStreamableHttpApp.js';
@@ -415,10 +418,19 @@ export class WebConsoleRegistrar {
   async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
     const onboardingConfiguration = this.options.onboardingConfiguration ? structuredClone(this.options.onboardingConfiguration) : null;
     const database = resolveConsoleDatabase(container);
-    const baseStores = await createConsoleStores(database);
+    const memoryProvider = resolveConsoleMemoryProvider(container);
+    const memoryDeletionBoundary = memoryProvider
+      ? container.resolve<DatabaseMemoryAccountDeletionBoundary>('DatabaseMemoryAccountDeletionBoundary') : undefined;
+    if (memoryProvider) {
+      if (!(memoryDeletionBoundary instanceof DatabaseMemoryAccountDeletionBoundary) || !database) {
+        throw new Error('Configured console account deletion requires its actual system database boundary');
+      }
+      memoryDeletionBoundary.requireDatabase(database);
+    }
+    const baseStores = await createConsoleStores(database, memoryDeletionBoundary);
     const stores = {
       ...baseStores,
-      portfolioStore: resolvePortfolioElementStore(container, this.options, baseStores.portfolioStore, database),
+      portfolioStore: resolvePortfolioElementStore(container, this.options, baseStores.portfolioStore, database, memoryProvider),
       portfolioSyncJobStore: resolvePortfolioSyncJobStore(container, this.options, baseStores.portfolioSyncJobStore),
     };
     const adminAuditWriter = resolveAdminAuditWriter(database, container);
@@ -432,6 +444,7 @@ export class WebConsoleRegistrar {
       accountAllowlistStore: stores.accountAllowlistStore,
       securityInvalidationStore: stores.securityInvalidationStore,
       adminAuditWriter,
+      memoryDeletionBoundary,
     });
     const registry = new ConsoleModuleRegistry();
     const consoleOAuthClient = resolveConsoleOAuthClient(container, this.options);
@@ -577,6 +590,7 @@ export class WebConsoleRegistrar {
       integrationStore: stores.integrationStore,
       runtimeTerminationAcknowledgementTimeoutMs: this.options.runtimeTerminationAcknowledgementTimeoutMs,
       accountAdminMutationTransactionRunner,
+      memoryDeletionBoundary,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,
     }));
@@ -1364,7 +1378,7 @@ function operationHealthFromInvalidationReadiness(snapshot: ConsoleSecurityInval
 // evidence). Shared-hosted production activation fails loud on a memory backend (see
 // WebConsoleProductionActivation's database_required check), so a no-DB production
 // deployment is refused rather than left silently volatile.
-async function createConsoleStores(database: DatabaseInstance | undefined): Promise<ConsoleStoreSet> {
+async function createConsoleStores(database: DatabaseInstance | undefined, memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary): Promise<ConsoleStoreSet> {
   if (database) {
     const [
       { PostgresConsoleSessionStore },
@@ -1400,7 +1414,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       loginTransactionStore: markProductionAdapter(new PostgresLoginTransactionStore(database), 'PostgresLoginTransactionStore'),
       idempotencyStore: markProductionAdapter(new PostgresIdempotencyStore(database), 'PostgresIdempotencyStore'),
       factorStore: markProductionAdapter(new PostgresConsoleFactorStore(database), 'PostgresConsoleFactorStore'),
-      accountAdminStore: markProductionAdapter(new PostgresConsoleAccountAdminStore(database), 'PostgresConsoleAccountAdminStore'),
+      accountAdminStore: markProductionAdapter(new PostgresConsoleAccountAdminStore(database, memoryDeletionBoundary), 'PostgresConsoleAccountAdminStore'),
       accountAllowlistStore: markProductionAdapter(
         new PostgresConsoleAccountAllowlistStore(database),
         'PostgresConsoleAccountAllowlistStore',
@@ -1553,6 +1567,7 @@ function resolveAccountAdminMutationTransactionRunner(options: {
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary;
 }): IAccountAdminMutationTransactionRunner {
   if (options.database) {
     if (!options.container.hasRegistration('AuditHmacResolver')) {
@@ -1561,6 +1576,7 @@ function resolveAccountAdminMutationTransactionRunner(options: {
     return markProductionAdapter(new PostgresAccountAdminMutationTransactionRunner({
       db: options.database,
       hmacKeyResolver: options.container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'),
+      memoryDeletionBoundary: options.memoryDeletionBoundary,
     }), 'PostgresAccountAdminMutationTransactionRunner');
   }
   return new InMemoryAccountAdminMutationTransactionRunner({
@@ -2270,13 +2286,21 @@ function resolvePortfolioElementStore(
   options: WebConsoleRegistrarOptions,
   fallback: IPortfolioElementStore,
   database: DatabaseInstance | undefined,
+  memoryProvider?: TenantMemoryOperationProvider,
 ): IPortfolioElementStore {
-  if (options.portfolioStore !== undefined) return options.portfolioStore ?? fallback;
+  const requireConfiguredStore = (store: IPortfolioElementStore): IPortfolioElementStore => {
+    if (memoryProvider) {
+      if (!(store instanceof ManagerBackedPortfolioElementStore)) throw new Error('Configured console requires an actual tenant-bound portfolio store');
+      store.requireMemoryProvider(memoryProvider);
+    }
+    return store;
+  };
+  if (options.portfolioStore !== undefined) return requireConfiguredStore(options.portfolioStore ?? fallback);
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore)) {
-    return container.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore);
+    return requireConfiguredStore(container.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore));
   }
   if (options.enableManagerBackedPortfolioStore !== false) {
-    const store = createManagerBackedPortfolioElementStore(container);
+    const store = createManagerBackedPortfolioElementStore(container, memoryProvider);
     if (store) return markProductionAdapter(store, 'ManagerBackedPortfolioElementStore');
   }
   if (database) {
@@ -2294,21 +2318,35 @@ function resolvePortfolioElementStore(
   return fallback;
 }
 
+function resolveConsoleMemoryProvider(container: DiContainerFacade): TenantMemoryOperationProvider | undefined {
+  if (!container.hasRegistration('DatabaseTenantMemoryRegistry')) return undefined;
+  const registry = container.resolve<DatabaseTenantMemoryRegistry>('DatabaseTenantMemoryRegistry');
+  if (!(registry instanceof DatabaseTenantMemoryRegistry) ||
+      !registry.matchesDatabase(container.resolve<DatabaseInstance>('DatabaseInstance'))) {
+    throw new Error('Console memory registry requires the actual application database');
+  }
+  return new TenantMemoryOperationProvider(registry, container.resolve<ContextTracker>('ContextTracker'));
+}
+
 function createManagerBackedPortfolioElementStore(
   container: DiContainerFacade,
+  memoryProvider?: TenantMemoryOperationProvider,
 ): ManagerBackedPortfolioElementStore | null {
   if (missingPortfolioManagerServices(container).length > 0) return null;
-  const managers: ManagerBackedPortfolioManagers = {
+  const managers: Omit<ManagerBackedPortfolioManagers, 'memories'> = {
     personas: container.resolve<BaseElementManager<IElement>>('PersonaManager'),
     skills: container.resolve<BaseElementManager<IElement>>('SkillManager'),
     templates: container.resolve<BaseElementManager<IElement>>('TemplateManager'),
     agents: container.resolve<BaseElementManager<IElement>>('AgentManager'),
-    memories: container.resolve<BaseElementManager<IElement>>('MemoryManager'),
     ensembles: container.resolve<BaseElementManager<IElement>>('EnsembleManager'),
   };
+  const getCurrentUserId = container.resolve<UserIdResolver>('UserIdResolver');
+  if (memoryProvider) {
+    return new ManagerBackedPortfolioElementStore({ managers, getCurrentUserId, memoryProvider,
+      contextTracker: container.resolve<ContextTracker>('ContextTracker') });
+  }
   return new ManagerBackedPortfolioElementStore({
-    managers,
-    getCurrentUserId: container.resolve<UserIdResolver>('UserIdResolver'),
+    managers: { ...managers, memories: container.resolve<BaseElementManager<IElement>>('MemoryManager') }, getCurrentUserId,
   });
 }
 

@@ -220,6 +220,8 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_ADMIN_URL: z.string().optional(),
   /** Maximum connection pool size. */
   DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  /** Trusted tenant composition. Durable protected state still refuses when this is off. */
+  DOLLHOUSE_DATABASE_MEMORY_GUARDED: envBool(false),
   /** SSL mode for database connection. */
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
   /** Expected production database name for hosted web-console activation verification. */

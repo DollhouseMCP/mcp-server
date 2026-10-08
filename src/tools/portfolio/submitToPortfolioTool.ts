@@ -42,6 +42,8 @@ import * as path from 'path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../../storage/TenantMemoryOperationProvider.js';
+import type { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantMemoryRegistry.js';
 
 // PortfolioElement, SubmitToPortfolioParams, and SubmitToPortfolioResult
 // are imported from ./types.ts and re-exported above
@@ -60,7 +62,8 @@ export interface SubmitToPortfolioToolDependencies {
   authManager: GitHubAuthManager;
   portfolioRepoManager: PortfolioRepoManager;
   portfolioManager: PortfolioManager;
-  portfolioIndexManager: PortfolioIndexManager;
+  portfolioIndexManager?: PortfolioIndexManager;
+  memoryRegistry?: DatabaseTenantMemoryRegistry;
   rateLimiter: IRateLimiter;
   fileOperations: IFileOperationsService;
   tokenManager: TokenManager;
@@ -68,16 +71,55 @@ export interface SubmitToPortfolioToolDependencies {
 }
 
 export class SubmitToPortfolioTool {
+  private memoryOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+
+  bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+    portfolioIndexManager: PortfolioIndexManager): SubmitToPortfolioTool {
+    if (!(provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory provider required');
+    if (this.memoryRegistry) provider.assertRegistry(this.memoryRegistry);
+    provider.assertOperation(operation);
+    const bound = new SubmitToPortfolioTool(this.apiCache, { authManager: this.authManager,
+      portfolioRepoManager: this.portfolioRepoManager, portfolioManager: this.portfolioManager,
+      portfolioIndexManager, memoryRegistry: this.memoryRegistry, rateLimiter: this.rateLimiter,
+      fileOperations: this.fileOperations, tokenManager: this.tokenManager,
+      isAutoSubmitEnabled: () => this.isAutoSubmitEnabled() });
+    bound.memoryOperation = Object.freeze({ provider, operation });
+    return bound;
+  }
+
+  private originalBindingFailure?: { readonly cause: unknown };
+  private assertMemoryOperation(): void {
+    if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+    if (!this.memoryOperation) return;
+    try { this.memoryOperation.provider.assertOperation(this.memoryOperation.operation); }
+    catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+  }
+
+  private assertSubmissionType(type: ElementType): void {
+    this.assertMemoryOperation();
+    if (!this.memoryOperation) return;
+    if (!Object.values(ElementType).includes(type)) throw new Error('Unknown portfolio submission type');
+    if (type === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
+      throw new Error('Guarded database memory remote submission requires a local file and is unsupported; get_element_details or read-only console inspection does not provide an equivalent submission or backup');
+    }
+  }
+
   private authManager: GitHubAuthManager;
   private portfolioRepoManager: PortfolioRepoManager;
   private portfolioManager: PortfolioManager;
-  private portfolioIndexManager: PortfolioIndexManager;
+  private readonly fixedIndex?: PortfolioIndexManager;
+  private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
+  private get portfolioIndexManager(): PortfolioIndexManager {
+    this.assertMemoryOperation();
+    if (!this.fixedIndex) throw new Error('Authentic selected portfolio index required');
+    return this.fixedIndex;
+  }
   private rateLimiter: IRateLimiter;
   private fileOperations: IFileOperationsService;
   private tokenManager: TokenManager;
   private isAutoSubmitEnabled: () => boolean;
 
-  constructor(apiCache: APICache, dependencies: SubmitToPortfolioToolDependencies) {
+  constructor(private readonly apiCache: APICache, dependencies: SubmitToPortfolioToolDependencies) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
     // Previously: constructor(apiCache: any)
     // Now: constructor(apiCache: APICache) with proper import
@@ -87,7 +129,7 @@ export class SubmitToPortfolioTool {
     if (!dependencies.portfolioManager) {
       throw new Error('SubmitToPortfolioTool requires a PortfolioManager instance');
     }
-    if (!dependencies.portfolioIndexManager) {
+    if (!dependencies.portfolioIndexManager && !dependencies.memoryRegistry) {
       throw new Error('SubmitToPortfolioTool requires a PortfolioIndexManager instance');
     }
     if (!dependencies.rateLimiter) {
@@ -97,7 +139,8 @@ export class SubmitToPortfolioTool {
     this.authManager = dependencies.authManager;
     this.portfolioRepoManager = dependencies.portfolioRepoManager;
     this.portfolioManager = dependencies.portfolioManager;
-    this.portfolioIndexManager = dependencies.portfolioIndexManager;
+    this.fixedIndex = dependencies.portfolioIndexManager;
+    this.memoryRegistry = dependencies.memoryRegistry;
     this.rateLimiter = dependencies.rateLimiter;
     this.fileOperations = dependencies.fileOperations;
     this.tokenManager = dependencies.tokenManager;
@@ -155,6 +198,7 @@ export class SubmitToPortfolioTool {
     error?: SubmitToPortfolioResult;
   }> {
     const authStatus = await this.authManager.getAuthStatus();
+    this.assertMemoryOperation();
     if (!authStatus.isAuthenticated) {
       // Log authentication required (using existing event type)
       logger.warn('User attempted portfolio submission without authentication');
@@ -227,6 +271,7 @@ export class SubmitToPortfolioTool {
       // CRITICAL FIX: No type provided - implement smart detection across ALL element types
       // This prevents the previous hardcoded default to PERSONA and enables proper type detection
       const detectionResult = await this.detectElementType(safeName);
+      this.assertMemoryOperation();
       
       if (!detectionResult.found) {
         // UX IMPROVEMENT: Enhanced guidance with specific suggestions
@@ -234,6 +279,7 @@ export class SubmitToPortfolioTool {
         
         // Get suggestions for similar names
         const suggestions = await this.generateNameSuggestions(safeName);
+        this.assertMemoryOperation();
         
         let message = `Content "${originalName || safeName}" not found in portfolio.\n\n`;
         message += `🔍 **Searched in all element types**: ${availableTypes}\n\n`;
@@ -313,6 +359,7 @@ export class SubmitToPortfolioTool {
   }> {
     // SECURITY ENHANCEMENT (Task #7): Validate file path before processing
     const pathValidation = await this.validatePortfolioPath(localPath);
+    this.assertMemoryOperation();
     if (!pathValidation.isValid) {
       return {
         success: false,
@@ -325,6 +372,7 @@ export class SubmitToPortfolioTool {
 
     // Validate file size before reading
     const stats = await this.fileOperations.stat(safePath);
+    this.assertMemoryOperation();
     if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: 'RATE_LIMIT_EXCEEDED',
@@ -344,6 +392,7 @@ export class SubmitToPortfolioTool {
 
     // Validate content security
     const content = await this.fileOperations.readFile(safePath, { source: 'SubmitToPortfolioTool.validateFileAndContent' });
+    this.assertMemoryOperation();
     const validationResult = ContentValidator.validateAndSanitize(content);
 
     if (!validationResult.isValid && validationResult.severity === 'critical') {
@@ -501,6 +550,7 @@ export class SubmitToPortfolioTool {
   private async extractElementMetadata(filePath: string): Promise<Record<string, any> | null> {
     try {
       const content = await this.fileOperations.readFile(filePath, { source: 'SubmitToPortfolioTool.extractElementMetadata' });
+      this.assertMemoryOperation();
       
       // SECURITY FIX: Use SecureYamlParser to prevent YAML deserialization attacks
       // Previously would have used: yaml.load(yamlContent) which is vulnerable
@@ -555,6 +605,7 @@ export class SubmitToPortfolioTool {
       }
       
     } catch (error) {
+      this.assertMemoryOperation();
       logger.warn('Failed to extract metadata from element file', {
         path: filePath,
         error: error instanceof Error ? error.message : String(error)
@@ -599,6 +650,7 @@ export class SubmitToPortfolioTool {
       // Using centralized scope management for consistency
       const requiredScopes = this.tokenManager.getRequiredScopes('collection');
       const validationResult = await this.tokenManager.validateTokenScopes(token, requiredScopes);
+      this.assertMemoryOperation();
 
       if (!validationResult.isValid) {
         SecurityMonitor.logSecurityEvent({
@@ -672,6 +724,7 @@ export class SubmitToPortfolioTool {
       };
 
     } catch (error: any) {
+      this.assertMemoryOperation();
       // Handle rate limit exceeded specifically
       if (error?.code === 'RATE_LIMIT_EXCEEDED') {
         logger.warn('Token validation rate limited, allowing operation to proceed with cached status');
@@ -824,6 +877,7 @@ export class SubmitToPortfolioTool {
           throw new Error('Path contains directory traversal');
         }
       } catch (error) {
+      this.assertMemoryOperation();
         SecurityMonitor.logSecurityEvent({
           type: 'PATH_TRAVERSAL_ATTEMPT',
           severity: 'HIGH',
@@ -912,6 +966,7 @@ export class SubmitToPortfolioTool {
       };
 
     } catch (error) {
+      this.assertMemoryOperation();
       SecurityMonitor.logSecurityEvent({
         type: 'PATH_TRAVERSAL_ATTEMPT',
         severity: 'HIGH',
@@ -949,6 +1004,7 @@ export class SubmitToPortfolioTool {
     try {
       // Get current token
       const token = await this.tokenManager.getGitHubTokenAsync();
+      this.assertMemoryOperation();
       if (!token) {
         return {
           canProceed: false,
@@ -962,6 +1018,7 @@ export class SubmitToPortfolioTool {
 
       // Validate token for the specific operation
       const validation = await this.validateTokenBeforeUsage(token);
+      this.assertMemoryOperation();
       if (!validation.isValid) {
         return {
           canProceed: false,
@@ -1031,6 +1088,7 @@ export class SubmitToPortfolioTool {
       };
 
     } catch (error: any) {
+      this.assertMemoryOperation();
       SecurityMonitor.logSecurityEvent({
         type: 'TOKEN_VALIDATION_FAILURE',
         severity: 'MEDIUM',
@@ -1088,6 +1146,7 @@ export class SubmitToPortfolioTool {
   }> {
     // SECURITY ENHANCEMENT (Task #14): Smart token management for long operations
     const tokenManagement = await this.manageTokenForLongOperation('portfolio_creation');
+    this.assertMemoryOperation();
     if (!tokenManagement.canProceed) {
       return {
         success: false,
@@ -1109,11 +1168,14 @@ export class SubmitToPortfolioTool {
     // Check if portfolio exists and create if needed
     const username = authStatus.username || 'unknown';
     const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
+    this.assertMemoryOperation();
     
     if (!portfolioExists) {
       logger.info('Creating portfolio repository...');
       // Request consent for portfolio creation
+      this.assertMemoryOperation();
       const repoUrl = await this.portfolioRepoManager.createPortfolio(username, true);
+      this.assertMemoryOperation();
       if (!repoUrl) {
         return {
           success: false,
@@ -1154,6 +1216,7 @@ export class SubmitToPortfolioTool {
           'User-Agent': 'DollhouseMCP/1.0'
         }
       });
+      this.assertMemoryOperation();
 
       if (response.status === 404) {
         // File doesn't exist, not a duplicate
@@ -1170,6 +1233,7 @@ export class SubmitToPortfolioTool {
       }
 
       const data = await response.json();
+      this.assertMemoryOperation();
       
       // GitHub returns content as base64
       const existingContent = Buffer.from(data.content, 'base64').toString('utf-8');
@@ -1190,6 +1254,7 @@ export class SubmitToPortfolioTool {
       return isDuplicate;
       
     } catch (error) {
+      this.assertMemoryOperation();
       logger.warn('Error checking for existing content', {
         error: error instanceof Error ? error.message : String(error),
         path: filePath
@@ -1224,6 +1289,7 @@ export class SubmitToPortfolioTool {
           'User-Agent': 'DollhouseMCP/1.0'
         }
       });
+      this.assertMemoryOperation();
 
       if (!response.ok) {
         logger.warn('Failed to search for existing issues', {
@@ -1233,6 +1299,7 @@ export class SubmitToPortfolioTool {
       }
 
       const data = await response.json();
+      this.assertMemoryOperation();
       
       if (data.items && data.items.length > 0) {
         // Found existing issue(s)
@@ -1247,6 +1314,7 @@ export class SubmitToPortfolioTool {
       return null;
       
     } catch (error) {
+      this.assertMemoryOperation();
       logger.warn('Error checking for existing collection issue', {
         error: error instanceof Error ? error.message : String(error),
         elementName
@@ -1291,6 +1359,7 @@ export class SubmitToPortfolioTool {
       fullContent,
       authStatus.token
     );
+    this.assertMemoryOperation();
     
     let fileUrl: string | null = null;
     
@@ -1351,6 +1420,7 @@ export class SubmitToPortfolioTool {
 
     // SECURITY ENHANCEMENT (Task #14): Smart token management for collection submission
     const collectionTokenManagement = await this.manageTokenForLongOperation('collection_submission');
+    this.assertMemoryOperation();
     if (!collectionTokenManagement.canProceed) {
       // Token management failed for collection submission, but main submission succeeded
       const errorMessage = collectionTokenManagement.error?.message || 'Token management failed';
@@ -1387,6 +1457,7 @@ export class SubmitToPortfolioTool {
       token,
       localPath  // Pass the local file path for reading content
     });
+    this.assertMemoryOperation();
 
     // Build the response message based on what happened
     const portfolioMessage = wasDuplicate ? 
@@ -1419,6 +1490,9 @@ export class SubmitToPortfolioTool {
   }
 
   async execute(params: SubmitToPortfolioParams): Promise<SubmitToPortfolioResult> {
+    this.assertMemoryOperation();
+    if (this.memoryRegistry && !this.memoryOperation) throw new Error('Authentic selected portfolio submission operation required');
+    if (params.type !== undefined) this.assertSubmissionType(params.type);
     const startTime = Date.now();
     const timings: Record<string, number> = {};
     
@@ -1432,6 +1506,7 @@ export class SubmitToPortfolioTool {
       logger.info('📋 Step 1/8: Validating parameters...');
       const step1Start = Date.now();
       const validationResult = await this.validateAndNormalizeParams(params);
+      this.assertMemoryOperation();
       timings['validation'] = Date.now() - step1Start;
       logger.info(`✅ Step 1 complete (${timings['validation']}ms)`);
       if (!validationResult.success) {
@@ -1443,6 +1518,7 @@ export class SubmitToPortfolioTool {
       logger.info('🔍 Step 2/8: Finding content locally...');
       const step2Start = Date.now();
       const contentResult = await this.discoverContentWithTypeDetection(safeName!, params.type, params.name);
+      this.assertMemoryOperation();
       timings['contentDiscovery'] = Date.now() - step2Start;
       logger.info(`✅ Step 2 complete (${timings['contentDiscovery']}ms)`, {
         found: contentResult.success,
@@ -1452,7 +1528,9 @@ export class SubmitToPortfolioTool {
       if (!contentResult.success) {
         return contentResult.error!;
       }
+      this.assertMemoryOperation();
       const elementType = contentResult.elementType!;
+      this.assertSubmissionType(elementType);
       const localPath = contentResult.localPath!;
 
       // Step 3: Validate file and content security (including size check)
@@ -1460,6 +1538,7 @@ export class SubmitToPortfolioTool {
       logger.info('🔒 Step 3/8: Validating security and file size...');
       const step3Start = Date.now();
       const securityResult = await this.validateFileAndContent(localPath);
+      this.assertMemoryOperation();
       timings['security'] = Date.now() - step3Start;
       logger.info(`✅ Step 3 complete (${timings['security']}ms)`);
       if (!securityResult.success) {
@@ -1472,6 +1551,7 @@ export class SubmitToPortfolioTool {
       logger.info('🔐 Step 4/8: Checking authentication...');
       const step4Start = Date.now();
       const authResult = await this.checkAuthentication();
+      this.assertMemoryOperation();
       timings['authentication'] = Date.now() - step4Start;
       logger.info(`✅ Step 4 complete (${timings['authentication']}ms)`, {
         username: authResult.authStatus?.username,
@@ -1486,6 +1566,7 @@ export class SubmitToPortfolioTool {
       logger.info('📝 Step 5/8: Preparing metadata...');
       const step5Start = Date.now();
       const metadata = await this.prepareElementMetadata(safeName!, elementType, authStatus, localPath);
+      this.assertMemoryOperation();
       timings['metadata'] = Date.now() - step5Start;
       logger.info(`✅ Step 5 complete (${timings['metadata']}ms)`, {
         author: metadata.author,
@@ -1496,6 +1577,7 @@ export class SubmitToPortfolioTool {
       logger.info('🔧 Step 6/8: Setting up GitHub repository...');
       const step6Start = Date.now();
       const repoResult = await this.setupGitHubRepository(authStatus);
+      this.assertMemoryOperation();
       timings['repoSetup'] = Date.now() - step6Start;
       logger.info(`✅ Step 6 complete (${timings['repoSetup']}ms)`, {
         success: repoResult.success
@@ -1515,6 +1597,7 @@ export class SubmitToPortfolioTool {
         authStatus,
         localPath  // Pass file path for collection submission
       );
+      this.assertMemoryOperation();
       timings['submission'] = Date.now() - step7Start;
       
       // Step 8: Final reporting
@@ -1528,6 +1611,8 @@ export class SubmitToPortfolioTool {
       return result;
 
     } catch (error) {
+      this.assertMemoryOperation();
+      if (this.memoryOperation) throw error;
       // SECURITY ENHANCEMENT (Task #14): Enhanced error handling with token refresh guidance
       ErrorHandler.logError('submitToPortfolio', error, {
         elementName: params.name,
@@ -1547,6 +1632,7 @@ export class SubmitToPortfolioTool {
         try {
           // Get current token to determine type for guidance
           const currentToken = await this.tokenManager.getGitHubTokenAsync();
+          this.assertMemoryOperation();
           if (currentToken) {
             const tokenType = this.tokenManager.getTokenType(currentToken);
             const refreshGuidance = this.formatTokenRefreshGuidance('portfolio submission', tokenType);
@@ -1604,6 +1690,7 @@ export class SubmitToPortfolioTool {
         token: params.token,
         localPath: params.localPath  // Pass through the file path
       });
+      this.assertMemoryOperation();
 
       if (issueUrl) {
         // Check if this was an existing issue (duplicate) or newly created
@@ -1632,6 +1719,7 @@ export class SubmitToPortfolioTool {
       }
 
     } catch (error) {
+      this.assertMemoryOperation();
       logger.error('Error in collection submission prompt', { error });
       return {
         submitted: false,
@@ -1661,6 +1749,7 @@ export class SubmitToPortfolioTool {
         params.username,
         params.token
       );
+      this.assertMemoryOperation();
       
       if (existingIssueUrl) {
         logger.info('Collection issue already exists, skipping creation', {
@@ -1710,6 +1799,7 @@ export class SubmitToPortfolioTool {
         try {
           // SECURITY: Validate file size before reading to prevent memory exhaustion
           const stats = await this.fileOperations.stat(params.localPath);
+          this.assertMemoryOperation();
           if (stats.size > FILE_SIZE_LIMITS.MAX_FILE_SIZE) {
             // DO NOT truncate user content - reject if too large
             logger.error('Element file exceeds size limit for collection submission', {
@@ -1773,6 +1863,7 @@ export class SubmitToPortfolioTool {
             buildVersion: `v${PACKAGE_VERSION}`,
           });
         } catch (error) {
+      this.assertMemoryOperation();
           logger.warn('Failed to read element file content, falling back to metadata only', {
             elementName: params.elementName,
             error: error instanceof Error ? error.message : String(error)
@@ -1829,9 +1920,11 @@ ${elementContent}
 
       // PERFORMANCE OPTIMIZATION (Task #6): Use GitHub rate limiter for API calls
       // This prevents hitting GitHub rate limits and provides better error handling
+      this.assertSubmissionType(params.elementType);
       const issueUrl = await this.rateLimiter.queueRequest(
         'create-collection-issue',
         async () => {
+          this.assertMemoryOperation();
           const url = 'https://api.github.com/repos/DollhouseMCP/collection/issues';
           
           // Create AbortController for timeout
@@ -1854,6 +1947,7 @@ ${elementContent}
               }),
               signal: controller.signal
             });
+            this.assertMemoryOperation();
             
             clearTimeout(timeoutId);
 
@@ -1883,6 +1977,7 @@ ${elementContent}
 
             if (!response.ok) {
               const errorText = await response.text();
+              this.assertMemoryOperation();
               logger.error('GitHub API error creating issue', { 
                 status: response.status, 
                 statusText: response.statusText,
@@ -1902,6 +1997,7 @@ ${elementContent}
             }
 
             const data = await response.json();
+            this.assertMemoryOperation();
             return data.html_url;
           } finally {
             clearTimeout(timeoutId);
@@ -1909,10 +2005,12 @@ ${elementContent}
         },
         'high' // High priority for collection submission
       );
+      this.assertMemoryOperation();
       
       return issueUrl;
 
     } catch (error: any) {
+      this.assertMemoryOperation();
       // Handle timeout specifically
       if (error.name === 'AbortError') {
         logger.error(`GitHub API request timeout after ${getValidatedTimeout()}ms`);
@@ -1926,6 +2024,17 @@ ${elementContent}
   }
 
   private async findLocalContent(name: string, type: ElementType): Promise<string | null> {
+    this.assertMemoryOperation();
+    if (this.memoryOperation && type === ElementType.MEMORY &&
+        this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
+      // Generic type discovery must not refuse a non-memory name merely because
+      // MEMORY is among the types inspected. A genuine matching DB owner refuses.
+      const entry = await this.portfolioIndexManager.findByName(name, { elementType: type, fuzzyMatch: true });
+      this.assertMemoryOperation();
+      if (entry) this.assertSubmissionType(type);
+      return null;
+    }
+    this.assertSubmissionType(type);
     try {
       // METADATA INDEX FIX: Use portfolio index for fast metadata-based lookups
       // This solves the critical issue where "Safe Roundtrip Tester" couldn't be found
@@ -1933,11 +2042,13 @@ ${elementContent}
       const indexManager = this.portfolioIndexManager;
       
       // UX IMPROVEMENT: Enhanced search with fuzzy matching
-      const indexEntry = await indexManager.findByName(name, { 
+      // The existing submission consumer requires a real local file. A DB UUID
+      // is a locator, never a path. LEGACY retains its original filesystem path.
+      const indexEntry = this.memoryOperation && type === ElementType.MEMORY ? null : await indexManager.findByName(name, {
         elementType: type,
         fuzzyMatch: true
       });
-      
+      this.assertMemoryOperation();
       if (indexEntry) {
         logger.debug('Found content via metadata index', { 
           searchName: name, 
@@ -1961,6 +2072,7 @@ ${elementContent}
         partialMatch: true,
         cacheResults: true
       });
+      this.assertMemoryOperation();
       
       // Issue #815: Memory files are stored in dated subdirectories (YYYY-MM-DD/).
       // FileDiscoveryUtil only searches flat directories, so traverse subdirs for memories.
@@ -1968,7 +2080,9 @@ ${elementContent}
         try {
           // Use readdir with withFileTypes to identify dated subdirectories
           const { readdir: readdirFs } = await import('node:fs/promises');
+          this.assertMemoryOperation();
           const entries = await readdirFs(portfolioDir, { withFileTypes: true });
+          this.assertMemoryOperation();
           const subdirs = entries.filter(e => e.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(e.name));
           const normalizedSearch = name.toLowerCase().replaceAll(/[^a-z0-9]/g, '-').replaceAll(/-+/g, '-').replaceAll(/(^-)|(-$)/g, '');
 
@@ -1976,6 +2090,7 @@ ${elementContent}
             const subdirPath = path.join(portfolioDir, subdir.name);
             // Use FileOperationsService for file listing (respects sandboxing)
             const subdirFiles = await this.fileOperations.listDirectory(subdirPath);
+            this.assertMemoryOperation();
             for (const f of subdirFiles) {
               // Skip backup files (same filtering as PortfolioManager.listElements)
               if (f.includes('.backup-') || f.includes('.backup.')) continue;
@@ -1991,6 +2106,7 @@ ${elementContent}
             if (file) break;
           }
         } catch (err) {
+          this.assertMemoryOperation();
           logger.debug('Memory subdirectory traversal failed', {
             name, type, error: err instanceof Error ? err.message : String(err)
           });
@@ -2057,6 +2173,8 @@ ${elementContent}
       return null;
       
     } catch (error) {
+      this.assertMemoryOperation();
+      if (this.memoryOperation) throw error;
       logger.error('Error finding local content', {
         name,
         type,
@@ -2075,6 +2193,18 @@ ${elementContent}
    * @returns Detection result with found matches across all element types
    */
   private async detectElementType(name: string): Promise<ElementDetectionResult> {
+    if (this.memoryOperation) {
+      // The ordinary optimizer converts failures to strings. Bound discovery must
+      // retain the genuine selected-read/refusal cause and complete type census.
+      const discovered = await Promise.all(Object.values(ElementType).map(async type => {
+        const filePath = await this.findLocalContent(name, type);
+        this.assertMemoryOperation();
+        return filePath ? {type,path:filePath} : null;
+      }));
+      this.assertMemoryOperation();
+      const matches = discovered.filter((match): match is ElementDetectionMatch => match !== null);
+      return {found:matches.length > 0,matches};
+    }
     try {
       // PERFORMANCE OPTIMIZATION (Task #9): Use early termination search utility
       // Create search functions for each element type
@@ -2082,11 +2212,14 @@ ${elementContent}
       const searchFunctions = elementTypes.map((type) => async () => {
         try {
           const filePath = await this.findLocalContent(name, type);
+          this.assertMemoryOperation();
           if (filePath) {
             return { type: type as ElementType, path: filePath };
           }
           return null;
         } catch (error: any) {
+          this.assertMemoryOperation();
+          if (this.memoryOperation) throw error;
           // Log unexpected errors but don't fail the search
           if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
             logger.debug(`Error searching ${type} directory for content detection`, { 
@@ -2117,6 +2250,7 @@ ${elementContent}
           maxParallelSearches: 8 // Limit concurrent searches to avoid overwhelming the system
         }
       );
+      this.assertMemoryOperation();
 
       // PERFORMANCE OPTIMIZATION (Task #8): Enhanced batch operation reporting
       const batchResults = {
@@ -2177,6 +2311,8 @@ ${elementContent}
       };
 
     } catch (error) {
+      this.assertMemoryOperation();
+      if (this.memoryOperation) throw error;
       logger.error('Error in element type detection', {
         name,
         error: error instanceof Error ? error.message : String(error)
@@ -2214,6 +2350,7 @@ ${elementContent}
       
       // Process all element types for suggestions
       for (const elementType of elementTypes) {
+        if (elementType === ElementType.MEMORY && this.memoryOperation?.operation.manager.isGuardedHeadUpdateEnabled()) continue;
         try {
           const elementDir = this.portfolioManager.getElementDir(elementType);
           
@@ -2223,6 +2360,7 @@ ${elementContent}
             partialMatch: false,
             cacheResults: true
           });
+          this.assertMemoryOperation();
           
           let typeSuggestions = 0;
           
@@ -2254,6 +2392,7 @@ ${elementContent}
           batchResults.suggestionsByType[elementType] = typeSuggestions;
           
         } catch (error) {
+      this.assertMemoryOperation();
           // PERFORMANCE OPTIMIZATION (Task #8): Track and report partial failures
           batchResults.failedScans++;
           batchResults.failureDetails.push({
@@ -2311,6 +2450,7 @@ ${elementContent}
       return sortedSuggestions;
       
     } catch (error) {
+      this.assertMemoryOperation();
       logger.warn('Failed to generate name suggestions - batch operation failed completely', { 
         searchName, 
         error: error instanceof Error ? error.message : String(error),
@@ -2368,7 +2508,9 @@ ${elementContent}
           attempt
         });
         
+        this.assertSubmissionType(elementType);
         const fileUrl = await this.portfolioRepoManager.saveElement(adapter, true);
+        this.assertMemoryOperation();
         
         if (fileUrl) {
           if (attempt > 1) {
@@ -2385,6 +2527,7 @@ ${elementContent}
         lastError = new Error(`saveElement returned null on attempt ${attempt}`);
         
       } catch (error: any) {
+      this.assertMemoryOperation();
         lastError = error;
         const isRetryable = this.isRetryableError(error);
         
@@ -2411,6 +2554,7 @@ ${elementContent}
           const delay = calculateRetryDelay(attempt);
           logger.debug(`Waiting ${delay}ms before retry`, { attempt, delay });
           await new Promise(resolve => setTimeout(resolve, delay));
+          this.assertMemoryOperation();
         }
       }
     }

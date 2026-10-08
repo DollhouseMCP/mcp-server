@@ -12,13 +12,16 @@ import { PortfolioManager } from '../portfolio/PortfolioManager.js';
 import { PortfolioIndexManager } from '../portfolio/PortfolioIndexManager.js';
 import { ElementType } from '../portfolio/types.js';
 import { logger } from '../utils/logger.js';
-import { PortfolioSyncComparer, SyncMode, SyncAction } from '../sync/PortfolioSyncComparer.js';
+import { PortfolioSyncComparer, SyncMode, SyncAction, type SyncActions } from '../sync/PortfolioSyncComparer.js';
 import { PortfolioDownloader } from '../sync/PortfolioDownloader.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 import { TokenManager } from '../security/tokenManager.js';
 import * as path from 'path';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import { isWritableStorageLayer } from '../storage/IStorageLayer.js';
+import type { DatabaseTenantMemoryRegistry } from '../storage/DatabaseTenantMemoryRegistry.js';
 
 export interface PullOptions {
   direction: string;
@@ -39,7 +42,8 @@ export interface PortfolioPullHandlerDependencies {
   portfolioRepoManager: PortfolioRepoManager;
   githubIndexer: GitHubPortfolioIndexer;
   portfolioManager: PortfolioManager;
-  indexManager: PortfolioIndexManager;
+  indexManager?: PortfolioIndexManager;
+  memoryRegistry?: DatabaseTenantMemoryRegistry;
   syncComparer: PortfolioSyncComparer;
   downloader: PortfolioDownloader;
   fileOperations: IFileOperationsService;
@@ -57,10 +61,76 @@ export interface PortfolioPullHandlerDependencies {
 }
 
 export class PortfolioPullHandler {
+  private memoryOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+
+  /** The parent binds one authenticated operation; this clone never selects a manager again. */
+  bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+    indexManager: PortfolioIndexManager): PortfolioPullHandler {
+    if (!(provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory provider required');
+    if (this.memoryRegistry) provider.assertRegistry(this.memoryRegistry);
+    provider.assertOperation(operation);
+    const bound = new PortfolioPullHandler({ portfolioRepoManager: this.portfolioRepoManager,
+      githubIndexer: this.githubIndexer, portfolioManager: this.portfolioManager, indexManager,
+      syncComparer: this.syncComparer, downloader: this.downloader, fileOperations: this.fileOperations,
+      tokenManager: this.tokenManager, storageLayerFactory: this.storageLayerFactory, memoryRegistry: this.memoryRegistry });
+    bound.memoryOperation = Object.freeze({ provider, operation });
+    return bound;
+  }
+
+  private preparedPull?: Readonly<{ mode: SyncMode; username: string; repository: string;
+    totalElements: number; localCount: number; actions: SyncActions }>;
+
+  /** Guard BOTH before either direction mutates; retain only copied primitive decisions. */
+  async preflightCombinedPull(options: PullOptions): Promise<void> {
+    this.assertMemoryOperation();
+    if (!this.memoryOperation) throw new Error('Authentic selected portfolio pull operation required');
+    if (!this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) return;
+    const mode = this.validateSyncMode(options.mode);
+    const remote = await this.githubIndexer.getIndex(true);
+    this.assertMemoryOperation();
+    const local = await this.getAllLocalElements();
+    this.assertMemoryOperation();
+    const compared = this.syncComparer.compareElements(remote?.elements ?? new Map(), local, mode);
+    const copy = (actions: SyncAction[]): SyncAction[] => {
+      const result = actions.map(a => Object.freeze({type:a.type,name:a.name,path:a.path,action:a.action,
+        reason:a.reason,localSha:a.localSha,remoteSha:a.remoteSha}));
+      Object.freeze(result);
+      return result;
+    };
+    const actions = Object.freeze({toAdd:copy(compared.toAdd),toUpdate:copy(compared.toUpdate),
+      toDelete:copy(compared.toDelete),toSkip:copy(compared.toSkip)});
+    for (const action of [...actions.toAdd,...actions.toUpdate,...actions.toDelete]) this.assertMutationType(action.type);
+    this.preparedPull = Object.freeze({mode,username:remote?.username ?? '',repository:remote?.repository ?? '',
+      totalElements:remote?.totalElements ?? 0,localCount:this.countElements(local),actions});
+  }
+
+  private originalBindingFailure?: { readonly cause: unknown };
+  private assertMemoryOperation(): void {
+    if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+    if (!this.memoryOperation) return;
+    try { this.memoryOperation.provider.assertOperation(this.memoryOperation.operation); }
+    catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+  }
+
+  private assertMutationType(type: ElementType): void {
+    this.assertMemoryOperation();
+    if (!this.memoryOperation) return;
+    if (!Object.values(ElementType).includes(type)) throw new Error('Unknown portfolio mutation type');
+    if (type === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
+      throw new Error('Guarded database memories support admitted UPDATE only; portfolio pull cannot create, replace or delete them');
+    }
+  }
+
   private portfolioRepoManager: PortfolioRepoManager;
   private githubIndexer: GitHubPortfolioIndexer;
   private portfolioManager: PortfolioManager;
-  private indexManager: PortfolioIndexManager;
+  private readonly fixedIndex?: PortfolioIndexManager;
+  private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
+  private get indexManager(): PortfolioIndexManager {
+    this.assertMemoryOperation();
+    if (!this.fixedIndex) throw new Error('Authentic selected portfolio index required');
+    return this.fixedIndex;
+  }
   private syncComparer: PortfolioSyncComparer;
   private downloader: PortfolioDownloader;
   private readonly fileOperations: IFileOperationsService;
@@ -74,14 +144,15 @@ export class PortfolioPullHandler {
     if (!dependencies.githubIndexer) {
       throw new Error('PortfolioPullHandler requires a GitHubPortfolioIndexer instance');
     }
-    if (!dependencies.indexManager) {
+    if (!dependencies.indexManager && !dependencies.memoryRegistry) {
       throw new Error('PortfolioPullHandler requires a PortfolioIndexManager instance');
     }
 
     this.portfolioRepoManager = dependencies.portfolioRepoManager;
     this.githubIndexer = dependencies.githubIndexer;
     this.portfolioManager = dependencies.portfolioManager;
-    this.indexManager = dependencies.indexManager;
+    this.fixedIndex = dependencies.indexManager;
+    this.memoryRegistry = dependencies.memoryRegistry;
     this.syncComparer = dependencies.syncComparer;
     this.downloader = dependencies.downloader;
     this.fileOperations = dependencies.fileOperations;
@@ -93,20 +164,24 @@ export class PortfolioPullHandler {
    * Execute the pull operation from GitHub to local portfolio
    */
   async executePull(options: PullOptions, personaIndicator: string): Promise<PullResult> {
+    this.assertMemoryOperation();
+    if (this.memoryRegistry && !this.memoryOperation) throw new Error('Authentic selected portfolio pull operation required');
     try {
       logger.info('Starting portfolio pull operation', { options });
 
       // Step 0: Ensure portfolio directory structure exists
-      await this.portfolioManager.initialize();
+      if (!this.memoryOperation) await this.portfolioManager.initialize();
+      this.assertMemoryOperation();
 
       // Step 1: Validate sync mode
-      const syncMode = this.validateSyncMode(options.mode);
+      const syncMode = this.preparedPull?.mode ?? this.validateSyncMode(options.mode);
       
       // Step 2: Fetch GitHub portfolio index
       const progressMessages: string[] = [];
       progressMessages.push('🔍 Fetching portfolio from GitHub...');
       
-      const githubIndex = await this.githubIndexer.getIndex(true);
+      const githubIndex = this.preparedPull ?? await this.githubIndexer.getIndex(true);
+      this.assertMemoryOperation();
       
       if (!githubIndex || githubIndex.totalElements === 0) {
         return {
@@ -120,15 +195,15 @@ export class PortfolioPullHandler {
       progressMessages.push(`📊 Found ${githubIndex.totalElements} elements on GitHub`);
       
       // Step 3: Get local portfolio state
-      await this.indexManager.rebuildIndex();
-      const localElements = await this.getAllLocalElements();
-      progressMessages.push(`📁 Found ${this.countElements(localElements)} local elements`);
+      if (!this.preparedPull) await this.indexManager.rebuildIndex();
+      this.assertMemoryOperation();
+      const localElements = this.preparedPull ? new Map<ElementType, any[]>() : await this.getAllLocalElements();
+      this.assertMemoryOperation();
+      progressMessages.push(`📁 Found ${this.preparedPull?.localCount ?? this.countElements(localElements)} local elements`);
       
       // Step 4: Compare and determine sync actions
-      const syncActions = this.syncComparer.compareElements(
-        githubIndex.elements,
-        localElements,
-        syncMode
+      const syncActions = this.preparedPull?.actions ?? this.syncComparer.compareElements(
+        'elements' in githubIndex ? githubIndex.elements : new Map(), localElements, syncMode
       );
       
       // Step 5: Handle dry-run mode
@@ -151,6 +226,14 @@ export class PortfolioPullHandler {
         };
       }
       
+      // Discover the entire mutation set before launching any partial write.
+      for (const action of [...syncActions.toAdd, ...syncActions.toUpdate, ...syncActions.toDelete]) {
+        this.assertMutationType(action.type);
+      }
+      if (this.memoryOperation) {
+        await this.portfolioManager.initialize();
+        this.assertMemoryOperation();
+      }
       // Step 7: Execute sync actions
       const results = await this.executeSyncActions(
         syncActions, 
@@ -159,6 +242,7 @@ export class PortfolioPullHandler {
         progressMessages
       );
       
+      this.assertMemoryOperation();
       // Step 8: Return success summary
       return {
         content: [{
@@ -175,6 +259,7 @@ export class PortfolioPullHandler {
       };
       
     } catch (error) {
+      if (this.memoryOperation) throw error;
       logger.error('Portfolio pull failed', { error });
       return {
         content: [{
@@ -215,6 +300,7 @@ export class PortfolioPullHandler {
     
     for (const type of elementTypes) {
       const typeElements = await this.indexManager.getElementsByType(type);
+      this.assertMemoryOperation();
       if (typeElements.length > 0) {
         elements.set(type, typeElements);
       }
@@ -311,12 +397,19 @@ export class PortfolioPullHandler {
     const processBatch = async (actions: SyncAction[], operation: string) => {
       const results = await Promise.allSettled(
         actions.map(async (action) => {
+          this.assertMutationType(action.type);
           progressMessages.push(`${operation}: ${action.type}/${action.name}`);
           await this.downloadAndSaveElement(action, username, repository);
+          this.assertMemoryOperation();
           return action;
         })
       );
       
+      this.assertMemoryOperation();
+      if (this.memoryOperation) {
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed?.status === 'rejected') throw failed.reason;
+      }
       return results.map((result, index) => ({
         action: actions[index],
         success: result.status === 'fulfilled',
@@ -328,6 +421,7 @@ export class PortfolioPullHandler {
     for (let i = 0; i < syncActions.toAdd.length; i += BATCH_SIZE) {
       const batch = syncActions.toAdd.slice(i, i + BATCH_SIZE);
       const batchResults = await processBatch(batch, '📥 Downloading');
+      this.assertMemoryOperation();
       
       for (const result of batchResults) {
         if (result.success) {
@@ -343,6 +437,7 @@ export class PortfolioPullHandler {
     for (let i = 0; i < syncActions.toUpdate.length; i += BATCH_SIZE) {
       const batch = syncActions.toUpdate.slice(i, i + BATCH_SIZE);
       const batchResults = await processBatch(batch, '🔄 Updating');
+      this.assertMemoryOperation();
       
       for (const result of batchResults) {
         if (result.success) {
@@ -359,8 +454,10 @@ export class PortfolioPullHandler {
       try {
         progressMessages.push(`🗑️ Deleting: ${action.type}/${action.name}`);
         await this.deleteLocalElement(action);
+        this.assertMemoryOperation();
         results.deleted++;
       } catch (error) {
+        if (this.memoryOperation) throw error;
         logger.error(`Failed to delete ${action.type}/${action.name}`, { error });
         progressMessages.push(`❌ Failed to delete: ${action.type}/${action.name}`);
       }
@@ -370,6 +467,7 @@ export class PortfolioPullHandler {
     if (results.added > 0 || results.updated > 0 || results.deleted > 0) {
       progressMessages.push('🔄 Rebuilding index...');
       await this.indexManager.rebuildIndex();
+      this.assertMemoryOperation();
     }
     
     return results;
@@ -384,6 +482,7 @@ export class PortfolioPullHandler {
     username: string,
     repository: string
   ): Promise<void> {
+    this.assertMutationType(action.type);
     // NOTE: Token should already be set on portfolioRepoManager (passed as dependency)
     // Don't re-fetch token here - it breaks dependency injection and test environments
 
@@ -403,6 +502,7 @@ export class PortfolioPullHandler {
       repository
     );
     
+    this.assertMutationType(action.type);
     // Save to local portfolio
     const elementDir = this.portfolioManager.getElementDir(action.type);
     const fileName = path.basename(action.path);
@@ -414,6 +514,7 @@ export class PortfolioPullHandler {
     // on the per-user portfolio dir (typically tmpfs in containers) and
     // vanish on every restart. Filesystem-mode deployments fall through.
     const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
+    this.assertMutationType(action.type);
     const elementName = path.basename(action.path, path.extname(action.path));
     const persistedViaStorageLayer = await persistElementViaFactory(
       this.storageLayerFactory,
@@ -424,16 +525,20 @@ export class PortfolioPullHandler {
       { exclusive: false },
     );
 
+    this.assertMemoryOperation();
     if (!persistedViaStorageLayer) {
       // Ensure parent directory exists before writing (defensive check)
       await this.fileOperations.createDirectory(elementDir);
 
+      this.assertMutationType(action.type);
       await this.fileOperations.writeFile(filePath, elementData.content, {
         encoding: 'utf-8',
         source: 'PortfolioPullHandler.downloadAndSaveElement'
       });
+      this.assertMemoryOperation();
     }
 
+    this.assertMemoryOperation();
     // SECURITY: Log successful save for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_CREATED',
@@ -450,6 +555,7 @@ export class PortfolioPullHandler {
    * SECURITY: Added audit logging for deletion operations
    */
   private async deleteLocalElement(action: SyncAction): Promise<void> {
+    this.assertMutationType(action.type);
     const elementDir = this.portfolioManager.getElementDir(action.type);
     // Use the original filename from the path to preserve extension
     const fileName = path.basename(action.path) || `${action.name}.md`;
@@ -463,9 +569,19 @@ export class PortfolioPullHandler {
       details: `Attempting to delete: ${action.type}/${fileName}`
     });
     
+    const layer = this.memoryOperation && this.storageLayerFactory?.createForElement(action.type,
+      { elementDir, fileExtension: path.extname(fileName) || '.md', scanCooldownMs: 0 });
+    if (layer && isWritableStorageLayer(layer)) {
+      this.assertMutationType(action.type);
+      await layer.deleteContent(action.type, action.name);
+      this.assertMemoryOperation();
+      return;
+    }
+    this.assertMutationType(action.type);
     await this.fileOperations.deleteFile(filePath, action.type, {
       source: 'PortfolioPullHandler.deleteLocalElement'
     });
+    this.assertMemoryOperation();
     // PERFORMANCE: Skip individual index rebuild - will batch rebuild after all operations
 
     // SECURITY: Log successful deletion
@@ -482,6 +598,7 @@ export class PortfolioPullHandler {
    */
   private async getGitHubToken(): Promise<string> {
     const token = await this.tokenManager.getGitHubTokenAsync();
+    this.assertMemoryOperation();
     if (!token) {
       throw new Error('GitHub authentication required. Please run setup_github_auth first.');
     }

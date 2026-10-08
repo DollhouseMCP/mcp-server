@@ -51,14 +51,17 @@ export class DatabaseTenantMemoryRegistry {
   getCapturedTenant(capture: TenantMemoryCapture): string { return this.requireCapture(capture).tenant; }
 
   /** Capture trusted effective context synchronously; the opaque slot is not a tenant selector. */
-  capture(): TenantMemoryCapture {
-    try { return this.captureBound(); }
+  capture(expectedTenant?: string): TenantMemoryCapture {
+    try { return this.captureBound(expectedTenant); }
     catch (cause) { this.observeFailure('capture'); throw cause; }
   }
 
-  private captureBound(): TenantMemoryCapture {
+  private captureBound(expectedTenant?: string): TenantMemoryCapture {
     const tenant = this.deps.getEffectiveTenant();
     validateUserId(tenant);
+    if (expectedTenant !== undefined && tenant !== expectedTenant) {
+      throw new Error('Effective memory tenant differs from the trusted construction identity');
+    }
     this.requireTenant(tenant);
     let slot = this.slots.get(tenant);
     if (!slot) {

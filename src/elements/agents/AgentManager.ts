@@ -84,7 +84,18 @@ export interface ResolvedElementManager {
   }>>;
 }
 
+export interface AgentMemoryOperationBinding {
+  readonly provider: TenantMemoryOperationProvider;
+  readonly operation: BoundMemoryOperation;
+}
+interface AgentMemoryReadScope {
+  readonly manager: MemoryManager;
+  readonly assertCurrent: () => void;
+}
+
 export interface AgentManagerDeps extends ElementManagerDeps {
+  /** Actual trusted composition identity; never a mutable current invocation. */
+  memoryRegistry?: DatabaseTenantMemoryRegistry;
   baseDir: string;
   stateStore?: IAgentStateStore;
   /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
@@ -101,6 +112,9 @@ interface AgentExecutionInvocationContext {
   executionIdentity?: PersistedActivationIdentity;
 }
 import { ElementType } from '../../portfolio/types.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../../storage/TenantMemoryOperationProvider.js';
+import { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantMemoryRegistry.js';
+import type { MemoryManager } from '../memories/MemoryManager.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -204,12 +218,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly _localAgentNamesByIdentity = new Map<string, string>();
 
   // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+  private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   private _dangerZoneEnforcer?: DangerZoneBlocker;
   private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
   private static warnedDbModeOrphanedStateFiles = false;
 
   constructor(deps: AgentManagerDeps) {
+    if (Object.hasOwn(deps, 'memoryRegistry') && !(deps.memoryRegistry instanceof DatabaseTenantMemoryRegistry)) {
+      throw new TypeError('Actual tenant memory registry required');
+    }
     const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
     super(
       ElementType.AGENT,
@@ -237,9 +255,35 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.metadataService = deps.metadataService;
     this.stateStore = deps.stateStore || this.createDefaultStateStore(deps);
     // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+    if (Object.hasOwn(deps, 'memoryRegistry')) {
+      this.memoryRegistry = deps.memoryRegistry;
+    }
     this._elementManagerResolver = deps.elementManagerResolver;
     this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
     this._verificationStore = deps.verificationStore;
+  }
+
+  /** Validate caller composition before an outer execution handler reads or mutates state. */
+  assertMemoryOperationBinding(binding?: AgentMemoryOperationBinding): void {
+    this.captureMemoryReadScope(binding);
+  }
+
+  private captureMemoryReadScope(binding?: AgentMemoryOperationBinding): AgentMemoryReadScope | undefined {
+    if (!this.memoryRegistry) {
+      if (binding !== undefined) throw new Error('Agent memory binding requires configured composition');
+      return undefined;
+    }
+    const provider = binding?.provider;
+    const operation = binding?.operation;
+    if (!(provider instanceof TenantMemoryOperationProvider) || !operation) throw new Error('Authentic agent memory operation required');
+    const registry = this.memoryRegistry;
+    const assertCurrent = () => {
+      provider.assertRegistry(registry);
+      provider.assertContextTracker(this.contextTracker);
+      provider.assertOperation(operation);
+    };
+    assertCurrent();
+    return Object.freeze({ manager: operation.manager, assertCurrent });
   }
 
   /**
@@ -1445,12 +1489,15 @@ export class AgentManager extends BaseElementManager<Agent> {
     parameters: Record<string, unknown>,
     // Thread the triggering MCP lifecycle op through validation so error messages
     // can distinguish a fresh execute_agent call from a misused continue_execution.
-    context: AgentExecutionInvocationContext = {}
+    context: AgentExecutionInvocationContext = {},
+    memoryBinding?: AgentMemoryOperationBinding,
   ): Promise<ExecuteAgentResult> {
+    const memoryScope = this.captureMemoryReadScope(memoryBinding);
     return this.runSerializedAgentStateOperation(
       name,
-      identity => this.executeAgentWithinStateOperation(name, parameters, context, identity),
+      identity => this.executeAgentWithinStateOperation(name, parameters, context, identity, memoryScope),
       context.executionIdentity,
+      memoryScope?.assertCurrent,
     );
   }
 
@@ -1459,12 +1506,15 @@ export class AgentManager extends BaseElementManager<Agent> {
     parameters: Record<string, unknown>,
     context: AgentExecutionInvocationContext,
     identity: PersistedActivationIdentity,
+    memoryScope?: AgentMemoryReadScope,
   ): Promise<ExecuteAgentResult> {
+    memoryScope?.assertCurrent();
     // Register before the first await so abort recovery can detect every caller,
     // including continue_execution and legacy entry points.
     this.beginExecutionAttempt(identity);
     try {
-      const agent = await this.loadExecutableAgent(name, identity);
+      const agent = await this.loadExecutableAgent(name, identity, memoryScope);
+      memoryScope?.assertCurrent();
       const metadata = agent.metadata as AgentMetadataV2;
 
       // 2. Clone parameters to prevent mutation of caller's object (Issue #118)
@@ -1478,6 +1528,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       this.logUnmatchedPlaceholders(name, unmatchedPlaceholders);
       const executionContext = createExecutionContext(name);
       await this.assertNoStaticActivationCycle(name, metadata);
+      memoryScope?.assertCurrent();
       const resumedGoal = context.resumedGoalId
         ? agent.getState().goals.find(goal =>
           goal.id === context.resumedGoalId && goal.status === 'in_progress'
@@ -1502,7 +1553,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         );
       }
 
-      const activationResult = await this.activateAgentElements(name, metadata, executionContext);
+      const activationResult = await this.activateAgentElements(name, metadata, executionContext, memoryScope);
+      memoryScope?.assertCurrent();
       const result = this.createExecuteAgentResult(
         name,
         renderedGoal,
@@ -1512,6 +1564,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       );
       const executionGoal = resumedGoal
         ?? await this.persistExecutionGoal(agent, name, renderedGoal, result, identity);
+      memoryScope?.assertCurrent();
       if (resumedGoal) {
         result.goalId = resumedGoal.id;
         result.stateVersion = agent.getState().stateVersion || 1;
@@ -1539,6 +1592,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       return result;
     } catch (error) {
+      if (memoryScope) throw error;
       logger.error(`Failed to execute agent '${name}':`, error);
       throw error;
     } finally {
@@ -1550,10 +1604,19 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     operation: (identity: PersistedActivationIdentity) => Promise<T>,
     resolvedIdentity?: PersistedActivationIdentity,
+    assertCurrent?: () => void,
   ): Promise<T> {
+    assertCurrent?.();
     const identity = resolvedIdentity ?? await this.resolveExecutionIdentity(name);
+    assertCurrent?.();
     const operationKey = this.getAgentStateOperationKey(identity);
-    return this.stateOperationLock.runExclusive(operationKey, () => operation(identity));
+    if (!assertCurrent) return this.stateOperationLock.runExclusive(operationKey, () => operation(identity));
+    return this.stateOperationLock.runExclusive(operationKey, async () => {
+      assertCurrent();
+      const result = await operation(identity);
+      assertCurrent?.();
+      return result;
+    });
   }
 
   private getAgentStateOperationKey(identity: PersistedActivationIdentity): string {
@@ -1639,13 +1702,17 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async loadExecutableAgent(
     name: string,
     identity: PersistedActivationIdentity,
+    memoryScope?: AgentMemoryReadScope,
   ): Promise<Agent> {
+    memoryScope?.assertCurrent();
     const agent = await this.readAgentForExecutionIdentity(name, identity, false);
+    memoryScope?.assertCurrent();
 
     const metadata = agent.metadata as AgentMetadataV2;
     const goal = (metadata as Partial<AgentMetadataV2>).goal;
     if (!goal?.template) {
       await this.convertLegacyAgentForExecution(agent, name, metadata, identity);
+      memoryScope?.assertCurrent();
     }
     return agent;
   }
@@ -1726,8 +1793,10 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async activateAgentElements(
     agentName: string,
     metadata: AgentMetadataV2,
-    executionContext: ExecutionContext
+    executionContext: ExecutionContext,
+    memoryScope?: AgentMemoryReadScope,
   ): Promise<ActivationResult> {
+    memoryScope?.assertCurrent();
     if (!metadata.activates) {
       return { activeElements: {}, activationWarnings: [] };
     }
@@ -1737,7 +1806,8 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     for (const [elementType, elementNames] of Object.entries(metadata.activates)) {
       if (!elementNames || elementNames.length === 0) continue;
-      const group = await this.activateElementGroup(agentName, elementType, elementNames, executionContext);
+      const group = await this.activateElementGroup(agentName, elementType, elementNames, executionContext, memoryScope);
+      memoryScope?.assertCurrent();
       activeElements[elementType] = group.items;
       activationWarnings.push(...group.warnings);
     }
@@ -1749,12 +1819,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     elementType: string,
     elementNames: string[],
     executionContext: ExecutionContext,
+    memoryScope?: AgentMemoryReadScope,
   ): Promise<{ items: ActivationResult['activeElements'][string]; warnings: ActivationResult['activationWarnings'] }> {
     const items: ActivationResult['activeElements'][string] = [];
     const warnings: ActivationResult['activationWarnings'] = [];
 
     for (const elementName of elementNames) {
-      const outcome = await this.activateSingleElement(agentName, elementType, elementName, executionContext);
+      const outcome = await this.activateSingleElement(agentName, elementType, elementName, executionContext, memoryScope);
+      memoryScope?.assertCurrent();
       if (outcome.item) items.push(outcome.item);
       if (outcome.warning) warnings.push(outcome.warning);
     }
@@ -1766,11 +1838,15 @@ export class AgentManager extends BaseElementManager<Agent> {
     elementType: string,
     elementName: string,
     executionContext: ExecutionContext,
+    memoryScope?: AgentMemoryReadScope,
   ): Promise<{ item?: ActivationResult['activeElements'][string][number]; warning?: ActivationResult['activationWarnings'][number] }> {
     try {
-      const elementContent = await this.getElementContent(elementType, elementName, executionContext);
+      const elementContent = await this.getElementContent(elementType, elementName, executionContext, memoryScope);
+      memoryScope?.assertCurrent();
       return { item: { name: elementName, content: elementContent } };
     } catch (error) {
+      if (memoryScope && elementType === 'memories') throw error;
+      memoryScope?.assertCurrent();
       if (error instanceof Error && error.message.includes('Circular agent activation detected')) {
         throw error;
       }
@@ -2306,11 +2382,13 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async getElementContent(
     elementType: string,
     elementName: string,
-    executionContext?: ExecutionContext
+    executionContext?: ExecutionContext,
+    memoryScope?: AgentMemoryReadScope,
   ): Promise<string> {
+    memoryScope?.assertCurrent();
     // Issue #1948: Use instance-injected resolver instead of static
     const resolver = this._elementManagerResolver;
-    if (!resolver) {
+    if (!resolver && !(memoryScope && elementType === 'memories')) {
       logger.warn(`Element manager resolver not configured - cannot activate ${elementType}/${elementName}`);
       return `[Element manager resolver not configured for ${elementType}/${elementName}]`;
     }
@@ -2349,14 +2427,16 @@ export class AgentManager extends BaseElementManager<Agent> {
         return `[Unknown element type: ${elementType}]`;
       }
 
-      const manager = resolver(managerName);
+      const manager = memoryScope && elementType === 'memories' ? memoryScope.manager : resolver?.(managerName);
       if (!manager) {
         logger.warn(`Manager not found for element type: ${elementType}`);
         return `[Manager not found: ${managerName}]`;
       }
 
       // Get all elements of this type
-      const elements = await manager.list();
+      const elements = memoryScope && elementType === 'memories'
+        ? await memoryScope.manager.list({ strictDatabase: true }) : await manager.list();
+      memoryScope?.assertCurrent();
       // Issue #2432: activates: references use canonical filename slugs (e.g.
       // 'security-analyst', 'bug-report') while element metadata carries display
       // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
@@ -2392,14 +2472,15 @@ export class AgentManager extends BaseElementManager<Agent> {
 
         case 'memories': {
           const entries = element.getEntries?.() ?? [];
-          return `Memory '${elementName}' with ${entries.length} entries`;
+          const count = entries instanceof Map ? entries.size : entries.length;
+          return `Memory '${elementName}' with ${count} entries`;
         }
 
         case 'templates':
           return element.content || '';
 
         case 'ensembles': {
-          const elementList = Object.entries(element.elements || {})
+          const elementList = Object.entries(('elements' in element ? element.elements : undefined) || {})
             .map(([type, names]) => `${type}: ${Array.isArray(names) ? names.join(', ') : String(names)}`)
             .join('; ');
           return `Ensemble '${elementName}' activates: ${elementList}`;
@@ -2414,6 +2495,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           return `[Content not available for ${elementType}]`;
       }
     } catch (error) {
+      if (memoryScope) throw error;
       logger.error(`Error getting content for ${elementType} '${elementName}':`, error);
       throw error;
     }
@@ -4193,7 +4275,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     parameters?: Record<string, unknown>;
     previousStepResult?: string;
     executionIdentity?: PersistedActivationIdentity;
-  }): Promise<ExecuteAgentResult & {
+  }, memoryBinding?: AgentMemoryOperationBinding): Promise<ExecuteAgentResult & {
     previousState: {
       goals: Array<{
         id: string;
@@ -4217,9 +4299,11 @@ export class AgentManager extends BaseElementManager<Agent> {
       suggestedNextSteps?: string[];
     };
   }> {
+    const memoryScope = this.captureMemoryReadScope(memoryBinding);
     return this.runSerializedAgentStateOperation(params.agentName, async identity => {
       // 1. Load agent by name
       const agent = await this.readAgentForExecutionIdentity(params.agentName, identity, false);
+      memoryScope?.assertCurrent();
 
       // 2. Get current state
       const state = agent.getState();
@@ -4267,7 +4351,9 @@ export class AgentManager extends BaseElementManager<Agent> {
           executionIdentity: identity,
         },
         identity,
+        memoryScope,
       );
+      memoryScope?.assertCurrent();
 
       // 5. Build previous state summary
       const recentDecisions = state.decisions.slice(-5).map(d => ({
@@ -4308,7 +4394,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           suggestedNextSteps
         }
       };
-    }, params.executionIdentity);
+    }, params.executionIdentity, memoryScope?.assertCurrent);
   }
 
   /**

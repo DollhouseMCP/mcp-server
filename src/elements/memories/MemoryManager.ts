@@ -175,6 +175,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
+    this._retentionPolicyService = deps.memoryRetentionPolicyService;
   }
 
   /** Issue #1948: Set retention policy service (called by Container after registration). */
@@ -1240,6 +1241,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
   override async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<Memory[]> {
+    if (this.guardedUpdateAdapter && options?.includePublic) {
+      throw new Error('Guarded database memory public inclusion is unavailable; use owned qualified memory reads');
+    }
     // Database mode: delegate to base class which uses listFromDatabase().
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
@@ -1321,9 +1325,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
    */
-  async activateMemory(identifier: string): Promise<{ success: boolean; message: string; memory?: Memory }> {
+  async activateMemory(identifier: string, assertCurrent?: () => void): Promise<{ success: boolean; message: string; memory?: Memory }> {
+    assertCurrent?.();
     // PERFORMANCE FIX: Use findByName() instead of list()
     const memory = await this.findByName(identifier);
+    assertCurrent?.();
 
     if (!memory) {
       return {
@@ -1341,6 +1347,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Update memory status in memory
     await memory.activate();
+    assertCurrent?.();
 
     // Routine activation — debug only (was flooding security buffer)
     logger.debug(`[MemoryManager] Memory activated: ${memory.metadata.name}`);
@@ -1398,8 +1405,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Get all active memories
    * Issue #18 Phase 4: Return memories that are in the active set
    */
-  async getActiveMemories(): Promise<Memory[]> {
-    const memories = await this.list();
+  async getActiveMemories(assertCurrent?: () => void): Promise<Memory[]> {
+    assertCurrent?.();
+    const memories = assertCurrent && isWritableStorageLayer(this.storageLayer)
+      ? await this.list({ strictDatabase: true }) : await this.list();
+    assertCurrent?.();
     return memories.filter(m => this.getActivationSet().has(m.metadata.name));
   }
 
@@ -1744,8 +1754,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * @returns Promise resolving to array of auto-load memories sorted by priority
    */
-  async getAutoLoadMemories(): Promise<Memory[]> {
+  async getAutoLoadMemories(assertCurrent?: () => void): Promise<Memory[]> {
+    assertCurrent?.();
     try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        const memories = await this.list({ strictDatabase: true });
+        assertCurrent?.();
+        return memories.filter(memory => (memory.metadata as MemoryMetadata).autoLoad === true)
+          .sort((a, b) => ((a.metadata as MemoryMetadata).priority ?? 999) - ((b.metadata as MemoryMetadata).priority ?? 999));
+      }
       // Ensure index is populated
       await this.storageLayer.scan();
 
@@ -1776,6 +1793,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       return autoLoadMemories;
     } catch (error) {
+      if (assertCurrent || this.guardedUpdateAdapter) throw error;
       logger.error('[MemoryManager] Failed to get auto-load memories:', error);
       return [];
     }
@@ -2568,12 +2586,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * @returns Promise resolving to auto-load statistics
    */
-  async loadAndActivateAutoLoadMemories(): Promise<{
+  async loadAndActivateAutoLoadMemories(assertCurrent?: () => void): Promise<{
     loaded: number;
     skipped: number;
     totalTokens: number;
     errors: string[];
   }> {
+    assertCurrent?.();
     const startTime = Date.now();
     let loaded = 0;
     let skipped = 0;
@@ -2597,10 +2616,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
 
       // Install seed memories first
-      await this.installSeedMemories();
+      if (!this.guardedUpdateAdapter) {
+        await this.installSeedMemories();
+        assertCurrent?.();
+      }
 
       // Get auto-load memories
-      const autoLoadMemories = await this.getAutoLoadMemories();
+      const autoLoadMemories = assertCurrent
+        ? await this.getAutoLoadMemories(assertCurrent)
+        : await this.getAutoLoadMemories();
+      assertCurrent?.();
 
       if (autoLoadMemories.length === 0) {
         logger.debug('[MemoryManager] No auto-load memories configured');
@@ -2629,8 +2654,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
           // Activate the memory
           // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
+          assertCurrent?.();
           this.getActivationSet().add(memoryName);
           await memory.activate();
+          assertCurrent?.();
           loaded++;
           totalTokens += estimatedTokens;
 
@@ -2640,6 +2667,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
           logger.debug(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${(memory.metadata as any).priority})`);
 
         } catch (error) {
+          if (assertCurrent) throw error;
           const memoryName = memory.metadata.name || 'unknown';
           const errorMsg = `Failed to load '${memoryName}': ${error instanceof Error ? error.message : String(error)}`;
           errors.push(errorMsg);
@@ -2669,9 +2697,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
         }
       });
 
+      assertCurrent?.();
       return { loaded, skipped, totalTokens, errors };
 
     } catch (error) {
+      if (assertCurrent) throw error;
       // Don't fail startup if auto-load fails, but provide detailed diagnostics
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorType = error instanceof Error ? error.constructor.name : 'Unknown';
