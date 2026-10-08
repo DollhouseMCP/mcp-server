@@ -148,8 +148,7 @@ export class MemoryHeadUpdateAdapter {
         if (handoff) return this.recordPending(state, captured, originalToken, handoff);
         const outcome = await this.prepareAdmittedWrite(state, captured, originalToken);
         if (outcome.status !== 'committed') {
-          if (outcome.status === 'unknown') state.handoff?.store.close();
-          return this.recordPending(state, captured, originalToken, outcome);
+          return this.recordUncommittedAdmission(state, captured, originalToken, outcome);
         }
         committed = this.recordCommit(state, outcome.value.token, originalToken);
         state.handoff?.store.noteKnownCommit(state.handoff.receipt);
@@ -164,6 +163,11 @@ export class MemoryHeadUpdateAdapter {
     } catch (cause) {
       return this.recordWriteFailure(state, captured, originalToken, cause, committed);
     }
+  }
+  private recordUncommittedAdmission(state: BoundState, candidate: MemoryUpdateCandidate,
+    token: MemoryUpdateToken, outcome: { status: 'refused' | 'unknown'; cause: unknown }): MemoryUpdateOutcome {
+    if (outcome.status === 'unknown') state.handoff?.store.close();
+    return this.recordPending(state, candidate, token, outcome);
   }
   private async readCandidateRefusal(candidate: MemoryUpdateCandidate, token: MemoryUpdateToken,
     tenant: string): Promise<{ status: 'refused'; cause: unknown } | undefined> {
