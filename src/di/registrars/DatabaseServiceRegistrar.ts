@@ -159,9 +159,25 @@ export class DatabaseServiceRegistrar {
     // the DB-specific resolver (not the PathsServiceRegistrar fallback).
     const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
     const sessionIdResolver = container.resolve<SessionIdResolver>('SessionIdResolver');
+    const { DatabaseTenantMemoryRegistry } = await import('../../storage/DatabaseTenantMemoryRegistry.js');
+    const { requireDatabaseMemoryStartupAdmission } = await import('../../storage/DatabaseMemoryStartupAdmission.js');
+    const memoryRegistry = container.hasRegistration('DatabaseTenantMemoryRegistry')
+      ? container.resolve<unknown>('DatabaseTenantMemoryRegistry') : undefined;
+    if (memoryRegistry !== undefined && (!(memoryRegistry instanceof DatabaseTenantMemoryRegistry) ||
+      !memoryRegistry.matchesDatabase(result.db))) {
+      throw new Error('Database tenant memory composition must bind the actual application database');
+    }
+    // Always execute, including configuration-off. An RLS-filtered app query
+    // cannot prove that another served tenant has no durable protected mode.
+    await requireDatabaseMemoryStartupAdmission(result.db, systemConnection.db, memoryRegistry !== undefined);
+    const { DatabaseMemoryModeEnforcingStorageLayerFactory } = await import(
+      '../../storage/DatabaseMemoryModeEnforcingStorageLayerFactory.js'
+    );
     container.register(
       'StorageLayerFactory',
-      () => new DatabaseStorageLayerFactory(result.db, userIdResolver),
+      () => memoryRegistry
+        ? new DatabaseMemoryModeEnforcingStorageLayerFactory(result.db, userIdResolver)
+        : new DatabaseStorageLayerFactory(result.db, userIdResolver),
       { override: true },
     );
     container.register(
