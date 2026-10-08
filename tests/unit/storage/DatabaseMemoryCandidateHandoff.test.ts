@@ -133,9 +133,40 @@ describe('candidate handoff driver/authority boundaries (SQL behavior requires a
     expect(() => f.handoff.noteKnownCommit(receipt)).toThrow();
     expect(f.statements.some(statement => statement.includes("SET status='published'"))).toBe(false);
   });
+  it('never reuses a dispatched receipt after a rollback before prospective recording', async () => {
+    const f = fixture(); const { capture, receipt } = await retained(f); f.handoff.consume(receipt);
+    const original = new Error('rollback before head preparation');
+    expect(await f.gate.withAdmittedWrite(capture, async authority => {
+      await f.handoff.requireBeforeDispatch(authority, receipt, f.candidate);
+      throw original;
+    })).toEqual({ status: 'refused', cause: original });
+    const headDispatch = jest.fn();
+    const second = await f.gate.withAdmittedWrite(capture, async authority => {
+      await f.handoff.requireBeforeDispatch(authority, receipt, f.candidate);
+      headDispatch();
+    });
+    expect(second).toMatchObject({ status: 'refused', cause: { code: 'EMEMORYHANDOFF' } });
+    expect(headDispatch).not.toHaveBeenCalled();
+    expect(f.statements.filter(statement => statement.includes('SELECT id FROM public.memory_candidate_handoffs'))).toHaveLength(1);
+    expect(f.statements.some(statement => statement.includes("SET status='committed'"))).toBe(false);
+  });
+  it('does not record committed evidence with a different authentic transaction authority', async () => {
+    const f = fixture(); const { capture, receipt } = await retained(f); f.handoff.consume(receipt);
+    const original = new Error('first attempt rolled back');
+    await f.gate.withAdmittedWrite(capture, async authority => {
+      await f.handoff.requireBeforeDispatch(authority, receipt, f.candidate); throw original;
+    });
+    const second = await f.gate.withAdmittedWrite(capture, authority =>
+      f.handoff.recordCommitted(authority, receipt, f.candidate, { ...f.original, revision: '2' }));
+    expect(second).toMatchObject({ status: 'refused', cause: { code: 'EMEMORYHANDOFF' } });
+    expect(f.statements.some(statement => statement.includes("SET status='committed'"))).toBe(false);
+  });
   it('failed owning publication does not retire the exact retained candidate', async () => {
     const f = fixture(); const { capture, receipt } = await retained(f); f.handoff.consume(receipt);
-    await f.gate.withAdmittedWrite(capture, authority => f.handoff.recordCommitted(authority, receipt, f.candidate, { ...f.original, revision: '2' }));
+    await f.gate.withAdmittedWrite(capture, async authority => {
+      await f.handoff.requireBeforeDispatch(authority, receipt, f.candidate);
+      await f.handoff.recordCommitted(authority, receipt, f.candidate, { ...f.original, revision: '2' });
+    });
     f.handoff.noteKnownCommit(receipt); const cause = new Error('actual publication failure');
     await expect(f.handoff.completePublication(receipt, async () => { throw cause; })).rejects.toBe(cause);
     expect(f.statements.some(statement => statement.includes('DELETE FROM public.memory_candidate_handoffs'))).toBe(false);
@@ -143,7 +174,10 @@ describe('candidate handoff driver/authority boundaries (SQL behavior requires a
   });
   it('retirement loss remains cleanup-unknown while actual publication success survives throwing observers', async () => {
     const f = fixture(); const { capture, receipt } = await retained(f); f.handoff.consume(receipt);
-    await f.gate.withAdmittedWrite(capture, authority => f.handoff.recordCommitted(authority, receipt, f.candidate, { ...f.original, revision: '2' }));
+    await f.gate.withAdmittedWrite(capture, async authority => {
+      await f.handoff.requireBeforeDispatch(authority, receipt, f.candidate);
+      await f.handoff.recordCommitted(authority, receipt, f.candidate, { ...f.original, revision: '2' });
+    });
     f.handoff.noteKnownCommit(receipt); f.completion(() => { throw new Error('controlled cleanup completion loss'); });
     const observe = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => { throw new Error('observer failed'); });
     const warn = jest.spyOn(logger, 'warn').mockImplementation(() => { throw new Error('warning failed'); });

@@ -32,6 +32,7 @@ interface RetainedReceipt {
   readonly attribution: string;
   readonly retireSecret: string;
   attempted: boolean;
+  dispatchAuthority?: DatabaseMemoryWriteAuthority;
   prospective?: { readonly authority: DatabaseMemoryWriteAuthority; readonly token: MemoryHeadToken };
   committed?: MemoryHeadToken;
   publishing: boolean;
@@ -60,7 +61,7 @@ export class DatabaseMemoryCandidateHandoff {
   }
   private required(receipt: MemoryCandidateHandoffReceipt): RetainedReceipt {
     const retained = this.receipts.get(receipt);
-    if (!retained || retained.tenant !== this.getTenant() || retained.attribution !== this.attribution()) refuse();
+    if (!retained?.tenant || retained.tenant !== this.getTenant() || retained.attribution !== this.attribution()) refuse();
     this.boot.require(retained.boot, this.currentIdentity());
     return retained;
   }
@@ -111,15 +112,19 @@ export class DatabaseMemoryCandidateHandoff {
 
   /** Consume before the first head attempt, even if that attempt later rolls back. */
   consume(receipt: MemoryCandidateHandoffReceipt): void {
-    const retained = this.required(receipt); if (retained.attempted) refuse(); retained.attempted = true;
+    const retained = this.required(receipt);
+    if (retained.attempted) refuse();
+    retained.attempted = true;
   }
 
   async requireBeforeDispatch(authority: DatabaseMemoryWriteAuthority, receipt: MemoryCandidateHandoffReceipt,
     candidate: MemoryUpdateCandidate): Promise<void> {
     const retained = this.required(receipt);
-    if (!retained.attempted || retained.prospective) refuse();
+    if (!retained.attempted || retained.dispatchAuthority) refuse();
     this.requireCandidate(retained, candidate);
     const tx = requireDatabaseMemoryWriteAuthority(authority, this.store, retained.tenant);
+    // Rollback or SQL failure cannot authorize replay under a later transaction.
+    retained.dispatchAuthority = authority;
     const rows = await tx.execute(sql`SELECT id FROM public.memory_candidate_handoffs
       WHERE id=${retained.id}::uuid AND user_id=${retained.tenant}::uuid AND status='prepared'
         AND digest=${retained.digest} AND envelope=${retained.candidateBytes} FOR UPDATE`);
@@ -135,7 +140,8 @@ export class DatabaseMemoryCandidateHandoff {
 
   async recordCommitted(authority: DatabaseMemoryWriteAuthority, receipt: MemoryCandidateHandoffReceipt,
     candidate: MemoryUpdateCandidate, token: MemoryHeadToken): Promise<void> {
-    const retained = this.required(receipt); if (!retained.attempted || retained.committed) refuse();
+    const retained = this.required(receipt);
+    if (!retained.attempted || retained.dispatchAuthority !== authority || retained.committed) refuse();
     // Candidate evidence contains original authority/context; compare the complete submitted data.
     this.requireCandidate(retained, candidate);
     if (token.backend !== 'database' || token.userId !== retained.tenant || token.ownerId !== retained.original.ownerId ||

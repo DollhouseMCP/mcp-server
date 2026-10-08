@@ -137,14 +137,9 @@ export class MemoryHeadUpdateAdapter {
     let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
       if (this.resolveDatabaseAdmission) {
-        if (this.resolveCandidateHandoff) {
-          const store = this.resolveCandidateHandoff();
-          if (!state.admission || !store || state.handoff) throw refusal('Original candidate handoff required');
-          const handoff = await store.handoff(state.admission.capture, captured, originalToken as MemoryHeadToken);
-          if (handoff.status !== 'committed') return this.recordPending(state, captured, originalToken, handoff);
-          state.handoff = { store, receipt: handoff.value, candidate: captured, originalToken, completed: false };
-          store.consume(handoff.value);
-        }
+        const handoff = this.resolveCandidateHandoff
+          ? await this.prepareCandidateHandoff(state, captured, originalToken) : undefined;
+        if (handoff) return this.recordPending(state, captured, originalToken, handoff);
         const outcome = await this.prepareAdmittedWrite(state, captured, originalToken);
         if (outcome.status !== 'committed') {
           if (outcome.status === 'unknown') state.handoff?.store.close();
@@ -161,21 +156,37 @@ export class MemoryHeadUpdateAdapter {
         : await this.port.store.updateOwnedHead(originalToken as OwnedFileMemoryToken, captured.content);
       return this.recordCommit(state, token, originalToken);
     } catch (cause) {
-      if (committed) {
-        state.pending = Object.freeze({ status: 'committed-publication-failed', candidate: captured,
-          originalToken, committedToken: state.token, cause });
-        return { ...committed, cause };
-      }
-      const error = cause as { committed?: boolean; token?: MemoryUpdateToken; code?: string; residual?: boolean } | null;
-      if (this.port.backend === 'file' && error?.committed === true && error.token) {
-        const outcome = this.recordCommit(state, error.token, originalToken);
-        state.pending = Object.freeze({ status: 'committed-publication-failed', candidate: captured,
-          originalToken, committedToken: state.token, cause });
-        return { ...outcome, cause };
-      }
-      const status = error?.residual !== true && refusalCodes.has(error?.code ?? '') ? 'refused' : 'unknown';
-      return this.recordPending(state, captured, originalToken, { status, cause });
+      return this.recordWriteFailure(state, captured, originalToken, cause, committed);
     }
+  }
+  private async prepareCandidateHandoff(state: BoundState, captured: MemoryUpdateCandidate,
+    originalToken: MemoryUpdateToken): Promise<{ status: 'refused' | 'unknown'; cause: unknown } | undefined> {
+    if (!this.resolveCandidateHandoff) return undefined;
+    const store = this.resolveCandidateHandoff();
+    if (!state.admission || !store || state.handoff) throw refusal('Original candidate handoff required');
+    const outcome = await store.handoff(state.admission.capture, captured, originalToken as MemoryHeadToken);
+    if (outcome.status !== 'committed') return outcome;
+    state.handoff = { store, receipt: outcome.value, candidate: captured, originalToken, completed: false };
+    store.consume(outcome.value);
+    return undefined;
+  }
+  private recordWriteFailure(state: BoundState, captured: MemoryUpdateCandidate,
+    originalToken: MemoryUpdateToken, cause: unknown,
+    committed?: { status: 'committed'; token: MemoryUpdateToken }): MemoryUpdateOutcome {
+    if (committed) {
+      state.pending = Object.freeze({ status: 'committed-publication-failed', candidate: captured,
+        originalToken, committedToken: state.token, cause });
+      return { ...committed, cause };
+    }
+    const error = cause as { committed?: boolean; token?: MemoryUpdateToken; code?: string; residual?: boolean } | null;
+    if (this.port.backend === 'file' && error?.committed === true && error.token) {
+      const outcome = this.recordCommit(state, error.token, originalToken);
+      state.pending = Object.freeze({ status: 'committed-publication-failed', candidate: captured,
+        originalToken, committedToken: state.token, cause });
+      return { ...outcome, cause };
+    }
+    const status = error?.residual !== true && refusalCodes.has(error?.code ?? '') ? 'refused' : 'unknown';
+    return this.recordPending(state, captured, originalToken, { status, cause });
   }
   private async prepareAdmittedWrite(state: BoundState, captured: MemoryUpdateCandidate,
     originalToken: MemoryUpdateToken): Promise<DatabaseMemoryAdmittedWriteOutcome<PreparedDatabaseMemoryHeadWrite>> {

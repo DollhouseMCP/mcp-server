@@ -23,6 +23,26 @@ describe('bounded exact candidate handoff data', () => {
     Object.defineProperty(original.metadata, 'hidden', { get: getter, enumerable: true });
     expect(() => encodeMemoryCandidate(original)).toThrow('bounded handoff'); expect(getter).not.toHaveBeenCalled();
   });
+  it('keeps canonical UTF-16 key ordering and existing envelope bytes independent of insertion order', () => {
+    const original = candidate();
+    const keys = ['\uDFFF', '😀', '\uD800', 'ä', 'a', 'Z', '2', '10'];
+    Object.assign(original.metadata, { extension: Object.fromEntries(keys.map(key => [key, null])) });
+    const expected = raw(['object', [
+      ['content', ['string', original.content]],
+      ['metadata', ['object', [
+        ['author', ['string', 'author']], ['description', ['string', 'exact']],
+        ['extension', ['object', ['10', '2', 'Z', 'a', 'ä', '\uD800', '😀', '\uDFFF'].map(key => [key, ['null']])]],
+        ['tags', ['array', [['string', 'one']]]], ['version', ['string', '1']], ['visibility', ['undefined']]
+      ]]],
+      ['name', ['string', 'owned-name']]
+    ]]);
+    const encoded = encodeMemoryCandidate(original);
+    expect(encoded.bytes).toEqual(expected.bytes);
+    expect(encoded.digest).toBe(expected.digest);
+    Object.assign(original.metadata, { extension: Object.fromEntries([...keys].reverse().map(key => [key, null])) });
+    expect(encodeMemoryCandidate(original)).toEqual(encoded);
+    expect(decodeMemoryCandidate(expected)).toEqual(original);
+  });
   it.each([NaN, Infinity, -0, 1n, new Date(), Symbol('unsupported'), () => 'callback'])('refuses unsupported data without dropping it: %s', value => {
     const original = candidate(); Object.assign(original.metadata, { extension: value });
     expect(() => encodeMemoryCandidate(original)).toThrow('bounded handoff');

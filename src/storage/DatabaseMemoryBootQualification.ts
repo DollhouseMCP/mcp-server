@@ -38,7 +38,7 @@ export class DatabaseMemoryBootQualification {
 
   capture(identity: MemoryBootIdentity): object {
     const qualification = this.current;
-    if (!qualification || qualification.identity.tenant !== identity.tenant ||
+    if (!qualification?.identity || qualification.identity.tenant !== identity.tenant ||
       qualification.identity.store !== identity.store || identity.backend !== 'database') this.refuse();
     return qualification;
   }
