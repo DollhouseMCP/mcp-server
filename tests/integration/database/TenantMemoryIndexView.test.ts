@@ -47,10 +47,13 @@ required('selected tenant DB memory index and RAM-only derivation', () => {
     const scope = new AsyncLocalStorage<string>(); const getTenant = () => scope.getStore() ?? f.userId;
     let deps!: ElementManagerDeps;
     const root = admittedMemoryContainer(f.db, getTenant, directory, factory => incoming => {
-      deps = incoming; return factory.createAdmittedMemoryManager(incoming);
+      deps = incoming; return factory.createAdmittedMemoryManager({ ...incoming, fileWatchService: undefined });
     });
     try {
       const fixed = root.manager(); const c = root.container; const tracker = c.resolve<ContextTracker>('ContextTracker');
+      // The unrelated root-manager negative control is DB-only too; local
+      // watcher flags must not create a directory before selected reads begin.
+      expect(await readdir(directory, { recursive: true })).toEqual([]);
       const paths = new PathService({ userResolver: new PerUserPathResolver(directory), packageLocator: new PackageResourceLocator(), userIdResolver: getTenant });
       const portfolio = new PortfolioManager(c.resolve('FileOperationsService'), { baseDir: directory }, { pathService: paths, contextTracker: tracker });
       const registry = new DatabaseTenantMemoryRegistry({ db: f.db, getEffectiveTenant: getTenant,
@@ -66,6 +69,15 @@ required('selected tenant DB memory index and RAM-only derivation', () => {
           userId: tenant, sessionId: `owned-${tenant}`, tenantId: tenant, transport: 'http', createdAt: 1,
         }), async () => {
           const operation = await provider.resolve(provider.capture());
+          await expect(operation.manager.load(locator)).rejects.toMatchObject({ code: 'EMEMORYADMISSION' });
+          // Controlled owned-fixture authority only: this is not the production
+          // whole-tenant qualifier or evidence of authenticated/cold admission.
+          await registry.qualify(registry.capture(), async identity => {
+            expect(identity.tenant).toBe(tenant); expect(identity.backend).toBe('database');
+            expect(await f.snapshot()).toEqual(before);
+            const [current] = await f.maintenance`SELECT jsonb_agg(to_jsonb(e) ORDER BY id)::text AS heads FROM public.elements e`;
+            expect(current).toEqual(headsBefore);
+          });
           const view = bindTenantMemoryIndexView(provider, operation, viewDeps);
           try {
             const entries = await view.portfolioIndex.getElementsByType(ElementType.MEMORY);
