@@ -17,7 +17,8 @@ import { logger } from '../../utils/logger.js';
 import type { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import matter from 'gray-matter';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
+import { SerializationService } from '../../services/SerializationService.js';
 
 /**
  * Result of parsing a file with frontmatter
@@ -106,7 +107,9 @@ export class ElementFileOperations {
     });
 
     // Parse frontmatter
-    const parsed = matter(raw);
+    const parsed = SecureYamlParser.safeMatter(raw, undefined, {
+      maxContentSize: maxSize, maxYamlSize: maxSize, validateContent: false, validateFields: false
+    });
 
     return {
       metadata: parsed.data,
@@ -168,7 +171,9 @@ export class ElementFileOperations {
     }, {} as any);
 
     // Create frontmatter content
-    const fileContent = matter.stringify(content, cleanMetadata);
+    const fileContent = new SerializationService().stringifySafeFrontmatter(content, cleanMetadata, {
+      schema: 'json', skipInvalid: false, noRefs: true
+    });
 
     await this.fileOperations.writeFile(fullPath, fileContent, {
       encoding: 'utf-8',

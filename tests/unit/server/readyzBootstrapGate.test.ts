@@ -39,6 +39,7 @@ import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.j
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { randomBytes } from 'node:crypto';
+import { PACKAGE_VERSION } from '../../../src/generated/version.js';
 
 async function buildRuntime(
   isReadyForTraffic?: () => Promise<boolean>,
@@ -90,15 +91,14 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
     }
   });
 
-  it('returns 503 with reason=bootstrap_required when oauthProvider reports ready=false', async () => {
+  it('returns only readiness/version with 503 when oauthProvider reports ready=false', async () => {
     const runtime = await buildRuntime(() => Promise.resolve(false));
     try {
       const res = await request(runtime.app).get('/readyz');
       expect(res.status).toBe(503);
       expect(res.body).toEqual({
         ready: false,
-        reason: 'bootstrap_required',
-        transport: 'streamable-http',
+        version: PACKAGE_VERSION,
       });
     } finally {
       await runtime.close();
