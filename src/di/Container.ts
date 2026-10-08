@@ -1274,6 +1274,10 @@ export class DollhouseContainer {
     // Build handler registry, then add lazy getters for session-scoped services.
     // MemoryMetricsSink is registered during deferredSetup (after MetricsManager.start()),
     // so it isn't available at handler construction time — resolve on first access instead.
+    // MemoryLogSink is registered by the genuine LogManager factory. A
+    // configured index view must not depend on ordinary index construction
+    // incidentally materializing that observer before the root registry.
+    this.resolve<LogManager>('LogManager');
     const sessionContainerRegistry = this.resolve<SessionContainerRegistry>('SessionContainerRegistry');
     const resolveActiveOrRoot = <T>(serviceName: string): T => {
       const activeContainer = sessionContainerRegistry.getActiveContainer();

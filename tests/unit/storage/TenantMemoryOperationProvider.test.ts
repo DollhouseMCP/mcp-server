@@ -641,11 +641,12 @@ describe('actual configured Container handler assembly (controlled DB transport)
     f.container.replace('PortfolioManager',()=>deps.portfolioManager);
     const denied=jest.fn(()=>{throw new Error('Fixed root memory/index retrieval');});
     for(const name of ['MemoryManager','EnhancedIndexManager','PortfolioIndexManager','UnifiedIndexManager'])f.container.replace(name,denied);
-    f.container.resolve('LogManager'); // Normal observability bootstrap registers its in-memory sink.
+    expect(f.container.hasRegistration('MemoryLogSink')).toBe(false);
     const persona=f.container.resolve<PersonaManager>('PersonaManager');jest.spyOn(persona,'reload').mockResolvedValue(undefined);
     Object.assign(f.container,{personasDir:deps.portfolioManager.getElementDir(ElementType.PERSONA)});
     await f.tracker.runAsync(invocation(f.tracker,f.first),async()=>{
       const bundle=await f.container.bootstrapHandlers();
+      expect(f.container.hasRegistration('MemoryLogSink')).toBe(true);
       expect(bundle.elementCrudHandler).toBeInstanceOf(ElementCRUDHandler);expect(bundle.collectionHandler).toBeInstanceOf(CollectionHandler);
       expect(bundle.portfolioHandler).toBeInstanceOf(PortfolioHandler);expect(bundle.syncHandler).toBeInstanceOf(SyncHandler);
       expect(bundle.mcpAqlHandler).toBeInstanceOf(MCPAQLHandler);expect(denied).not.toHaveBeenCalled();
