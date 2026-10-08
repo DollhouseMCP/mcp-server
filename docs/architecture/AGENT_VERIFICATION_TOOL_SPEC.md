@@ -194,7 +194,7 @@ export class VerificationChallengeStore {
 │ 2. AgentManager.executeAgent() runs                         │
 │    - Evaluates risk: score = 75 (VERIFY tier)              │
 │    - Creates VerificationChallenge                          │
-│      - challengeId: "challenge_1733781234567_abc123"       │
+│      - challengeId: "550e8400-e29b-41d4-a716-446655440000"       │
 │      - displayCode: "H4K2P9" (generated randomly)          │
 │      - expiresAt: 5 minutes from now                       │
 └─────────────────────────────────────────────────────────────┘
@@ -214,7 +214,7 @@ export class VerificationChallengeStore {
 │    │                                                   │    │
 │    │         H4K2P9                                   │    │
 │    │                                                   │    │
-│    │ Challenge ID: challenge_1733781234567_abc123    │    │
+│    │ Challenge ID: 550e8400-e29b-41d4-a716-446655440000    │    │
 │    │ Expires: 2025-12-09T18:30:00Z                   │    │
 │    └─────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
@@ -224,7 +224,7 @@ export class VerificationChallengeStore {
 │    {                                                        │
 │      safetyTier: "verify",                                 │
 │      verificationRequired: {                               │
-│        challengeId: "challenge_1733781234567_abc123",     │
+│        challengeId: "550e8400-e29b-41d4-a716-446655440000",     │
 │        challengeType: "display_code",                      │
 │        prompt: "Enter verification code...",               │
 │        expiresAt: "2025-12-09T18:30:00Z",                 │
@@ -248,7 +248,7 @@ export class VerificationChallengeStore {
                            ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ 8. LLM calls verify_agent_execution(                       │
-│      challengeId: "challenge_1733781234567_abc123",       │
+│      challengeId: "550e8400-e29b-41d4-a716-446655440000",       │
 │      verificationCode: "H4K2P9",                           │
 │      agentName: "deploy-prod",                             │
 │      parameters: { ... }                                   │
@@ -379,7 +379,7 @@ if (!challenge) {
   "success": false,
   "error": "CHALLENGE_NOT_FOUND",
   "message": "Challenge ID not found. It may have expired or been completed.",
-  "challengeId": "challenge_1733781234567_abc123"
+  "challengeId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
