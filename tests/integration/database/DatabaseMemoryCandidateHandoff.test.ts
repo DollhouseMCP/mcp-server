@@ -153,7 +153,7 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
     await f.maintenance`DELETE FROM public.memory_candidate_quotas WHERE user_id=${f.userId}::uuid`;
     const memory = await f.manager.load(f.memoryId); await memory.addEntry('Unaccepted missing quota');
     await expect(memory.save()).rejects.toMatchObject({ cause: {
-      code: '23514', message: 'Candidate handoff quota is unavailable'
+      code: '23514', message: 'Candidate handoff quota is not provisioned'
     } });
     expect(f.admitted).not.toHaveBeenCalled();
     expect(await f.rows()).toHaveLength(0); expect(await f.snapshot()).toEqual(before); f.done();
