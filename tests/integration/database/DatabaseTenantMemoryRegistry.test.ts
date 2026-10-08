@@ -31,6 +31,10 @@ async function fixture(name: string) {
 required('required PostgreSQL private tenant composition', () => {
   it('blocks configuration-off for another served protected tenant that app RLS does not expose', async () => {
     const f = await fixture('whole-database-off'); const before = await f.snapshot();
+    const [endpoint] = await f.maintenance`SELECT pg_catalog.inet_server_addr()::text AS inet_text,
+      pg_catalog.host(pg_catalog.inet_server_addr()) AS host_text`;
+    expect(endpoint.inet_text).toMatch(/\/(32|128)$/u);
+    expect(endpoint.host_text).not.toContain('/');
     await expect(requireDatabaseMemoryStartupAdmission(f.db, f.systemDb, false)).resolves.toBeUndefined();
     await f.maintenance`INSERT INTO public.memory_backend_modes
       (user_id,backend,protocol_version,profile,mode,generation)

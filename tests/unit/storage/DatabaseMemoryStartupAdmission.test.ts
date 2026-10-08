@@ -37,6 +37,26 @@ describe('configuration-independent whole database startup admission', () => {
     const query = f.statements.find(text => text.includes('invalid_modes'))!;
     expect(query).toContain('IS NOT TRUE'); expect(query).toContain('a.attnotnull'); expect(query).toContain('count(*) = 6');
   });
+  it('extracts the bare IP from PostgreSQL inet identity instead of rejecting its explicit text netmask', async () => {
+    const f = fixture();
+    const databaseIdentity = { ...identity, address: '127.0.0.1/32' };
+    f.execute.mockImplementation(async query => {
+      const text = new PgDialect().sqlToQuery(query).sql;
+      if (text.includes('canBypassRls')) return [{ currentUser: 'system-test', canBypassRls: true }];
+      if (text.includes('AS database')) return [text.includes('pg_catalog.host(pg_catalog.inet_server_addr())')
+        ? identity : databaseIdentity];
+      if (text.includes('invalid_modes')) return [{ catalog_known: true, invalid_modes: '0', protected_modes: '0' }];
+      return [];
+    });
+    // The app transport must evaluate the same SQL projection as the authoritative transport.
+    const appDb = { transaction: async (body: (tx: {execute: typeof f.execute}) => Promise<unknown>) =>
+      body({execute:f.execute}) } as unknown as DatabaseInstance;
+    await expect(requireDatabaseMemoryStartupAdmission(appDb, f.systemDb, false)).resolves.toBeUndefined();
+    const identities = f.execute.mock.calls.map(([query]) => new PgDialect().sqlToQuery(query).sql)
+      .filter(text => text.includes('AS database'));
+    expect(identities).toHaveLength(2);
+    for (const text of identities) expect(text).toContain('pg_catalog.host(pg_catalog.inet_server_addr())');
+  });
   it('blocks flag-off when any served tenant is guarded or read-only, while configured catalog acceptance is not boot admission', async () => {
     const f = fixture(); f.setMode({ catalog_known: true, invalid_modes: '0', protected_modes: '2' });
     await expect(requireDatabaseMemoryStartupAdmission(f.appDb, f.systemDb, false)).rejects.toThrow('startup');

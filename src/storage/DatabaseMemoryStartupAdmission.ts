@@ -39,7 +39,7 @@ async function inspectStartup(appDb: DatabaseInstance, systemDb: DatabaseInstanc
     await tx.execute(sql`SET TRANSACTION READ ONLY`);
     return tx.execute(sql`SELECT pg_catalog.current_database() AS database,
       (SELECT oid::text FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()) AS oid,
-      pg_catalog.inet_server_addr()::text AS address, pg_catalog.inet_server_port() AS port,
+      pg_catalog.host(pg_catalog.inet_server_addr()) AS address, pg_catalog.inet_server_port() AS port,
       extract(epoch from pg_catalog.pg_postmaster_start_time())::text AS started`);
   });
   // An ordinary RLS-filtered connection cannot establish absence of protected tenants.
@@ -47,7 +47,7 @@ async function inspectStartup(appDb: DatabaseInstance, systemDb: DatabaseInstanc
     await tx.execute(sql`SET TRANSACTION READ ONLY`);
     const systemIdentity = await tx.execute(sql`SELECT pg_catalog.current_database() AS database,
       (SELECT oid::text FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()) AS oid,
-      pg_catalog.inet_server_addr()::text AS address, pg_catalog.inet_server_port() AS port,
+      pg_catalog.host(pg_catalog.inet_server_addr()) AS address, pg_catalog.inet_server_port() AS port,
       extract(epoch from pg_catalog.pg_postmaster_start_time())::text AS started`);
     if (applicationIdentity.length !== 1 || systemIdentity.length !== 1 ||
       !knownIdentity(applicationIdentity[0]) || !knownIdentity(systemIdentity[0]) ||
