@@ -17,6 +17,17 @@ async function checked<T>(checkpoint: () => void, read: () => PromiseLike<T>): P
   checkpoint(); const value = await read(); checkpoint(); return value;
 }
 
+function requireCensusKey(row: Record<string, unknown>, last: string | null): string {
+  if (typeof row.id !== 'string' || !UUID.test(row.id) || last !== null && row.id <= last) {
+    throw new Error('Invalid memory census order');
+  }
+  return row.id;
+}
+function requireReadObservation(observed: Awaited<ReturnType<DatabaseMemoryReconciliationInspector['inspectGuardedReadInTransaction']>>): void {
+  if (observed.inspection.status !== 'equivalent' || observed.inspection.diagnosticsTruncated ||
+      typeof observed.rawContent !== 'string') throw new Error('Memory owner read qualification refused');
+}
+
 export interface GuardedMemoryTenantQualification {
   readonly appDb: DatabaseInstance;
   readonly systemDb: DatabaseInstance;
@@ -60,16 +71,13 @@ export async function qualifyDatabaseMemoryTenant(deps: GuardedMemoryTenantQuali
       if (!page.length) break; // Explicit EOF in this same snapshot, not a short-page assumption.
       if (page.length > PAGE_SIZE) throw new Error('Invalid memory census page');
       for (const row of page) {
-        if (typeof row.id !== 'string' || !UUID.test(row.id) || last !== null && row.id <= last) {
-          throw new Error('Invalid memory census order');
-        }
+        const ownerId = requireCensusKey(row, last);
         const observed = await checked(deps.checkpoint, () => inspector.inspectGuardedReadInTransaction(tx,
-          { userId: deps.tenant, memoryId: row.id as string }, deps.checkpoint));
-        if (observed.inspection.status !== 'equivalent' || observed.inspection.diagnosticsTruncated ||
-            typeof observed.rawContent !== 'string') throw new Error('Memory owner read qualification refused');
+          { userId: deps.tenant, memoryId: ownerId }, deps.checkpoint));
+        requireReadObservation(observed);
         await checked(deps.checkpoint, () => deps.manager.assertGuardedReadFidelity(observed.rawContent!,
-          row.id as string, observed.inspection.name));
-        last = row.id;
+          ownerId, observed.inspection.name));
+        last = ownerId;
         owners += 1;
         if (!Number.isSafeInteger(owners)) throw new Error('Memory census count is unrepresentable');
         // No payload/Memory escapes this iteration; only count and key remain.

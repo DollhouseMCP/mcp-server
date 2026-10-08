@@ -18,7 +18,9 @@ function decimal(token: string): Decimal {
   let digits = (match[2] + fraction).replace(/^0+/u, '');
   let scale = BigInt(match[4] ?? '0') - BigInt(fraction.length);
   if (!digits) return { negative: match[1] === '-', digits: '0', scale: 0n };
-  const trailing = /0+$/u.exec(digits)?.[0].length ?? 0;
+  let end = digits.length;
+  while (end > 0 && digits[end - 1] === '0') end -= 1;
+  const trailing = digits.length - end;
   if (trailing) { digits = digits.slice(0, -trailing); scale += BigInt(trailing); }
   return { negative: match[1] === '-', digits, scale };
 }

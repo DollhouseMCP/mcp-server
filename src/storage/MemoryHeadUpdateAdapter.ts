@@ -138,13 +138,9 @@ export class MemoryHeadUpdateAdapter {
     let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
       if (this.checkReadCandidate) {
-        try {
-          await this.checkReadCandidate(captured, originalToken);
-          this.requireTenant(tenant);
-        } catch (cause) {
-          // No handoff or head transaction has been dispatched at this point.
-          return this.recordPending(state, captured, originalToken, { status: 'refused', cause });
-        }
+        const refusal = await this.readCandidateRefusal(captured, originalToken, tenant);
+        if (refusal) return this.recordPending(state, captured, originalToken, refusal);
+        this.requireTenant(tenant);
       }
       if (this.resolveDatabaseAdmission) {
         const handoff = this.resolveCandidateHandoff
@@ -167,6 +163,17 @@ export class MemoryHeadUpdateAdapter {
       return this.recordCommit(state, token, originalToken);
     } catch (cause) {
       return this.recordWriteFailure(state, captured, originalToken, cause, committed);
+    }
+  }
+  private async readCandidateRefusal(candidate: MemoryUpdateCandidate, token: MemoryUpdateToken,
+    tenant: string): Promise<{ status: 'refused'; cause: unknown } | undefined> {
+    try {
+      await this.checkReadCandidate!(candidate, token);
+      this.requireTenant(tenant);
+      return undefined;
+    } catch (cause) {
+      // No handoff or head transaction has been dispatched at this point.
+      return { status: 'refused', cause };
     }
   }
   private async prepareCandidateHandoff(state: BoundState, captured: MemoryUpdateCandidate,

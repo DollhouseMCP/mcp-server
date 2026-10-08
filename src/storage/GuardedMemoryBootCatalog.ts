@@ -117,7 +117,7 @@ export async function requireGuardedMemoryBootCatalog(tx: DrizzleTx): Promise<vo
     expression(row.qualification), expression(row.checking)]);
   const expected = POLICIES.map(([relation, name, command, qualification, checking]) =>
     [relation, name, command, expression(qualification), expression(checking)]);
-  const sort = (values: unknown[][]) => values.map(value => JSON.stringify(value)).sort();
+  const sort = (values: unknown[][]) => values.map(value => JSON.stringify(value)).sort((left, right) => left.localeCompare(right));
   if (policies.some(row => row.polpermissive !== true || row.roles !== '{0}') ||
       !isDeepStrictEqual(sort(actual), sort(expected))) throw new Error('Guarded memory policy contract refused');
   // The existing Drizzle schema binds unqualified relation names to public.
@@ -153,7 +153,8 @@ async function requireConstraints(tx: DrizzleTx): Promise<void> {
           .some(key => primary[0][key] !== true)) throw new Error('Guarded memory primary key refused');
     const checks = rows.filter(row => row.relname === relation && row.contype === 'c');
     if (checks.some(row => row.builtin_only !== true || typeof row.expression !== 'string') ||
-        !isDeepStrictEqual(checks.map(row => expression(row.expression)).sort(), CHECKS[relation].map(expression).sort())) {
+        !isDeepStrictEqual(checks.map(row => expression(row.expression)).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+          CHECKS[relation].map(expression).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))))) {
       throw new Error('Guarded memory bounds or outcome constraints refused');
     }
   }

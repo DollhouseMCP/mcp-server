@@ -13,19 +13,23 @@ function timestamp(value: unknown): string {
   return new Date(value).toISOString();
 }
 
-/** Compare the actual quiet loader result, retaining raw ordering rather than SQL row order. */
-export function assertHydratedMemoryReadFidelity(raw: Record<string, unknown>, memory: Memory,
-  decodedRetentionDays: unknown): void {
-  const source = raw.metadata === undefined ? raw : record(raw.metadata);
-  if (source.volumes !== undefined && (!Array.isArray(source.volumes) || source.volumes.length !== 0)) refuse();
-  const entries = raw.entries ?? [];
+function normalizeEntries(rawEntries: unknown): unknown[] {
+  const entries = rawEntries ?? [];
   if (!Array.isArray(entries)) refuse();
-  const normalized = entries.map(value => {
+  return entries.map(value => {
     const entry = record(value);
     return { ...entry, timestamp: timestamp(entry.timestamp),
       ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt === null ? null : timestamp(entry.expiresAt) }),
       tags: entry.tags ?? [], trustLevel: entry.trustLevel || 'untrusted', source: entry.source || 'loaded' };
   });
+}
+
+/** Compare the actual quiet loader result, retaining raw ordering rather than SQL row order. */
+export function assertHydratedMemoryReadFidelity(raw: Record<string, unknown>, memory: Memory,
+  decodedRetentionDays: unknown): void {
+  const source = raw.metadata === undefined ? raw : record(raw.metadata);
+  if (source.volumes !== undefined && (!Array.isArray(source.volumes) || source.volumes.length !== 0)) refuse();
+  const normalized = normalizeEntries(raw.entries);
   const serialized = JSON.parse(memory.serialize()) as { entries: unknown[] };
   if (!isDeepStrictEqual(normalized, serialized.entries) ||
       raw.extensions !== undefined && !isDeepStrictEqual(raw.extensions, memory.extensions) ||
@@ -40,13 +44,21 @@ export function assertHydratedMemoryReadFidelity(raw: Record<string, unknown>, m
     if (diskFields.has(key)) continue;
     if (raw.metadata === undefined && ['entries', 'stats', 'instructions', 'extensions'].includes(key)) continue;
     const actual = (memory.metadata as unknown as Record<string, unknown>)[aliases[key] ?? key];
-    if (key === 'description' && value === '' && actual === undefined) continue;
-    if (['created', 'modified'].includes(key)) {
-      if (timestamp(value) !== timestamp(actual instanceof Date ? actual.toISOString() : actual)) refuse();
-    } else if (key === 'retention_policy') {
-      // Reuse the actual loader's legacy duration interpretation; no separate
-      // handwritten duration parser or new policy normalization contract.
-      if (!isDeepStrictEqual(decodedRetentionDays, (memory.metadata as unknown as Record<string, unknown>).retentionDays)) refuse();
-    } else if (!isDeepStrictEqual(value, actual)) refuse();
+    assertMetadataField(key, value, actual, memory, decodedRetentionDays);
   }
+}
+
+function assertMetadataField(key: string, value: unknown, actual: unknown, memory: Memory,
+  decodedRetentionDays: unknown): void {
+  if (key === 'description' && value === '' && actual === undefined) return;
+  if (['created', 'modified'].includes(key)) {
+    if (timestamp(value) !== timestamp(actual instanceof Date ? actual.toISOString() : actual)) refuse();
+    return;
+  }
+  if (key === 'retention_policy') {
+    // Reuse the actual loader's duration interpretation, without a new parser.
+    if (!isDeepStrictEqual(decodedRetentionDays, (memory.metadata as unknown as Record<string, unknown>).retentionDays)) refuse();
+    return;
+  }
+  if (!isDeepStrictEqual(value, actual)) refuse();
 }
