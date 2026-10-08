@@ -17,7 +17,8 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import matter from 'gray-matter';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
+import { SerializationService } from '../../services/SerializationService.js';
 
 /**
  * Result of parsing a file with frontmatter
@@ -103,7 +104,9 @@ export class ElementFileOperations {
     const raw = await this.fileLockManager.atomicReadFile(fullPath, { encoding: 'utf-8' });
 
     // Parse frontmatter
-    const parsed = matter(raw);
+    const parsed = SecureYamlParser.safeMatter(raw, undefined, {
+      maxContentSize: maxSize, maxYamlSize: maxSize, validateContent: false, validateFields: false
+    });
 
     return {
       metadata: parsed.data,
@@ -165,7 +168,9 @@ export class ElementFileOperations {
     }, {} as any);
 
     // Create frontmatter content
-    const fileContent = matter.stringify(content, cleanMetadata);
+    const fileContent = new SerializationService().stringifySafeFrontmatter(content, cleanMetadata, {
+      schema: 'json', skipInvalid: false, noRefs: true
+    });
 
     // CRITICAL FIX: Use atomic file write via injected instance
     await this.fileLockManager.atomicWriteFile(fullPath, fileContent, { encoding: 'utf-8' });
