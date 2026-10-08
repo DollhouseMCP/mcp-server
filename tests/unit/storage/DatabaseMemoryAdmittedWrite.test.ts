@@ -88,6 +88,14 @@ describe('dormant same-transaction admitted UPDATE', () => {
       .toEqual({ status: 'unknown', cause });
   });
 
+  it('returns no rollback proof when capture refusal occurs before a transaction callback', async () => {
+    const f = fixture(); const body = jest.fn(async () => 'unreachable');
+    const outcome = await f.gate.withAdmittedWrite({ protocolVersion: 1 }, body);
+    expect(outcome).toMatchObject({ status: 'unknown', cause: { code: 'EMEMORYADMISSION' } });
+    expect(body).not.toHaveBeenCalled();
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+
   it('expires authority when connection completion races a still-running callback', async () => {
     const f = fixture(); const capture = await f.gate.capture(); const cause = new Error('connection close race');
     let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });

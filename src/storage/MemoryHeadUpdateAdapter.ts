@@ -2,8 +2,8 @@
 import type { IMemoryHeadStore, MemoryHeadToken } from './IMemoryHeadStore.js';
 import type { FileMemoryOwnerSnapshots, OwnedFileMemoryToken } from './FileMemoryOwnerSnapshots.js';
 import type { ElementWriteMetadata } from './IStorageLayer.js';
-import type { DatabaseMemoryAdmission, DatabaseMemoryAdmissionGate } from './DatabaseMemoryAdmissionGate.js';
-import type { DatabaseMemoryStorageLayer } from './DatabaseMemoryStorageLayer.js';
+import type { DatabaseMemoryAdmission, DatabaseMemoryAdmissionGate, DatabaseMemoryAdmittedWriteOutcome } from './DatabaseMemoryAdmissionGate.js';
+import type { DatabaseMemoryStorageLayer, PreparedDatabaseMemoryHeadWrite } from './DatabaseMemoryStorageLayer.js';
 
 export type MemoryUpdateToken = MemoryHeadToken | OwnedFileMemoryToken;
 export type MemoryUpdateSnapshot = { readonly content: string; readonly token: MemoryUpdateToken };
@@ -127,18 +127,7 @@ export class MemoryHeadUpdateAdapter {
     let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
       if (this.resolveDatabaseAdmission) {
-        const admission = state.admission;
-        if (!admission || this.resolveDatabaseAdmission() !== admission.gate || this.port.backend !== 'database') {
-          throw refusal('Original database admission gate required');
-        }
-        const store = this.port.store as DatabaseMemoryStorageLayer;
-        const outcome = await admission.gate.withAdmittedWrite(admission.capture, async authority => {
-          const prepared = await store.prepareHeadWriteInAdmission(authority,
-            originalToken as MemoryHeadToken, captured.name, captured.content, captured.metadata);
-          // An invalid prospective receipt must roll back, never become a committed token.
-          this.validateReceipt(prepared.token, originalToken);
-          return prepared;
-        });
+        const outcome = await this.prepareAdmittedWrite(state, captured, originalToken);
         if (outcome.status !== 'committed') return this.recordPending(state, captured, originalToken, outcome);
         committed = this.recordCommit(state, outcome.value.token, originalToken);
         this.requireTenant(tenant);
@@ -168,6 +157,21 @@ export class MemoryHeadUpdateAdapter {
       state.pending = Object.freeze({ status, candidate: captured, originalToken, cause });
       return { status, cause };
     }
+  }
+  private async prepareAdmittedWrite(state: BoundState, captured: MemoryUpdateCandidate,
+    originalToken: MemoryUpdateToken): Promise<DatabaseMemoryAdmittedWriteOutcome<PreparedDatabaseMemoryHeadWrite>> {
+    const admission = state.admission;
+    if (!admission?.gate || this.resolveDatabaseAdmission?.() !== admission.gate || this.port.backend !== 'database') {
+      throw refusal('Original database admission gate required');
+    }
+    const store = this.port.store as DatabaseMemoryStorageLayer;
+    return await admission.gate.withAdmittedWrite(admission.capture, async authority => {
+      const prepared = await store.prepareHeadWriteInAdmission(authority,
+        originalToken as MemoryHeadToken, captured.name, captured.content, captured.metadata);
+      // An invalid prospective receipt must roll back, never become a committed token.
+      this.validateReceipt(prepared.token, originalToken);
+      return prepared;
+    });
   }
   private recordPending(state: BoundState, captured: MemoryUpdateCandidate, originalToken: MemoryUpdateToken,
     outcome: { status: 'refused' | 'unknown'; cause: unknown }): MemoryUpdateOutcome {
