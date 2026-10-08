@@ -787,6 +787,10 @@ export class Memory extends BaseElement implements IElement {
    * SECURITY: Ensures memory doesn't grow unbounded
    */
   public async enforceRetentionPolicy(): Promise<number> {
+    return this.enforceRetentionPolicySync();
+  }
+
+  private enforceRetentionPolicySync(): number {
     const now = new Date();
     let deletedCount = 0;
 
@@ -1089,31 +1093,7 @@ export class Memory extends BaseElement implements IElement {
         });
       }
 
-      // Issue #51: Check if retention enforcement should happen on load
-      // IMPORTANT: Retention enforcement is now opt-in, not automatic
-      // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
-      try {
-        const retentionService = Memory.getRetentionPolicyService();
-        if (retentionService?.shouldEnforceOnLoad()) {
-          // User has explicitly enabled on-load enforcement
-          this.enforceRetentionPolicy();
-          logger.debug(`[Memory] Retention policy enforced on load for "${this.metadata.name}"`, {
-            enforcementMode: 'on_load'
-          });
-        } else if (retentionService?.isEnabled()) {
-          // Retention is enabled but not set to on_load mode - log for visibility
-          logger.debug(`[Memory] Retention is enabled but not enforced on load for "${this.metadata.name}"`, {
-            note: 'Use explicit enforcement command to cleanup expired entries'
-          });
-        }
-        // If retentionService is not configured or disabled, no enforcement happens
-        // This is the safe default - nothing is deleted without explicit consent
-      } catch {
-        // Silently ignore retention policy errors during deserialization
-        // This can happen in test environments where ConfigManager is not initialized,
-        // or when a stale resolver references a disposed service instance
-        // It's safe to skip retention enforcement in these cases - the default is no deletion
-      }
+      this.enforceRetentionOnLoad();
 
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
@@ -1127,6 +1107,32 @@ export class Memory extends BaseElement implements IElement {
   }
   
   // Private helper methods
+
+  private enforceRetentionOnLoad(): void {
+    let onLoad = false;
+    let enabled = false;
+    try {
+      const policy = Memory.getRetentionPolicyService();
+      onLoad = policy?.shouldEnforceOnLoad() ?? false;
+      enabled = !onLoad && (policy?.isEnabled() ?? false);
+    } catch {
+      // An unavailable optional resolver cannot authorize deletion.
+      return;
+    }
+    if (onLoad) {
+      // deserialize is synchronous: enforcement failures must reach its error
+      // boundary instead of escaping an ignored Promise after a successful load.
+      this.enforceRetentionPolicySync();
+      logger.debug(`[Memory] Retention policy enforced on load for "${this.metadata.name}"`, {
+        enforcementMode: 'on_load'
+      });
+    } else if (enabled) {
+      logger.debug(`[Memory] Retention is enabled but not enforced on load for "${this.metadata.name}"`, {
+        note: 'Use explicit enforcement command to cleanup expired entries'
+      });
+    }
+  }
+
   
   private calculateExpiryDate(): Date {
     const expiry = new Date();

@@ -149,8 +149,9 @@ describe('FileLogSink', () => {
   });
 
   test('security files use longer retention period', async () => {
-    const oldDate = '2025-10-01'; // ~4 months old
-    const recentDate = new Date().toISOString().slice(0, 10);
+    const now = Date.now();
+    const oldDate = new Date(now - 120 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10); // Beyond 30 days, within 365
+    const recentDate = new Date(now).toISOString().slice(0, 10);
 
     await fs.writeFile(path.join(tmpDir, `security-${oldDate}.log`), 'old security');
     await fs.writeFile(path.join(tmpDir, `application-${oldDate}.log`), 'old app');
