@@ -92,34 +92,7 @@ export class ElementListOperations<T extends IElement> {
 
       const userElements = elements.filter((e): e is Awaited<T> => e !== null) as T[];
 
-      if (options?.includePublic && this.publicElementDiscovery) {
-        try {
-          const userFileNames = new Set(files.map(f => path.basename(f)));
-          const sharedFiles = await this.publicElementDiscovery.discoverPublicElements(
-            this.host.elementType, userFileNames,
-          );
-          const sharedElements = await Promise.all(
-            sharedFiles.map(async (absPath) => {
-              try {
-                const content = await this.fileOperations.readElementFile(absPath, this.host.elementType, {
-                  source: `${this.host.constructor.name}.list:shared`,
-                });
-                const parsed = this.host.parseContent(content);
-                this.host.migrateMetadataDefaults(parsed.data, absPath);
-                const metadata = await this.host.parseMetadata(parsed.data);
-                return this.host.createElement(metadata, parsed.content);
-              } catch {
-                return null;
-              }
-            }),
-          );
-          for (const el of sharedElements) {
-            if (el) userElements.push(el);
-          }
-        } catch {
-          logger.debug(`[${this.host.constructor.name}] Shared-pool discovery failed; returning user elements only`);
-        }
-      }
+      if (options?.includePublic) await this.addPublicElements(files, userElements);
 
       return userElements;
     } catch (error) {
@@ -131,6 +104,36 @@ export class ElementListOperations<T extends IElement> {
       }
       logger.error(`Failed to list ${this.host.elementType}s:`, error);
       return [];
+    }
+  }
+
+  private async addPublicElements(files: string[], userElements: T[]): Promise<void> {
+    if (!this.publicElementDiscovery) return;
+    try {
+      const userFileNames = new Set(files.map(f => path.basename(f)));
+      const sharedFiles = await this.publicElementDiscovery.discoverPublicElements(
+        this.host.elementType, userFileNames,
+      );
+      const sharedElements = await Promise.all(
+        sharedFiles.map(async (absPath) => {
+          try {
+            const content = await this.fileOperations.readElementFile(absPath, this.host.elementType, {
+              source: `${this.host.constructor.name}.list:shared`,
+            });
+            const parsed = this.host.parseContent(content);
+            this.host.migrateMetadataDefaults(parsed.data, absPath);
+            const metadata = await this.host.parseMetadata(parsed.data);
+            return this.host.createElement(metadata, parsed.content);
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const el of sharedElements) {
+        if (el) userElements.push(el);
+      }
+    } catch {
+      logger.debug(`[${this.host.constructor.name}] Shared-pool discovery failed; returning user elements only`);
     }
   }
 

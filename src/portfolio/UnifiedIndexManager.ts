@@ -575,25 +575,29 @@ export class UnifiedIndexManager {
         }
       }
     } catch (error) {
-      this.assertCurrent?.();
-      if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
-      const shouldFallback = this.sourcePriorityConfig.fallbackOnError;
-
-      if (shouldFallback) {
-        logger.warn(`Search failed for source ${source}, continuing to next source`, {
-          error: error instanceof Error ? error.message : String(error),
-          source
-        });
-      } else {
-        logger.error(`Search failed for source ${source}, halting search`, {
-          error: error instanceof Error ? error.message : String(error),
-          source
-        });
-        throw error;
-      }
+      this.handleSourceFailure(source, error);
     }
 
     return true; // Continue to next source
+  }
+
+  private handleSourceFailure(source: 'local' | 'github' | 'collection', error: unknown): void {
+    this.assertCurrent?.();
+    if (source === 'local' && this.localIndexManager.hasBoundMemorySource?.()) throw error;
+    const shouldFallback = this.sourcePriorityConfig.fallbackOnError;
+
+    if (shouldFallback) {
+      logger.warn(`Search failed for source ${source}, continuing to next source`, {
+        error: error instanceof Error ? error.message : String(error),
+        source
+      });
+    } else {
+      logger.error(`Search failed for source ${source}, halting search`, {
+        error: error instanceof Error ? error.message : String(error),
+        source
+      });
+      throw error;
+    }
   }
 
   /**
