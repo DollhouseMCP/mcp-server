@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
+
 - Add browser handoff links for Cursor and VS Code hosted MCP setup, editable connection names, and manual configuration fallbacks. (#2809, #2828)
 - Add a hosted-console Connect guide for Claude Code, Codex, Claude web/Desktop, and Cursor, with deployment-owned endpoint discovery and current-user connection status. (#2803)
 - Incorporate the 2.0.42 macOS verification dialog security fix and prepare safety package 1.0.3, retaining beta’s timing-safe challenge comparison. (#2686)
