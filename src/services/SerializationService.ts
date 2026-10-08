@@ -656,7 +656,7 @@ export class SerializationService {
   }
 
   /** Keep gray-matter's body unwrapping without its executable/default engines. */
-  private stringifySafeFrontmatter(content: string, metadata: any, options: YamlDumpOptions): string {
+  stringifySafeFrontmatter(content: string, metadata: any, options: YamlDumpOptions): string {
     if (options.schema === 'default') {
       throw new Error('Default YAML schema is not supported for frontmatter serialization');
     }
