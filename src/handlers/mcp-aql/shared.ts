@@ -33,6 +33,7 @@ export class VerificationError extends Error {
 }
 
 const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LEGACY_CHALLENGE_ID_LENGTH = 'challenge_'.length + 13 + 1 + 12;
 
 /**
  * Validate that a challenge ID is a valid UUID v4 format.
@@ -56,7 +57,8 @@ export function validateChallengeIdFormat(challengeId: string): void {
  */
 export function validateVerificationChallengeIdFormat(challengeId: string): void {
   const legacyFormat = /^challenge_[1-9]\d{12}_[0-9a-f]{12}$/;
-  if (challengeId.length === 36 && legacyFormat.test(challengeId)) return;
+  // `$` also matches before a terminal newline; the exact length prevents that suffix.
+  if (challengeId.length === LEGACY_CHALLENGE_ID_LENGTH && legacyFormat.test(challengeId)) return;
   validateChallengeIdFormat(challengeId);
 }
 
