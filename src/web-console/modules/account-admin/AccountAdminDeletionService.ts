@@ -117,12 +117,11 @@ export class AccountAdminDeletionService {
     let deletion: PrincipalDeletionOutcome;
     try {
       deletion = await this.options.transactionRunner.run(async tx => {
-        const result = await tx.deletePrincipal({
+        const result = this.requireDeletionOutcome(await tx.deletePrincipal({
           userId,
           deletedByUserId: actor.userId,
           deletedAt: occurredAt,
-        });
-        if (!result) throw new PrincipalVanishedError();
+        }));
         // The tombstone row still exists and can anchor an acknowledged
         // invalidation; a hard-deleted user has nothing left to invalidate.
         if (result.outcome === 'anonymized') {
@@ -165,6 +164,11 @@ export class AccountAdminDeletionService {
     }
 
     return this.buildDeletionResult(userId, occurredAt, deletion, browserSessionsRevoked, oauthGrantsRevoked, runtimeSummary);
+  }
+
+  private requireDeletionOutcome(result: PrincipalDeletionOutcome | null): PrincipalDeletionOutcome {
+    if (!result) throw new PrincipalVanishedError();
+    return result;
   }
 
   private buildDeletionResult(
