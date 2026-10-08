@@ -83,7 +83,7 @@ export class AccountAdminDeletionService {
       await this.options.memoryDeletionBoundary?.checkBeforeAuthMutation(userId);
     } catch (cause) {
       // A failed refusal audit must not replace the original check/transport cause.
-      try { await this.writeAttemptAudit(req, route, cause instanceof DatabaseMemoryLegacyPermissionError ? 'rejected' : 'failed', 'memory_deletion_unavailable', userId, {}); }
+      try { await this.writeAttemptAudit(req, route, this.memoryDeletionAuditResult(cause), 'memory_deletion_unavailable', userId, {}); }
       catch { throw cause; }
       if (!(cause instanceof DatabaseMemoryLegacyPermissionError)) throw cause;
       return problem(409, 'memory_deletion_unavailable', 'Conflict', 'Account deletion is unavailable for this memory storage mode.');
@@ -117,11 +117,12 @@ export class AccountAdminDeletionService {
     let deletion: PrincipalDeletionOutcome;
     try {
       deletion = await this.options.transactionRunner.run(async tx => {
-        const result = this.requireDeletionOutcome(await tx.deletePrincipal({
+        const result = await tx.deletePrincipal({
           userId,
           deletedByUserId: actor.userId,
           deletedAt: occurredAt,
-        }));
+        });
+        if (!result) throw new PrincipalVanishedError();
         // The tombstone row still exists and can anchor an acknowledged
         // invalidation; a hard-deleted user has nothing left to invalidate.
         if (result.outcome === 'anonymized') {
@@ -166,9 +167,8 @@ export class AccountAdminDeletionService {
     return this.buildDeletionResult(userId, occurredAt, deletion, browserSessionsRevoked, oauthGrantsRevoked, runtimeSummary);
   }
 
-  private requireDeletionOutcome(result: PrincipalDeletionOutcome | null): PrincipalDeletionOutcome {
-    if (!result) throw new PrincipalVanishedError();
-    return result;
+  private memoryDeletionAuditResult(cause: unknown): ConsoleAdminAuditResult {
+    return cause instanceof DatabaseMemoryLegacyPermissionError ? 'rejected' : 'failed';
   }
 
   private buildDeletionResult(
