@@ -1,3 +1,5 @@
+import { TenantMemoryOperationProvider } from '../../storage/TenantMemoryOperationProvider.js';
+import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import type { Memory } from '../../elements/memories/Memory.js';
 import { portfolioFilenameStem } from '../../utils/portfolioName.js';
@@ -49,6 +51,8 @@ export type ManagerBackedPortfolioManagers = Readonly<Record<ConsolePortfolioEle
 export interface ManagerBackedPortfolioElementStoreOptions {
   readonly managers: ManagerBackedPortfolioManagers;
   readonly getCurrentUserId: () => string;
+  readonly memoryProvider?: TenantMemoryOperationProvider;
+  readonly contextTracker?: ContextTracker;
 }
 
 export interface PendingConsoleMemoryUpdate {
@@ -59,11 +63,40 @@ export interface PendingConsoleMemoryUpdate {
 }
 
 export class ManagerBackedPortfolioElementStore implements IPortfolioElementStore {
-  private readonly guardedOperations = new Map<string, PendingConsoleMemoryUpdate>();
-  private readonly publicationTails = new WeakMap<ConsolePortfolioElementDetailRecord, {
-    manager: MemoryManager; candidate: Memory; requestKey: string; targetKey: string;
+  private guardedOperations = new Map<string, PendingConsoleMemoryUpdate>();
+  private publicationTails = new WeakMap<ConsolePortfolioElementDetailRecord, {
+    manager: MemoryManager; candidate: Memory; requestKey: string; targetKey: string; bindingCheck?: () => void;
   }>();
-  constructor(private readonly options: ManagerBackedPortfolioElementStoreOptions) {}
+  private operationCheck?: () => void;
+  readonly bindForOperation?: (userId: string) => Promise<IPortfolioElementStore>;
+
+  constructor(private readonly options: ManagerBackedPortfolioElementStoreOptions) {
+    if (Object.hasOwn(options, 'memoryProvider')) {
+      if (!(options.memoryProvider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual trusted memory provider required');
+      options.memoryProvider.assertContextTracker(options.contextTracker);
+      this.bindForOperation = userId => this.bindConfiguredOperation(userId, options.memoryProvider!);
+    }
+  }
+
+  private async bindConfiguredOperation(userId: string, provider: TenantMemoryOperationProvider): Promise<IPortfolioElementStore> {
+    // Authenticated identity must match the actual resolver before capture schedules its flight.
+    this.assertUserIdentity(userId);
+    const capture = provider.capture();
+    const operation = await provider.resolve(capture);
+    provider.assertOperation(operation);
+    this.assertUserIdentity(userId);
+    const { memoryProvider: _provider, ...fixed } = this.options;
+    const bound = new ManagerBackedPortfolioElementStore({ ...fixed, managers: { ...fixed.managers, memories: operation.manager } });
+    bound.operationCheck = () => { provider.assertOperation(operation); bound.assertUserIdentity(userId); };
+    bound.guardedOperations = this.guardedOperations;
+    bound.publicationTails = this.publicationTails;
+    return bound;
+  }
+
+  assertOperationBinding(): void {
+    if (this.bindForOperation) throw new Error('Bound console memory operation required');
+    this.operationCheck?.();
+  }
 
   async summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
     return (await this.listByUser(userId)).map(clonePortfolioElementSummaryRecord);
@@ -82,6 +115,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
         try {
           record = await this.toRecord(userId, type, element);
         } catch (error) {
+          this.assertOperationBinding();
           // Listing is inert — no element is activated here — so a single
           // element whose body fails content parsing/validation (e.g. a
           // security/agent element that legitimately contains injection-like
@@ -97,6 +131,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
         records.push(record);
       }
     }
+    this.assertOperationBinding();
     return [...records]
       .sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name))
       .map(clonePortfolioElementSummaryRecord);
@@ -122,6 +157,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     try {
       return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element, true));
     } catch (error) {
+      this.assertOperationBinding();
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
@@ -136,6 +172,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       throw new PortfolioElementAlreadyExistsError();
     }
     const element = await manager.importElement(rawContentFromInput(input, input.type), managerFormatForType(input.type));
+    this.assertOperationBinding();
     try {
       await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
     } catch (error) {
@@ -176,6 +213,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       tags: input.tags ?? existingRecord.tags,
     }, input.type);
     const updated = await manager.importElement(updatedRaw, managerFormatForType(input.type));
+    this.assertOperationBinding();
     try {
       await manager.save(updated, target?.path ?? elementPath(manager, existingRecord.canonicalName), target?.options);
     } catch (error) {
@@ -197,7 +235,9 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     if (!existing) return null;
     const existingRecord = await this.toRecord(input.userId, input.type, existing);
     this.assertExpectedHash(input.expectedContentHash, existingRecord);
+    this.assertOperationBinding();
     await manager.delete(elementPath(manager, existingRecord.canonicalName));
+    this.assertOperationBinding();
     return clonePortfolioElementDetailRecord({
       ...existingRecord,
       updatedAt: input.now,
@@ -215,9 +255,22 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   /** The console service supplies its actual serialization/ETag tail before retirement. */
   async completeUpdatePublication<T>(record: ConsolePortfolioElementDetailRecord, publish: () => Promise<T>): Promise<T> {
     const tail = this.publicationTails.get(record);
-    if (!tail) return await publish();
+    if (!tail) {
+      this.assertOperationBinding();
+      const result = await publish();
+      this.assertOperationBinding();
+      return result;
+    }
     try {
-      const result = await tail.manager.completeGuardedOperation(tail.candidate, publish);
+      this.assertOperationBinding();
+      tail.bindingCheck?.();
+      const result = await tail.manager.completeGuardedOperation(tail.candidate, async () => {
+        tail.bindingCheck?.();
+        const published = await publish();
+        tail.bindingCheck?.();
+        return published;
+      });
+      // Owning publication was checked before retirement; later delivery is not a new publication attempt.
       this.publicationTails.delete(record);
       return result;
     } catch (cause) {
@@ -269,7 +322,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       else await manager.save(candidate);
       committed = true;
       this.requireGuardedContext(captured.userId, manager, tenant);
-      if ((manager as Partial<MemoryManager>).completeGuardedOperation) this.publicationTails.set(response, { manager, candidate, requestKey, targetKey });
+      if ((manager as Partial<MemoryManager>).completeGuardedOperation) this.publicationTails.set(response, { manager, candidate, requestKey, targetKey, bindingCheck: this.operationCheck });
       return response;
     } catch (cause) {
       throw this.retainGuardedFailure(manager, candidate, dispatched, committed, requestKey, targetKey, cause);
@@ -299,19 +352,27 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
   }
 
   private manager(type: ConsolePortfolioElementType): PortfolioElementManager {
+    this.assertOperationBinding();
     return this.options.managers[type];
   }
 
   private async findElement(type: ConsolePortfolioElementType, canonicalName: string): Promise<IElement | undefined> {
     const normalizedName = canonicalizePortfolioElementName(canonicalName);
     const normalizedFilename = filenameStem(canonicalName);
-    return (await this.manager(type).list()).find(element =>
+    const elements = await this.manager(type).list();
+    this.assertOperationBinding();
+    return elements.find(element =>
       canonicalizePortfolioElementName(element.metadata.name) === normalizedName ||
       filenameStem(element.metadata.name) === normalizedFilename,
     );
   }
 
   private assertAmbientUser(userId: string): void {
+    this.assertOperationBinding();
+    this.assertUserIdentity(userId);
+  }
+
+  private assertUserIdentity(userId: string): void {
     const ambientUserId = this.options.getCurrentUserId();
     if (ambientUserId !== userId) {
       throw new Error('Portfolio manager ambient user does not match authenticated console user');

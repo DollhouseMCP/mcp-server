@@ -45,6 +45,9 @@ export interface ConsolePortfolioListFilters {
 }
 
 export interface IPortfolioElementStore {
+  /** Trusted internal caller composition; never an input/request supplied store. */
+  bindForOperation?(userId: string): Promise<IPortfolioElementStore>;
+  assertOperationBinding?(): void;
   summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]>;
   listByUser(
     userId: string,
