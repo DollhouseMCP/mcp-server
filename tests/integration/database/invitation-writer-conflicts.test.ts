@@ -5,7 +5,7 @@ import { InMemoryIdempotencyStore } from '../../../src/web-console/stores/InMemo
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { eq, sql } from 'drizzle-orm';
 import { createDatabaseConnection, type DatabaseInstance } from '../../../src/database/connection.js';
-import type { DrizzleTx } from '../../../src/database/db-utils.js';
+import { getErrorCode, type DrizzleTx } from '../../../src/database/db-utils.js';
 import { users } from '../../../src/database/schema/users.js';
 import { PostgresInvitationManagementStore } from '../../../src/invitations/PostgresInvitationManagementStore.js';
 import { normalizeAuthAllowlistValue } from '../../../src/auth/embedded-as/allowlistIdentity.js';
@@ -52,12 +52,37 @@ function deferred<T = void>() {
 }
 // Keep the actual writer and every SQL statement intact. Only pause its real
 // transaction after the callback, before COMMIT, to force both write orders.
-function observedDb(onStart: (pid: number) => void, beforeCommit?: () => Promise<void>): DatabaseInstance {
+async function observeLifetimeLockFailure(cause: unknown): Promise<void> {
+  // Failure-only observation after 55P03, not proof of the conflicting holder
+  // at the instant NOWAIT failed. Never replace the actual writer's rejection.
+  try {
+    if (getErrorCode(cause) !== '55P03') return;
+    const rows = await connection.db.execute(sql`SELECT c.relname AS relation,
+      l.pid, l.mode, l.granted, a.state,
+      CASE WHEN a.application_name IN ('invitation-lifetime-writer', 'invitation-lifetime-blocker')
+        THEN a.application_name ELSE 'unlabelled' END AS application_name
+      FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+      WHERE n.nspname = 'public' AND c.relname IN ('users', 'auth_accounts',
+        'user_admin_roles', 'account_allowlist_entries', 'admin_audit_chain_heads',
+        'admin_audit_events', 'security_invalidation_events')
+      ORDER BY c.relname, l.pid, l.mode, l.granted LIMIT 128`);
+    console.info('[invitation-lifetime-lock-observation] post-55P03', JSON.stringify(rows));
+  } catch { /* Query or console observers cannot change the original failure. */ }
+}
+function observedDb(onStart: (pid: number) => void, beforeCommit?: () => Promise<void>, lifetimeDiagnostic = false): DatabaseInstance {
   return { transaction: (callback: (tx: DrizzleTx) => Promise<unknown>) => connection.db.transaction(async tx => {
     await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
     const [row] = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
     onStart(Number(row.pid));
-    const result = await callback(tx);
+    if (lifetimeDiagnostic) await tx.execute(sql`SET LOCAL application_name = 'invitation-lifetime-writer'`);
+    let result: unknown;
+    try { result = await callback(tx); }
+    catch (cause) {
+      if (lifetimeDiagnostic) await observeLifetimeLockFailure(cause);
+      throw cause;
+    }
     await beforeCommit?.();
     return result;
   }) } as DatabaseInstance;
@@ -147,8 +172,9 @@ it('starts the legacy credential lifetime after a users lock wait longer than it
   let pending: ReturnType<typeof issueLegacy> | undefined;
   try {
     await connection.db.transaction(async blocker => {
+      await blocker.execute(sql`SET LOCAL application_name = 'invitation-lifetime-blocker'`);
       await blocker.select().from(users).where(eq(users.id, actorUserId)).for('update');
-      pending = issueLegacy(observedDb(value => pid.resolve(value)), f.legacy, signingKeyStore);
+      pending = issueLegacy(observedDb(value => pid.resolve(value), undefined, true), f.legacy, signingKeyStore);
       await expectBlockedOnUsers(await pid.promise);
       // Model elapsed wall time while the actual writer is blocked in PostgreSQL.
       // The old implementation minted at startedAt and returned an expired token.
