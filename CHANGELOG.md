@@ -2,6 +2,8 @@
 
 ## [2.0.43] - Unreleased
 
+- Pin the direct YAML parser to 4.3.2 to bound merge work and collection depth while retaining the supported DEFAULT-schema timestamp, merge and ordered-map types. Documents exceeding those parser budgets are refused. (#3031)
+
 - Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
 
 - **Behavior change:** permanent memories now default to `onFull: error`. Adding an entry at the 1,000-entry default capacity rejects with an actionable error and preserves existing entries. Set `onFull: evict_oldest` explicitly to retain cache-style eviction; memories with an expiring `retentionDays` policy retain their eviction default. (#2859, #2999)
