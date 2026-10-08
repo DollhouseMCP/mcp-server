@@ -150,7 +150,7 @@ export class ElementCRUDHandler {
   ) {
     if (callerOptions && 'memoryProvider' in callerOptions) {
       if (!(callerOptions.memoryProvider instanceof TenantMemoryOperationProvider)) {
-        throw new Error('Actual trusted memory provider required');
+        throw new TypeError('Actual trusted memory provider required');
       }
       callerOptions.memoryProvider.assertContextTracker(contextTracker);
       this.memoryProvider = callerOptions.memoryProvider;
