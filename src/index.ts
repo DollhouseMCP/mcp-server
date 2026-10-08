@@ -1126,7 +1126,7 @@ async function startStreamableHttpServer(
     : undefined;
   const runtimeSessionControl = await resolveRuntimeMcpSessionControl(container);
 
-  return createStreamableHttpRuntime(async (transport, authClaims, clientInfo) => {
+  const runtime = await createStreamableHttpRuntime(async (transport, authClaims, clientInfo) => {
     // SECURITY: fail-closed per-user isolation. Authenticated HTTP
     // sessions must never collapse onto the unauthenticated fallback user.
     //
@@ -1208,7 +1208,7 @@ async function startStreamableHttpServer(
     tlsConfig: container.hasRegistration('TlsConfig')
       ? container.resolve<TlsConfig>('TlsConfig')
       : undefined,
-    // Forward PerformanceMonitor so /healthz can surface auth-flow timing
+    // Forward PerformanceMonitor for authenticated operator auth-flow timing
     // aggregates alongside session telemetry. Resolved from the container
     // which ObservabilityServiceRegistrar wires unconditionally.
     performanceMonitor: container.hasRegistration('PerformanceMonitor')
@@ -1224,6 +1224,8 @@ async function startStreamableHttpServer(
       ingestRoutes?.deregisterHttpSession(sessionId);
     },
   });
+  container.register('HttpRuntimeMetricsSource', () => () => runtime.getOperationalMetrics());
+  return runtime;
 }
 
 function resolveWebConsoleHttpMounts(
