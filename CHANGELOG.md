@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prepare `@dollhousemcp/safety` 1.0.4 and require `^1.0.4` for the beta npm package so the reviewed UUID challenge producer is delivered through the registry dependency. Preserve exact legacy challenge acceptance during migration; publication and consumer qualification remain separate release gates. (#3000, #2656)
+
 - Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
 
 - Add browser handoff links for Cursor and VS Code hosted MCP setup, editable connection names, and manual configuration fallbacks. (#2809, #2828)
