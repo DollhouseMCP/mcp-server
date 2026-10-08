@@ -9,6 +9,29 @@ const PACKAGE_NAME = '@dollhousemcp/safety';
 const PACKAGE_PATH = 'packages/safety';
 const TRUSTED_MAIN_REF = 'refs/remotes/origin/main';
 
+// Beta retained these development-tool security pins when trusted main published
+// 1.0.4. The qualified beta pack has all 30 non-manifest files byte-identical to
+// that published pack, using identical TypeScript and Node type versions. Its
+// manifest differs only by ten development overrides; the lock is not packed.
+// This record retires automatically on any version, source, blob, or mode change.
+// It is not a general exemption for development metadata or build-tool changes.
+const REVIEWED_SAFETY_104 = Object.freeze({
+  version: '1.0.4',
+  gitHead: 'b2b93accf670c8c3dfa884e9f6c379bf93768001',
+  files: Object.freeze([
+    Object.freeze({
+      path: 'packages/safety/package.json',
+      published: '27575d44c47cc404ac14dfe5afca3bdbb55d1083',
+      beta: '4af547d2bd1cd53e7b3390e5de7b370abd8db516',
+    }),
+    Object.freeze({
+      path: 'packages/safety/package-lock.json',
+      published: '1d3f1d55d02095da8ab4851f6923e483f79a6622',
+      beta: '210e1c3868d9f1d3274c710b52b85a1b708c02f5',
+    }),
+  ]),
+});
+
 function run(command, args, cwd) {
   return spawnSync(command, args, {
     cwd,
@@ -92,6 +115,33 @@ function validateRegistryResult(result, localVersion, log) {
   return { status: 'published-version', version: localVersion, gitHead: publishedGitHead };
 }
 
+function matchesReviewedSafety104(cwd, localVersion, publishedGitHead) {
+  if (localVersion !== REVIEWED_SAFETY_104.version
+    || publishedGitHead !== REVIEWED_SAFETY_104.gitHead) {
+    return false;
+  }
+
+  for (const file of REVIEWED_SAFETY_104.files) {
+    for (const [ref, blob] of [[publishedGitHead, file.published], ['HEAD', file.beta]]) {
+      const entry = run('git', ['ls-tree', ref, '--', file.path], cwd);
+      assertGitSuccess(entry, 'Reading reviewed safety tree entry');
+      if (entry.stdout.trim() !== `100644 blob ${blob}\t${file.path}`) {
+        return false;
+      }
+    }
+  }
+
+  const remainingTree = run('git', [
+    'diff', '--exit-code', publishedGitHead, 'HEAD', '--', PACKAGE_PATH,
+    ...REVIEWED_SAFETY_104.files.map(file => `:(exclude)${file.path}`),
+  ], cwd);
+  if (remainingTree.status === 1 && !remainingTree.error) {
+    return false;
+  }
+  assertGitSuccess(remainingTree, 'Comparing remaining safety package tree');
+  return true;
+}
+
 export function checkSafetyPackageVersion({
   cwd = process.cwd(),
   runNpm = args => run('npm', args, cwd),
@@ -159,6 +209,14 @@ export function checkSafetyPackageVersion({
     throw new Error(`Comparing published safety package tree failed: ${treeResult.error.message}`);
   }
   if (treeResult.status === 1) {
+    if (matchesReviewedSafety104(cwd, localVersion, publishedGitHead)) {
+      log(`Published ${PACKAGE_NAME}@${localVersion} has the exact reviewed beta development-pin divergence; every other safety tree entry is identical.`);
+      return {
+        status: 'published-reviewed-equivalent',
+        version: localVersion,
+        gitHead: publishedGitHead,
+      };
+    }
     throw new Error(
       `Safety package source changed since published ${PACKAGE_NAME}@${localVersion}; bump the package version before merging`
     );

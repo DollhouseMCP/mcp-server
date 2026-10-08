@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 interface CommandResult {
@@ -13,7 +13,7 @@ interface CommandResult {
 }
 
 interface CheckResult {
-  status: 'new-version' | 'published-identical';
+  status: 'new-version' | 'published-identical' | 'published-reviewed-equivalent';
   version: string;
   gitHead?: string;
 }
@@ -30,6 +30,12 @@ const helperUrl = pathToFileURL(
   join(process.cwd(), 'scripts', 'check-safety-package-version.mjs')
 ).href;
 const { checkSafetyPackageVersion } = await import(helperUrl) as SafetyVersionModule;
+
+const REVIEWED_PUBLISHED_HEAD = 'b2b93accf670c8c3dfa884e9f6c379bf93768001';
+const REVIEWED_BETA_BLOBS = [
+  ['package.json', '4af547d2bd1cd53e7b3390e5de7b370abd8db516'],
+  ['package-lock.json', '210e1c3868d9f1d3274c710b52b85a1b708c02f5'],
+];
 
 function git(repo: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -81,6 +87,110 @@ describe('check-safety-package-version', () => {
   afterEach(async () => {
     // Bounded retries tolerate transient ENOTEMPTY; exhaustion still rejects cleanup.
     await rm(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  async function prepareReviewedBeta(): Promise<void> {
+    // Borrow existing local Git objects read-only; no network, install, or
+    // fabricated published commit. Only the safety subtree is checked out.
+    const objects = resolve(process.cwd(), git(process.cwd(), ['rev-parse', '--git-common-dir']), 'objects');
+    await writeFile(join(repo, '.git', 'objects', 'info', 'alternates'), `${objects}\n`);
+    git(repo, ['read-tree', REVIEWED_PUBLISHED_HEAD]);
+    git(repo, ['update-ref', 'HEAD', REVIEWED_PUBLISHED_HEAD]);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', REVIEWED_PUBLISHED_HEAD]);
+    git(repo, ['checkout', REVIEWED_PUBLISHED_HEAD, '--', 'packages/safety']);
+    for (const [file, blob] of REVIEWED_BETA_BLOBS) {
+      await writeFile(join(repo, 'packages', 'safety', file), execFileSync('git', ['cat-file', 'blob', blob], { cwd: process.cwd() }));
+    }
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'retain exact reviewed beta development pins']);
+  }
+
+  function checkReviewedBeta(gitHead = REVIEWED_PUBLISHED_HEAD): CheckResult {
+    return checkSafetyPackageVersion({
+      cwd: repo,
+      runNpm: () => registryResult({ version: '1.0.4', gitHead }),
+      log: () => undefined,
+    });
+  }
+
+  it('recognizes only the exact reviewed 1.0.4 beta metadata divergence', async () => {
+    await prepareReviewedBeta();
+    expect(checkReviewedBeta()).toEqual({
+      status: 'published-reviewed-equivalent',
+      version: '1.0.4',
+      gitHead: REVIEWED_PUBLISHED_HEAD,
+    });
+  });
+
+  it.each([
+    ['runtime dependency', 'dependencies', { injected: '1.0.0' }],
+    ['export', 'exports', { '.': './changed.js' }],
+    ['packed files', 'files', ['src']],
+    ['build script', 'scripts', { build: 'different-compiler' }],
+    ['extra development override', 'overrides', { typescript: '5.0.0' }],
+  ])('rejects a %s change to the reviewed manifest', async (_label, field, value) => {
+    await prepareReviewedBeta();
+    const path = join(repo, 'packages', 'safety', 'package.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    manifest[field as string] = value;
+    await writeFile(path, JSON.stringify(manifest));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'mutate reviewed manifest']);
+    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+  });
+
+  it.each(['src/index.ts', 'tsconfig.json', 'README.md'])('rejects any other safety path change: %s', async file => {
+    await prepareReviewedBeta();
+    const path = join(repo, 'packages', 'safety', file);
+    await writeFile(path, `${await readFile(path, 'utf8')}\nchanged\n`);
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'mutate safety source or build input']);
+    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+  });
+
+  it('rejects a changed compiler entry in the standalone lock', async () => {
+    await prepareReviewedBeta();
+    const path = join(repo, 'packages', 'safety', 'package-lock.json');
+    const lock = JSON.parse(await readFile(path, 'utf8'));
+    lock.packages['node_modules/typescript'].version = '5.0.0';
+    await writeFile(path, JSON.stringify(lock));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'change locked compiler']);
+    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+  });
+
+  it('rejects a reviewed blob with a changed tree mode', async () => {
+    await prepareReviewedBeta();
+    git(repo, ['update-index', '--chmod=+x', 'packages/safety/package.json']);
+    git(repo, ['commit', '-m', 'change reviewed entry mode']);
+    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+  });
+
+  it('rejects a deleted reviewed file', async () => {
+    await prepareReviewedBeta();
+    git(repo, ['rm', 'packages/safety/package-lock.json']);
+    git(repo, ['commit', '-m', 'remove reviewed lock']);
+    expect(() => checkReviewedBeta()).toThrow('Safety package source changed');
+  });
+
+  it('does not extend the record to another trusted published head', async () => {
+    await prepareReviewedBeta();
+    expect(() => checkReviewedBeta(git(repo, ['rev-parse', `${REVIEWED_PUBLISHED_HEAD}^1`]))).toThrow('Safety package source changed');
+  });
+
+  it('does not extend the record to another version', async () => {
+    await prepareReviewedBeta();
+    const path = join(repo, 'packages', 'safety', 'package.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    manifest.version = '1.0.5';
+    await writeFile(path, JSON.stringify(manifest));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'change package version']);
+    expect(() => checkSafetyPackageVersion({
+      cwd: repo,
+      runNpm: () => registryResult({ version: '1.0.5', gitHead: REVIEWED_PUBLISHED_HEAD }),
+      log: () => undefined,
+    })).toThrow('Safety package source changed');
   });
 
   it('allows an exact published version when its trusted source tree is identical', () => {
