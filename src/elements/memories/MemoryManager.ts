@@ -253,6 +253,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Previously: const content = await fs.readFile(fullPath, 'utf-8');
       // Now: Uses FileOperationsService which wraps FileLockManager
       const content = await this.fileOperations.readFile(fullPath, { encoding: 'utf-8' });
+      if (content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+        throw new Error('Memory exceeds the bounded legacy recovery read limit');
+      }
       
       // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
       // Uses SerializationService which wraps SecureYamlParser and handles pure YAML automatically
@@ -268,7 +271,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
         parsed = { data: {}, content: '' };
       } else {
         const parseResult = this.serializationService.parseFrontmatter(content, {
-          maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+          maxYamlSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
+          maxContentSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE,
           validateContent: false,  // FIX (#1206): Local files are pre-trusted
           source: 'MemoryManager.load',
           schema: 'json'  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
@@ -314,12 +318,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // If markdown content exists after the frontmatter, add it as a memory entry
       // This preserves content from seed memories and memory files with markdown sections
       if (markdownContentFromFile && markdownContentFromFile.trim() && parsed.content && parsed.content.trim()) {
-        await memory.addEntry(
-          parsed.content.trim(),
-          [],  // tags
-          { loadedAt: new Date().toISOString() },  // metadata
-          'file'  // source
-        );
+        memory.appendLoadedMarkdownBody(parsed.content.trim());
+      }
+
+      if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+        memory.markOversizedLegacyReadOnly();
+        logger.warn('[MemoryManager] Oversized legacy memory loaded read-only; split it before adding entries.', {
+          contentLength: content.length, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+        });
+        SecurityMonitor.logSecurityEvent({
+          type: 'CONTENT_SIZE_EXCEEDED', severity: 'HIGH', source: 'MemoryManager.load',
+          details: 'Oversized legacy memory loaded read-only; ordinary save and import limits still apply.',
+          metadata: { contentLength: content.length, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE },
+        });
       }
       
       // FIX #1320: Set file path on memory for persistence (store relative path)
@@ -656,9 +667,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * actual write can never disagree.
    */
   private validateSerializedMemoryYaml(yamlContent: string): void {
-    // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
-    // limit parseContent() enforces on load. The previous 2MB cap allowed writing
-    // files the loader would then reject.
+    // Ordinary writes retain the 256KB limit; legacy recovery reads are separate.
     if (yamlContent.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
@@ -1975,6 +1984,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       privacyLevel: metadataSource.privacy_level || metadataSource.privacyLevel || MEMORY_CONSTANTS.DEFAULT_PRIVACY_LEVEL,
       searchable: metadataSource.searchable !== false,
       maxEntries: metadataSource.maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+      onFull: Object.hasOwn(metadataSource, 'onFull') ? metadataSource.onFull : metadataSource.on_full,
       // FIX #1430: Extract auto-load configuration
       autoLoad: metadataSource.autoLoad,
       priority: metadataSource.priority,
