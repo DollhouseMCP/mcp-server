@@ -101,6 +101,10 @@ export async function upgradeElement(
   context: ElementCrudContext,
   args: UpgradeElementArgs,
 ) {
+  const { type: guardedType } = normalizeElementTypeInput(args.type);
+  if (guardedType === ElementType.MEMORY && context.memoryManager.isGuardedHeadUpdateEnabled?.()) {
+    return error('Guarded memory supports immediate append/clear and console UPDATE only');
+  }
   await context.ensureInitialized();
 
   const { name, type, dry_run, instructions_override, content_override } = args;
