@@ -1,10 +1,12 @@
 /** Owned PostgreSQL proof only. Controlled delivery faults are not provider outage claims. */
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { withUserContext } from '../../../src/database/rls.js';
 import { DATABASE_MEMORY_ADMISSION_PROFILE as profile } from '../../../src/storage/DatabaseMemoryAdmissionGate.js';
 import type { DormantDurableMemoryComposition } from '../../../src/storage/DatabaseStorageLayerFactory.js';
@@ -96,6 +98,170 @@ async function fixture(name: string) {
     tenant: (next: string) => { tenant = next; }, legacy, ordinary, admitted, prepare,
     done: () => { expect(legacy).not.toHaveBeenCalled(); expect(ordinary).not.toHaveBeenCalled(); phase(name, 'assertions-complete'); } };
 }
+
+// Migration acceptance is confined to the generated disposable fixture database.
+// No production preflight, repair or backfill is supplied by these controls.
+async function migrationFixture(name: string) {
+  phase(name, 'fixture-start');
+  const f = await makeEquivalentFixture();
+  const item: typeof owned[number] = { name, f }; owned.push(item);
+  const declared = f.request();
+  const [actual] = await f.maintenance`SELECT current_database() AS name, oid::text AS oid
+    FROM pg_catalog.pg_database WHERE datname=current_database()`;
+  expect(actual).toEqual({ name: declared.databaseName, oid: declared.databaseOid });
+  expect(actual.name).toMatch(/^memory_equivalent_[0-9a-f]{32}$/);
+  item.directory = await mkdtemp(path.join(os.tmpdir(), 'memory-candidate-migrations-'));
+  // The fixture initially migrated its own DB; reset it explicitly to test installation states.
+  await f.maintenance`DROP SCHEMA public CASCADE`;
+  await f.maintenance`DROP SCHEMA drizzle CASCADE`;
+  await f.maintenance`CREATE SCHEMA public`;
+  const sourceDirectory = path.join(process.cwd(), 'src/database/migrations');
+  const journal = JSON.parse(await readFile(path.join(sourceDirectory, 'meta/_journal.json'), 'utf8')) as {
+    version: string; dialect: string;
+    entries: { idx: number; version: string; when: number; tag: string; breakpoints: boolean }[];
+  };
+  async function install(selected: typeof journal.entries) {
+    const folder = path.join(item.directory!, `subset-${randomUUID()}`);
+    await mkdir(path.join(folder, 'meta'), { recursive: true });
+    await writeFile(path.join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: selected }));
+    const expected = [];
+    for (const entry of selected) {
+      const bytes = await readFile(path.join(sourceDirectory, `${entry.tag}.sql`));
+      await writeFile(path.join(folder, `${entry.tag}.sql`), bytes);
+      expected.push({ hash: createHash('sha256').update(bytes).digest('hex'), created_at: String(entry.when) });
+    }
+    await migrate(drizzle(f.maintenance), { migrationsFolder: folder });
+    return expected;
+  }
+  async function ledger() {
+    return Array.from(await f.maintenance`SELECT id,hash,created_at::text FROM drizzle.__drizzle_migrations
+      ORDER BY created_at,id`);
+  }
+  async function guardState() {
+    const [row] = await f.maintenance`SELECT
+      pg_get_functiondef('public.memory_backend_modes_guard()'::regprocedure) AS function,
+      (SELECT pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint
+        WHERE conrelid='public.memory_backend_modes'::regclass AND conname='memory_backend_modes_mode_check') AS constraint,
+      (SELECT pg_get_triggerdef(oid) FROM pg_catalog.pg_trigger
+        WHERE tgrelid='public.memory_backend_modes'::regclass AND tgname='memory_backend_modes_guard') AS trigger`;
+    return row;
+  }
+  phase(name, 'fixture-end');
+  return { ...f, journal, install, ledger, guardState };
+}
+
+required('owned candidate migration prerequisite acceptance on PostgreSQL', () => {
+  it.each(['empty', 'through-0059'] as const)('installs ordered 0060/0061 and sticky guard from %s', async state => {
+    const name = `migration-${state}`; const f = await migrationFixture(name);
+    const prefix = state === 'through-0059'
+      ? await f.install(f.journal.entries.filter(entry => entry.idx <= 59)) : [];
+    const before = state === 'through-0059' ? await f.ledger() : [];
+    const expected = await f.install(f.journal.entries);
+    const applied = await f.ledger();
+    expect(applied.map(({ hash, created_at }) => ({ hash, created_at }))).toEqual(expected);
+    expect(applied.slice(0, prefix.length)).toEqual(before);
+    expect(f.journal.entries.slice(-3).map(({ idx }) => idx)).toEqual([59, 60, 61]);
+    expect(applied.slice(-3).map(({ created_at }) => created_at)).toEqual(['1791417600000', '1791504000000', '1791504001000']);
+    const [tables] = await f.maintenance`SELECT to_regclass('public.memory_candidate_handoffs')::text AS handoffs,
+      to_regclass('public.memory_candidate_quotas')::text AS quotas`;
+    expect(tables).toEqual({ handoffs: 'memory_candidate_handoffs', quotas: 'memory_candidate_quotas' });
+    const guard = await f.guardState();
+    expect(guard.function).toContain('Protected memory mode cannot return to legacy');
+    expect(guard.constraint).toContain('legacy');
+    expect(guard.trigger).toContain('BEFORE INSERT OR DELETE OR UPDATE');
+    const legacyProfile = 'legacy-memory-writes-v1';
+    const rows = () => f.maintenance`SELECT * FROM public.memory_backend_modes ORDER BY user_id,backend`;
+    const empty = await rows();
+    await expect(f.maintenance`INSERT INTO public.memory_backend_modes(user_id,backend,protocol_version,profile,mode,generation)
+      VALUES (${f.foreignUserId}::uuid,'database',1,${legacyProfile},'legacy',2)`).rejects.toMatchObject({ code: '23514' });
+    expect(await rows()).toEqual(empty);
+    await f.maintenance`INSERT INTO public.memory_backend_modes(user_id,backend,protocol_version,profile,mode,generation)
+      VALUES (${f.userId}::uuid,'database',1,${legacyProfile},'legacy',1)`;
+    await f.maintenance`UPDATE public.memory_backend_modes SET mode='guarded',profile=${profile} WHERE user_id=${f.userId}::uuid`;
+    for (const mode of ['guarded', 'read_only']) {
+      if (mode === 'read_only') await f.maintenance`UPDATE public.memory_backend_modes SET mode='read_only' WHERE user_id=${f.userId}::uuid`;
+      const prior = await rows();
+      await expect(f.maintenance`UPDATE public.memory_backend_modes SET mode='legacy',profile=${legacyProfile},protocol_version=1,generation=1
+        WHERE user_id=${f.userId}::uuid`).rejects.toMatchObject({ code: '23514' });
+      expect(await rows()).toEqual(prior);
+    }
+    const protectedRows = await rows();
+    await expect(f.maintenance`DELETE FROM public.memory_backend_modes WHERE user_id=${f.userId}::uuid`).rejects.toMatchObject({ code: '23514' });
+    expect(await rows()).toEqual(protectedRows);
+    await expect(f.maintenance`UPDATE public.memory_backend_modes SET user_id=${f.foreignUserId}::uuid
+      WHERE user_id=${f.userId}::uuid`).rejects.toMatchObject({ code: '23514' });
+    expect(await rows()).toEqual(protectedRows);
+    const [generation] = await f.maintenance`SELECT generation::text FROM public.memory_backend_modes WHERE user_id=${f.userId}::uuid`;
+    expect(generation.generation).toBe('3');
+    // Restore explicit grants destroyed by the reset; errors must be RLS, not absent privileges.
+    await f.maintenance`GRANT USAGE ON SCHEMA public TO ${f.maintenance(f.roleName)}`;
+    await f.maintenance`GRANT SELECT,INSERT,UPDATE,DELETE ON public.memory_backend_modes TO ${f.maintenance(f.roleName)}`;
+    await withUserContext(f.db, f.userId, async tx => {
+      const [role] = await tx.execute(sql`SELECT rolsuper,rolbypassrls,
+        has_table_privilege(current_user,'public.memory_backend_modes','INSERT,UPDATE,DELETE,SELECT') AS granted
+        FROM pg_catalog.pg_roles WHERE rolname=current_user`);
+      expect(role).toEqual({ rolsuper: false, rolbypassrls: false, granted: true });
+      expect(await tx.execute(sql`SELECT generation::text FROM public.memory_backend_modes WHERE user_id=${f.userId}::uuid`))
+        .toEqual([{ generation: '3' }]);
+    });
+    await expect(withUserContext(f.db, f.userId, tx => tx.execute(sql`INSERT INTO public.memory_backend_modes
+      (user_id,backend,protocol_version,profile,mode,generation) VALUES (${f.foreignUserId}::uuid,'database',1,${legacyProfile},'legacy',1)`)))
+      .rejects.toMatchObject({ cause: { code: '42501' } });
+    expect(await rows()).toEqual(protectedRows);
+    await expect(withUserContext(f.db, f.userId, tx => tx.execute(sql`UPDATE public.memory_backend_modes SET generation=generation
+      WHERE user_id=${f.userId}::uuid`))).rejects.toMatchObject({ cause: { code: '42501' } });
+    expect(await rows()).toEqual(protectedRows);
+    await withUserContext(f.db, f.userId, async tx => {
+      expect(await tx.execute(sql`DELETE FROM public.memory_backend_modes WHERE user_id=${f.userId}::uuid RETURNING user_id`)).toHaveLength(0);
+    });
+    expect(await rows()).toEqual(protectedRows);
+    const migrationState = async () => ({
+      ledger: await f.ledger(), guard: await f.guardState(), rows: Array.from(await rows()),
+      grants: Array.from(await f.maintenance`SELECT
+        has_schema_privilege(${f.roleName},'public','USAGE') AS usage,
+        has_table_privilege(${f.roleName},'public.memory_backend_modes','SELECT') AS select,
+        has_table_privilege(${f.roleName},'public.memory_backend_modes','INSERT') AS insert,
+        has_table_privilege(${f.roleName},'public.memory_backend_modes','UPDATE') AS update,
+        has_table_privilege(${f.roleName},'public.memory_backend_modes','DELETE') AS delete`),
+      catalog: Array.from(await f.maintenance`SELECT relname,relrowsecurity,relforcerowsecurity
+        FROM pg_catalog.pg_class WHERE oid IN ('public.memory_candidate_handoffs'::regclass,
+          'public.memory_candidate_quotas'::regclass) ORDER BY relname`),
+    });
+    const beforeReentry = await migrationState();
+    expect(beforeReentry.ledger).toEqual(applied);
+    expect(beforeReentry.grants).toEqual([{ usage: true, select: true, insert: true, update: true, delete: true }]);
+    expect(beforeReentry.catalog.every(row => row.relrowsecurity && row.relforcerowsecurity)).toBe(true);
+    await f.install(f.journal.entries);
+    expect(await migrationState()).toEqual(beforeReentry);
+    phase(name, 'assertions-complete');
+  });
+
+  it('reports deliberate 0061-without-0060 as repair-needed without performing repair', async () => {
+    const name = 'migration-0061-without-0060'; const f = await migrationFixture(name);
+    await f.install(f.journal.entries.filter(entry => entry.idx !== 60));
+    const before = { ledger: await f.ledger(), guard: await f.guardState() };
+    const modeEntry = f.journal.entries.find(entry => entry.idx === 60)!;
+    const handoffEntry = f.journal.entries.find(entry => entry.idx === 61)!;
+    const modeHash = createHash('sha256').update(await readFile(path.join(process.cwd(), 'src/database/migrations', `${modeEntry.tag}.sql`))).digest('hex');
+    const handoffHash = createHash('sha256').update(await readFile(path.join(process.cwd(), 'src/database/migrations', `${handoffEntry.tag}.sql`))).digest('hex');
+    // Descriptive test-local assessment of actual records and installed guard, not a shipped qualifier.
+    const assess = (observed: typeof before) => {
+      const handoffApplied = observed.ledger.some(row => row.hash === handoffHash && row.created_at === String(handoffEntry.when));
+      const modeApplied = observed.ledger.some(row => row.hash === modeHash && row.created_at === String(modeEntry.when));
+      const guardedDowngrade = observed.guard.function.includes('Protected memory mode cannot return to legacy');
+      const legacyAllowed = observed.guard.constraint.includes('legacy');
+      return handoffApplied && !modeApplied && !guardedDowngrade && !legacyAllowed ? 'repair-needed' : 'unclassified';
+    };
+    expect(before.ledger.at(-1)?.created_at).toBe(String(handoffEntry.when));
+    expect(assess(before)).toBe('repair-needed');
+    expect(before.guard.trigger).toContain('BEFORE INSERT OR DELETE OR UPDATE');
+    await f.install(f.journal.entries);
+    const after = { ledger: await f.ledger(), guard: await f.guardState() };
+    expect(after).toEqual(before);
+    expect(assess(after)).toBe('repair-needed');
+    phase(name, 'assertions-complete');
+  });
+});
 
 required('bounded candidate handoff and owning publication on PostgreSQL', () => {
   it('reuses slots beyond 64 successful central saves and completes actual AQL/console tails', async () => {
