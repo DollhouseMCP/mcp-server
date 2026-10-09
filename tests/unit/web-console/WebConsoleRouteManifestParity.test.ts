@@ -139,6 +139,7 @@ const CONTRACT_ROUTES = [
   'GET /api/v1/admin/operate/logs',
   'GET /api/v1/admin/operate/logs/stream',
   'GET /api/v1/admin/operate/metrics',
+  'GET /api/v1/admin/operate/metrics/http',
   'GET /api/v1/admin/operate/metrics/stream',
   'GET /api/v1/admin/operate/metrics/system',
   'GET /api/v1/admin/audit/admin',

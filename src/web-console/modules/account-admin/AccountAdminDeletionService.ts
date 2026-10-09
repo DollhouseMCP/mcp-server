@@ -83,7 +83,7 @@ export class AccountAdminDeletionService {
       await this.options.memoryDeletionBoundary?.checkBeforeAuthMutation(userId);
     } catch (cause) {
       // A failed refusal audit must not replace the original check/transport cause.
-      try { await this.writeAttemptAudit(req, route, cause instanceof DatabaseMemoryLegacyPermissionError ? 'rejected' : 'failed', 'memory_deletion_unavailable', userId, {}); }
+      try { await this.writeAttemptAudit(req, route, this.memoryDeletionAuditResult(cause), 'memory_deletion_unavailable', userId, {}); }
       catch { throw cause; }
       if (!(cause instanceof DatabaseMemoryLegacyPermissionError)) throw cause;
       return problem(409, 'memory_deletion_unavailable', 'Conflict', 'Account deletion is unavailable for this memory storage mode.');
@@ -164,6 +164,21 @@ export class AccountAdminDeletionService {
       throw error;
     }
 
+    return this.buildDeletionResult(userId, occurredAt, deletion, browserSessionsRevoked, oauthGrantsRevoked, runtimeSummary);
+  }
+
+  private memoryDeletionAuditResult(cause: unknown): ConsoleAdminAuditResult {
+    return cause instanceof DatabaseMemoryLegacyPermissionError ? 'rejected' : 'failed';
+  }
+
+  private buildDeletionResult(
+    userId: string,
+    occurredAt: Date,
+    deletion: PrincipalDeletionOutcome,
+    browserSessionsRevoked: number,
+    oauthGrantsRevoked: number,
+    runtimeSummary: AccountRuntimeTerminationSummary,
+  ): ConsoleHandlerResult {
     const runtimeFailed = runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0;
     const body: AccountDeletionDto = serializeAccountDeletion({
       userId,
