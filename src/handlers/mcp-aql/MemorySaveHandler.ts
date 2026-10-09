@@ -61,6 +61,7 @@ export class MemorySaveHandler {
   /** Serialize append validation and clear for the same in-process Memory object. */
   private static readonly mutationTails = new WeakMap<Memory, Promise<void>>();
   private readonly guardedMutations = new Map<string, GuardedMutationPending>();
+  private deferredSavesRefused = false;
   private readonly pendingSaves = new Map<string, PendingSave>();
   private readonly debounceMetrics = { coalesced: 0, written: 0 };
   private readonly saveFrequencyCounters = new Map<string, SaveFrequencyCounter>();
@@ -89,7 +90,12 @@ export class MemorySaveHandler {
       'the name of the memory to operate on'
     );
 
-    if (manager.isGuardedHeadUpdateEnabled?.()) return this.dispatchGuarded(method, memoryName, manager, params);
+    if (manager.isGuardedHeadUpdateEnabled?.()) {
+      this.observeDeferredRefusal(manager);
+      if (this.pendingSaves.size || this.failedMemorySaves.size) throw this.deferredRefusal();
+      return this.dispatchGuarded(method, memoryName, manager, params);
+    }
+    this.requireLegacyDeferred(manager);
 
     const memory = await manager.find(m => m.metadata.name === memoryName);
     if (!memory) {
@@ -104,6 +110,27 @@ export class MemorySaveHandler {
       default:
         throw new Error(`Unknown Memory method: ${method}`);
     }
+  }
+
+  /** Conservative whole-handler latch; never an inference of another process's durable mode. */
+  private observeDeferredRefusal(manager: MemoryManager = this.handlers.memoryManager): boolean {
+    if (manager.isGuardedHeadUpdateEnabled?.() || this.handlers.memoryManager.isGuardedHeadUpdateEnabled?.()) {
+      this.deferredSavesRefused = true;
+    }
+    if (this.deferredSavesRefused) {
+      // Cancelling execution preserves the only queued candidate and its context.
+      for (const pending of this.pendingSaves.values()) clearTimeout(pending.timer);
+    }
+    return this.deferredSavesRefused;
+  }
+
+  private deferredRefusal(): Error {
+    return Object.assign(new Error('Deferred memory work is refused and retained; explicit recovery is required'),
+      { code: 'EDEFERREDMEMORY' });
+  }
+
+  private requireLegacyDeferred(manager: MemoryManager): void {
+    if (this.observeDeferredRefusal(manager)) throw this.deferredRefusal();
   }
 
   private guardedContext(memoryName: string, manager: MemoryManager): { key: string; userId: string; check: () => void } {
@@ -147,16 +174,20 @@ export class MemorySaveHandler {
       await manager.assertPersistable(candidate);
       context.check();
       accepted = true;
-      await manager.save(candidate);
+      if (manager.saveForGuardedOperation) await manager.saveForGuardedOperation(candidate);
+      else await manager.save(candidate);
       committed = true;
-      context.check();
-      SecurityMonitor.logSecurityEvent(audit);
-      if (removedCount > 0) SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED, severity: 'MEDIUM',
-        source: 'MemorySaveHandler.guardedMutation', details: `Durably removed ${removedCount} entries by retention or onFull policy`,
-      });
-      this.guardedMutations.delete(context.key);
-      return response;
+      const publish = () => {
+        context.check();
+        SecurityMonitor.logSecurityEvent(audit);
+        if (removedCount > 0) SecurityMonitor.logSecurityEvent({
+          type: MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED, severity: 'MEDIUM',
+          source: 'MemorySaveHandler.guardedMutation', details: `Durably removed ${removedCount} entries by retention or onFull policy`,
+        });
+        this.guardedMutations.delete(context.key);
+        return Promise.resolve(response);
+      };
+      return manager.completeGuardedOperation ? await manager.completeGuardedOperation(candidate, publish) : await publish();
     } catch (cause) {
       const pending = candidate && manager.getPendingHeadUpdate(candidate);
       if (accepted || pending) {
@@ -224,6 +255,7 @@ export class MemorySaveHandler {
   cleanupSession(sessionId: string): void {
     this.reportGuardedPending(sessionId);
     const prefix = `${sessionId}:`;
+    if (this.observeDeferredRefusal()) return;
 
     for (const [key, entry] of this.failedMemorySaves) {
       if (!key.startsWith(prefix)) continue;
@@ -262,16 +294,21 @@ export class MemorySaveHandler {
    */
   async flushPendingSaves(): Promise<void> {
     this.reportGuardedPending();
+    if (this.observeDeferredRefusal() && (this.pendingSaves.size || this.failedMemorySaves.size)) throw this.deferredRefusal();
     const pending = [...this.pendingSaves.entries()];
-    this.pendingSaves.clear();
+    for (const [, entry] of pending) clearTimeout(entry.timer);
     if (pending.length > 0) {
       logger.info(`[MCPAQLHandler] Flushing ${pending.length} pending memory save(s) on shutdown (total coalesced: ${this.debounceMetrics.coalesced}, total written: ${this.debounceMetrics.written})`);
     }
     const flushedKeys = new Set<string>();
-    for (const [key, { timer, memory, manager, context }] of pending) {
-      clearTimeout(timer);
+    for (const [key, entry] of pending) {
+      const { memory, manager, context } = entry;
       flushedKeys.add(key);
-      await this.flushOne(key, memory, manager, 'shutdown', context);
+      const saved = await this.flushOne(key, memory, manager, 'shutdown', context);
+      // A closed boundary/context failure must not drop this or later queued
+      // candidates. Preserve newer coalesced work under the same key too.
+      if (this.pendingSaves.get(key) === entry &&
+        (saved || this.failedMemorySaves.get(key)?.memory === memory)) this.pendingSaves.delete(key);
     }
     // Retry any failure-ledger entry not already attempted above. Direct Map
     // iteration is safe: saveMemoryTracked only deletes the current key on
@@ -288,16 +325,19 @@ export class MemorySaveHandler {
   }
 
   /** Write one tracked save during shutdown flush, reporting unrecoverable loss. */
-  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string, context?: ExecutionContext): Promise<void> {
+  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string, context?: ExecutionContext): Promise<boolean> {
     try {
       // Re-establish the save's originating per-user context. Shutdown runs with
       // no ambient AsyncLocalStorage context, so without this a file-mode
       // per-user save would resolve to the shared baseDir instead of the owner's.
       await this.runInSaveContext(context, () => this.saveMemoryTracked(key, memory, manager));
       this.debounceMetrics.written++;
+      return true;
     } catch (err) {
+      if (this.observeDeferredRefusal(manager)) throw err;
       const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
       logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
+      return false;
     }
   }
 
@@ -320,6 +360,7 @@ export class MemorySaveHandler {
     entry: FailedSave,
     context: string,
   ): Promise<boolean> {
+    this.requireLegacyDeferred(entry.manager);
     let confirmedDeleted = false;
     try {
       confirmedDeleted = await entry.manager.isMemoryDeletedAt(entry.probeToken);
@@ -329,6 +370,7 @@ export class MemorySaveHandler {
         `(${probeError instanceof Error ? probeError.message : probeError}); retrying the save`
       );
     }
+    this.requireLegacyDeferred(entry.manager);
     if (confirmedDeleted) {
       logger.info(
         `[MCPAQLHandler] ${context}: memory '${key}' was deleted; dropping failed-save bookkeeping`
@@ -341,6 +383,7 @@ export class MemorySaveHandler {
       await this.saveMemoryTracked(key, entry.memory, entry.manager);
       return true;
     } catch (error) {
+      if (this.observeDeferredRefusal(entry.manager)) throw error;
       logger.error(
         `[MCPAQLHandler] ${context} retry failed for memory '${key}': ${error}`
       );
@@ -365,6 +408,7 @@ export class MemorySaveHandler {
    * fire-and-forget writes and unchanged here.
    */
   cleanupDeletedMemory(memoryName: string): void {
+    this.requireLegacyDeferred(this.handlers.memoryManager);
     const key = this.memorySaveKey(memoryName);
     const pending = this.pendingSaves.get(key);
     if (pending) {
@@ -435,6 +479,7 @@ export class MemorySaveHandler {
     // Issue #2329: if a previous save of this memory failed (e.g. disk error),
     // recover before accepting more entries — otherwise they pile up in RAM
     // behind the same failure and are lost on restart.
+    this.requireLegacyDeferred(manager);
     if (priorFailure) {
       try {
         await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
@@ -466,6 +511,7 @@ export class MemorySaveHandler {
       );
     }
 
+    this.requireLegacyDeferred(manager);
     if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {
       throw new Error(
         `Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. ` +
@@ -519,6 +565,7 @@ export class MemorySaveHandler {
       ?? this.pendingSaves.get(clearKey)?.memory
       ?? memory;
     return MemorySaveHandler.withMemoryMutation(targetMemory, async () => {
+      this.requireLegacyDeferred(manager);
       // Issue #2329: cancel any pending debounced save first — a stale timer
       // firing after the clear would resurrect the pre-clear entries on disk.
       const pendingClear = this.pendingSaves.get(clearKey);
@@ -539,6 +586,7 @@ export class MemorySaveHandler {
     memory: Memory,
     manager: MemoryManager,
   ): void {
+    this.requireLegacyDeferred(manager);
     const key = this.memorySaveKey(memoryName);
     // Capture the originating per-user context now, while a request context is
     // active, so a shutdown flush (which runs with none) can re-establish it.
@@ -550,6 +598,7 @@ export class MemorySaveHandler {
       logger.debug(`[MCPAQLHandler] Coalesced save for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
     }
     const timer = setTimeout(() => {
+      if (this.observeDeferredRefusal(manager)) return;
       this.pendingSaves.delete(key);
       this.debounceMetrics.written++;
       logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
@@ -578,7 +627,11 @@ export class MemorySaveHandler {
     const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;
     this.memorySaveAttempts.set(key, attempt);
     try {
+      this.requireLegacyDeferred(manager);
       await manager.save(memory);
+      // A save already in flight cannot be cancelled. Keep its evidence if the
+      // boundary closes before bookkeeping; never claim that it rolled back.
+      this.requireLegacyDeferred(manager);
       if (this.memorySaveAttempts.get(key) === attempt) {
         this.failedMemorySaves.delete(key);
         // Prune the counter on latest-success so the map stays bounded by
@@ -592,7 +645,7 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
-          probeToken: manager.getMemoryProbeToken(memory),
+          probeToken: this.deferredSavesRefused ? null : manager.getMemoryProbeToken(memory),
           // getContext() here returns the ambient context on the normal debounced
           // path, and the re-established context when retried from the shutdown
           // flush (flushOne runs saveMemoryTracked inside runInSaveContext).
