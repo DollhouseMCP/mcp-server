@@ -1,3 +1,4 @@
+import { assertHydratedMemoryReadFidelity } from '../../storage/MemoryHydrationReadFidelity.js';
 import { matchesPortfolioName } from '../../utils/portfolioName.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
@@ -144,6 +145,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
   // grants an override to its candidate and the private persistence copy.
   private readonly consoleRawNames = new WeakMap<Memory, string>();
   private readonly consoleSerializationNames = new WeakMap<Memory, string>();
+
+  private readonly deferredGuardedPublications = new WeakSet<Memory>();
 
   constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
@@ -709,7 +712,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
       throw cause;
     }
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode !== 'public' });
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: true });
     memory.setFilePath(locator);
     const definition = mode === 'lookup' ? this.parseContent(snapshot.content) : undefined;
     if (definition) {
@@ -722,6 +725,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
     // The caller receives a mutable working copy, not a durable cache entry.
     return Object.freeze({ memory, content: snapshot.content, locator, definition });
+  }
+
+  /** Internal captured-byte comparison; never loads storage, binds a token or publishes a cache. */
+  async assertGuardedReadFidelity(content: string, locator: string, logicalName: string): Promise<void> {
+    const raw = SecureYamlParser.parseRawYaml(content, {
+      maxSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE, contentPolicy: 'structure-only', numericPolicy: 'read-fidelity',
+    });
+    if (!validateMemoryControlFields(raw)) throw new Error('Invalid memory control fields');
+    const decoded = await this.parseMetadata(structuredClone(raw));
+    const memory = await this.hydrateDefinitionFromContent(content, locator,
+      { suppressLoadPolicy: true, quietMemory: true });
+    if (memory.metadata.name !== logicalName) throw new Error('Memory read owner name mismatch');
+    assertHydratedMemoryReadFidelity(raw, memory, decoded.retentionDays);
   }
 
   isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
@@ -858,6 +874,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.guardedUpdateAdapter?.getPendingUpdate(memory);
   }
 
+  /** Internal larger-operation seam: save without claiming the caller's publication tail. */
+  async saveForGuardedOperation(memory: Memory): Promise<void> {
+    if (this.deferredGuardedPublications.has(memory)) throw new Error('Guarded publication is already in progress');
+    this.deferredGuardedPublications.add(memory);
+    try { await this.save(memory); }
+    finally { this.deferredGuardedPublications.delete(memory); }
+  }
+
+  /** Actual caller tail, not a flag or restored receipt, establishes completion. */
+  async completeGuardedOperation<T>(memory: Memory, publish: () => Promise<T>): Promise<T> {
+    if (!this.guardedUpdateAdapter) return publish();
+    return await this.guardedUpdateAdapter.completePublication(memory, publish);
+  }
+
   private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
@@ -887,17 +917,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
       if (outcome.status !== 'committed') throw outcome.cause;
       committed = true;
       if ('cause' in outcome) throw outcome.cause;
-      // A concurrent caller mutation never becomes the committed cache snapshot.
-      const publication = detached.createRuntimePublication();
-      publication.setFilePath(locator!);
-      this.requireGuardedContext(tenant, contextRoot);
-      adapter.bindPublication(publication, element);
-      if (!isWritableStorageLayer(this.storageLayer)) {
-        await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+      const publish = async () => {
+        // A concurrent caller mutation never becomes the committed cache snapshot.
+        const publication = detached.createRuntimePublication();
+        publication.setFilePath(locator!);
         this.requireGuardedContext(tenant, contextRoot);
-      }
-      this.cacheElement(publication, locator!);
-      await this.afterSave(publication, locator!);
+        adapter.bindPublication(publication, element);
+        if (!isWritableStorageLayer(this.storageLayer)) {
+          await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+          this.requireGuardedContext(tenant, contextRoot);
+        }
+        this.cacheElement(publication, locator!);
+        await this.afterSave(publication, locator!);
+      };
+      if (this.deferredGuardedPublications.has(element)) await publish();
+      else await adapter.completePublication(element, publish);
     } catch (cause) {
       adapter.recordFailure(element, candidate, original, cause, committed);
       if (adapter.getPendingUpdate(element)?.status === 'refused') {
@@ -1205,7 +1239,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
-  override async list(options?: { includePublic?: boolean }): Promise<Memory[]> {
+  override async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<Memory[]> {
     // Database mode: delegate to base class which uses listFromDatabase().
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
@@ -1213,6 +1247,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.applyActivationStatus(memories);
       return memories;
     }
+
+    if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
 
     // File mode: custom multi-directory listing with deduplication.
     // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()
@@ -1384,6 +1420,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     repairedMemories: Array<{ original: string; repaired: string; path: string }>;
     errorDetails: Array<{ name: string; error: string }>;
   }> {
+    if (this.guardedUpdateAdapter) throw new Error('Name repair is unavailable for guarded memory updates; no memories were processed.');
     const result = {
       scanned: 0,
       repaired: 0,
@@ -1757,6 +1794,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async installSeedMemories(): Promise<void> {
     logger.info('[MemoryManager] 🌱 Starting seed memory installation...');
     try {
+      if (this.guardedUpdateAdapter) throw new Error('Seed installation is unavailable for guarded memory updates; no seeds were changed.');
       // Define the seed file
       const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
       logger.debug(`[MemoryManager] Step 1: Target seed file: ${seedFileName}`);
@@ -2126,6 +2164,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     data: string,
     format: 'json' | 'yaml' | 'markdown' = 'yaml'
   ): Promise<Memory> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       let parsed: any;
       let markdownContent: string | undefined;
@@ -2210,8 +2249,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
   }
 
-  protected override createElement(metadata: MemoryMetadata, _content: string): Memory {
-    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
+  protected override createElement(metadata: MemoryMetadata, _content: string, options?: { quietMemory?: boolean }): Memory {
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService, options?.quietMemory);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
       memory.instructions = metadata.instructions;

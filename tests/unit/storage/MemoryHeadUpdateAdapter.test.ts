@@ -110,6 +110,49 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
   }
 }
 const posix = process.platform === 'win32' ? describe.skip : describe;
+posix('guarded manager early repair and seed refusal', () => {
+  it('refuses repair before discovery, progress, name mutation or persistence', async () => {
+    const name = 'memory-one.backup-2025-11-14-10-20-30-456';
+    const f = await fixture({}, undefined, false, raw => raw.replace('Owned memory', name));
+    try {
+      const { manager } = f.makeManager();
+      const source = await manager.load('head.yaml');
+      expect(source.metadata.name).toBe(name);
+      const sourceBefore = source.serialize();
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      const list = jest.spyOn(manager, 'list');
+      const save = jest.spyOn(manager, 'save');
+      const update = jest.spyOn(f.owners, 'updateOwnedHead');
+      const progress = jest.fn();
+      try {
+        await expect(manager.repairCorruptedNames(progress)).rejects.toThrow('Name repair is unavailable');
+        expect(list).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+        expect(progress).not.toHaveBeenCalled(); expect(update).not.toHaveBeenCalled();
+        expect(source.serialize()).toBe(sourceBefore);
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+      } finally { list.mockRestore(); save.mockRestore(); update.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
+  it('contains seed refusal during startup without discovery, reads, deletion or success claims', async () => {
+    const f = await fixture();
+    try {
+      const { manager } = f.makeManager();
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      const load = jest.spyOn(manager, 'load'); const save = jest.spyOn(manager, 'save');
+      const remove = jest.spyOn(manager, 'delete');
+      const files = jest.spyOn(FileOperationsService.prototype, 'readFile');
+      const info = jest.spyOn(logger, 'info'); const failure = jest.spyOn(logger, 'error');
+      try {
+        await expect(manager.installSeedMemories()).resolves.toBeUndefined();
+        expect(load).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+        expect(remove).not.toHaveBeenCalled(); expect(files).not.toHaveBeenCalled();
+        expect(info.mock.calls.map(([message]) => String(message)).some(message => message.includes('installation COMPLETE') || message.includes('already installed'))).toBe(false);
+        expect(failure.mock.calls.some(call => String(call[1]).includes('Seed installation is unavailable'))).toBe(true);
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+      } finally { for (const spy of [load, save, remove, files, info, failure]) spy.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
+});
 posix('guarded background validation refusal with an owned file manager', () => {
   it.each([false, true])('refuses before discovery or mutation with published cache=%s', async (publishCache) => {
     const f = await fixture();
@@ -548,22 +591,42 @@ posix('immediate guarded MCP-AQL mutations', () => {
       expect(shadowAfter.token).toEqual(shadowBefore.token);
     } finally { await f.cleanup(); }
   });
-  it('preserves public guarded on-load behavior while named mutation hydration stays quiet', async () => {
+  it.each(['load', 'list', 'auto-load'])('preserves guarded snapshot entries through public %s hydration', async route => {
     const f = await fixture({}, undefined, true);
     try {
-      const { manager } = f.makeManager();
+      const { manager, adapter } = f.makeManager();
       manager.setRetentionPolicyService({ shouldEnforceOnLoad: () => true, isEnabled: () => true });
+      const before = await f.owners.readHeadSnapshot('head.yaml');
       const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      const read = jest.spyOn(f.owners, 'readHeadSnapshot');
       try {
-        const loaded = await manager.load('head.yaml');
-        expect(loaded.getEntries().size).toBe(0);
-        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(1);
-        audit.mockClear();
+        const memories = route === 'load' ? [await manager.load('head.yaml')]
+          : route === 'list' ? await manager.list() : await manager.getAutoLoadMemories();
+        expect(memories).toHaveLength(1);
+        expect(read).toHaveBeenCalled();
+        expect(memories[0].getEntries().size).toBe(1);
+        expect(memories[0].getPolicyRemovedCount()).toBe(0);
+        const token = adapter.beginUpdate(memories[0], USER, 'head.yaml', memories[0].metadata.name, path.join(f.root, 'memories'));
+        try { expect(token).toEqual(before.token); } finally { adapter.finishUpdate(memories[0]); }
+        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
         const mutationSource = await manager.loadGuardedMemoryByName('Owned memory', USER);
         expect(mutationSource.getEntries().size).toBe(1);
         expect(mutationSource.getPolicyRemovedCount()).toBe(0);
-        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(0);
-        expect((await f.owners.readHeadSnapshot('head.yaml')).content).toContain('Original entry');
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
+      } finally { audit.mockRestore(); read.mockRestore(); }
+    } finally { await f.cleanup(); }
+  });
+  it('preserves ordinary opted-in on-load retention without changing persisted owned bytes', async () => {
+    const f = await fixture({}, undefined, true);
+    try {
+      const before = await f.owners.readHeadSnapshot('head.yaml');
+      f.ordinary.setRetentionPolicyService({ shouldEnforceOnLoad: () => true, isEnabled: () => true });
+      f.ordinary.clearCache();
+      const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+      try {
+        expect((await f.ordinary.load('head.yaml')).getEntries().size).toBe(0);
+        expect(audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.RETENTION_POLICY_ENFORCED)).toHaveLength(1);
+        expect(await f.owners.readHeadSnapshot('head.yaml')).toEqual(before);
       } finally { audit.mockRestore(); }
     } finally { await f.cleanup(); }
   });

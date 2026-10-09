@@ -45,6 +45,9 @@ export interface ConsolePortfolioListFilters {
 }
 
 export interface IPortfolioElementStore {
+  /** Trusted internal caller composition; never an input/request supplied store. */
+  bindForOperation?(userId: string): Promise<IPortfolioElementStore>;
+  assertOperationBinding?(): void;
   summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]>;
   listByUser(
     userId: string,
@@ -57,6 +60,8 @@ export interface IPortfolioElementStore {
   ): Promise<ConsolePortfolioElementDetailRecord | null>;
   create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord>;
   update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null>;
+  /** Internal manager-backed completion seam; never a client-supplied receipt. */
+  completeUpdatePublication?<T>(record: ConsolePortfolioElementDetailRecord, publish: () => Promise<T>): Promise<T>;
   delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null>;
 }
 
