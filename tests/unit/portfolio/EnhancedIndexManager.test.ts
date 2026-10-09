@@ -2,6 +2,7 @@
  * Tests for EnhancedIndexManager - Demonstrating extensibility
  */
 
+import { jest } from '@jest/globals';
 import { EnhancedIndexManager } from '../../../src/portfolio/EnhancedIndexManager.js';
 import { IndexConfigManager } from '../../../src/portfolio/config/IndexConfig.js';
 import { ConfigManager } from '../../../src/config/ConfigManager.js';
@@ -169,6 +170,36 @@ describe('EnhancedIndexManager - Extensibility Tests', () => {
     // Clean up test environment
     await fs.rm(testDir, { recursive: true, force: true });
   }, 30000);  // Increase timeout for cleanup
+
+  describe('Restricted index YAML schema', () => {
+    it('loads a normal dumped index with scalar types and extensible fields intact', async () => {
+      const stored = yamlLoad(await fs.readFile(testIndexPath, 'utf8')) as Record<string, unknown>;
+      stored.extensions = { enabled: true, weight: 3, label: 'ordinary' };
+      await fs.writeFile(testIndexPath, yamlDump(stored, { noRefs: true }));
+      const index = await manager.getIndex({ forceRebuild: false });
+      expect((index as unknown as Record<string, unknown>).extensions)
+        .toEqual({ enabled: true, weight: 3, label: 'ordinary' });
+      expect(index.metadata.total_elements).toBe(0);
+    });
+
+    it.each(['!!omap\n  - version: untrusted', '!!merge untrusted'])('rebuilds rather than admitting default-only tag %s', async tagged => {
+      const loader = manager as unknown as { loadIndex(): Promise<void>; buildIndex(): Promise<void> };
+      const rebuild = jest.spyOn(loader, 'buildIndex');
+      await fs.writeFile(testIndexPath, `metadata: ${tagged}\nelements: {}\naction_triggers: {}\n`);
+      await loader.loadIndex();
+      expect(rebuild).toHaveBeenCalledTimes(1);
+      expect((await manager.getIndex()).metadata.version).toBe('2.0.0');
+    });
+
+    it('keeps implicit merge syntax as ordinary data without merging authority', async () => {
+      const source = await fs.readFile(testIndexPath, 'utf8');
+      await fs.writeFile(testIndexPath, `${source}\nextensions:\n  base: &base {enabled: true}\n  inherited: {<<: *base}\n`);
+      const index = await manager.getIndex({ forceRebuild: false });
+      const extensions = (index as unknown as { extensions: { inherited: Record<string, unknown> } }).extensions;
+      expect(extensions.inherited).toEqual({ '<<': { enabled: true } });
+      expect(Object.hasOwn(extensions.inherited, 'enabled')).toBe(false);
+    });
+  });
 
   describe('Schema Extensibility', () => {
     it('should support arbitrary element types without code changes', async () => {

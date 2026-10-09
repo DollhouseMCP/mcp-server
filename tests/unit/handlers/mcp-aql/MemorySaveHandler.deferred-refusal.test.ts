@@ -115,6 +115,42 @@ describe('admitted profile refuses deferred work without losing its sole copy', 
     f.admit(false); await expect(f.handler.flushPendingSaves()).rejects.toMatchObject({ code: 'EDEFERREDMEMORY' });
     expect(f.manager.save).toHaveBeenCalledTimes(1);
   });
+  it.each(['resolve', 'reject'] as const)('rejects ledger-only disposal when admission closes during a save that will %s', async settlement => {
+    const f = fixture(); await f.append();
+    f.manager.save.mockRejectedValueOnce(new Error('Original failure establishing the ledger'));
+    await f.handler.flushPendingSaves();
+    const failed = f.internals.failedMemorySaves.get('owned-session:queue-memory')!;
+    const attemptedContent = failed.memory.serialize();
+    expect(f.internals.pendingSaves.size).toBe(0);
+    expect(failed.memory).toBe(f.memories[0]); expect(failed.manager).toBe(f.manager);
+    expect(failed.context).toBe(f.context);
+    const restoredContexts: unknown[] = [];
+    f.scope.runAsync = async (context, body) => { restoredContexts.push(context); return body(); };
+    const entered = barrier(); const resume = barrier();
+    const originalCause = new Error('Original in-flight retry rejection');
+    f.manager.save.mockClear(); f.manager.isMemoryDeletedAt.mockClear();
+    f.manager.save.mockImplementationOnce(async () => {
+      entered.release(); await resume.promise;
+      if (settlement === 'reject') throw originalCause;
+    });
+    const disposal = f.handler.dispose(); const outcome = disposal.then(() => undefined, error => error);
+    try { await entered.promise; f.admit(); } finally { resume.release(); }
+    const cause = await outcome;
+    if (settlement === 'reject') expect(cause).toBe(originalCause);
+    else expect(cause).toMatchObject({ code: 'EDEFERREDMEMORY' });
+    const retained = f.internals.failedMemorySaves.get('owned-session:queue-memory')!;
+    expect(retained.memory).toBe(failed.memory); expect(retained.manager).toBe(failed.manager);
+    expect(retained.memory.serialize()).toBe(attemptedContent);
+    expect(retained.context).toBe(failed.context); expect(restoredContexts).toHaveLength(1);
+    expect(restoredContexts[0]).toBe(f.context);
+    expect(f.internals.pendingSaves.size).toBe(0);
+    // The already-started save settled; this refusal cannot cancel its effects.
+    expect(f.manager.save).toHaveBeenCalledTimes(1); expect(f.manager.save).toHaveBeenCalledWith(failed.memory);
+    expect(f.manager.isMemoryDeletedAt).toHaveBeenCalledTimes(1);
+    f.admit(false); await expect(f.handler.dispose()).rejects.toMatchObject({ code: 'EDEFERREDMEMORY' });
+    expect(f.manager.save).toHaveBeenCalledTimes(1); expect(f.manager.isMemoryDeletedAt).toHaveBeenCalledTimes(1);
+    expect(f.internals.failedMemorySaves.get('owned-session:queue-memory')).toBe(retained);
+  });
   it('re-observes admission when context restoration rejects before the tracked save begins', async () => {
     const f = fixture(); await f.append(); const queued = f.internals.pendingSaves.get('owned-session:queue-memory');
     const cause = new Error('Original context restoration failure'); const entered = barrier(); const resume = barrier();
