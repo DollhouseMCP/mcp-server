@@ -414,6 +414,20 @@
       "when": 1790812800000,
       "tag": "0058_memory_head_invalidation_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1791417600000,
+      "tag": "0059_memory_backend_modes",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1791504000000,
+      "tag": "0060_memory_legacy_mutation_permission",
+      "breakpoints": true
     }
   ]
 }

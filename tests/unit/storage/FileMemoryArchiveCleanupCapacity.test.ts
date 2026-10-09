@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it as jestIt, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
-import { Dir, type Dirent, type BigIntStats } from 'node:fs';
+import { type BigIntStats } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -9,6 +9,7 @@ import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryVolumeStore, type ArchiveCleanupPhase } from '../../../src/storage/FileMemoryVolumeStore.js';
+import { cleanupDirectoryReadObservers, observeDirectoryReads as observeReads } from './fixtures/aggregateDirectoryReadObserver.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -82,34 +83,44 @@ async function fixture(nested: boolean, count: number) {
   return { root, locator, owners, token, store, receipt, owner, retained, foreign, namespaces,
     slot: path.join(owner, 'v1'), intent: path.join(owner, 'v1.cleanup.json') };
 }
-function observeReads() {
-  const methods = Dir.prototype as unknown as { read: () => Promise<Dirent | null> };
-  const original = methods.read;
-  const measured = { attemptedReads: 0, completedCensuses: 0 };
-  const spy = jest.spyOn(methods, 'read').mockImplementation(async function(this: Dir) {
-    measured.attemptedReads++;
-    const entry = await original.call(this);
-    if (!entry) measured.completedCensuses++;
-    return entry;
-  });
-  return { measured, restore: () => spy.mockRestore() };
-}
 async function verifyRetained(f: Awaited<ReturnType<typeof fixture>>) {
   await verify(f.retained); await verify(f.foreign);
   for (const namespace of f.namespaces) expect((await fs.readdir(namespace.target)).sort()).toEqual(namespace.names);
 }
 afterEach(async () => {
-  jest.restoreAllMocks();
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  const profile = cleanupProfile; cleanupProfile = undefined;
+  profile?.mark('cleanup-start');
+  try {
+    await cleanupDirectoryReadObservers(async () => {
+      jest.restoreAllMocks();
+      for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+    });
+    profile?.mark('cleanup-end');
+  } finally { profile?.mark('cleanup-finally'); profile?.flush(); }
 });
 
+let cleanupProfile: { mark: (phase: string, measured?: object) => void; flush: () => void } | undefined;
 function diagnostics(caseDetails: object) {
-  const started = performance.now(); let records = 0;
-  return (phase: string, measured: object = {}) => {
-    if (records++ >= 8) return;
-    process.stderr.write(`Cleanup phase ${JSON.stringify({ ...caseDetails, phase, elapsedMs: performance.now() - started,
-      node: process.version, pid: process.pid, ...measured })}\n`);
+  let started = 0, unavailable = false, truncated = false, flushed = false, assertionsComplete = false;
+  try { started = performance.now(); } catch { unavailable = true; }
+  const samples: object[] = [];
+  const mark = (phase: string, measured: object = {}) => {
+    if (flushed) return;
+    try {
+      if (phase === 'assertion-complete') assertionsComplete = true;
+      if (samples.length >= 16) { truncated = true; return; }
+      samples.push({ phase, elapsedMs: performance.now() - started, ...measured });
+    } catch { unavailable = true; }
   };
+  cleanupProfile = { mark, flush() {
+    if (flushed) return;
+    flushed = true;
+    try { process.stderr.write(`Cleanup profile ${JSON.stringify({ ...caseDetails, node: process.version,
+      pid: process.pid, partial: !assertionsComplete, unavailable, truncated, samples })}\n`); }
+    catch { /* Instrumentation cannot replace an operation/assertion failure or prevent cleanup. */ }
+  } };
+  mark('setup-start');
+  return mark;
 }
 
 describe('file protected cleanup populated portfolios', () => {
@@ -130,11 +141,13 @@ describe('file protected cleanup populated portfolios', () => {
     record('setup-complete');
     record('operation-start');
     const observed = observeReads(), started = performance.now();
-    let result;
+    let result, primary: { cause: unknown } | undefined;
     try { result = await f.store().removeUnreferenced(token, f.receipt); }
-    finally { observed.restore(); }
+    catch (cause) { primary = { cause }; throw cause; }
+    finally { observed.restore(primary); }
     const operationMs = performance.now() - started;
     record('operation-end', { operationMs, ...observed.measured });
+    record('verification-start');
     expect(observed.measured.attemptedReads).toBeGreaterThan(0);
     expect(observed.measured.completedCensuses).toBeGreaterThan(0);
     expect(observed.measured.attemptedReads).toBeLessThanOrEqual(2_109_440);
@@ -149,9 +162,12 @@ describe('file protected cleanup populated portfolios', () => {
       expect(await fs.readdir(f.owner)).toEqual(['v2']);
     }
     expect(await f.owners.readHeadSnapshot(f.locator)).toEqual(headBefore);
+    record('retained-verification-start');
     await verifyRetained(f);
+    record('retained-verification-end');
     record('assertion-complete');
-    process.stderr.write(`Cleanup capacity ${JSON.stringify({ nested, count, referenced, operationMs, ...observed.measured })}\n`);
+    try { process.stderr.write(`Cleanup capacity ${JSON.stringify({ nested, count, referenced, operationMs, ...observed.measured })}\n`); }
+    catch { /* Measurement output cannot replace completed preservation assertions. */ }
   });
   it.each([[false, 'after-payload'], [true, 'after-payload'], [true, 'after-slot']] as const)(
     'retries nested=%s at %s with 1000 owners and fresh revision authority', async (nested, stop) => {
@@ -170,11 +186,13 @@ describe('file protected cleanup populated portfolios', () => {
       const fresh = (await f.owners.readHeadSnapshot(f.locator)).token as OwnedFileMemoryToken;
       record('fresh-revision-complete'); record('operation-start');
       const observed = observeReads(), started = performance.now();
-      let result;
+      let result, primary: { cause: unknown } | undefined;
       try { result = await f.store().removeUnreferenced(fresh, f.receipt); }
-      finally { observed.restore(); }
+      catch (cause) { primary = { cause }; throw cause; }
+      finally { observed.restore(primary); }
       const operationMs = performance.now() - started;
       record('operation-end', { operationMs, ...observed.measured });
+      record('verification-start');
       expect(result.status).toBe(stop === 'after-slot' ? 'absent' : 'removed');
       if (stop === 'after-slot') expect(result).not.toHaveProperty('receipt');
       else {
@@ -184,8 +202,11 @@ describe('file protected cleanup populated portfolios', () => {
       }
       expect(await fs.readdir(f.owner)).toEqual(['v2']);
       expect((await f.owners.readHeadSnapshot(f.locator)).token).toEqual(updated);
+      record('retained-verification-start');
       await verifyRetained(f);
+      record('retained-verification-end');
       record('assertion-complete');
-      process.stderr.write(`Cleanup populated retry ${JSON.stringify({ nested, stop, operationMs, ...observed.measured })}\n`);
+      try { process.stderr.write(`Cleanup populated retry ${JSON.stringify({ nested, stop, operationMs, ...observed.measured })}\n`); }
+      catch { /* Measurement output cannot replace completed preservation assertions. */ }
     });
 });
