@@ -1,3 +1,4 @@
+import { assertHydratedMemoryReadFidelity } from '../../storage/MemoryHydrationReadFidelity.js';
 import { matchesPortfolioName } from '../../utils/portfolioName.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
@@ -145,6 +146,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private readonly consoleRawNames = new WeakMap<Memory, string>();
   private readonly consoleSerializationNames = new WeakMap<Memory, string>();
 
+  private readonly deferredGuardedPublications = new WeakSet<Memory>();
+
   constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
       ElementType.MEMORY,
@@ -172,6 +175,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
+    this._retentionPolicyService = deps.memoryRetentionPolicyService;
   }
 
   /** Issue #1948: Set retention policy service (called by Container after registration). */
@@ -709,7 +713,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
       throw cause;
     }
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode !== 'public' });
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: true });
     memory.setFilePath(locator);
     const definition = mode === 'lookup' ? this.parseContent(snapshot.content) : undefined;
     if (definition) {
@@ -722,6 +726,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
     // The caller receives a mutable working copy, not a durable cache entry.
     return Object.freeze({ memory, content: snapshot.content, locator, definition });
+  }
+
+  /** Internal captured-byte comparison; never loads storage, binds a token or publishes a cache. */
+  async assertGuardedReadFidelity(content: string, locator: string, logicalName: string): Promise<void> {
+    const raw = SecureYamlParser.parseRawYaml(content, {
+      maxSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE, contentPolicy: 'structure-only', numericPolicy: 'read-fidelity',
+    });
+    if (!validateMemoryControlFields(raw)) throw new Error('Invalid memory control fields');
+    const decoded = await this.parseMetadata(structuredClone(raw));
+    const memory = await this.hydrateDefinitionFromContent(content, locator,
+      { suppressLoadPolicy: true, quietMemory: true });
+    if (memory.metadata.name !== logicalName) throw new Error('Memory read owner name mismatch');
+    assertHydratedMemoryReadFidelity(raw, memory, decoded.retentionDays);
   }
 
   isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
@@ -858,6 +875,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.guardedUpdateAdapter?.getPendingUpdate(memory);
   }
 
+  /** Internal larger-operation seam: save without claiming the caller's publication tail. */
+  async saveForGuardedOperation(memory: Memory): Promise<void> {
+    if (this.deferredGuardedPublications.has(memory)) throw new Error('Guarded publication is already in progress');
+    this.deferredGuardedPublications.add(memory);
+    try { await this.save(memory); }
+    finally { this.deferredGuardedPublications.delete(memory); }
+  }
+
+  /** Actual caller tail, not a flag or restored receipt, establishes completion. */
+  async completeGuardedOperation<T>(memory: Memory, publish: () => Promise<T>): Promise<T> {
+    if (!this.guardedUpdateAdapter) return publish();
+    return await this.guardedUpdateAdapter.completePublication(memory, publish);
+  }
+
   private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
@@ -887,17 +918,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
       if (outcome.status !== 'committed') throw outcome.cause;
       committed = true;
       if ('cause' in outcome) throw outcome.cause;
-      // A concurrent caller mutation never becomes the committed cache snapshot.
-      const publication = detached.createRuntimePublication();
-      publication.setFilePath(locator!);
-      this.requireGuardedContext(tenant, contextRoot);
-      adapter.bindPublication(publication, element);
-      if (!isWritableStorageLayer(this.storageLayer)) {
-        await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+      const publish = async () => {
+        // A concurrent caller mutation never becomes the committed cache snapshot.
+        const publication = detached.createRuntimePublication();
+        publication.setFilePath(locator!);
         this.requireGuardedContext(tenant, contextRoot);
-      }
-      this.cacheElement(publication, locator!);
-      await this.afterSave(publication, locator!);
+        adapter.bindPublication(publication, element);
+        if (!isWritableStorageLayer(this.storageLayer)) {
+          await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+          this.requireGuardedContext(tenant, contextRoot);
+        }
+        this.cacheElement(publication, locator!);
+        await this.afterSave(publication, locator!);
+      };
+      if (this.deferredGuardedPublications.has(element)) await publish();
+      else await adapter.completePublication(element, publish);
     } catch (cause) {
       adapter.recordFailure(element, candidate, original, cause, committed);
       if (adapter.getPendingUpdate(element)?.status === 'refused') {
@@ -1205,7 +1240,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
-  override async list(options?: { includePublic?: boolean }): Promise<Memory[]> {
+  override async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<Memory[]> {
+    if (this.guardedUpdateAdapter && options?.includePublic) {
+      throw new Error('Guarded database memory public inclusion is unavailable; use owned qualified memory reads');
+    }
     // Database mode: delegate to base class which uses listFromDatabase().
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
@@ -1213,6 +1251,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.applyActivationStatus(memories);
       return memories;
     }
+
+    if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
 
     // File mode: custom multi-directory listing with deduplication.
     // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()
@@ -1285,9 +1325,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
    */
-  async activateMemory(identifier: string): Promise<{ success: boolean; message: string; memory?: Memory }> {
+  async activateMemory(identifier: string, assertCurrent?: () => void): Promise<{ success: boolean; message: string; memory?: Memory }> {
+    assertCurrent?.();
     // PERFORMANCE FIX: Use findByName() instead of list()
     const memory = await this.findByName(identifier);
+    assertCurrent?.();
 
     if (!memory) {
       return {
@@ -1305,6 +1347,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Update memory status in memory
     await memory.activate();
+    assertCurrent?.();
 
     // Routine activation — debug only (was flooding security buffer)
     logger.debug(`[MemoryManager] Memory activated: ${memory.metadata.name}`);
@@ -1362,8 +1405,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Get all active memories
    * Issue #18 Phase 4: Return memories that are in the active set
    */
-  async getActiveMemories(): Promise<Memory[]> {
-    const memories = await this.list();
+  async getActiveMemories(assertCurrent?: () => void): Promise<Memory[]> {
+    assertCurrent?.();
+    const memories = assertCurrent && isWritableStorageLayer(this.storageLayer)
+      ? await this.list({ strictDatabase: true }) : await this.list();
+    assertCurrent?.();
     return memories.filter(m => this.getActivationSet().has(m.metadata.name));
   }
 
@@ -1384,6 +1430,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     repairedMemories: Array<{ original: string; repaired: string; path: string }>;
     errorDetails: Array<{ name: string; error: string }>;
   }> {
+    if (this.guardedUpdateAdapter) throw new Error('Name repair is unavailable for guarded memory updates; no memories were processed.');
     const result = {
       scanned: 0,
       repaired: 0,
@@ -1707,8 +1754,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * @returns Promise resolving to array of auto-load memories sorted by priority
    */
-  async getAutoLoadMemories(): Promise<Memory[]> {
+  async getAutoLoadMemories(assertCurrent?: () => void): Promise<Memory[]> {
+    assertCurrent?.();
     try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        const memories = await this.list({ strictDatabase: true });
+        assertCurrent?.();
+        return memories.filter(memory => (memory.metadata as MemoryMetadata).autoLoad === true)
+          .sort((a, b) => ((a.metadata as MemoryMetadata).priority ?? 999) - ((b.metadata as MemoryMetadata).priority ?? 999));
+      }
       // Ensure index is populated
       await this.storageLayer.scan();
 
@@ -1739,6 +1793,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       return autoLoadMemories;
     } catch (error) {
+      if (assertCurrent || this.guardedUpdateAdapter) throw error;
       logger.error('[MemoryManager] Failed to get auto-load memories:', error);
       return [];
     }
@@ -1757,6 +1812,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async installSeedMemories(): Promise<void> {
     logger.info('[MemoryManager] 🌱 Starting seed memory installation...');
     try {
+      if (this.guardedUpdateAdapter) throw new Error('Seed installation is unavailable for guarded memory updates; no seeds were changed.');
       // Define the seed file
       const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
       logger.debug(`[MemoryManager] Step 1: Target seed file: ${seedFileName}`);
@@ -2126,6 +2182,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     data: string,
     format: 'json' | 'yaml' | 'markdown' = 'yaml'
   ): Promise<Memory> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       let parsed: any;
       let markdownContent: string | undefined;
@@ -2210,8 +2267,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
   }
 
-  protected override createElement(metadata: MemoryMetadata, _content: string): Memory {
-    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
+  protected override createElement(metadata: MemoryMetadata, _content: string, options?: { quietMemory?: boolean }): Memory {
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService, options?.quietMemory);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
       memory.instructions = metadata.instructions;
@@ -2515,6 +2572,48 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return Math.ceil(words / 0.75);
   }
 
+  private async activateAutoLoadMemory(memory: Memory, errors: string[], counts: {loaded: number; skipped: number; totalTokens: number}, assertCurrent?: () => void): Promise<void> {
+        try {
+          const memoryName = memory.metadata.name || 'unknown';
+
+          // Validate memory before loading
+          const validation = memory.validate();
+          if (!validation.valid) {
+            const errorMsg = `Validation failed for '${memoryName}': ${validation.errors?.map(e => e.message).join(', ')}`;
+            errors.push(errorMsg);
+            logger.warn(`[MemoryManager] ${errorMsg}`);
+            counts.skipped++;
+            return;
+          }
+
+          // Estimate tokens
+          const estimatedTokens = this.estimateTokens(memory.content || '');
+
+          // Activate the memory
+          // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
+          assertCurrent?.();
+          this.getActivationSet().add(memoryName);
+          await memory.activate();
+          assertCurrent?.();
+          counts.loaded++;
+          counts.totalTokens += estimatedTokens;
+
+          logger.info(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens)`);
+
+          // Routine auto-load — debug only (was flooding security buffer)
+          logger.debug(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${(memory.metadata as any).priority})`);
+
+
+        } catch (error) {
+          if (assertCurrent) throw error;
+          const memoryName = memory.metadata.name || 'unknown';
+          const errorMsg = `Failed to load '${memoryName}': ${error instanceof Error ? error.message : String(error)}`;
+          errors.push(errorMsg);
+          logger.warn(`[MemoryManager] ${errorMsg}`);
+          counts.skipped++;
+        }
+  }
+
   /**
    * Load and activate auto-load memories during server initialization
    * Issue #1430: Auto-load baseline memories feature
@@ -2529,16 +2628,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * @returns Promise resolving to auto-load statistics
    */
-  async loadAndActivateAutoLoadMemories(): Promise<{
+  async loadAndActivateAutoLoadMemories(assertCurrent?: () => void): Promise<{
     loaded: number;
     skipped: number;
     totalTokens: number;
     errors: string[];
   }> {
+    assertCurrent?.();
     const startTime = Date.now();
-    let loaded = 0;
-    let skipped = 0;
-    let totalTokens = 0;
+    const counts = { loaded: 0, skipped: 0, totalTokens: 0 };
     const errors: string[] = [];
 
     try {
@@ -2558,10 +2656,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
 
       // Install seed memories first
-      await this.installSeedMemories();
+      if (!this.guardedUpdateAdapter) {
+        await this.installSeedMemories();
+        assertCurrent?.();
+      }
 
       // Get auto-load memories
-      const autoLoadMemories = await this.getAutoLoadMemories();
+      const autoLoadMemories = assertCurrent
+        ? await this.getAutoLoadMemories(assertCurrent)
+        : await this.getAutoLoadMemories();
+      assertCurrent?.();
 
       if (autoLoadMemories.length === 0) {
         logger.debug('[MemoryManager] No auto-load memories configured');
@@ -2570,45 +2674,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       logger.info(`[MemoryManager] Found ${autoLoadMemories.length} auto-load memories`);
 
-      // Process each auto-load memory
+      // Complete each activation and its binding checks before starting the next.
       for (const memory of autoLoadMemories) {
-        try {
-          const memoryName = memory.metadata.name || 'unknown';
-
-          // Validate memory before loading
-          const validation = memory.validate();
-          if (!validation.valid) {
-            const errorMsg = `Validation failed for '${memoryName}': ${validation.errors?.map(e => e.message).join(', ')}`;
-            errors.push(errorMsg);
-            logger.warn(`[MemoryManager] ${errorMsg}`);
-            skipped++;
-            continue;
-          }
-
-          // Estimate tokens
-          const estimatedTokens = this.estimateTokens(memory.content || '');
-
-          // Activate the memory
-          // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
-          this.getActivationSet().add(memoryName);
-          await memory.activate();
-          loaded++;
-          totalTokens += estimatedTokens;
-
-          logger.info(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens)`);
-
-          // Routine auto-load — debug only (was flooding security buffer)
-          logger.debug(`[MemoryManager] Auto-loaded: ${memoryName} (~${estimatedTokens} tokens, priority: ${(memory.metadata as any).priority})`);
-
-        } catch (error) {
-          const memoryName = memory.metadata.name || 'unknown';
-          const errorMsg = `Failed to load '${memoryName}': ${error instanceof Error ? error.message : String(error)}`;
-          errors.push(errorMsg);
-          logger.warn(`[MemoryManager] ${errorMsg}`);
-          skipped++;
-        }
+        await this.activateAutoLoadMemory(memory, errors, counts, assertCurrent);
+        assertCurrent?.();
       }
 
+      const { loaded, skipped, totalTokens } = counts;
       const elapsedTime = Date.now() - startTime;
       logger.info(
         `[MemoryManager] Auto-load complete: ${loaded} memories activated ` +
@@ -2630,9 +2702,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
         }
       });
 
+      assertCurrent?.();
       return { loaded, skipped, totalTokens, errors };
 
     } catch (error) {
+      if (assertCurrent) throw error;
       // Don't fail startup if auto-load fails, but provide detailed diagnostics
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorType = error instanceof Error ? error.constructor.name : 'Unknown';

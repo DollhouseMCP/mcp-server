@@ -81,8 +81,20 @@ export type {
 
 type TriggerUsageTrend = 'increasing' | 'stable' | 'decreasing';
 
+/** Per-invocation derived RAM state; this mode never persists an index file. */
+export interface MemoryDerivedIndexMode {
+  readonly storage: 'memory' | 'persistent';
+  readonly namespace: string;
+  readonly assertCurrent: () => void;
+}
+
 
 export class EnhancedIndexManager {
+  private readonly pathService?: PathService;
+  private readonly boundMode?: MemoryDerivedIndexMode;
+  private get memoryMode(): MemoryDerivedIndexMode | undefined {
+    return this.boundMode?.storage === 'memory' ? this.boundMode : undefined;
+  }
   private readonly indexByNamespace = new Map<string, EnhancedIndex>();
   private readonly lastLoadedByNamespace = new Map<string, Date>();
   private TTL_MS: number;
@@ -119,8 +131,14 @@ export class EnhancedIndexManager {
     relationshipManager: RelationshipManager,
     helpers: EnhancedIndexHelpers,
     fileOperations: FileOperationsService,
-    private readonly pathService?: PathService
+    pathServiceOrMode?: PathService | MemoryDerivedIndexMode
   ) {
+    if (pathServiceOrMode && 'storage' in pathServiceOrMode) {
+      if (!['memory', 'persistent'].includes(pathServiceOrMode.storage) || !pathServiceOrMode.namespace ||
+        typeof pathServiceOrMode.assertCurrent !== 'function') throw new TypeError('Invalid derived memory index mode');
+      this.boundMode = Object.freeze({ ...pathServiceOrMode });
+      this.boundMode.assertCurrent();
+    } else this.pathService = pathServiceOrMode;
     // Initialize configuration
     this.config = indexConfigManager;
     this.configManager = configManager;
@@ -150,7 +168,7 @@ export class EnhancedIndexManager {
         maxMemoryMB: EnhancedIndexManager.MAX_METRICS_CACHE_MEMORY_MB
       },
       getIndex: () => this.getIndex(),
-      persistIndex: (index) => this.writeToFile(index)
+      persistIndex: (index) => this.commitIndexState(index)
     });
 
     logger.debug('EnhancedIndexManager initialized', {
@@ -192,6 +210,10 @@ export class EnhancedIndexManager {
   }
 
   public get indexPath(): string {
+    if (this.boundMode) {
+      this.boundMode.assertCurrent();
+      return this.boundMode.namespace;
+    }
     let portfolioPath: string;
     try {
       portfolioPath = this.pathService?.getUserPortfolioDir() ?? path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
@@ -219,7 +241,7 @@ export class EnhancedIndexManager {
 
     // Flush pending metrics before disposal
     try {
-      await this.metricsTracker.flush();
+      if (!this.memoryMode) await this.metricsTracker.flush();
     } catch (error) {
       logger.warn('Failed to flush metrics batch during disposal', error);
     }
@@ -238,6 +260,7 @@ export class EnhancedIndexManager {
    * Get the current index, loading or building as needed
    */
   public async getIndex(options: IndexOptions = {}): Promise<EnhancedIndex> {
+    this.boundMode?.assertCurrent();
     try {
       // Add performance tracking
       const startTime = Date.now();
@@ -273,8 +296,10 @@ export class EnhancedIndexManager {
         });
       }
 
+      this.boundMode?.assertCurrent();
       return this.index!;
     } catch (error) {
+      if (this.boundMode) throw error;
       logger.error('Failed to get Enhanced Index', error);
       throw error;
     }
@@ -349,11 +374,11 @@ export class EnhancedIndexManager {
   private async buildIndex(options: IndexOptions = {}): Promise<void> {
     const config = this.config.getConfig();
     const indexPath = this.indexPath;
-    const fileLock = this.getFileLock(indexPath);
-    const lockAcquired = await fileLock.acquire({
+    const fileLock = this.memoryMode ? undefined : this.getFileLock(indexPath);
+    const lockAcquired = fileLock ? await fileLock.acquire({
       timeout: config.index.lockTimeoutMs,
       stale: 60000  // 1 minute
-    });
+    }) : true;
 
     if (!lockAcquired) {
       logger.warn('Could not acquire lock for index build');
@@ -367,14 +392,17 @@ export class EnhancedIndexManager {
       const existingIndex = options.preserveCustom && this.index ? this.index : null;
       const newIndex = EnhancedIndexManager.createEmptyEnhancedIndex(existingIndex);
       const portfolioData = await this.portfolioIndexManager.getIndex();
+      this.boundMode?.assertCurrent();
       this.populateEnhancedIndex(newIndex, portfolioData.byType, existingIndex, options);
       await this.calculateSemanticRelationships(newIndex);
+      this.boundMode?.assertCurrent();
       await this.relationshipManager.discoverRelationships(newIndex);
+      this.boundMode?.assertCurrent();
       await this.commitBuiltIndex(newIndex, existingIndex, startTime);
 
     } finally {
       this.isBuilding = false;
-      await fileLock.release();
+      if (fileLock) await fileLock.release();
     }
   }
 
@@ -453,7 +481,7 @@ export class EnhancedIndexManager {
     if (existingIndex?.extensions) {
       newIndex.extensions = existingIndex.extensions;
     }
-    await this.writeToFile(newIndex);
+    await this.commitIndexState(newIndex);
     this.index = newIndex;
     this.lastLoaded = new Date();
     EnhancedIndexManager.logBuiltIndex(newIndex, Date.now() - startTime);
@@ -825,6 +853,7 @@ export class EnhancedIndexManager {
     startTime: number | null,
     metrics: Record<string, any>
   ): void {
+    if (this.memoryMode) return;
     if (!startTime || !this.isTelemetryEnabled()) return;
 
     const duration = Date.now() - startTime;
@@ -913,11 +942,14 @@ export class EnhancedIndexManager {
    * Private implementation detail
    */
   private async writeToFile(index: EnhancedIndex): Promise<void> {
+    this.boundMode?.assertCurrent();
+    if (this.memoryMode) throw new Error('Derived memory index cannot be persisted to disk');
     try {
       // Ensure directory exists
       const indexPath = this.indexPath;
       const dir = path.dirname(indexPath);
       await this.fileOperations.createDirectory(dir);
+      this.boundMode?.assertCurrent();
 
       // Convert to YAML with nice formatting
       const yamlContent = yamlDump(index, {
@@ -936,6 +968,7 @@ export class EnhancedIndexManager {
       await this.fileOperations.writeFile(indexPath, yamlContent, {
         source: 'EnhancedIndexManager.writeToFile'
       });
+      this.boundMode?.assertCurrent();
 
     } catch (error) {
       logger.error('Failed to save index', error);
@@ -947,6 +980,10 @@ export class EnhancedIndexManager {
    * Check if index needs rebuilding
    */
   private async needsRebuild(): Promise<boolean> {
+    if (this.memoryMode) {
+      this.boundMode!.assertCurrent();
+      return !this.index || !this.lastLoaded || Date.now() - this.lastLoaded.getTime() > this.TTL_MS;
+    }
     try {
       // Check if index file exists
       const indexStats = await this.fileOperations.stat(this.indexPath).catch(() => null);
@@ -991,6 +1028,7 @@ export class EnhancedIndexManager {
       updateOnly: elementNames,
       preserveCustom: true
     });
+    this.boundMode?.assertCurrent();
   }
 
   /**
@@ -1002,6 +1040,7 @@ export class EnhancedIndexManager {
     relationship: Relationship
   ): Promise<void> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
 
     // Find the element
     let found = false;
@@ -1033,8 +1072,9 @@ export class EnhancedIndexManager {
 
     if (found) {
       index.metadata.last_updated = new Date().toISOString();
-      await this.writeToFile(index);
+      await this.commitIndexState(index);
     }
+    this.boundMode?.assertCurrent();
   }
 
   /**
@@ -1042,6 +1082,7 @@ export class EnhancedIndexManager {
    */
   public async addExtension(key: string, data: any): Promise<void> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
 
     if (!index.extensions) {
       index.extensions = {};
@@ -1050,7 +1091,8 @@ export class EnhancedIndexManager {
     index.extensions[key] = data;
     index.metadata.last_updated = new Date().toISOString();
 
-    await this.writeToFile(index);
+    await this.commitIndexState(index);
+    this.boundMode?.assertCurrent();
   }
 
   /**
@@ -1058,10 +1100,15 @@ export class EnhancedIndexManager {
    * Public method for tests and external callers to save current state
    */
   public async persist(): Promise<void> {
+    if (this.memoryMode) {
+      this.boundMode!.assertCurrent();
+      throw new Error('Derived memory index cannot be persisted to disk');
+    }
     if (!this.index) {
       throw new Error('No index loaded to persist');
     }
     await this.writeToFile(this.index);
+    this.boundMode?.assertCurrent();
   }
 
   /**
@@ -1070,9 +1117,11 @@ export class EnhancedIndexManager {
    */
   public async getElementsByAction(verb: string): Promise<string[]> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
 
     // Track trigger usage metrics
     await this.trackTriggerUsage(verb);
+    this.boundMode?.assertCurrent();
 
     return index.action_triggers[verb] || [];
   }
@@ -1086,8 +1135,12 @@ export class EnhancedIndexManager {
    */
   private async trackTriggerUsage(trigger: string, immediate: boolean = false): Promise<void> {
     try {
-      await this.metricsTracker.track(trigger, immediate);
+      this.boundMode?.assertCurrent();
+      await this.metricsTracker.track(trigger, immediate || this.memoryMode !== undefined);
+      this.boundMode?.assertCurrent();
     } catch (error) {
+      this.boundMode?.assertCurrent();
+      if (this.memoryMode) throw error;
       logger.warn('Failed to track trigger usage', { trigger, error });
     }
   }
@@ -1131,6 +1184,7 @@ export class EnhancedIndexManager {
     trend: TriggerUsageTrend;
   }[]> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
 
     if (!index.metadata.trigger_metrics) {
       return [];
@@ -1214,6 +1268,7 @@ export class EnhancedIndexManager {
    */
   public async exportMetrics(format: 'json' | 'csv' | 'prometheus' = 'json'): Promise<string> {
     const metrics = await this.getTriggerMetrics();
+    this.boundMode?.assertCurrent();
 
     switch (format) {
       case 'csv': {
@@ -1276,6 +1331,7 @@ export class EnhancedIndexManager {
     hasRelationships?: boolean;
   }): Promise<ElementDefinition[]> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
     const results: ElementDefinition[] = [];
 
     for (const [type, elements] of Object.entries(index.elements)) {
@@ -1356,7 +1412,10 @@ export class EnhancedIndexManager {
     }
   ): Promise<ElementPath | null> {
     const index = await this.getIndex();
-    return this.relationshipManager.findPath(fromElement, toElement, index, options as any);
+    this.boundMode?.assertCurrent();
+    const result = this.relationshipManager.findPath(fromElement, toElement, index, options as any);
+    this.boundMode?.assertCurrent();
+    return result;
   }
 
   /**
@@ -1371,7 +1430,10 @@ export class EnhancedIndexManager {
     }
   ): Promise<Map<string, ElementPath>> {
     const index = await this.getIndex();
-    return this.relationshipManager.getConnectedElements(element, index, options as any);
+    this.boundMode?.assertCurrent();
+    const result = this.relationshipManager.getConnectedElements(element, index, options as any);
+    this.boundMode?.assertCurrent();
+    return result;
   }
 
   /**
@@ -1379,6 +1441,7 @@ export class EnhancedIndexManager {
    */
   public async getRelationshipStats(): Promise<Record<string, number>> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
     return this.relationshipManager.getRelationshipStats(index);
   }
 
@@ -1387,6 +1450,7 @@ export class EnhancedIndexManager {
    */
   public async getElementRelationships(elementId: string): Promise<Record<string, Relationship[]>> {
     const index = await this.getIndex();
+    this.boundMode?.assertCurrent();
     // FIX: Use centralized element ID parsing
     const parsed = parseElementId(elementId);
     if (!parsed) {
@@ -1406,6 +1470,7 @@ export class EnhancedIndexManager {
    * FIX: Added to prevent memory leaks as identified in PR review
    */
   public clearMemoryCache(): void {
+    this.boundMode?.assertCurrent();
     const now = new Date();
     const timeSinceLastCleanup = now.getTime() - this.lastMemoryCleanup.getTime();
 
@@ -1456,6 +1521,8 @@ export class EnhancedIndexManager {
    */
   // FIX: Use configuration for default cleanup interval
   public startMemoryCleanup(intervalMs?: number): void {
+    // An invocation-bound callback must not outlive its original context.
+    if (this.boundMode) return;
     const config = this.config.getConfig();
     const actualInterval = intervalMs || config.memory.cleanupIntervalMinutes * 60 * 1000;
     if (this.memoryCleanupInterval) {
@@ -1488,6 +1555,12 @@ export class EnhancedIndexManager {
    */
   public async cleanup(): Promise<void> {
     this.stopMemoryCleanup();
+    if (this.memoryMode) {
+      this.metricsTracker.dispose();
+      this.indexByNamespace.clear();
+      this.lastLoadedByNamespace.clear();
+      return;
+    }
     this.clearMemoryCache();
 
     try {
@@ -1505,5 +1578,14 @@ export class EnhancedIndexManager {
     for (const lock of this.fileLocks.values()) {
       await lock.release().catch(() => {});
     }
+  }
+
+  private async commitIndexState(index: EnhancedIndex): Promise<void> {
+    if (this.memoryMode) {
+      this.boundMode!.assertCurrent();
+      this.index = index;
+      return;
+    }
+    await this.writeToFile(index);
   }
 }

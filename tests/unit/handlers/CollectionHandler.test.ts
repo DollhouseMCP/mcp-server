@@ -261,6 +261,27 @@ describe('CollectionHandler', () => {
       delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
     });
 
+    it('changes the setting before returning its Promise', async () => {
+      const pending = handler.configureCollectionSubmission(true);
+      expect(pending).toBeInstanceOf(Promise);
+      expect(handler.isAutoSubmitEnabled()).toBe(true);
+      await expect(pending).resolves.toHaveProperty('content');
+    });
+
+    it.each(['configure', 'read'] as const)('rejects the exact synchronous observer cause for %s without throwing to the caller', async (operation) => {
+      const cause = { observer: operation };
+      mockServices.indicatorService.getPersonaIndicator.mockImplementation(() => { throw cause; });
+      let pending: Promise<unknown> | undefined;
+      expect(() => {
+        pending = operation === 'configure'
+          ? handler.configureCollectionSubmission(true)
+          : handler.getCollectionSubmissionConfig();
+      }).not.toThrow();
+      expect(pending).toBeInstanceOf(Promise);
+      if (operation === 'configure') expect(handler.isAutoSubmitEnabled()).toBe(true);
+      await expect(pending).rejects.toBe(cause);
+    });
+
     it('should enable collection submission when autoSubmit is true', async () => {
       const result = await handler.configureCollectionSubmission(true);
 

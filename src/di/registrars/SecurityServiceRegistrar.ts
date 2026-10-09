@@ -87,10 +87,15 @@ export class SecurityServiceRegistrar {
     container.register('PatternExtractor', () => new PatternExtractor(
       container.resolve('PatternEncryptor')
     ));
-    container.register('BackgroundValidator', () => new BackgroundValidator(
+    container.register('BackgroundValidator', () => {
+      if (container.hasRegistration('DatabaseTenantMemoryRegistry')) {
+        throw new Error('Global memory validation requires a tenant-bound operation; unattributed background validation is unavailable');
+      }
+      return new BackgroundValidator(
       container.resolve('PatternExtractor'),
       container.resolve('MemoryManager')
-    ));
+      );
+    });
     container.register('SecurityTelemetry', () => new SecurityTelemetry());
 
     container.register('TokenManager', () => new TokenManager(

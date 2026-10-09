@@ -3,7 +3,7 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
-import type { AgentManager } from '../../elements/agents/AgentManager.js';
+import { AgentManager, type AgentMemoryOperationBinding } from '../../elements/agents/AgentManager.js';
 import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 import type { AgentMetadataV2, AgentNotification } from '../../elements/agents/types.js';
 import { evaluateResiliencePolicy, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
@@ -30,7 +30,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class AgentExecutionHandler {
   private static readonly MAX_RECENT_BLOCKS = 50;
   // Keep policy ownership and its durable state mutation in one lifecycle operation.
-  private readonly executionOperationLock = new AsyncKeyedLock();
+  private readonly executionOperationLock: AsyncKeyedLock;
+
+  private readonly memoryBinding?: AgentMemoryOperationBinding;
 
   constructor(
     private readonly handlers: HandlerRegistry,
@@ -39,16 +41,32 @@ export class AgentExecutionHandler {
     private readonly sessionKey: (name: string) => string,
     private readonly operations: OperationRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
-  ) {}
+    memoryOptions?: { readonly binding: AgentMemoryOperationBinding; readonly operationLock: AsyncKeyedLock },
+  ) {
+    if (memoryOptions) {
+      this.executionOperationLock = memoryOptions.operationLock;
+      this.memoryBinding = Object.freeze({provider:memoryOptions.binding.provider,operation:memoryOptions.binding.operation});
+    } else this.executionOperationLock = new AsyncKeyedLock();
+  }
+
+  private assertBoundMemory(): void {
+    if (this.handlers.agentManager instanceof AgentManager) {
+      this.handlers.agentManager.assertMemoryOperationBinding(this.memoryBinding);
+    } else if (this.memoryBinding) throw new Error('Actual configured agent manager required');
+  }
 
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+    this.assertBoundMemory();
     const manager = this.handlers.agentManager;
     const elementName = validateExecutionElementName(method, params);
     this.ensureNotDangerZoneBlocked(method, elementName);
     const target = await this.resolveDispatchTarget(method, manager, elementName);
+    this.assertBoundMemory();
 
     return this.executionOperationLock.runExclusive(target.key, async () => {
+      this.assertBoundMemory();
       await this.ensureAgentCanExecute(method, manager, target);
+      this.assertBoundMemory();
 
       const handlers: Partial<Record<string, () => Promise<unknown>>> = {
         execute: () => this.executeAgent(manager, target, params),
@@ -65,7 +83,10 @@ export class AgentExecutionHandler {
       if (!handler) {
         throw new Error(`Unknown Execute method: ${method}`);
       }
-      return handler();
+      if (!this.memoryBinding) return handler();
+      const result = await handler();
+      this.assertBoundMemory();
+      return result;
     });
   }
 
@@ -201,7 +222,9 @@ export class AgentExecutionHandler {
       target.name,
       params.parameters as Record<string, unknown>,
       { executionIdentity: target.identity },
+      ...(this.memoryBinding ? [this.memoryBinding] as const : []),
     );
+    this.assertBoundMemory();
     await this.trackExecutingAgent(
       manager,
       target,
@@ -230,6 +253,7 @@ export class AgentExecutionHandler {
     goalId: string | undefined,
     preserveExistingState = false,
   ): Promise<void> {
+    this.assertBoundMemory();
     const previousEntry = this.executingAgents.get(target.key);
     const goalIds = [...(previousEntry?.goalIds ?? [])];
     if (goalId && !goalIds.includes(goalId)) {
@@ -263,6 +287,7 @@ export class AgentExecutionHandler {
 
     try {
       const agentElement = await manager.read(elementName);
+      this.assertBoundMemory();
       const agentMeta = agentElement?.metadata as AgentMetadataV2 | undefined;
       const gatekeeperPolicy = agentMeta?.gatekeeper ??
         (agentMeta?.tools ? translateToolConfigToPolicy(agentMeta.tools, this.operations) ?? undefined : undefined);
@@ -272,7 +297,8 @@ export class AgentExecutionHandler {
         executionEntry.metadata.gatekeeper = gatekeeperPolicy;
       }
       executionEntry.resiliencePolicy = resiliencePolicy;
-    } catch {
+    } catch (cause) {
+      if (this.memoryBinding) throw cause;
       logger.warn('Failed to load optional execution policies while tracking agent', {
         agentName: elementName,
       });
@@ -546,7 +572,8 @@ export class AgentExecutionHandler {
       previousStepResult: params.previousStepResult as string | undefined,
       parameters: params.parameters as Record<string, unknown> | undefined,
       executionIdentity: target.identity,
-    });
+    }, ...(this.memoryBinding ? [this.memoryBinding] as const : []));
+    this.assertBoundMemory();
     await this.trackExecutingAgent(
       manager,
       target,
@@ -875,7 +902,8 @@ export class AgentExecutionHandler {
         originalGoalId: restoredState.goalId,
       },
       executionIdentity: target.identity,
-    });
+    }, ...(this.memoryBinding ? [this.memoryBinding] as const : []));
+    this.assertBoundMemory();
     await this.trackExecutingAgent(
       manager,
       target,

@@ -109,7 +109,8 @@ export async function makeEquivalentFixture() {
       return row;
     }
     return { db, ordinary, maintenance, competitor, roleName, userId, foreignUserId, memoryId, name, raw,
-      layer, request, snapshot, cleanup };
+      layer, request, snapshot, cleanup,
+      runtime: Object.freeze({ appUrl: appUrl.toString(), systemUrl: url.toString(), selectedUsername, foreignUsername }) };
   } catch (cause) {
     try { await cleanup(); }
     catch (cleanupError) { throw new AggregateError([cause, cleanupError], 'Owned fixture setup and cleanup failed'); }

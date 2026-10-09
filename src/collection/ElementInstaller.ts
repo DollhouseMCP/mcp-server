@@ -50,6 +50,8 @@ import { logger } from '../utils/logger.js';
 import type { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { ISharedPoolInstaller } from '../collection/shared-pool/ISharedPoolInstaller.js';
 import type { IStorageLayerFactory } from '../storage/IStorageLayerFactory.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import type { DatabaseTenantMemoryRegistry } from '../storage/DatabaseTenantMemoryRegistry.js';
 
 /**
  * Result of an element installation operation
@@ -124,13 +126,51 @@ function elementFileExtension(elementType: ElementType): string {
 }
 
 export class ElementInstaller {
+  private memoryOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+
+  bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+    unifiedIndexManager: UnifiedIndexManager): ElementInstaller {
+    if (!(provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory provider required');
+    if (this.memoryRegistry) provider.assertRegistry(this.memoryRegistry);
+    provider.assertOperation(operation);
+    const bound = new ElementInstaller(this.githubClient, { portfolioManager: this.portfolioManager,
+      unifiedIndexManager, fileOperations: this.fileOperations, sharedPoolInstaller: this.sharedPoolInstaller,
+      storageLayerFactory: this.storageLayerFactory, memoryRegistry: this.memoryRegistry });
+    bound.memoryOperation = Object.freeze({ provider, operation });
+    return bound;
+  }
+
+  private originalBindingFailure?: { readonly cause: unknown };
+  private assertMemoryOperation(): void {
+    if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+    if (!this.memoryOperation) return;
+    try { this.memoryOperation.provider.assertOperation(this.memoryOperation.operation); }
+    catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+  }
+
+  private assertMutationType(type: ElementType): void {
+    this.assertMemoryOperation();
+    if (this.memoryRegistry && !this.memoryOperation) throw new Error('Authentic selected collection operation required');
+    if (!this.memoryOperation) return;
+    if (!Object.values(ElementType).includes(type)) throw new Error('Unknown collection mutation type');
+    if (type === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
+      throw new Error('Guarded database memories support admitted UPDATE only; collection installation cannot create or replace them');
+    }
+  }
+
   private readonly githubClient: GitHubClient;
   private readonly portfolioManager: PortfolioManager;
   private readonly baseUrl = 'https://api.github.com/repos/DollhouseMCP/collection/contents';
 
   // Source priority support (Issue #1447)
   private readonly sourcePriorityConfig: SourcePriorityConfig;
-  private readonly unifiedIndexManager: UnifiedIndexManager;
+  private readonly fixedIndex?: UnifiedIndexManager;
+  private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
+  private get unifiedIndexManager(): UnifiedIndexManager {
+    this.assertMemoryOperation();
+    if (!this.fixedIndex) throw new Error('Authentic selected collection index required');
+    return this.fixedIndex;
+  }
 
   // File operations service for secure file I/O
   private readonly fileOperations: IFileOperationsService;
@@ -158,20 +198,22 @@ export class ElementInstaller {
       fileOperations?: IFileOperationsService;
       sharedPoolInstaller?: ISharedPoolInstaller;
       storageLayerFactory?: IStorageLayerFactory;
+      memoryRegistry?: DatabaseTenantMemoryRegistry;
     }
   ) {
     this.githubClient = githubClient;
     if (!options.portfolioManager) {
       throw new Error('ElementInstaller requires a PortfolioManager instance');
     }
-    if (!options.unifiedIndexManager) {
+    if (!options.unifiedIndexManager && !options.memoryRegistry) {
       throw new Error('ElementInstaller requires a UnifiedIndexManager instance');
     }
     if (!options.fileOperations) {
       throw new Error('ElementInstaller requires a FileOperationsService instance');
     }
     this.portfolioManager = options.portfolioManager;
-    this.unifiedIndexManager = options.unifiedIndexManager;
+    this.fixedIndex = options.unifiedIndexManager;
+    this.memoryRegistry = options.memoryRegistry;
     this.sourcePriorityConfig = getSourcePriorityConfig();
     // Initialize file operations service
     this.fileOperations = options.fileOperations;
@@ -219,6 +261,7 @@ export class ElementInstaller {
     collectionPath: string,
     options: InstallOptions = {}
   ): Promise<InstallResult> {
+    this.assertMutationType(elementType);
     // ENHANCEMENT: Validate elementName is not empty/null before processing
     // This prevents errors during filename generation and provides clear feedback
     if (!elementName || elementName.trim().length === 0) {
@@ -247,6 +290,7 @@ export class ElementInstaller {
 
     // Step 1: Check if element already exists locally (unless force = true)
     const localCheckResult = await this.checkLocalElementIfNeeded(elementName, elementType, force);
+    this.assertMemoryOperation();
     if (localCheckResult) {
       logger.debug('Element already exists locally', { elementName, elementType });
       return localCheckResult;
@@ -286,6 +330,7 @@ export class ElementInstaller {
     }
 
     const localExists = await this.checkLocalElement(elementName, elementType);
+    this.assertMemoryOperation();
     if (localExists) {
       return {
         success: false,
@@ -347,6 +392,7 @@ export class ElementInstaller {
         collectionPath,
         fallbackOnError
       );
+      this.assertMemoryOperation();
 
       if (installResult.success) {
         installResult.source = source;
@@ -400,6 +446,7 @@ export class ElementInstaller {
         elementType,
         collectionPath
       );
+      this.assertMemoryOperation();
 
       // ENHANCEMENT (PR #1453): Log successful installation
       if (installResult.success) {
@@ -412,6 +459,7 @@ export class ElementInstaller {
 
       return installResult;
     } catch (error) {
+      this.assertMemoryOperation();
       const err = error instanceof Error ? error : new Error(String(error));
 
       // ENHANCEMENT (PR #1453): Log installation failure
@@ -582,6 +630,7 @@ export class ElementInstaller {
         includeCollection: false,
         elementType
       });
+      this.assertMemoryOperation();
 
       // ENHANCEMENT (PR #1453): Use optional chaining for safer property access
       // Check if any result matches the element name exactly
@@ -591,6 +640,8 @@ export class ElementInstaller {
           result.entry.name.toLowerCase() === elementName.toLowerCase()
       );
     } catch (error) {
+      this.assertMemoryOperation();
+      if (this.memoryOperation) throw error;
       // FIX (SonarCloud L511): Log error before fallback to filesystem check
       // If index check fails, fall back to filesystem check
       // This is a graceful degradation when the index is unavailable
@@ -615,6 +666,7 @@ export class ElementInstaller {
           return nameWithoutExt.toLowerCase() === elementName.toLowerCase();
         });
       } catch (fallbackError) {
+        this.assertMemoryOperation();
         // FIX (SonarCloud L523): Log fallback error before returning
         // Both index and filesystem checks failed - assume element doesn't exist
         logger.debug('Filesystem check also failed, assuming element does not exist', {
@@ -666,6 +718,7 @@ export class ElementInstaller {
         includeCollection: false,
         elementType
       });
+      this.assertMemoryOperation();
 
       // ENHANCEMENT (PR #1453): Use optional chaining for safer property access
       // Find exact match
@@ -696,11 +749,13 @@ export class ElementInstaller {
 
       // Fetch content from GitHub
       const response = await fetch(match.entry.githubDownloadUrl);
+      this.assertMemoryOperation();
       if (!response.ok) {
         throw new Error(`Failed to fetch from GitHub: ${response.statusText}`);
       }
 
       const content = await response.text();
+      this.assertMemoryOperation();
 
       // SECURITY: Validate content size
       validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
@@ -713,6 +768,7 @@ export class ElementInstaller {
       try {
         parsed = SecureYamlParser.safeMatter(sanitizedContent);
       } catch (error) {
+        this.assertMemoryOperation();
         if (error instanceof SecurityError) {
           throw new Error(`Security threat in content: ${error.message}`);
         }
@@ -740,7 +796,9 @@ export class ElementInstaller {
       const localPath = path.join(elementDir, filename);
 
       // SECURITY: Atomic write
+      this.assertMutationType(elementType);
       await this.atomicWriteFile(localPath, sanitizedContent);
+      this.assertMemoryOperation();
 
       // ENHANCEMENT (PR #1453): Log successful installation
       logger.debug('Element installed successfully from GitHub', {
@@ -758,6 +816,7 @@ export class ElementInstaller {
         elementType
       };
     } catch (error) {
+      this.assertMemoryOperation();
       const err = error instanceof Error ? error : new Error(String(error));
 
       // ENHANCEMENT (PR #1453): Log installation error
@@ -793,9 +852,11 @@ export class ElementInstaller {
     // SECURITY: Validate and sanitize the input path first
     const sanitizedPath = validatePath(collectionPath);
     const elementType = this.validateAndExtractElementType(sanitizedPath);
+    this.assertMutationType(elementType);
 
     // STEP 1: FETCH CONTENT INTO MEMORY (NO DISK OPERATIONS YET)
     const content = await this.fetchCollectionContent(sanitizedPath);
+    this.assertMutationType(elementType);
 
     // STEP 2: PERFORM ALL VALIDATION BEFORE ANY DISK OPERATIONS
     const { sanitizedContent, metadata } = this.validateCollectionElement(elementType, content);
@@ -806,6 +867,7 @@ export class ElementInstaller {
 
     // SECURITY: Check if file already exists before any write operations
     const existsResult = await this.checkFileExists(localPath, filename);
+    this.assertMemoryOperation();
     if (existsResult) {
       logger.debug('Element already exists in collection', {
         filename,
@@ -825,13 +887,17 @@ export class ElementInstaller {
     // DB-mode deployments, so the install vanishes on every restart.
     // Filesystem-mode deployments fall through to the legacy atomicWriteFile
     // path (factory either absent or produces a non-writable layer).
+    this.assertMutationType(elementType);
     const persistedViaStorageLayer = await this.persistViaStorageLayerIfDbMode(
       elementType,
       metadata,
       sanitizedContent,
     );
+    this.assertMemoryOperation();
     if (!persistedViaStorageLayer) {
+      this.assertMutationType(elementType);
       await this.atomicWriteFile(localPath, sanitizedContent);
+      this.assertMemoryOperation();
     }
 
     // ENHANCEMENT (PR #1453): Log successful installation
@@ -871,6 +937,7 @@ export class ElementInstaller {
     const sanitizedPath = validatePath(collectionPath);
     const elementType = this.resolveCollectionElementType(sanitizedPath);
     const raw = await this.fetchCollectionContent(sanitizedPath);
+    this.assertMemoryOperation();
 
     if (elementType === ElementType.MEMORY) {
       return this.validateCollectionMemory(elementType, raw);
@@ -925,6 +992,7 @@ export class ElementInstaller {
     try {
       parsed = SecureYamlParser.parseRawYaml(sanitizedContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
     } catch (error) {
+      this.assertMemoryOperation();
       if (error instanceof SecurityError) {
         throw new CollectionContentInvalidError(`Security threat in content: ${error.message}`);
       }
@@ -972,6 +1040,7 @@ export class ElementInstaller {
       return false;
     }
     const { isWritableStorageLayer } = await import('../storage/IStorageLayer.js');
+    this.assertMemoryOperation();
     // FileStorageOptions are only used by the filesystem backend; the
     // database backend ignores them. Pass sensible values so the filesystem
     // path stays consistent if someone wires this through it.
@@ -983,6 +1052,7 @@ export class ElementInstaller {
     if (!isWritableStorageLayer(layer)) {
       return false;
     }
+    this.assertMutationType(elementType);
     await layer.writeContent(
       elementType,
       metadata.name,
@@ -998,6 +1068,7 @@ export class ElementInstaller {
         elementLabel: this.singularElementLabel(elementType),
       },
     );
+    this.assertMemoryOperation();
     return true;
   }
 
@@ -1047,6 +1118,7 @@ export class ElementInstaller {
   private async fetchCollectionContent(sanitizedPath: string): Promise<string> {
     const url = `${this.baseUrl}/${sanitizedPath}`;
     const data = await this.githubClient.fetchFromGitHub(url);
+    this.assertMemoryOperation();
 
     if (data.type !== 'file') {
       throw new CollectionElementNotFoundError('Path does not point to a file');
@@ -1144,6 +1216,7 @@ export class ElementInstaller {
       const parsed = SecureYamlParser.safeMatter(content);
       return { data: parsed.data as IElementMetadata, content: parsed.content };
     } catch (error) {
+      this.assertMemoryOperation();
       if (error instanceof SecurityError) {
         throw new CollectionContentInvalidError(`Security threat in content: ${error.message}`);
       }
@@ -1205,6 +1278,7 @@ export class ElementInstaller {
    */
   private async checkFileExists(localPath: string, filename: string): Promise<InstallResult | null> {
     const exists = await this.fileOperations.exists(localPath);
+    this.assertMemoryOperation();
     if (exists) {
       return {
         success: false,
@@ -1233,6 +1307,8 @@ export class ElementInstaller {
     elementType?: ElementType;
     filename?: string;
   }> {
+    this.assertMemoryOperation();
+    if (this.memoryRegistry && !this.memoryOperation) throw new Error('Authentic selected collection operation required');
     if (this.sharedPoolInstaller) {
       return this.installViaSharedPool(inputPath);
     }
@@ -1250,10 +1326,13 @@ export class ElementInstaller {
     }
     const sanitizedPath = validatePath(collectionPath);
     const elementType = this.validateAndExtractElementType(sanitizedPath);
+    this.assertMutationType(elementType);
     const content = await this.fetchCollectionContent(sanitizedPath);
+    this.assertMutationType(elementType);
     const { sanitizedContent, metadata } = this.validateCollectionElement(elementType, content);
 
     const sourceUrl = `github://DollhouseMCP/collection/${sanitizedPath}`;
+    this.assertMutationType(elementType);
     const result = await sharedPoolInstaller.install({
       content: sanitizedContent,
       elementType,
@@ -1263,6 +1342,7 @@ export class ElementInstaller {
       sourceVersion: metadata.version ?? null,
     });
 
+    this.assertMemoryOperation();
     switch (result.action) {
       case 'installed':
         return {
@@ -1311,6 +1391,7 @@ export class ElementInstaller {
     try {
       // SECURITY: Write to temporary file first
       // If this fails, no files are left on disk
+      this.assertMemoryOperation();
       await this.fileOperations.writeFile(tempFile, content, {
         source: 'ElementInstaller.atomicWriteFile'
       });
@@ -1318,7 +1399,9 @@ export class ElementInstaller {
       // SECURITY: Atomic rename operation
       // On most filesystems, rename is atomic - the file appears with complete content
       // or doesn't appear at all. This prevents partial file corruption.
+      this.assertMemoryOperation();
       await this.fileOperations.renameFile(tempFile, destination);
+      this.assertMemoryOperation();
 
     } catch (error) {
       // SECURITY: Guaranteed cleanup of temporary file on ANY failure

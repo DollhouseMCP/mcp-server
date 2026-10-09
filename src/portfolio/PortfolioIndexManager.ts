@@ -101,6 +101,13 @@ interface DirectoryEntries {
   yamlFiles: string[];
 }
 
+/** Trusted per-operation DB discovery; never falls back to memory files. */
+export interface PortfolioMemoryIndexSource {
+  readonly namespace: string;
+  readonly assertCurrent: () => void;
+  readonly listEntries: () => Promise<readonly IndexEntry[]>;
+}
+
 export class PortfolioIndexManager {
   private readonly indexByNamespace = new Map<string, PortfolioIndex>();
   private readonly lastBuiltByNamespace = new Map<string, Date>();
@@ -116,7 +123,8 @@ export class PortfolioIndexManager {
   public constructor(
     private readonly indexConfigManager: IndexConfigManager,
     portfolioManager: PortfolioManager,
-    fileOperations: IFileOperationsService
+    fileOperations: IFileOperationsService,
+    private readonly memorySource?: PortfolioMemoryIndexSource
   ) {
     logger.debug('PortfolioIndexManager created');
     this.TTL_MS = this.indexConfigManager.getConfig().index.ttlMinutes * 60 * 1000;
@@ -173,11 +181,13 @@ export class PortfolioIndexManager {
    * Get the current index, building it if necessary
    */
   public async getIndex(): Promise<PortfolioIndex> {
+    this.memorySource?.assertCurrent();
     // Check if we need to rebuild
     if (this.needsRebuild()) {
       await this.buildIndex();
     }
     
+    this.memorySource?.assertCurrent();
     return this.indexByNamespace.get(this.currentNamespace())!;
   }
 
@@ -186,6 +196,7 @@ export class PortfolioIndexManager {
    */
   public async findByName(name: string, options: SearchOptions = {}): Promise<IndexEntry | null> {
     const index = await this.getIndex();
+    this.memorySource?.assertCurrent();
     
     // Normalize input for security
     const normalizedName = UnicodeValidator.normalize(name);
@@ -234,6 +245,7 @@ export class PortfolioIndexManager {
    */
   public async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const index = await this.getIndex();
+    this.memorySource?.assertCurrent();
     const safeQuery = this.normalizeSearchQuery(query);
     if (!safeQuery) return [];
 
@@ -351,6 +363,7 @@ export class PortfolioIndexManager {
    */
   public async getElementsByType(elementType: ElementType): Promise<IndexEntry[]> {
     const index = await this.getIndex();
+    this.memorySource?.assertCurrent();
     return index.byType.get(elementType) || [];
   }
 
@@ -404,8 +417,15 @@ export class PortfolioIndexManager {
   }
 
   private currentNamespace(): string {
+    if (this.memorySource) {
+      this.memorySource.assertCurrent();
+      return this.memorySource.namespace;
+    }
     return this.portfolioManager.getElementDir(ElementType.PERSONA);
   }
+
+  /** Bound discovery failures cannot be represented as stale/empty local data. */
+  public hasBoundMemorySource(): boolean { return this.memorySource !== undefined; }
 
   public getCacheNamespace(): string {
     return this.currentNamespace();
@@ -446,10 +466,12 @@ export class PortfolioIndexManager {
 
       for (const elementType of Object.values(ElementType)) {
         this.addBuildStats(stats, await this.scanElementType(elementType, newIndex));
+        this.memorySource?.assertCurrent();
       }
       
       this.updateIndexAtomically(namespace, newIndex, stats, startTime);
     } catch (error) {
+      if (this.memorySource) throw error;
       ErrorHandler.logError('PortfolioIndexManager.performBuild', error);
       throw ErrorHandler.wrapError(error, 'Failed to build portfolio index', ErrorCategory.SYSTEM_ERROR);
     }
@@ -473,6 +495,13 @@ export class PortfolioIndexManager {
   }
 
   private async scanElementType(elementType: ElementType, newIndex: PortfolioIndex): Promise<BuildStats> {
+    this.memorySource?.assertCurrent();
+    if (elementType === ElementType.MEMORY && this.memorySource) {
+      const entries = await this.memorySource.listEntries();
+      this.memorySource.assertCurrent();
+      for (const entry of entries) this.addToIndex(newIndex, entry);
+      return { totalFiles: entries.length, processedFiles: entries.length };
+    }
     try {
       const elementDir = this.portfolioManager.getElementDir(elementType);
       const dirExists = await this.fileOperations.exists(elementDir);
@@ -485,6 +514,7 @@ export class PortfolioIndexManager {
         ? this.scanMemoryDirectory(elementDir, newIndex)
         : this.scanStandardElementDirectory(elementDir, elementType, newIndex);
     } catch (error) {
+      this.memorySource?.assertCurrent();
       logger.error(`Failed to scan element type: ${elementType}`, {
         error: error instanceof Error ? error.message : String(error)
       });
