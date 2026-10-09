@@ -86,6 +86,11 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     super(db, getCurrentUserId, 'memories');
   }
 
+  /** Internal composition identity check; no connection or write authority is exposed. */
+  matchesAdmissionContext(db: DatabaseInstance, tenant: string): boolean {
+    return this.db === db && this.userId === tenant;
+  }
+
   /**
    * Override to add totalEntries count from memory_entries table.
    */
