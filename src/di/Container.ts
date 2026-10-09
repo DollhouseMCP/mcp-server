@@ -12,7 +12,7 @@ import type { PortfolioManager } from "../portfolio/PortfolioManager.js";
 import { ElementType } from "../portfolio/PortfolioManager.js";
 import type { MigrationManager } from "../portfolio/MigrationManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
-import { MCPAQLHandler, type TenantHandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
+import { MCPAQLHandler, type HandlerRegistry, type TenantHandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import type { AuditHmacResolver } from "../security/toolRedaction.js";
@@ -1340,8 +1340,13 @@ export class DollhouseContainer {
     handlerDeps.integrationRequestGateway = integrationServices.authorizedIntegrationGateway;
     const mcpAqlHandler = memoryProvider
       ? new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'), memoryProvider)
-      : new MCPAQLHandler({ ...handlerDeps, memoryManager: this.resolve<MemoryManager>('MemoryManager') },
-        this.resolve<ContextTracker>('ContextTracker'));
+      : new MCPAQLHandler(Object.defineProperties({}, {
+          ...Object.getOwnPropertyDescriptors(handlerDeps),
+          memoryManager: {
+            value: this.resolve<MemoryManager>('MemoryManager'),
+            enumerable: true, configurable: true, writable: true,
+          },
+        }) as HandlerRegistry, this.resolve<ContextTracker>('ContextTracker'));
 
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
@@ -1899,8 +1904,13 @@ export class DollhouseContainer {
     handlerDeps.integrationRequestGateway = integrationServices.authorizedIntegrationGateway;
     const mcpAqlHandler = memoryProvider
       ? new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'), memoryProvider)
-      : new MCPAQLHandler({ ...handlerDeps, memoryManager: this.resolve<MemoryManager>('MemoryManager') },
-        this.resolve<ContextTracker>('ContextTracker'));
+      : new MCPAQLHandler(Object.defineProperties({}, {
+          ...Object.getOwnPropertyDescriptors(handlerDeps),
+          memoryManager: {
+            value: this.resolve<MemoryManager>('MemoryManager'),
+            enumerable: true, configurable: true, writable: true,
+          },
+        }) as HandlerRegistry, this.resolve<ContextTracker>('ContextTracker'));
     return {
       personaHandler,
       elementCrudHandler,

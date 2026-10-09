@@ -552,6 +552,7 @@ describe('AgentManager', () => {
           executionIdentity: { kind: 'file', value: 'test-agent.md' },
         },
         { kind: 'file', value: 'test-agent.md' },
+        undefined,
       );
     });
 
