@@ -435,7 +435,7 @@ export class MemorySaveHandler {
       await this.saveMemoryTracked(key, entry.memory, entry.manager, entry);
       return true;
     } catch (error) {
-      if (entry.bindingCheck) throw error;
+      if (this.observeDeferredRefusal(entry.manager) || entry.bindingCheck) throw error;
       logger.error(
         `[MCPAQLHandler] ${context} retry failed for memory '${key}': ${error}`
       );

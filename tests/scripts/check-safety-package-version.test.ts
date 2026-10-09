@@ -13,12 +13,19 @@ interface CommandResult {
 }
 
 interface CheckResult {
-  status: 'new-version' | 'published-identical';
+  status: 'new-version' | 'published-identical' | 'published-reviewed-equivalent';
   version: string;
   gitHead?: string;
 }
 
+interface RecordedFile {
+  path: string;
+  published: string;
+  beta: string;
+}
+
 interface SafetyVersionModule {
+  compareRecordedSafetyTree(cwd: string, publishedGitHead: string, files: RecordedFile[]): boolean;
   checkSafetyPackageVersion(options: {
     cwd: string;
     runNpm: (args: string[]) => CommandResult;
@@ -29,7 +36,7 @@ interface SafetyVersionModule {
 const helperUrl = pathToFileURL(
   join(process.cwd(), 'scripts', 'check-safety-package-version.mjs')
 ).href;
-const { checkSafetyPackageVersion } = await import(helperUrl) as SafetyVersionModule;
+const { checkSafetyPackageVersion, compareRecordedSafetyTree } = await import(helperUrl) as SafetyVersionModule;
 
 function git(repo: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -51,6 +58,7 @@ describe('check-safety-package-version', () => {
   let repo: string;
   let publishedGitHead: string;
   let trustedMainHead: string;
+  let recordedFiles: RecordedFile[];
 
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'safety-version-check-'));
@@ -81,6 +89,135 @@ describe('check-safety-package-version', () => {
   afterEach(async () => {
     // Bounded retries tolerate transient ENOTEMPTY; exhaustion still rejects cleanup.
     await rm(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  async function prepareRecordedTree(): Promise<void> {
+    // Own every Git object: no network, alternates, or checkout-history dependency.
+    // These controls prove structural comparison, not the actual pinned record.
+    const safety = join(repo, 'packages', 'safety');
+    await writeFile(join(safety, 'package.json'), JSON.stringify({
+      name: '@dollhousemcp/safety', version: '1.0.4',
+      dependencies: { runtime: '1.0.0' }, exports: { '.': './dist/index.js' },
+      files: ['dist'], scripts: { build: 'tsc' },
+    }));
+    await writeFile(join(safety, 'package-lock.json'), JSON.stringify({
+      packages: { 'node_modules/typescript': { version: '5.9.3' } },
+    }));
+    await writeFile(join(safety, 'tsconfig.json'), '{"compilerOptions":{"strict":true}}');
+    await writeFile(join(safety, 'README.md'), 'owned safety documentation\n');
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'own synthetic published tree']);
+    publishedGitHead = git(repo, ['rev-parse', 'HEAD']);
+    git(repo, ['update-ref', 'refs/remotes/origin/main', publishedGitHead]);
+    const manifestPath = join(safety, 'package.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    manifest.overrides = { tool: '2.0.0' };
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const lockPath = join(safety, 'package-lock.json');
+    const lock = JSON.parse(await readFile(lockPath, 'utf8'));
+    lock.packages['node_modules/tool'] = { version: '2.0.0' };
+    await writeFile(lockPath, JSON.stringify(lock));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'own synthetic development metadata']);
+    recordedFiles = ['package.json', 'package-lock.json'].map(file => {
+      const path = `packages/safety/${file}`;
+      return {
+        path,
+        published: git(repo, ['rev-parse', `${publishedGitHead}:${path}`]),
+        beta: git(repo, ['rev-parse', `HEAD:${path}`]),
+      };
+    });
+  }
+
+  function compareRecordedTree(): boolean {
+    return compareRecordedSafetyTree(repo, publishedGitHead, recordedFiles);
+  }
+
+  function checkSyntheticPublishedVersion(version: string): CheckResult {
+    return checkSafetyPackageVersion({
+      cwd: repo,
+      runNpm: () => registryResult({ version, gitHead: publishedGitHead }),
+      log: () => undefined,
+    });
+  }
+
+  it('compares exact recorded blobs and every remaining tree entry offline', async () => {
+    await prepareRecordedTree();
+    expect(compareRecordedTree()).toBe(true);
+  });
+
+  it.each([
+    ['runtime dependency', 'dependencies', { injected: '1.0.0' }],
+    ['export', 'exports', { '.': './changed.js' }],
+    ['packed files', 'files', ['src']],
+    ['build script', 'scripts', { build: 'different-compiler' }],
+    ['extra development override', 'overrides', { typescript: '5.0.0' }],
+  ])('rejects a %s change to the reviewed manifest', async (_label, field, value) => {
+    await prepareRecordedTree();
+    const path = join(repo, 'packages', 'safety', 'package.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    manifest[field as string] = value;
+    await writeFile(path, JSON.stringify(manifest));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'mutate reviewed manifest']);
+    expect(compareRecordedTree()).toBe(false);
+  });
+
+  it.each(['src/index.ts', 'tsconfig.json', 'README.md'])('rejects any other safety path change: %s', async file => {
+    await prepareRecordedTree();
+    const path = join(repo, 'packages', 'safety', file);
+    await writeFile(path, `${await readFile(path, 'utf8')}\nchanged\n`);
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'mutate safety source or build input']);
+    expect(compareRecordedTree()).toBe(false);
+  });
+
+  it('rejects a changed compiler entry in the standalone lock', async () => {
+    await prepareRecordedTree();
+    const path = join(repo, 'packages', 'safety', 'package-lock.json');
+    const lock = JSON.parse(await readFile(path, 'utf8'));
+    lock.packages['node_modules/typescript'].version = '5.0.0';
+    await writeFile(path, JSON.stringify(lock));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'change locked compiler']);
+    expect(compareRecordedTree()).toBe(false);
+  });
+
+  it('rejects a reviewed blob with a changed tree mode', async () => {
+    await prepareRecordedTree();
+    git(repo, ['update-index', '--chmod=+x', 'packages/safety/package.json']);
+    git(repo, ['commit', '-m', 'change reviewed entry mode']);
+    expect(compareRecordedTree()).toBe(false);
+  });
+
+  it('rejects a deleted reviewed file', async () => {
+    await prepareRecordedTree();
+    git(repo, ['rm', 'packages/safety/package-lock.json']);
+    git(repo, ['commit', '-m', 'remove reviewed lock']);
+    expect(compareRecordedTree()).toBe(false);
+  });
+
+  it('does not authorize a synthetic record through the production guard', async () => {
+    await prepareRecordedTree();
+    expect(compareRecordedTree()).toBe(true);
+    expect(() => checkSyntheticPublishedVersion('1.0.4')).toThrow('Safety package source changed');
+  });
+
+  it('does not authorize another version through the production guard', async () => {
+    await prepareRecordedTree();
+    const path = join(repo, 'packages', 'safety', 'package.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    manifest.version = '1.0.5';
+    await writeFile(path, JSON.stringify(manifest));
+    git(repo, ['add', 'packages/safety']);
+    git(repo, ['commit', '-m', 'change package version']);
+    expect(() => checkSyntheticPublishedVersion('1.0.5')).toThrow('Safety package source changed');
+  });
+
+  it('fails closed when the recorded commit is unavailable', async () => {
+    await prepareRecordedTree();
+    expect(() => compareRecordedSafetyTree(repo, 'f'.repeat(40), recordedFiles))
+      .toThrow('Reading reviewed safety tree entry failed');
   });
 
   it('allows an exact published version when its trusted source tree is identical', () => {

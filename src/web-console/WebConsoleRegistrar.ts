@@ -598,6 +598,11 @@ export class WebConsoleRegistrar {
       telemetry: telemetryQuery,
       operatorConfigStore,
       systemMetrics: systemMetricsSource,
+      // The runtime registers its source after binding. Resolve lazily so this
+      // pre-start composition never caches an absent or stale metrics snapshot.
+      httpMetrics: () => container.hasRegistration('HttpRuntimeMetricsSource')
+        ? container.resolve<() => unknown>('HttpRuntimeMetricsSource')()
+        : { available: false },
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, SECURITY_ADMIN_MODULE_ID, () => createSecurityAdminModule({
