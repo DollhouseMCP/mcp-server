@@ -17,7 +17,7 @@ const liveOwnerReasons = ['LOCK_DEADLINE_EXCEEDED', 'CURRENT_PROCESS_IDENTITY_UN
   'TICKET_SPACE_EXHAUSTED', 'FILESYSTEM_OPERATION_ERROR', 'CHILD_SPAWN_ERROR', 'UNKNOWN_LOCK_ERROR'] as const;
 const liveOwnerPhases = ['ready', 'lock', 'entered', 'returned', 'complete', 'error'] as const;
 const liveOwnerErrorNames = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'Unknown'];
-const liveOwnerErrorCodes = ['ENOENT', 'EEXIST', 'EACCES', 'EPERM', 'ENOTSUP', 'EIO', 'ENOSPC', 'ETIMEDOUT'];
+const liveOwnerErrorCodes = ['ENOENT', 'EEXIST', 'EACCES', 'EPERM', 'ENOTSUP', 'EIO', 'ENOSPC', 'ETIMEDOUT', 'ERR_MODULE_NOT_FOUND'];
 
 function liveOwnerTrace() {
   const samples: { event: string; elapsedMs: number }[] = [];
@@ -52,7 +52,7 @@ const liveOwnerChildScript = `
       if (error?.message === 'Timed out waiting for OAuth state lock: ' + stateFile + '.lock') return 'LOCK_DEADLINE_EXCEEDED';
       if (error?.name === 'TypeError' && error.message === 'Unable to determine process identity for OAuth state locking') return 'CURRENT_PROCESS_IDENTITY_UNAVAILABLE';
       if (error?.message === 'OAuth state lock ticket space exhausted') return 'TICKET_SPACE_EXHAUSTED';
-      if (${JSON.stringify(liveOwnerErrorCodes)}.includes(error?.code)) return 'FILESYSTEM_OPERATION_ERROR';
+      if (${JSON.stringify(liveOwnerErrorCodes.filter(code => code !== 'ERR_MODULE_NOT_FOUND'))}.includes(error?.code)) return 'FILESYSTEM_OPERATION_ERROR';
     } catch { unavailable = true; }
     return 'UNKNOWN_LOCK_ERROR';
   };
