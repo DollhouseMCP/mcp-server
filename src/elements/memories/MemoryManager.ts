@@ -2126,6 +2126,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     data: string,
     format: 'json' | 'yaml' | 'markdown' = 'yaml'
   ): Promise<Memory> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       let parsed: any;
       let markdownContent: string | undefined;
