@@ -1448,7 +1448,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     category: CATEGORY.SECURITY,
     description: 'Submit verification code to unblock a danger zone operation',
     params: {
-      challenge_id: { type: 'string', required: true, description: 'UUID v4 challenge ID from danger zone trigger' },
+      challenge_id: { type: 'string', required: true, description: 'UUID v4 challenge ID from danger zone trigger; exact legacy safety IDs accepted for existing challenges during 2.1 migration' },
       code: { type: 'string', required: true, description: 'Verification code displayed to the user' },
     },
     returns: { name: 'VerifyResult', kind: 'object', description: 'Verification status: { verified, challenge_id, agentName?, message }' },

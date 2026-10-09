@@ -87,7 +87,7 @@ export interface StreamableHttpRuntimeOptions {
   /** Poll interval for durable runtime termination commands when runtimeSessionControl is configured. */
   runtimeCommandPollIntervalMs?: number;
   /**
-   * Optional PerformanceMonitor. When provided, /healthz includes
+   * Optional PerformanceMonitor. When provided, operator diagnostics include
    * per-op auth timing aggregates (latency p50/p95/p99, success rate)
    * under the `auth` key so operators can spot slow OAuth round-trips,
    * JWKS misses, etc.
@@ -107,6 +107,8 @@ export interface StreamableHttpRuntimeHandle {
   close(): Promise<void>;
   activeSessionCount(): number;
   pooledSessionCount(): number;
+  /** Trusted in-process diagnostics; never exposed by public health routes. */
+  getOperationalMetrics(): Record<string, unknown>;
 }
 
 /** Client name/version advertised in the MCP `initialize` handshake (`clientInfo`). */
@@ -873,28 +875,14 @@ export async function createStreamableHttpRuntime(
       connectorUrl: publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}${mcpPath}` : mcpPath,
       health: '/healthz',
       readiness: '/readyz',
-      sessionPoolSize,
-      sessionTelemetry,
     });
   });
 
   app.get('/healthz', (_req, res) => {
-    res.status(200).json({
-      ok: true,
-      transport: STREAMABLE_HTTP,
-      version: PACKAGE_VERSION,
-      sessions: {
-        active: sessions.size,
-        pooled: pooledSessions.length,
-        ...sessionTelemetry,
-      },
-      auth: options.performanceMonitor?.getAuthOpStats() ?? {},
-      authAuthorization: options.performanceMonitor?.getAuthAuthorizationFailureStats() ?? null,
-      memory: getProcessMemorySnapshot(),
-    });
+    res.status(200).json({ ok: true, version: PACKAGE_VERSION });
   });
 
-  app.get('/readyz', (_req, res, next) => {
+  app.get('/readyz', (_req, res) => {
     void (async () => {
       try {
         // Round 5 / H3: when the embedded AS is in multi-user mode and
@@ -903,28 +891,29 @@ export async function createStreamableHttpRuntime(
         // /readyz, Kubernetes routes traffic to the pod and operators
         // see a flood of 503s with no probe signal that something
         // requires action. Fail-closed shape: bootstrap-incomplete →
-        // 503 with reason='bootstrap_required'.
+        // 503 without disclosing bootstrap or operational diagnostics.
         if (options.oauthProvider?.isReadyForTraffic) {
           const ready = await options.oauthProvider.isReadyForTraffic();
           if (!ready) {
             res.status(503).json({
               ready: false,
-              reason: 'bootstrap_required',
-              transport: STREAMABLE_HTTP,
+              version: PACKAGE_VERSION,
             });
             return;
           }
         }
         res.status(200).json({
           ready: true,
-          transport: STREAMABLE_HTTP,
-          activeSessions: sessions.size,
-          pooledSessions: pooledSessions.length,
-          sessionTelemetry,
-          memory: getProcessMemorySnapshot(),
+          version: PACKAGE_VERSION,
         });
-      } catch (err) {
-        next(err);
+      } catch {
+        // A public probe must not delegate private failures to Express's error page.
+        try {
+          logger.warn('Readiness probe failed');
+        } catch {
+          // Diagnostic listeners cannot change the closed public response.
+        }
+        res.status(503).json({ ready: false, version: PACKAGE_VERSION });
       }
     })();
   });
@@ -1237,6 +1226,14 @@ export async function createStreamableHttpRuntime(
     isHttps,
     activeSessionCount: () => sessions.size,
     pooledSessionCount: () => pooledSessions.length,
+    getOperationalMetrics: () => ({
+      available: true,
+      version: PACKAGE_VERSION,
+      sessions: { active: sessions.size, pooled: pooledSessions.length, ...sessionTelemetry },
+      auth: options.performanceMonitor?.getAuthOpStats() ?? {},
+      authAuthorization: options.performanceMonitor?.getAuthAuthorizationFailureStats() ?? null,
+      memory: getProcessMemorySnapshot(),
+    }),
     close: async () => {
       removeSignalHandlers();
       await shutdown();

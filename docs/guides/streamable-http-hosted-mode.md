@@ -47,8 +47,8 @@ Supporting endpoints:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /healthz` | Health status with session telemetry and memory usage |
-| `GET /readyz` | Readiness status with pool and telemetry details |
+| `GET /healthz` | Public status and package version only |
+| `GET /readyz` | Public readiness status and package version only |
 | `GET /version` | Server name and version |
 | `GET /` | Server info including transport type and MCP path |
 
@@ -135,32 +135,9 @@ docker inspect --format='{{.State.Health.Status}}' dollhousemcp-http
 docker inspect --format='{{json .State.Health}}' dollhousemcp-http | jq
 ```
 
-The `/healthz` response includes session telemetry:
+Public probes intentionally exclude session, authentication and process-memory diagnostics. `/healthz` returns `{"ok":true,"version":"…"}`; `/readyz` returns `{"ready":true,"version":"…"}` (or HTTP 503 with `ready:false`). Root discovery exposes endpoint information without pool or session counters.
 
-```json
-{
-  "ok": true,
-  "transport": "streamable-http",
-  "version": "2.0.12",
-  "sessions": {
-    "active": 2,
-    "pooled": 0,
-    "created": 15,
-    "disposed": 13,
-    "expired": 0,
-    "poolHits": 0,
-    "poolMisses": 15,
-    "rateLimitedRequests": 0
-  },
-  "memory": {
-    "rss": 215056384,
-    "heapTotal": 134934528,
-    "heapUsed": 112370048,
-    "external": 3976256,
-    "arrayBuffers": 318641
-  }
-}
-```
+Operators obtain aggregate HTTP diagnostics at `GET /api/v1/admin/operate/metrics/http`. This console route requires an authenticated session, the existing `console:admin:operate` capability and current administrative step-up. The operational privacy projector excludes session identities and arbitrary source fields; the existing admin audit records access. No new public metrics endpoint is provided.
 
 ## Session durability across restarts
 

@@ -7,7 +7,7 @@
  * @since v1.0.0
  */
 
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import {
   SafetyTier,
   SafetyConfig,
@@ -283,8 +283,7 @@ export function createVerificationChallenge(
   expirationMinutes: number = DEFAULT_VERIFICATION_EXPIRATION_MINUTES,
   logger: AuditLogger = defaultAuditLogger
 ): VerificationChallenge {
-  const randomPart = randomBytes(6).toString('hex');
-  const challengeId = `challenge_${Date.now()}_${randomPart}`;
+  const challengeId = randomUUID();
   const expiresAt = new Date(
     Date.now() + expirationMinutes * 60 * 1000
   ).toISOString();
