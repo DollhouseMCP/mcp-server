@@ -709,7 +709,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
       throw cause;
     }
-    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: mode !== 'public' });
+    const memory = await this.hydrateDefinitionFromContent(snapshot.content, locator, { suppressLoadPolicy: true });
     memory.setFilePath(locator);
     const definition = mode === 'lookup' ? this.parseContent(snapshot.content) : undefined;
     if (definition) {
@@ -1384,6 +1384,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     repairedMemories: Array<{ original: string; repaired: string; path: string }>;
     errorDetails: Array<{ name: string; error: string }>;
   }> {
+    if (this.guardedUpdateAdapter) throw new Error('Name repair is unavailable for guarded memory updates; no memories were processed.');
     const result = {
       scanned: 0,
       repaired: 0,
@@ -1757,6 +1758,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async installSeedMemories(): Promise<void> {
     logger.info('[MemoryManager] 🌱 Starting seed memory installation...');
     try {
+      if (this.guardedUpdateAdapter) throw new Error('Seed installation is unavailable for guarded memory updates; no seeds were changed.');
       // Define the seed file
       const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
       logger.debug(`[MemoryManager] Step 1: Target seed file: ${seedFileName}`);
@@ -2126,6 +2128,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     data: string,
     format: 'json' | 'yaml' | 'markdown' = 'yaml'
   ): Promise<Memory> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       let parsed: any;
       let markdownContent: string | undefined;
