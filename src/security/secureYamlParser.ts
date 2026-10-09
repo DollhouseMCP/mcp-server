@@ -33,6 +33,7 @@
 
 import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
+import { assertSupportedFrontmatterLanguage } from './frontmatterLanguage.js';
 import { SecurityError } from '../errors/SecurityError.js';
 import { ContentValidator } from './contentValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
@@ -379,13 +380,21 @@ export class SecureYamlParser {
    * Safe wrapper for gray-matter with security validations
    */
   static safeMatter(input: string, options?: matter.GrayMatterOption<string, any>, secureOptions?: SecureParseOptions): matter.GrayMatterFile<string> {
+    // Language selection happens before a YAML engine is invoked, including option aliases.
+    assertSupportedFrontmatterLanguage(input, options);
     // First, use our secure parser (for validation)
     this.parse(input, secureOptions);
 
     // Then use gray-matter with custom engines
     return matter(input, {
       ...options,
+      // Engine ownership belongs to this secure wrapper, including alias lookups.
+      parsers: undefined,
       engines: {
+        json: {
+          parse: JSON.parse,
+          stringify: (obj: any) => JSON.stringify(obj, null, 2)
+        },
         yaml: {
           parse: (str: string) => {
             // Use our secure YAML parsing

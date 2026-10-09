@@ -1,3 +1,4 @@
+import { createMockMemoryManager } from '../../../helpers/di-mocks.js';
 import { INTEGRATION_ENTRY_POINTS } from '../../../../src/security/IntegrationEntryPoint.js';
 import { env } from '../../../../src/config/env.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
@@ -20,7 +21,7 @@ function setup(configured = true) {
   const gateway = { request } as unknown as AuthorizedIntegrationGateway;
   const gatekeeper = new Gatekeeper(undefined, { enableAuditLogging: false }, undefined, 'request-tests', new StaticAuditHmacKeyResolver('ab'.repeat(32)));
   const metric = jest.fn();
-  const handler = new MCPAQLHandler({ gatekeeper, operationMetricsTracker: { record: metric }, integrationRequestGateway: configured ? gateway : undefined,
+  const handler = new MCPAQLHandler({ gatekeeper, memoryManager: createMockMemoryManager(), operationMetricsTracker: { record: metric }, integrationRequestGateway: configured ? gateway : undefined,
     elementCRUD: { getActiveElementsForPolicy: async () => [], getActiveElements: async () => [] },
   } as unknown as HandlerRegistry);
   return { handler, request, gateway, metric, gatekeeper };
@@ -142,7 +143,7 @@ describe.each(['discrete', 'execute', 'single', 'legacy'] as const)('request pol
     const gateway = new AuthorizedIntegrationGateway({ gateway: raw as unknown as IntegrationRequestGateway,
       policyEnforcer: new IntegrationRequestPolicyEnforcer({ gatekeeper, getActiveElements: async () => elements }),
     });
-    const handler = new MCPAQLHandler({ gatekeeper, integrationRequestGateway: gateway,
+    const handler = new MCPAQLHandler({ gatekeeper, memoryManager: createMockMemoryManager(), integrationRequestGateway: gateway,
       elementCRUD: { getActiveElementsForPolicy: async () => elements, getActiveElements: async () => [] },
     } as unknown as HandlerRegistry);
     const request = { ...params, method: 'POST', body: { text: 'approved bytes' } };

@@ -1069,7 +1069,8 @@ describe('bound sync and submission route contracts (controlled remote ports)', 
   });
 
   function submit(f: Awaited<ReturnType<typeof fixture>>, matchMemory: boolean) {
-    const file=path.join(f.directory,'skill.md');
+    // Controlled index discovery supplies a safe relative path; stat/read are mocked.
+    const file='skill.md';
     const auth={getAuthStatus:jest.fn(async()=>({isAuthenticated:false}))};
     const files={stat:jest.fn(async()=>({size:20})),readFile:jest.fn(async()=> '---\nname: Owner\n---\nSupported content')};
     const root=new SubmitToPortfolioTool(f.container.resolve('APICache'),{memoryRegistry:f.registry,authManager:auth,
