@@ -30,8 +30,10 @@
  */
 
 import { env } from '../../config/env.js';
+import { Memory } from '../../elements/memories/Memory.js';
 import { createStdioSession } from '../../context/StdioSession.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
+import type { PathService } from '../../paths/PathService.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { SessionIdResolver, UserIdResolver } from '../../database/UserContext.js';
 
@@ -147,7 +149,7 @@ export class DatabaseServiceRegistrar {
       const registry = container.hasRegistration('SessionActivationRegistry')
         ? container.resolve<SessionActivationRegistry>('SessionActivationRegistry')
         : undefined;
-      return createUserIdResolver(tracker, registry);
+      return createUserIdResolver(tracker, registry, env.DOLLHOUSE_DATABASE_MEMORY_GUARDED);
     }, { override: true });
     container.register('SessionIdResolver', () => {
       const tracker = container.resolve<ContextTracker>('ContextTracker');
@@ -159,9 +161,49 @@ export class DatabaseServiceRegistrar {
     // the DB-specific resolver (not the PathsServiceRegistrar fallback).
     const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
     const sessionIdResolver = container.resolve<SessionIdResolver>('SessionIdResolver');
+    const { DatabaseTenantMemoryRegistry } = await import('../../storage/DatabaseTenantMemoryRegistry.js');
+    const { requireDatabaseMemoryStartupAdmission } = await import('../../storage/DatabaseMemoryStartupAdmission.js');
+    if (env.DOLLHOUSE_DATABASE_MEMORY_GUARDED && !container.hasRegistration('DatabaseTenantMemoryRegistry')) {
+      const tracker = container.resolve<ContextTracker>('ContextTracker');
+      const registry = new DatabaseTenantMemoryRegistry({
+        db: result.db, getEffectiveTenant: userIdResolver,
+        createManagerDeps: (factory, resolver) => container.resolve<import('./ElementManagerServiceRegistrar.js').DatabaseMemoryManagerDepsFactory>(
+          'DatabaseMemoryManagerDepsFactory')(factory, resolver),
+        getAttribution: () => {
+          const session = tracker.requireSessionContext('Durable memory attribution');
+          return { contextRoot: container.resolve<PathService>('PathService').getUserPortfolioDir(userIdResolver()),
+            sessionId: session.sessionId, transport: session.transport };
+        },
+      });
+      container.register('DatabaseTenantMemoryRegistry', () => registry);
+      container.resolve('DatabaseTenantMemoryRegistry');
+    }
+    const memoryRegistry = container.hasRegistration('DatabaseTenantMemoryRegistry')
+      ? container.resolve<unknown>('DatabaseTenantMemoryRegistry') : undefined;
+    if (memoryRegistry !== undefined && (!(memoryRegistry instanceof DatabaseTenantMemoryRegistry) ||
+      !memoryRegistry.matchesDatabase(result.db))) {
+      throw new Error('Database tenant memory composition must bind the actual application database');
+    }
+    // Before startup admission awaits or console/background exposure. The
+    // process cannot inherit another container's unattributed static owner.
+    if (memoryRegistry) Memory.refuseUnattributedAccess();
+    // Always execute, including configuration-off. An RLS-filtered app query
+    // cannot prove that another served tenant has no durable protected mode.
+    await requireDatabaseMemoryStartupAdmission(result.db, systemConnection.db, memoryRegistry !== undefined);
+    if (memoryRegistry) {
+      const { DatabaseMemoryAccountDeletionBoundary } = await import('../../storage/DatabaseMemoryAccountDeletionBoundary.js');
+      const boundary = new DatabaseMemoryAccountDeletionBoundary(systemConnection.db);
+      container.register('DatabaseMemoryAccountDeletionBoundary', () => boundary);
+      container.resolve('DatabaseMemoryAccountDeletionBoundary');
+    }
+    const { DatabaseMemoryModeEnforcingStorageLayerFactory } = await import(
+      '../../storage/DatabaseMemoryModeEnforcingStorageLayerFactory.js'
+    );
     container.register(
       'StorageLayerFactory',
-      () => new DatabaseStorageLayerFactory(result.db, userIdResolver),
+      () => memoryRegistry
+        ? new DatabaseMemoryModeEnforcingStorageLayerFactory(result.db, userIdResolver)
+        : new DatabaseStorageLayerFactory(result.db, userIdResolver),
       { override: true },
     );
     container.register(
@@ -207,6 +249,62 @@ export class DatabaseServiceRegistrar {
       ...createStdioSession(),
       userId: result.userId,
     }), { override: true });
+  }
+
+  /** Cold startup only. No request handler receives this privileged boot method. */
+  public async qualifyRegisteredMemoryTenants(container: DiContainerFacade): Promise<void> {
+    if (!container.hasRegistration('DatabaseTenantMemoryRegistry')) return;
+    const { sql } = await import('drizzle-orm');
+    const { withSystemContext } = await import('../../database/admin.js');
+    const { DatabaseTenantMemoryRegistry } = await import('../../storage/DatabaseTenantMemoryRegistry.js');
+    const { qualifyDatabaseMemoryTenant } = await import('../../storage/DatabaseMemoryTenantQualification.js');
+    const { requireDatabaseMemoryStartupAdmission } = await import('../../storage/DatabaseMemoryStartupAdmission.js');
+    const registry = container.resolve<InstanceType<typeof DatabaseTenantMemoryRegistry>>('DatabaseTenantMemoryRegistry');
+    const appDb = container.resolve<DatabaseInstance>('DatabaseInstance');
+    const systemDb = container.resolve<DatabaseInstance>('SystemDatabaseInstance');
+    if (!(registry instanceof DatabaseTenantMemoryRegistry) || !registry.matchesDatabase(appDb)) {
+      throw new Error('Boot memory registry must bind the actual application database');
+    }
+    const tracker = container.resolve<ContextTracker>('ContextTracker');
+    let last: string | null = null;
+    try {
+      for (;;) {
+        // Settle the bounded mode page before acquiring either pool for the
+        // owner qualifier. This remains safe when each pool has size one.
+        // Cold all-replica mode/writer exclusion is independently required;
+        // this page loop is not a hot promotion or cross-tenant snapshot fence.
+        const page = await withSystemContext(systemDb, async tx => {
+          await tx.execute(sql`SET TRANSACTION READ ONLY`);
+          await tx.execute(sql`SET LOCAL statement_timeout='5s'`);
+          return tx.execute(sql`SELECT user_id::text AS tenant FROM public.memory_backend_modes
+            WHERE backend='database' AND mode IN ('guarded','read_only')
+              AND (${last}::uuid IS NULL OR user_id > ${last}::uuid) ORDER BY user_id LIMIT 100`);
+        });
+        if (!page.length) break;
+        if (page.length > 100) throw new Error('Invalid protected tenant boot page');
+        for (const row of page) {
+          const tenant = row.tenant;
+          if (typeof tenant !== 'string' || last !== null && tenant <= last) throw new Error('Invalid tenant boot order');
+          const session = Object.freeze({ userId: tenant, sessionId: `memory-boot-${tenant}`, tenantId: null,
+            transport: 'stdio' as const, createdAt: Date.now() });
+          await tracker.runAsync(tracker.createSessionContext('background-task', session), async () => {
+            const capture = registry.capture(tenant);
+            const manager = await registry.resolve(capture);
+            const checkpoint = () => registry.assertCurrent(capture);
+            await registry.qualify(capture, async identity => {
+              checkpoint();
+              if (identity.tenant !== tenant || identity.backend !== 'database') throw new Error('Memory boot identity changed');
+              await qualifyDatabaseMemoryTenant({ appDb, systemDb, tenant, manager, checkpoint });
+              checkpoint();
+            });
+          });
+          last = tenant;
+        }
+      }
+      // Unknown/malformed or mismatched database state still refuses startup.
+      // Newly observed protected slots remain closed; no on-request adoption.
+      await requireDatabaseMemoryStartupAdmission(appDb, systemDb, true);
+    } catch (cause) { registry.close(); throw cause; }
   }
 
   private async registerWebConsoleProductionDatabaseReadiness(

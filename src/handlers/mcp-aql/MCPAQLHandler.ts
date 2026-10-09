@@ -24,6 +24,8 @@ import { isIntegrationPolicyOperation } from './IntegrationManagementOperations.
  * - data: never (discriminated union enforces this)
  */
 
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../../storage/TenantMemoryOperationProvider.js';
+import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import { OperationRegistry } from './OperationRegistry.js';
 import type { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalog } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 import { type CRUDEndpoint } from './OperationRouter.js';
@@ -37,6 +39,7 @@ import { SearchHandler } from './SearchHandler.js';
 import { ElementCRUDDispatcher } from './ElementCRUDDispatcher.js';
 import { ConfigDispatcher } from './ConfigDispatcher.js';
 import { AgentExecutionHandler } from './AgentExecutionHandler.js';
+import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
 import { GatekeeperHandler } from './GatekeeperHandler.js';
 import { MemorySaveHandler, type SaveContextScope } from './MemorySaveHandler.js';
 import { buildOperationSummary } from './OperationSummary.js';
@@ -76,18 +79,18 @@ import { generateDisplayCode } from '@dollhousemcp/safety';
 import { randomUUID } from 'node:crypto';
 import type { ElementCRUDHandler } from '../ElementCRUDHandler.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
-import type { AgentManager } from '../../elements/agents/AgentManager.js';
+import type { AgentManager, AgentMemoryOperationBinding } from '../../elements/agents/AgentManager.js';
 import type { CircuitBreakerState } from '../../elements/agents/resilienceEvaluator.js';
 import type { ResilienceMetricsTracker } from '../../elements/agents/resilienceMetrics.js';
 import type { TemplateRenderer } from '../../utils/TemplateRenderer.js';
 import type { ElementQueryService } from '../../services/query/ElementQueryService.js';
-import type { CollectionHandler } from '../CollectionHandler.js';
-import type { PortfolioHandler } from '../PortfolioHandler.js';
+import { CollectionHandler } from '../CollectionHandler.js';
+import { PortfolioHandler } from '../PortfolioHandler.js';
 import type { GitHubAuthHandler } from '../GitHubAuthHandler.js';
 import type { ConfigHandler } from '../ConfigHandler.js';
-import type { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
+import { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
 import type { PersonaHandler } from '../PersonaHandler.js';
-import type { SyncHandler } from '../SyncHandlerV2.js';
+import { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
 import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { LogQueryOptions } from '../../logging/types.js';
@@ -450,15 +453,27 @@ export interface CorrelationIdProvider extends SaveContextScope {
   getSessionContext?(): { sessionId: string } | undefined;
 }
 
+interface MemoryCallerView {
+  readonly handlers: HandlerRegistry;
+  readonly operation: BoundMemoryOperation;
+  readonly saves: MemorySaveHandler;
+}
+
+export type TenantHandlerRegistry = Omit<HandlerRegistry, 'memoryManager'>;
+
 export class MCPAQLHandler {
+  private readonly handlers: TenantHandlerRegistry;
   readonly operations: OperationRegistry;
   private readonly gatekeeper: Gatekeeper;
-  private readonly searchHandler: SearchHandler;
-  private readonly elementCRUDDispatcher: ElementCRUDDispatcher;
+  private readonly searchHandler?: SearchHandler;
+  private readonly elementCRUDDispatcher?: ElementCRUDDispatcher;
   private readonly configDispatcher: ConfigDispatcher;
-  private readonly agentExecutionHandler: AgentExecutionHandler;
-  private readonly gatekeeperHandler: GatekeeperHandler;
-  private readonly memorySaveHandler: MemorySaveHandler;
+  private readonly agentExecutionHandler?: AgentExecutionHandler;
+  private readonly tenantAgentExecutionLock = new AsyncKeyedLock();
+  private readonly agentMemoryBindings = new WeakMap<HandlerRegistry, AgentMemoryOperationBinding>();
+  private readonly gatekeeperHandler?: GatekeeperHandler;
+  private readonly memorySaveHandler?: MemorySaveHandler;
+  private readonly tenantSaveHandlers = new Map<MemoryManager, MemorySaveHandler>();
   /** Issue #1947: Per-session rate limiters (prevents cross-session rate limit exhaustion) */
   private readonly permissionPromptLimiters = new Map<string, RateLimiter>();
   private readonly cliApprovalLimiters = new Map<string, RateLimiter>();
@@ -526,10 +541,26 @@ export class MCPAQLHandler {
    */
   private readonly abortedGoals = new Set<string>();
 
+  constructor(handlers: HandlerRegistry, contextTracker?: CorrelationIdProvider);
+  constructor(handlers: TenantHandlerRegistry, contextTracker: CorrelationIdProvider | undefined,
+    memoryProvider: TenantMemoryOperationProvider);
   constructor(
-    private readonly handlers: HandlerRegistry,
+    handlers: HandlerRegistry | TenantHandlerRegistry,
     private readonly contextTracker?: CorrelationIdProvider,
+    private readonly memoryProvider?: TenantMemoryOperationProvider,
   ) {
+    if (arguments.length >= 3) {
+      if (!(memoryProvider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual trusted memory provider required');
+      memoryProvider.assertContextTracker(contextTracker as ContextTracker | undefined);
+    }
+    if (!memoryProvider && (!('memoryManager' in handlers) || !handlers.memoryManager)) {
+      throw new TypeError('Ordinary construction requires a fixed memory manager');
+    }
+    if (memoryProvider) {
+      const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(handlers);
+      delete descriptors.memoryManager;
+      this.handlers = Object.defineProperties({}, descriptors) as TenantHandlerRegistry;
+    } else this.handlers = handlers;
     this.operations = new OperationRegistry(handlers.integrationOperationCatalog, handlers.integrationRequestGateway);
     // Initialize normalizers for schema-driven operations (Issue #243)
     initializeNormalizers();
@@ -539,38 +570,71 @@ export class MCPAQLHandler {
       throw new Error('Gatekeeper instance is required in HandlerRegistry. Provide one via the DI container.');
     }
     this.gatekeeper = gatekeeper;
-    this.searchHandler = new SearchHandler(handlers);
-    this.elementCRUDDispatcher = new ElementCRUDDispatcher(handlers);
-    this.configDispatcher = new ConfigDispatcher(handlers);
-    // Pass the context tracker so pending memory saves can re-establish their
-    // per-user context during a shutdown flush (#2329 multi-user correctness).
-    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name), contextTracker);
-    this.agentExecutionHandler = new AgentExecutionHandler(
-      handlers,
-      this.executingAgents,
-      this.abortedGoals,
-      (name) => this.sessionKey(name),
-      this.operations,
-      contextTracker,
-    );
-    this.gatekeeperHandler = new GatekeeperHandler({
+    this.configDispatcher = new ConfigDispatcher(this.handlers);
+    // Only the ordinary constructor owns fixed-manager dispatchers. Configured
+    // dispatch creates a complete local view after authentic capture/resolve.
+    if (!memoryProvider) {
+      const fixed = handlers as HandlerRegistry;
+      this.searchHandler = new SearchHandler(fixed);
+      this.elementCRUDDispatcher = new ElementCRUDDispatcher(fixed);
+      this.memorySaveHandler = new MemorySaveHandler(fixed, name => this.sessionKey(name), contextTracker);
+      this.agentExecutionHandler = this.createAgentExecutionHandler(fixed);
+      this.gatekeeperHandler = this.createGatekeeperHandler(fixed);
+    }
+  }
+
+  private get fixedHandlers(): HandlerRegistry {
+    if (this.memoryProvider) throw new Error('Authentic selected memory operation required');
+    return this.handlers as HandlerRegistry;
+  }
+  private requireOrdinary<T>(value: T | undefined): T {
+    if (!value || this.memoryProvider) throw new Error('Authentic selected memory operation required');
+    return value;
+  }
+  private createAgentExecutionHandler(handlers: HandlerRegistry): AgentExecutionHandler {
+    const binding = this.agentMemoryBindings.get(handlers);
+    if (this.memoryProvider && !binding) throw new Error('Authentic agent caller view required');
+    return new AgentExecutionHandler(handlers, this.executingAgents, this.abortedGoals,
+      name => this.sessionKey(name), this.operations, this.contextTracker,
+      binding ? {binding,operationLock:this.tenantAgentExecutionLock} : undefined);
+  }
+
+  private createGatekeeperHandler(handlers: HandlerRegistry): GatekeeperHandler {
+    return new GatekeeperHandler({
       handlers,
       operations: this.operations,
       gatekeeper: this.gatekeeper,
-      contextTracker,
+      contextTracker: this.contextTracker,
       executingAgents: this.executingAgents,
       verificationMetrics: this.verificationMetrics,
-      getActiveElements: (sessionId?: string) => this.getActiveElements(sessionId),
-      getPolicyReportElements: (sessionId?: string) => this.getPolicyReportElements(sessionId),
+      getActiveElements: (sessionId?: string) => this.getActiveElements(sessionId, handlers),
+      getPolicyReportElements: (sessionId?: string) => this.getPolicyReportElements(sessionId, handlers),
       getEndpointForOperation: (operation: string) => this.getEndpointForOperation(operation),
       issueDeadlockReliefChallenge: () => this.issueDeadlockReliefChallenge(),
-      completeDeadlockRelief: (challengeId: string, code: string) => this.completeDeadlockRelief(challengeId, code),
+      completeDeadlockRelief: (challengeId: string, code: string) => this.completeDeadlockRelief(challengeId, code, handlers),
       resolveVerificationRateLimiter: () => this.resolveVerificationRateLimiter(),
       resolvePermissionPromptLimiter: () => this.resolvePermissionPromptLimiter(),
       resolveCliApprovalLimiter: () => this.resolveCliApprovalLimiter(),
       buildRateLimitDeny: (limiterName, toolName, status, riskLevel, reason) =>
         this.buildRateLimitDeny(limiterName, toolName, status, riskLevel, reason),
     });
+  }
+
+  private async captureMemoryView(): Promise<MemoryCallerView | undefined> {
+    if (!this.memoryProvider) return undefined;
+    const capture = this.memoryProvider.capture();
+    const operation = await this.memoryProvider.resolve(capture);
+    this.memoryProvider.assertOperation(operation);
+    const elementCRUD = this.handlers.elementCRUD.bindCapturedMemoryOperation(this.memoryProvider, operation);
+    const handlers = Object.freeze({ ...this.handlers, memoryManager: operation.manager, elementCRUD });
+    this.agentMemoryBindings.set(handlers, Object.freeze({provider:this.memoryProvider,operation}));
+    let saves = this.tenantSaveHandlers.get(operation.manager);
+    if (!saves) {
+      saves = new MemorySaveHandler({ ...this.handlers, memoryManager: operation.manager },
+        name => this.sessionKey(name), this.contextTracker, true);
+      this.tenantSaveHandlers.set(operation.manager, saves);
+    }
+    return Object.freeze({ handlers, operation, saves });
   }
 
   /**
@@ -651,7 +715,9 @@ export class MCPAQLHandler {
   cleanupSession(sessionId: string): void {
     const prefix = `${sessionId}:`;
 
-    this.memorySaveHandler.cleanupSession(sessionId);
+    if (this.memoryProvider) {
+      for (const saves of this.tenantSaveHandlers.values()) saves.cleanupSession(sessionId);
+    } else this.requireOrdinary(this.memorySaveHandler).cleanupSession(sessionId);
 
     // Remove session-keyed entries from tracking collections
     this.deleteByPrefix(this.executingAgents, prefix);
@@ -675,6 +741,7 @@ export class MCPAQLHandler {
     operation: string,
     elementType: AqlElementType | undefined,
     params: Record<string, unknown>,
+    view?: MemoryCallerView,
   ): void {
     if (operation !== 'delete_element') return;
     // The type may arrive as the resolved top-level elementType OR inside params
@@ -684,7 +751,8 @@ export class MCPAQLHandler {
     if (!rawType || normalizeMCPAQLElementType(rawType) !== AqlElementType.Memory) return;
     const name = (params.element_name ?? params.name) as string | undefined;
     if (name) {
-      this.memorySaveHandler.cleanupDeletedMemory(name);
+      if (view) view.saves.cleanupDeletedMemory(name, view.operation.assertCurrent);
+      else this.requireOrdinary(this.memorySaveHandler).cleanupDeletedMemory(name);
     }
   }
 
@@ -719,14 +787,14 @@ export class MCPAQLHandler {
    * @throws When the authoritative policy set cannot be loaded. Proceeding
    *         without it would silently disable active-element restrictions.
    */
-  private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
+  private async getActiveElements(sessionId?: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<ActiveElement[]> {
     try {
       const rawElements = sessionId
-        ? await this.handlers.elementCRUD.getPolicyElementsForReport(
+        ? await handlers.elementCRUD.getPolicyElementsForReport(
           sessionId,
           { allowCoalescing: false },
         )
-        : await this.handlers.elementCRUD.getActiveElementsForPolicy({ allowCoalescing: false });
+        : await handlers.elementCRUD.getActiveElementsForPolicy({ allowCoalescing: false });
       const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,
         name: el.name,
@@ -770,12 +838,15 @@ export class MCPAQLHandler {
    * need Gatekeeper externalRestrictions enforcement.
    */
   async getActiveElementsForGatekeeperPolicy(): Promise<ActiveElement[]> {
-    return this.getActiveElements();
+    const view = this.memoryProvider ? await this.captureMemoryView() : undefined;
+    const result = await this.getActiveElements(undefined, view?.handlers);
+    view?.operation.assertCurrent();
+    return result;
   }
 
-  private async getPolicyReportElements(sessionId?: string): Promise<ActiveElement[]> {
+  private async getPolicyReportElements(sessionId?: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<ActiveElement[]> {
     try {
-      const rawElements = await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId);
+      const rawElements = await handlers.elementCRUD.getPolicyElementsForReport(sessionId);
       return rawElements.map((el) => ({
         type: el.type,
         name: el.name,
@@ -791,7 +862,7 @@ export class MCPAQLHandler {
       }));
     } catch (error) {
       logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
-      return sessionId ? [] : this.getActiveElements();
+      return sessionId ? [] : this.getActiveElements(undefined, handlers);
     }
   }
 
@@ -959,7 +1030,9 @@ export class MCPAQLHandler {
         if (identityError) return this.failure(identityError, startTime);
       }
 
-      const gatekeeperFailure = await this.enforceOperationGatekeeper(parsedInput, endpoint, startTime);
+      const view = this.memoryProvider ? await this.captureMemoryView() : undefined;
+      const gatekeeperFailure = await this.enforceOperationGatekeeper(parsedInput, endpoint, startTime, view?.handlers);
+      view?.operation.assertCurrent();
       if (gatekeeperFailure) return gatekeeperFailure;
 
       // Step 3: Route operation to handler reference
@@ -977,8 +1050,9 @@ export class MCPAQLHandler {
         operation,
         elementType,
         params: mergedParams,
-      }, context ?? integrationInvocationContext(input, 'mcp_aql_execute'));
-      this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
+      }, context ?? integrationInvocationContext(input, 'mcp_aql_execute'), view);
+      view?.operation.assertCurrent();
+      this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams, view);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency
@@ -992,6 +1066,7 @@ export class MCPAQLHandler {
       this.handlers.operationMetricsTracker?.record(operationName, endpoint, durationMs, integrationError === undefined);
       const typeSuffix = elementType ? ':' + elementType : '';
       logger.debug(`[MCP-AQL] ${endpoint} ${operation}${typeSuffix} (${durationMs.toFixed(1)}ms)`);
+      view?.operation.assertCurrent();
       return this.success(data, startTime);
     } catch (error) {
       // Catch all errors and return as OperationFailure
@@ -1021,7 +1096,8 @@ export class MCPAQLHandler {
   private async enforceOperationGatekeeper(
     input: OperationInput,
     endpoint: CRUDEndpoint,
-    startTime: number
+    startTime: number,
+    handlers: HandlerRegistry = this.fixedHandlers,
   ): Promise<OperationFailure | null> {
     const { operation, params } = input;
     const elementType = resolveInputElementType(input);
@@ -1030,7 +1106,7 @@ export class MCPAQLHandler {
       return null;
     }
 
-    const activeElements = await this.getActiveElements();
+    const activeElements = await this.getActiveElements(undefined, handlers);
     const decision = this.gatekeeper.enforce({
       operation,
       endpoint,
@@ -1040,7 +1116,7 @@ export class MCPAQLHandler {
     }, this.operations);
 
     this.recordGatekeeperDecision(decision);
-    this.handleDeniedGatekeeperDecision(decision, operation, endpoint, elementType, params);
+    this.handleDeniedGatekeeperDecision(decision, operation, endpoint, elementType, params, handlers);
     return this.blockGatekeeperPolicyEdit(decision, operation, elementType, params, startTime);
   }
 
@@ -1058,7 +1134,8 @@ export class MCPAQLHandler {
     operation: string,
     endpoint: CRUDEndpoint,
     elementType: string | undefined,
-    params?: Record<string, unknown>
+    params: Record<string, unknown> | undefined,
+    handlers: HandlerRegistry,
   ): void {
     if (decision.allowed) {
       return;
@@ -1068,7 +1145,7 @@ export class MCPAQLHandler {
       return;
     }
 
-    this.agentExecutionHandler.recordGatekeeperBlock(
+    this.createAgentExecutionHandler(handlers).recordGatekeeperBlock(
       operation,
       elementType,
       (decision.reason as string | undefined) ?? 'Operation blocked by policy',
@@ -1316,9 +1393,48 @@ export class MCPAQLHandler {
   private async dispatch(
     handlerRef: string,
     input: OperationInput,
-    context?: IntegrationInvocationContext
+    context?: IntegrationInvocationContext,
+    view?: MemoryCallerView,
   ): Promise<unknown> {
-    const { operation, params } = input;
+    view?.operation.assertCurrent();
+    const handlers = view?.handlers ?? this.fixedHandlers;
+    const [module, method] = handlerRef.split('.');
+    if (view && module === 'Agent') {
+      throw new Error('Tenant-bound agent memory composition is required');
+    }
+    if (view && module === 'EnhancedIndex') {
+      const handler = handlers.enhancedIndexHandler;
+      if (!(handler instanceof EnhancedIndexHandler)) throw new Error('Tenant-bound portfolio/index memory composition is required');
+      return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
+        this.dispatchInView(handlerRef,input,context,view,{...handlers,enhancedIndexHandler:bound}));
+    }
+    if (view && module === 'Collection') {
+      const handler = handlers.collectionHandler;
+      if (!(handler instanceof CollectionHandler)) throw new Error('Tenant-bound collection composition required');
+      return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
+        this.dispatchInView(handlerRef,input,context,view,{...handlers,collectionHandler:bound}));
+    }
+    if (view && module === 'Portfolio') {
+      if (method === 'elementManager') {
+        const handler = handlers.syncHandler;
+        if (!(handler instanceof SyncHandler)) throw new Error('Tenant-bound sync composition required');
+        return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
+          this.dispatchInView(handlerRef,input,context,view,{...handlers,syncHandler:bound}));
+      }
+      const handler = handlers.portfolioHandler;
+      if (!(handler instanceof PortfolioHandler)) throw new Error('Tenant-bound portfolio composition required');
+      return handler.withCapturedMemoryOperation(this.memoryProvider!,view.operation,bound =>
+        this.dispatchInView(handlerRef,input,context,view,{...handlers,portfolioHandler:bound}));
+    }
+
+    return this.dispatchInView(handlerRef,input,context,view,handlers);
+  }
+
+  private async dispatchInView(handlerRef:string,input:OperationInput,context:IntegrationInvocationContext|undefined,
+    view:MemoryCallerView|undefined,handlers:HandlerRegistry):Promise<unknown> {
+    view?.operation.assertCurrent();
+    const {operation,params}=input;
+    const [module,method]=handlerRef.split('.');
 
     // Issue #247: Schema-driven dispatch for configured operations
     // This eliminates the need for manual switch statements
@@ -1327,7 +1443,7 @@ export class MCPAQLHandler {
       return SchemaDispatcher.dispatch(
         operation,
         params || {},
-        this.handlers,
+        handlers,
         input,
         this.operations,
         context
@@ -1335,25 +1451,23 @@ export class MCPAQLHandler {
     }
 
     // Legacy module-based dispatch for complex operations
-    const [module, method] = handlerRef.split('.');
-
     const p = params as Record<string, unknown>;
     const dispatchers: Record<string, () => unknown> = {
-      ElementCRUD: () => this.dispatchElementCRUD(method, input),
-      Memory: () => this.dispatchMemory(method, p),
+      ElementCRUD: () => view ? new ElementCRUDDispatcher(handlers).dispatch(method, input) : this.dispatchElementCRUD(method, input),
+      Memory: () => view ? view.saves.dispatch(method, p, view.operation.assertCurrent) : this.dispatchMemory(method, p),
       Agent: () => this.dispatchAgent(method, p),
       Template: () => this.dispatchTemplate(method, p),
-      Activation: () => this.dispatchActivation(method, input),
-      Search: () => this.dispatchSearch(method, input),
+      Activation: () => this.dispatchActivation(method, input, handlers),
+      Search: () => view ? new SearchHandler(handlers).dispatch(method, input) : this.dispatchSearch(method, input),
       Introspection: () => this.dispatchIntrospection(method, p),
-      Collection: () => this.dispatchCollection(method, p),
-      Portfolio: () => this.dispatchPortfolio(method, p),
+      Collection: () => this.dispatchCollection(method, p, handlers),
+      Portfolio: () => this.dispatchPortfolio(method, p, handlers),
       Auth: () => this.dispatchAuth(method, p),
       Config: () => this.dispatchConfig(method, p),
-      EnhancedIndex: () => this.dispatchEnhancedIndex(method, p),
+      EnhancedIndex: () => this.dispatchEnhancedIndex(method, p, handlers),
       Persona: () => this.dispatchPersona(method, p),
-      Execute: () => this.dispatchExecute(method, p),
-      Gatekeeper: () => this.dispatchGatekeeper(method, p),
+      Execute: () => view ? this.createAgentExecutionHandler(handlers).dispatch(method, p) : this.dispatchExecute(method, p),
+      Gatekeeper: () => view ? this.createGatekeeperHandler(handlers).dispatch(method, p) : this.dispatchGatekeeper(method, p),
       Logging: () => this.dispatchLogging(method, p),
       Metrics: () => this.dispatchMetrics(method, p),
       Browser: () => this.dispatchBrowser(method, p),
@@ -1372,30 +1486,36 @@ export class MCPAQLHandler {
     method: string,
     input: OperationInput
   ): Promise<unknown> {
-    return this.elementCRUDDispatcher.dispatch(method, input);
+    return this.requireOrdinary(this.elementCRUDDispatcher).dispatch(method, input);
   }
 
   async dispose(): Promise<void> {
-    await this.memorySaveHandler.dispose();
+    if (this.memoryProvider) {
+      for (const saves of this.tenantSaveHandlers.values()) await saves.dispose();
+    } else await this.requireOrdinary(this.memorySaveHandler).dispose();
   }
 
   async flushPendingSaves(): Promise<void> {
-    await this.memorySaveHandler.flushPendingSaves();
+    if (this.memoryProvider) {
+      for (const saves of this.tenantSaveHandlers.values()) await saves.flushPendingSaves();
+    } else await this.requireOrdinary(this.memorySaveHandler).flushPendingSaves();
   }
 
   private get saveFrequencyCounters(): Map<string, unknown> {
-    return this.memorySaveHandler.getSaveFrequencyCountersForTesting();
+    if (this.memoryProvider) throw new Error('Selected memory save owner required');
+    return this.requireOrdinary(this.memorySaveHandler).getSaveFrequencyCountersForTesting();
   }
 
   private trackSaveFrequency(memoryName: string): void {
-    this.memorySaveHandler.trackSaveFrequencyForTesting(memoryName);
+    if (this.memoryProvider) throw new Error('Selected memory save owner required');
+    this.requireOrdinary(this.memorySaveHandler).trackSaveFrequencyForTesting(memoryName);
   }
 
   private async dispatchMemory(
     method: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
-    return this.memorySaveHandler.dispatch(method, params);
+    return this.requireOrdinary(this.memorySaveHandler).dispatch(method, params);
   }
 
   /**
@@ -1455,11 +1575,12 @@ export class MCPAQLHandler {
    */
   private async dispatchActivation(
     method: string,
-    input: OperationInput
+    input: OperationInput,
+    handlers: HandlerRegistry = this.fixedHandlers,
   ): Promise<unknown> {
     const elementType = resolveInputElementType(input);
     const { params } = input;
-    const handler = this.handlers.elementCRUD;
+    const handler = handlers.elementCRUD;
     const p = params as Record<string, unknown>;
 
     // Issue #290: Use element_name/element_type parameter names
@@ -1509,7 +1630,7 @@ export class MCPAQLHandler {
     method: string,
     input: OperationInput
   ): Promise<unknown> {
-    return this.searchHandler.dispatch(method, input);
+    return this.requireOrdinary(this.searchHandler).dispatch(method, input);
   }
 
   // NOTE: Unified Search operations (Issue #243) are now schema-driven.
@@ -1538,9 +1659,10 @@ export class MCPAQLHandler {
    */
   private async dispatchCollection(
     method: string,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    handlers: HandlerRegistry,
   ): Promise<unknown> {
-    const handler = this.handlers.collectionHandler;
+    const handler = handlers.collectionHandler;
     if (!handler) {
       throw new Error('Collection operations not available: CollectionHandler not configured');
     }
@@ -1580,9 +1702,10 @@ export class MCPAQLHandler {
    */
   private async dispatchPortfolio(
     method: string,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    handlers: HandlerRegistry,
   ): Promise<unknown> {
-    const handler = this.handlers.portfolioHandler;
+    const handler = handlers.portfolioHandler;
     if (!handler) {
       throw new Error('Portfolio operations not available: PortfolioHandler not configured');
     }
@@ -1638,7 +1761,7 @@ export class MCPAQLHandler {
         });
 
       case 'elementManager': {
-        const syncHandler = this.handlers.syncHandler;
+        const syncHandler = handlers.syncHandler;
         if (!syncHandler) {
           throw new Error('Portfolio element manager not available: SyncHandler not configured');
         }
@@ -1704,9 +1827,10 @@ export class MCPAQLHandler {
    */
   private async dispatchEnhancedIndex(
     method: string,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    handlers:HandlerRegistry = this.fixedHandlers,
   ): Promise<unknown> {
-    const handler = this.handlers.enhancedIndexHandler;
+    const handler = handlers.enhancedIndexHandler;
     if (!handler) {
       throw new Error('EnhancedIndex operations not available: EnhancedIndexHandler not configured');
     }
@@ -1834,7 +1958,7 @@ export class MCPAQLHandler {
     };
   }
 
-  private async completeDeadlockRelief(challengeId: string, code: string): Promise<{
+  private async completeDeadlockRelief(challengeId: string, code: string, handlers: HandlerRegistry = this.fixedHandlers): Promise<{
     released: true;
     challenge_id: string;
     sessionId?: string;
@@ -1903,7 +2027,7 @@ export class MCPAQLHandler {
     const verifyDurationMs = attemptTimestamp - (challenge.expiresAt - DEADLOCK_RELIEF_TIMEOUT_MS);
     this.verificationMetrics.recordSuccess(verifyDurationMs > 0 ? verifyDurationMs : undefined);
 
-    const reset = await this.handlers.elementCRUD.releaseDeadlock();
+    const reset = await handlers.elementCRUD.releaseDeadlock();
 
     SecurityMonitor.logSecurityEvent({
       type: 'VERIFICATION_SUCCEEDED',
@@ -1985,7 +2109,7 @@ export class MCPAQLHandler {
     method: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
-    return this.gatekeeperHandler.dispatch(method, params);
+    return this.requireOrdinary(this.gatekeeperHandler).dispatch(method, params);
   }
 
   /**
@@ -2205,7 +2329,7 @@ export class MCPAQLHandler {
     method: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
-    return this.agentExecutionHandler.dispatch(method, params);
+    return this.requireOrdinary(this.agentExecutionHandler).dispatch(method, params);
   }
 
   /**

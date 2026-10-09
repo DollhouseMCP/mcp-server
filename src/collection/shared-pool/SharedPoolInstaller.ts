@@ -29,6 +29,8 @@ import type {
   ProvenanceRecord,
 } from './types.js';
 import { SYSTEM_USER_UUID } from './SharedPoolConfig.js';
+import { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantMemoryRegistry.js';
+import { requireDatabaseSystemMemoryLegacyMode } from '../../storage/DatabaseMemoryLegacyMutationGuard.js';
 
 /**
  * Strategy for writing element content to the shared pool.
@@ -239,30 +241,45 @@ export class FileSharedPoolWriteStrategy implements SharedPoolWriteStrategy {
  * DB-mode write strategy — inserts SYSTEM-owned element via admin context.
  */
 export class DatabaseSharedPoolWriteStrategy implements SharedPoolWriteStrategy {
+  private readonly enforceMemoryMode: boolean;
+
   constructor(
     private readonly db: DatabaseInstance,
-  ) {}
+    options?: Readonly<{ registry: DatabaseTenantMemoryRegistry; applicationDb: DatabaseInstance }>,
+  ) {
+    this.enforceMemoryMode = arguments.length >= 2;
+    if (this.enforceMemoryMode && (!(options?.registry instanceof DatabaseTenantMemoryRegistry) ||
+      !options.registry.matchesDatabase(options.applicationDb))) {
+      throw new TypeError('Actual application memory registry required for configured SYSTEM writes');
+    }
+  }
 
   async writeElement(request: SharedPoolInstallRequest, contentHash: string): Promise<string> {
+    // Retain primitive request fields before imports/transaction acquisition can yield.
+    const captured = Object.freeze({ ...request });
     const { withSystemContext } = await import('../../database/admin.js');
     const { elements } = await import('../../database/schema/elements.js');
     const { FrontmatterParser } = await import('../../storage/FrontmatterParser.js');
     const { sql } = await import('drizzle-orm');
 
-    const frontmatter = FrontmatterParser.extractMetadata(request.content);
-    const byteSize = Buffer.byteLength(request.content, 'utf-8');
+    const frontmatter = FrontmatterParser.extractMetadata(captured.content);
+    const byteSize = Buffer.byteLength(captured.content, 'utf-8');
 
-    const bodyContent = this.extractBody(request.content);
+    const bodyContent = this.extractBody(captured.content);
 
     const elementId = await withSystemContext(this.db, async (tx) => {
+      if (this.enforceMemoryMode && captured.elementType === 'memories') {
+        // This role-agnostic tuple check holds its lock until the real privileged upsert settles.
+        await requireDatabaseSystemMemoryLegacyMode(tx);
+      }
       const values = {
         userId: SYSTEM_USER_UUID,
-        rawContent: request.content,
+        rawContent: captured.content,
         bodyContent,
         contentHash,
         byteSize,
-        elementType: request.elementType,
-        name: request.name,
+        elementType: captured.elementType,
+        name: captured.name,
         description: frontmatter.description,
         version: frontmatter.version,
         author: frontmatter.author,
@@ -292,7 +309,7 @@ export class DatabaseSharedPoolWriteStrategy implements SharedPoolWriteStrategy 
         .returning({ id: elements.id });
 
       if (!rows[0]) {
-        throw new Error(`Failed to insert shared-pool element '${request.name}'`);
+        throw new Error(`Failed to insert shared-pool element '${captured.name}'`);
       }
 
       return rows[0].id;

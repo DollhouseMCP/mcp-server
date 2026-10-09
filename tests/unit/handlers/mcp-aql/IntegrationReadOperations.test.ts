@@ -1,3 +1,4 @@
+import { createMockMemoryManager } from '../../../helpers/di-mocks.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
@@ -52,6 +53,7 @@ function setup(configured = true, options: Parameters<typeof createCatalog>[0] =
   const catalog = new AuthorizedIntegrationOperationCatalog({ catalog: fixture.catalog, policyEnforcer });
   const handlers = {
     gatekeeper,
+    memoryManager: createMockMemoryManager(),
     elementCRUD: { getActiveElementsForPolicy: async () => policy.elements ?? [], getActiveElements: async () => [] },
     agentManager: {
       resolveExecutionIdentity: async (name: string) => ({ kind: 'file', value: `${name}.md` }),

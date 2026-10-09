@@ -12,13 +12,15 @@ import type { PortfolioManager } from "../portfolio/PortfolioManager.js";
 import { ElementType } from "../portfolio/PortfolioManager.js";
 import type { MigrationManager } from "../portfolio/MigrationManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
-import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
+import { MCPAQLHandler, type HandlerRegistry, type TenantHandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import type { AuditHmacResolver } from "../security/toolRedaction.js";
 import type { SkillManager } from "../elements/skills/index.js";
 import type { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
+import { TenantMemoryOperationProvider } from "../storage/TenantMemoryOperationProvider.js";
+import type { DatabaseTenantMemoryRegistry } from "../storage/DatabaseTenantMemoryRegistry.js";
 import type { MemoryManager } from "../elements/memories/MemoryManager.js";
 import { WebSSELogSink } from "../web/sinks/WebSSELogSink.js";
 import { WebSSEMetricsSink } from "../web/sinks/WebSSEMetricsSink.js";
@@ -141,6 +143,7 @@ import type { WebServerResult } from '../web/server.js';
 import type { RequestHandler } from 'express';
 import type { IUserPathResolver } from '../paths/IUserPathResolver.js';
 import type { PathService } from '../paths/PathService.js';
+import type { TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
 import type { SecurityTelemetry } from '../security/telemetry/SecurityTelemetry.js';
 import type { FileLockManager } from '../security/fileLockManager.js';
 import type { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
@@ -385,6 +388,9 @@ export class DollhouseContainer {
     await this.bootstrapStorageAndSecurity();
     await this.runLegacyConfigMigrationIfEnabled();
     await this.bootstrapAuthAndSharedPool();
+    if (this.hasRegistration('DatabaseTenantMemoryRegistry')) {
+      await new DatabaseServiceRegistrar().qualifyRegisteredMemoryTenants(this);
+    }
     await this.runDeploymentSeedLoaderIfEnabled();
     await this.bootstrapWebConsoleApiV1IfEnabled();
     this.wireMemoryServiceRefs();
@@ -506,7 +512,36 @@ export class DollhouseContainer {
     await bootstrapWebConsoleHttpApiV1(this);
   }
 
+  private createTenantMemoryProvider(authenticatedHttpUserId?: string): TenantMemoryOperationProvider | undefined {
+    if (!this.hasRegistration('DatabaseTenantMemoryRegistry')) return undefined;
+    const registry = this.resolve<DatabaseTenantMemoryRegistry>('DatabaseTenantMemoryRegistry');
+    if (!registry.matchesDatabase(this.resolve<DatabaseInstance>('DatabaseInstance'))) {
+      throw new Error('Memory provider must bind the application database registry');
+    }
+    const tracker = this.resolve<ContextTracker>('ContextTracker');
+    return authenticatedHttpUserId === undefined
+      ? new TenantMemoryOperationProvider(registry, tracker)
+      : new TenantMemoryOperationProvider(registry, tracker, authenticatedHttpUserId);
+  }
+
+  private createTenantMemoryIndexDependencies(owner: DollhouseContainer | SessionContainer = this): TenantMemoryIndexDependencies {
+    return {
+      portfolioManager:this.resolve('PortfolioManager'),pathService:this.resolve('PathService'),
+      indexConfig:this.resolve('IndexConfigManager'),config:this.resolve('ConfigManager'),
+      fileOperations:this.resolve('FileOperationsService'),
+      remote:{githubIndexer:owner.resolve('GitHubPortfolioIndexer'),collectionIndexCache:owner.resolve('CollectionIndexCache'),
+        githubClient:owner.resolve('GitHubClient'),apiCache:owner.resolve('APICache'),
+        rateLimitTracker:owner.resolve('RateLimitTracker'),performanceMonitor:owner.resolve('PerformanceMonitor'),
+        fileOperations:this.resolve('FileOperationsService')},
+    };
+  }
+
   private wireMemoryServiceRefs(): void {
+    if (this.hasRegistration('DatabaseTenantMemoryRegistry')) {
+      Memory.refuseUnattributedAccess();
+      logger.debug('[Container] Tenant memory composition has no unattributed static root manager');
+      return;
+    }
     // Issue #1948: deferred from registerServices to avoid eager resolution.
     try {
       const mm = this.resolve<MemoryManager>('MemoryManager');
@@ -687,8 +722,14 @@ export class DollhouseContainer {
       const config = configManager.getConfig();
 
       if (config.autoLoad.enabled) {
-        const memoryManager = this.resolve<MemoryManager>('MemoryManager');
-        const autoLoadResult = await memoryManager.loadAndActivateAutoLoadMemories();
+        const provider = this.createTenantMemoryProvider();
+        const operation = provider ? await provider.resolve(provider.capture()) : undefined;
+        operation?.assertCurrent();
+        const memoryManager = operation?.manager ?? this.resolve<MemoryManager>('MemoryManager');
+        const autoLoadResult = operation
+          ? await memoryManager.loadAndActivateAutoLoadMemories(operation.assertCurrent)
+          : await memoryManager.loadAndActivateAutoLoadMemories();
+        operation?.assertCurrent();
 
         if (autoLoadResult.errors.length > 0) {
           logger.warn(
@@ -941,10 +982,13 @@ export class DollhouseContainer {
    * Auto-loaded memories are deduplicated (not activated twice).
    */
   private async restoreActivations(store: IActivationStateStore): Promise<void> {
+    const provider = this.createTenantMemoryProvider();
+    const operation = provider ? await provider.resolve(provider.capture()) : undefined;
+    operation?.assertCurrent();
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
     const skillManager = this.resolve<SkillManager>('SkillManager');
     const agentManager = this.resolve<AgentManager>('AgentManager');
-    const memoryManager = this.resolve<MemoryManager>('MemoryManager');
+    const memoryManager = operation?.manager ?? this.resolve<MemoryManager>('MemoryManager');
     const ensembleManager = this.resolve<EnsembleManager>('EnsembleManager');
 
     let restoredCount = 0;
@@ -963,12 +1007,14 @@ export class DollhouseContainer {
         }
       };
       for (const activation of store.getActivations(elementType)) {
+        operation?.assertCurrent();
         if (skip?.has(activation.name)) {
           logger.debug(`[Container] ${elementType} '${activation.name}' already active (auto-loaded), skipping`);
           continue;
         }
         try {
           const result = await activateFn(activation);
+          operation?.assertCurrent();
           if (result.success) {
             restoredCount++;
           } else {
@@ -976,7 +1022,10 @@ export class DollhouseContainer {
             prune(activation);
             skippedCount++;
           }
-        } catch {
+        } catch (cause) {
+          if (operation) {
+            try { operation.assertCurrent(); } catch { throw cause; }
+          }
           // A restore/persistence exception is not proof of authoritative absence.
           // Do not request another stale-record removal after a failed callback.
           logger.debug(`[Container] Deferring failed ${elementType} '${activation.name}'; skipping further stale-record removal`);
@@ -995,6 +1044,7 @@ export class DollhouseContainer {
       const result = persistedIdentity
         ? await agentManager.activateAgentByStorageIdentity(persistedIdentity, activation.name)
         : await agentManager.activateAgent(activation.name);
+      operation?.assertCurrent();
 
       // Upgrade a successful legacy name-only/filename record immediately.
       // The next restart can then resolve the agent after a metadata rename.
@@ -1013,17 +1063,30 @@ export class DollhouseContainer {
     });
 
     // Memories: dedup against auto-loaded ones
-    const activeMemories = await memoryManager.getActiveMemories();
+    const activeMemories = operation
+      ? await memoryManager.getActiveMemories(operation.assertCurrent)
+      : await memoryManager.getActiveMemories();
+    operation?.assertCurrent();
     const activeMemoryNames = new Set(activeMemories.map(m => m.metadata.name));
-    await restoreType('memory', (a) => memoryManager.activateMemory(a.name), activeMemoryNames);
+    await restoreType('memory', (a) => operation
+      ? memoryManager.activateMemory(a.name, operation.assertCurrent)
+      : memoryManager.activateMemory(a.name), activeMemoryNames);
 
     await restoreType('ensemble', (a) => ensembleManager.activateEnsemble(a.name));
+    operation?.assertCurrent();
 
     if (restoredCount > 0 || skippedCount > 0) {
       logger.info(
         `[Container] Restored ${restoredCount} element(s), skipped ${skippedCount} for session '${store.getSessionId()}'`
       );
     }
+  }
+
+  private resolveCrudCallerOptions(memoryProvider?: TenantMemoryOperationProvider): ConstructorParameters<typeof ElementCRUDHandler>[18] {
+    const forkOnEditStrategy = this.hasRegistration('ForkOnEditStrategy')
+      ? this.resolve<import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy>('ForkOnEditStrategy') : undefined;
+    if (memoryProvider) return { memoryProvider, forkOnEditStrategy };
+    return forkOnEditStrategy;
   }
 
   /**
@@ -1076,12 +1139,13 @@ export class DollhouseContainer {
 
     await personaManager.reload();
 
+    const memoryProvider = this.createTenantMemoryProvider();
     const elementCrudHandler = new ElementCRUDHandler(
       this.resolve('SkillManager'),
       this.resolve('TemplateManager'),
       this.resolve('TemplateRenderer'),
       this.resolve('AgentManager'),
-      this.resolve('MemoryManager'),
+      memoryProvider ? undefined : this.resolve('MemoryManager'),
       this.resolve('EnsembleManager'),
       personaManager,
       this.resolve('PortfolioManager'),
@@ -1095,7 +1159,7 @@ export class DollhouseContainer {
       this.resolve('PolicyExportService'),
       this.resolve('SessionActivationRegistry'),
       this.resolve('ContextTracker'),
-      this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
+      this.resolveCrudCallerOptions(memoryProvider),
     );
     // Register for lazy resolution by PolicyExportService
     this.register('ElementCRUDHandler', () => elementCrudHandler);
@@ -1113,10 +1177,11 @@ export class DollhouseContainer {
       this.resolve('APICache'),
       personaManager, // Use the resolved PersonaManager
       this.resolve('SubmitToPortfolioTool'),
-      this.resolve('UnifiedIndexManager'),
+      memoryProvider ? undefined : this.resolve('UnifiedIndexManager'),
       this.resolve('InitializationService'),
       this.resolve('PersonaIndicatorService'),
-      this.resolve('FileOperationsService')
+      this.resolve('FileOperationsService'),
+      ...(memoryProvider ? [{provider:memoryProvider,dependencies:this.createTenantMemoryIndexDependencies()}] as const : []),
     );
 
     // Wire auto-submit check now that CollectionHandler exists.
@@ -1129,15 +1194,16 @@ export class DollhouseContainer {
       this.resolve('GitHubAuthManager'),
       this.resolve('PortfolioManager'),
       this.resolve('PortfolioPullHandler'),
-      this.resolve('PortfolioIndexManager'),
-      this.resolve('UnifiedIndexManager'),
+      memoryProvider ? undefined : this.resolve('PortfolioIndexManager'),
+      memoryProvider ? undefined : this.resolve('UnifiedIndexManager'),
       initService,
       indicatorService,
       this.resolve('ConfigManager'),
       this.resolve('FileOperationsService'),
       this.resolve('TokenManager'),
       this.resolve('PortfolioRepoManager'),
-      collectionHandler
+      collectionHandler,
+      ...(memoryProvider ? [{provider:memoryProvider,dependencies:this.createTenantMemoryIndexDependencies()}] as const : []),
     );
 
     const githubAuthHandler = new GitHubAuthHandler(
@@ -1159,7 +1225,8 @@ export class DollhouseContainer {
       personaManager,
       initService,
       indicatorService,
-      this.resolve('ContextTracker')
+      this.resolve('ContextTracker'),
+      memoryProvider !== undefined,
     );
 
     // In DB mode, wire identity handler to create/resolve DB users on set_user_identity
@@ -1178,12 +1245,14 @@ export class DollhouseContainer {
     const syncHandler = new SyncHandler(
       this.resolve('PortfolioSyncManager'),
       this.resolve('ConfigManager'),
-      indicatorService
+      indicatorService,
+      ...(memoryProvider ? [memoryProvider] as const : []),
     );
 
     const enhancedIndexHandler = new EnhancedIndexHandler(
-      this.resolve('EnhancedIndexManager'),
-      indicatorService
+      memoryProvider ? undefined : this.resolve('EnhancedIndexManager'),
+      indicatorService,
+      ...(memoryProvider ? [{provider:memoryProvider,dependencies:this.createTenantMemoryIndexDependencies()}] as const : []),
     );
 
     // Issue #452: Create Gatekeeper policy engine instance
@@ -1205,14 +1274,17 @@ export class DollhouseContainer {
     // Build handler registry, then add lazy getters for session-scoped services.
     // MemoryMetricsSink is registered during deferredSetup (after MetricsManager.start()),
     // so it isn't available at handler construction time — resolve on first access instead.
+    // MemoryLogSink is registered by the genuine LogManager factory. A
+    // configured index view must not depend on ordinary index construction
+    // incidentally materializing that observer before the root registry.
+    this.resolve<LogManager>('LogManager');
     const sessionContainerRegistry = this.resolve<SessionContainerRegistry>('SessionContainerRegistry');
     const resolveActiveOrRoot = <T>(serviceName: string): T => {
       const activeContainer = sessionContainerRegistry.getActiveContainer();
       return (activeContainer ?? this).resolve<T>(serviceName);
     };
-    const handlerDeps: HandlerRegistry = {
+    const handlerDeps: TenantHandlerRegistry = {
       elementCRUD: elementCrudHandler,
-      memoryManager: this.resolve('MemoryManager'),
       agentManager: this.resolve('AgentManager'),
       templateRenderer: this.resolve('TemplateRenderer'),
       elementQueryService: this.resolve('ElementQueryService'),
@@ -1266,7 +1338,15 @@ export class DollhouseContainer {
     );
     handlerDeps.integrationOperationCatalog = integrationServices.authorizedIntegrationOperationCatalog;
     handlerDeps.integrationRequestGateway = integrationServices.authorizedIntegrationGateway;
-    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
+    const mcpAqlHandler = memoryProvider
+      ? new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'), memoryProvider)
+      : new MCPAQLHandler(Object.defineProperties({}, {
+          ...Object.getOwnPropertyDescriptors(handlerDeps),
+          memoryManager: {
+            value: this.resolve<MemoryManager>('MemoryManager'),
+            enumerable: true, configurable: true, writable: true,
+          },
+        }) as HandlerRegistry, this.resolve<ContextTracker>('ContextTracker'));
 
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
@@ -1508,7 +1588,8 @@ export class DollhouseContainer {
     ));
     child.register('PortfolioPullHandler', () => new PortfolioPullHandler({
       portfolioManager: this.resolve('PortfolioManager'),
-      indexManager: this.resolve('PortfolioIndexManager'),
+      indexManager: this.hasRegistration('DatabaseTenantMemoryRegistry') ? undefined : this.resolve('PortfolioIndexManager'),
+      memoryRegistry: this.hasRegistration('DatabaseTenantMemoryRegistry') ? this.resolve('DatabaseTenantMemoryRegistry') : undefined,
       githubIndexer: child.resolve('GitHubPortfolioIndexer'),
       portfolioRepoManager: child.resolve('PortfolioRepoManager'),
       syncComparer: this.resolve('PortfolioSyncComparer'),
@@ -1522,13 +1603,15 @@ export class DollhouseContainer {
     child.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(this.resolve('APICache'), {
       authManager: child.resolve('GitHubAuthManager'),
       portfolioManager: this.resolve('PortfolioManager'),
-      portfolioIndexManager: this.resolve('PortfolioIndexManager'),
+      portfolioIndexManager: this.hasRegistration('DatabaseTenantMemoryRegistry') ? undefined : this.resolve('PortfolioIndexManager'),
+      memoryRegistry: this.hasRegistration('DatabaseTenantMemoryRegistry') ? this.resolve('DatabaseTenantMemoryRegistry') : undefined,
       portfolioRepoManager: child.resolve('PortfolioRepoManager'),
       rateLimiter: child.resolve('GitHubRateLimiter'),
       fileOperations: this.resolve('FileOperationsService'),
       tokenManager: child.resolve('TokenManager'),
     }));
     child.register('PortfolioSyncManager', () => new PortfolioSyncManager({
+      memoryRegistry: this.hasRegistration('DatabaseTenantMemoryRegistry') ? this.resolve('DatabaseTenantMemoryRegistry') : undefined,
       configManager: this.resolve('ConfigManager'),
       portfolioManager: this.resolve('PortfolioManager'),
       portfolioRepoManager: child.resolve('PortfolioRepoManager'),
@@ -1557,7 +1640,7 @@ export class DollhouseContainer {
     }
     gatekeeper.registerSession(sid, httpGkSession);
 
-    const bundle = this.createHttpSessionHandlerBundle(child, userPortfolioDir);
+    const bundle = this.createHttpSessionHandlerBundle(child, userPortfolioDir, httpUserId);
 
     child.register('ElementCRUDHandler', () => bundle.elementCrudHandler);
     child.register('CollectionHandler', () => bundle.collectionHandler);
@@ -1633,7 +1716,9 @@ export class DollhouseContainer {
   private createHttpSessionHandlerBundle(
     child: SessionContainer,
     userPortfolioDir: string,
+    authenticatedHttpUserId: string,
   ): HandlerBundle {
+    const memoryProvider = this.createTenantMemoryProvider(authenticatedHttpUserId);
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
     const initService = this.resolve<InitializationService>('InitializationService');
     const indicatorService = child.resolve<PersonaIndicatorService>('PersonaIndicatorService');
@@ -1671,7 +1756,7 @@ export class DollhouseContainer {
       this.resolve('TemplateManager'),
       this.resolve('TemplateRenderer'),
       this.resolve('AgentManager'),
-      this.resolve('MemoryManager'),
+      memoryProvider ? undefined : this.resolve('MemoryManager'),
       this.resolve('EnsembleManager'),
       personaManager,
       this.resolve('PortfolioManager'),
@@ -1685,7 +1770,7 @@ export class DollhouseContainer {
       this.resolve('PolicyExportService'),
       this.resolve('SessionActivationRegistry'),
       this.resolve('ContextTracker'),
-      this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
+      this.resolveCrudCallerOptions(memoryProvider),
     );
 
     const collectionHandler = new CollectionHandler(
@@ -1698,10 +1783,11 @@ export class DollhouseContainer {
       this.resolve('APICache'),
       personaManager,
       child.resolve('SubmitToPortfolioTool'),
-      this.resolve('UnifiedIndexManager'),
+      memoryProvider ? undefined : this.resolve('UnifiedIndexManager'),
       initService,
       indicatorService,
       this.resolve('FileOperationsService'),
+      ...(memoryProvider ? [{provider:memoryProvider,dependencies:this.createTenantMemoryIndexDependencies(child)}] as const : []),
     );
 
     child.resolve<SubmitToPortfolioTool>('SubmitToPortfolioTool')
@@ -1711,8 +1797,8 @@ export class DollhouseContainer {
       child.resolve('GitHubAuthManager'),
       this.resolve('PortfolioManager'),
       child.resolve('PortfolioPullHandler'),
-      this.resolve('PortfolioIndexManager'),
-      this.resolve('UnifiedIndexManager'),
+      memoryProvider ? undefined : this.resolve('PortfolioIndexManager'),
+      memoryProvider ? undefined : this.resolve('UnifiedIndexManager'),
       initService,
       indicatorService,
       this.resolve('ConfigManager'),
@@ -1720,6 +1806,7 @@ export class DollhouseContainer {
       child.resolve('TokenManager'),
       child.resolve('PortfolioRepoManager'),
       collectionHandler,
+      ...(memoryProvider ? [{provider:memoryProvider,dependencies:this.createTenantMemoryIndexDependencies(child)}] as const : []),
     );
 
     const githubAuthHandler = new GitHubAuthHandler(
@@ -1742,6 +1829,7 @@ export class DollhouseContainer {
       initService,
       indicatorService,
       this.resolve('ContextTracker'),
+      memoryProvider !== undefined,
     );
     if (this.hasRegistration('UserIdentityService')) {
       identityHandler.setDatabaseIdentityServices(
@@ -1759,15 +1847,16 @@ export class DollhouseContainer {
       child.resolve('PortfolioSyncManager'),
       this.resolve('ConfigManager'),
       indicatorService,
+      ...(memoryProvider ? [memoryProvider] as const : []),
     );
     const enhancedIndexHandler = new EnhancedIndexHandler(
-      this.resolve('EnhancedIndexManager'),
+      memoryProvider ? undefined : this.resolve('EnhancedIndexManager'),
       indicatorService,
+      ...(memoryProvider ? [{provider:memoryProvider,dependencies:this.createTenantMemoryIndexDependencies(child)}] as const : []),
     );
 
-    const handlerDeps: HandlerRegistry = {
+    const handlerDeps: TenantHandlerRegistry = {
       elementCRUD: elementCrudHandler,
-      memoryManager: this.resolve('MemoryManager'),
       agentManager: this.resolve('AgentManager'),
       templateRenderer: this.resolve('TemplateRenderer'),
       elementQueryService: this.resolve('ElementQueryService'),
@@ -1813,7 +1902,15 @@ export class DollhouseContainer {
     );
     handlerDeps.integrationOperationCatalog = integrationServices.authorizedIntegrationOperationCatalog;
     handlerDeps.integrationRequestGateway = integrationServices.authorizedIntegrationGateway;
-    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
+    const mcpAqlHandler = memoryProvider
+      ? new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'), memoryProvider)
+      : new MCPAQLHandler(Object.defineProperties({}, {
+          ...Object.getOwnPropertyDescriptors(handlerDeps),
+          memoryManager: {
+            value: this.resolve<MemoryManager>('MemoryManager'),
+            enumerable: true, configurable: true, writable: true,
+          },
+        }) as HandlerRegistry, this.resolve<ContextTracker>('ContextTracker'));
     return {
       personaHandler,
       elementCrudHandler,

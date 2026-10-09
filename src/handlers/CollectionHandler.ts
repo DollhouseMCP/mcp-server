@@ -1,3 +1,6 @@
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import type { PortfolioIndexManager } from '../portfolio/PortfolioIndexManager.js';
+import { bindTenantMemoryIndexView, type TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
 
 import { CollectionBrowser, CollectionSearch, PersonaDetails, ElementInstaller } from '../collection/index.js';
 import { CollectionCache } from '../cache/index.js';
@@ -32,6 +35,45 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
  * @security-audit-suppress DMCP-SEC-006
  */
 export class CollectionHandler {
+    private readonly memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies };
+    private boundOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+    private originalBindingFailure?: { readonly cause: unknown };
+    private assertMemoryOperation(): void {
+        if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+        if (!this.boundOperation) return;
+        try { this.boundOperation.provider.assertOperation(this.boundOperation.operation); }
+        catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+    }
+
+    private withMemoryOperation<T>(action: (handler: CollectionHandler) => Promise<T>): Promise<T> {
+        if (!this.memoryComposition) return action(this);
+        const provider = this.memoryComposition.provider;
+        const capture = provider.capture();
+        return provider.resolve(capture).then(operation => this.withCapturedMemoryOperation(provider, operation, action));
+    }
+
+    async withCapturedMemoryOperation<T>(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+        action: (handler: CollectionHandler) => Promise<T>): Promise<T> {
+        if (provider !== this.memoryComposition?.provider) throw new Error('Memory caller provider binding mismatch');
+        provider.assertOperation(operation);
+        const view = bindTenantMemoryIndexView(provider, operation, this.memoryComposition.dependencies);
+        let result: T;
+        try {
+            if (!view.unifiedIndex) throw new Error('Selected remote index collaborators required');
+            const bound = this.bindMemoryOperation(provider, operation, view);
+            result = await action(bound);
+            bound.assertMemoryOperation();
+            provider.assertOperation(operation);
+        } catch (cause) {
+            try { await view.dispose(); } catch { /* Preserve the original action refusal. */ }
+            throw cause;
+        }
+        await view.dispose();
+        this.assertMemoryOperation();
+        provider.assertOperation(operation);
+        return result;
+    }
+
     constructor(
         private readonly collectionBrowser: CollectionBrowser,
         private readonly collectionSearch: CollectionSearch,
@@ -42,29 +84,69 @@ export class CollectionHandler {
         private readonly apiCache: APICache,
         private readonly personaManager: PersonaManager,
         private readonly submitToPortfolioTool: SubmitToPortfolioTool,
-        private readonly unifiedIndexManager: UnifiedIndexManager,
+        unifiedIndexManager: UnifiedIndexManager | undefined,
         private readonly initService: InitializationService,
         private readonly indicatorService: PersonaIndicatorService,
-        private readonly fileOperations: FileOperationsService
+        private readonly fileOperations: FileOperationsService,
+        memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies }
     ) {
+        if (arguments.length >= 14) {
+            if (!(memoryComposition?.provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory caller provider required');
+            this.memoryComposition = Object.freeze({ ...memoryComposition });
+        } else {
+            this.fixedUnifiedIndex = unifiedIndexManager;
+        }
         // Initialize from env var at construction, then manage via instance state.
         // Removes process.env mutation during runtime — prevents cross-session contamination.
         this._autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+    }
+
+    private readonly fixedUnifiedIndex?: UnifiedIndexManager;
+    private get unifiedIndexManager(): UnifiedIndexManager {
+        this.assertMemoryOperation();
+        if (!this.fixedUnifiedIndex) throw new Error('Selected collection index required');
+        return this.fixedUnifiedIndex;
+    }
+    private submissionOwner?: CollectionHandler;
+    private boundPortfolioIndex?: PortfolioIndexManager;
+
+    bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+        view: ReturnType<typeof bindTenantMemoryIndexView>): CollectionHandler {
+        if (this.memoryComposition && provider !== this.memoryComposition.provider) throw new Error('Memory caller provider binding mismatch');
+        provider.assertOperation(operation); view.assertCurrent();
+        if (!view.unifiedIndex) throw new Error('Selected remote index collaborators required');
+        const bound = new CollectionHandler(this.collectionBrowser, this.collectionSearch, this.personaDetails,
+            this.elementInstaller.bindMemoryOperation(provider, operation, view.unifiedIndex),
+            this.collectionCache, this.portfolioManager, this.apiCache, this.personaManager,
+            this.submitToPortfolioTool.bindMemoryOperation(provider, operation, view.portfolioIndex),
+            view.unifiedIndex, this.initService, this.indicatorService, this.fileOperations);
+        bound.boundOperation = Object.freeze({ provider, operation });
+        bound.submissionOwner = this.submissionOwner ?? this;
+        bound.boundPortfolioIndex = view.portfolioIndex;
+        return bound;
     }
 
     private _autoSubmitEnabled: boolean;
 
     /** Whether auto-submit to collection is enabled. */
     public isAutoSubmitEnabled(): boolean {
-        return this._autoSubmitEnabled;
+        this.assertMemoryOperation();
+        return this.submissionOwner ? this.submissionOwner.isAutoSubmitEnabled() : this._autoSubmitEnabled;
     }
 
     /** Set auto-submit state. Used by configureCollectionSubmission and PortfolioHandler. */
     public setAutoSubmitEnabled(enabled: boolean): void {
-        this._autoSubmitEnabled = enabled;
+        this.assertMemoryOperation();
+        if (this.submissionOwner) this.submissionOwner.setAutoSubmitEnabled(enabled);
+        else this._autoSubmitEnabled = enabled;
     }
 
-    public async browseCollection(section?: string, type?: string) {
+    browseCollection(section?: string, type?: string): ReturnType<CollectionHandler['browseCollectionBody']> {
+        return this.withMemoryOperation(bound => bound.browseCollectionBody(section, type));
+    }
+
+    private async browseCollectionBody(section?: string, type?: string) {
+        this.assertMemoryOperation();
         try {
           // FIX #471: Replace legacy category validation with proper section/type validation
           // Valid sections: library, showcase, catalog
@@ -98,6 +180,7 @@ export class CollectionHandler {
           }
           
           const result = await this.collectionBrowser.browseCollection(validatedSection, validatedType);
+          this.assertMemoryOperation();
           
           // Handle sections view
           const items = result.items;
@@ -120,6 +203,7 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
+          if (this.boundOperation) throw error;
           const sanitized = SecureErrorHandler.sanitizeError(error);
           return {
             content: [
@@ -132,12 +216,18 @@ export class CollectionHandler {
         }
     }
 
-    public async searchCollection(query: string) {
+    searchCollection(query: string): ReturnType<CollectionHandler['searchCollectionBody']> {
+        return this.withMemoryOperation(bound => bound.searchCollectionBody(query));
+    }
+
+    private async searchCollectionBody(query: string) {
+        this.assertMemoryOperation();
         try {
           // Enhanced input validation for search query
           const validatedQuery = MCPInputValidator.validateSearchQuery(query);
 
           const items = await this.collectionSearch.searchCollection(validatedQuery);
+          this.assertMemoryOperation();
           const text = this.collectionSearch.formatSearchResults(items, validatedQuery, this.indicatorService.getPersonaIndicator());
 
           return {
@@ -149,6 +239,7 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
+          if (this.boundOperation) throw error;
           const sanitized = SecureErrorHandler.sanitizeError(error);
           return {
             content: [
@@ -161,7 +252,12 @@ export class CollectionHandler {
         }
     }
 
-    public async searchCollectionEnhanced(query: string, options: any = {}) {
+    searchCollectionEnhanced(query: string, options: any = {}): ReturnType<CollectionHandler['searchCollectionEnhancedBody']> {
+        return this.withMemoryOperation(bound => bound.searchCollectionEnhancedBody(query, options));
+    }
+
+    private async searchCollectionEnhancedBody(query: string, options: any = {}) {
+        this.assertMemoryOperation();
         try {
           // Enhanced input validation for search query
           const validatedQuery = MCPInputValidator.validateSearchQuery(query);
@@ -176,6 +272,7 @@ export class CollectionHandler {
           };
 
           const results = await this.collectionSearch.searchCollectionWithOptions(validatedQuery, validatedOptions);
+          this.assertMemoryOperation();
           const text = this.collectionSearch.formatSearchResultsWithPagination(results, this.indicatorService.getPersonaIndicator());
 
           return {
@@ -187,6 +284,7 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
+          if (this.boundOperation) throw error;
           const sanitized = SecureErrorHandler.sanitizeError(error);
           return {
             content: [
@@ -199,9 +297,15 @@ export class CollectionHandler {
         }
     }
 
-    public async getCollectionContent(path: string) {
+    getCollectionContent(path: string): ReturnType<CollectionHandler['getCollectionContentBody']> {
+        return this.withMemoryOperation(bound => bound.getCollectionContentBody(path));
+    }
+
+    private async getCollectionContentBody(path: string) {
+        this.assertMemoryOperation();
         try {
           const { metadata, content } = await this.personaDetails.getCollectionContent(path);
+          this.assertMemoryOperation();
           const text = this.personaDetails.formatPersonaDetails(metadata, content, path, this.indicatorService.getPersonaIndicator());
           
           return {
@@ -213,6 +317,7 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
+          if (this.boundOperation) throw error;
           const sanitized = SecureErrorHandler.sanitizeError(error);
           return {
             content: [
@@ -225,9 +330,15 @@ export class CollectionHandler {
         }
     }
 
-    public async installContent(inputPath: string) {
+    installContent(inputPath: string): ReturnType<CollectionHandler['installContentBody']> {
+        return this.withMemoryOperation(bound => bound.installContentBody(inputPath));
+    }
+
+    private async installContentBody(inputPath: string) {
+        this.assertMemoryOperation();
         try {
           const result = await this.elementInstaller.installContent(inputPath);
+          this.assertMemoryOperation();
 
           if (!result.success) {
             return {
@@ -243,6 +354,7 @@ export class CollectionHandler {
           // If it's a persona, reload personas
           if (result.elementType === ElementType.PERSONA) {
             await this.personaManager.reload();
+            this.assertMemoryOperation();
           }
 
           // FIX: DMCP-SEC-006 - Add security audit logging for content installation
@@ -269,6 +381,7 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
+          if (this.boundOperation) throw error;
           // Phase 4.5 PoC verification fix: previously this catch swallowed
           // the error into a text-response (with a sad-face emoji) and let
           // the MCP-AQL dispatcher see "success". Operators saw "installed"
@@ -285,17 +398,18 @@ export class CollectionHandler {
         }
     }
 
-    public async submitContent(contentIdentifier: string) {
-        try {
-        // Try to find the content across all element types
-        let elementType: ElementType | undefined;
-        let foundPath: string | null = null;
-        
-        // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
-        // NOTE: This dynamically handles ALL element types from the ElementType enum
-        // No hardcoded count - if you add 10 more element types tomorrow, this code
-        // will automatically search all 16 types without any changes needed here
-        const searchPromises = Object.values(ElementType).map(async (type) => {
+    submitContent(contentIdentifier: string): ReturnType<CollectionHandler['submitContentBody']> {
+        return this.withMemoryOperation(bound => bound.submitContentBody(contentIdentifier));
+    }
+
+    private async findSubmissionType(contentIdentifier: string, type: ElementType) {
+          this.assertMemoryOperation();
+          if (type === ElementType.MEMORY && this.boundOperation?.operation.manager.isGuardedHeadUpdateEnabled()) {
+            const entry = await this.boundPortfolioIndex!.findByName(contentIdentifier, { elementType: type, fuzzyMatch: true });
+            this.assertMemoryOperation();
+            if (entry) throw new Error('Guarded database memory remote submission requires a local file and is unsupported; get_element_details or read-only console inspection is not equivalent submission or backup');
+            return null;
+          }
           const dir = this.portfolioManager.getElementDir(type);
           try {
             const file = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
@@ -303,9 +417,11 @@ export class CollectionHandler {
               partialMatch: true,
               cacheResults: true
             });
+            this.assertMemoryOperation();
             
             return file ? { type: type as ElementType, file } : null;
           } catch (error: any) {
+          if (this.boundOperation) throw error;
             // IMPROVED ERROR HANDLING: Log warnings for unexpected errors
             if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
               // Not just a missing directory - this could be a permission issue or other problem
@@ -321,10 +437,28 @@ export class CollectionHandler {
             }
             return null;
           }
-        });
+    }
+
+    private async findContentForSubmission(contentIdentifier: string) {
+        // Try to find the content across all element types
+        let elementType: ElementType | undefined;
+        let foundPath: string | null = null;
+
+        // PERFORMANCE OPTIMIZATION: Search all element directories in parallel
+        // NOTE: This dynamically handles ALL element types from the ElementType enum
+        // No hardcoded count - if you add 10 more element types tomorrow, this code
+        // will automatically search all 16 types without any changes needed here
+        const searchPromises = Object.values(ElementType).map(type => this.findSubmissionType(contentIdentifier, type));
         
         // Wait for all searches to complete and find the first match
         const searchResults = await Promise.allSettled(searchPromises);
+        this.assertMemoryOperation();
+        if (this.boundOperation) {
+          const failed = searchResults.find(result => result.status === 'rejected');
+          if (failed?.status === 'rejected') throw failed.reason;
+          const matches = searchResults.filter(result => result.status === 'fulfilled' && result.value);
+          if (matches.length > 1) throw new Error('Ambiguous portfolio submission type; no remote write performed');
+        }
         
         // NOTE: File validation - we rely on the portfolio directory structure to ensure
         // files are in the correct element type directory. Additional schema validation
@@ -345,26 +479,15 @@ export class CollectionHandler {
           }
         }
         
-        // CRITICAL FIX: Never default to any element type when content is not found
-        // This prevents incorrect submissions and forces proper type detection or user specification
-        if (!elementType) {
-          // Content not found in any element directory - provide helpful error with suggestions
-          const availableTypes = Object.values(ElementType).join(', ');
-          logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, {
-            contentIdentifier,
-            searchedTypes: Object.values(ElementType) 
-          });
-          
-          // UX IMPROVEMENT: Enhanced error message with smart suggestions
-          let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
-          errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
-          
-          // Try to provide smart suggestions based on partial matches
-          try {
+        return { elementType, foundPath };
+    }
+
+    private async submissionNameSuggestions(contentIdentifier: string): Promise<string[]> {
             const suggestions: string[] = [];
             
             // Search for similar names across all element types
             for (const elementType of Object.values(ElementType)) {
+              if (elementType === ElementType.MEMORY && this.boundOperation?.operation.manager.isGuardedHeadUpdateEnabled()) continue;
               const dir = this.portfolioManager.getElementDir(elementType);
               try {
                 const partialMatches = await FileDiscoveryUtil.findFile(dir, contentIdentifier, {
@@ -372,6 +495,7 @@ export class CollectionHandler {
                   partialMatch: true,
                   cacheResults: false
                 });
+                this.assertMemoryOperation();
                 
                 if (Array.isArray(partialMatches) && partialMatches.length > 0) {
                   for (const match of partialMatches.slice(0, 2)) {
@@ -388,6 +512,26 @@ export class CollectionHandler {
               }
             }
             
+            return suggestions;
+    }
+
+    private async submissionNotFound(contentIdentifier: string) {
+          // Content not found in any element directory - provide helpful error with suggestions
+          const availableTypes = Object.values(ElementType).join(', ');
+          logger.warn(`Content "${contentIdentifier}" not found in any portfolio directory`, {
+            contentIdentifier,
+            searchedTypes: Object.values(ElementType)
+          });
+
+          // UX IMPROVEMENT: Enhanced error message with smart suggestions
+          let errorMessage = `❌ Content "${contentIdentifier}" not found in portfolio.\n\n`;
+          errorMessage += `🔍 **Searched across all element types**: ${availableTypes}\n\n`;
+
+          // Try to provide smart suggestions based on partial matches
+          try {
+            const suggestions = await this.submissionNameSuggestions(contentIdentifier);
+            this.assertMemoryOperation();
+
             if (suggestions.length > 0) {
               errorMessage += `💡 **Did you mean one of these?**\n`;
               for (const suggestion of suggestions.slice(0, 5)) {
@@ -396,6 +540,7 @@ export class CollectionHandler {
               errorMessage += `\n`;
             }
           } catch (suggestionError) {
+          if (this.boundOperation) throw suggestionError;
             // If suggestions fail, continue without them
             logger.debug('Failed to generate suggestions', { suggestionError });
           }
@@ -418,16 +563,9 @@ export class CollectionHandler {
               },
             ],
           };
-        }
-        
-        // Check for duplicates across all sources before submission
-        try {
-          // Extract the actual element name from the content path
-          const basename = path.basename(foundPath!, path.extname(foundPath!));
-          const duplicates = await this.unifiedIndexManager.checkDuplicates(basename);
-          
-          if (duplicates.length > 0) {
-            const duplicate = duplicates[0];
+    }
+
+    private formatDuplicateWarning(duplicate: Awaited<ReturnType<UnifiedIndexManager['checkDuplicates']>>[number]): string {
             let warningText = `⚠️ **Duplicate Detection Alert**\n\n`;
             warningText += `Found "${duplicate.name}" in multiple sources:\n\n`;
             
@@ -456,6 +594,76 @@ export class CollectionHandler {
 `;
             warningText += `**Proceeding with submission anyway...**\n\n`;
             
+            return warningText;
+    }
+
+    private formatSubmissionFailure(error: any) {
+          let errorMessage = `${this.indicatorService.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
+          errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
+
+          // Provide contextual troubleshooting based on error type
+          if (error.message?.includes('auth') || error.message?.includes('token')) {
+            errorMessage += `🔐 **Authentication Issue**:\n`;
+            errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
+            errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
+          }
+
+          if (error.message?.includes('network') || error.message?.includes('connection')) {
+            errorMessage += `🌐 **Network Issue**:\n`;
+            errorMessage += `• Check your internet connection
+`;
+            errorMessage += `• Try again in a few minutes
+`;
+            errorMessage += `• Check GitHub status: https://status.github.com
+
+`;
+          }
+
+          errorMessage += `🚑 **Emergency Alternatives**:\n`;
+          errorMessage += `1. 🔄 **Retry**: Try the same command again
+`;
+          errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
+          errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
+          errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface
+
+`;
+          errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: errorMessage,
+              },
+            ],
+          };
+    }
+
+    private async submitContentBody(contentIdentifier: string) {
+        this.assertMemoryOperation();
+        try {
+        const { elementType, foundPath } = await this.findContentForSubmission(contentIdentifier);
+        this.assertMemoryOperation();
+
+        // CRITICAL FIX: Never default to any element type when content is not found
+        // This prevents incorrect submissions and forces proper type detection or user specification
+        if (!elementType) {
+          const result = await this.submissionNotFound(contentIdentifier);
+          this.assertMemoryOperation();
+          return result;
+        }
+
+        // Check for duplicates across all sources before submission
+        try {
+          // Extract the actual element name from the content path
+          const basename = path.basename(foundPath!, path.extname(foundPath!));
+          const duplicates = await this.unifiedIndexManager.checkDuplicates(basename);
+          this.assertMemoryOperation();
+
+          if (duplicates.length > 0) {
+            const duplicate = duplicates[0];
+            const warningText = this.formatDuplicateWarning(duplicate);
+
             // Log the duplicate detection for monitoring
             logger.warn('Duplicate content detected during submission', {
               contentIdentifier,
@@ -468,6 +676,7 @@ export class CollectionHandler {
               name: contentIdentifier,
               type: elementType
             });
+            this.assertMemoryOperation();
             
             // Combine warning with submission result
             const responseText = `${this.indicatorService.getPersonaIndicator()}${result.success ? '⚠️' : '❌'} ${warningText}${result.message}`
@@ -480,6 +689,7 @@ export class CollectionHandler {
             };
           }
         } catch (duplicateError) {
+          if (this.boundOperation) throw duplicateError;
           // If duplicate checking fails, log but continue with submission
           logger.warn('Duplicate checking failed during submission', {
             contentIdentifier,
@@ -492,6 +702,7 @@ export class CollectionHandler {
           name: contentIdentifier,
           type: elementType
         });
+        this.assertMemoryOperation();
         
         // Format the response - the message already contains all details
         let responseText = result.message;
@@ -509,6 +720,7 @@ export class CollectionHandler {
         };
         
         } catch (error: any) {
+          if (this.boundOperation) throw error;
           // UX IMPROVEMENT: Comprehensive error handling with fallback suggestions
           logger.error('Unexpected error in submitContent', {
             contentIdentifier,
@@ -516,45 +728,7 @@ export class CollectionHandler {
             stack: error.stack
           });
           
-          let errorMessage = `${this.indicatorService.getPersonaIndicator()}❌ **Submission Failed**\n\n`;
-          errorMessage += `🚨 **Error**: ${error.message || 'Unknown error occurred'}\n\n`;
-          
-          // Provide contextual troubleshooting based on error type
-          if (error.message?.includes('auth') || error.message?.includes('token')) {
-            errorMessage += `🔐 **Authentication Issue**:\n`;
-            errorMessage += `• Run: \`setup_github_auth\` to re-authenticate\n`;
-            errorMessage += `• Check: \`gh auth status\` if you have GitHub CLI\n\n`;
-          }
-          
-          if (error.message?.includes('network') || error.message?.includes('connection')) {
-            errorMessage += `🌐 **Network Issue**:\n`;
-            errorMessage += `• Check your internet connection
-`;
-            errorMessage += `• Try again in a few minutes
-`;
-            errorMessage += `• Check GitHub status: https://status.github.com
-
-`;
-          }
-          
-          errorMessage += `🚑 **Emergency Alternatives**:\n`;
-          errorMessage += `1. 🔄 **Retry**: Try the same command again
-`;
-          errorMessage += `2. 📝 **Check content**: Use \`list_portfolio\` to verify the element exists\n`;
-          errorMessage += `3. 🎯 **Specify type**: Add \`--type=personas\` if you know the element type\n`;
-          errorMessage += `4. 🚑 **Manual upload**: Copy content directly to GitHub via web interface
-
-`;
-          errorMessage += `📞 **Need help?** This looks like a system issue. Please report it with the error details above.`;
-          
-          return {
-            content: [
-              {
-                type: "text",
-                text: errorMessage,
-              },
-            ],
-          };
+          return this.formatSubmissionFailure(error);
         }
     }
 
@@ -562,9 +736,20 @@ export class CollectionHandler {
      * Configure collection submission settings
      * Controls whether content is automatically submitted to the DollhouseMCP collection
      */
-    public async configureCollectionSubmission(autoSubmit: boolean) {
+    configureCollectionSubmission(autoSubmit: boolean): ReturnType<CollectionHandler['configureCollectionSubmissionBody']> {
+        return this.withMemoryOperation(bound => bound.configureCollectionSubmissionBody(autoSubmit));
+    }
+
+    private configureCollectionSubmissionBody(autoSubmit: boolean) {
+        // Evaluate immediately; thrown failures remain rejected Promises.
+        try { return Promise.resolve(this.configureCollectionSubmissionResult(autoSubmit)); }
+        catch (cause) { return Promise.reject(cause); }
+    }
+
+    private configureCollectionSubmissionResult(autoSubmit: boolean) {
+        this.assertMemoryOperation();
       try {
-        this._autoSubmitEnabled = autoSubmit;
+        this.setAutoSubmitEnabled(autoSubmit);
 
         const message = autoSubmit
           ? "✅ Collection submission enabled! Content will automatically be submitted to the DollhouseMCP collection after portfolio upload."
@@ -579,6 +764,7 @@ export class CollectionHandler {
           ]
         };
       } catch (error) {
+          if (this.boundOperation) throw error;
         logger.error('Error configuring collection submission', { error });
         return {
           content: [
@@ -595,8 +781,19 @@ export class CollectionHandler {
      * Get current collection submission configuration
      * Shows whether auto-submit is enabled or disabled
      */
-    public async getCollectionSubmissionConfig() {
-      const autoSubmitEnabled = this._autoSubmitEnabled;
+    getCollectionSubmissionConfig(): ReturnType<CollectionHandler['getCollectionSubmissionConfigBody']> {
+        return this.withMemoryOperation(bound => bound.getCollectionSubmissionConfigBody());
+    }
+
+    private getCollectionSubmissionConfigBody() {
+        // Evaluate immediately; thrown failures remain rejected Promises.
+        try { return Promise.resolve(this.getCollectionSubmissionConfigResult()); }
+        catch (cause) { return Promise.reject(cause); }
+    }
+
+    private getCollectionSubmissionConfigResult() {
+        this.assertMemoryOperation();
+      const autoSubmitEnabled = this.isAutoSubmitEnabled();
 
       const message = `**Collection Submission Configuration**\n\n` +
         `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +
@@ -616,11 +813,38 @@ export class CollectionHandler {
       };
     }
 
-    public async getCollectionCacheHealth() {
+    getCollectionCacheHealth(): ReturnType<CollectionHandler['getCollectionCacheHealthBody']> {
+        return this.withMemoryOperation(bound => bound.getCollectionCacheHealthBody());
+    }
+
+    private formatCacheAge(ageMs: number): string {
+            if (ageMs === 0) return 'Not cached';
+            const hours = Math.floor(ageMs / (1000 * 60 * 60));
+            const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
+            if (hours > 0) {
+              return `${hours}h ${minutes}m old`;
+            }
+            return `${minutes}m old`;
+    }
+
+    private cacheHealthStatus(valid: boolean, exists: boolean): string {
+        if (valid) return 'healthy';
+        return exists ? 'expired' : 'empty';
+    }
+
+    private cacheHealthIcon(status: string): string {
+        if (status === 'healthy') return '✅';
+        return status === 'expired' ? '⚠️' : '📦';
+    }
+
+    private async getCollectionCacheHealthBody() {
+        this.assertMemoryOperation();
         try {
           // Get cache statistics from both caches
           const collectionStats = await this.collectionCache.getCacheStats();
+          this.assertMemoryOperation();
           const searchStats = await this.collectionSearch.getCacheStats();
+          this.assertMemoryOperation();
           
           // Check if cache directory exists
           let cacheFileExists = false;
@@ -629,43 +853,34 @@ export class CollectionHandler {
           try {
             const cacheFile = this.collectionCache.getCacheFilePath();
             const fileStats = await this.fileOperations.stat(cacheFile);
+            this.assertMemoryOperation();
             cacheFileExists = true;
             cacheFileSize = fileStats.size;
           } catch {
+            this.assertMemoryOperation();
             // Cache file doesn't exist yet
           }
-          
-          // Format cache age
-          const formatAge = (ageMs: number): string => {
-            if (ageMs === 0) return 'Not cached';
-            const hours = Math.floor(ageMs / (1000 * 60 * 60));
-            const minutes = Math.floor((ageMs % (1000 * 60 * 60)) / (1000 * 60));
-            if (hours > 0) {
-              return `${hours}h ${minutes}m old`;
-            }
-            return `${minutes}m old`;
-          };
           
           // Build health report with both cache systems
           const healthReport = {
             collection: {
-              status: collectionStats.isValid ? 'healthy' : (cacheFileExists ? 'expired' : 'empty'),
+              status: this.cacheHealthStatus(collectionStats.isValid, cacheFileExists),
               cacheExists: cacheFileExists,
               itemCount: collectionStats.itemCount,
-              cacheAge: formatAge(collectionStats.cacheAge),
+              cacheAge: this.formatCacheAge(collectionStats.cacheAge),
               cacheAgeMs: collectionStats.cacheAge,
               isValid: collectionStats.isValid,
               cacheFileSize: cacheFileSize,
               cacheFileSizeFormatted: cacheFileSize > 0 ? `${(cacheFileSize / 1024).toFixed(2)} KB` : '0 KB',
-              ttlRemaining: collectionStats.isValid ? formatAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
+              ttlRemaining: collectionStats.isValid ? this.formatCacheAge(24 * 60 * 60 * 1000 - collectionStats.cacheAge) : 'Expired'
             },
             index: {
-              status: searchStats.index.isValid ? 'healthy' : (searchStats.index.hasCache ? 'expired' : 'empty'),
+              status: this.cacheHealthStatus(searchStats.index.isValid, searchStats.index.hasCache),
               hasCache: searchStats.index.hasCache,
               elements: searchStats.index.elements,
-              cacheAge: formatAge(searchStats.index.age),
+              cacheAge: this.formatCacheAge(searchStats.index.age),
               isValid: searchStats.index.isValid,
-              ttlRemaining: searchStats.index.isValid ? formatAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
+              ttlRemaining: searchStats.index.isValid ? this.formatCacheAge(15 * 60 * 1000 - searchStats.index.age) : 'Expired'
             },
             overall: {
               recommendation: (collectionStats.isValid || searchStats.index.isValid)
@@ -680,13 +895,13 @@ export class CollectionHandler {
                 type: "text",
                 text: `${this.indicatorService.getPersonaIndicator()}📊 **Collection Cache Health Check**\n\n` +
                   `## 🗄️ Collection Cache (Legacy)\n` +
-                  `**Status**: ${healthReport.collection.status === 'healthy' ? '✅' : healthReport.collection.status === 'expired' ? '⚠️' : '📦'} ${healthReport.collection.status.toUpperCase()}\n` +
+                  `**Status**: ${this.cacheHealthIcon(healthReport.collection.status)} ${healthReport.collection.status.toUpperCase()}\n` +
                   `**Items Cached**: ${healthReport.collection.itemCount}\n` +
                   `**Cache Age**: ${healthReport.collection.cacheAge}\n` +
                   `**Cache Size**: ${healthReport.collection.cacheFileSizeFormatted}\n` +
                   `**TTL Remaining**: ${healthReport.collection.ttlRemaining}\n\n` +
                   `## 🚀 Index Cache (Enhanced Search)\n` +
-                  `**Status**: ${healthReport.index.status === 'healthy' ? '✅' : healthReport.index.status === 'expired' ? '⚠️' : '📦'} ${healthReport.index.status.toUpperCase()}\n` +
+                  `**Status**: ${this.cacheHealthIcon(healthReport.index.status)} ${healthReport.index.status.toUpperCase()}\n` +
                   `**Elements Indexed**: ${healthReport.index.elements}\n` +
                   `**Cache Age**: ${healthReport.index.cacheAge}\n` +
                   `**TTL Remaining**: ${healthReport.index.ttlRemaining}\n\n` +
@@ -697,6 +912,7 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
+          if (this.boundOperation) throw error;
           const errorMessage = error instanceof Error ? error.message : String(error);
           logger.error(`Failed to get cache health: ${errorMessage}`);
           

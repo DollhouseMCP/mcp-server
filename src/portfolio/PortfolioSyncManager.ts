@@ -24,6 +24,8 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { ElementType } from './types.js';
 import { PortfolioElementAdapter } from '../tools/portfolio/PortfolioElementAdapter.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import type { DatabaseTenantMemoryRegistry } from '../storage/DatabaseTenantMemoryRegistry.js';
 
 export interface SyncOperation {
   operation: 'download' | 'upload' | 'compare' | 'list-remote';
@@ -104,10 +106,44 @@ export interface PortfolioSyncManagerDependencies {
    * landed on tmpfs and vanished on restart. Same correctness pattern as
    * the ElementInstaller and PortfolioPullHandler fixes.
    */
+  memoryRegistry?: DatabaseTenantMemoryRegistry;
   storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 }
 
 export class PortfolioSyncManager {
+  private readonly memoryRegistry?: DatabaseTenantMemoryRegistry;
+  private memoryOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+  private originalBindingFailure?: { readonly cause: unknown };
+
+  bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation): PortfolioSyncManager {
+    if (!(provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory provider required');
+    if (this.memoryRegistry) provider.assertRegistry(this.memoryRegistry);
+    provider.assertOperation(operation);
+    const bound = new PortfolioSyncManager({ configManager: this.configManager, portfolioManager: this.portfolioManager,
+      portfolioRepoManager: this.repoManager, indexer: this.indexer, fileOperations: this.fileOperations,
+      tokenManager: this.tokenManager, storageLayerFactory: this.storageLayerFactory, memoryRegistry: this.memoryRegistry });
+    bound.memoryOperation = Object.freeze({ provider, operation });
+    return bound;
+  }
+
+  private assertMemoryOperation(): void {
+    if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+    if (!this.memoryOperation) return;
+    try { this.memoryOperation.provider.assertOperation(this.memoryOperation.operation); }
+    catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+  }
+
+  private assertMutationType(type: ElementType, operation: 'download' | 'upload'): void {
+    this.assertMemoryOperation();
+    if (!this.memoryOperation) return;
+    if (!Object.values(ElementType).includes(type)) throw new Error('Unknown portfolio mutation type');
+    if (type === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
+      throw new Error(operation === 'download'
+        ? 'Guarded database memories support admitted UPDATE only; portfolio download cannot create or replace them'
+        : 'Guarded database memory remote submission requires a local file and is unsupported; get_element_details or read-only console inspection is not equivalent submission or backup');
+    }
+  }
+
   private configManager: ConfigManager;
   private portfolioManager: PortfolioManager;
   private repoManager: PortfolioRepoManager;
@@ -124,20 +160,27 @@ export class PortfolioSyncManager {
     this.fileOperations = dependencies.fileOperations;
     this.tokenManager = dependencies.tokenManager;
     this.storageLayerFactory = dependencies.storageLayerFactory;
+    this.memoryRegistry = dependencies.memoryRegistry;
   }
   
   /**
    * Main handler for sync operations
    */
   public async handleSyncOperation(params: SyncOperation): Promise<SyncResult> {
+    this.assertMemoryOperation();
+    if (this.memoryOperation) params = Object.freeze({...params});
+    if (this.memoryRegistry && !this.memoryOperation) throw new Error('Authentic selected portfolio sync operation required');
     try {
       const config = this.configManager.getConfig();
       const configFailure = this.validateSyncOperationConfig(params, config);
       if (configFailure) {
         return configFailure;
       }
-      return await this.dispatchSyncOperation(params);
+      const result = await this.dispatchSyncOperation(params);
+      this.assertMemoryOperation();
+      return result;
     } catch (error) {
+      if (this.memoryOperation) throw error;
       logger.error('Sync operation failed', {
         operation: params.operation,
         error: error instanceof Error ? error.message : String(error)
@@ -246,6 +289,7 @@ export class PortfolioSyncManager {
     try {
       // Get GitHub token
       const token = await this.tokenManager.getGitHubTokenAsync();
+      this.assertMemoryOperation();
       if (!token) {
         return {
           success: false,
@@ -257,6 +301,7 @@ export class PortfolioSyncManager {
       
       // Get index of GitHub portfolio
       const index = await this.indexer.getIndex();
+      this.assertMemoryOperation();
       
       if (!index || index.totalElements === 0) {
         return {
@@ -293,6 +338,7 @@ export class PortfolioSyncManager {
       };
       
     } catch (error) {
+      if (this.memoryOperation) throw error;
       return {
         success: false,
         message: `Failed to list remote elements: ${error instanceof Error ? error.message : String(error)}`
@@ -309,6 +355,7 @@ export class PortfolioSyncManager {
     version?: string,
     force?: boolean
   ): Promise<SyncResult> {
+    this.assertMutationType(elementType, 'download');
     try {
       const config = this.configManager.getConfig();
       const validationFailure = this.validateDownloadElementName(elementName);
@@ -317,12 +364,14 @@ export class PortfolioSyncManager {
       }
 
       const token = await this.requireGitHubToken();
+      this.assertMemoryOperation();
       if (!token) {
         return { success: false, message: 'GitHub authentication required' };
       }
       this.repoManager.setToken(token);
 
       const index = await this.indexer.getIndex();
+      this.assertMemoryOperation();
       const entries = index.elements.get(elementType) || [];
       const entry = this.findRemoteElementEntry(elementName, entries);
       if (!entry) {
@@ -331,7 +380,9 @@ export class PortfolioSyncManager {
 
       const localPath = this.portfolioManager.getElementPath(elementType, `${elementName}.md`);
       const localContent = await this.readLocalElementContent(localPath, 'PortfolioSyncManager.downloadElement');
+      this.assertMemoryOperation();
       const remoteContent = await this.fetchRemoteElementContent(entry.downloadUrl, token);
+      this.assertMemoryOperation();
       const securityFailure = this.validateRemoteContent(remoteContent);
       if (securityFailure) {
         return securityFailure;
@@ -347,6 +398,7 @@ export class PortfolioSyncManager {
         config,
         force,
       });
+      this.assertMemoryOperation();
       if (conflictResult) {
         return conflictResult;
       }
@@ -357,6 +409,7 @@ export class PortfolioSyncManager {
         localPath,
         remoteContent
       );
+      this.assertMemoryOperation();
 
       logger.info('Element downloaded from GitHub', {
         element: elementName,
@@ -371,6 +424,7 @@ export class PortfolioSyncManager {
       };
       
     } catch (error) {
+      if (this.memoryOperation) throw error;
       return {
         success: false,
         message: `Failed to download element: ${error instanceof Error ? error.message : String(error)}`
@@ -432,6 +486,7 @@ export class PortfolioSyncManager {
     try {
       return await this.fileOperations.readFile(localPath, { source });
     } catch {
+      this.assertMemoryOperation();
       return null;
     }
   }
@@ -443,6 +498,7 @@ export class PortfolioSyncManager {
         'Accept': 'application/vnd.github.v3.raw'
       }
     });
+    this.assertMemoryOperation();
     if (!response.ok) {
       throw new Error(`Failed to download: ${response.statusText}`);
     }
@@ -484,7 +540,9 @@ export class PortfolioSyncManager {
     }
 
     const diff = await this.generateDiff(localContent, remoteContent);
+    this.assertMemoryOperation();
     const conflictInfo = await this.buildConflictInfo(elementName, elementType, localPath, localContent, entry);
+    this.assertMemoryOperation();
     logger.warn('Sync conflict detected', { element: elementName, type: elementType, conflict: conflictInfo });
     return {
       success: false,
@@ -501,7 +559,9 @@ export class PortfolioSyncManager {
     remoteContent: string
   ): Promise<boolean> {
     const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
+    this.assertMemoryOperation();
     const elementDir = path.dirname(localPath);
+    this.assertMutationType(elementType, 'download');
     const persistedViaStorageLayer = await persistElementViaFactory(
       this.storageLayerFactory,
       elementType,
@@ -510,10 +570,14 @@ export class PortfolioSyncManager {
       { elementDir, fileExtension: path.extname(localPath) || '.md', scanCooldownMs: 0 },
       { exclusive: false },
     );
+    this.assertMemoryOperation();
 
     if (!persistedViaStorageLayer) {
+      this.assertMutationType(elementType, 'download');
       await this.fileOperations.createDirectory(elementDir);
+      this.assertMemoryOperation();
       await this.fileOperations.writeFile(localPath, remoteContent, { source: 'PortfolioSyncManager.downloadElement' });
+    this.assertMemoryOperation();
     }
     return persistedViaStorageLayer;
   }
@@ -526,10 +590,12 @@ export class PortfolioSyncManager {
     elementType: ElementType,
     confirm?: boolean
   ): Promise<SyncResult> {
+    this.assertMutationType(elementType, 'upload');
     try {
       const config = this.configManager.getConfig();
       const localPath = this.portfolioManager.getElementPath(elementType, `${elementName}.md`);
       const content = await this.readUploadContent(elementName, elementType, localPath);
+      this.assertMemoryOperation();
       if (typeof content !== 'string') {
         return content;
       }
@@ -554,6 +620,7 @@ export class PortfolioSyncManager {
       }
 
       const token = await this.requireGitHubToken();
+      this.assertMemoryOperation();
       if (!token) {
         return {
           success: false,
@@ -582,6 +649,7 @@ export class PortfolioSyncManager {
       return await this.saveElementToGitHub(adapter, elementName, elementType, token);
       
     } catch (error) {
+      if (this.memoryOperation) throw error;
       return {
         success: false,
         message: `Failed to upload element: ${error instanceof Error ? error.message : String(error)}`
@@ -597,6 +665,7 @@ export class PortfolioSyncManager {
     try {
       return await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.uploadElement' });
     } catch {
+      this.assertMemoryOperation();
       return {
         success: false,
         message: `Element '${elementName}' (${elementType}) not found locally`
@@ -664,7 +733,9 @@ export class PortfolioSyncManager {
     });
 
     try {
+      this.assertMutationType(elementType, 'upload');
       const url = await this.repoManager.saveElement(adapter, true);
+      this.assertMemoryOperation();
       logger.info('Element uploaded to GitHub', { element: elementName, type: elementType, url });
       return {
         success: true,
@@ -672,6 +743,7 @@ export class PortfolioSyncManager {
         data: { url }
       };
     } catch (uploadError) {
+      if (this.memoryOperation) throw uploadError;
       if (uploadError instanceof Error && uploadError.message.includes('repository does not exist')) {
         return {
           success: false,
@@ -692,16 +764,21 @@ export class PortfolioSyncManager {
   ): Promise<SyncResult> {
     try {
       const localPath = this.portfolioManager.getElementPath(elementType, `${elementName}.md`);
-      const local = await this.loadLocalVersion(localPath);
+      const local = this.memoryOperation && elementType === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()
+        ? await this.loadSelectedMemoryVersion(elementName) : await this.loadLocalVersion(localPath);
+      this.assertMemoryOperation();
       const token = await this.requireGitHubToken();
+      this.assertMemoryOperation();
       if (!token) {
         return { success: false, message: 'GitHub authentication required' };
       }
 
       const index = await this.indexer.getIndex();
+      this.assertMemoryOperation();
       const entries = index.elements.get(elementType) || [];
       const entry = entries.find(e => e.name === elementName);
       const remote = entry ? await this.loadRemoteVersion(entry, token) : { version: null, content: null };
+      this.assertMemoryOperation();
       const result = await this.buildVersionComparisonResult(
         elementName,
         elementType,
@@ -709,6 +786,7 @@ export class PortfolioSyncManager {
         remote,
         showDiff
       );
+      this.assertMemoryOperation();
 
       return {
         success: true,
@@ -717,6 +795,7 @@ export class PortfolioSyncManager {
       };
       
     } catch (error) {
+      if (this.memoryOperation) throw error;
       return {
         success: false,
         message: `Failed to compare versions: ${error instanceof Error ? error.message : String(error)}`
@@ -724,11 +803,27 @@ export class PortfolioSyncManager {
     }
   }
 
+  private async loadSelectedMemoryVersion(name: string): Promise<{ version: VersionInfo | null; content: string | null }> {
+    this.assertMemoryOperation();
+    const scope = this.memoryOperation!;
+    const tenant = scope.provider.getOperationTenant(scope.operation);
+    // This existing captured-read seam retains authoritative raw bytes. It does
+    // not serialize a lossy export or grant upload/replacement authority.
+    const observed = await scope.operation.manager.findGuardedMemoryForUpdate(name, tenant);
+    this.assertMemoryOperation();
+    if (!observed) return { version: null, content: null };
+    const metadata = observed.memory.metadata;
+    return { content: observed.content, version: { version: metadata.version ?? '1.0.0',
+      timestamp: new Date(metadata.modified ?? metadata.created ?? 0), author: metadata.author ?? 'unknown',
+      hash: createHash('sha256').update(observed.content).digest('hex'), size: Buffer.byteLength(observed.content), source: 'local' } };
+  }
+
   private async loadLocalVersion(
     localPath: string
   ): Promise<{ version: VersionInfo | null; content: string | null }> {
     try {
       const content = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.compareVersions' });
+      this.assertMemoryOperation();
       const parsed = SecureYamlParser.parse(content, {
         maxYamlSize: 64 * 1024,
         validateContent: false,
@@ -746,6 +841,7 @@ export class PortfolioSyncManager {
         }
       };
     } catch {
+      this.assertMemoryOperation();
       return { version: null, content: null };
     }
   }
@@ -760,11 +856,13 @@ export class PortfolioSyncManager {
         'Accept': 'application/vnd.github.v3.raw'
       }
     });
+    this.assertMemoryOperation();
     if (!response.ok) {
       return { version: null, content: null };
     }
 
     const content = await response.text();
+    this.assertMemoryOperation();
     return {
       content,
       version: {
@@ -826,6 +924,7 @@ export class PortfolioSyncManager {
     
     // Get list of remote elements
     const remoteResult = await this.listRemoteElements();
+    this.assertMemoryOperation();
     if (!remoteResult.success || !remoteResult.elements) {
       return remoteResult;
     }
@@ -848,9 +947,11 @@ export class PortfolioSyncManager {
       return this.buildBulkDownloadPreview(elementsToDownload);
     }
 
+    for (const element of elementsToDownload) this.assertMutationType(element.type, 'download');
     const results = PortfolioSyncManager.createBulkDownloadResults();
     for (const element of elementsToDownload) {
       await this.downloadBulkElement(element, results);
+      this.assertMemoryOperation();
     }
 
     return {
@@ -883,6 +984,7 @@ export class PortfolioSyncManager {
   ): Promise<void> {
     try {
       const result = await this.downloadElement(element.name, element.type, undefined, true);
+      this.assertMemoryOperation();
       if (result.success) {
         results.downloaded.push(element.name);
       } else if (result.message?.includes('already up to date')) {
@@ -891,6 +993,7 @@ export class PortfolioSyncManager {
         results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
       }
     } catch (error) {
+      if (this.memoryOperation) throw error;
       results.failed.push({
         name: element.name,
         error: error instanceof Error ? error.message : String(error)
@@ -925,6 +1028,7 @@ export class PortfolioSyncManager {
     }
     
     const localElements = await this.listLocalElementsForUpload(elementType);
+    this.assertMemoryOperation();
     
     if (localElements.length === 0) {
       return {
@@ -938,9 +1042,11 @@ export class PortfolioSyncManager {
       return this.buildBulkUploadPreview(localElements);
     }
 
+    for (const element of localElements) this.assertMutationType(element.type, 'upload');
     const results = PortfolioSyncManager.createBulkUploadResults();
     for (const element of localElements) {
       await this.uploadBulkElement(element, results);
+      this.assertMemoryOperation();
     }
 
     return {
@@ -964,6 +1070,7 @@ export class PortfolioSyncManager {
     const localElements: Array<{ name: string; type: ElementType; path: string }> = [];
     for (const type of types) {
       await this.collectLocalElementsOfType(type, localElements);
+      this.assertMemoryOperation();
     }
     return localElements;
   }
@@ -972,15 +1079,26 @@ export class PortfolioSyncManager {
     type: ElementType,
     localElements: Array<{ name: string; type: ElementType; path: string }>
   ): Promise<void> {
+    this.assertMemoryOperation();
+    if (this.memoryOperation && type === ElementType.MEMORY && this.memoryOperation.operation.manager.isGuardedHeadUpdateEnabled()) {
+      const memories = await this.memoryOperation.operation.manager.list({ strictDatabase: true });
+      this.assertMemoryOperation();
+      for (const memory of memories) localElements.push({ name: memory.metadata.name, type,
+        // Discovery only: guarded uploads are refused before any filepath consumer.
+        path: '' });
+      return;
+    }
     const dir = this.portfolioManager.getElementDir(type);
     try {
       const files = await this.fileOperations.listDirectory(dir);
+      this.assertMemoryOperation();
       for (const file of files) {
         if (file.endsWith('.md')) {
           localElements.push({ name: file.replace('.md', ''), type, path: path.join(dir, file) });
         }
       }
     } catch {
+      this.assertMemoryOperation();
       logger.debug(`Directory for ${type} does not exist yet`);
     }
   }
@@ -1016,6 +1134,7 @@ export class PortfolioSyncManager {
   ): Promise<void> {
     try {
       const result = await this.uploadElement(element.name, element.type, true);
+      this.assertMemoryOperation();
       if (result.success) {
         results.uploaded.push(element.name);
       } else if (result.message?.includes('local-only')) {
@@ -1024,6 +1143,7 @@ export class PortfolioSyncManager {
         results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
       }
     } catch (error) {
+      if (this.memoryOperation) throw error;
       results.failed.push({
         name: element.name,
         error: error instanceof Error ? error.message : String(error)
@@ -1092,8 +1212,10 @@ export class PortfolioSyncManager {
     let localModified = new Date();
     try {
       const stats = await this.fileOperations.stat(localPath);
+      this.assertMemoryOperation();
       localModified = stats.mtime;
     } catch {
+      this.assertMemoryOperation();
       // Ignore - use current date fallback
     }
 
@@ -1120,6 +1242,7 @@ export class PortfolioSyncManager {
         version: parsed.data?.version
       };
     } catch {
+      this.assertMemoryOperation();
       return {};
     }
   }

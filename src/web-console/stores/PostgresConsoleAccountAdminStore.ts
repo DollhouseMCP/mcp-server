@@ -1,3 +1,4 @@
+import type { DatabaseMemoryAccountDeletionBoundary } from '../../storage/DatabaseMemoryAccountDeletionBoundary.js';
 import { invitationIdentityAllowedSql } from '../../auth/InvitationAuthenticationPolicy.js';
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
@@ -76,7 +77,13 @@ type PrincipalRow = Record<string, unknown> & {
 };
 
 export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminStore {
-  constructor(private readonly db: DatabaseInstance) {}
+  constructor(private readonly db: DatabaseInstance, private readonly memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary) {
+    memoryDeletionBoundary?.requireDatabase(db);
+  }
+
+  requireMemoryDeletionBoundary(boundary: DatabaseMemoryAccountDeletionBoundary): void {
+    if (this.memoryDeletionBoundary !== boundary) throw new Error('Account store requires the same memory deletion boundary');
+  }
 
   async listPrincipals(query: PrincipalDirectoryQuery = {}): Promise<PrincipalDirectoryPage> {
     validatePrincipalDirectoryQuery(query);
@@ -196,7 +203,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   }
 
   async deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null> {
-    return withSystemContext(this.db, tx => deleteConsolePrincipalWithTx(tx, input));
+    return withSystemContext(this.db, tx => deleteConsolePrincipalWithTx(tx, input, this.memoryDeletionBoundary));
   }
 
   async listLinkedIdentities(userId: string): Promise<LinkedIdentity[]> {
@@ -436,8 +443,10 @@ export async function bumpConsolePrincipalAuthzVersionWithTx(
 export async function deleteConsolePrincipalWithTx(
   tx: DrizzleTx,
   input: PrincipalDeletionInput,
+  memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary,
 ): Promise<PrincipalDeletionOutcome | null> {
   validatePrincipalDeletionInput(input);
+  await memoryDeletionBoundary?.requireLegacyBeforeDelete(tx, input.userId);
   const existing = await tx.select({ id: users.id, email: users.email }).from(users)
     .where(and(eq(users.id, input.userId), isNull(users.deletedAt))).limit(1).for('update');
   if (existing.length === 0) return null;

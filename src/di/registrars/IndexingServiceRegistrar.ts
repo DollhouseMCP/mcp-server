@@ -148,7 +148,8 @@ export class IndexingServiceRegistrar {
     // SYNC & TOOLS
     container.register('PortfolioPullHandler', () => new PortfolioPullHandler({
       portfolioManager: container.resolve('PortfolioManager'),
-      indexManager: container.resolve('PortfolioIndexManager'),
+      indexManager: container.hasRegistration('DatabaseTenantMemoryRegistry') ? undefined : container.resolve('PortfolioIndexManager'),
+      memoryRegistry: container.hasRegistration('DatabaseTenantMemoryRegistry') ? container.resolve('DatabaseTenantMemoryRegistry') : undefined,
       githubIndexer: container.resolve('GitHubPortfolioIndexer'),
       portfolioRepoManager: container.resolve('PortfolioRepoManager'),
       syncComparer: container.resolve('PortfolioSyncComparer'),
@@ -165,7 +166,8 @@ export class IndexingServiceRegistrar {
     container.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(container.resolve<APICache>('APICache'), {
       authManager: container.resolve('GitHubAuthManager'),
       portfolioManager: container.resolve('PortfolioManager'),
-      portfolioIndexManager: container.resolve('PortfolioIndexManager'),
+      portfolioIndexManager: container.hasRegistration('DatabaseTenantMemoryRegistry') ? undefined : container.resolve('PortfolioIndexManager'),
+      memoryRegistry: container.hasRegistration('DatabaseTenantMemoryRegistry') ? container.resolve('DatabaseTenantMemoryRegistry') : undefined,
       portfolioRepoManager: container.resolve('PortfolioRepoManager'),
       rateLimiter: container.resolve('GitHubRateLimiter'),
       fileOperations: container.resolve('FileOperationsService'),
@@ -173,6 +175,7 @@ export class IndexingServiceRegistrar {
     }));
 
     container.register('PortfolioSyncManager', () => new PortfolioSyncManager({
+      memoryRegistry: container.hasRegistration('DatabaseTenantMemoryRegistry') ? container.resolve('DatabaseTenantMemoryRegistry') : undefined,
       configManager: container.resolve('ConfigManager'),
       portfolioManager: container.resolve('PortfolioManager'),
       portfolioRepoManager: container.resolve('PortfolioRepoManager'),
