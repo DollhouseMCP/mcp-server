@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { type Dirent } from 'node:fs';
 import { mkdtemp, opendir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -14,7 +14,82 @@ function deferred<T>() {
   const promise = new Promise<T>(accept => { resolve = accept; });
   return { promise, resolve };
 }
+function previousJestObserver(owner: { read: () => Promise<Dirent | null> }) {
+  const original = owner.read, measured = { attemptedReads: 0, completedCensuses: 0 };
+  const spy = jest.spyOn(owner, 'read').mockImplementation(async function(this: object) {
+    measured.attemptedReads++;
+    const entry = await original.call(this);
+    if (!entry) measured.completedCensuses++;
+    return entry;
+  });
+  return { measured, restore: () => spy.mockRestore(), histories: () => ({
+    calls: spy.mock.calls.length, contexts: spy.mock.contexts.length, instances: spy.mock.instances.length,
+    results: spy.mock.results.length, invocationCallOrder: spy.mock.invocationCallOrder.length,
+  }) };
+}
 describe('aggregate directory read observer contract', () => {
+  it.each([['jest', 'aggregate'], ['aggregate', 'jest']] as const)(
+    'pairs literal histories and exact aggregate outcomes in %s then %s order', async (...order) => {
+      const attempts = 4096, cause = new Error('paired read rejection');
+      for (const kind of order) {
+        let calls = 0, lastEntry: Dirent | null = null;
+        const owner = { async read(): Promise<Dirent | null> {
+          expect(this).toBe(owner);
+          if (++calls === attempts + 2) throw cause;
+          lastEntry = calls <= attempts ? { name: String(calls) } as Dirent : null;
+          return lastEntry;
+        } };
+        const original = Object.getOwnPropertyDescriptor(owner, 'read');
+        const observer = kind === 'jest' ? previousJestObserver(owner) : observeDirectoryReads(owner);
+        try {
+          for (let index = 0; index < attempts; index++) expect(await owner.read()).toBe(lastEntry);
+          expect(await owner.read()).toBeNull();
+          await expect(owner.read()).rejects.toBe(cause);
+          expect(observer.measured).toEqual({ attemptedReads: attempts + 2, completedCensuses: 1 });
+          if ('histories' in observer) expect(observer.histories()).toEqual({
+            calls: attempts + 2, contexts: attempts + 2, instances: attempts + 2,
+            results: attempts + 2, invocationCallOrder: attempts + 2,
+          });
+          else expect(jest.isMockFunction(owner.read)).toBe(false);
+        } finally { observer.restore(); }
+        expect(Object.getOwnPropertyDescriptor(owner, 'read')).toEqual(original);
+      }
+    });
+  it.each([['jest', 'aggregate'], ['aggregate', 'jest']] as const)(
+    'pairs concurrent out-of-order settlements in %s then %s order', async (...order) => {
+      for (const kind of order) {
+        const entry = { name: 'exact entry' } as Dirent, cause = new Error('exact rejection');
+        let calls = 0;
+        const pending = Array.from({ length: 4 }, () => {
+          let resolve!: (value: Dirent | null) => void, reject!: (cause: unknown) => void;
+          const promise = new Promise<Dirent | null>((accept, refuse) => { resolve = accept; reject = refuse; });
+          return { promise, resolve, reject };
+        });
+        const owner = { read() { expect(this).toBe(owner); return pending[calls++].promise; } };
+        const original = Object.getOwnPropertyDescriptor(owner, 'read');
+        const observer = kind === 'jest' ? previousJestObserver(owner) : observeDirectoryReads(owner);
+        const results = Array.from({ length: 4 }, () => owner.read().then(
+          value => ({ status: 'fulfilled', value }), failure => ({ status: 'rejected', value: failure })));
+        try {
+          expect(observer.measured).toEqual({ attemptedReads: 4, completedCensuses: 0 });
+          pending[3].reject(undefined); expect((await results[3]).value).toBeUndefined();
+          pending[1].resolve(null); expect((await results[1]).value).toBeNull();
+          expect(observer.measured.completedCensuses).toBe(1);
+          pending[2].reject(cause); expect((await results[2]).value).toBe(cause);
+          pending[0].resolve(entry); expect((await results[0]).value).toBe(entry);
+          expect((await Promise.all(results)).map(result => result.status))
+            .toEqual(['fulfilled', 'fulfilled', 'rejected', 'rejected']);
+          expect(observer.measured).toEqual({ attemptedReads: 4, completedCensuses: 1 });
+          if ('histories' in observer) expect(observer.histories()).toEqual({
+            calls: 4, contexts: 4, instances: 4, results: 4, invocationCallOrder: 4,
+          });
+        } finally {
+          for (const value of pending) value.resolve(null);
+          await Promise.all(results); observer.restore();
+        }
+        expect(Object.getOwnPropertyDescriptor(owner, 'read')).toEqual(original);
+      }
+    });
   it('delegates real directory reads and EOF with the actual receiver and restores the descriptor', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'aggregate-directory-read-')); roots.push(root);
     await writeFile(path.join(root, 'one'), 'one');
