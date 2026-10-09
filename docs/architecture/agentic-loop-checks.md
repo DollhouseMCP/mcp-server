@@ -482,6 +482,19 @@ When the safety tier evaluation returns `verify` or `danger_zone`, the system cr
 2. Generates display code: 6 characters from `0-9A-HJ-NP-Z` (excludes I, O for readability) using `crypto.randomBytes()`
 3. Sets `expiresAt` (default 5 minutes, configurable via `verificationTimeoutMinutes`)
 
+### Existing Challenge Migration (#2656)
+
+New safety challenges use UUID v4 IDs. During the 2.1 compatibility window,
+`verify_challenge` also accepts the previous generator's exact format:
+`challenge_<13-digit nonzero-leading timestamp>_<12 lowercase hex characters>`.
+This only permits store lookup; the code must still be present, unexpired,
+one-time and owned by the requesting session. `release_deadlock` remains UUID-only.
+Do not rewrite an existing block's ID: that would break its association with the stored code.
+Legacy acceptance is retained through 2.1; removal requires a later migration decision
+after outstanding legacy blocks have been verified or recovered. Codes live in memory,
+so accepting a persisted legacy block's ID does not restore its code after restart.
+An orphaned block needs the separate authenticated recovery flow (#2431).
+
 ### Display Code Isolation (Security Critical)
 
 The display code is **never returned to the LLM**. It is:
