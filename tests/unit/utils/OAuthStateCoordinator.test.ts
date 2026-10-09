@@ -13,15 +13,61 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+const liveOwnerReasons = ['LOCK_DEADLINE_EXCEEDED', 'CURRENT_PROCESS_IDENTITY_UNAVAILABLE',
+  'TICKET_SPACE_EXHAUSTED', 'FILESYSTEM_OPERATION_ERROR', 'CHILD_SPAWN_ERROR', 'UNKNOWN_LOCK_ERROR'] as const;
+const liveOwnerPhases = ['ready', 'lock', 'entered', 'returned', 'complete', 'error'] as const;
+const liveOwnerErrorNames = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'Unknown'];
+const liveOwnerErrorCodes = ['ENOENT', 'EEXIST', 'EACCES', 'EPERM', 'ENOTSUP', 'EIO', 'ENOSPC', 'ETIMEDOUT'];
+
+function liveOwnerTrace() {
+  const samples: { event: string; elapsedMs: number }[] = [];
+  let unavailable = false;
+  let truncated = false;
+  let started = 0;
+  try { started = performance.now(); } catch { unavailable = true; }
+  const mark = (event: 'owner-entered-observed' | 'owner-ticket-identity-asserted' | 'owner-ticket-aged' |
+    'contender-ready-and-ticket-identity-observed' | 'no-premature-entry-asserted' |
+    'owner-release-write-start' | 'owner-release-write-complete' | 'owner-close-observed' |
+    'contender-close-observed' | 'final-assertions-complete' | 'cleanup-children-settled' |
+    'owned-directory-removal-complete') => {
+    try {
+      if (samples.length === 16) { truncated = true; return; }
+      samples.push({ event, elapsedMs: Math.round(performance.now() - started) });
+    } catch { unavailable = true; }
+  };
+  return { mark, snapshot: () => ({ samples, unavailable, truncated }) };
+}
+
 // Only this fixture emits these bounded records; never include exception messages or paths.
 const liveOwnerChildScript = `
   import fs from 'node:fs';
   const [moduleUrl, role, stateFile, readyFile, enteredFile, releaseFile, publication] = process.argv.slice(1);
   let phase = 'import';
-  const report = (error) => process.stderr.write(JSON.stringify({
-    phase, name: /^[A-Za-z]{1,40}$/.test(error?.name) ? error.name : 'Unknown',
-    code: /^[A-Z0-9_]{1,40}$/.test(error?.code) ? error.code : null
-  }) + '\\n');
+  let sequence = 0;
+  let unavailable = false;
+  let started = 0;
+  try { started = performance.now(); } catch { unavailable = true; }
+  const reason = (error) => {
+    try {
+      if (error?.message === 'Timed out waiting for OAuth state lock: ' + stateFile + '.lock') return 'LOCK_DEADLINE_EXCEEDED';
+      if (error?.name === 'TypeError' && error.message === 'Unable to determine process identity for OAuth state locking') return 'CURRENT_PROCESS_IDENTITY_UNAVAILABLE';
+      if (error?.message === 'OAuth state lock ticket space exhausted') return 'TICKET_SPACE_EXHAUSTED';
+      if (${JSON.stringify(liveOwnerErrorCodes)}.includes(error?.code)) return 'FILESYSTEM_OPERATION_ERROR';
+    } catch { unavailable = true; }
+    return 'UNKNOWN_LOCK_ERROR';
+  };
+  const emit = (event, error) => {
+    try {
+      if (sequence === 6) return;
+      const failure = error === undefined ? {} : {
+        reason: reason(error),
+        name: ${JSON.stringify(liveOwnerErrorNames)}.includes(error?.name) ? error.name : 'Unknown',
+        code: ${JSON.stringify(liveOwnerErrorCodes)}.includes(error?.code) ? error.code : null
+      };
+      process.stderr.write(JSON.stringify({ event, phase, sequence: ++sequence,
+        elapsedMs: Math.round(performance.now() - started), unavailable, ...failure }) + '\\n');
+    } catch { unavailable = true; }
+  };
   try {
     const { withOAuthStateLockSync } = await import(moduleUrl);
     if (publication === 'directory-fallback') fs.linkSync = () => {
@@ -31,23 +77,31 @@ const liveOwnerChildScript = `
     };
     phase = 'ready';
     fs.writeFileSync(readyFile, 'ready');
+    emit('ready');
     phase = 'lock';
+    emit('lock');
     withOAuthStateLockSync(stateFile, () => {
       phase = 'entered';
       fs.writeFileSync(enteredFile, 'entered');
+      emit('entered');
       if (role === 'owner') while (!fs.existsSync(releaseFile)) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
       }
+      emit('returned');
     });
     phase = 'complete';
-  } catch (error) { report(error); process.exitCode = 1; }
+    emit('complete');
+  } catch (error) { emit('error', error); process.exitCode = 1; }
 `;
 
-function observedChild(args: string[]) {
+function observedChild(args: string[], onClose?: () => void) {
   const child = spawn(process.execPath, ['--input-type=module', '--eval', liveOwnerChildScript, ...args],
     { stdio: ['ignore', 'ignore', 'pipe'] });
   const started = performance.now();
-  let diagnostic: { phase: string; name: string; code: string | null } | null = null;
+  let diagnostic: { phase: string; name: string; code: string | null; reason: string } | null = null;
+  const samples: { event: string; sequence: number; elapsedMs: number }[] = [];
+  let unavailable = false;
+  let truncated = false;
   let stderr = '';
   let closed = false;
   let exited = false;
@@ -55,28 +109,51 @@ function observedChild(args: string[]) {
   let exitCode: number | null = null;
   let signal: string | null = null;
   child.stderr.on('data', (chunk: Buffer) => {
-    stderr = (stderr + chunk.toString('utf8')).slice(0, 1_024);
-    for (const line of stderr.split('\n')) {
+    stderr += chunk.toString('utf8');
+    if (stderr.length > 1_024) { stderr = stderr.slice(-1_024); truncated = true; }
+    const lines = stderr.split('\n');
+    stderr = lines.pop() ?? '';
+    for (const line of lines) {
       try {
         const value = JSON.parse(line) as Record<string, unknown>;
+        if (liveOwnerPhases.includes(value.event as (typeof liveOwnerPhases)[number]) &&
+            Number.isInteger(value.sequence) && Number(value.sequence) > 0 && Number(value.sequence) <= 6 &&
+            typeof value.elapsedMs === 'number' && Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0) {
+          if (samples.length < 6) samples.push({ event: String(value.event),
+            sequence: Number(value.sequence), elapsedMs: value.elapsedMs });
+          else truncated = true;
+          unavailable ||= value.unavailable === true;
+        }
         if (['import', 'ready', 'lock', 'entered', 'complete'].includes(String(value.phase)) &&
-            typeof value.name === 'string' && /^[A-Za-z]{1,40}$/.test(value.name) &&
-            (value.code === null || typeof value.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(value.code))) {
-          diagnostic = { phase: String(value.phase), name: value.name, code: value.code as string | null };
+            liveOwnerErrorNames.includes(String(value.name)) &&
+            (value.code === null || liveOwnerErrorCodes.includes(String(value.code))) &&
+            liveOwnerReasons.includes(value.reason as (typeof liveOwnerReasons)[number])) {
+          diagnostic = { phase: String(value.phase), name: String(value.name),
+            code: value.code as string | null, reason: String(value.reason) };
         }
       } catch { /* Discard unstructured loader warnings and all raw error text. */ }
     }
   });
-  child.once('error', () => { failed = true; });
+  child.once('error', () => {
+    failed = true;
+    diagnostic = { phase: 'import', name: 'Unknown', code: null, reason: 'CHILD_SPAWN_ERROR' };
+  });
   child.once('exit', (code, exitSignal) => { exited = true; exitCode = code; signal = exitSignal; failed ||= code !== 0; });
   const completion = new Promise<void>(resolve => child.once('close', code => {
     closed = true;
     failed ||= code !== 0;
     resolve();
+    try { onClose?.(); } catch { unavailable = true; }
   }));
-  const summary = () => JSON.stringify({ role: args[1], exitCode, signal,
-    elapsedMs: Math.round(performance.now() - started), diagnostic });
-  return { child, completion, isClosed: () => closed,
+  const snapshot = () => ({ role: args[1], exitCode, signal,
+    elapsedMs: Math.round(performance.now() - started), diagnostic, samples,
+    unavailable: unavailable || samples.length === 0 ||
+      samples.some((sample, index) => sample.sequence !== index + 1) ||
+      (closed && (failed ? diagnostic?.reason !== 'CHILD_SPAWN_ERROR' &&
+        !samples.some(sample => sample.event === 'error') : !samples.some(sample => sample.event === 'complete'))),
+    truncated });
+  const summary = () => JSON.stringify(snapshot());
+  return { child, completion, snapshot, isClosed: () => closed,
     assertAlive: () => {
       if (exited || closed || failed) throw new Error(`Lock fixture child ended: ${summary()}`);
     },
@@ -624,6 +701,7 @@ describe('OAuthStateCoordinator', () => {
     'does not reclaim a stale-aged ticket while its original process is alive (%s)', async publication => {
     // Leave time for finally cleanup within the existing ten-second Jest timeout.
     const fixtureDeadline = performance.now() + 7_000;
+    const trace = liveOwnerTrace();
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
     const ownerEnteredFile = path.join(directory, 'owner-entered');
@@ -635,7 +713,8 @@ describe('OAuthStateCoordinator', () => {
       path.join(process.cwd(), 'oauth-state-coordinator.mjs')
     ).href;
     requireFixtureTime(fixtureDeadline);
-    const owner = observedChild([coordinatorUrl, 'owner', stateFile, ownerReadyFile, ownerEnteredFile, releaseOwnerFile, publication]);
+    const owner = observedChild([coordinatorUrl, 'owner', stateFile, ownerReadyFile, ownerEnteredFile, releaseOwnerFile, publication],
+      () => trace.mark('owner-close-observed'));
     // afterEach never deletes a directory that may still belong to a live child.
     transferChildFixtureCleanup(directory);
     let contender: ReturnType<typeof observedChild> | undefined;
@@ -643,6 +722,7 @@ describe('OAuthStateCoordinator', () => {
     let cleanupFailures: unknown[] = [];
     try {
     await waitForLiveOwnerObservation(async () => fs.access(ownerEnteredFile).then(() => true, () => false), [owner], fixtureDeadline);
+    trace.mark('owner-entered-observed');
     const ownerIdentityMarker = `${stateFile}.lock.process-${owner.child.pid}.identity`;
     await expect(fs.access(ownerIdentityMarker)).resolves.toBeUndefined();
     const ownerSlot = path.join(`${stateFile}.lock`, '1.slot');
@@ -651,12 +731,15 @@ describe('OAuthStateCoordinator', () => {
     expect(ownerTicket.ownerPid).toBe(owner.child.pid);
     const marker = JSON.parse(await fs.readFile(ownerIdentityMarker, 'utf8')) as { identity: string };
     expect(marker.identity).toBe(ownerTicket.ownerIdentity);
+    trace.mark('owner-ticket-identity-asserted');
     const staleTime = new Date(Date.now() - 60_000);
     await fs.utimes(ownerSlot, staleTime, staleTime);
+    trace.mark('owner-ticket-aged');
 
     owner.assertAlive();
     requireFixtureTime(fixtureDeadline);
-    contender = observedChild([coordinatorUrl, 'contender', stateFile, contenderReadyFile, contenderEnteredFile, releaseOwnerFile, publication]);
+    contender = observedChild([coordinatorUrl, 'contender', stateFile, contenderReadyFile, contenderEnteredFile, releaseOwnerFile, publication],
+      () => trace.mark('contender-close-observed'));
     const currentContender = contender;
     await waitForLiveOwnerObservation(async () => {
       try {
@@ -670,12 +753,16 @@ describe('OAuthStateCoordinator', () => {
           typeof ticket.id === 'string' && ticket.id.length > 0;
       } catch { return false; }
     }, [owner, contender], fixtureDeadline);
+    trace.mark('contender-ready-and-ticket-identity-observed');
     await new Promise(resolve => setTimeout(resolve, 150));
     requireFixtureTime(fixtureDeadline);
     owner.assertAlive();
     contender.assertAlive();
     await expect(fs.access(contenderEnteredFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    trace.mark('no-premature-entry-asserted');
+    trace.mark('owner-release-write-start');
     await fs.writeFile(releaseOwnerFile, 'release', 'utf8');
+    trace.mark('owner-release-write-complete');
     await boundedChildCompletion(Promise.all([owner.completion, contender.completion]).then(() => undefined),
       Math.max(1, Math.min(5_000, fixtureDeadline - performance.now())));
     owner.assertSuccess();
@@ -684,14 +771,26 @@ describe('OAuthStateCoordinator', () => {
     await expect(fs.access(contenderEnteredFile)).resolves.toBeUndefined();
     await expect(fs.access(ownerIdentityMarker)).rejects.toMatchObject({ code: 'ENOENT' });
     await expectAllTicketsCompleted(stateFile);
+    trace.mark('final-assertions-complete');
     } catch (cause) { primary = { cause }; } finally {
       const cleanup = await Promise.allSettled([owner, ...(contender ? [contender] : [])].map(stopObservedChild));
+      trace.mark('cleanup-children-settled');
       cleanupFailures = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
         .map(result => result.reason);
       if (cleanupFailures.length === 0) {
-        try { await fs.rm(directory, { recursive: true, force: true }); }
+        try {
+          await fs.rm(directory, { recursive: true, force: true });
+          trace.mark('owned-directory-removal-complete');
+        }
         catch { cleanupFailures.push(new Error('Lock fixture directory cleanup failed')); }
       }
+      // Parent observations share one monotonic clock; child elapsed values do not.
+      // Emission failure cannot replace the original operation or cleanup cause.
+      try {
+        console.info('oauth-live-owner-diagnostic', JSON.stringify({ publication,
+          parent: trace.snapshot(), owner: owner.snapshot(), contender: contender?.snapshot() ?? null,
+          primaryFailed: primary !== undefined, cleanupFailures: cleanupFailures.length }));
+      } catch { /* Diagnostic output is advisory to the unchanged assertions. */ }
     }
     throwChildFixtureFailures(primary, cleanupFailures);
   });
