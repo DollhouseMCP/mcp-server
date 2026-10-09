@@ -145,6 +145,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private readonly consoleRawNames = new WeakMap<Memory, string>();
   private readonly consoleSerializationNames = new WeakMap<Memory, string>();
 
+  private readonly deferredGuardedPublications = new WeakSet<Memory>();
+
   constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
       ElementType.MEMORY,
@@ -858,6 +860,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.guardedUpdateAdapter?.getPendingUpdate(memory);
   }
 
+  /** Internal larger-operation seam: save without claiming the caller's publication tail. */
+  async saveForGuardedOperation(memory: Memory): Promise<void> {
+    if (this.deferredGuardedPublications.has(memory)) throw new Error('Guarded publication is already in progress');
+    this.deferredGuardedPublications.add(memory);
+    try { await this.save(memory); }
+    finally { this.deferredGuardedPublications.delete(memory); }
+  }
+
+  /** Actual caller tail, not a flag or restored receipt, establishes completion. */
+  async completeGuardedOperation<T>(memory: Memory, publish: () => Promise<T>): Promise<T> {
+    if (!this.guardedUpdateAdapter) return publish();
+    return await this.guardedUpdateAdapter.completePublication(memory, publish);
+  }
+
   private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
@@ -887,17 +903,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
       if (outcome.status !== 'committed') throw outcome.cause;
       committed = true;
       if ('cause' in outcome) throw outcome.cause;
-      // A concurrent caller mutation never becomes the committed cache snapshot.
-      const publication = detached.createRuntimePublication();
-      publication.setFilePath(locator!);
-      this.requireGuardedContext(tenant, contextRoot);
-      adapter.bindPublication(publication, element);
-      if (!isWritableStorageLayer(this.storageLayer)) {
-        await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+      const publish = async () => {
+        // A concurrent caller mutation never becomes the committed cache snapshot.
+        const publication = detached.createRuntimePublication();
+        publication.setFilePath(locator!);
         this.requireGuardedContext(tenant, contextRoot);
-      }
-      this.cacheElement(publication, locator!);
-      await this.afterSave(publication, locator!);
+        adapter.bindPublication(publication, element);
+        if (!isWritableStorageLayer(this.storageLayer)) {
+          await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
+          this.requireGuardedContext(tenant, contextRoot);
+        }
+        this.cacheElement(publication, locator!);
+        await this.afterSave(publication, locator!);
+      };
+      if (this.deferredGuardedPublications.has(element)) await publish();
+      else await adapter.completePublication(element, publish);
     } catch (cause) {
       adapter.recordFailure(element, candidate, original, cause, committed);
       if (adapter.getPendingUpdate(element)?.status === 'refused') {
@@ -1205,7 +1225,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
-  override async list(options?: { includePublic?: boolean }): Promise<Memory[]> {
+  override async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<Memory[]> {
     // Database mode: delegate to base class which uses listFromDatabase().
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
@@ -1213,6 +1233,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.applyActivationStatus(memories);
       return memories;
     }
+
+    if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
 
     // File mode: custom multi-directory listing with deduplication.
     // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()
@@ -2126,6 +2148,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     data: string,
     format: 'json' | 'yaml' | 'markdown' = 'yaml'
   ): Promise<Memory> {
+    if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       let parsed: any;
       let markdownContent: string | undefined;
