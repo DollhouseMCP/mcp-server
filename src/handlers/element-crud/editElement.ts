@@ -1004,6 +1004,10 @@ export async function editElement(
   args: EditElementArgs,
   validationService?: ValidationService
 ) {
+  const { type: guardedType } = normalizeElementTypeInput(args.type);
+  if (guardedType === ElementType.MEMORY && context.memoryManager.isGuardedHeadUpdateEnabled?.()) {
+    return error('Guarded memory supports immediate append/clear and console UPDATE only');
+  }
   await context.ensureInitialized();
 
   // Use injected validation service or create default
