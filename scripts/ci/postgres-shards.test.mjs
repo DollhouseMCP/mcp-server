@@ -27,6 +27,7 @@ test('complete future inventory and intentional pending cases retain honest cove
 
 for (const [name, mutate] of [
   ['missing shard artifact', e => e.pop()],
+  ['missing inventory digest', e => { delete e[0].inventoryDigest; }],
   ['wrong attempt', e => { e[0].identity = { ...identity, attempt: '2' }; }],
   ['wrong source', e => { e[0].identity = { ...identity, source: 'other' }; }],
   ['shared service', e => { e[1].service = e[0].service; }],

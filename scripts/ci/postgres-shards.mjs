@@ -6,6 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = process.cwd();
+// setup-node's qualified installation supplies Node and npm together. Avoid PATH lookup.
+const npmCli = path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js');
+const compare = (a, b) => {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+};
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const save = (file, value) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 const read = file => JSON.parse(readFileSync(file, 'utf8'));
@@ -18,7 +24,7 @@ function identity() {
     source: process.env.PG_SOURCE_HEAD,
   };
   for (const value of Object.values(result)) assert.ok(value, 'Missing workflow identity');
-  assert.equal(spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(), result.checkout);
+  assert.equal(spawnSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim(), result.checkout);
   return result;
 }
 
@@ -32,7 +38,7 @@ function unique(files) {
   assert.ok(Array.isArray(files) && files.length > 0, 'Empty or absent inventory');
   assert.equal(new Set(files).size, files.length, 'Duplicate inventory entry');
   for (const file of files) assert.ok(typeof file === 'string' && file.startsWith('tests/integration/') && !file.includes('..'));
-  return [...files].sort();
+  return [...files].sort(compare);
 }
 
 export function checkPartition(inventory, shards) {
@@ -46,14 +52,15 @@ function discover(shard) {
   // Native Jest discovery and native default-sequencer partition; never a static filename list.
   const args = ['--silent', 'run', 'test:integration', '--', '--runInBand', '--listTests', '--json'];
   if (shard) args.push(`--shard=${shard}/2`);
-  const result = spawnSync('npm', args, { encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
+  assert.ok(existsSync(npmCli), 'Qualified Node installation must include its npm CLI');
+  const result = spawnSync(process.execPath, [npmCli, ...args], { encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
   assert.equal(result.status, 0, 'Native Jest discovery failed');
   return unique(JSON.parse(result.stdout).map(relative));
 }
 
 export function checkEvidence(evidence, expected) {
   assert.equal(evidence.length, 2, 'Both shard artifacts required');
-  assert.deepEqual(evidence.map(e => e.shard).sort(), [1, 2]);
+  assert.deepEqual(evidence.map(e => e.shard).sort((a, b) => a - b), [1, 2]);
   assert.equal(new Set(evidence.map(e => e.service)).size, 2, 'Independent services required');
   for (const e of evidence) {
     assert.match(e.service, /^[a-f0-9]{12,64}$/);
@@ -127,7 +134,8 @@ async function run(shard, directory) {
   save(file, evidence);
   const resultPath = path.join(directory, 'jest-result.json');
   const args = ['run', 'test:integration', '--', '--runInBand', '--runTestsByPath', ...evidence.selected, '--json', '--outputFile', resultPath];
-  const child = spawn('npm', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.ok(existsSync(npmCli), 'Qualified Node installation must include its npm CLI');
+  const child = spawn(process.execPath, [npmCli, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   let tail = '';
   const output = (stream, chunk) => {
     stream.write(chunk);
@@ -161,7 +169,7 @@ async function run(shard, directory) {
       failed: f.assertionResults.filter(a => a.status === 'failed').length,
       pending: f.assertionResults.filter(a => a.status === 'pending').length,
       todo: f.assertionResults.filter(a => a.status === 'todo').length,
-    })).sort((a, b) => a.file.localeCompare(b.file));
+    })).sort((a, b) => compare(a.file, b.file));
   }
   // Only this sanitized inventory/count/outcome evidence is uploaded, not raw messages or logs.
   save(file, evidence);
@@ -174,10 +182,10 @@ function stop(directory, container) {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.match(container, /^[a-f0-9]{12,64}$/);
   // Each matrix job owns its own hosted service/cluster, including every DB and role.
-  const removed = spawnSync('docker', ['rm', '--force', '--volumes', container], { encoding: 'utf8', timeout: 30000 });
+  const removed = spawnSync('/usr/bin/docker', ['rm', '--force', '--volumes', container], { encoding: 'utf8', timeout: 30000 });
   assert.equal(removed.status, 0, 'Service removal failed');
   assert.equal(removed.stdout.trim(), container);
-  const remaining = spawnSync('docker', ['ps', '--all', '--quiet', '--filter', `id=${container}`], { encoding: 'utf8', timeout: 10000 });
+  const remaining = spawnSync('/usr/bin/docker', ['ps', '--all', '--quiet', '--filter', `id=${container}`], { encoding: 'utf8', timeout: 10000 });
   assert.equal(remaining.status, 0);
   assert.equal(remaining.stdout.trim(), '', 'Owned service still exists');
   const file = path.join(directory, 'evidence.json');
@@ -193,7 +201,7 @@ function aggregate(directory) {
   assert.equal(process.env.PG_SHARDS_RESULT, 'success', 'Failed, cancelled, skipped or missing shard job');
   const names = readdirSync(directory);
   const prefix = `pg-integration-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}-shard-`;
-  assert.deepEqual(names.sort(), [prefix + '1', prefix + '2'].sort(), 'Both exact current-attempt artifacts required');
+  assert.deepEqual(names.sort(compare), [prefix + '1', prefix + '2'].sort(compare), 'Both exact current-attempt artifacts required');
   const evidence = [1, 2].map(n => read(path.join(directory, prefix + n, 'evidence.json')));
   checkEvidence(evidence, identity());
   console.log(JSON.stringify({ inventoryFiles: evidence[0].inventory.length, shards: evidence.map(e => ({ shard: e.shard, ...e.finalSuite })), cleanupVerified: true }));
