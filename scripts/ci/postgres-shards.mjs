@@ -58,6 +58,24 @@ function discover(shard) {
   return unique(JSON.parse(result.stdout).map(relative));
 }
 
+function checkFile(f) {
+  // Preserve intentional existing pending cases/suites; never report them as executed passes.
+  assert.ok(['passed', 'focused', 'skipped'].includes(f.status), 'Failed or absent file result');
+  assert.equal(f.failed, 0);
+  for (const value of [f.passed, f.failed, f.pending, f.todo]) assert.ok(Number.isInteger(value) && value >= 0);
+  assert.ok(f.passed + f.pending + f.todo > 0, 'Empty suite evidence');
+  // Jest's JSON reporter uses focused for successful files containing skipped cases.
+  if (f.status === 'passed') assert.equal(f.pending, 0);
+  if (f.status === 'focused') {
+    assert.ok(f.pending > 0);
+    assert.ok(f.passed + f.todo > 0);
+  }
+  if (f.status === 'skipped') {
+    assert.equal(f.passed, 0);
+    assert.equal(f.todo, 0);
+  }
+}
+
 export function checkEvidence(evidence, expected) {
   assert.equal(evidence.length, 2, 'Both shard artifacts required');
   assert.deepEqual(evidence.map(e => e.shard).sort((a, b) => a - b), [1, 2]);
@@ -77,15 +95,9 @@ export function checkEvidence(evidence, expected) {
     assert.equal(e.finalSuite.totalSuites, e.selected.length);
     assert.equal(e.files.length, e.selected.length);
     assert.deepEqual(unique(e.files.map(f => f.file)), e.selected, 'Missing, duplicate or extra file result');
-    for (const f of e.files) {
-      // Preserve intentional existing pending cases/suites; never report them as executed passes.
-      assert.ok(['passed', 'pending'].includes(f.status), 'Failed or absent file result');
-      assert.equal(f.failed, 0);
-      for (const value of [f.passed, f.failed, f.pending, f.todo]) assert.ok(Number.isInteger(value) && value >= 0);
-      assert.ok(f.passed + f.pending + f.todo > 0, 'Empty suite evidence');
-    }
-    assert.equal(e.finalSuite.passedSuites, e.files.filter(f => f.status === 'passed').length);
-    assert.equal(e.finalSuite.pendingSuites, e.files.filter(f => f.status === 'pending').length);
+    for (const f of e.files) checkFile(f);
+    assert.equal(e.finalSuite.passedSuites, e.files.filter(f => f.status === 'passed' || f.status === 'focused').length);
+    assert.equal(e.finalSuite.pendingSuites, e.files.filter(f => f.status === 'skipped').length);
     assert.equal(e.finalSuite.totalSuites, e.finalSuite.passedSuites + e.finalSuite.pendingSuites);
     for (const [total, field] of [['passedTests', 'passed'], ['pendingTests', 'pending'], ['todoTests', 'todo']]) {
       assert.equal(e.finalSuite[total], e.files.reduce((sum, f) => sum + f[field], 0), 'Final test counts differ from file evidence');
