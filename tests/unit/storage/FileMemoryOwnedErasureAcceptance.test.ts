@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { FileMemoryOwnerSnapshots, type ErasurePublication } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
@@ -21,6 +21,30 @@ function assertBinding(record: ReturnType<typeof erasureParseRecord>, fixture: A
   expect(record).toMatchObject({ state, ownerId: fixture.token.ownerId, operationId: fixture.request.operationId,
     deleteOperationId: fixture.request.deleteOperationId, userId: fixture.token.userId });
 }
+/** Constant-size observations only; timing/output cannot replace an operation failure. */
+function retiredPrefixTiming() {
+  let started = 0, unavailable = false, flushed = false;
+  const samples: { phase: string; elapsedMs: number }[] = [];
+  try { started = performance.now(); } catch { unavailable = true; }
+  return {
+    mark(phase: string) {
+      if (flushed || unavailable) return;
+      try {
+        if (samples.length >= 16) { unavailable = true; return; }
+        samples.push({ phase, elapsedMs: performance.now() - started });
+      } catch { unavailable = true; }
+    },
+    flush(observation: 'body-finally' | 'setup-failed' | 'jest-afterEach') {
+      if (flushed) return;
+      flushed = true;
+      try { process.stderr.write(`ERASURE retired-prefix timing ${JSON.stringify({ node: process.version, observation, unavailable, samples })}\n`); }
+      catch { /* Diagnostic output must preserve the original operation/cleanup outcome. */ }
+    },
+  };
+}
+let activeRetiredPrefixTiming: ReturnType<typeof retiredPrefixTiming> | undefined;
+// A timed-out async body can remain pending. Emit its bounded partial phases without cancelling it.
+afterEach(() => { activeRetiredPrefixTiming?.flush('jest-afterEach'); });
 const supported = process.platform !== 'win32' && !!process.getuid;
 (supported ? describe : describe.skip)('remaining public owner erasure authority acceptance', () => {
   it.each(['no-volumes', 'no-by-id', 'no-owner-root'] as const)('recovers the exact first-missing witness at READY and retirement (%s)', async archive => {
@@ -74,14 +98,23 @@ const supported = process.platform !== 'win32' && !!process.getuid;
     } finally { await fixture.cleanup(); }
   }, 10_000);
   it.each(['tamper', 'missing', 'retired-prefix'] as const)('authenticates a genuine multiple-segment suffix (%s)', async change => {
-    const fixture = await makeOwnedErasureFixture({ volumes: 2 });
+    const timing = change === 'retired-prefix' ? retiredPrefixTiming() : undefined;
+    if (timing) activeRetiredPrefixTiming = timing;
+    timing?.mark('setup-start');
+    const fixture = await makeOwnedErasureFixture({ volumes: 2 }).catch(cause => {
+      timing?.mark('setup-failed'); timing?.flush('setup-failed'); throw cause;
+    });
+    timing?.mark('fixture-ready');
     const selected = path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId), registry = path.join(fixture.root, '.memory-owners/owners');
     // Real supported unknown private files increase encoded inventory width; no records are fabricated.
     const stop: ErasurePublication = change === 'retired-prefix' ? 'after-evidence-retirement' : 'inventory-durable';
     try {
     for (let index = 0; index < 16; index++) await fs.writeFile(path.join(selected, `${String(index).padStart(2, '0')}-${'x'.repeat(200)}`), 'private unknown', { mode: 0o600 });
+      timing?.mark('setup-end');
       const writer = interruption(fixture.coordinator, stop);
+      timing?.mark('erase-start');
       const failure = await writer.owners.eraseOwned(fixture.request).catch(cause => cause);
+      timing?.mark('erase-end'); timing?.mark('verification-start');
       expect(writer.reached()).toBe(true); expect(containsCause(failure, writer.cause)).toBe(true);
       const journal = erasureParseRecord(await fs.readFile(path.join(registry, `${fixture.token.ownerId}.erase.json`), 'utf8'));
       assertBinding(journal, fixture, change === 'retired-prefix' ? 'RETIRE_ACTION_PREPARED' : 'INVENTORY_READY');
@@ -90,10 +123,12 @@ const supported = process.platform !== 'win32' && !!process.getuid;
       if (change === 'retired-prefix') {
         expect(journal.retirement!.kind).toBe('segment'); expect(journal.retirement!.successor!.ordinal).toBe(1);
         await expect(fs.lstat(first)).rejects.toMatchObject({ code: 'ENOENT' });
+        timing?.mark('pre-recovery-verification-end'); timing?.mark('recovery-start');
         expect(['erased', 'already-erased']).toContain((await fixture.owners.recoverOwnedErasure({ ownerId: fixture.token.ownerId,
           operationId: fixture.request.operationId, deleteOperationId: fixture.request.deleteOperationId })).status);
+        timing?.mark('recovery-end'); timing?.mark('post-recovery-verification-start');
         expect((await fs.readdir(registry)).filter(name => name.startsWith(fixture.token.ownerId))).toEqual([]);
-        return;
+        timing?.mark('assertions-complete'); return;
       }
       const segment = erasureParseSegment(await fs.readFile(first, 'utf8'));
       expect(segment.successor!.ordinal).toBe(1);
@@ -104,6 +139,10 @@ const supported = process.platform !== 'win32' && !!process.getuid;
       await expect(fixture.owners.recoverOwnedErasure({ ownerId: fixture.token.ownerId, operationId: fixture.request.operationId,
         deleteOperationId: fixture.request.deleteOperationId })).rejects.toBeDefined();
       expect({ selected: await captureErasureTree(selected), registry: await captureErasureTree(registry) }).toEqual(before);
-    } finally { await fixture.cleanup(); }
+    } finally {
+      timing?.mark('cleanup-start');
+      try { await fixture.cleanup(); timing?.mark('cleanup-end'); }
+      finally { timing?.mark('cleanup-finally'); timing?.flush('body-finally'); }
+    }
   }, 10_000);
 });
