@@ -14,6 +14,6 @@ export const memoryBackendModes = pgTable('memory_backend_modes', {
   check('memory_backend_modes_backend_check', sql`${table.backend} = 'database'`),
   check('memory_backend_modes_protocol_check', sql`${table.protocolVersion} > 0`),
   check('memory_backend_modes_profile_check', sql`length(${table.profile}) > 0`),
-  check('memory_backend_modes_mode_check', sql`${table.mode} IN ('guarded', 'read_only')`),
+  check('memory_backend_modes_mode_check', sql`${table.mode} IN ('legacy', 'guarded', 'read_only')`),
   check('memory_backend_modes_generation_check', sql`${table.generation} > 0`),
 ]);
