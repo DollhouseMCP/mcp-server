@@ -46,6 +46,10 @@ function copyCandidate(candidate: MemoryUpdateCandidate): MemoryUpdateCandidate 
 export class MemoryHeadUpdateAdapter {
   private readonly bindings = new WeakMap<object, BoundState>();
   constructor(private readonly port: MemoryUpdatePort, private readonly getCurrentUserId: () => string) {}
+  /** Internal composition identity check; exposes no backend port or token. */
+  matchesDatabaseStore(store: IMemoryHeadStore): boolean {
+    return this.port.backend === 'database' && this.port.store === store;
+  }
   captureTenant(): string {
     const tenant = this.getCurrentUserId();
     if (typeof tenant !== 'string' || !tenant) throw refusal('Authenticated memory tenant required');

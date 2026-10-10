@@ -14,6 +14,7 @@ export { elementProvenance } from './provenance.js';
 export { memoryEntries } from './memories.js';
 export { memoryVolumes } from './memoryVolumes.js';
 export { memoryHeadInvalidationRuns } from './memoryHeadInvalidationRuns.js';
+export { memoryBackendModes } from './memoryBackendModes.js';
 export { ensembleMembers } from './ensembles.js';
 export { agentStates } from './agents.js';
 export { sessions } from './sessions.js';
