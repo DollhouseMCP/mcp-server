@@ -14,7 +14,7 @@ const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestI
 const roots: string[] = [];
 const USER = '11111111-1111-4111-8111-111111111111';
 const input = { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-09-29T00:00:00Z') };
-async function fixture(hook?: (phase: ArchivePublicationPhase, location: string) => Promise<void> | void, releaseFailure = false) {
+async function fixture(hook?: (phase: ArchivePublicationPhase, location: string) => Promise<void> | void, releaseFailure = false, acquisitionTimeoutMs?: number) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'archive-publication-'));
   roots.push(root);
   await fs.writeFile(path.join(root, 'ÜberNote.yaml'), 'entries: []\n');
@@ -22,7 +22,9 @@ async function fixture(hook?: (phase: ArchivePublicationPhase, location: string)
   const fence = new FileMemoryFence();
   const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER,
     fence: { withTenantFence: async (tenant, callback) => {
-      const result = await fence.withTenantFence(tenant, callback, { timeoutMs: 100 });
+      // Semantic archive cases use the production acquisition default.
+      // Orphan-lock timeout cases opt into their explicit short acquisition window.
+      const result = await fence.withTenantFence(tenant, callback, acquisitionTimeoutMs === undefined ? {} : { timeoutMs: acquisitionTimeoutMs });
       if (failRelease) throw new Error('release failure');
       return result;
     } } });
@@ -202,7 +204,7 @@ describe('dormant file archive publication', () => {
 it.each(['reserved-volume', 'reserved-generation', 'partial-payload', 'partial-metadata', 'before-marker', 'committed-marker'] as const)(
   'real SIGKILL at %s leaves attributable immutable crash evidence', async phase => {
     const { spawn } = await import('node:child_process');
-    const f = await fixture();
+    const f = await fixture(undefined, false, 100);
     const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
     const moduleUrl = (name: string) => new URL(`../../../src/storage/${name}.${extension}`, import.meta.url).href;
     const script = `

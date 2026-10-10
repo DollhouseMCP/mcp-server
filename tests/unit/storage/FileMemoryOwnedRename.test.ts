@@ -8,12 +8,13 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { FileMemoryOwnerSnapshots, type RenamePublication, type RenameOwnedRequest, type UnownedFileMemoryToken, type FileMemorySnapshot } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
-import { Dir, type Dirent, type BigIntStats } from 'node:fs';
+import { type BigIntStats } from 'node:fs';
 import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStore.js';
 import { FileMemoryOwnedRename, captureRenameRequest } from '../../../src/storage/FileMemoryOwnedRename.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
+import { cleanupDirectoryReadObservers, observeDirectoryReads } from './fixtures/aggregateDirectoryReadObserver.js';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const CONTENT = 'name: Original\nentries: []\n';
@@ -37,7 +38,58 @@ async function fixture(nested = false) {
   const foreign = path.join(root, 'Unrelated.yaml'); await fs.writeFile(foreign, 'foreign content', { mode: 0o600 });
   return { root, token, request, store, coordinator, source, destination, foreign, sourceJournal: journal(source), destinationJournal: journal(destination) };
 }
-afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+async function cleanupRenameFixtures() {
+  const failures: unknown[] = [];
+  try { jest.restoreAllMocks(); } catch (cause) { failures.push(cause); }
+  for (const root of roots.splice(0)) {
+    try { await fs.rm(root, { recursive: true, force: true }); }
+    catch (cause) { failures.push(cause); }
+  }
+  if (failures.length) throw new AggregateError(failures, 'RENAME fixture cleanup failed');
+}
+afterEach(async () => {
+  const profile = renameProfile; renameProfile = undefined;
+  profile?.mark('cleanup-start');
+  try {
+    await cleanupDirectoryReadObservers(cleanupRenameFixtures);
+    profile?.mark('cleanup-end');
+  } finally { profile?.mark('cleanup-finally'); profile?.flush(); }
+});
+
+let renameProfile: { mark: (phase: string, counters?: object) => void; flush: () => void } | undefined;
+function renameDiagnostics(caseDetails: object) {
+  let started = 0, unavailable = false, truncated = false, flushed = false, assertionsComplete = false, cleanupComplete = false;
+  try { started = performance.now(); } catch { unavailable = true; }
+  const samples: object[] = [];
+  const mark = (phase: string, counters: object = {}) => {
+    if (flushed) return;
+    try {
+      if (phase === 'assertions-complete') assertionsComplete = true;
+      if (phase === 'cleanup-end') cleanupComplete = true;
+      if (samples.length >= 16) { truncated = true; return; }
+      samples.push({ phase, elapsedMs: performance.now() - started, ...counters });
+    } catch { unavailable = true; }
+  };
+  renameProfile = { mark, flush() {
+    if (flushed) return;
+    flushed = true;
+    try { process.stderr.write(`RENAME profile ${JSON.stringify({ ...caseDetails, node: process.version,
+      pid: process.pid, partial: !assertionsComplete || !cleanupComplete, unavailable, truncated, samples })}\n`); }
+    catch { /* Diagnostics cannot replace the body result or prevent original cleanup. */ }
+  } };
+  mark('setup-start');
+  return mark;
+}
+function restoreRenameObservation(observation?: { restore: () => void }, directory?: { restore: () => void }, primary?: { cause: unknown }) {
+  const failures: unknown[] = [];
+  try { directory?.restore(); } catch (cause) { failures.push(cause); }
+  try { observation?.restore(); } catch (cause) { failures.push(cause); }
+  if (failures.length) {
+    if (primary) throw new AggregateError([primary.cause, ...failures], 'RENAME operation and observation restoration failed');
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, 'RENAME observation restoration failed');
+  }
+}
 describe('dormant same-parent managed RENAME', () => {
   if (process.platform === 'win32') {
     it('retains the POSIX-only owner-store boundary', () => {
@@ -438,58 +490,68 @@ describe('dormant same-parent managed RENAME', () => {
     return { counts, restore: () => { spy.mockRestore(); captureSpy.mockRestore(); readSpy.mockRestore(); absenceSpy.mockRestore(); } };
 
   }
-  function phaseDiagnostic(nested: boolean, stop: string, count: number) {
-    const started = Date.now(); let records = 0;
-    return (phase: string, counters: object = {}) => {
-      if (count !== 1000 || records++ >= 8) return;
-      process.stderr.write(`RENAME phase ${JSON.stringify({ nested, stop, phase, elapsedMs: Date.now() - started, node: process.version, pid: process.pid, ...counters })}\n`);
-    };
-  }
   it.each([[false, 100], [false, 250], [false, 1000], [true, 100], [true, 250], [true, 1000]] as const)(
     'qualifies populated same-parent RENAME nested=%s owners=%i', async (nested, count) => {
-      const diagnostic = phaseDiagnostic(nested, 'fresh', count);
+      const diagnostic = renameDiagnostics({ nested, stop: 'fresh', count });
       const f = await fixture(nested), retained = await populated(f, count);
       const archive = new FileMemoryVolumeStore({ coordinator: f.coordinator, owners: f.store() });
       const receipt = await archive.createExclusive(f.token, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-10-01') });
       const archiveRoot = path.join(f.root, 'volumes', 'by-id', f.token.ownerId);
       const archiveNames = (await fs.readdir(archiveRoot)).sort();
       diagnostic('setup-complete');
-      const observation = renameObservation();
-      let reads = 0, eof = 0; const originalRead: (this: Dir) => Promise<Dirent<string> | null> = Dir.prototype.read;
-      const spy = jest.spyOn(Dir.prototype, 'read').mockImplementation(async function(this: Dir) {
-        reads++; const entry = await originalRead.call(this); if (!entry) eof++; return entry;
-      } as typeof Dir.prototype.read);
-      let moved;
+      let observation: ReturnType<typeof renameObservation> | undefined;
+      let directory: ReturnType<typeof observeDirectoryReads> | undefined;
+      let moved, primary: { cause: unknown } | undefined;
       diagnostic('operation-start');
-      try { moved = await f.store().renameOwned(f.request); diagnostic('operation-end', { reads, completedCensuses: eof, ...observation.counts }); }
-      finally { spy.mockRestore(); observation.restore(); }
-      expect(reads).toBeGreaterThan(0); expect(eof).toBeGreaterThan(0); expect(reads).toBeLessThanOrEqual(794624);
+      try {
+        observation = renameObservation(); directory = observeDirectoryReads();
+        moved = await f.store().renameOwned(f.request);
+        diagnostic('operation-end', { reads: directory.measured.attemptedReads,
+          completedCensuses: directory.measured.completedCensuses, ...observation.counts });
+      } catch (cause) { primary = { cause }; throw cause; }
+      finally { restoreRenameObservation(observation, directory, primary); }
+      expect(directory!.measured.attemptedReads).toBeGreaterThan(0); expect(directory!.measured.completedCensuses).toBeGreaterThan(0);
+      expect(directory!.measured.attemptedReads).toBeLessThanOrEqual(794624);
       expect(moved.revision).toBe(String(BigInt(f.token.revision) + 1n));
+      diagnostic('retained-verification-start');
       await fixtureBatch(retained, async item => { deepStrictEqual(await evidence(item.target), item.before, `Retained RENAME evidence changed: ${item.target}`); });
+      diagnostic('retained-verification-end');
+      diagnostic('archive-verification-start');
       expect((await fs.readdir(archiveRoot)).sort()).toEqual(archiveNames);
       expect((await archive.read(moved, receipt.volume)).status).toBe('found');
       await expect(archive.read(f.token, receipt.volume)).rejects.toThrow();
+      diagnostic('archive-verification-end');
+      diagnostic('head-verification-start');
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
+      diagnostic('head-verification-end');
       diagnostic('assertions-complete');
-      process.stderr.write(`RENAME capacity ${JSON.stringify({ nested, count, reads, completedCensuses: eof })}\n`);
+      try { process.stderr.write(`RENAME capacity ${JSON.stringify({ nested, count, reads: directory!.measured.attemptedReads,
+        completedCensuses: directory!.measured.completedCensuses })}\n`); }
+      catch { /* Diagnostic output cannot replace completed preservation assertions. */ }
     });
   it.each([[false, 'prepared-durable'], [true, 'prepared-durable'], [false, 'linked-durable'], [true, 'linked-durable'], [false, 'final-durable'], [true, 'final-durable']] as const)(
     'qualifies populated 1000-owner fresh recovery nested=%s phase=%s', async (nested, stop) => {
-      const diagnostic = phaseDiagnostic(nested, stop, 1000);
+      const diagnostic = renameDiagnostics({ nested, stop, count: 1000 });
       const f = await fixture(nested), retained = await populated(f, 1000);
       diagnostic('setup-complete');
-      const observation = renameObservation();
-      let moved;
+      let observation: ReturnType<typeof renameObservation> | undefined;
+      let moved, primary: { cause: unknown } | undefined;
       try {
-        diagnostic('interrupted-operation-start');
+        observation = renameObservation();
+        diagnostic('interrupted-start');
         await expect(f.store(phase => { if (phase === stop) throw new Error('controlled populated stop'); }).renameOwned(f.request)).rejects.toThrow();
-        diagnostic('interrupted-operation-end', observation.counts);
+        diagnostic('interrupted-end', observation.counts);
         diagnostic('retry-start');
         moved = await f.store().renameOwned(f.request); diagnostic('retry-end', observation.counts);
-      } finally { observation.restore(); }
+      } catch (cause) { primary = { cause }; throw cause; }
+      finally { restoreRenameObservation(observation, undefined, primary); }
       expect(moved.revision).toBe(String(BigInt(f.token.revision) + 1n));
+      diagnostic('retained-verification-start');
       await fixtureBatch(retained, async item => { deepStrictEqual(await evidence(item.target), item.before, `Retained RENAME evidence changed: ${item.target}`); });
+      diagnostic('retained-verification-end');
+      diagnostic('head-verification-start');
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
+      diagnostic('head-verification-end');
       diagnostic('assertions-complete');
     });
   it.each(['symlink', 'hardlink'] as const)('preserves a foreign %s destination without publication', async kind => {
