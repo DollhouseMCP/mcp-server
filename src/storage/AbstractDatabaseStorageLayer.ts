@@ -300,6 +300,15 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   abstract deleteContent(elementType: string, name: string): Promise<void>;
 
+  /** Memory-specific dormant enforcement; generic element persistence is unchanged. */
+  protected beforeLegacyIdentityDelete(_tx: DrizzleTx, _userId: string, _elementType: string): void | Promise<void> { return; }
+  protected afterLegacyIdentityDelete(_userId: string): void { return; }
+  protected observeLegacyIdentityDeleteFailure(): void { return; }
+
+  private notifyLegacyIdentityDeleteFailure(): void {
+    try { this.observeLegacyIdentityDeleteFailure(); } catch { /* Observers cannot replace storage causes. */ }
+  }
+
   async deleteContentByIdentity(
     elementType: string,
     identifier: string,
@@ -312,6 +321,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       try {
         const deleted = await this.db.transaction(async (tx) => {
           await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId}, true)`);
+          await this.beforeLegacyIdentityDelete(tx, userId, elementType);
           const identity = await this.resolveIdentityInTransaction(tx, userId, elementType, identifier);
           if (!identity) throw this.createNotFoundError(elementType, identifier);
           if (expectedIdentity !== undefined && (
@@ -333,6 +343,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
             ))
             .returning({ id: elements.id });
           if (rows.length !== 1) throw this.createNotFoundError(elementType, identifier);
+          this.afterLegacyIdentityDelete(userId);
           return identity;
         }, { isolationLevel: 'serializable' });
 
@@ -346,7 +357,10 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
         );
         return deleted;
       } catch (error) {
-        if (!isSerializationFailure(error)) throw error;
+        if (!isSerializationFailure(error)) {
+          this.notifyLegacyIdentityDeleteFailure();
+          throw error;
+        }
         if (attempt < SERIALIZABLE_DELETE_ATTEMPTS) continue;
         const retryableError = new Error(
           `Concurrent database update prevented deletion of ${elementType}/${identifier}; retry the operation`,
@@ -354,6 +368,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
         ) as NodeJS.ErrnoException & { retryable: true };
         retryableError.code = 'EAGAIN';
         retryableError.retryable = true;
+        this.notifyLegacyIdentityDeleteFailure();
         throw retryableError;
       }
     }
