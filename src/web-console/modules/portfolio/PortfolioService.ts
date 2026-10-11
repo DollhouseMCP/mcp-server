@@ -13,6 +13,7 @@ import {
   PORTFOLIO_ELEMENT_METADATA_MAX_BYTES,
   PORTFOLIO_ELEMENT_TAGS_MAX,
   PortfolioElementVersionConflictError,
+  type ConsolePortfolioElementDetailRecord,
   type ConsolePortfolioElementSummaryRecord,
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
@@ -58,9 +59,26 @@ export class PortfolioService {
     private readonly activityEventSink: IPortfolioActivityEventSink | null = null,
   ) {}
 
+  private async findBoundElement(
+    userId: string,
+    type: ConsolePortfolioElementType,
+    canonicalName: string,
+  ): Promise<{ readonly store: IPortfolioElementStore; readonly existing: ConsolePortfolioElementDetailRecord | null }> {
+    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
+    store.assertOperationBinding?.();
+    const existing = await store.findByName(userId, type, canonicalName);
+    store.assertOperationBinding?.();
+    // Callers also check after awaiting this helper, before using the selected store or record.
+    return { store, existing };
+  }
+
   async getSummary(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const records = await this.store.summarizeByUser(auth.userId);
+    const userId = auth.userId;
+    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
+    store.assertOperationBinding?.();
+    const records = await store.summarizeByUser(userId);
+    store.assertOperationBinding?.();
     return {
       status: 200,
       body: serializePortfolioSummary(records),
@@ -69,15 +87,19 @@ export class PortfolioService {
 
   async listElements(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     const type = optionalPortfolioType(req.query.type);
     if (type.kind === 'invalid') return invalidRequest('type query parameter must be a supported portfolio element type.');
     const tag = optionalSingleString(req.query.tag);
     const fields = parseFields(req.query.fields);
     if (fields.kind === 'invalid') return invalidRequest('fields query parameter contains unsupported portfolio fields.');
-    const records = await this.store.listByUser(auth.userId, {
+    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
+    store.assertOperationBinding?.();
+    const records = await store.listByUser(userId, {
       type: type.value,
       tag: tag ?? undefined,
     });
+    store.assertOperationBinding?.();
     return {
       status: 200,
       body: serializePortfolioElementList(records, fields.value),
@@ -90,6 +112,7 @@ export class PortfolioService {
     name: string,
   ): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     if (!isConsolePortfolioElementType(type)) {
       return invalidRequest('type path parameter must be a supported portfolio element type.');
     }
@@ -98,7 +121,10 @@ export class PortfolioService {
     }
     const fields = parseFields(req.query.fields);
     if (fields.kind === 'invalid') return invalidRequest('fields query parameter contains unsupported portfolio fields.');
-    const record = await this.store.findByName(auth.userId, type, canonicalizePortfolioElementName(name));
+    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
+    store.assertOperationBinding?.();
+    const record = await store.findByName(userId, type, canonicalizePortfolioElementName(name));
+    store.assertOperationBinding?.();
     if (!record) {
       return {
         status: 404,
@@ -123,6 +149,7 @@ export class PortfolioService {
     type: string,
   ): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     if (!isConsolePortfolioElementType(type)) {
       return invalidRequest('type path parameter must be a supported portfolio element type.');
     }
@@ -131,8 +158,10 @@ export class PortfolioService {
     const issues = validateElementPayload(type, parsed.value);
     if (issues.length > 0) return validationFailed(issues);
     try {
-      const record = await this.store.create({
-        userId: auth.userId,
+      const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
+      store.assertOperationBinding?.();
+      const record = await store.create({
+        userId,
         type,
         name: parsed.value.name ?? '',
         displayName: parsed.value.displayName ?? null,
@@ -141,6 +170,7 @@ export class PortfolioService {
         tags: parsed.value.tags ?? [],
         now: this.now(),
       });
+      store.assertOperationBinding?.();
       return {
         status: 201,
         body: serializePortfolioElementDetail(record, null),
@@ -160,9 +190,11 @@ export class PortfolioService {
     name: string,
   ): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const existing = await this.store.findByName(auth.userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
+    store.assertOperationBinding?.();
     if (!existing) return notFound();
     const precondition = requireCurrentElementEtag(req, existing);
     if (precondition.kind === 'problem') return precondition.result;
@@ -183,8 +215,8 @@ export class PortfolioService {
     const issues = validateElementPayload(path.type, candidate);
     if (issues.length > 0) return validationFailed(issues);
     try {
-      const updated = await this.store.update({
-        userId: auth.userId,
+      const updated = await store.update({
+        userId,
         type: path.type,
         canonicalName: path.canonicalName,
         expectedVersion: precondition.version,
@@ -195,14 +227,20 @@ export class PortfolioService {
         tags: parsed.value.tags,
         now: this.now(),
       });
-      if (!updated) return notFound();
-      const publish = () => Promise.resolve({
-        status: 200,
-        body: serializePortfolioElementDetail(updated, null),
-        headers: { ETag: portfolioElementEtag(updated) },
-      });
-      return this.store.completeUpdatePublication
-        ? await this.store.completeUpdatePublication(updated, publish) : await publish();
+      if (!updated) {
+        store.assertOperationBinding?.();
+        return notFound();
+      }
+      const publish = () => {
+        store.assertOperationBinding?.();
+        return Promise.resolve({
+          status: 200,
+          body: serializePortfolioElementDetail(updated, null),
+          headers: { ETag: portfolioElementEtag(updated) },
+        });
+      };
+      return store.completeUpdatePublication
+        ? await store.completeUpdatePublication(updated, publish) : await publish();
     } catch (error) {
       if (error instanceof PortfolioElementVersionConflictError) {
         return problem(412, 'precondition_failed', 'Precondition failed', 'Portfolio element changed before the write completed.');
@@ -221,25 +259,28 @@ export class PortfolioService {
     name: string,
   ): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const existing = await this.store.findByName(auth.userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
+    store.assertOperationBinding?.();
     if (!existing) return notFound();
     const precondition = requireCurrentElementEtag(req, existing);
     if (precondition.kind === 'problem') return precondition.result;
     try {
-      const deleted = await this.store.delete({
-        userId: auth.userId,
+      const deleted = await store.delete({
+        userId,
         type: path.type,
         canonicalName: path.canonicalName,
         expectedVersion: precondition.version,
         expectedContentHash: precondition.contentHash,
         now: this.now(),
       });
+      store.assertOperationBinding?.();
       if (!deleted) return notFound();
       await this.activityEventSink?.recordElementDeleted({
         type: 'console.portfolio.element.deleted.v1',
-        userId: auth.userId,
+        userId,
         consoleSessionId: auth.sessionIdHash.toString('hex'),
         elementType: deleted.type,
         canonicalName: deleted.canonicalName,
@@ -247,6 +288,7 @@ export class PortfolioService {
         correlationId: requireConsoleRequestContext(req).correlationId,
         occurredAt: this.now(),
       });
+      store.assertOperationBinding?.();
       return {
         status: 200,
         body: {
@@ -271,9 +313,11 @@ export class PortfolioService {
     name: string,
   ): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const existing = await this.store.findByName(auth.userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
+    store.assertOperationBinding?.();
     const parsed = parseElementBody(req.body, { requireName: false, requireContent: false });
     if (parsed.kind === 'problem') return parsed.result;
     let displayName = existing?.displayName ?? null;
@@ -301,9 +345,11 @@ export class PortfolioService {
     name: string,
   ): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const existing = await this.store.findByName(auth.userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
+    store.assertOperationBinding?.();
     if (!existing) return notFound();
     const parsed = parseElementBody(req.body, { requireName: false, requireContent: false });
     if (parsed.kind === 'problem') return parsed.result;
