@@ -1,3 +1,4 @@
+import type { DatabaseMemoryAccountDeletionBoundary } from '../../../storage/DatabaseMemoryAccountDeletionBoundary.js';
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import type { DrizzleTx } from '../../../database/db-utils.js';
@@ -71,6 +72,8 @@ export interface AccountAdminMutationTransactionContext extends MutationTransact
 }
 
 export interface IAccountAdminMutationTransactionRunner {
+  /** Internal identity check for protected deletion composition. */
+  requireMemoryDeletionBoundary?(boundary: DatabaseMemoryAccountDeletionBoundary): void;
   /**
    * Executes account-admin mutation work in one system transaction.
    *
@@ -84,11 +87,18 @@ export interface IAccountAdminMutationTransactionRunner {
 export interface PostgresAccountAdminMutationTransactionRunnerOptions {
   readonly db: DatabaseInstance;
   readonly hmacKeyResolver: AdminAuditHmacKeyResolver;
+  readonly memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary;
 }
 
 export class PostgresAccountAdminMutationTransactionRunner
 implements IAccountAdminMutationTransactionRunner {
-  constructor(private readonly options: PostgresAccountAdminMutationTransactionRunnerOptions) {}
+  constructor(private readonly options: PostgresAccountAdminMutationTransactionRunnerOptions) {
+    options.memoryDeletionBoundary?.requireDatabase(options.db);
+  }
+
+  requireMemoryDeletionBoundary(boundary: DatabaseMemoryAccountDeletionBoundary): void {
+    if (this.options.memoryDeletionBoundary !== boundary) throw new Error('Account transaction runner requires the same memory deletion boundary');
+  }
 
   async run<T>(operation: (tx: AccountAdminMutationTransactionContext) => Promise<T>): Promise<T> {
     return withSystemContext(this.options.db, async tx => {
@@ -108,7 +118,7 @@ implements IAccountAdminMutationTransactionRunner {
       disablePrincipal: input => disableConsolePrincipalWithTx(tx, input),
       enablePrincipal: input => enableConsolePrincipalWithTx(tx, input),
       bumpPrincipalAuthzVersion: input => bumpConsolePrincipalAuthzVersionWithTx(tx, input),
-      deletePrincipal: input => deleteConsolePrincipalWithTx(tx, input),
+      deletePrincipal: input => deleteConsolePrincipalWithTx(tx, input, this.options.memoryDeletionBoundary),
       linkIdentity: input => linkConsoleIdentityWithTx(tx, input),
       unlinkIdentity: input => unlinkConsoleIdentityWithTx(tx, input),
       addAllowlistEntry: input => addAccountAllowlistEntryWithTx(tx, input),

@@ -294,17 +294,20 @@ jobs:
             exit 1
           fi
 
-  postgres-integration:
-    name: PostgreSQL Integration
+  postgres-shards:
+    name: PostgreSQL shard ${{ matrix.shard }}/2
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    # The first complete 126-suite serial runs consumed 1,048-1,080 seconds
-    # (87-90% of the former 20-minute cap). Keep capacity headroom as the
-    # required integration tree grows; per-test startup timeouts are repaired
-    # independently and are not masked by this job-level budget.
+    # Each shard owns a separate hosted runner and PostgreSQL cluster.
+    # Keep the existing whole-job and per-test budgets unchanged.
     timeout-minutes: 30
     env:
+      PG_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       DOLLHOUSE_REQUIRE_TEST_DATABASE: '1'
       DOLLHOUSE_REQUIRE_PG_AUTH_TESTS: '1'
       DOLLHOUSE_TEST_DATABASE_URL: postgres://dollhouse_app@localhost:5432/dollhousemcp_test
@@ -348,5 +351,59 @@ jobs:
       - name: Build project
         run: npm run build
 
-      - name: Run required PostgreSQL integration suite
-        run: npm run test:integration -- --runInBand
+      - name: Run required PostgreSQL integration shard
+        env:
+          PG_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: node scripts/ci/postgres-shards.mjs run '${{ matrix.shard }}' '${{ runner.temp }}/pg-evidence-${{ matrix.shard }}'
+
+      - name: Remove and verify owned PostgreSQL service
+        if: always()
+        run: node scripts/ci/postgres-shards.mjs stop '${{ runner.temp }}/pg-evidence-${{ matrix.shard }}' '${{ job.services.postgres.id }}'
+
+      - name: Upload sanitized shard evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pg-integration-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/pg-evidence-${{ matrix.shard }}/evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  postgres-integration:
+    name: PostgreSQL Integration
+    needs: postgres-shards
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PG_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      PG_SHARDS_RESULT: ${{ needs.postgres-shards.result }}
+    steps:
+      - name: Require both successful shard jobs
+        run: test "$PG_SHARDS_RESULT" = success
+
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20.x'
+
+      - name: Download both current-attempt shard artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: pg-integration-${{ github.run_id }}-${{ github.run_attempt }}-shard-*
+          path: ${{ runner.temp }}/pg-shard-artifacts
+          merge-multiple: false
+
+      - name: Validate complete inventory, final results and cleanup
+        run: |
+          node --test scripts/ci/postgres-shards.test.mjs
+          node scripts/ci/postgres-shards.mjs aggregate '${{ runner.temp }}/pg-shard-artifacts'
