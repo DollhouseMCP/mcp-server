@@ -656,7 +656,9 @@ function parsePureYamlExport(
     // the top level; the bare projection would drop the entries entirely. Surface
     // a flat memory document (config + entries) as `content` so the detail view
     // and Raw/Download can render the memory, while `metadata` stays the config.
-    return { metadata: jsonClone(metadata), content: flatMemoryYaml(record, metadata) };
+    const memoryMetadata = isRecord(record.metadata) ? record.metadata
+      : Object.fromEntries(Object.entries(pickMemoryConfig(record)).filter(([key]) => key !== 'instructions'));
+    return { metadata: jsonClone(memoryMetadata), content: flatMemoryYaml(record, memoryMetadata) };
   }
   return {
     metadata: jsonClone(metadata),
@@ -671,6 +673,7 @@ function flatMemoryYaml(
   const flat: Record<string, unknown> = { ...metadata };
   if (Array.isArray(record.entries)) flat.entries = record.entries;
   if (typeof record.instructions === 'string') flat.instructions = record.instructions;
+  if (record.extensions !== undefined) flat.extensions = record.extensions;
   return yaml.dump(flat, { lineWidth: -1, noRefs: true });
 }
 

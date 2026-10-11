@@ -359,7 +359,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       parseContent: (c: string) => this.parseContent(c),
       migrateMetadataDefaults: (d: Record<string, unknown>, fp: string) => this.migrateMetadataDefaults(d, fp),
       parseMetadata: (d: any) => this.parseMetadata(d),
-      createElement: (m: T['metadata'], c: string) => this.createElement(m, c),
+      createElement: (m: T['metadata'], c: string, options?: { quietMemory?: boolean }) => this.createElement(m, c, options),
       afterLoad: (el: T, fp: string, pd?: { data: Record<string, unknown>; content: string }, options?: { suppressLoadPolicy?: boolean }) =>
         this.afterLoad ? this.afterLoad(el, fp, pd, options) : Promise.resolve(),
       onLoadError: (fp: string, err: unknown) => this.onLoadError?.(fp, err),
@@ -484,7 +484,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /** Complete hydration of exact snapshot bytes; intentionally no read/cache publication. */
-  protected hydrateDefinitionFromContent(content: string, relativePath: string, options?: { suppressLoadPolicy?: boolean }): Promise<T> {
+  protected hydrateDefinitionFromContent(content: string, relativePath: string, options?: { suppressLoadPolicy?: boolean; quietMemory?: boolean }): Promise<T> {
     return this._loader.hydrateDefinitionFromContent(content, relativePath, options);
   }
 
@@ -1041,7 +1041,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Create an element instance from metadata and content.
    * Subclasses implement element-specific construction.
    */
-  protected abstract createElement(metadata: T['metadata'], content: string): T;
+  protected abstract createElement(metadata: T['metadata'], content: string, options?: { quietMemory?: boolean }): T;
 
   /**
    * Serialize an element to file content.

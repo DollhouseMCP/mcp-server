@@ -57,7 +57,8 @@ export class MemoryHeadUpdateAdapter {
   constructor(private readonly port: MemoryUpdatePort, private readonly getCurrentUserId: () => string,
     /** Trusted dormant composition only; production DI remains unchanged. */
     private readonly resolveDatabaseAdmission?: () => DatabaseMemoryAdmissionGate,
-    private readonly resolveCandidateHandoff?: () => DatabaseMemoryCandidateHandoff) {
+    private readonly resolveCandidateHandoff?: () => DatabaseMemoryCandidateHandoff,
+    private readonly checkReadCandidate?: (candidate: MemoryUpdateCandidate, token: MemoryUpdateToken) => Promise<void>) {
     if (resolveDatabaseAdmission && port.backend !== 'database') throw refusal('Database admission requires database storage');
     if (resolveCandidateHandoff && !resolveDatabaseAdmission) throw refusal('Candidate handoff requires database admission');
   }
@@ -136,14 +137,18 @@ export class MemoryHeadUpdateAdapter {
     if (state.lineage.unresolved) throw refusal('Memory has an unresolved related update');
     let committed: { status: 'committed'; token: MemoryUpdateToken } | undefined;
     try {
+      if (this.checkReadCandidate) {
+        const refusal = await this.readCandidateRefusal(captured, originalToken, tenant);
+        if (refusal) return this.recordPending(state, captured, originalToken, refusal);
+        this.requireTenant(tenant);
+      }
       if (this.resolveDatabaseAdmission) {
         const handoff = this.resolveCandidateHandoff
           ? await this.prepareCandidateHandoff(state, captured, originalToken) : undefined;
         if (handoff) return this.recordPending(state, captured, originalToken, handoff);
         const outcome = await this.prepareAdmittedWrite(state, captured, originalToken);
         if (outcome.status !== 'committed') {
-          if (outcome.status === 'unknown') state.handoff?.store.close();
-          return this.recordPending(state, captured, originalToken, outcome);
+          return this.recordUncommittedAdmission(state, captured, originalToken, outcome);
         }
         committed = this.recordCommit(state, outcome.value.token, originalToken);
         state.handoff?.store.noteKnownCommit(state.handoff.receipt);
@@ -157,6 +162,22 @@ export class MemoryHeadUpdateAdapter {
       return this.recordCommit(state, token, originalToken);
     } catch (cause) {
       return this.recordWriteFailure(state, captured, originalToken, cause, committed);
+    }
+  }
+  private recordUncommittedAdmission(state: BoundState, candidate: MemoryUpdateCandidate,
+    token: MemoryUpdateToken, outcome: { status: 'refused' | 'unknown'; cause: unknown }): MemoryUpdateOutcome {
+    if (outcome.status === 'unknown') state.handoff?.store.close();
+    return this.recordPending(state, candidate, token, outcome);
+  }
+  private async readCandidateRefusal(candidate: MemoryUpdateCandidate, token: MemoryUpdateToken,
+    tenant: string): Promise<{ status: 'refused'; cause: unknown } | undefined> {
+    try {
+      await this.checkReadCandidate!(candidate, token);
+      this.requireTenant(tenant);
+      return undefined;
+    } catch (cause) {
+      // No handoff or head transaction has been dispatched at this point.
+      return { status: 'refused', cause };
     }
   }
   private async prepareCandidateHandoff(state: BoundState, captured: MemoryUpdateCandidate,

@@ -38,6 +38,7 @@ import { SecurityError } from '../errors/SecurityError.js';
 import { ContentValidator } from './contentValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { SecurityMonitor } from './securityMonitor.js';
+import { numericReadFidelitySchema } from './numericReadFidelity.js';
 
 export interface SecureParseOptions {
   maxYamlSize?: number;
@@ -53,7 +54,7 @@ export interface SecureRawYamlParseOptions {
   maxSize?: number;
   schema?: 'core' | 'json' | 'failsafe';
   /** Optional reconciliation eligibility: CORE numeric scalars must be safe integers. */
-  numericPolicy?: 'safe-integers';
+  numericPolicy?: 'safe-integers' | 'read-fidelity';
   /** Strict scans scalar text; structure-only leaves element content policy to its owner. */
   contentPolicy?: 'strict' | 'structure-only';
   /** When provided, recursively validates parsed scalar values using the element's content policy. */
@@ -474,13 +475,14 @@ export class SecureYamlParser {
     }
 
     const numericPolicy = typeof maxSizeOrOptions === 'number' ? undefined : maxSizeOrOptions.numericPolicy;
-    if (numericPolicy !== undefined && (numericPolicy !== 'safe-integers' || options.schema !== 'core')) {
+    if (numericPolicy !== undefined &&
+        (!['safe-integers', 'read-fidelity'].includes(numericPolicy) || options.schema !== 'core')) {
       throw new SecurityError('Unsupported YAML numeric policy or schema', 'YAML_NUMERIC_POLICY', 'medium');
     }
     let unqualifiedNumber = false;
     // Parse only AFTER the same size and structure/content validation above.
     const parsed = yaml.load(yamlContent, {
-      schema: this.rawYamlSchema(options.schema),
+      schema: numericPolicy === 'read-fidelity' ? numericReadFidelitySchema() : this.rawYamlSchema(options.schema),
       json: false,
       listener: numericPolicy === 'safe-integers' ? (event, node) => {
         if (event !== 'close') return;

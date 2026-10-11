@@ -1,3 +1,4 @@
+import { assertHydratedMemoryReadFidelity } from '../../storage/MemoryHydrationReadFidelity.js';
 import { matchesPortfolioName } from '../../utils/portfolioName.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
@@ -724,6 +725,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
     adapter.bindLoaded(memory, snapshot, memory.metadata.name, contextRoot);
     // The caller receives a mutable working copy, not a durable cache entry.
     return Object.freeze({ memory, content: snapshot.content, locator, definition });
+  }
+
+  /** Internal captured-byte comparison; never loads storage, binds a token or publishes a cache. */
+  async assertGuardedReadFidelity(content: string, locator: string, logicalName: string): Promise<void> {
+    const raw = SecureYamlParser.parseRawYaml(content, {
+      maxSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE, contentPolicy: 'structure-only', numericPolicy: 'read-fidelity',
+    });
+    if (!validateMemoryControlFields(raw)) throw new Error('Invalid memory control fields');
+    const decoded = await this.parseMetadata(structuredClone(raw));
+    const memory = await this.hydrateDefinitionFromContent(content, locator,
+      { suppressLoadPolicy: true, quietMemory: true });
+    if (memory.metadata.name !== logicalName) throw new Error('Memory read owner name mismatch');
+    assertHydratedMemoryReadFidelity(raw, memory, decoded.retentionDays);
   }
 
   isGuardedHeadUpdateEnabled(): boolean { return this.guardedUpdateAdapter !== undefined; }
@@ -2235,8 +2249,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
   }
 
-  protected override createElement(metadata: MemoryMetadata, _content: string): Memory {
-    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
+  protected override createElement(metadata: MemoryMetadata, _content: string, options?: { quietMemory?: boolean }): Memory {
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService, options?.quietMemory);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
       memory.instructions = metadata.instructions;

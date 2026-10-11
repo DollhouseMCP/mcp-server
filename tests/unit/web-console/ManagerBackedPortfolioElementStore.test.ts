@@ -2,6 +2,7 @@ import { problemForConsoleError } from '../../../src/web-console/platform/Proble
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import type { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 
@@ -227,6 +228,24 @@ describe('ManagerBackedPortfolioElementStore', () => {
 
     expect(created.content).toContain('mem_code_reference');
     expect(created.content).toContain(codeLikeContent);
+  });
+
+  it.each(['flat', 'nested'] as const)('separates %s memory config from complete editable body fields', async representation => {
+    const config = { name: 'Projected Memory', unique_id: 'persisted-identity', description: 'Preserved config',
+      author: 'test-author', version: '1.0.0', tags: ['test'], customConfig: { fraction: 0.5 } };
+    const body = { entries: [{ id: 'one', content: 'Preserved entry', timestamp: NOW.toISOString() }],
+      instructions: 'Preserved instructions', extensions: { custom: { fraction: 0.5 } }, stats: { totalEntries: 1 } };
+    const document = representation === 'flat' ? { ...config, ...body } : { metadata: config, ...body };
+    const manager = new FakeManager('memories', [{ metadata: config, body: '' }]);
+    manager.exportElement = async () => yaml.dump(document, { noRefs: true });
+    const store = new ManagerBackedPortfolioElementStore({ managers: managersWith(manager, 'memories'),
+      getCurrentUserId: () => USER_ID });
+    const record = await store.findByName(USER_ID, 'memories', 'projected-memory');
+    expect(record?.metadata).toEqual(config);
+    const editable = yaml.load(record!.content) as Record<string, unknown>;
+    expect(editable).toMatchObject({ ...config, entries: body.entries, instructions: body.instructions,
+      extensions: body.extensions });
+    expect(editable).not.toHaveProperty('metadata');
   });
 
   it('does not replace an existing file-backed memory on console create', async () => {

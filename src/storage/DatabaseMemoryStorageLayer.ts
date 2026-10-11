@@ -30,6 +30,7 @@ import type { ElementIndexEntry } from './types.js';
 import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
 import type { IMemoryHeadStore, MemoryHeadSnapshot, MemoryHeadToken } from './IMemoryHeadStore.js';
 import type { DatabaseMemoryLegacyMutationGuard } from './DatabaseMemoryLegacyMutationGuard.js';
+import { DatabaseMemoryReconciliationInspector } from './DatabaseMemoryReconciliationInspector.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export interface PreparedDatabaseMemoryHeadWrite {
 }
 
 export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer implements IMemoryHeadStore {
+  private guardedReadCheck?: (content: string, locator: string, name: string) => Promise<void>;
   constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver,
     private readonly legacyMutationGuard?: DatabaseMemoryLegacyMutationGuard) {
     super(db, getCurrentUserId, 'memories');
@@ -98,6 +100,17 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
   /** Internal composition identity check; no connection or write authority is exposed. */
   matchesAdmissionContext(db: DatabaseInstance, tenant: string): boolean {
     return this.db === db && this.userId === tenant;
+  }
+
+  /** Actual durable factory installs this once, before exposing its manager. */
+  bindGuardedReadFidelity(check: (content: string, locator: string, name: string) => Promise<void>): void {
+    if (this.guardedReadCheck || typeof check !== 'function') throw new Error('Guarded read predicate binding is invalid');
+    this.guardedReadCheck = check;
+  }
+
+  async assertGuardedReadCandidate(content: string, locator: string, name: string): Promise<void> {
+    if (!this.guardedReadCheck) throw new Error('Guarded read predicate is unavailable');
+    await this.guardedReadCheck(content, locator, name);
   }
 
   /**
@@ -258,6 +271,16 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer imp
     let saved: { id: string; revision?: bigint };
     try { saved = await prepared.write(tx); }
     catch (cause) { throw this.headWriteFailure(cause); }
+    if (this.guardedReadCheck) {
+      const checkpoint = () => { requireDatabaseMemoryWriteAuthority(authority, this, userId); };
+      const observed = await new DatabaseMemoryReconciliationInspector(this.db, () => this.userId)
+        .inspectGuardedReadInTransaction(tx, { userId, memoryId: saved.id }, checkpoint);
+      checkpoint();
+      if (observed.inspection.status !== 'equivalent' || observed.inspection.diagnosticsTruncated ||
+          observed.rawContent !== content) throw this.createInvalidHeadError('Prospective memory read fidelity refused');
+      await this.assertGuardedReadCandidate(observed.rawContent, saved.id, nextName);
+      checkpoint();
+    }
     // This value is prospective until the enclosing admitted transaction resolves.
     const prospective = Object.freeze({ backend: 'database' as const, userId, ownerId: saved.id,
       locator: saved.id, name: nextName, revision: saved.revision!.toString() });

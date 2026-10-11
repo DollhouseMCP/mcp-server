@@ -12,6 +12,7 @@ import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import { SecurityError } from '../errors/SecurityError.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { assertJsonNumericReadFidelity } from '../security/numericReadFidelity.js';
 import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -145,6 +146,18 @@ export class DatabaseMemoryReconciliationInspector {
 
   /** @internal Same-transaction classification; never grants apply authority. */
   async inspectInTransaction(tx: DrizzleTx, captured: MemoryInspectionOwner, checkpoint: () => void = () => undefined): Promise<MemoryReconciliationInspection> {
+    return (await this.readProjection(tx, captured, checkpoint, false)).inspection;
+  }
+
+  /** Non-destructive raw-reader qualification. Ordinary RLS visibility stays ordinary. */
+  async inspectGuardedReadInTransaction(tx: DrizzleTx, captured: MemoryInspectionOwner,
+    checkpoint: () => void): Promise<{ inspection: MemoryReconciliationInspection; rawContent?: string }> {
+    if (!UUID.test(captured.userId) || !UUID.test(captured.memoryId)) throw new TypeError('Memory inspection requires UUIDs');
+    return this.readProjection(tx, captured, checkpoint, true);
+  }
+
+  private async readProjection(tx: DrizzleTx, captured: MemoryInspectionOwner, checkpoint: () => void,
+    guardedRead: boolean): Promise<{ inspection: MemoryReconciliationInspection; rawContent?: string }> {
       const parentBounds = await checked(checkpoint, () => tx.select({
         rawBytes: sql<number>`octet_length(${elements.rawContent})`,
         metadataBytes: sql<number>`octet_length(${elements.metadata}::text)`,
@@ -179,10 +192,10 @@ export class DatabaseMemoryReconciliationInspector {
           dirty: elements.memoryEntriesOutOfSync })
           .from(elements).where(and(eq(elements.userId, captured.userId), eq(elements.id, captured.memoryId))).limit(1));
         return {
-          status: 'ineligible' as const, canApply: false as const, owner: captured,
+          inspection: { status: 'ineligible' as const, canApply: false as const, owner: captured,
           name: row[0].name, revision: row[0].revision.toString(), dirty: row[0].dirty,
           rawUnits: null, counts: { rawEntries: null, childEntries: childBounds.count, volumes: volumeBounds.count },
-          diagnostics: [diagnostic('resource_limit', 'head')], diagnosticsTruncated: false,
+          diagnostics: [diagnostic('resource_limit', 'head')], diagnosticsTruncated: false },
         };
       }
       const [parent] = await checked(checkpoint, () => tx.select({
@@ -217,7 +230,23 @@ export class DatabaseMemoryReconciliationInspector {
       })
         .from(memoryVolumes).where(and(eq(memoryVolumes.userId, captured.userId),
           eq(memoryVolumes.memoryId, captured.memoryId))).orderBy(asc(memoryVolumes.volume)));
-      return this.classify(captured, parent, children, tags.map(row => row.tag), volumes);
+      if (guardedRead) {
+        // Only user JSONB fields, never typed bigint revisions/counters.
+        const numericFields = await checked(checkpoint, () => tx.execute(sql`SELECT e.metadata::text AS value
+          FROM public.elements e WHERE e.id=${captured.memoryId}::uuid AND e.user_id=${captured.userId}::uuid
+          UNION ALL SELECT c.entry_metadata::text FROM public.memory_entries c
+            WHERE c.memory_id=${captured.memoryId}::uuid AND c.user_id=${captured.userId}::uuid
+          UNION ALL SELECT c.sanitized_patterns::text FROM public.memory_entries c
+            WHERE c.memory_id=${captured.memoryId}::uuid AND c.user_id=${captured.userId}::uuid`));
+        for (const row of numericFields) {
+          if (row.value !== null) {
+            if (typeof row.value !== 'string') throw new Error('Unknown JSONB numeric representation');
+            assertJsonNumericReadFidelity(row.value);
+          }
+        }
+      }
+      return { inspection: this.classify(captured, parent, children, tags.map(row => row.tag), volumes, guardedRead),
+        ...(guardedRead ? { rawContent: parent.rawContent } : {}) };
   }
 
   /** @internal Complete comparison fingerprint, not authorization. Bounds precede transfer. */
@@ -262,7 +291,7 @@ export class DatabaseMemoryReconciliationInspector {
   /** @internal Test-only barrier for deterministic concurrent-writer checks. */
   protected afterParentRead(): Promise<void> { return Promise.resolve(); }
 
-  private classify(owner: MemoryInspectionOwner, parent: Parent, children: ChildSnapshot[], tags: string[], volumes: Volume[]): MemoryReconciliationInspection {
+  private classify(owner: MemoryInspectionOwner, parent: Parent, children: ChildSnapshot[], tags: string[], volumes: Volume[], guardedRead = false): MemoryReconciliationInspection {
     const findings: MemoryInspectionDiagnostic[] = [];
     let findingCount = 0;
     const add = (code: string, path: string) => {
@@ -283,6 +312,7 @@ export class DatabaseMemoryReconciliationInspector {
     try {
       raw = SecureYamlParser.parseRawYaml(parent.rawContent, {
         maxSize: MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE, contentPolicy: 'structure-only',
+        ...(guardedRead ? { numericPolicy: 'read-fidelity' as const } : {}),
       });
       if (!validateMemoryControlFields(raw)) throw new Error('Invalid memory control fields');
     } catch {
@@ -294,8 +324,12 @@ export class DatabaseMemoryReconciliationInspector {
       add('invalid_raw_entries', 'entries');
       return report('ineligible', null);
     }
-    const ambiguous = this.checkMetadata(raw, parent, tags, volumes, add);
-    const entryStatus = this.checkEntries(rawEntries, children, add);
+    const ambiguous = this.checkMetadata(raw, parent, tags, volumes, add, guardedRead);
+    const entryStatus = this.checkEntries(rawEntries, children, add, guardedRead);
+    if (guardedRead && (parent.memoryEntriesOutOfSync || parent.storageRevision <= 0n || volumes.length !== 0)) {
+      add('unsupported_guarded_head', 'head');
+      return report('ineligible', rawEntries.length);
+    }
     let status: MemoryInspectionStatus = entryStatus;
     // Any unresolvable authority/precision question wins over a separately
     // observed mismatch; callers must not infer that only entries need repair.
@@ -303,7 +337,7 @@ export class DatabaseMemoryReconciliationInspector {
     return report(status, rawEntries.length);
   }
 
-  private checkEntries(rawEntries: unknown[], children: ChildSnapshot[], add: (code: string, path: string) => void): 'equivalent' | 'divergent' | 'ambiguous' {
+  private checkEntries(rawEntries: unknown[], children: ChildSnapshot[], add: (code: string, path: string) => void, rawAuthoritative = false): 'equivalent' | 'divergent' | 'ambiguous' {
     let ambiguous = false;
     if (rawEntries.length !== children.length) add('entry_count_mismatch', 'entries');
     const byId = new Map(children.map(child => [child.entry.entryId, child]));
@@ -319,13 +353,13 @@ export class DatabaseMemoryReconciliationInspector {
     // A child row has no persisted sequence and the current loader orders
     // only by timestamp. Equal-time order cannot be proven; otherwise a
     // difference from descending timestamp order is a definite mismatch.
-    const unprovenOrder = this.hasTimestampTies(rawEntries) ||
-      this.hasTimestampTies(children.map(child => child.entry));
+    const unprovenOrder = !rawAuthoritative && (this.hasTimestampTies(rawEntries) ||
+      this.hasTimestampTies(children.map(child => child.entry)));
     if (unprovenOrder) {
       add('unproven_equal_time_order', 'entries');
       ambiguous = true;
     }
-    if (rawEntries.length === children.length &&
+    if (!rawAuthoritative && rawEntries.length === children.length &&
       !isDeepStrictEqual(rawEntries.map(entry => objectValue(entry)?.id), children.map(child => child.entry.entryId))) {
       add('raw_order_differs_from_loader', 'entries');
       if (unprovenOrder) ambiguous = true;
@@ -425,6 +459,7 @@ export class DatabaseMemoryReconciliationInspector {
     raw: Record<string, unknown>, parent: Parent,
     tags: string[], volumes: Volume[],
     add: (code: string, path: string) => void,
+    guardedRead = false,
   ): boolean {
     let ambiguous = false;
     const nested = objectValue(raw.metadata);
@@ -447,7 +482,7 @@ export class DatabaseMemoryReconciliationInspector {
     // Default the expected raw projection only. A stored NULL or empty version
     // is not interchangeable with the non-null values written by normal saves.
     const comparisons: Array<[string, unknown, unknown]> = [
-      ['name', extracted.name, parent.name],
+      ...(!guardedRead ? [['name', extracted.name, parent.name] as [string, unknown, unknown]] : []),
       ['description', extracted.description || '', parent.description],
       ['version', extracted.version || '1.0.0', parent.version],
       ['author', extracted.author || '', parent.author],
