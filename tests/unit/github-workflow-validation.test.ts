@@ -37,12 +37,15 @@ interface WorkflowJob {
   strategy?: {
     matrix?: {
       os?: string | string[];
+      shard?: number[];
     };
+    'fail-fast'?: boolean;
   };
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
   services?: Record<string, WorkflowService>;
   'timeout-minutes'?: number;
+  if?: string;
   needs?: string | string[];
 }
 
@@ -222,23 +225,25 @@ describe('GitHub Workflow Validation', () => {
       expect(build?.run).toBe('npm run rebuild');
     });
 
-    it('should enforce the full PostgreSQL integration suite against a pinned service', () => {
+    it('should enforce complete PostgreSQL shards against a pinned service', () => {
       const workflow = yaml.load(
         fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
       ) as Workflow;
-      const job = workflow.jobs['postgres-integration'];
+      const job = workflow.jobs['postgres-shards'];
       const postgres = job?.services?.postgres;
       const integrationStep = job?.steps.find(
-        (step) => step.name === 'Run required PostgreSQL integration suite'
+        (step) => step.name === 'Run required PostgreSQL integration shard'
       );
       const buildStepIndex = job?.steps.findIndex(
         (step) => step.name === 'Build project'
       ) ?? -1;
       const integrationStepIndex = job?.steps.findIndex(
-        (step) => step.name === 'Run required PostgreSQL integration suite'
+        (step) => step.name === 'Run required PostgreSQL integration shard'
       ) ?? -1;
 
-      expect(job?.name).toBe('PostgreSQL Integration');
+      expect(job?.name).toBe('PostgreSQL shard ${{ matrix.shard }}/2');
+      expect(job?.strategy?.matrix?.shard).toEqual([1, 2]);
+      expect(job?.strategy?.['fail-fast']).toBe(false);
       expect(job?.['runs-on']).toBe('ubuntu-latest');
       expect(job?.['timeout-minutes']).toBe(30);
       expect(job?.permissions).toEqual({ contents: 'read' });
@@ -263,7 +268,18 @@ describe('GitHub Workflow Validation', () => {
         POSTGRES_DB: 'postgres',
       });
       expect(postgres?.ports).toEqual(['5432:5432']);
-      expect(integrationStep?.run).toBe('npm run test:integration -- --runInBand');
+      expect(integrationStep?.run).toBe(
+        "node scripts/ci/postgres-shards.mjs run '${{ matrix.shard }}' '${{ runner.temp }}/pg-evidence-${{ matrix.shard }}'"
+      );
+      expect(integrationStep?.env?.PG_CONTAINER_ID).toBe('${{ job.services.postgres.id }}');
+      const cleanup = job?.steps.find(step => step.name === 'Remove and verify owned PostgreSQL service');
+      const upload = job?.steps.find(step => step.name === 'Upload sanitized shard evidence');
+      expect(cleanup?.if).toBe('always()');
+      expect(cleanup?.run).toContain("node scripts/ci/postgres-shards.mjs stop");
+      expect(cleanup?.run).toContain('${{ job.services.postgres.id }}');
+      expect(upload?.if).toBe('always()');
+      expect(upload?.with?.name).toBe('pg-integration-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}');
+      expect(upload?.with?.['if-no-files-found']).toBe('error');
 
       const externalActions = job?.steps
         .map((step) => step.uses)
@@ -271,7 +287,33 @@ describe('GitHub Workflow Validation', () => {
       expect(externalActions).toEqual([
         'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683',
         'actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af',
+        'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
       ]);
+    });
+
+    it('should fail closed unless both current PostgreSQL shards qualify', () => {
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const job = workflow.jobs['postgres-integration'];
+      const guard = job.steps.find(step => step.name === 'Require both successful shard jobs');
+      const download = job.steps.find(step => step.name === 'Download both current-attempt shard artifacts');
+      const validation = job.steps.find(step => step.name === 'Validate complete inventory, final results and cleanup');
+
+      expect(job.name).toBe('PostgreSQL Integration');
+      expect(job.needs).toBe('postgres-shards');
+      expect(job.if).toBe('always()');
+      expect(job.services).toBeUndefined();
+      expect(job.env?.PG_SHARDS_RESULT).toBe('${{ needs.postgres-shards.result }}');
+      expect(guard?.run).toBe('test "$PG_SHARDS_RESULT" = success');
+      expect(download?.uses).toBe('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093');
+      expect(download?.with?.pattern).toBe('pg-integration-${{ github.run_id }}-${{ github.run_attempt }}-shard-*');
+      expect(download?.with?.['merge-multiple']).toBe(false);
+      expect(validation?.run).toContain('node --test scripts/ci/postgres-shards.test.mjs');
+      expect(validation?.run).toContain("node scripts/ci/postgres-shards.mjs aggregate '${{ runner.temp }}/pg-shard-artifacts'");
+      expect(job.steps).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ 'continue-on-error': true })])
+      );
     });
 
     it('should hard-fail integration setup when PostgreSQL is required', () => {

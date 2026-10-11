@@ -13,6 +13,7 @@ import {
   PORTFOLIO_ELEMENT_METADATA_MAX_BYTES,
   PORTFOLIO_ELEMENT_TAGS_MAX,
   PortfolioElementVersionConflictError,
+  type ConsolePortfolioElementDetailRecord,
   type ConsolePortfolioElementSummaryRecord,
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
@@ -57,6 +58,19 @@ export class PortfolioService {
     private readonly now: () => Date = () => new Date(),
     private readonly activityEventSink: IPortfolioActivityEventSink | null = null,
   ) {}
+
+  private async findBoundElement(
+    userId: string,
+    type: ConsolePortfolioElementType,
+    canonicalName: string,
+  ): Promise<{ readonly store: IPortfolioElementStore; readonly existing: ConsolePortfolioElementDetailRecord | null }> {
+    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
+    store.assertOperationBinding?.();
+    const existing = await store.findByName(userId, type, canonicalName);
+    store.assertOperationBinding?.();
+    // Callers also check after awaiting this helper, before using the selected store or record.
+    return { store, existing };
+  }
 
   async getSummary(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
@@ -179,9 +193,7 @@ export class PortfolioService {
     const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
-    store.assertOperationBinding?.();
-    const existing = await store.findByName(userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
     store.assertOperationBinding?.();
     if (!existing) return notFound();
     const precondition = requireCurrentElementEtag(req, existing);
@@ -250,9 +262,7 @@ export class PortfolioService {
     const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
-    store.assertOperationBinding?.();
-    const existing = await store.findByName(userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
     store.assertOperationBinding?.();
     if (!existing) return notFound();
     const precondition = requireCurrentElementEtag(req, existing);
@@ -306,9 +316,7 @@ export class PortfolioService {
     const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
-    store.assertOperationBinding?.();
-    const existing = await store.findByName(userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
     store.assertOperationBinding?.();
     const parsed = parseElementBody(req.body, { requireName: false, requireContent: false });
     if (parsed.kind === 'problem') return parsed.result;
@@ -340,9 +348,7 @@ export class PortfolioService {
     const userId = auth.userId;
     const path = parseElementPath(type, name);
     if (path.kind === 'problem') return path.result;
-    const store = this.store.bindForOperation ? await this.store.bindForOperation(userId) : this.store;
-    store.assertOperationBinding?.();
-    const existing = await store.findByName(userId, path.type, path.canonicalName);
+    const { store, existing } = await this.findBoundElement(userId, path.type, path.canonicalName);
     store.assertOperationBinding?.();
     if (!existing) return notFound();
     const parsed = parseElementBody(req.body, { requireName: false, requireContent: false });
