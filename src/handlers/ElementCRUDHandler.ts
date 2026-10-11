@@ -25,6 +25,7 @@ import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
 import { AgentManager } from '../elements/agents/AgentManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
+import { TenantMemoryOperationProvider } from '../storage/TenantMemoryOperationProvider.js';
 import { EnsembleManager } from '../elements/ensembles/EnsembleManager.js';
 import { logger } from '../utils/logger.js';
 import { ElementNotFoundError } from '../utils/ErrorHandler.js';
@@ -111,14 +112,24 @@ async function mapPolicyLookups<TInput, TOutput>(
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
-  private readonly activePolicySnapshots = new Map<string, Promise<PolicyElement[]>>();
+  private activePolicySnapshots = new Map<string, Promise<PolicyElement[]>>();
+  private readonly tenantPolicySnapshots = new WeakMap<MemoryManager, Map<string, Promise<PolicyElement[]>>>();
+  private readonly memoryProvider?: TenantMemoryOperationProvider;
+  private readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
+  private operationCheck?: () => void;
+
+  private get memoryManager(): MemoryManager {
+    this.operationCheck?.();
+    if (this.memoryProvider || !this.fixedMemoryManager) throw new Error('Bound memory operation required');
+    return this.fixedMemoryManager;
+  }
 
   constructor(
     private readonly skillManager: SkillManager,
     private readonly templateManager: TemplateManager,
     private readonly templateRenderer: TemplateRenderer,
     private readonly agentManager: AgentManager,
-    private readonly memoryManager: MemoryManager,
+    private readonly fixedMemoryManager: MemoryManager | undefined,
     private readonly ensembleManager: EnsembleManager,
     private readonly personaManager: PersonaManager,
     private readonly portfolioManager: PortfolioManager,
@@ -132,25 +143,62 @@ export class ElementCRUDHandler {
     private readonly policyExportService?: PolicyExportService,
     private readonly activationRegistry?: SessionActivationRegistry,
     private readonly contextTracker?: ContextTracker,
-    private readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy,
+    callerOptions?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy | {
+      readonly memoryProvider: TenantMemoryOperationProvider;
+      readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
+    },
   ) {
+    if (callerOptions && 'memoryProvider' in callerOptions) {
+      if (!(callerOptions.memoryProvider instanceof TenantMemoryOperationProvider)) {
+        throw new TypeError('Actual trusted memory provider required');
+      }
+      callerOptions.memoryProvider.assertContextTracker(contextTracker);
+      this.memoryProvider = callerOptions.memoryProvider;
+      this.forkOnEditStrategy = callerOptions.forkOnEditStrategy;
+    } else this.forkOnEditStrategy = callerOptions;
+    if (!fixedMemoryManager && !this.memoryProvider) throw new Error('Memory manager or trusted provider required');
+    // Composed handlers never construct memory strategies from a cached root manager.
+    // Bound per-invocation handlers install them using the selected actual manager.
     // Initialize strategy map with all element type strategies
     this.strategies = new Map<string, ElementActivationStrategy>([
       [ElementType.PERSONA, new PersonaActivationStrategy(personaManager, indicatorService)],
       [ElementType.SKILL, new SkillActivationStrategy(skillManager)],
       [ElementType.TEMPLATE, new TemplateActivationStrategy(templateManager)],
-      [ElementType.AGENT, new AgentActivationStrategy(agentManager)],
-      [ElementType.MEMORY, new MemoryActivationStrategy(memoryManager)],
-      [ElementType.ENSEMBLE, new EnsembleActivationStrategy(
-        ensembleManager,
-        portfolioManager,
-        skillManager,
-        templateManager,
-        agentManager,
-        memoryManager,
-        personaManager
-      )]
+      [ElementType.AGENT, new AgentActivationStrategy(agentManager)]
     ]);
+    if (fixedMemoryManager && !this.memoryProvider) {
+      this.strategies.set(ElementType.MEMORY, new MemoryActivationStrategy(fixedMemoryManager));
+      this.strategies.set(ElementType.ENSEMBLE, new EnsembleActivationStrategy(
+        ensembleManager, portfolioManager, skillManager, templateManager, agentManager,
+        fixedMemoryManager, personaManager));
+    }
+  }
+
+  private requireAgentMemoryComposition(): void {
+    // These AgentManager paths independently resolve cached memory content. Until
+    // their trusted caller seam is composed, configured handlers must not use it.
+    if (this.memoryProvider || this.operationCheck) {
+      throw new Error('Tenant-bound agent memory composition is required');
+    }
+  }
+
+  private async bindMemoryOperation(): Promise<ElementCRUDHandler> {
+    if (!this.memoryProvider) throw new Error('Trusted memory provider required');
+    const capture = this.memoryProvider.capture();
+    const operation = await this.memoryProvider.resolve(capture);
+    operation.assertCurrent();
+    const bound = new ElementCRUDHandler(this.skillManager, this.templateManager, this.templateRenderer,
+      this.agentManager, operation.manager, this.ensembleManager, this.personaManager,
+      this.portfolioManager, this.initService, this.indicatorService, this.fileOperations,
+      this.elementQueryService, this.validationRegistry, this.activationStore, this.backupService,
+      this.policyExportService, this.activationRegistry, this.contextTracker, this.forkOnEditStrategy);
+    bound.operationCheck = operation.assertCurrent;
+    let snapshots = this.tenantPolicySnapshots.get(operation.manager);
+    if (!snapshots) {
+      snapshots = new Map(); this.tenantPolicySnapshots.set(operation.manager, snapshots);
+    }
+    bound.activePolicySnapshots = snapshots;
+    return bound;
   }
 
   /**
@@ -159,6 +207,7 @@ export class ElementCRUDHandler {
    * Issue #1946: Per-session activation persistence.
    */
   private getSessionActivationStore(): IActivationStateStore | undefined {
+    this.operationCheck?.();
     if (this.activationRegistry && this.contextTracker) {
       const sessionId = this.contextTracker.getSessionContext()?.sessionId
         ?? this.activationRegistry.getDefaultSessionId();
@@ -170,6 +219,7 @@ export class ElementCRUDHandler {
   }
 
   private async ensureInitialized(): Promise<void> {
+    this.operationCheck?.();
     await this.initService.ensureInitialized();
   }
 
@@ -178,6 +228,7 @@ export class ElementCRUDHandler {
   }
 
   private getContext(): ElementCrudContext {
+    this.operationCheck?.();
     return {
       ensureInitialized: () => this.ensureInitialized(),
       getPersonaIndicator: () => this.getPersonaIndicator(),
@@ -252,6 +303,7 @@ export class ElementCRUDHandler {
   }
 
   private getPolicySnapshotScope(): string {
+    this.operationCheck?.();
     return this.contextTracker?.getSessionContext()?.sessionId
       ?? this.getSessionActivationStore()?.getSessionId()
       ?? 'default';
@@ -266,6 +318,17 @@ export class ElementCRUDHandler {
    * Extracted from index.ts:1492-1631 (140 lines - exact copy)
    */
   async createElement(args: {name: string; type: string; description: string; content?: string; instructions?: string; metadata?: Record<string, any>}) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performCreateElement(args);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performCreateElement(args);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performCreateElement(args: {name: string; type: string; description: string; content?: string; instructions?: string; metadata?: Record<string, any>}) {
     return createElementCommand(this.getContext(), args);
   }
 
@@ -283,6 +346,17 @@ export class ElementCRUDHandler {
    * });
    */
   async editElement(args: {name: string; type: string; input: Record<string, unknown>}) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performEditElement(args);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performEditElement(args);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performEditElement(args: {name: string; type: string; input: Record<string, unknown>}) {
     return editElementCommand(this.getContext(), args);
   }
 
@@ -290,6 +364,17 @@ export class ElementCRUDHandler {
    * Upgrade element from v1 single-body to v2 dual-field format (instructions + content)
    */
   async upgradeElement(args: {name: string; type: string; dry_run?: boolean; instructions_override?: string; content_override?: string}) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performUpgradeElement(args);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performUpgradeElement(args);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performUpgradeElement(args: {name: string; type: string; dry_run?: boolean; instructions_override?: string; content_override?: string}) {
     return upgradeElementCommand(this.getContext(), args);
   }
 
@@ -298,6 +383,17 @@ export class ElementCRUDHandler {
    * Extracted from index.ts:1941-2054 (114 lines - exact copy)
    */
   async validateElement(args: {name: string; type: string; strict?: boolean}) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performValidateElement(args);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performValidateElement(args);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performValidateElement(args: {name: string; type: string; strict?: boolean}) {
     return validateElementCommand(this.getContext(), args);
   }
 
@@ -306,6 +402,17 @@ export class ElementCRUDHandler {
    * Extracted from index.ts:2056-2310 (255 lines - exact copy, split for readability)
    */
   async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performDeleteElement(args);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performDeleteElement(args);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performDeleteElement(args: {name: string; type: string; deleteData?: boolean}) {
     return deleteElementCommand(this.getContext(), args);
   }
 
@@ -331,6 +438,17 @@ export class ElementCRUDHandler {
   }
 
   async listElements(type: string, options?: import('../services/query/types.js').QueryOptions) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performListElements(type, options);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performListElements(type, options);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performListElements(type: string, options?: import('../services/query/types.js').QueryOptions) {
     return listElementsCommand(this.getContext(), type, options);
   }
 
@@ -342,6 +460,17 @@ export class ElementCRUDHandler {
    * @returns Array of raw element objects
    */
   async getElements(type: string): Promise<unknown[]> {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performGetElements(type);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performGetElements(type);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performGetElements(type: string): Promise<unknown[]> {
     await this.ensureInitialized();
     const normalizedType = this.normalizeElementType(type);
 
@@ -364,6 +493,17 @@ export class ElementCRUDHandler {
   }
 
   async activateElement(name: string, type: string, context?: Record<string, any>) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performActivateElement(name, type, context);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performActivateElement(name, type, context);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performActivateElement(name: string, type: string, context?: Record<string, any>) {
     try {
       // FIX: DMCP-SEC-006 - Add security audit logging for element activation
       SecurityMonitor.logSecurityEvent({
@@ -421,6 +561,17 @@ export class ElementCRUDHandler {
   }
 
   async getActiveElements(type?: string) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performGetActiveElements(type);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performGetActiveElements(type);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performGetActiveElements(type?: string) {
     try {
       // Issue #501: When type is omitted, aggregate active elements across all types
       if (!type || type.trim() === '') {
@@ -459,6 +610,19 @@ export class ElementCRUDHandler {
    * Issue #452: Provides active element context for enforce() policy checks.
    */
   async getActiveElementsForPolicy(
+    options: { allowCoalescing?: boolean } = {},
+  ): Promise<PolicyElement[]> {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performGetActiveElementsForPolicy(options);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performGetActiveElementsForPolicy(options);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performGetActiveElementsForPolicy(
     options: { allowCoalescing?: boolean } = {},
   ): Promise<PolicyElement[]> {
     // Enforcement reads cannot join work that may have started before an
@@ -704,6 +868,25 @@ export class ElementCRUDHandler {
     metadata: Record<string, unknown>;
     sessionIds?: string[];
   }>> {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performGetPolicyElementsForReport(sessionId, options);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performGetPolicyElementsForReport(sessionId, options);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performGetPolicyElementsForReport(
+    sessionId?: string,
+    options: { allowCoalescing?: boolean } = {},
+  ): Promise<Array<{
+    type: string;
+    name: string;
+    metadata: Record<string, unknown>;
+    sessionIds?: string[];
+  }>> {
     const merged = new Map<string, {
       type: string;
       name: string;
@@ -815,6 +998,28 @@ export class ElementCRUDHandler {
   }
 
   async releaseDeadlock(): Promise<{
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
+  }> {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performReleaseDeadlock();
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performReleaseDeadlock();
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performReleaseDeadlock(): Promise<{
     sessionId?: string;
     activeBeforeReset: Array<{ type: string; name: string }>;
     deactivated: Array<{ type: string; name: string }>;
@@ -1026,6 +1231,17 @@ export class ElementCRUDHandler {
   }
 
   async deactivateElement(name: string, type: string) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performDeactivateElement(name, type);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performDeactivateElement(name, type);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performDeactivateElement(name: string, type: string) {
     try {
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_DEACTIVATED',
@@ -1106,6 +1322,17 @@ export class ElementCRUDHandler {
   }
 
   async getElementDetails(name: string, type: string) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performGetElementDetails(name, type);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performGetElementDetails(name, type);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performGetElementDetails(name: string, type: string) {
     try {
       const normalizedType = this.normalizeElementType(type);
       const strategy = this.strategies.get(normalizedType);
@@ -1155,6 +1382,17 @@ export class ElementCRUDHandler {
    * Extracted from index.ts:609-679 (exact copy, adapted for handler pattern)
    */
   async reloadElements(type: string) {
+    if (!this.memoryProvider) {
+      this.operationCheck?.();
+      return this.performReloadElements(type);
+    }
+    const bound = await this.bindMemoryOperation();
+    const result = await bound.performReloadElements(type);
+    bound.operationCheck?.();
+    return result;
+  }
+
+  private async performReloadElements(type: string) {
     try {
       // Normalize the type to handle both plural and singular forms
       const normalizedType = this.normalizeElementType(type);
@@ -1274,6 +1512,7 @@ export class ElementCRUDHandler {
    * Returns context for LLM to drive the agentic loop
    */
   async executeAgent(name: string, parameters: Record<string, any>) {
+    this.requireAgentMemoryComposition();
     try {
       const result = await this.agentManager.executeAgent(name, parameters);
 
@@ -1407,6 +1646,7 @@ export class ElementCRUDHandler {
     parameters?: Record<string, any>;
     previousStepResult?: string;
   }) {
+    this.requireAgentMemoryComposition();
     try {
       const result = await this.agentManager.continueAgentExecution(args);
 
