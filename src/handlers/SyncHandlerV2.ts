@@ -13,6 +13,7 @@ import { ConfigManager } from '../config/ConfigManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { ElementType } from '../portfolio/PortfolioManager.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 
 export interface SyncOperationOptions {
   operation: 'list-remote' | 'download' | 'upload' | 'compare' | 'bulk-download' | 'bulk-upload';
@@ -31,20 +32,46 @@ export interface SyncOperationOptions {
 }
 
 export class SyncHandler {
+  private readonly memoryComposition?: TenantMemoryOperationProvider;
+  private boundOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+  withCapturedMemoryOperation<T>(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+    action: (handler: SyncHandler) => Promise<T>): Promise<T> {
+    if (provider !== this.memoryComposition) throw new Error('Memory sync provider binding mismatch');
+    provider.assertOperation(operation);
+    const bound = new SyncHandler(this.syncManager.bindMemoryOperation(provider, operation), this.configManager, this.indicatorService);
+    bound.boundOperation = Object.freeze({ provider, operation });
+    return action(bound).then(result => { provider.assertOperation(operation); return result; });
+  }
+
   constructor(
     private readonly syncManager: PortfolioSyncManager,
     private readonly configManager: ConfigManager,
-    private readonly indicatorService: PersonaIndicatorService
-  ) {}
+    private readonly indicatorService: PersonaIndicatorService,
+    memoryProvider?: TenantMemoryOperationProvider,
+  ) {
+    if (arguments.length >= 4) {
+      if (!(memoryProvider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory sync provider required');
+      this.memoryComposition = memoryProvider;
+    }
+  }
   
   /**
    * Handle portfolio sync operations
    */
-  async handleSyncOperation(options: SyncOperationOptions) {
+  async handleSyncOperation(options: SyncOperationOptions): Promise<{content:{type:string;text:string}[]}> {
+    options = {...options,filter:options.filter && {...options.filter},options:options.options && {...options.options}};
+    if (this.memoryComposition) {
+      const provider = this.memoryComposition;
+      const capture = provider.capture();
+      const operation = await provider.resolve(capture);
+      return this.withCapturedMemoryOperation(provider, operation, bound => bound.handleSyncOperation(options));
+    }
+    this.boundOperation?.provider.assertOperation(this.boundOperation.operation);
     const indicator = this.indicatorService.getPersonaIndicator();
 
     try {
       await this.configManager.initialize();
+      this.boundOperation?.provider.assertOperation(this.boundOperation.operation);
 
       // Check if sync is enabled (allow list-remote and compare even when disabled)
       const syncEnabled = this.configManager.getSetting('sync.enabled');
@@ -75,11 +102,13 @@ export class SyncHandler {
       
       // Call the unified handleSyncOperation method
       const result = await this.syncManager.handleSyncOperation(syncOp);
+      this.boundOperation?.provider.assertOperation(this.boundOperation.operation);
       
       // Format the result based on the operation type
       return this.formatResult(result, options, indicator);
       
     } catch (error) {
+      if (this.boundOperation) throw error;
       const sanitizedError = SecureErrorHandler.sanitizeError(error);
       return {
         content: [{

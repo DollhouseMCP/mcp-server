@@ -162,6 +162,23 @@ function productionActivationServices() {
 }
 
 describe('WebConsoleRegistrar', () => {
+  it.each([undefined, null])('refuses a configured missing deletion boundary before constructing stores (%s)', async boundary => {
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+    const { DatabaseTenantMemoryRegistry } = await import('../../../src/storage/DatabaseTenantMemoryRegistry.js');
+    const { ContextTracker } = await import('../../../src/security/encryption/ContextTracker.js');
+    const { randomUUID } = await import('node:crypto');
+    const db={execute:jest.fn()} as unknown as import('../../../src/database/connection.js').DatabaseInstance;
+    const container=new TestContainer();
+    container.seed('DatabaseInstance',db); container.seed('SystemDatabaseInstance',db);
+    container.seed('ContextTracker',new ContextTracker());
+    container.seed('DatabaseTenantMemoryRegistry',new DatabaseTenantMemoryRegistry({db,
+      getEffectiveTenant:()=>randomUUID(), createManagerDeps:()=>{throw new Error('Must not initialize');},
+      getAttribution:()=>({contextRoot:'trusted-root',sessionId:'test-session',transport:'http'})}));
+    container.seed('DatabaseMemoryAccountDeletionBoundary',boundary);
+    await expect(new WebConsoleRegistrar().bootstrapAndRegister(container)).rejects.toThrow('actual system database boundary');
+    expect(db.execute).not.toHaveBeenCalled();
+  });
+
   it('registers an unmounted in-memory web-console composition', async () => {
     const lifecycle = { registerPeriodicTask: jest.fn() };
     const reportCleanupError = jest.fn();

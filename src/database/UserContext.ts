@@ -73,6 +73,7 @@ export type SessionIdResolver = () => string;
 export function createUserIdResolver(
   contextTracker: ContextTracker,
   registry?: SessionActivationRegistry,
+  pinAuthenticatedHttp = false,
 ): UserIdResolver {
   return () => {
     const session = contextTracker.getSessionContext();
@@ -85,6 +86,18 @@ export function createUserIdResolver(
         'from a background task or a test harness that forgot to establish one.',
       );
       throw new UserContextMissingError('No active user context for database operation');
+    }
+
+    // Configured HTTP sessions are created by the verified authentication
+    // route. Attribution overrides may never replace that database authority.
+    if (pinAuthenticatedHttp && session.transport === 'http') {
+      const userId = session.userId;
+      validateUserId(userId);
+      const override = registry?.get(session.sessionId)?.dbUserId;
+      if (override !== undefined && override !== userId) {
+        throw new UserContextMissingError('Database override differs from the authenticated HTTP subject');
+      }
+      return userId;
     }
 
     // Check for per-session DB identity override (from set_user_identity)

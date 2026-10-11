@@ -48,12 +48,15 @@ interface StorageSerializationCapable {
 
 export type ManagerBackedPortfolioManagers = Readonly<Record<ConsolePortfolioElementType, PortfolioElementManager>>;
 
-export interface ManagerBackedPortfolioElementStoreOptions {
-  readonly managers: ManagerBackedPortfolioManagers;
+interface ManagerBackedPortfolioIdentity {
   readonly getCurrentUserId: () => string;
-  readonly memoryProvider?: TenantMemoryOperationProvider;
   readonly contextTracker?: ContextTracker;
 }
+export type ManagerBackedPortfolioElementStoreOptions = ManagerBackedPortfolioIdentity & (
+  | { readonly managers: ManagerBackedPortfolioManagers; readonly memoryProvider?: never }
+  | { readonly managers: Omit<ManagerBackedPortfolioManagers, 'memories'>;
+      readonly memoryProvider: TenantMemoryOperationProvider; readonly contextTracker: ContextTracker }
+);
 
 export interface PendingConsoleMemoryUpdate {
   readonly status: 'preparing' | 'refused' | 'unknown' | 'committed-publication-failed';
@@ -74,8 +77,21 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     if (Object.hasOwn(options, 'memoryProvider')) {
       if (!(options.memoryProvider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual trusted memory provider required');
       options.memoryProvider.assertContextTracker(options.contextTracker);
-      this.bindForOperation = userId => this.bindConfiguredOperation(userId, options.memoryProvider!);
+      // Omit also at runtime: a wider ordinary registry is structurally assignable
+      // to the configured input, but cannot leave a cached root memory dependency.
+      const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(options.managers);
+      delete descriptors.memories;
+      this.options = { getCurrentUserId: options.getCurrentUserId, memoryProvider: options.memoryProvider,
+        contextTracker: options.contextTracker!, managers: Object.defineProperties(
+          {} as Omit<ManagerBackedPortfolioManagers, 'memories'>, descriptors) };
+      const provider = options.memoryProvider;
+      this.bindForOperation = userId => this.bindConfiguredOperation(userId, provider);
     }
+  }
+
+  /** Trusted registrar composition cannot substitute a different provider/store. */
+  requireMemoryProvider(provider: TenantMemoryOperationProvider): void {
+    if (this.options.memoryProvider !== provider) throw new Error('Console portfolio requires its original memory provider');
   }
 
   private async bindConfiguredOperation(userId: string, provider: TenantMemoryOperationProvider): Promise<IPortfolioElementStore> {
@@ -353,7 +369,9 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
 
   private manager(type: ConsolePortfolioElementType): PortfolioElementManager {
     this.assertOperationBinding();
-    return this.options.managers[type];
+    const manager = (this.options.managers as Partial<ManagerBackedPortfolioManagers>)[type];
+    if (!manager) throw new Error('Console memory manager requires an authentic bound operation');
+    return manager;
   }
 
   private async findElement(type: ConsolePortfolioElementType, canonicalName: string): Promise<IElement | undefined> {

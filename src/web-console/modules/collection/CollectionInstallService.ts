@@ -66,10 +66,19 @@ export class CollectionInstallService {
     const path = collectionPathFromBody(req.body);
     if (path.kind === 'invalid') return invalidRequest(path.detail);
 
+    // Bind once before outbound I/O; the configured store checks the authenticated
+    // target against the ambient trusted invocation before scheduling initialization.
+    const rootStore = this.options.portfolioStore;
+    const store = rootStore.bindForOperation ? await rootStore.bindForOperation(auth.userId) : rootStore;
+    store.assertOperationBinding?.();
+
     let validated: CollectionValidatedElement;
     try {
       validated = await this.options.installer.fetchAndValidate(path.value);
+      store.assertOperationBinding?.();
     } catch (error) {
+      // An expired original binding cannot become a successful HTTP problem response.
+      store.assertOperationBinding?.();
       return classifyFetchError(error);
     }
 
@@ -110,7 +119,8 @@ export class CollectionInstallService {
     }
 
     try {
-      const record = await this.options.portfolioStore.create({
+      store.assertOperationBinding?.();
+      const record = await store.create({
         userId: auth.userId,
         type,
         name: validated.name,
@@ -120,12 +130,16 @@ export class CollectionInstallService {
         tags,
         now: this.now(),
       });
-      return {
+      store.assertOperationBinding?.();
+      const result = {
         status: 201,
         body: serializePortfolioElementDetail(record, null),
         headers: { ETag: portfolioElementEtag(record) },
       };
+      store.assertOperationBinding?.();
+      return result;
     } catch (error) {
+      store.assertOperationBinding?.();
       if (error instanceof PortfolioElementAlreadyExistsError) {
         return problem(409, 'portfolio_element_exists', 'Conflict',
           'A portfolio element with that name already exists.');

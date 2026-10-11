@@ -36,13 +36,18 @@ export class ServerServiceRegistrar {
       );
     });
 
-    container.register('ServerStartup', () => new ServerStartup(
+    container.register('ServerStartup', () => {
+      if (container.hasRegistration('DatabaseTenantMemoryRegistry')) {
+        throw new Error('Alternative memory startup requires a tenant-bound operation; use attributed startup composition');
+      }
+      return new ServerStartup(
       container.resolve('PortfolioManager'),
       container.resolve('FileLockManager'),
       container.resolve('ConfigManager'),
       container.resolve('MigrationManager'),
       container.resolve('MemoryManager'),
       container.resolve('OperationalTelemetry')
-    ));
+      );
+    });
   }
 }

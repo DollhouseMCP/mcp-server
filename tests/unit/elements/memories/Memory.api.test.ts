@@ -35,6 +35,7 @@ describe('Memory API Integration (Issue #1320)', () => {
     process.env.DOLLHOUSE_PORTFOLIO_DIR = tempPortfolioDir;
 
     container = new DollhouseContainer();
+    await container.preparePortfolio();
     manager = container.resolve('MemoryManager');
     // Issue #1948: Set root memory manager for static methods (findByTrustLevel, find)
     Memory.setRootMemoryManager(manager as any);

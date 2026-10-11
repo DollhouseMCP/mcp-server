@@ -56,12 +56,27 @@ export class SharedPoolServiceRegistrar {
 
     container.register<SharedPoolConfiguration>('SharedPoolConfig', () => config);
 
+    const configuredMemory = container.hasRegistration('DatabaseTenantMemoryRegistry');
+    const registry = configuredMemory
+      ? container.resolve<import('../../storage/DatabaseTenantMemoryRegistry.js').DatabaseTenantMemoryRegistry>('DatabaseTenantMemoryRegistry')
+      : undefined;
+    const applicationDb = container.hasRegistration('DatabaseInstance')
+      ? container.resolve<import('../../database/connection.js').DatabaseInstance>('DatabaseInstance') : undefined;
+    const sharedDb = configuredMemory
+      ? container.resolve<import('../../database/connection.js').DatabaseInstance>('SystemDatabaseInstance') : applicationDb;
+    if (configuredMemory) {
+      const { DatabaseTenantMemoryRegistry } = await import('../../storage/DatabaseTenantMemoryRegistry.js');
+      if (!(registry instanceof DatabaseTenantMemoryRegistry) || !applicationDb || !sharedDb ||
+        !registry.matchesDatabase(applicationDb)) throw new TypeError('Actual paired database memory registry required for shared pool');
+    }
+
+
     // In DB mode, ensure the SYSTEM user row exists. The migration
     // (0008) creates it, but this is a safety net for deployments
     // that haven't run migrations yet or had the row deleted.
     if (container.hasRegistration('DatabaseInstance')) {
       const { SystemUserProvisioner } = await import('./SystemUserProvisioner.js');
-      const db = container.resolve<import('../../database/connection.js').DatabaseInstance>('DatabaseInstance');
+      const db = sharedDb!;
       const provisioner = new SystemUserProvisioner(db);
       await provisioner.ensure();
       container.register('SystemUserProvisioner', () => provisioner);
@@ -72,7 +87,7 @@ export class SharedPoolServiceRegistrar {
     // File mode: FileProvenanceStore (reads from shared/.provenance/).
     if (container.hasRegistration('DatabaseInstance')) {
       const { DatabaseProvenanceStore } = await import('./DatabaseProvenanceStore.js');
-      const db = container.resolve<import('../../database/connection.js').DatabaseInstance>('DatabaseInstance');
+      const db = sharedDb!;
       container.register('ProvenanceStore', () => new DatabaseProvenanceStore(db));
     } else {
       const { FileProvenanceStore } = await import('./FileProvenanceStore.js');
@@ -94,10 +109,11 @@ export class SharedPoolServiceRegistrar {
       await import('./SharedPoolInstaller.js');
 
     if (container.hasRegistration('DatabaseInstance')) {
-      const dbForInstaller = container.resolve<import('../../database/connection.js').DatabaseInstance>('DatabaseInstance');
+      const dbForInstaller = sharedDb!;
       container.register('SharedPoolInstaller', () => {
         const store = container.resolve<import('./IProvenanceStore.js').IProvenanceStore>('ProvenanceStore');
-        return new SharedPoolInstaller(store, new DatabaseSharedPoolWriteStrategy(dbForInstaller));
+        return new SharedPoolInstaller(store, configuredMemory ? new DatabaseSharedPoolWriteStrategy(dbForInstaller, { registry: registry!, applicationDb: applicationDb! })
+          : new DatabaseSharedPoolWriteStrategy(dbForInstaller));
       });
     } else {
       const { resolveDataDirectory } = await import('../../paths/resolveDataDirectory.js');

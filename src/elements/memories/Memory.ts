@@ -205,6 +205,18 @@ export class Memory extends BaseElement implements IElement {
 
   // Issue #1948: Root memory manager ref for static methods (findByTrustLevel, etc.)
   private static _rootMemoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
+  private static unattributedAccessRefused = false;
+
+  /** Cold configured-process fence; this does not revoke already captured instance owners. */
+  static refuseUnattributedAccess(): void {
+    Memory.unattributedAccessRefused = true;
+  }
+
+  private static requireUnattributedAccess(): void {
+    if (Memory.unattributedAccessRefused) {
+      throw new Error('Tenant-bound memory operation required; unattributed static memory access is unavailable');
+    }
+  }
 
   /** Set the root memory manager ref (called by Container). Warns on re-set (prevents silent replacement). */
   static setRootMemoryManager(manager: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> }): void {
@@ -219,6 +231,7 @@ export class Memory extends BaseElement implements IElement {
 
   /** Get memory manager for static methods (findByTrustLevel, etc.) */
   private static getStaticMemoryManager() {
+    Memory.requireUnattributedAccess();
     if (!Memory._rootMemoryManagerRef) {
       throw new Error('Memory root manager not configured — call Memory.setRootMemoryManager()');
     }
@@ -230,6 +243,7 @@ export class Memory extends BaseElement implements IElement {
   }
 
   private getMemoryManager() {
+    if (!this._memoryManagerRef) Memory.requireUnattributedAccess();
     // Instance ref first (normal path), then static fallback (for static methods)
     const ref = this._memoryManagerRef ?? Memory._rootMemoryManagerRef;
     if (!ref) {

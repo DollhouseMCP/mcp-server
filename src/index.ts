@@ -57,6 +57,8 @@ import { ConfigManager } from "./config/ConfigManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
 import { validateUserId } from './paths/validateUserId.js';
+import { validateUserId as validateDatabaseUserId } from './state/db-persistence-utils.js';
+import type { AuthClaims } from './auth/IAuthProvider.js';
 
 // Transport-aware error handlers.
 // Issue #1948: Process lifecycle managed by LifecycleService singleton.
@@ -941,6 +943,9 @@ async function resolvePortFromConfig(): Promise<number | undefined> {
  * and all HTTP sessions.
  */
 async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
+  if (env.DOLLHOUSE_DATABASE_MEMORY_GUARDED && !env.DOLLHOUSE_AUTH_ENABLED) {
+    throw new Error('Configured database memory HTTP requires verified authentication');
+  }
   const container = new DollhouseContainer(_lifecycleService);
   await container.preparePortfolio();
   await container.bootstrapHttpHandlers();
@@ -1078,6 +1083,37 @@ async function startHttpConsole(
   return ingestResult;
 }
 
+/** Resolve only the verified middleware subject in configured DB HTTP mode. */
+export async function resolveHttpSessionUserIdentity(
+  authClaims: AuthClaims | undefined,
+  options: {
+    requiresAuthenticatedDatabaseIdentity: boolean;
+    userIdentityService?: Pick<UserIdentityService, 'resolveUserForSub'>;
+    fallbackUserId?: string;
+    authProviderName?: string;
+  },
+): Promise<{ userId: string | undefined; resolvedDbUserId: boolean }> {
+  const { requiresAuthenticatedDatabaseIdentity, userIdentityService, fallbackUserId, authProviderName } = options;
+  if (requiresAuthenticatedDatabaseIdentity &&
+      (!authClaims || typeof authClaims.sub !== 'string' || !authClaims.sub.trim() || !userIdentityService)) {
+    throw new Error('Configured database memory HTTP requires a verified subject and DB identity resolution');
+  }
+  if (!authClaims?.sub) return { userId: fallbackUserId, resolvedDbUserId: false };
+  if (!userIdentityService) {
+    return { userId: toPathSafeAuthUserId(authClaims.sub, authProviderName), resolvedDbUserId: false };
+  }
+  let userId: string;
+  try {
+    // Actual auth_accounts subject link is shared with the authenticated console.
+    userId = await userIdentityService.resolveUserForSub(authClaims.sub, authClaims.displayName);
+  } catch (err) {
+    logger.error(`[HTTP] Failed to resolve DB user for '${authClaims.sub}': ${err instanceof Error ? err.message : String(err)}`);
+    throw new Error('Failed to resolve database user for authenticated HTTP session');
+  }
+  if (requiresAuthenticatedDatabaseIdentity) validateDatabaseUserId(userId);
+  return { userId, resolvedDbUserId: true };
+}
+
 /**
  * Start DollhouseMCP in Streamable HTTP transport mode.
  *
@@ -1085,7 +1121,7 @@ async function startHttpConsole(
  * IngestRoutesResult is provided, HTTP session lifecycle events are forwarded
  * to the console's session registry.
  */
-async function startStreamableHttpServer(
+export async function startStreamableHttpServer(
   options: StreamableHttpRuntimeOptions = {},
   params?: { container?: DollhouseContainer; ingestRoutes?: IngestRoutesResult },
 ): Promise<StreamableHttpRuntimeHandle> {
@@ -1121,44 +1157,20 @@ async function startStreamableHttpServer(
     ? container.resolve<UserIdentityService>('UserIdentityService')
     : undefined;
 
+  const requiresAuthenticatedDatabaseIdentity = container.hasRegistration('DatabaseTenantMemoryRegistry');
+  if (requiresAuthenticatedDatabaseIdentity && (!authMiddleware || !userIdentityService)) {
+    throw new Error('Configured database memory HTTP requires authentication middleware and DB identity resolution');
+  }
+
   const activationRegistry = container.hasRegistration('SessionActivationRegistry')
     ? container.resolve<SessionActivationRegistry>('SessionActivationRegistry')
     : undefined;
   const runtimeSessionControl = await resolveRuntimeMcpSessionControl(container);
 
   const runtime = await createStreamableHttpRuntime(async (transport, authClaims, clientInfo) => {
-    // SECURITY: fail-closed per-user isolation. Authenticated HTTP
-    // sessions must never collapse onto the unauthenticated fallback user.
-    //
-    // Resolution order:
-    //   1. DB mode + UserIdentityService.resolveOrCreateUser succeeds → UUID.
-    //   2. DB mode + resolve fails → abort session setup; continuing with a
-    //      non-UUID subject would poison RLS-scoped state.
-    //   3. File mode → path-safe stable id derived from authClaims.sub.
-    //   4. No authClaims at all (auth disabled) → fallbackUserId.
-    let sessionUserId = fallbackUserId;
-    let resolvedDbUserId = false;
-    if (authClaims?.sub) {
-      if (userIdentityService) {
-        try {
-          // Resolve via the auth_account link (not username==sub) so this MCP
-          // session and the web console converge on the SAME users row for this
-          // identity — every machine on one OAuth identity is one account.
-          sessionUserId = await userIdentityService.resolveUserForSub(
-            authClaims.sub,
-            authClaims.displayName,
-          );
-          resolvedDbUserId = true;
-        } catch (err) {
-          logger.error(`[HTTP] Failed to resolve DB user for '${authClaims.sub}': ${err instanceof Error ? err.message : String(err)}`);
-          throw new Error('Failed to resolve database user for authenticated HTTP session');
-        }
-      } else {
-        // File mode: no DB UUID resolution layer. Use a stable path-safe
-        // internal ID so generic OIDC subjects cannot break path resolution.
-        sessionUserId = toPathSafeAuthUserId(authClaims.sub, authProviderName);
-      }
-    }
+    const { userId: sessionUserId, resolvedDbUserId } = await resolveHttpSessionUserIdentity(authClaims, {
+      requiresAuthenticatedDatabaseIdentity, userIdentityService, fallbackUserId, authProviderName,
+    });
 
     const sessionContext = createHttpSession({
       userId: sessionUserId,

@@ -8,6 +8,7 @@ import { validateUserId } from '../state/db-persistence-utils.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import type { DatabaseMemoryStorageLayer } from './DatabaseMemoryStorageLayer.js';
+import { SYSTEM_USER_UUID } from '../collection/shared-pool/SharedPoolConfig.js';
 
 export const DATABASE_MEMORY_LEGACY_PROFILE = 'legacy-memory-writes-v1';
 
@@ -21,6 +22,15 @@ function refuse(): never { throw new DatabaseMemoryLegacyPermissionError(); }
 /** Internal mode check only; callers separately establish DB, role and transaction provenance. */
 export async function requireDatabaseMemoryLegacyMode(tx: DrizzleTx, tenant: string): Promise<void> {
   try { validateUserId(tenant); } catch { refuse(); }
+  await requireLegacyTuple(tx, tenant);
+}
+
+/** Fixed non-session owner only; caller separately proves the genuine privileged transaction. */
+export async function requireDatabaseSystemMemoryLegacyMode(tx: DrizzleTx): Promise<void> {
+  await requireLegacyTuple(tx, SYSTEM_USER_UUID);
+}
+
+async function requireLegacyTuple(tx: DrizzleTx, tenant: string): Promise<void> {
   const rows = await tx.execute(sql`SELECT protocol_version, profile, mode, generation::text AS generation
     FROM public.memory_backend_modes WHERE user_id=${tenant}::uuid AND backend='database' FOR SHARE`);
   if (rows.length !== 1) refuse();

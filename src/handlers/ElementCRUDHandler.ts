@@ -23,7 +23,7 @@ import path from 'node:path';
 import { SkillManager } from '../elements/skills/index.js';
 import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
-import { AgentManager } from '../elements/agents/AgentManager.js';
+import { AgentManager, type AgentMemoryOperationBinding } from '../elements/agents/AgentManager.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 import { EnsembleManager } from '../elements/ensembles/EnsembleManager.js';
@@ -174,12 +174,15 @@ export class ElementCRUDHandler {
     }
   }
 
-  private requireAgentMemoryComposition(): void {
-    // These AgentManager paths independently resolve cached memory content. Until
-    // their trusted caller seam is composed, configured handlers must not use it.
-    if (this.memoryProvider || this.operationCheck) {
+  private agentMemoryBinding?: AgentMemoryOperationBinding;
+
+  private requireAgentMemoryComposition(): AgentMemoryOperationBinding | undefined {
+    // A bound handler must retain the exact authentic operation for nested agent reads.
+    if (this.memoryProvider || this.operationCheck && !this.agentMemoryBinding) {
       throw new Error('Tenant-bound agent memory composition is required');
     }
+    this.operationCheck?.();
+    return this.agentMemoryBinding;
   }
 
   private async bindMemoryOperation(): Promise<ElementCRUDHandler> {
@@ -199,6 +202,7 @@ export class ElementCRUDHandler {
       this.elementQueryService, this.validationRegistry, this.activationStore, this.backupService,
       this.policyExportService, this.activationRegistry, this.contextTracker, this.forkOnEditStrategy);
     bound.operationCheck = operation.assertCurrent;
+    bound.agentMemoryBinding = Object.freeze({provider,operation});
     let snapshots = this.tenantPolicySnapshots.get(operation.manager);
     if (!snapshots) {
       snapshots = new Map(); this.tenantPolicySnapshots.set(operation.manager, snapshots);
@@ -1517,10 +1521,13 @@ export class ElementCRUDHandler {
    * Execute an agent with goal parameters
    * Returns context for LLM to drive the agentic loop
    */
-  async executeAgent(name: string, parameters: Record<string, any>) {
-    this.requireAgentMemoryComposition();
+  async executeAgent(name: string, parameters: Record<string, any>): Promise<MCPResponse> {
+    if (this.memoryProvider) return (await this.bindMemoryOperation()).executeAgent(name, parameters);
+    const binding = this.requireAgentMemoryComposition();
     try {
-      const result = await this.agentManager.executeAgent(name, parameters);
+      const result = binding ? await this.agentManager.executeAgent(name, parameters, {}, binding)
+        : await this.agentManager.executeAgent(name, parameters);
+      this.operationCheck?.();
 
       return {
         content: [{
@@ -1529,6 +1536,7 @@ export class ElementCRUDHandler {
         }]
       };
     } catch (error) {
+      if (binding) throw error;
       // FIX: Issue #275 - Re-throw ElementNotFoundError for consistent error handling
       if (error instanceof ElementNotFoundError) {
         throw error;
@@ -1651,10 +1659,13 @@ export class ElementCRUDHandler {
     agentName: string;
     parameters?: Record<string, any>;
     previousStepResult?: string;
-  }) {
-    this.requireAgentMemoryComposition();
+  }): Promise<MCPResponse> {
+    if (this.memoryProvider) return (await this.bindMemoryOperation()).continueAgentExecution(args);
+    const binding = this.requireAgentMemoryComposition();
     try {
-      const result = await this.agentManager.continueAgentExecution(args);
+      const result = binding ? await this.agentManager.continueAgentExecution(args, binding)
+        : await this.agentManager.continueAgentExecution(args);
+      this.operationCheck?.();
 
       return {
         content: [{
@@ -1663,6 +1674,7 @@ export class ElementCRUDHandler {
         }]
       };
     } catch (error) {
+      if (binding) throw error;
       // FIX: Issue #275 - Re-throw ElementNotFoundError for consistent error handling
       if (error instanceof ElementNotFoundError) {
         throw error;

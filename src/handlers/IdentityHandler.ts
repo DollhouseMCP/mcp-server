@@ -29,7 +29,8 @@ export class IdentityHandler {
     private readonly personaManager: PersonaManager,
     private readonly initService: InitializationService,
     private readonly indicatorService: PersonaIndicatorService,
-    private readonly contextTracker?: ContextTracker
+    private readonly contextTracker?: ContextTracker,
+    private readonly pinAuthenticatedHttp = false,
   ) {}
 
   /**
@@ -42,6 +43,12 @@ export class IdentityHandler {
   ): void {
     this.userIdentityService = service;
     this.sessionActivationRegistry = registry;
+  }
+
+  private assertIdentityMutationAllowed(): void {
+    if (this.pinAuthenticatedHttp && this.contextTracker?.getSessionContext()?.transport === 'http') {
+      throw new Error('Authenticated HTTP identity cannot be changed by attribution tools');
+    }
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -59,6 +66,7 @@ export class IdentityHandler {
    * @param email - Optional email address
    */
   async setUserIdentity(username: string, email?: string) {
+    this.assertIdentityMutationAllowed();
     await this.ensureInitialized();
 
     try {
@@ -199,6 +207,7 @@ export class IdentityHandler {
    * Clear user identity and return to anonymous mode
    */
   async clearUserIdentity() {
+    this.assertIdentityMutationAllowed();
     await this.ensureInitialized();
 
     const { username: currentUsername } = this.personaManager.getUserIdentity();

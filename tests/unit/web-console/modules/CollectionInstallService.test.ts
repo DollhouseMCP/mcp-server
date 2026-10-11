@@ -207,4 +207,66 @@ describe('CollectionInstallService', () => {
     expect(result.status).toBe(409);
     expect((result.body as { code: string }).code).toBe('portfolio_element_exists');
   });
+  it('retains one authenticated bound store before fetch through response construction', async () => {
+    const events: string[] = [];
+    const selected = new InMemoryPortfolioElementStore();
+    const create = jest.spyOn(selected, 'create');
+    const rootCreate = jest.fn<IPortfolioElementStore['create']>();
+    const bind = jest.fn<NonNullable<IPortfolioElementStore['bindForOperation']>>(async userId => {
+      expect(userId).toBe(USER_ID);
+      events.push('bind');
+      return selected;
+    });
+    const root = { create: rootCreate, bindForOperation: bind } as unknown as IPortfolioElementStore;
+    const installer = { fetchAndValidate: async () => {
+      events.push('fetch');
+      return validatedSkill();
+    } };
+    const result = await run(serviceWith(installer, root), { path: 'library/skills/code-review.md' });
+    expect(result.status).toBe(201);
+    expect(result.headers?.ETag).toBeDefined();
+    expect(events).toEqual(['bind', 'fetch']);
+    expect(bind).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(rootCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses capture failure before outbound fetch', async () => {
+    const cause = new Error('Wrong authenticated target');
+    const installer = installerReturning(validatedSkill());
+    const root = { bindForOperation: async () => { throw cause; } } as unknown as IPortfolioElementStore;
+    await expect(run(serviceWith(installer, root), { path: 'library/skills/x.md' })).rejects.toBe(cause);
+    expect(installer.fetchAndValidate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('refuses original binding drift after fetch (fetch rejection=%s)', async failFetch => {
+    const cause = new Error('Original invocation closed');
+    let open = true;
+    const create = jest.fn<IPortfolioElementStore['create']>();
+    const selected = { create, assertOperationBinding: () => { if (!open) throw cause; } } as unknown as IPortfolioElementStore;
+    const root = { bindForOperation: async () => selected } as unknown as IPortfolioElementStore;
+    const installer = { fetchAndValidate: async () => {
+      open = false;
+      if (failFetch) throw new CollectionElementNotFoundError('File not found in collection');
+      return validatedSkill();
+    } };
+    await expect(run(serviceWith(installer, root), { path: 'library/skills/x.md' })).rejects.toBe(cause);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses drift during response serialization instead of delivering a stale ETag', async () => {
+    const cause = new Error('Original invocation closed while serializing');
+    let open = true;
+    const ordinary = new InMemoryPortfolioElementStore();
+    const selected = { assertOperationBinding: () => { if (!open) throw cause; },
+      create: async (input: Parameters<IPortfolioElementStore['create']>[0]) => {
+        const record = await ordinary.create(input);
+        return { ...record, get content() { open = false; return record.content; } };
+      } } as unknown as IPortfolioElementStore;
+    const root = { bindForOperation: async () => selected } as unknown as IPortfolioElementStore;
+    await expect(run(serviceWith(installerReturning(validatedSkill()), root), {
+      path: 'library/skills/code-review.md',
+    })).rejects.toBe(cause);
+  });
+
 });

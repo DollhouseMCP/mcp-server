@@ -1,3 +1,5 @@
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
+import { bindTenantMemoryIndexView, type TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
 
 import { GitHubAuthManager } from '../auth/GitHubAuthManager.js';
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
@@ -35,7 +37,80 @@ import { normalizeElementType, formatElementTypesList } from '../utils/elementTy
  * Audit logging happens in the underlying services (GitHubAuthManager, PortfolioRepoManager).
  * @security-audit-suppress DMCP-SEC-006
  */
+interface PortfolioSyncProgress {
+    syncCount: number;
+    totalElements: number;
+    syncText: string;
+    elementCounts: Record<string, number>;
+    failedElements: Array<{type: string; name: string; error: string}>;
+}
+
 export class PortfolioHandler {
+    private readonly memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies };
+    private boundOperation?: { readonly provider: TenantMemoryOperationProvider; readonly operation: BoundMemoryOperation };
+    private originalBindingFailure?: { readonly cause: unknown };
+    private assertMemoryOperation(): void {
+        if (this.originalBindingFailure) throw this.originalBindingFailure.cause;
+        if (!this.boundOperation) return;
+        try { this.boundOperation.provider.assertOperation(this.boundOperation.operation); }
+        catch (cause) { this.originalBindingFailure = { cause }; throw cause; }
+    }
+
+    private withMemoryOperation<T>(action: (handler: PortfolioHandler) => Promise<T>): Promise<T> {
+        if (!this.memoryComposition) return action(this);
+        const provider = this.memoryComposition.provider;
+        const capture = provider.capture();
+        return provider.resolve(capture).then(operation => this.withCapturedMemoryOperation(provider, operation, action));
+    }
+
+    async withCapturedMemoryOperation<T>(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+        action: (handler: PortfolioHandler) => Promise<T>): Promise<T> {
+        if (provider !== this.memoryComposition?.provider) throw new Error('Memory caller provider binding mismatch');
+        provider.assertOperation(operation);
+        const view = bindTenantMemoryIndexView(provider, operation, this.memoryComposition.dependencies);
+        let result: T;
+        try {
+            if (!view.unifiedIndex) throw new Error('Selected remote index collaborators required');
+            const bound = this.bindMemoryOperation(provider, operation, view);
+            result = await action(bound);
+            bound.assertMemoryOperation();
+            provider.assertOperation(operation);
+        } catch (cause) {
+            try { await view.dispose(); } catch { /* Preserve the original action refusal. */ }
+            throw cause;
+        }
+        await view.dispose();
+        this.assertMemoryOperation();
+        provider.assertOperation(operation);
+        return result;
+    }
+
+    private readonly fixedPortfolioIndex?: PortfolioIndexManager;
+    private readonly fixedUnifiedIndex?: UnifiedIndexManager;
+    private get portfolioIndexManager(): PortfolioIndexManager {
+        this.assertMemoryOperation();
+        if (!this.fixedPortfolioIndex) throw new Error('Selected portfolio index required');
+        return this.fixedPortfolioIndex;
+    }
+    private get unifiedIndexManager(): UnifiedIndexManager {
+        this.assertMemoryOperation();
+        if (!this.fixedUnifiedIndex) throw new Error('Selected unified index required');
+        return this.fixedUnifiedIndex;
+    }
+
+    private bindMemoryOperation(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+        view: ReturnType<typeof bindTenantMemoryIndexView>): PortfolioHandler {
+        provider.assertOperation(operation); view.assertCurrent();
+        if (!view.unifiedIndex) throw new Error('Selected remote index collaborators required');
+        const bound = new PortfolioHandler(this.githubAuthManager, this.portfolioManager,
+            this.portfolioPullHandler.bindMemoryOperation(provider, operation, view.portfolioIndex),
+            view.portfolioIndex, view.unifiedIndex, this.initService, this.indicatorService,
+            this.configManager, this.fileOperations, this.tokenManager, this.portfolioRepoManager,
+            this.collectionHandler?.bindMemoryOperation(provider, operation, view));
+        bound.boundOperation = Object.freeze({ provider, operation });
+        return bound;
+    }
+
     private readonly fileOperations: FileOperationsService;
     private readonly tokenManager: TokenManager;
     private readonly portfolioRepoManager: PortfolioRepoManager;
@@ -44,24 +119,32 @@ export class PortfolioHandler {
         private readonly githubAuthManager: GitHubAuthManager,
         private readonly portfolioManager: PortfolioManager,
         private readonly portfolioPullHandler: PortfolioPullHandler,
-        private readonly portfolioIndexManager: PortfolioIndexManager,
-        private readonly unifiedIndexManager: UnifiedIndexManager,
+        portfolioIndexManager: PortfolioIndexManager | undefined,
+        unifiedIndexManager: UnifiedIndexManager | undefined,
         private readonly initService: InitializationService,
         private readonly indicatorService: PersonaIndicatorService,
         private readonly configManager: ConfigManager,
         fileOperations: FileOperationsService,
         tokenManager: TokenManager,
         portfolioRepoManager: PortfolioRepoManager,
-        private readonly collectionHandler?: CollectionHandler
+        private readonly collectionHandler?: CollectionHandler,
+        memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies }
     ) {
+        if (arguments.length >= 13) {
+            if (!(memoryComposition?.provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory caller provider required');
+            this.memoryComposition = Object.freeze({ ...memoryComposition });
+        } else {
+            this.fixedPortfolioIndex = portfolioIndexManager;
+            this.fixedUnifiedIndex = unifiedIndexManager;
+        }
         // Validation moved to constructor parameters with readonly
         if (!portfolioPullHandler) {
             throw new Error('PortfolioHandler requires a PortfolioPullHandler instance');
         }
-        if (!portfolioIndexManager) {
+        if (!portfolioIndexManager && !this.memoryComposition) {
             throw new Error('PortfolioHandler requires a PortfolioIndexManager instance');
         }
-        if (!unifiedIndexManager) {
+        if (!unifiedIndexManager && !this.memoryComposition) {
             throw new Error('PortfolioHandler requires a UnifiedIndexManager instance');
         }
         if (!portfolioRepoManager) {
@@ -74,12 +157,20 @@ export class PortfolioHandler {
     }
 
     private async countElementsInDir(dirPath: string): Promise<number> {
+        this.assertMemoryOperation();
+        if (this.boundOperation && dirPath === this.portfolioManager.getElementDir(ElementType.MEMORY)) {
+            const memories = await this.boundOperation.operation.manager.list({ strictDatabase: true });
+            this.assertMemoryOperation();
+            return memories.length;
+        }
         try {
             const exists = await this.fileOperations.exists(dirPath);
+            this.assertMemoryOperation();
             if (!exists) {
                 return 0;
             }
             const files = await this.fileOperations.listDirectory(dirPath);
+            this.assertMemoryOperation();
             return files.filter(file =>
                 file.endsWith('.md') ||
                 file.endsWith('.json') ||
@@ -100,16 +191,19 @@ export class PortfolioHandler {
 
         try {
             const exists = await this.fileOperations.exists(dirPath);
+            this.assertMemoryOperation();
             if (!exists) {
                 logger.debug(`[PortfolioHandler] Element directory doesn't exist yet: ${dirPath}`);
                 return [];
             }
             const files = await this.fileOperations.listDirectory(dirPath);
+            this.assertMemoryOperation();
 
             return files
                 .filter(file => file.endsWith('.md') || file.endsWith('.json') || file.endsWith('.yaml'))
                 .map(file => file.replace(/\.(md|json|yaml)$/i, ''));
         } catch (error: any) {
+          if (this.boundOperation) throw error;
             if (error.code === 'ENOENT') {
                 logger.debug(`[PortfolioHandler] Element directory doesn't exist yet: ${dirPath}`);
                 return [];
@@ -148,6 +242,7 @@ export class PortfolioHandler {
             const filePath = path.join(dirPath, `${sanitizedName}${ext}`);
             try {
                 const stats = await this.fileOperations.stat(filePath);
+                this.assertMemoryOperation();
                 if (stats.size > MAX_FILE_SIZE) {
                     throw new Error(`File size exceeds limit of 10MB: ${stats.size} bytes`);
                 }
@@ -159,6 +254,8 @@ export class PortfolioHandler {
                 foundFile = filePath;
                 break;
             } catch (err: any) {
+          this.assertMemoryOperation();
+          if (this.boundOperation) throw err;
                 if (err.code !== 'ENOENT') {
                     throw err;
                 }
@@ -194,21 +291,17 @@ export class PortfolioHandler {
         } as any;
     }
 
-    async portfolioStatus(username?: string) {
-        try {
-          // FIX: DMCP-SEC-006 - Add security audit logging for portfolio access
-          SecurityMonitor.logSecurityEvent({
-            type: 'PORTFOLIO_FETCH_SUCCESS',
-            severity: 'LOW',
-            source: 'PortfolioHandler.portfolioStatus',
-            details: `Portfolio status check for ${username || 'current user'}`
-          });
+    portfolioStatus(username?: string): ReturnType<PortfolioHandler['portfolioStatusBody']> {
+        return this.withMemoryOperation(bound => bound.portfolioStatusBody(username));
+    }
 
+    private invalidPortfolioUsername(username?: string) {
           // Validate username parameter if provided
           if (username && typeof username === 'string') {
             try {
               validateUsername(username);
             } catch (error) {
+          if (this.boundOperation) throw error;
               return {
                 content: [{
                   type: "text",
@@ -218,10 +311,28 @@ export class PortfolioHandler {
             }
           }
     
+          return undefined;
+    }
+
+    private async portfolioStatusBody(username?: string) {
+        this.assertMemoryOperation();
+        try {
+          // FIX: DMCP-SEC-006 - Add security audit logging for portfolio access
+          SecurityMonitor.logSecurityEvent({
+            type: 'PORTFOLIO_FETCH_SUCCESS',
+            severity: 'LOW',
+            source: 'PortfolioHandler.portfolioStatus',
+            details: `Portfolio status check for ${username || 'current user'}`
+          });
+
+          const invalidUsername = this.invalidPortfolioUsername(username);
+          if (invalidUsername) return invalidUsername;
+
           // Get current user if username not provided
           let targetUsername = username;
           if (!targetUsername) {
             const authStatus = await this.githubAuthManager.getAuthStatus();
+            this.assertMemoryOperation();
             if (!authStatus.isAuthenticated || !authStatus.username) {
               return {
                 content: [{
@@ -243,6 +354,7 @@ export class PortfolioHandler {
     
           // Check if portfolio exists
           const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(targetUsername);
+          this.assertMemoryOperation();
 
           let statusText = `${this.indicatorService.getPersonaIndicator()}📊 **Portfolio Status for ${targetUsername}**\n\n`;
 
@@ -266,6 +378,7 @@ export class PortfolioHandler {
               this.countElementsInDir(memoriesPath),
               this.countElementsInDir(ensemblesPath)
             ]);
+            this.assertMemoryOperation();
     
             const totalElements = personas + skills + templates + agents + memories + ensembles;
             statusText += `📈 **Local Elements**:\n`;
@@ -297,6 +410,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           return {
             content: [{
               type: "text",
@@ -306,10 +420,16 @@ export class PortfolioHandler {
         }
     }
 
-    async initPortfolio(_options: {repositoryName?: string; private?: boolean; description?: string}) {
+    initPortfolio(_options: {repositoryName?: string; private?: boolean; description?: string}): ReturnType<PortfolioHandler['initPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.initPortfolioBody(_options));
+    }
+
+    private async initPortfolioBody(_options: {repositoryName?: string; private?: boolean; description?: string}) {
+        this.assertMemoryOperation();
         try {
           // Check authentication
           const authStatus = await this.githubAuthManager.getAuthStatus();
+          this.assertMemoryOperation();
           if (!authStatus.isAuthenticated || !authStatus.username) {
             return {
               content: [{
@@ -331,6 +451,7 @@ export class PortfolioHandler {
 
           // Check if portfolio already exists
           const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
+          this.assertMemoryOperation();
 
           if (portfolioExists) {
             return {
@@ -343,6 +464,7 @@ export class PortfolioHandler {
 
           // Create portfolio with explicit consent
           await this.portfolioRepoManager.createPortfolio(username, true);
+          this.assertMemoryOperation();
 
           // FIX: DMCP-SEC-006 - Add security audit logging for portfolio initialization
           SecurityMonitor.logSecurityEvent({
@@ -366,6 +488,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           return {
             content: [{
               type: "text",
@@ -375,7 +498,12 @@ export class PortfolioHandler {
         }
     }
 
-    async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
+    portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}): ReturnType<PortfolioHandler['portfolioConfigBody']> {
+        return this.withMemoryOperation(bound => bound.portfolioConfigBody(options));
+    }
+
+    private async portfolioConfigBody(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
+        this.assertMemoryOperation();
         try {
           // FIX: DMCP-SEC-006 - Add security audit logging for configuration changes
           SecurityMonitor.logSecurityEvent({
@@ -393,6 +521,7 @@ export class PortfolioHandler {
 
           const configManager = this.configManager;
           await configManager.initialize();
+          this.assertMemoryOperation();
     
           let statusText = `${this.indicatorService.getPersonaIndicator()}⚙️ **Portfolio Configuration**\n\n`;
     
@@ -437,6 +566,7 @@ export class PortfolioHandler {
           };
     
         } catch (error) {
+          if (this.boundOperation) throw error;
           return {
             content: [{
               type: "text",
@@ -446,57 +576,296 @@ export class PortfolioHandler {
         }
     }
 
-    async syncPortfolio(options: {
-        direction: string; 
+    syncPortfolio(options: {
+        direction: string;
         mode?: string;
-        force: boolean; 
+        force: boolean;
         dryRun: boolean;
         confirmDeletions?: boolean;
-      }) {
-        try {
-          // Check authentication
-          const authStatus = await this.githubAuthManager.getAuthStatus();
-          if (!authStatus.isAuthenticated || !authStatus.username) {
-            return {
-              content: [{
-                type: "text",
-                text: `${this.indicatorService.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
-                `🔐 **Quick Setup**:\n` +
-                `1. Run: \`setup_github_auth\` to authenticate\n` +
-                `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
-                `📝 **What this enables**:\n` +
-                `• Upload elements to your GitHub portfolio\n` +
-                `• Sync your local portfolio with GitHub\n` +
-                `• Share elements with the community\n\n` +
-                `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
-              }]
+      }): ReturnType<PortfolioHandler['syncPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.syncPortfolioBody(options));
+    }
+
+    private async syncPortfolioPush(username: string) {
+            const progress: PortfolioSyncProgress = {
+              syncCount: 0, totalElements: 0,
+              syncText: `${this.indicatorService.getPersonaIndicator()}🔄 **Syncing Portfolio...**\n\n`,
+              elementCounts: {}, failedElements: [],
             };
-          }
     
-          const username = authStatus.username;
+            // UX IMPROVEMENT: Calculate total elements for progress tracking
+            const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
 
-          // Check if portfolio exists (PortfolioRepoManager is injected with TokenManager)
-          const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
 
-          if (!portfolioExists) {
+            await this.calculateSyncScope(progress, elementTypes);
+            this.assertMemoryOperation();
+
+            // Finish each repository write/refusal before starting another type.
+            for (const elementType of elementTypes) {
+              await this.syncPortfolioType(progress, elementType);
+              this.assertMemoryOperation();
+            }
+
+            this.appendSyncSummary(progress, username);
+
             return {
               content: [{
                 type: "text",
-                text: `${this.indicatorService.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
-                      `🏠 **Quick Setup**:\n` +
-                      `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
-                      `2. This creates: https://github.com/[username]/${this.portfolioRepoManager.getRepositoryName()}\n\n` +
-                      `📝 **What you'll get**:\n` +
-                      `• Public repository to showcase your AI elements\n` +
-                      `• Organized structure for personas, skills, templates, and agents\n` +
-                      `• Automatic syncing of your local portfolio\n` +
-                      `• Community sharing capabilities\n\n` +
-                      `🚀 **After setup**: Use \`sync_portfolio\` to upload your content!`
+                text: progress.syncText
               }]
             };
-          }
+    }
 
-          if (options.dryRun) {
+    private async calculateSyncScope(progress: PortfolioSyncProgress, elementTypes: readonly string[]) {
+            // Pre-calculate totals for better progress indicators
+            try {
+              progress.syncText += `📊 **Calculating sync scope...**\n`;
+              for (const elementType of elementTypes) {
+                await this.countSyncType(progress, elementType);
+                this.assertMemoryOperation();
+              }
+              
+              progress.syncText += `\n🎯 **Ready to sync ${progress.totalElements} elements:**\n`;
+              for (const [type, count] of Object.entries(progress.elementCounts)) {
+                const icon = count > 0 ? '✅' : '⚪';
+                progress.syncText += `  ${icon} ${type}: ${count} elements\n`;
+              }
+              progress.syncText += `\n🚀 **Starting sync process...**\n\n`;
+              
+            } catch (error: any) {
+              if (this.boundOperation) throw error;
+              progress.syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
+            }
+            
+    }
+
+    private async countSyncType(progress: PortfolioSyncProgress, elementType: string): Promise<void> {
+                try {
+                  const elements = await this.getElementsList(elementType);
+                  this.assertMemoryOperation();
+                  progress.elementCounts[elementType] = elements.length;
+                  progress.totalElements += elements.length;
+                } catch (error: any) {
+                  if (this.boundOperation) throw error;
+
+                  progress.elementCounts[elementType] = 0;
+                  logger.warn(`Failed to count ${elementType}`, { error: error.message });
+                }
+    }
+
+    private async syncPortfolioType(progress: PortfolioSyncProgress, elementType: string) {
+              const typeCount = progress.elementCounts[elementType] || 0;
+              if (typeCount === 0) {
+                progress.syncText += `⏩ **Skipping ${elementType}** (no elements found)\n`;
+                return;
+              }
+              
+              progress.syncText += `📁 **Processing ${elementType}** (${typeCount} elements):\n`;
+              const typeProgress = { successCount: 0 };
+              
+              try {
+                const elements = await this.getElementsList(elementType);
+                this.assertMemoryOperation();
+                
+                for (let i = 0; i < elements.length; i++) {
+                  await this.syncPortfolioElement(progress, typeProgress, elementType, elements, i);
+                  this.assertMemoryOperation();
+                }
+
+                // UX IMPROVEMENT: Show completion summary for each type
+                const successRate = elements.length > 0 ? Math.round((typeProgress.successCount / elements.length) * 100) : 0;
+                const statusIcon = this.syncTypeStatusIcon(successRate);
+                progress.syncText += `  ${statusIcon} **${elementType} complete**: ${typeProgress.successCount}/${elements.length} synced (${successRate}%)\n\n`;
+              } catch (listError: any) {
+                this.assertMemoryOperation();
+                if (this.boundOperation) throw listError;
+                // UX IMPROVEMENT: Better error reporting for list failures
+                const errorMessage = listError.message || 'Failed to get elements list';
+                progress.syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
+                progress.failedElements.push({
+                  type: elementType,
+                  name: 'ALL',
+                  error: `Failed to list ${elementType}: ${errorMessage}`
+                });
+                logger.warn(`Failed to get ${elementType} list`, { error: errorMessage });
+              }
+    }
+
+    private async syncPortfolioElement(progress: PortfolioSyncProgress, typeProgress: {successCount: number}, elementType: string, elements: string[], i: number): Promise<void> {
+                  const elementName = elements[i];
+                  const position = `[${i + 1}/${elements.length}]`;
+                  
+                  try {
+                    // UX IMPROVEMENT: Show individual element progress
+                    progress.syncText += `  ${position} 🔄 Syncing "${elementName}"...`;
+                    
+                    // Load element and save to portfolio
+                    const element = await this.loadElementByType(elementName, elementType);
+                    this.assertMemoryOperation();
+                    if (element) {
+                      await this.portfolioRepoManager.saveElement(element, true);
+                      this.assertMemoryOperation(); // Explicit consent
+                      progress.syncCount++;
+                      typeProgress.successCount++;
+                      progress.syncText += ` ✅\n`;
+                      logger.debug(`Successfully synced ${elementType}/${elementName}`);
+                    } else {
+                      progress.syncText += ` ❌ (null element)\n`;
+                      progress.failedElements.push({
+                        type: elementType,
+                        name: elementName,
+                        error: 'Element loaded as null/undefined'
+                      });
+                    }
+                  } catch (elementError: any) {
+                    this.assertMemoryOperation();
+                    if (this.boundOperation) throw elementError;
+                    this.appendSyncElementError(progress, elementType, elementName, elementError);
+                  }
+    }
+
+    private appendSyncElementError(progress: PortfolioSyncProgress, elementType: string, elementName: string, elementError: any): void {
+                    // Extract error code if present
+                    const errorCode = elementError.code || (elementError.message?.match(/([A-Z_]+_\d+)/)?.[1]) || '';
+                    const errorMessage = elementError.message || 'Unknown error during element sync';
+                    
+                    // Clean up error message for display (remove code if already extracted)
+                    const displayMessage = errorCode 
+                      ? errorMessage.replace(/([A-Z_]+_\d+)\s*/, '')
+                      : errorMessage;
+                    
+                    // Show error code in output for better diagnostics
+                    const errorOutput = errorCode 
+                      ? `${errorCode}: ${displayMessage}`
+                      : displayMessage;
+                    
+                    progress.syncText += ` ❌ (${errorOutput})\n`;
+                    progress.failedElements.push({
+                      type: elementType,
+                      name: elementName,
+                      error: errorOutput
+                    });
+                    logger.warn(`Failed to sync ${elementType}/${elementName}`, { 
+                      error: errorMessage,
+                      errorCode,
+                      elementName,
+                      elementType
+                    });
+    }
+
+    private syncTypeStatusIcon(successRate: number): string {
+        if (successRate === 100) return '🎉';
+        return successRate > 50 ? '⚠️' : '❌';
+    }
+
+    private syncSummaryIcon(successRate: number): string {
+        if (successRate === 100) return '🎉';
+        if (successRate >= 80) return '✅';
+        return successRate >= 50 ? '⚠️' : '❌';
+    }
+
+    private appendSyncSummary(progress: PortfolioSyncProgress, username: string): void {
+            // UX IMPROVEMENT: Enhanced final summary with actionable insights
+            const successRate = progress.totalElements > 0 ? Math.round((progress.syncCount / progress.totalElements) * 100) : 0;
+            const summaryIcon = this.syncSummaryIcon(successRate);
+            
+            progress.syncText += `${summaryIcon} **Sync Complete!**\n`;
+            progress.syncText += `📊 **Overall Results**: ${progress.syncCount}/${progress.totalElements} elements synced (${successRate}%)\n`;
+            progress.syncText += `🏠 **Portfolio**: https://github.com/${username}/${this.portfolioRepoManager.getRepositoryName()}\n\n`;
+            
+            // Include failed elements information with actionable suggestions
+            if (progress.failedElements.length > 0) {
+              progress.syncText += `⚠️ **Issues Encountered** (${progress.failedElements.length} problems):\n\n`;
+
+              this.appendSyncFailureGroups(progress);
+              
+              this.appendSyncFailureAdvice(progress);
+            } else {
+              progress.syncText += `🎉 **Perfect Sync!** All elements uploaded successfully!\n\n`;
+            }
+
+            // UX IMPROVEMENT: Add next steps and helpful links
+            if (progress.syncCount > 0) {
+              progress.syncText += `🚀 **Next Steps**:\n`;
+              progress.syncText += `  • View your portfolio: https://github.com/${username}/${this.portfolioRepoManager.getRepositoryName()}\n`;
+              progress.syncText += `  • Share individual elements using \`submit_collection_content <name>\`\n`;
+              progress.syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
+            }
+
+            progress.syncText += `Your elements are now available on GitHub!`;
+
+    }
+
+    private appendSyncFailureGroups(progress: PortfolioSyncProgress): void {
+              // Group failures by type for better organization
+              const failuresByType: Record<string, Array<{name: string, error: string}>> = {};
+              for (const failed of progress.failedElements) {
+                if (!failuresByType[failed.type]) {
+                  failuresByType[failed.type] = [];
+                }
+                failuresByType[failed.type].push({ name: failed.name, error: failed.error });
+              }
+              
+              for (const [type, failures] of Object.entries(failuresByType)) {
+                progress.syncText += `📁 **${type}** (${failures.length} issues):\n`;
+                for (const failure of failures) {
+                  if (failure.name === 'ALL') {
+                    progress.syncText += `  ❌ ${failure.error}\n`;
+                  } else {
+                    progress.syncText += `  ❌ "${failure.name}": ${failure.error}\n`;
+                  }
+                }
+                progress.syncText += `\n`;
+              }
+              
+    }
+
+    private appendSyncFailureAdvice(progress: PortfolioSyncProgress): void {
+              // UX IMPROVEMENT: Add helpful suggestions based on error codes found
+              progress.syncText += `💡 **Troubleshooting Tips**:\n`;
+              
+              // Check for specific error codes and provide targeted advice
+              const errorCodes = progress.failedElements.map(f => /^([A-Z_]+_\d+):/.exec(f.error)?.[1]).filter(Boolean);
+              const uniqueErrorCodes = [...new Set(errorCodes)];
+              
+              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_001')) {
+                progress.syncText += `  • 🔐 **Auth Error**: Run \`setup_github_auth\` to re-authenticate\n`;
+              }
+              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_002')) {
+                progress.syncText += `  • 📁 **Repo Missing**: Run \`init_portfolio\` to create your repository\n`;
+              }
+              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_004')) {
+                progress.syncText += `  • 🔧 **API Error**: GitHub response format issue - please report this bug\n`;
+              }
+              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_006')) {
+                progress.syncText += `  • ⏳ **Rate Limited**: Wait a few minutes and try again\n`;
+              }
+              
+              // General tips
+              progress.syncText += `  • Check element file formats and metadata\n`;
+              progress.syncText += `  • Try syncing individual elements with \`portfolio_element_manager\` (upload operation)\n`;
+              progress.syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
+              
+              // Add error code legend if we found any
+              if (uniqueErrorCodes.length > 0) {
+                progress.syncText += `📋 **Error Codes Detected**:\n`;
+                for (const code of uniqueErrorCodes) {
+                  const errorDescriptions: Record<string, string> = {
+                    'PORTFOLIO_SYNC_001': 'Authentication failure',
+                    'PORTFOLIO_SYNC_002': 'Repository not found',
+                    'PORTFOLIO_SYNC_003': 'File creation failed',
+                    'PORTFOLIO_SYNC_004': 'API response parsing error',
+                    'PORTFOLIO_SYNC_005': 'Network error',
+                    'PORTFOLIO_SYNC_006': 'Rate limit exceeded'
+                  };
+                  const description = errorDescriptions[code as string] || 'Unknown error';
+                  progress.syncText += `  • ${code}: ${description}\n`;
+                }
+                progress.syncText += `\n`;
+              }
+    }
+
+    private async previewPortfolioSync(direction: string, username: string) {
             // Show what would be synced
             const elementTypeCounts: Record<string, number | string> = {};
             const elementTypeErrors: string[] = [];
@@ -505,15 +874,17 @@ export class PortfolioHandler {
             for (const elementType of ['personas', 'skills', 'templates', 'agents']) {
               try {
                 const elements = await this.getElementsList(elementType);
+                this.assertMemoryOperation();
                 elementTypeCounts[elementType] = elements.length;
               } catch (error: any) {
+          if (this.boundOperation) throw error;
                 elementTypeCounts[elementType] = 'ERROR';
                 elementTypeErrors.push(`${elementType}: ${error.message || 'Unknown error'}`);
               }
             }
 
             let dryRunText = `${this.indicatorService.getPersonaIndicator()}🔍 **Dry Run - Portfolio Sync Preview**\n\n`;
-            dryRunText += `📤 **Elements to sync** (${options.direction}):\n`;
+            dryRunText += `📤 **Elements to sync** (${direction}):\n`;
             dryRunText += `  • Personas: ${elementTypeCounts.personas}\n`;
             dryRunText += `  • Skills: ${elementTypeCounts.skills}\n`;
             dryRunText += `  • Templates: ${elementTypeCounts.templates}\n`;
@@ -537,238 +908,91 @@ export class PortfolioHandler {
                 text: dryRunText
               }]
             };
-          }
-    
-          // For now, implement basic push functionality
-          if (options.direction === 'push' || options.direction === 'both') {
-            let syncCount = 0;
-            let totalElements = 0;
-            let syncText = `${this.indicatorService.getPersonaIndicator()}🔄 **Syncing Portfolio...**\n\n`;
-    
-            // UX IMPROVEMENT: Calculate total elements for progress tracking
-            const elementTypes = ['personas', 'skills', 'templates', 'agents'] as const;
-            const elementCounts: Record<string, number> = {};
-            const failedElements: Array<{type: string, name: string, error: string}> = [];
-            
-            // Pre-calculate totals for better progress indicators
-            try {
-              syncText += `📊 **Calculating sync scope...**\n`;
-              for (const elementType of elementTypes) {
-                try {
-                  const elements = await this.getElementsList(elementType);
-                  elementCounts[elementType] = elements.length;
-                  totalElements += elements.length;
-                } catch (error: any) {
-                  elementCounts[elementType] = 0;
-                  logger.warn(`Failed to count ${elementType}`, { error: error.message });
-                }
-              }
-              
-              syncText += `\n🎯 **Ready to sync ${totalElements} elements:**\n`;
-              for (const [type, count] of Object.entries(elementCounts)) {
-                const icon = count > 0 ? '✅' : '⚪';
-                syncText += `  ${icon} ${type}: ${count} elements\n`;
-              }
-              syncText += `\n🚀 **Starting sync process...**\n\n`;
-              
-            } catch (error: any) {
-              syncText += `\n⚠️ **Warning**: Could not calculate sync scope: ${error.message}\n\n`;
-            }
-            
-            // UX IMPROVEMENT: Process each element type with progress tracking
-            for (const elementType of elementTypes) {
-              const typeCount = elementCounts[elementType] || 0;
-              if (typeCount === 0) {
-                syncText += `⏩ **Skipping ${elementType}** (no elements found)\n`;
-                continue;
-              }
-              
-              syncText += `📁 **Processing ${elementType}** (${typeCount} elements):\n`;
-              let typeSuccessCount = 0;
-              
-              try {
-                const elements = await this.getElementsList(elementType);
-                
-                for (let i = 0; i < elements.length; i++) {
-                  const elementName = elements[i];
-                  const progress = `[${i + 1}/${elements.length}]`;
-                  
-                  try {
-                    // UX IMPROVEMENT: Show individual element progress
-                    syncText += `  ${progress} 🔄 Syncing \"${elementName}\"...`;
-                    
-                    // Load element and save to portfolio
-                    const element = await this.loadElementByType(elementName, elementType);
-                    if (element) {
-                      await this.portfolioRepoManager.saveElement(element, true); // Explicit consent
-                      syncCount++;
-                      typeSuccessCount++;
-                      syncText += ` ✅\n`;
-                      logger.debug(`Successfully synced ${elementType}/${elementName}`);
-                    } else {
-                      syncText += ` ❌ (null element)\n`;
-                      failedElements.push({
-                        type: elementType,
-                        name: elementName,
-                        error: 'Element loaded as null/undefined'
-                      });
-                    }
-                  } catch (elementError: any) {
-                    // Extract error code if present
-                    const errorCode = elementError.code || (elementError.message?.match(/([A-Z_]+_\d+)/)?.[1]) || '';
-                    const errorMessage = elementError.message || 'Unknown error during element sync';
-                    
-                    // Clean up error message for display (remove code if already extracted)
-                    const displayMessage = errorCode 
-                      ? errorMessage.replace(/([A-Z_]+_\d+)\s*/, '')
-                      : errorMessage;
-                    
-                    // Show error code in output for better diagnostics
-                    const errorOutput = errorCode 
-                      ? `${errorCode}: ${displayMessage}`
-                      : displayMessage;
-                    
-                    syncText += ` ❌ (${errorOutput})\n`;
-                    failedElements.push({
-                      type: elementType,
-                      name: elementName,
-                      error: errorOutput
-                    });
-                    logger.warn(`Failed to sync ${elementType}/${elementName}`, { 
-                      error: errorMessage,
-                      errorCode,
-                      elementName,
-                      elementType
-                    });
-                  }
-                }
-                
-                // UX IMPROVEMENT: Show completion summary for each type
-                const successRate = elements.length > 0 ? Math.round((typeSuccessCount / elements.length) * 100) : 0;
-                const statusIcon = successRate === 100 ? '🎉' : successRate > 50 ? '⚠️' : '❌';
-                syncText += `  ${statusIcon} **${elementType} complete**: ${typeSuccessCount}/${elements.length} synced (${successRate}%)\n\n`;
-              } catch (listError: any) {
-                // UX IMPROVEMENT: Better error reporting for list failures
-                const errorMessage = listError.message || 'Failed to get elements list';
-                syncText += `  ❌ **Failed to list ${elementType}**: ${errorMessage}\n\n`;
-                failedElements.push({
-                  type: elementType,
-                  name: 'ALL',
-                  error: `Failed to list ${elementType}: ${errorMessage}`
-                });
-                logger.warn(`Failed to get ${elementType} list`, { error: errorMessage });
-              }
-            }
-    
-            // UX IMPROVEMENT: Enhanced final summary with actionable insights
-            const successRate = totalElements > 0 ? Math.round((syncCount / totalElements) * 100) : 0;
-            const summaryIcon = successRate === 100 ? '🎉' : successRate >= 80 ? '✅' : successRate >= 50 ? '⚠️' : '❌';
-            
-            syncText += `${summaryIcon} **Sync Complete!**\n`;
-            syncText += `📊 **Overall Results**: ${syncCount}/${totalElements} elements synced (${successRate}%)\n`;
-            syncText += `🏠 **Portfolio**: https://github.com/${username}/${this.portfolioRepoManager.getRepositoryName()}\n\n`;
-            
-            // Include failed elements information with actionable suggestions
-            if (failedElements.length > 0) {
-              syncText += `⚠️ **Issues Encountered** (${failedElements.length} problems):\n\n`;
-              
-              // Group failures by type for better organization
-              const failuresByType: Record<string, Array<{name: string, error: string}>> = {};
-              for (const failed of failedElements) {
-                if (!failuresByType[failed.type]) {
-                  failuresByType[failed.type] = [];
-                }
-                failuresByType[failed.type].push({ name: failed.name, error: failed.error });
-              }
-              
-              for (const [type, failures] of Object.entries(failuresByType)) {
-                syncText += `📁 **${type}** (${failures.length} issues):\n`;
-                for (const failure of failures) {
-                  if (failure.name === 'ALL') {
-                    syncText += `  ❌ ${failure.error}\n`;
-                  } else {
-                    syncText += `  ❌ \"${failure.name}\": ${failure.error}\n`;
-                  }
-                }
-                syncText += `\n`;
-              }
-              
-              // UX IMPROVEMENT: Add helpful suggestions based on error codes found
-              syncText += `💡 **Troubleshooting Tips**:\n`;
-              
-              // Check for specific error codes and provide targeted advice
-              const errorCodes = failedElements.map(f => f.error.match(/^([A-Z_]+_\d+):/)?.[1]).filter(Boolean);
-              const uniqueErrorCodes = [...new Set(errorCodes)];
-              
-              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_001')) {
-                syncText += `  • 🔐 **Auth Error**: Run \`setup_github_auth\` to re-authenticate\n`;
-              }
-              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_002')) {
-                syncText += `  • 📁 **Repo Missing**: Run \`init_portfolio\` to create your repository\n`;
-              }
-              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_004')) {
-                syncText += `  • 🔧 **API Error**: GitHub response format issue - please report this bug\n`;
-              }
-              if (uniqueErrorCodes.includes('PORTFOLIO_SYNC_006')) {
-                syncText += `  • ⏳ **Rate Limited**: Wait a few minutes and try again\n`;
-              }
-              
-              // General tips
-              syncText += `  • Check element file formats and metadata\n`;
-              syncText += `  • Try syncing individual elements with \`portfolio_element_manager\` (upload operation)\n`;
-              syncText += `  • Use \`sync_portfolio\` with \`dry_run=true\` to preview issues\n\n`;
-              
-              // Add error code legend if we found any
-              if (uniqueErrorCodes.length > 0) {
-                syncText += `📋 **Error Codes Detected**:\n`;
-                for (const code of uniqueErrorCodes) {
-                  const errorDescriptions: Record<string, string> = {
-                    'PORTFOLIO_SYNC_001': 'Authentication failure',
-                    'PORTFOLIO_SYNC_002': 'Repository not found',
-                    'PORTFOLIO_SYNC_003': 'File creation failed',
-                    'PORTFOLIO_SYNC_004': 'API response parsing error',
-                    'PORTFOLIO_SYNC_005': 'Network error',
-                    'PORTFOLIO_SYNC_006': 'Rate limit exceeded'
-                  };
-                  const description = errorDescriptions[code as string] || 'Unknown error';
-                  syncText += `  • ${code}: ${description}\n`;
-                }
-                syncText += `\n`;
-              }
-            } else {
-              syncText += `🎉 **Perfect Sync!** All elements uploaded successfully!\n\n`;
-            }
-            
-            // UX IMPROVEMENT: Add next steps and helpful links
-            if (syncCount > 0) {
-              syncText += `🚀 **Next Steps**:\n`;
-              syncText += `  • View your portfolio: https://github.com/${username}/${this.portfolioRepoManager.getRepositoryName()}\n`;
-              syncText += `  • Share individual elements using \`submit_collection_content <name>\`\n`;
-              syncText += `  • Keep portfolio updated with \`sync_portfolio\` regularly\n\n`;
-            }
-            
-            syncText += `Your elements are now available on GitHub!`;
-    
+    }
+
+    private async syncPortfolioBody(options: {
+        direction: string;
+        mode?: string;
+        force: boolean;
+        dryRun: boolean;
+        confirmDeletions?: boolean;
+      }) {
+        this.assertMemoryOperation();
+        try {
+          // Check authentication
+          const authStatus = await this.githubAuthManager.getAuthStatus();
+          this.assertMemoryOperation();
+          if (!authStatus.isAuthenticated || !authStatus.username) {
             return {
               content: [{
                 type: "text",
-                text: syncText
+                text: `${this.indicatorService.getPersonaIndicator()}❌ **GitHub Authentication Required**\n\n` +
+                `🔐 **Quick Setup**:\n` +
+                `1. Run: \`setup_github_auth\` to authenticate\n` +
+                `2. Or use: \`gh auth login --web\` if you have GitHub CLI\n\n` +
+                `📝 **What this enables**:\n` +
+                `• Upload elements to your GitHub portfolio\n` +
+                `• Sync your local portfolio with GitHub\n` +
+                `• Share elements with the community\n\n` +
+                `🌐 **Need help?** Visit: https://docs.anthropic.com/en/docs/claude-code/oauth-setup`
               }]
             };
           }
-    
+
+          const username = authStatus.username;
+
+          // Check if portfolio exists (PortfolioRepoManager is injected with TokenManager)
+          const portfolioExists = await this.portfolioRepoManager.checkPortfolioExists(username);
+          this.assertMemoryOperation();
+
+          if (!portfolioExists) {
+            return {
+              content: [{
+                type: "text",
+                text: `${this.indicatorService.getPersonaIndicator()}❌ **No Portfolio Repository Found**\n\n` +
+                      `🏠 **Quick Setup**:\n` +
+                      `1. Run: \`init_portfolio\` to create your GitHub portfolio\n` +
+                      `2. This creates: https://github.com/[username]/${this.portfolioRepoManager.getRepositoryName()}\n\n` +
+                      `📝 **What you'll get**:\n` +
+                      `• Public repository to showcase your AI elements\n` +
+                      `• Organized structure for personas, skills, templates, and agents\n` +
+                      `• Automatic syncing of your local portfolio\n` +
+                      `• Community sharing capabilities\n\n` +
+                      `🚀 **After setup**: Use \`sync_portfolio\` to upload your content!`
+              }]
+            };
+          }
+
+          if (options.dryRun) {
+            const result = await this.previewPortfolioSync(options.direction, username);
+            this.assertMemoryOperation();
+            return result;
+          }
+
+          // For now, implement basic push functionality
+          if (this.boundOperation && options.direction === 'both') {
+            await this.portfolioPullHandler.preflightCombinedPull(options);
+            this.assertMemoryOperation();
+          }
+          if (options.direction === 'push' || options.direction === 'both') {
+            const result = await this.syncPortfolioPush(username);
+            this.assertMemoryOperation();
+            return result;
+          }
+
           if (options.direction === 'pull' || options.direction === 'both') {
             return this.portfolioPullHandler.executePull(options, this.indicatorService.getPersonaIndicator());
           }
-    
+
           return {
             content: [{
               type: "text",
               text: `${this.indicatorService.getPersonaIndicator()}❌ Invalid sync direction. Use 'push', 'pull', or 'both'.`
             }]
           };
-    
+
         } catch (error) {
+          if (this.boundOperation) throw error;
           // IMPROVED ERROR HANDLING: Ensure we always have a meaningful error message
           const sanitizedError = SecureErrorHandler.sanitizeError(error);
           const errorMessage = sanitizedError?.message || (error as any)?.message || String(error) || 'Unknown error occurred';
@@ -782,7 +1006,92 @@ export class PortfolioHandler {
         }
     }
 
-    async searchPortfolio(options: {
+    searchPortfolio(options: {
+        query: string;
+        elementType?: string;
+        fuzzyMatch?: boolean;
+        maxResults?: number;
+        includeKeywords?: boolean;
+        includeTags?: boolean;
+        includeTriggers?: boolean;
+        includeDescriptions?: boolean;
+      }): ReturnType<PortfolioHandler['searchPortfolioBody']> {
+        return this.withMemoryOperation(bound => bound.searchPortfolioBody(options));
+    }
+
+    private formatPortfolioSearchEntry(result: Awaited<ReturnType<PortfolioIndexManager['search']>>[number]): string {
+              let text = '';
+              const { entry, matchType } = result;
+              const icon = getElementIcon(entry.elementType);
+
+              text += `${icon} **${entry.metadata.name}**\n`;
+              text += `   📁 Type: ${entry.elementType}\n`;
+              text += `   🎯 Match: ${matchType}\n`;
+
+              if (entry.metadata.description) {
+                const desc = entry.metadata.description.length > 100
+                  ? entry.metadata.description.substring(0, 100) + '...'
+                  : entry.metadata.description;
+                text += `   📝 ${desc}\n`;
+              }
+
+              if (entry.metadata.tags && entry.metadata.tags.length > 0) {
+                text += `   🏷️ Tags: ${entry.metadata.tags.slice(0, 5).join(', ')}${entry.metadata.tags.length > 5 ? '...' : ''}\n`;
+              }
+
+              // FIX (#1213): Use correct file extension based on element type
+              // Previously: Hardcoded .md for all types (wrong for memories which are .yaml)
+              // Now: Get correct extension from PortfolioManager
+              const fileExtension = this.portfolioManager.getFileExtension(entry.elementType);
+              text += `   📄 File: ${entry.filename}${fileExtension}\n\n`;
+              return text;
+    }
+
+    private formatPortfolioSearch(query: string, results: Awaited<ReturnType<PortfolioIndexManager['search']>>, elementType: ElementType | undefined, maxResults: number) {
+          // Format the results
+          let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
+          text += `**Query**: "${query}"\n`;
+
+          if (elementType) {
+            text += `**Type Filter**: ${elementType}\n`;
+          }
+
+          text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
+
+          if (results.length === 0) {
+            text += `No elements found matching your search criteria.\n\n`;
+            text += `**Tips for better results:**\n`;
+            text += `• Try different keywords or partial names\n`;
+            text += `• Remove the type filter to search all element types\n`;
+            text += `• Check spelling and try synonyms\n`;
+            text += `• Use the list_elements tool to see all available content`;
+          } else {
+            text += `**Results:**\n\n`;
+
+            for (const result of results) {
+              text += this.formatPortfolioSearchEntry(result);
+            }
+
+            if (results.length >= maxResults) {
+              text += `⚠️ Results limited to ${maxResults}. Refine your search for more specific results.\n\n`;
+            }
+
+            text += `💡 **Next steps:**\n`;
+            text += `• Use get_element_details to see full content\n`;
+            text += `• Use activate_element to activate elements\n`;
+            text += `• Use submit_collection_content to share with the community`;
+          }
+
+          return {
+            content: [{
+              type: "text",
+              text
+            }]
+          };
+
+    }
+
+    private async searchPortfolioBody(options: {
         query: string; 
         elementType?: string; 
         fuzzyMatch?: boolean; 
@@ -792,6 +1101,7 @@ export class PortfolioHandler {
         includeTriggers?: boolean; 
         includeDescriptions?: boolean;
       }) {
+        this.assertMemoryOperation();
         try {
           // Validate the query parameter
           if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
@@ -831,10 +1141,77 @@ export class PortfolioHandler {
     
           // Perform the search
           const results = await this.portfolioIndexManager.search(options.query, searchOptions);
+          this.assertMemoryOperation();
     
+          return this.formatPortfolioSearch(options.query, results, elementType, searchOptions.maxResults);
+
+        } catch (error: any) {
+          if (this.boundOperation) throw error;
+          ErrorHandler.logError('PortfolioHandler.searchPortfolio', error, {
+            query: options.query,
+            elementType: options.elementType
+          });
+
+          return {
+            content: [{
+              type: "text",
+              text: `${this.indicatorService.getPersonaIndicator()}❌ Search failed: ${SecureErrorHandler.sanitizeError(error).message}`
+            }]
+          };
+        }
+    }
+
+    searchAll(options: {
+        query: string;
+        sources?: string[];
+        elementType?: string;
+        page?: number;
+        pageSize?: number;
+        sortBy?: string;
+      }): ReturnType<PortfolioHandler['searchAllBody']> {
+        return this.withMemoryOperation(bound => bound.searchAllBody(options));
+    }
+
+    private formatUnifiedSearchEntry(result: Awaited<ReturnType<UnifiedIndexManager['search']>>[number]): string {
+              let text = '';
+              const { entry, source, matchType, score, isDuplicate, versionConflict } = result;
+              const icon = getElementIcon(entry.elementType);
+              const sourceIcon = getSourceIcon(source);
+
+              text += `${icon} **${entry.name}** ${sourceIcon}\n`;
+              text += `   📁 Type: ${entry.elementType} | Source: ${source}\n`;
+              text += `   🎯 Match: ${matchType} | Score: ${score.toFixed(2)}
+`;
+
+              if (entry.description) {
+                const desc = entry.description.length > 100
+                  ? entry.description.substring(0, 100) + '...'
+                  : entry.description;
+                text += `   📝 ${desc}\n`;
+              }
+
+              if (entry.version) {
+                text += `   🏷️ Version: ${entry.version}\n`;
+              }
+
+              // Show duplicate information
+              if (isDuplicate) {
+                text += `   ⚠️ **Duplicate detected across sources**\n`;
+                if (versionConflict) {
+                  text += `   🔄 Version conflict - Recommended: ${versionConflict.recommended} (${versionConflict.reason})\n`;
+                }
+              }
+
+              text += `\n`;
+              return text;
+    }
+
+    private formatUnifiedSearch(query: string, results: Awaited<ReturnType<UnifiedIndexManager['search']>>, elementType: ElementType | undefined, sources: string[], page: number, pageSize: number) {
           // Format the results
-          let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Portfolio Search Results**\n\n`;
-          text += `**Query**: \"${options.query}\"\n`;
+          let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
+          text += `**Query**: "${query}"\n`;
+          text += `**Sources**: ${sources.join(', ')}
+`;
           
           if (elementType) {
             text += `**Type Filter**: ${elementType}\n`;
@@ -847,45 +1224,27 @@ export class PortfolioHandler {
             text += `**Tips for better results:**\n`;
             text += `• Try different keywords or partial names\n`;
             text += `• Remove the type filter to search all element types\n`;
+            text += `• Include more sources: local, github, collection\n`;
             text += `• Check spelling and try synonyms\n`;
-            text += `• Use the list_elements tool to see all available content`;
+            text += `• Use browse_collection to explore available content`;
           } else {
             text += `**Results:**\n\n`;
             
             for (const result of results) {
-              const { entry, matchType } = result;
-              const icon = getElementIcon(entry.elementType);
-              
-              text += `${icon} **${entry.metadata.name}**\n`;
-              text += `   📁 Type: ${entry.elementType}\n`;
-              text += `   🎯 Match: ${matchType}\n`;
-              
-              if (entry.metadata.description) {
-                const desc = entry.metadata.description.length > 100 
-                  ? entry.metadata.description.substring(0, 100) + '...' 
-                  : entry.metadata.description;
-                text += `   📝 ${desc}\n`;
-              }
-              
-              if (entry.metadata.tags && entry.metadata.tags.length > 0) {
-                text += `   🏷️ Tags: ${entry.metadata.tags.slice(0, 5).join(', ')}${entry.metadata.tags.length > 5 ? '...' : ''}\n`;
-              }
-    
-              // FIX (#1213): Use correct file extension based on element type
-              // Previously: Hardcoded .md for all types (wrong for memories which are .yaml)
-              // Now: Get correct extension from PortfolioManager
-              const fileExtension = this.portfolioManager.getFileExtension(entry.elementType);
-              text += `   📄 File: ${entry.filename}${fileExtension}\n\n`;
+              text += this.formatUnifiedSearchEntry(result);
             }
             
-            if (results.length >= searchOptions.maxResults) {
-              text += `⚠️ Results limited to ${searchOptions.maxResults}. Refine your search for more specific results.\n\n`;
+            const hasMore = results.length >= pageSize;
+            if (hasMore) {
+              const nextPage = page + 1;
+              text += `⚠️ Results limited to ${pageSize}. Use page=${nextPage} for more results.\n\n`;
             }
             
             text += `💡 **Next steps:**\n`;
             text += `• Use get_element_details to see full content\n`;
-            text += `• Use activate_element to activate elements\n`;
-            text += `• Use submit_collection_content to share with the community`;
+            text += `• Use install_collection_content for collection items\n`;
+            text += `• Use activate_element for local elements\n`;
+            text += `• Check for duplicates before submitting new content`;
           }
     
           return {
@@ -894,23 +1253,10 @@ export class PortfolioHandler {
               text
             }]
           };
-    
-        } catch (error: any) {
-          ErrorHandler.logError('PortfolioHandler.searchPortfolio', error, { 
-            query: options.query,
-            elementType: options.elementType 
-          });
-          
-          return {
-            content: [{
-              type: "text", 
-              text: `${this.indicatorService.getPersonaIndicator()}❌ Search failed: ${SecureErrorHandler.sanitizeError(error).message}`
-            }]
-          };
-        }
+
     }
 
-    async searchAll(options: {
+    private async searchAllBody(options: {
         query: string;
         sources?: string[];
         elementType?: string;
@@ -918,6 +1264,7 @@ export class PortfolioHandler {
         pageSize?: number;
         sortBy?: string;
       }) {
+        this.assertMemoryOperation();
         try {
           // Validate the query parameter
           if (!options.query || typeof options.query !== 'string' || options.query.trim().length === 0) {
@@ -964,83 +1311,12 @@ export class PortfolioHandler {
     
           // Perform the unified search
           const results = await this.unifiedIndexManager.search(searchOptions);
+          this.assertMemoryOperation();
     
-          // Format the results
-          let text = `${this.indicatorService.getPersonaIndicator()}🔍 **Unified Search Results**\n\n`;
-          text += `**Query**: \"${options.query}\"\n`;
-          text += `**Sources**: ${sources.join(', ')}
-`;
-          
-          if (elementType) {
-            text += `**Type Filter**: ${elementType}\n`;
-          }
-          
-          text += `**Found**: ${results.length} element${results.length === 1 ? '' : 's'}\n\n`;
-    
-          if (results.length === 0) {
-            text += `No elements found matching your search criteria.\n\n`;
-            text += `**Tips for better results:**\n`;
-            text += `• Try different keywords or partial names\n`;
-            text += `• Remove the type filter to search all element types\n`;
-            text += `• Include more sources: local, github, collection\n`;
-            text += `• Check spelling and try synonyms\n`;
-            text += `• Use browse_collection to explore available content`;
-          } else {
-            text += `**Results:**\n\n`;
-            
-            for (const result of results) {
-              const { entry, source, matchType, score, isDuplicate, versionConflict } = result;
-              const icon = getElementIcon(entry.elementType);
-              const sourceIcon = getSourceIcon(source);
-              
-              text += `${icon} **${entry.name}** ${sourceIcon}\n`;
-              text += `   📁 Type: ${entry.elementType} | Source: ${source}\n`;
-              text += `   🎯 Match: ${matchType} | Score: ${score.toFixed(2)}
-`;
-              
-              if (entry.description) {
-                const desc = entry.description.length > 100 
-                  ? entry.description.substring(0, 100) + '...' 
-                  : entry.description;
-                text += `   📝 ${desc}\n`;
-              }
-    
-              if (entry.version) {
-                text += `   🏷️ Version: ${entry.version}\n`;
-              }
-    
-              // Show duplicate information
-              if (isDuplicate) {
-                text += `   ⚠️ **Duplicate detected across sources**\n`;
-                if (versionConflict) {
-                  text += `   🔄 Version conflict - Recommended: ${versionConflict.recommended} (${versionConflict.reason})\n`;
-                }
-              }
-              
-              text += `\n`;
-            }
-            
-            const hasMore = results.length >= searchOptions.pageSize;
-            if (hasMore) {
-              const nextPage = searchOptions.page + 1;
-              text += `⚠️ Results limited to ${searchOptions.pageSize}. Use page=${nextPage} for more results.\n\n`;
-            }
-            
-            text += `💡 **Next steps:**\n`;
-            text += `• Use get_element_details to see full content\n`;
-            text += `• Use install_collection_content for collection items\n`;
-            text += `• Use activate_element for local elements\n`;
-            text += `• Check for duplicates before submitting new content`;
-          }
-    
-          return {
-            content: [{
-              type: "text",
-              text
-            }]
-          };
+          return this.formatUnifiedSearch(options.query, results, elementType, sources, searchOptions.page, searchOptions.pageSize);
     
         } catch (error: any) {
+          if (this.boundOperation) throw error;
           ErrorHandler.logError('PortfolioHandler.searchAll', error, { 
             query: options.query,
             sources: options.sources,

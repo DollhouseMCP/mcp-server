@@ -98,6 +98,29 @@ describe('tenant-bound console caller store',()=>{
     const ordinary=new ManagerBackedPortfolioElementStore({managers,getCurrentUserId});expect(ordinary.bindForOperation).toBeUndefined();
     await expect(store.listByUser(f.first,{type:'memories'})).rejects.toThrow('Bound console memory operation');
   });
+  it('omits a supplied cached root memory manager and enforces the actual provider identity', async () => {
+    const f=await fixture(); const {provider,store,managers}=composed(f);
+    const retained=(store as unknown as {options:{managers:unknown}}).options.managers;
+    expect(Object.hasOwn(retained as object,'memories')).toBe(false);
+    store.requireMemoryProvider(provider);
+    const other=new TenantMemoryOperationProvider(f.registry,f.tracker);
+    expect(()=>store.requireMemoryProvider(other)).toThrow('original memory provider');
+    const {memories: _root,...withoutMemory}=managers;
+    const rootless=new ManagerBackedPortfolioElementStore({managers:withoutMemory,getCurrentUserId:()=>f.first,
+      memoryProvider:provider,contextTracker:f.tracker});
+    await expect(rootless.listByUser(f.first,{type:'memories'})).rejects.toThrow('Bound console memory operation');
+  });
+  it('retains the original provider when caller-owned constructor options change', async () => {
+    const f=await fixture(); const {provider,managers}=composed(f);
+    const options={managers,getCurrentUserId:()=>f.first,memoryProvider:provider,contextTracker:f.tracker};
+    const store=new ManagerBackedPortfolioElementStore(options);
+    const other=new TenantMemoryOperationProvider(f.registry,f.tracker);
+    const originalCapture=jest.spyOn(provider,'capture'); const otherCapture=jest.spyOn(other,'capture');
+    options.memoryProvider=other;
+    await f.tracker.runAsync(invocation(f.tracker,f.first),()=>store.bindForOperation!(f.first));
+    expect(originalCapture).toHaveBeenCalledTimes(1); expect(otherCapture).not.toHaveBeenCalled();
+    store.requireMemoryProvider(provider);
+  });
   it('checks the authenticated user against the actual resolver before capture schedules initialization',async()=>{
     const f=await fixture();const {provider,store}=composed(f);const capture=jest.spyOn(provider,'capture');
     await expect(store.bindForOperation!(f.second)).rejects.toThrow('ambient user');

@@ -123,6 +123,8 @@ export interface ElementManagerDeps {
   validationRegistry: ValidationRegistry;
   serializationService: SerializationService;
   metadataService: MetadataService;
+  /** Memory-only policy reference; constructor allocation invokes no policy work. */
+  memoryRetentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
   eventDispatcher: ElementEventDispatcher;
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;

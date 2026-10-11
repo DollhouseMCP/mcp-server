@@ -1,7 +1,7 @@
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 
 export class ConfigDispatcher {
-  constructor(private readonly handlers: HandlerRegistry) {}
+  constructor(private readonly handlers: Pick<HandlerRegistry, 'configHandler' | 'buildInfoService' | 'cacheMemoryBudget'>) {}
 
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {

@@ -19,6 +19,7 @@
  */
 
 import * as path from 'node:path';
+import { DatabaseTenantMemoryRegistry } from '../../storage/DatabaseTenantMemoryRegistry.js';
 
 import { PACKAGE_VERSION } from '../../generated/version.js';
 import { getValidatedMaxBackupsPerElement, STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
@@ -53,6 +54,9 @@ import type { ElementCRUDHandler } from '../../handlers/ElementCRUDHandler.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 import type { SessionContainerRegistry } from '../SessionContainerRegistry.js';
 import type { DangerZoneBlocker } from '../../elements/agents/types.js';
+import type { UserIdResolver } from '../../database/UserContext.js';
+
+export type DatabaseMemoryManagerDepsFactory = (factory: IStorageLayerFactory, resolver: UserIdResolver) => ElementManagerDeps;
 
 export class ElementManagerServiceRegistrar {
   public register(container: DiContainerFacade): void {
@@ -248,6 +252,8 @@ export class ElementManagerServiceRegistrar {
     });
 
     container.register('AgentManager', () => new AgentManager({
+      ...(container.hasRegistration('DatabaseTenantMemoryRegistry')
+        ? { memoryRegistry: container.resolve<DatabaseTenantMemoryRegistry>('DatabaseTenantMemoryRegistry') } : {}),
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       baseDir: container.resolve<PortfolioManager>('PortfolioManager').getBaseDir(),
@@ -272,27 +278,36 @@ export class ElementManagerServiceRegistrar {
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,
     }));
 
-    container.register('MemoryManager', () => {
-      const deps: ElementManagerDeps = {
+    const memoryDeps = (factory: IStorageLayerFactory, resolver: UserIdResolver | undefined,
+      filesystemWatcher: boolean): ElementManagerDeps => ({
         portfolioManager: container.resolve('PortfolioManager'),
         fileLockManager: container.resolve('FileLockManager'),
         fileOperationsService: container.resolve('FileOperationsService'),
         validationRegistry: container.resolve('ValidationRegistry'),
         serializationService: container.resolve('SerializationService'),
         metadataService: container.resolve('MetadataService'),
-        fileWatchService: container.resolve('FileWatchService'),
+        memoryRetentionPolicyService: container.resolve('RetentionPolicyService'),
+        fileWatchService: filesystemWatcher ? container.resolve('FileWatchService') : undefined,
         memoryBudget: container.resolve('CacheMemoryBudget'),
         backupService: container.resolve('BackupService'),
         backupServiceProvider,
         eventDispatcher: container.resolve('ElementEventDispatcher'),
         contextTracker: container.resolve('ContextTracker'),
         activationRegistry: container.resolve('SessionActivationRegistry'),
-        storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-        getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
+        storageLayerFactory: factory,
+        getCurrentUserId: resolver,
         publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,
-      };
-      // Trusted server composition only. This slice registers no provider and
-      // therefore leaves ordinary file/database deployments unchanged.
+      });
+    container.register<DatabaseMemoryManagerDepsFactory>('DatabaseMemoryManagerDepsFactory', () =>
+      (factory, resolver) => memoryDeps(factory, resolver, false));
+    container.register('MemoryManager', () => {
+      if (container.hasRegistration('DatabaseTenantMemoryRegistry')) {
+        throw new Error('Configured database memory requires a trusted tenant operation');
+      }
+      const deps = memoryDeps(container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+        container.hasRegistration('UserIdResolver') ? container.resolve<UserIdResolver>('UserIdResolver') : undefined, true);
+      // Fixed-manager composition remains available only outside the configured
+      // tenant registry; attributed database callers use its selected manager.
       if (container.hasRegistration('AdmittedDatabaseMemoryManagerFactory')) {
         return container.resolve<AdmittedDatabaseMemoryManagerFactory>('AdmittedDatabaseMemoryManagerFactory')(deps);
       }

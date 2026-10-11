@@ -15,6 +15,8 @@
  */
 
 import { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
+import { bindTenantMemoryIndexView, type TenantMemoryIndexDependencies } from '../portfolio/TenantMemoryIndexView.js';
+import { TenantMemoryOperationProvider, type BoundMemoryOperation } from '../storage/TenantMemoryOperationProvider.js';
 import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { logger } from '../utils/logger.js';
@@ -26,10 +28,57 @@ import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js'
 import { normalizeElementTypeInput } from './element-crud/helpers.js';
 
 export class EnhancedIndexHandler {
+  private readonly fixedIndex?: EnhancedIndexManager;
+  private readonly memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies };
+  private operationCheck?: () => void;
+
   constructor(
-    private readonly enhancedIndexManager: EnhancedIndexManager,
-    private readonly indicatorService: PersonaIndicatorService
-  ) {}
+    enhancedIndexManager: EnhancedIndexManager | undefined,
+    private readonly indicatorService: PersonaIndicatorService,
+    memoryComposition?: { readonly provider: TenantMemoryOperationProvider; readonly dependencies: TenantMemoryIndexDependencies },
+  ) {
+    if (arguments.length >= 3) {
+      if (!(memoryComposition?.provider instanceof TenantMemoryOperationProvider)) throw new TypeError('Actual memory index provider required');
+      this.memoryComposition = Object.freeze({provider:memoryComposition.provider,dependencies:memoryComposition.dependencies});
+    } else {
+      if (!enhancedIndexManager) throw new TypeError('Ordinary enhanced index handler requires an index');
+      this.fixedIndex = enhancedIndexManager;
+    }
+  }
+
+  private get enhancedIndexManager(): EnhancedIndexManager {
+    this.operationCheck?.();
+    if (!this.fixedIndex) throw new Error('Authentic selected memory index required');
+    return this.fixedIndex;
+  }
+
+  /** AQL calls this only after its existing gate succeeds, with its original operation. */
+  async withCapturedMemoryOperation<T>(provider: TenantMemoryOperationProvider, operation: BoundMemoryOperation,
+    action: (handler: EnhancedIndexHandler) => Promise<T>): Promise<T> {
+    if (provider !== this.memoryComposition?.provider) throw new Error('Memory index provider binding mismatch');
+    provider.assertOperation(operation);
+    const view = bindTenantMemoryIndexView(provider,operation,this.memoryComposition.dependencies);
+    const bound = new EnhancedIndexHandler(view.enhancedIndex,this.indicatorService);
+    bound.operationCheck = view.assertCurrent;
+    let result: T;
+    try { result = await action(bound); view.assertCurrent(); }
+    catch (cause) {
+      // Resource cleanup cannot replace the original selected-read rejection.
+      try { await view.dispose(); } catch {
+        try { logger.warn('Failed to dispose refused memory index view'); } catch { /* observer is secondary */ }
+      }
+      throw cause;
+    }
+    await view.dispose();
+    view.assertCurrent();
+    return result;
+  }
+
+  private async withMemoryOperation<T>(action: (handler: EnhancedIndexHandler) => Promise<T>): Promise<T> {
+    const provider = this.memoryComposition!.provider;
+    const operation = await provider.resolve(provider.capture());
+    return this.withCapturedMemoryOperation(provider,operation,action);
+  }
 
   /**
    * Find semantically similar elements using NLP scoring
@@ -39,7 +88,9 @@ export class EnhancedIndexHandler {
     elementType?: string;
     limit: number;
     threshold: number;
-  }) {
+  }): Promise<{content:{type:string;text:string}[]}> {
+    if(this.memoryComposition) return this.withMemoryOperation(bound=>bound.findSimilarElements(options));
+    this.operationCheck?.();
     try {
       // Validate inputs
       if (!options.elementName || typeof options.elementName !== 'string') {
@@ -71,6 +122,7 @@ export class EnhancedIndexHandler {
       try {
         await this.enhancedIndexManager.getIndex();
       } catch (indexError) {
+        if(this.operationCheck) throw indexError;
         logger.error('Failed to get Enhanced Index', indexError);
         // Try to recover by forcing rebuild
         try {
@@ -143,6 +195,7 @@ export class EnhancedIndexHandler {
         }
       }
 
+      this.operationCheck?.();
       return {
         content: [{
           type: "text",
@@ -150,6 +203,7 @@ export class EnhancedIndexHandler {
         }]
       };
     } catch (error: any) {
+      if(this.operationCheck) throw error;
       ErrorHandler.logError('EnhancedIndexHandler.findSimilarElements', error, options);
       return {
         content: [{
@@ -167,7 +221,9 @@ export class EnhancedIndexHandler {
     elementName: string;
     elementType?: string;
     relationshipTypes?: string[];
-  }) {
+  }): Promise<{content:{type:string;text:string}[]}> {
+    if(this.memoryComposition) return this.withMemoryOperation(bound=>bound.getElementRelationships(options));
+    this.operationCheck?.();
     try {
       // FIX: DMCP-SEC-004 - Normalize Unicode in user input
       const normalized = UnicodeValidator.normalize(options.elementName);
@@ -186,6 +242,7 @@ export class EnhancedIndexHandler {
 
       // Get the index with error handling
       await this.enhancedIndexManager.getIndex().catch(async (error) => {
+        if(this.operationCheck) throw error;
         logger.error('Failed to get Enhanced Index, attempting rebuild', error);
         return this.enhancedIndexManager.getIndex({ forceRebuild: true });
       });
@@ -271,6 +328,7 @@ export class EnhancedIndexHandler {
         }
       }
 
+      this.operationCheck?.();
       return {
         content: [{
           type: "text",
@@ -278,6 +336,7 @@ export class EnhancedIndexHandler {
         }]
       };
     } catch (error: any) {
+      if(this.operationCheck) throw error;
       ErrorHandler.logError('EnhancedIndexHandler.getElementRelationships', error, options);
       return {
         content: [{
@@ -294,7 +353,9 @@ export class EnhancedIndexHandler {
   async searchByVerb(options: {
     verb: string;
     limit: number;
-  }) {
+  }): Promise<{content:{type:string;text:string}[]}> {
+    if(this.memoryComposition) return this.withMemoryOperation(bound=>bound.searchByVerb(options));
+    this.operationCheck?.();
     try {
       // FIX: DMCP-SEC-004 - Normalize Unicode in user input
       const normalized = UnicodeValidator.normalize(options.verb);
@@ -305,6 +366,7 @@ export class EnhancedIndexHandler {
 
       // Get the index with error handling
       await this.enhancedIndexManager.getIndex().catch(async (error) => {
+        if(this.operationCheck) throw error;
         logger.error('Failed to get Enhanced Index, attempting rebuild', error);
         return this.enhancedIndexManager.getIndex({ forceRebuild: true });
       });
@@ -350,6 +412,7 @@ export class EnhancedIndexHandler {
         }
       }
 
+      this.operationCheck?.();
       return {
         content: [{
           type: "text",
@@ -357,6 +420,7 @@ export class EnhancedIndexHandler {
         }]
       };
     } catch (error: any) {
+      if(this.operationCheck) throw error;
       ErrorHandler.logError('EnhancedIndexHandler.searchByVerb', error, options);
       return {
         content: [{
@@ -370,10 +434,13 @@ export class EnhancedIndexHandler {
   /**
    * Get statistics about the Enhanced Index relationships
    */
-  async getRelationshipStats() {
+  async getRelationshipStats(): Promise<{content:{type:string;text:string}[]}> {
+    if(this.memoryComposition) return this.withMemoryOperation(bound=>bound.getRelationshipStats());
+    this.operationCheck?.();
     try {
       // Get the index with error handling
       await this.enhancedIndexManager.getIndex().catch(async (error) => {
+        if(this.operationCheck) throw error;
         logger.error('Failed to get Enhanced Index, attempting rebuild', error);
         return this.enhancedIndexManager.getIndex({ forceRebuild: true });
       });
@@ -420,6 +487,7 @@ export class EnhancedIndexHandler {
         }
       }
 
+      this.operationCheck?.();
       return {
         content: [{
           type: "text",
@@ -427,6 +495,7 @@ export class EnhancedIndexHandler {
         }]
       };
     } catch (error: any) {
+      if(this.operationCheck) throw error;
       ErrorHandler.logError('EnhancedIndexHandler.getRelationshipStats', error);
       return {
         content: [{

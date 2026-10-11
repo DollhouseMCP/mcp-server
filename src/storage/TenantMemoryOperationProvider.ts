@@ -6,6 +6,7 @@ import type { SessionContext } from '../context/SessionContext.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import type { DatabaseTenantMemoryRegistry, TenantMemoryCapture } from './DatabaseTenantMemoryRegistry.js';
+import { validateUserId } from '../state/db-persistence-utils.js';
 
 export interface MemoryOperationCapture { readonly protocolVersion: 1 }
 export interface BoundMemoryOperation {
@@ -31,11 +32,21 @@ export class TenantMemoryOperationProvider {
   private readonly captures = new WeakMap<MemoryOperationCapture, CapturedInvocation>();
   private readonly operations = new WeakMap<BoundMemoryOperation, CapturedInvocation>();
   constructor(private readonly registry: DatabaseTenantMemoryRegistry,
-    private readonly tracker: ContextTracker) {}
+    private readonly tracker: ContextTracker,
+    private readonly authenticatedHttpUserId?: string) {
+    if (arguments.length >= 3) {
+      if (typeof authenticatedHttpUserId !== 'string') throw new TypeError('Server-authenticated HTTP subject required');
+      validateUserId(authenticatedHttpUserId);
+    }
+  }
 
   /** Trusted composition must not validate one invocation while a caller reads another tracker. */
   assertContextTracker(tracker: ContextTracker | undefined): void {
     if (tracker !== this.tracker) throw new Error('Memory caller context tracker binding mismatch');
+  }
+
+  assertRegistry(registry: DatabaseTenantMemoryRegistry): void {
+    if (registry !== this.registry) throw new Error('Memory caller registry binding mismatch');
   }
 
   /** Must run at caller entry, before its first awaited step. */
@@ -46,8 +57,9 @@ export class TenantMemoryOperationProvider {
       if (!context || !session || !context.requestId || !session.sessionId || !session.userId) {
         throw new Error('Attributed memory invocation required');
       }
+      this.requireTrustedIdentity(session);
       const invocation: CapturedInvocation = Object.freeze({
-        slot: this.registry.capture(), context, session, requestId: context.requestId,
+        slot: this.registry.capture(this.authenticatedHttpUserId), context, session, requestId: context.requestId,
         type: context.type, timestamp: context.timestamp, userId: session.userId,
         sessionId: session.sessionId, tenantId: session.tenantId, transport: session.transport,
         createdAt: session.createdAt,
@@ -94,7 +106,15 @@ export class TenantMemoryOperationProvider {
       session.transport !== invocation.transport || session.createdAt !== invocation.createdAt) {
       throw new Error('Memory invocation context changed');
     }
+    this.requireTrustedIdentity(session);
     this.registry.assertCurrent(invocation.slot);
+  }
+
+  private requireTrustedIdentity(session: SessionContext): void {
+    if (this.authenticatedHttpUserId !== undefined &&
+        (session.transport !== 'http' || session.userId !== this.authenticatedHttpUserId)) {
+      throw new Error('Memory request does not match the server-authenticated HTTP subject');
+    }
   }
 
   private observeFailure(stage: 'capture' | 'resolve'): void {
