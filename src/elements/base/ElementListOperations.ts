@@ -58,12 +58,13 @@ export class ElementListOperations<T extends IElement> {
    * List all available elements.
    * Identical to the former BaseElementManager.list() body.
    */
-  async list(options?: { includePublic?: boolean }): Promise<T[]> {
+  async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
     try {
       if (isWritableStorageLayer(this.storageLayer)) {
         return this.listFromDatabase(options);
       }
 
+      if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
       await this.fileOperations.createDirectory(this.host.elementDir);
 
       try {
@@ -91,37 +92,11 @@ export class ElementListOperations<T extends IElement> {
 
       const userElements = elements.filter((e): e is Awaited<T> => e !== null) as T[];
 
-      if (options?.includePublic && this.publicElementDiscovery) {
-        try {
-          const userFileNames = new Set(files.map(f => path.basename(f)));
-          const sharedFiles = await this.publicElementDiscovery.discoverPublicElements(
-            this.host.elementType, userFileNames,
-          );
-          const sharedElements = await Promise.all(
-            sharedFiles.map(async (absPath) => {
-              try {
-                const content = await this.fileOperations.readElementFile(absPath, this.host.elementType, {
-                  source: `${this.host.constructor.name}.list:shared`,
-                });
-                const parsed = this.host.parseContent(content);
-                this.host.migrateMetadataDefaults(parsed.data, absPath);
-                const metadata = await this.host.parseMetadata(parsed.data);
-                return this.host.createElement(metadata, parsed.content);
-              } catch {
-                return null;
-              }
-            }),
-          );
-          for (const el of sharedElements) {
-            if (el) userElements.push(el);
-          }
-        } catch {
-          logger.debug(`[${this.host.constructor.name}] Shared-pool discovery failed; returning user elements only`);
-        }
-      }
+      if (options?.includePublic) await this.addPublicElements(files, userElements);
 
       return userElements;
     } catch (error) {
+      if (options?.strictDatabase) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         const label = this.host.getElementLabelCapitalized();
         logger.debug(`${label}s directory does not exist yet, returning empty array`);
@@ -132,10 +107,40 @@ export class ElementListOperations<T extends IElement> {
     }
   }
 
+  private async addPublicElements(files: string[], userElements: T[]): Promise<void> {
+    if (!this.publicElementDiscovery) return;
+    try {
+      const userFileNames = new Set(files.map(f => path.basename(f)));
+      const sharedFiles = await this.publicElementDiscovery.discoverPublicElements(
+        this.host.elementType, userFileNames,
+      );
+      const sharedElements = await Promise.all(
+        sharedFiles.map(async (absPath) => {
+          try {
+            const content = await this.fileOperations.readElementFile(absPath, this.host.elementType, {
+              source: `${this.host.constructor.name}.list:shared`,
+            });
+            const parsed = this.host.parseContent(content);
+            this.host.migrateMetadataDefaults(parsed.data, absPath);
+            const metadata = await this.host.parseMetadata(parsed.data);
+            return this.host.createElement(metadata, parsed.content);
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const el of sharedElements) {
+        if (el) userElements.push(el);
+      }
+    } catch {
+      logger.debug(`[${this.host.constructor.name}] Shared-pool discovery failed; returning user elements only`);
+    }
+  }
+
   /**
    * Database-mode list: query summaries from storage layer, then load each element.
    */
-  private async listFromDatabase(options?: { includePublic?: boolean }): Promise<T[]> {
+  private async listFromDatabase(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
     try {
       const diff = await this.storageLayer.scan();
       for (const id of [...diff.modified, ...diff.removed]) {
@@ -149,6 +154,7 @@ export class ElementListOperations<T extends IElement> {
         try {
           currentUserId = this.getCurrentUserId() ?? '';
         } catch (err) {
+          if (options?.strictDatabase) throw err;
           logger.warn(
             `[${this.host.constructor.name}] getCurrentUserId threw during listFromDatabase; foreign-row cache eviction skipped`,
             { error: err instanceof Error ? err.message : String(err) },
@@ -162,7 +168,8 @@ export class ElementListOperations<T extends IElement> {
             const cached = this.cache.getCachedByPath(summary.filePath);
             if (cached) return cached;
             return await this.host.load(summary.filePath);
-          } catch {
+          } catch (cause) {
+            if (options?.strictDatabase) throw cause;
             return null;
           }
         }),
@@ -174,6 +181,7 @@ export class ElementListOperations<T extends IElement> {
 
       return elements.filter((e): e is Awaited<T> => e !== null) as T[];
     } catch (error) {
+      if (options?.strictDatabase) throw error;
       logger.error(`Failed to list ${this.host.elementType}s from database:`, error);
       return [];
     }

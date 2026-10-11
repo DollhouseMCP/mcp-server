@@ -1225,7 +1225,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
-  override async list(options?: { includePublic?: boolean }): Promise<Memory[]> {
+  override async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<Memory[]> {
     // Database mode: delegate to base class which uses listFromDatabase().
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
@@ -1233,6 +1233,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       await this.applyActivationStatus(memories);
       return memories;
     }
+
+    if (options?.strictDatabase) throw new Error('Strict database listing requires database storage');
 
     // File mode: custom multi-directory listing with deduplication.
     // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()

@@ -525,7 +525,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // LIST / FIND
   // ============================================
 
-  async list(options?: { includePublic?: boolean }): Promise<T[]> {
+  async list(options?: { includePublic?: boolean; strictDatabase?: boolean }): Promise<T[]> {
     return this._listOps.list(options);
   }
 
