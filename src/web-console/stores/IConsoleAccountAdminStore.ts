@@ -1,3 +1,4 @@
+import type { DatabaseMemoryAccountDeletionBoundary } from '../../storage/DatabaseMemoryAccountDeletionBoundary.js';
 import type { ConsoleAdminRole } from '../../database/schema/index.js';
 import {
   assertUuid,
@@ -170,6 +171,8 @@ export interface PrincipalDeletionOutcome {
 }
 
 export interface IConsoleAccountAdminStore {
+  /** Internal protected composition identity; absent is never compatible with a configured deletion boundary. */
+  requireMemoryDeletionBoundary?(boundary: DatabaseMemoryAccountDeletionBoundary): void;
   listPrincipals(query?: PrincipalDirectoryQuery): Promise<PrincipalDirectoryPage>;
   findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null>;
   findPrincipalByAccountCorrelationId(accountCorrelationId: string): Promise<ConsolePrincipalSummary | null>;

@@ -1,3 +1,4 @@
+import type { DatabaseMemoryAccountDeletionBoundary } from '../../../storage/DatabaseMemoryAccountDeletionBoundary.js';
 import type {
   ConsoleHandlerResult,
   ConsoleModuleDescriptor,
@@ -74,6 +75,7 @@ const USER_ID_PARAM = 'user_id';
 const USER_ID_REQUIRED_DETAIL = 'user_id path parameter is required.';
 
 export interface AccountAdminModuleOptions {
+  readonly memoryDeletionBoundary?: DatabaseMemoryAccountDeletionBoundary;
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly sessionStore: IConsoleSessionStore;
@@ -120,6 +122,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
   });
   const deletionService = new AccountAdminDeletionService({
     accountAdminStore,
+    memoryDeletionBoundary: options.memoryDeletionBoundary,
     sessionStore: options.sessionStore,
     oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner,
