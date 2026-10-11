@@ -94,6 +94,17 @@ export class DatabaseMemoryAdmissionGate {
     } catch (cause) { observeFailure('capture'); throw cause; }
   }
 
+  /** Durable evidence only. It cannot reconstruct the private captured authority. */
+  describeCapture(capture: DatabaseMemoryAdmission): {
+    readonly tenant: string; readonly backend: 'database'; readonly profile: string; readonly generation: string;
+  } {
+    const state = this.captures.get(capture);
+    if (!state || state.busy) refuse();
+    this.requireBinding(state.binding);
+    return Object.freeze({ tenant: state.binding.tenant, backend: 'database',
+      profile: DATABASE_MEMORY_ADMISSION_PROFILE, generation: state.generation });
+  }
+
   /**
    * Internal composition primitive. Future head writers must use THIS tx for
    * persistence, not dispatch a second transaction after this admission check.

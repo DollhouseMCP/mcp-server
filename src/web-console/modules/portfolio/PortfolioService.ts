@@ -196,11 +196,13 @@ export class PortfolioService {
         now: this.now(),
       });
       if (!updated) return notFound();
-      return {
+      const publish = () => Promise.resolve({
         status: 200,
         body: serializePortfolioElementDetail(updated, null),
         headers: { ETag: portfolioElementEtag(updated) },
-      };
+      });
+      return this.store.completeUpdatePublication
+        ? await this.store.completeUpdatePublication(updated, publish) : await publish();
     } catch (error) {
       if (error instanceof PortfolioElementVersionConflictError) {
         return problem(412, 'precondition_failed', 'Precondition failed', 'Portfolio element changed before the write completed.');

@@ -60,6 +60,9 @@ export interface PendingConsoleMemoryUpdate {
 
 export class ManagerBackedPortfolioElementStore implements IPortfolioElementStore {
   private readonly guardedOperations = new Map<string, PendingConsoleMemoryUpdate>();
+  private readonly publicationTails = new WeakMap<ConsolePortfolioElementDetailRecord, {
+    manager: MemoryManager; candidate: Memory; requestKey: string; targetKey: string;
+  }>();
   constructor(private readonly options: ManagerBackedPortfolioElementStoreOptions) {}
 
   async summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
@@ -209,6 +212,19 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     return this.guardedOperations.get(this.requestKey(userId, manager.captureGuardedTenant(), canonicalName));
   }
 
+  /** The console service supplies its actual serialization/ETag tail before retirement. */
+  async completeUpdatePublication<T>(record: ConsolePortfolioElementDetailRecord, publish: () => Promise<T>): Promise<T> {
+    const tail = this.publicationTails.get(record);
+    if (!tail) return await publish();
+    try {
+      const result = await tail.manager.completeGuardedOperation(tail.candidate, publish);
+      this.publicationTails.delete(record);
+      return result;
+    } catch (cause) {
+      throw this.retainGuardedFailure(tail.manager, tail.candidate, true, true, tail.requestKey, tail.targetKey, cause);
+    }
+  }
+
   private guardedManager(type: ConsolePortfolioElementType): MemoryManager | undefined {
     const manager = this.manager(type) as PortfolioElementManager & Partial<MemoryManager>;
     return type === 'memories' && manager.isGuardedHeadUpdateEnabled?.() ? manager as MemoryManager : undefined;
@@ -249,9 +265,11 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
       const response = clonePortfolioElementDetailRecord(await this.toRecord(captured.userId, 'memories', candidate, false, submitted));
       this.requireGuardedContext(captured.userId, manager, tenant);
       dispatched = true;
-      await manager.save(candidate);
+      if (manager.saveForGuardedOperation) await manager.saveForGuardedOperation(candidate);
+      else await manager.save(candidate);
       committed = true;
       this.requireGuardedContext(captured.userId, manager, tenant);
+      if ((manager as Partial<MemoryManager>).completeGuardedOperation) this.publicationTails.set(response, { manager, candidate, requestKey, targetKey });
       return response;
     } catch (cause) {
       throw this.retainGuardedFailure(manager, candidate, dispatched, committed, requestKey, targetKey, cause);
