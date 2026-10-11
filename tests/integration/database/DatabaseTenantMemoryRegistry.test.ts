@@ -82,7 +82,7 @@ required('required PostgreSQL private tenant composition', () => {
     try {
       root.manager();
       const registry = new DatabaseTenantMemoryRegistry({ db: f.db, getEffectiveTenant: getTenant,
-        createManagerDeps: (factory, resolver) => ({ ...deps, storageLayerFactory: factory, getCurrentUserId: resolver }),
+        createManagerDeps: (factory, resolver) => ({ ...deps, fileWatchService: undefined, storageLayerFactory: factory, getCurrentUserId: resolver }),
         getAttribution: () => ({ contextRoot: 'owned-pg-test', sessionId: 'test-session', transport: 'http' }) });
       const [first, same, foreign] = await Promise.all([
         scope.run(f.userId, () => registry.resolve(registry.capture())),
