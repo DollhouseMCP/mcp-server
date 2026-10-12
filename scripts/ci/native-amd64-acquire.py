@@ -5,15 +5,25 @@ S=pathlib.Path(sys.argv[1]).resolve(); O=pathlib.Path(sys.argv[2]).resolve(); O.
 P=O.parent/'private-native'; P.mkdir(mode=0o700); os.umask(0o077)
 SHA='e5449665b24907a3b3b01353ac8bbe0f4f3ee3e6'; TREE='de79bdb7891e9b1eb294851989c2dc0058996086'
 N='d2870-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']; NET=N+'-net'; PG=N+'-pg'; APP=N+'-app'; MIG=N+'-migrate'; B=N+'-build'; VOL=N+'-pgdata'
-containers=[]; network=False; volume=False; builder=False; counter=0
+containers=[]; network=False; volume=False; builder=False; counter=0; fixture_secrets=[]
+
+def phase(name): print("phase: "+name,flush=True)
+def redact(data):
+ for value in fixture_secrets:
+  data=data.replace(value.encode(),b"<fixture-redacted>")
+ return data
 
 def run(args,timeout=60,stdin=None,record=True,cwd=None):
  global counter
  counter+=1
  r=subprocess.run(args,input=stdin,capture_output=True,timeout=timeout,cwd=cwd)
  if record:
-  (O/f'{counter:03}-stdout.txt').write_bytes(r.stdout); (O/f'{counter:03}-stderr.txt').write_bytes(r.stderr)
- if r.returncode: raise RuntimeError('command failed: '+args[0]+' step '+str(counter)+' code '+str(r.returncode))
+  (O/f'{counter:03}-stdout.txt').write_bytes(redact(r.stdout)); (O/f'{counter:03}-stderr.txt').write_bytes(redact(r.stderr))
+ if r.returncode:
+  safe=redact(r.stderr)
+  (O/f'{counter:03}-failure-stderr.txt').write_bytes(safe[:16384])
+  (O/f'{counter:03}-failure.json').write_text(json.dumps({'step':counter,'exitCode':r.returncode,'stderrTruncated':len(safe)>16384,'fixtureSecretsRedacted':True}))
+  raise RuntimeError('command failed: '+args[0]+' step '+str(counter)+' code '+str(r.returncode))
  return r.stdout
 
 def inspect(kind,name): return json.loads(run(['docker',kind,'inspect',name],record=False))[0]
@@ -91,28 +101,33 @@ try:
  if caps['Memory']!=2147483648 or caps['MemorySwap']!=2147483648 or caps['CpuQuota']!=100000 or caps['CpuPeriod']!=100000: raise RuntimeError('build caps')
  manifest['buildCaps']={k:caps[k] for k in ['Memory','MemorySwap','CpuQuota','CpuPeriod']}
  for target in ['production','builder']:
+  phase('build-'+target)
   tag=N+':'+target
   run(['docker','buildx','build','--builder',B,'--platform','linux/amd64','--target',target,'--label','org.opencontainers.image.revision='+SHA,'--label','dollhouse.native='+N,'--tag',tag,'--load','--provenance=false','--file','docker/Dockerfile','.'],timeout=1200,cwd=S)
   image=inspect('image',tag)
   if image['Architecture']!='amd64' or image['Os']!='linux' or image['Config']['Labels']['org.opencontainers.image.revision']!=SHA: raise RuntimeError('image platform/source')
   manifest['images'][target]=image
  run(['docker','pull','--platform','linux/amd64','postgres:17-alpine'],timeout=180); pgimage=inspect('image','postgres:17-alpine'); manifest['postgres']=pgimage
- admin=secrets.token_hex(24); app=secrets.token_hex(24)
+ admin=secrets.token_hex(24); app=secrets.token_hex(24); master=__import__('base64').b64encode(secrets.token_bytes(32)).decode()
+ fixture_secrets.extend([admin,app,master])
  pg_env=write_env('pg.env',{'POSTGRES_USER':'dollhouse','POSTGRES_DB':'dollhousemcp','POSTGRES_PASSWORD':admin,'DOLLHOUSE_APP_DB_PASSWORD':app})
  common={'DOLLHOUSE_DATABASE_URL':'postgres://dollhouse_app:'+app+'@'+PG+':5432/dollhousemcp','DOLLHOUSE_DATABASE_ADMIN_URL':'postgres://dollhouse:'+admin+'@'+PG+':5432/dollhousemcp','DOLLHOUSE_DATABASE_SSL':'disable','DOLLHOUSE_DATABASE_POOL_SIZE':'2'}
  migrate_env=write_env('migration.env',common)
- app_env=write_env('app.env',{**common,'NODE_ENV':'production','DOLLHOUSE_TRANSPORT':'streamable-http','DOLLHOUSE_HTTP_HOST':'127.0.0.1','DOLLHOUSE_HTTP_PORT':'3000','DOLLHOUSE_HTTP_ALLOWED_HOSTS':'localhost,127.0.0.1','DOLLHOUSE_PUBLIC_BASE_URL':'http://127.0.0.1:3000','DOLLHOUSE_UNSAFE_NO_TLS':'true','DOLLHOUSE_STORAGE_BACKEND':'database','DOLLHOUSE_DATABASE_MEMORY_GUARDED':'false','DOLLHOUSE_AUTH_ENABLED':'true','DOLLHOUSE_AUTH_PROVIDER':'local','DOLLHOUSE_AUTH_STORAGE_BACKEND':'memory','DOLLHOUSE_AUTH_LOCAL_KEY_FILE':'/app/tmp/rehearsal-local-key.json','DOLLHOUSE_WEB_AUTH_ENABLED':'false','DOLLHOUSE_MASTER_ENCRYPTION_KEY':__import__('base64').b64encode(secrets.token_bytes(32)).decode(),'DOLLHOUSE_PORTFOLIO_DIR':'/app/tmp/portfolio','DOLLHOUSE_DISABLE_UPDATES':'true'})
+ app_env=write_env('app.env',{**common,'NODE_ENV':'production','DOLLHOUSE_TRANSPORT':'streamable-http','DOLLHOUSE_HTTP_HOST':'127.0.0.1','DOLLHOUSE_HTTP_PORT':'3000','DOLLHOUSE_HTTP_ALLOWED_HOSTS':'localhost,127.0.0.1','DOLLHOUSE_PUBLIC_BASE_URL':'http://127.0.0.1:3000','DOLLHOUSE_UNSAFE_NO_TLS':'true','DOLLHOUSE_STORAGE_BACKEND':'database','DOLLHOUSE_DATABASE_MEMORY_GUARDED':'false','DOLLHOUSE_AUTH_ENABLED':'true','DOLLHOUSE_AUTH_PROVIDER':'local','DOLLHOUSE_AUTH_STORAGE_BACKEND':'memory','DOLLHOUSE_AUTH_LOCAL_KEY_FILE':'/app/tmp/rehearsal-local-key.json','DOLLHOUSE_WEB_AUTH_ENABLED':'false','DOLLHOUSE_MASTER_ENCRYPTION_KEY':master,'DOLLHOUSE_PORTFOLIO_DIR':'/app/tmp/portfolio','DOLLHOUSE_DISABLE_UPDATES':'true'})
  run(['docker','network','create','--internal','--label','dollhouse.native='+N,NET]); network=True
  run(['docker','volume','create','--label','dollhouse.native='+N,VOL]); volume=True
+ phase('fresh-postgres-tcp-readiness')
  containers.append(PG)
  run(['docker','run','-d','--name',PG,'--label','dollhouse.native='+N,'--network',NET,'--memory','512m','--cpus','1','--env-file',pg_env,'-v',VOL+':/var/lib/postgresql/data',pgimage['Id']])
  deadline=time.monotonic()+60
  while True:
-  p=subprocess.run(['docker','exec',PG,'pg_isready','-U','dollhouse','-d','dollhousemcp'],capture_output=True,timeout=5)
+  p=subprocess.run(['docker','exec',PG,'pg_isready','-h','127.0.0.1','-U','dollhouse','-d','dollhousemcp'],capture_output=True,timeout=5)
   if p.returncode==0: break
   if time.monotonic()>deadline: raise RuntimeError('PG deadline')
   time.sleep(1)
+ phase('role-bootstrap')
  sql(b"\\getenv app_password DOLLHOUSE_APP_DB_PASSWORD\nSELECT format('CREATE ROLE dollhouse_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS', :'app_password')\n\\gexec\n")
+ phase('exact-image-migrations')
  containers.append(MIG)
  run(['docker','run','--name',MIG,'--label','dollhouse.native='+N,'--network',NET,'--memory','512m','--cpus','1','--env-file',migrate_env,manifest['images']['builder']['Id'],'npm','run','db:migrate'],timeout=120,record=False)
  ms=state_record(MIG)
@@ -123,9 +138,11 @@ try:
  actual=[json.loads(x) for x in sql(b"SELECT json_build_object('hash',hash,'created_at',created_at)::text FROM drizzle.__drizzle_migrations ORDER BY created_at,id;").decode().splitlines()]
  if actual!=expected: raise RuntimeError('complete ledger mismatch')
  (O/'ledger.json').write_text(json.dumps(actual,indent=2))
+ phase('ledger-and-source-grants')
  grants=P/'grants.sql'
  run(['bash','-c','source "$1"; POST_MIGRATION_GRANTS_FILE="$2"; write_post_migration_grants','render',str(S/'scripts/hosted-deploy/render.sh'),str(grants)],record=False)
  sql(b'\\getenv app_password DOLLHOUSE_APP_DB_PASSWORD\n'+grants.read_bytes()); check_catalog()
+ phase('same-image-off-startup')
  containers.append(APP)
  run(['docker','run','-d','--name',APP,'--label','dollhouse.native='+N,'--network',NET,'--memory','512m','--cpus','1','--env-file',app_env,'--tmpfs','/app/tmp:rw,nosuid,size=200m,mode=1777','--tmpfs','/app/logs:rw,nosuid,size=100m,mode=1777','--tmpfs','/tmp:rw,noexec,nosuid,size=200m,mode=1777','--cap-drop','ALL','--security-opt','no-new-privileges',manifest['images']['production']['Id']])
  deadline=time.monotonic()+90
@@ -141,11 +158,13 @@ try:
  if info['package']['version']!=json.loads((S/'package.json').read_text())['version'] or info['runtime']['arch']!='x64' or info['runtime']['platform']!='linux' or not info['build']['timestamp']: raise RuntimeError('compiled metadata')
  (O/'compiled-build-info.json').write_bytes(identity)
  manifest['native']=native
+ phase('off-ready-native-identity-and-close')
  closed(APP); state=state_record(APP)
  image=manifest['images']['production']
  if state['ports'].get('3000/tcp') is not None or state['memory']!=536870912 or state['nanoCpus']!=1000000000 or state['user']!=image['Config']['User'] or state['path']!=image['Config']['Cmd'][0] or state['args']!=image['Config']['Cmd'][1:]: raise RuntimeError('runtime defaults/caps/ports')
  check_catalog(); state_record(PG)
  for target in ['production','builder']:
+  phase('export-'+target)
   image=manifest['images'][target]; archive=O/(target+'.docker.tar')
   run(['docker','save','--output',str(archive),image['Id']],timeout=180)
   with tarfile.open(archive) as t:
@@ -159,6 +178,7 @@ try:
 except BaseException as e:
  failure=type(e).__name__+': '+str(e)
 finally:
+ phase('owned-cleanup')
  try: cleanup()
  except Exception as e: failure=(failure or '')+'; '+str(e)
  (O/'manifest.json').write_text(json.dumps(manifest,indent=2))
