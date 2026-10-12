@@ -161,7 +161,9 @@ try:
  phase('off-ready-native-identity-and-close')
  closed(APP); state=state_record(APP)
  image=manifest['images']['production']
- if state['ports'].get('3000/tcp') is not None or state['memory']!=536870912 or state['nanoCpus']!=1000000000 or state['user']!=image['Config']['User'] or state['path']!=image['Config']['Cmd'][0] or state['args']!=image['Config']['Cmd'][1:]: raise RuntimeError('runtime defaults/caps/ports')
+ default_command=(image['Config'].get('Entrypoint') or [])+(image['Config'].get('Cmd') or [])
+ if not default_command: raise RuntimeError('image default command absent')
+ if state['ports'].get('3000/tcp') is not None or state['memory']!=536870912 or state['nanoCpus']!=1000000000 or state['user']!=image['Config']['User'] or state['path']!=default_command[0] or state['args']!=default_command[1:]: raise RuntimeError('runtime defaults/caps/ports')
  check_catalog(); state_record(PG)
  for target in ['production','builder']:
   phase('export-'+target)
