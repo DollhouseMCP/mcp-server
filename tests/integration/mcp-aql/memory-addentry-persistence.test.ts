@@ -186,7 +186,7 @@ describe('Memory addEntry persistence (#2329)', () => {
     const result = await addEntry('flaky-disk-2329', content);
     expect(result.success).toBe(true);
     expect(saveSpy).toHaveBeenCalledTimes(2);
-    expect(attemptSpy.mock.calls[1][0] === attemptSpy.mock.calls[0][0]).toBe(false);
+    expect(attemptSpy.mock.calls[1][0]).not.toBe(attemptSpy.mock.calls[0][0]);
     await mcpAqlHandler.flushPendingSaves();
     expect(saveSpy).toHaveBeenCalledTimes(2); // No rejected candidate is replayed by flush.
     const persisted = new SerializationService().parsePureYaml(await fs.readFile(filePath, 'utf-8'));
@@ -240,7 +240,7 @@ describe('Memory addEntry persistence (#2329)', () => {
       expect(lifecycle.getSummary()).toMatchObject({ admitted: 0, writes: 0, failedWrites: 0, retainedOwners: 0 });
     }
     expect(saveSpy).toHaveBeenCalledTimes(2);
-    expect(attemptSpy.mock.calls[1][0] === attemptSpy.mock.calls[0][0]).toBe(false);
+    expect(attemptSpy.mock.calls[1][0]).not.toBe(attemptSpy.mock.calls[0][0]);
 
     // Restoring storage and flushing cannot invent acceptance for either failed
     // request. Only the previously acknowledged entry remains durable.
