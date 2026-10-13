@@ -318,14 +318,7 @@ export class BackgroundValidator {
           memoryId: memory.id
         });
       } catch (error) {
-        if (this.memoryUpgrade) this.retainedSaves.set(memory, {
-          // A supported legacy name repair precedes the manager's frozen write
-          // identity. Only definite prewrite failure may retain those normalized
-          // bytes; the manager ledger still refuses any changed retry candidate.
-          candidate: error instanceof MemoryWriteOutcomeError && error.outcome === 'refused-before-write'
-            ? memory.serialize() : candidate,
-          error, retry,
-        });
+        this.retainFailedValidationSave(memory, candidate, error, retry);
         logger.error('Failed to save memory after validation', {
           memoryId: memory.id,
           error
@@ -333,6 +326,22 @@ export class BackgroundValidator {
         // Don't throw - continue with other memories
       }
     }
+  }
+
+  private retainFailedValidationSave(
+    memory: Memory,
+    candidate: string,
+    error: unknown,
+    retry: () => Promise<void>,
+  ): void {
+    if (this.memoryUpgrade) this.retainedSaves.set(memory, {
+      // A supported legacy name repair precedes the manager's frozen write
+      // identity. Only definite prewrite failure may retain those normalized
+      // bytes; the manager ledger still refuses any changed retry candidate.
+      candidate: error instanceof MemoryWriteOutcomeError && error.outcome === 'refused-before-write'
+        ? memory.serialize() : candidate,
+      error, retry,
+    });
   }
 
   /**
