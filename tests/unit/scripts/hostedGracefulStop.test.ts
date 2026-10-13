@@ -5,14 +5,14 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const helper = fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.sh', import.meta.url));
+const helper = fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py', import.meta.url));
 const target = 'a'.repeat(64);
 
 async function run(mode: string) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'owned-graceful-stop-'));
   const trace = path.join(directory, 'trace.jsonl');
-  await writeFile(path.join(directory, 'docker'), `#!/usr/bin/env python3
-import json,os,sys,time
+  const dockerFixture = path.join(directory, 'docker-fixture.py');
+  await writeFile(dockerFixture, `import json,os,sys,time
 from pathlib import Path
 a=sys.argv[1:]; p=Path(os.environ['OWNED_TRACE']); mode=os.environ['OWNED_MODE']
 with p.open('a') as f: f.write(json.dumps(a)+'\\n')
@@ -26,11 +26,17 @@ if a==['kill','--signal=TERM','${target}']:
  if mode=='success': Path(str(p)+'.stopped').touch()
  sys.exit(0)
 sys.exit(3)
-`, { mode: 0o700 });
+`);
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  await writeFile(path.join(directory, process.platform === 'win32' ? 'docker.cmd' : 'docker'),
+    process.platform === 'win32'
+      ? `@echo off\r\npython "${dockerFixture}" %*\r\n`
+      : `#!/usr/bin/env python3\nexec(compile(open(${JSON.stringify(dockerFixture)}).read(), ${JSON.stringify(dockerFixture)}, 'exec'))\n`,
+    { mode: 0o700 });
   try {
     const started = Date.now();
-    const child = spawn('bash', [helper, target, '1'], {
-      env: { PATH: `${directory}:${process.env.PATH}`, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
+    const child = spawn(python, [helper, target, '1'], {
+      env: { ...process.env, PATH: `${directory}${path.delimiter}${process.env.PATH}`, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stdout!.resume(); child.stderr!.resume();

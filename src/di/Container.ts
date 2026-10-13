@@ -208,6 +208,7 @@ const DEFAULT_REGISTER_OPTIONS: RegisterOptions = { singleton: true };
 
 export class DollhouseContainer {
   private readonly services = new Map<string, ServiceRecord>();
+  private readonly memoryUpgradeLifecycle = new MemoryUpgradeLifecycle();
   private personasDir: string | null = null;
   private readonly securityMonitorInstance: SecurityMonitor | null;
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
@@ -226,7 +227,7 @@ export class DollhouseContainer {
       source: 'DollhouseContainer.constructor',
       details: 'Dependency injection container initializing'
     });
-    this.register('MemoryUpgradeLifecycle', () => new MemoryUpgradeLifecycle());
+    this.register('MemoryUpgradeLifecycle', () => this.memoryUpgradeLifecycle);
     this.registerServices();
     const securityMonitor = this.services.get('SecurityMonitor')?.instance;
     this.securityMonitorInstance = securityMonitor instanceof SecurityMonitor ? securityMonitor : null;
@@ -2366,7 +2367,7 @@ export class DollhouseContainer {
 
   public async dispose(): Promise<void> {
     // Memory obligations must settle before closing any transport or storage.
-    await this.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle').quiesceAndDrain();
+    await this.memoryUpgradeLifecycle.quiesceAndDrain();
     try {
     // Close the HTTP server first so the port is freed immediately (#1856)
     try {

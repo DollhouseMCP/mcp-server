@@ -66,6 +66,16 @@ describe('Memory upgrade lifecycle', () => {
     expect(lifecycle.getSummary()).toMatchObject({ state: 'refused', failedWrites: 1 });
   });
 
+  it('keeps a guarded original public error while retaining its classified unknown write', async () => {
+    const lifecycle = new MemoryUpgradeLifecycle();
+    const cause = Object.assign(new Error('Original guarded outcome'), { code: 'EHEADCONFLICT' });
+    const identity = { owner: {}, target: 'guarded', candidate: 'exact candidate', candidateDigest: 'digest' };
+    await expect(lifecycle.runWrite(async () => { throw cause; }, identity, () => 'unknown')).rejects.toBe(cause);
+    expect(lifecycle.getSummary().failedWrites).toBe(1);
+    await expect(lifecycle.runWrite(async () => {}, identity)).rejects.toThrow('without replay');
+    await expect(lifecycle.quiesceAndDrain()).rejects.toThrow();
+  });
+
   it('retains disposed owners and refuses release until their obligations are known complete', async () => {
     const lifecycle = new MemoryUpgradeLifecycle();
     let retained = true;

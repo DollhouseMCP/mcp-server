@@ -57,6 +57,17 @@ export class MemoryUpgradeLifecycle {
     this.owners.delete(owner);
   }
 
+  /** Restore a retained owner's user context without reviving an expired
+   * request admission lease captured by AsyncLocalStorage.snapshot(). */
+  runRetainedOwnerContext<T>(owner: MemoryDrainOwner, restore: (body: () => Promise<T>) => Promise<T>,
+    body: () => Promise<T>): Promise<T> {
+    const lease = this.context.getStore();
+    if (!this.owners.has(owner) || (this.state !== 'running' && !(lease?.active && lease.kind === 'drain'))) {
+      return Promise.reject(new MemoryDrainRefusedError());
+    }
+    return restore(() => this.context.run(lease ?? { kind: 'admitted', active: false }, body));
+  }
+
   registerStopSource(stop: () => void): () => void {
     this.stopSources.add(stop);
     return () => this.stopSources.delete(stop);
@@ -73,7 +84,8 @@ export class MemoryUpgradeLifecycle {
   }
 
   /** Tracks every original promise, rather than one token per memory name. */
-  runWrite<T>(body: () => Promise<T>, identity?: MemoryWriteIdentity): Promise<T> {
+  runWrite<T>(body: () => Promise<T>, identity?: MemoryWriteIdentity,
+    classifyFailure?: (error: unknown) => MemoryWriteOutcome | undefined): Promise<T> {
     if (this.state !== 'running' && !this.context.getStore()?.active) return Promise.reject(new MemoryDrainRefusedError());
     if (identity && [...this.failedWrites.values()].some(failure =>
       failure.identity && ((failure.outcome !== 'refused-before-write' &&
@@ -99,9 +111,22 @@ export class MemoryUpgradeLifecycle {
       }
     }, error => {
       this.writeOwners.delete(operation);
-      this.failedWrites.set(attempt, { identity, order, error, outcome: error instanceof MemoryWriteOutcomeError ? error.outcome : 'unknown' });
+      const outcome = this.classifyFailedWrite(error, classifyFailure);
+      // A guarded preacceptance refusal has no accepted publication to replay.
+      // Its original public error and adapter state remain with the caller.
+      if (outcome !== undefined) this.failedWrites.set(attempt, { identity, order, error, outcome });
     });
     return operation;
+  }
+
+  private classifyFailedWrite(error: unknown,
+    classifyFailure?: (error: unknown) => MemoryWriteOutcome | undefined): MemoryWriteOutcome | undefined {
+    if (classifyFailure) {
+      try { return classifyFailure(error); }
+      catch { return 'unknown'; }
+    }
+    if (error instanceof MemoryWriteOutcomeError) return error.outcome;
+    return 'unknown';
   }
 
   hasRetainedWrites(owner: object): boolean {
@@ -190,7 +215,7 @@ export class MemoryUpgradeLifecycle {
   }
 
   private async settle(operations: Set<Promise<unknown>>): Promise<void> {
-    while (operations.size) await Promise.allSettled([...operations]);
+    while (operations.size) await Promise.allSettled(operations);
   }
 
   private track<T>(set: Set<Promise<unknown>>, body: () => Promise<T>): Promise<T> {

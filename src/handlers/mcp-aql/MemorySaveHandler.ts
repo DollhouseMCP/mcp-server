@@ -338,9 +338,9 @@ export class MemorySaveHandler {
   }
 
   async dispose(): Promise<void> {
-    await Promise.allSettled([...this.startedMutations]);
+    await Promise.allSettled(this.startedMutations);
     await this.flushPendingSaves();
-    if (this.hasRetainedMemoryWork()) throw new Error('Memory owner remains retained; disposal refused');
+    if (this.handlers.memoryUpgradeLifecycle && this.hasRetainedMemoryWork()) throw new Error('Memory owner remains retained; disposal refused');
     this.handlers.memoryUpgradeLifecycle?.releaseOwner(this);
   }
 

@@ -10,6 +10,8 @@ import { BackgroundValidator } from '../../../../src/security/validation/Backgro
 import { PatternExtractor } from '../../../../src/security/validation/PatternExtractor.js';
 import { PatternEncryptor } from '../../../../src/security/encryption/PatternEncryptor.js';
 import { TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { MemoryUpgradeLifecycle, MemoryWriteOutcomeError } from '../../../../src/lifecycle/MemoryUpgradeLifecycle.js';
 import { logger } from '../../../../src/utils/logger.js';
 
 describe('BackgroundValidator', () => {
@@ -53,6 +55,47 @@ describe('BackgroundValidator', () => {
     validator.stop();
     jest.restoreAllMocks();
     jest.useRealTimers();
+  });
+
+  describe('upgrade retained background work', () => {
+    it('restores the original owner context after disposal refusal and releases only a known exact retry', async () => {
+      const lifecycle = new MemoryUpgradeLifecycle();
+      const ownerContext = new AsyncLocalStorage<string>();
+      const entry = { id: 'entry', content: 'Ordinary benign text', trustLevel: TRUST_LEVELS.UNTRUSTED };
+      const memory = { id: 'memory', getEntriesByTrustLevel: () => [entry], serialize: () => JSON.stringify(entry) };
+      mockMemoryManager.list = async () => [memory];
+      const owners: Array<string | undefined> = [];
+      let unavailable = true;
+      mockMemoryManager.save = async (candidate: unknown) => {
+        expect(candidate).toBe(memory);
+        owners.push(ownerContext.getStore());
+        if (unavailable) throw new MemoryWriteOutcomeError('refused-before-write', new Error('Prewrite refusal'));
+      };
+      const retained = new BackgroundValidator(patternExtractor, mockMemoryManager, { enabled: false }, lifecycle);
+      await ownerContext.run('original-owner', () => retained.processUntrustedMemories());
+      await expect(retained.dispose()).rejects.toThrow('Prewrite refusal');
+      expect(retained.hasRetainedMemoryWork()).toBe(true);
+      unavailable = false;
+      await lifecycle.quiesceAndDrain();
+      expect(owners).toEqual(['original-owner', 'original-owner', 'original-owner']);
+      expect(retained.hasRetainedMemoryWork()).toBe(false);
+      await retained.dispose();
+    });
+
+    it.each(['unknown', 'known-committed'] as const)('retains %s without shutdown or disposal replay', async outcome => {
+      const lifecycle = new MemoryUpgradeLifecycle();
+      const entry = { id: 'entry', content: 'Ordinary benign text', trustLevel: TRUST_LEVELS.UNTRUSTED };
+      const memory = { id: 'memory', getEntriesByTrustLevel: () => [entry], serialize: () => JSON.stringify(entry) };
+      mockMemoryManager.list = async () => [memory];
+      mockMemoryManager.save = jest.fn(async () => { throw new MemoryWriteOutcomeError(outcome, new Error('Private cause')); });
+      const retained = new BackgroundValidator(patternExtractor, mockMemoryManager, { enabled: false }, lifecycle);
+      await retained.processUntrustedMemories();
+      await expect(retained.dispose()).rejects.toThrow('without replay');
+      await expect(retained.flushPendingSaves()).rejects.toThrow('without replay');
+      expect(mockMemoryManager.save).toHaveBeenCalledTimes(1);
+      expect(retained.hasRetainedMemoryWork()).toBe(true);
+      expect(() => lifecycle.releaseOwner(retained)).toThrow('retain');
+    });
   });
 
   describe('guarded background validation refusal', () => {

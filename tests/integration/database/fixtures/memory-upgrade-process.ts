@@ -19,7 +19,7 @@ const redactDiagnostic = (value: string): string => value
 // Only the owned memory's inner persistence body is delayed, AFTER the real
 // MemoryManager.save has registered its lifecycle promise. The original production
 // MemorySaveHandler, admission/lifecycle and SQL writer still execute.
-const observer = String.raw`
+const observer = `
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -173,7 +173,10 @@ export class MemoryUpgradeRuntime {
     if (!this.child.kill('SIGTERM')) throw new Error('Owned child did not receive graceful signal');
   }
   async waitForClose(): Promise<void> { await this.waitUntil(() => this.closed, 15000); }
-  close(): Promise<void> { return this.closing ??= this.closeOwned(); }
+  close(): Promise<void> {
+    this.closing ??= this.closeOwned();
+    return this.closing;
+  }
   private async closeOwned(): Promise<void> {
     const outcomes = await Promise.allSettled(this.clients.map(client => client.close()));
     if (this.ended) await this.waitForClose();

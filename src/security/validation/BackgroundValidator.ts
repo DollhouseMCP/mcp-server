@@ -23,7 +23,8 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import type { MemoryUpgradeLifecycle } from '../../lifecycle/MemoryUpgradeLifecycle.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { MemoryDrainRefusedError, MemoryWriteOutcomeError, type MemoryUpgradeLifecycle } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import {
   ContentValidator,
   MALICIOUS_YAML_CONTENT_PATTERN,
@@ -106,6 +107,9 @@ export class BackgroundValidator {
   private readonly config: BackgroundValidatorConfig;
   private intervalHandle?: NodeJS.Timeout;
   private isProcessing: boolean = false;
+  private readonly retainedSaves = new Map<Memory, {
+    candidate: string; error: unknown; retry: () => Promise<void>;
+  }>();
 
   constructor(
     private readonly patternExtractor: PatternExtractor,
@@ -115,6 +119,7 @@ export class BackgroundValidator {
   ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.memoryUpgrade?.registerStopSource(() => this.stop());
+    this.memoryUpgrade?.registerOwner(this);
     logger.info('BackgroundValidator initialized', {
       enabled: this.config.enabled,
       intervalSeconds: this.config.intervalSeconds,
@@ -299,12 +304,19 @@ export class BackgroundValidator {
       });
 
       // DI REFACTOR: Use injected MemoryManager to save
+      const candidate = this.memoryUpgrade ? memory.serialize() : '';
+      const origin = AsyncLocalStorage.snapshot();
+      const retry = () => this.memoryUpgrade
+        ? this.memoryUpgrade.runRetainedOwnerContext(this, body => origin(body), () => this.memoryManager.save(memory))
+        : this.memoryManager.save(memory);
       try {
-        await this.memoryManager.save(memory);
+        await retry();
+        this.retainedSaves.delete(memory);
         logger.debug('Memory saved successfully', {
           memoryId: memory.id
         });
       } catch (error) {
+        if (this.memoryUpgrade) this.retainedSaves.set(memory, { candidate, error, retry });
         logger.error('Failed to save memory after validation', {
           memoryId: memory.id,
           error
@@ -427,8 +439,33 @@ export class BackgroundValidator {
    * Dispose of the validator and clean up resources
    * Implements cleanup for proper DI lifecycle management
    */
+  hasRetainedMemoryWork(): boolean { return this.isProcessing || this.retainedSaves.size > 0; }
+
+  async flushPendingSaves(): Promise<void> {
+    for (const [memory, retained] of this.retainedSaves) {
+      // An unknown or committed outcome never gains retry authority from
+      // shutdown. Retain the exact candidate, manager and original context.
+      if (!(retained.error instanceof MemoryWriteOutcomeError) ||
+          retained.error.outcome !== 'refused-before-write' || memory.serialize() !== retained.candidate) {
+        throw new MemoryDrainRefusedError('Background candidate requires reconciliation without replay');
+      }
+      try {
+        await retained.retry();
+        this.retainedSaves.delete(memory);
+      } catch (error) {
+        retained.error = error;
+        throw error;
+      }
+    }
+    if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
+  }
+
   async dispose(): Promise<void> {
     this.stop();
+    if (this.memoryUpgrade) {
+      await this.flushPendingSaves();
+      this.memoryUpgrade.releaseOwner(this);
+    }
     logger.debug('BackgroundValidator disposed');
   }
 }

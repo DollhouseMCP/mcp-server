@@ -449,6 +449,10 @@ export class WebConsoleRegistrar {
     return database ? 'postgres' : 'memory';
   }
 
+  private resolveMemoryUpgradeLifecycle(container: DiContainerFacade) {
+    return container.hasRegistration('MemoryUpgradeLifecycle') ? container.resolve<import('../lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle') : undefined;
+  }
+
   async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
     const onboardingConfiguration = this.cloneOnboardingConfiguration();
     const database = resolveConsoleDatabase(container);
@@ -813,7 +817,7 @@ export class WebConsoleRegistrar {
       },
     });
     const apiV1Mount = createApiV1Mount({
-      memoryUpgradeLifecycle: container.hasRegistration('MemoryUpgradeLifecycle') ? container.resolve('MemoryUpgradeLifecycle') : undefined,
+      memoryUpgradeLifecycle: this.resolveMemoryUpgradeLifecycle(container),
       activationProfile,
       options: this.options,
       registry,

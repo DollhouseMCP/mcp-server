@@ -649,15 +649,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const validation = element.validate();
     if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
     // Capture owner/root before the preflight await.
-    const owner = this.getCurrentUserId?.() ?? 'stdio';
+    const owner = this.captureUpgradeOwner();
     const root = this.memoriesDir;
     await this.assertPersistable(element);
-    if ((this.getCurrentUserId?.() ?? 'stdio') !== owner || this.memoriesDir !== root) throw new MemoryDrainRefusedError('Memory preflight ownership changed');
+    if (this.captureUpgradeOwner() !== owner || this.memoriesDir !== root) throw new MemoryDrainRefusedError('Memory preflight ownership changed');
     const target = JSON.stringify([isWritableStorageLayer(this.storageLayer) ? 'database' : 'file', owner, root,
       filePath ?? element.getFilePath() ?? element.metadata.name]);
     const candidate = element.serialize();
     return this.memoryUpgrade.runTarget(this.upgradeTargetKey(), async () => {
-      if ((this.getCurrentUserId?.() ?? 'stdio') !== owner || this.memoriesDir !== root) throw new MemoryDrainRefusedError('Memory write ownership changed');
+      if (this.captureUpgradeOwner() !== owner || this.memoriesDir !== root) throw new MemoryDrainRefusedError('Memory write ownership changed');
       const loaded = this.upgradeLoadedSnapshots.get(element);
       if (!this.guardedUpdateAdapter && loaded) {
         if (loaded.owner !== owner || loaded.root !== root) throw new MemoryDrainRefusedError('Memory snapshot ownership changed');
@@ -673,10 +673,17 @@ export class MemoryManager extends BaseElementManager<Memory> {
             ...loaded, sha256: crypto.createHash('sha256').update(await this.readUpgradeContent(loaded.path)).digest('hex'),
           });
         } catch (cause) {
-          throw new MemoryWriteOutcomeError(attempt.phase === 'not-started' ? 'refused-before-write' :
-            attempt.phase === 'known-committed' ? 'known-committed' : 'unknown', cause);
+          if (this.guardedUpdateAdapter) throw cause;
+          let outcome: 'refused-before-write' | 'unknown' | 'known-committed' = 'unknown';
+          if (attempt.phase === 'not-started') outcome = 'refused-before-write';
+          else if (attempt.phase === 'known-committed') outcome = 'known-committed';
+          throw new MemoryWriteOutcomeError(outcome, cause);
         }
-      }, { owner: this, target, scope: this.upgradeTargetKey(), candidate, candidateDigest: crypto.createHash('sha256').update(candidate).digest('hex') });
+      }, { owner: this, target, scope: this.upgradeTargetKey(), candidate, candidateDigest: crypto.createHash('sha256').update(candidate).digest('hex') }, this.guardedUpdateAdapter ? () => {
+        const pending = this.guardedUpdateAdapter!.getPendingUpdate(element);
+        if (pending?.status === 'refused' || (!pending && attempt.phase === 'not-started')) return undefined;
+        return pending?.status === 'committed-publication-failed' ? 'known-committed' : 'unknown';
+      } : undefined);
     });
   }
 
@@ -686,16 +693,27 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.fileOperations.readElementFile(fullPath, ElementType.MEMORY, { source: 'MemoryManager.upgradeSnapshot' });
   }
 
+  private captureUpgradeOwner(): string {
+    // Database writes still require the authenticated storage owner. File
+    // startup/background work follows BaseElementManager's existing namespace
+    // fallback, matching PortfolioManager's flat-directory contract.
+    return isWritableStorageLayer(this.storageLayer)
+      ? this.getCurrentUserId!() : this.getCacheNamespace();
+  }
+
   private upgradeTargetKey(): string {
-    return JSON.stringify([isWritableStorageLayer(this.storageLayer) ? 'database' : 'file',
-      this.getCurrentUserId?.() ?? 'stdio', this.memoriesDir]);
+    // Every writer of the same flat file root shares one fence, even when
+    // request users differ. Database roots remain tenant scoped.
+    return JSON.stringify(isWritableStorageLayer(this.storageLayer)
+      ? ['database', this.captureUpgradeOwner(), this.memoriesDir]
+      : ['file', this.memoriesDir]);
   }
 
   protected override captureLoadedContent(memory: Memory, content: string, filePath: string): void {
     if (!this.memoryUpgrade || this.guardedUpdateAdapter) return;
     this.upgradeLoadedSnapshots.set(memory, { path: filePath,
       sha256: crypto.createHash('sha256').update(content).digest('hex'),
-      owner: this.getCurrentUserId?.() ?? 'stdio', root: this.memoriesDir });
+      owner: this.captureUpgradeOwner(), root: this.memoriesDir });
   }
 
   /** Fresh legacy read inside the process fence; never adopts/qualifies a guarded head. */
@@ -707,7 +725,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const summaries = await this.storageLayer.listSummaries({ includePublic: false, preserveDuplicates: true, freshMetadata: true });
       if (this.upgradeTargetKey() !== target) throw new MemoryDrainRefusedError('Memory owner changed during lookup');
       const matches = summaries.filter(summary => summary.name === name);
-      if (matches.length !== 1 || !matches[0].filePath) throw new MemoryDrainRefusedError('Memory target is missing or ambiguous');
+      if (matches.length === 0) throw new Error(`Memory '${name}' not found. Use list_elements to see available memories.`);
+      if (matches.length !== 1 || !matches[0].filePath) throw new MemoryDrainRefusedError('Memory target is ambiguous or has no persisted path');
       const path = matches[0].filePath;
       const content = await this.readUpgradeContent(path);
       const memory = await this.hydrateDefinitionFromContent(content, path, { suppressLoadPolicy: true });
@@ -725,7 +744,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async flushPendingSaves(): Promise<void> {
     // Preflight/FIFO work is retained too, but a definite pre-write rejection
     // does not become a failed publication obligation.
-    while (this.upgradeSaveOperations.size) await Promise.allSettled([...this.upgradeSaveOperations]);
+    while (this.upgradeSaveOperations.size) await Promise.allSettled(this.upgradeSaveOperations);
     // A manager cannot blindly replay a failed publication. The originating
     // handler may reconcile its exact candidate through the normal save path.
     if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
@@ -734,8 +753,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private async saveMemoryKnown(element: Memory, filePath?: string, options?: ElementSaveOptions,
     attempt?: { phase: 'not-started' | 'started' | 'known-committed' }): Promise<void> {
     if (this.guardedUpdateAdapter) {
-      if (attempt) attempt.phase = 'started';
-      await this.saveGuardedMemory(element, filePath, options);
+      await this.saveGuardedMemory(element, filePath, options, attempt);
       if (attempt) attempt.phase = 'known-committed';
       return;
     }
@@ -1003,7 +1021,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return await this.guardedUpdateAdapter.completePublication(memory, publish);
   }
 
-  private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
+  private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions,
+    attempt?: { phase: 'not-started' | 'started' | 'known-committed' }): Promise<void> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
     if (options?.expectedIdentity !== undefined || options?.expectedStorageRevision !== undefined || options?.expectedFileSnapshot !== undefined) throw new Error('Caller preconditions are unsupported by the dormant memory adapter');
@@ -1028,6 +1047,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       } };
       this.validateSerializedContent(content);
       this.requireGuardedContext(tenant, contextRoot);
+      if (attempt) attempt.phase = 'started';
       const outcome = await adapter.write(element, tenant, candidate);
       if (outcome.status !== 'committed') throw outcome.cause;
       committed = true;

@@ -57,8 +57,8 @@ USER dollhouse
 # No ports exposed - stdio-based MCP servers don't need network access
 
 # Add security labels for container metadata
-LABEL org.dollhousemcp.memory-upgrade-drain="v1" \
-  security.non-root="true" \
+LABEL org.dollhousemcp.memory-upgrade-drain="v1"
+LABEL security.non-root="true" \
       security.no-new-privileges="true" \
       security.read-only-root="true" \
       build.strategy="prebuilt" \

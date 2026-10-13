@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
 import { Memory } from '../../../../src/elements/memories/Memory.js';
+import { BackgroundValidator } from '../../../../src/security/validation/BackgroundValidator.js';
+import type { PatternExtractor } from '../../../../src/security/validation/PatternExtractor.js';
+import { TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
 import { MemoryUpgradeLifecycle } from '../../../../src/lifecycle/MemoryUpgradeLifecycle.js';
 import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
@@ -39,6 +42,28 @@ async function owned(body: (manager: MemoryManager, lifecycle: MemoryUpgradeLife
 }
 
 describe('Memory manager upgrade obligations', () => {
+  it('retains a background-validation candidate across disposal refusal and retries its exact known prewrite failure', () => owned(async (manager, lifecycle, memory) => {
+    await memory.addEntry('Ordinary benign text');
+    await manager.save(memory);
+    jest.spyOn(manager, 'list').mockResolvedValue([memory]);
+    const validator = new BackgroundValidator({} as PatternExtractor, manager, { enabled: false }, lifecycle);
+    const known = manager as unknown as { saveMemoryKnown: (...args: unknown[]) => Promise<void> };
+    const original = known.saveMemoryKnown.bind(manager);
+    known.saveMemoryKnown = async () => { throw new Error('Owned prewrite interruption'); };
+    await validator.processUntrustedMemories();
+    expect(memory.getEntriesByTrustLevel(TRUST_LEVELS.VALIDATED)).toHaveLength(1);
+    expect(validator.hasRetainedMemoryWork()).toBe(true);
+    await expect(validator.dispose()).rejects.toThrow('Owned prewrite interruption');
+    expect(() => manager.dispose()).toThrow('retain');
+    known.saveMemoryKnown = original;
+    await lifecycle.quiesceAndDrain();
+    expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, retainedOwners: 0 });
+    const persisted = await manager.load(memory.getFilePath()!);
+    expect(persisted.getEntriesByTrustLevel(TRUST_LEVELS.VALIDATED).map(entry => entry.content)).toEqual(['Ordinary benign text']);
+    expect(persisted.getEntries().size).toBe(1);
+    await validator.dispose();
+  }));
+
   it('pure invalid unacknowledged input does not register an unknown write or block disposal', () => owned(async (manager, lifecycle, memory) => {
     jest.spyOn(memory, 'validate').mockReturnValue({ valid: false, errors: ['Owned invalid candidate'] });
     await expect(manager.save(memory)).rejects.toThrow('Invalid memory');

@@ -108,8 +108,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:'+(process.env.DOLLHOUSE_HTTP_PORT||3000)+'/healthz').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
 
 # Add security labels for container metadata
-LABEL org.dollhousemcp.memory-upgrade-drain="v1" \
-  security.non-root="true" \
+LABEL org.dollhousemcp.memory-upgrade-drain="v1"
+LABEL security.non-root="true" \
       security.no-new-privileges="true" \
       security.read-only-root="true"
 
