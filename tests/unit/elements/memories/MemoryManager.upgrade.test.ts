@@ -1,5 +1,6 @@
 import { jest, describe, it, expect } from '@jest/globals';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import path from 'node:path';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
@@ -9,6 +10,7 @@ import type { PatternExtractor } from '../../../../src/security/validation/Patte
 import { TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
 import { MemoryUpgradeLifecycle } from '../../../../src/lifecycle/MemoryUpgradeLifecycle.js';
 import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
+import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
@@ -42,6 +44,38 @@ async function owned(body: (manager: MemoryManager, lifecycle: MemoryUpgradeLife
 }
 
 describe('Memory manager upgrade obligations', () => {
+  it('fresh file discovery follows each current owner root instead of the root-created storage resolver', () => owned(async (manager, _lifecycle, memory) => {
+    const owner = new AsyncLocalStorage<string>();
+    const internals = manager as unknown as { portfolioManager: PortfolioManager; getCacheNamespace: () => string };
+    const originalDirectory = internals.portfolioManager.getElementDir.bind(internals.portfolioManager);
+    const roots = new Map(['first', 'second'].map(key => [key, path.join(originalDirectory(ElementType.MEMORY), key)]));
+    await Promise.all([...roots.values()].map(root => mkdir(root, { recursive: true })));
+    jest.spyOn(internals.portfolioManager, 'getElementDir').mockImplementation(type =>
+      owner.getStore() && type === ElementType.MEMORY ? roots.get(owner.getStore()!)! : originalDirectory(type));
+    jest.spyOn(internals, 'getCacheNamespace').mockImplementation(() => owner.getStore() ?? 'default');
+    const metadata = createTestMetadataService();
+    try {
+      await Promise.all([...roots.keys()].map(key => owner.run(key, async () => {
+        const original = new Memory({ name: memory.metadata.name, description: 'Separate owned head' }, metadata);
+        await original.addEntry(`${key} original`);
+        await manager.save(original);
+        await manager.runFreshMemoryMutation(original.metadata.name, async fresh => {
+          expect([...fresh.getEntries().values()].map(entry => entry.content)).toEqual([`${key} original`]);
+          await fresh.addEntry(`${key} durable append`);
+          await manager.save(fresh);
+        });
+      })));
+      await Promise.all([...roots.keys()].map(key => owner.run(key, () =>
+        manager.runFreshMemoryMutation(memory.metadata.name, async fresh => {
+          expect([...fresh.getEntries().values()].map(entry => entry.content).sort()).toEqual(
+            [`${key} original`, `${key} durable append`].sort());
+          expect(fresh.getFilePath()).toBeDefined();
+        }))));
+    } finally {
+      jest.restoreAllMocks();
+    }
+  }));
+
   it('retains a background-validation candidate across disposal refusal and retries its exact known prewrite failure', () => owned(async (manager, lifecycle, memory) => {
     await memory.addEntry('Ordinary benign text');
     await manager.save(memory);

@@ -310,7 +310,9 @@ export class BackgroundValidator {
         ? this.memoryUpgrade.runRetainedOwnerContext(this, body => origin(body), () => this.memoryManager.save(memory))
         : this.memoryManager.save(memory);
       try {
-        await retry();
+        // The original pass already owns a live admission lease, including
+        // during quiescence. Context restoration is only for later retries.
+        await this.memoryManager.save(memory);
         this.retainedSaves.delete(memory);
         logger.debug('Memory saved successfully', {
           memoryId: memory.id

@@ -24,7 +24,7 @@ import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer, type ElementSaveOptions } from '../../storage/IStorageLayer.js';
-import type { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _packageLocator = new PackageResourceLocator();
@@ -103,6 +103,10 @@ interface BackupCleanupResult {
 }
 
 type GuardedMemoryRead = Readonly<{memory: Memory; content: string; locator: string; definition?: ParsedMemoryData}>;
+type MemoryWritePhase = 'not-started' | 'started' | 'known-committed';
+interface MemoryWriteAttempt {
+  phase: MemoryWritePhase;
+}
 
 export class MemoryManager extends BaseElementManager<Memory> {
   /**
@@ -642,7 +646,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async saveAfterUpgradePreflight(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
-    const attempt: { phase: 'not-started' | 'started' | 'known-committed' } = { phase: 'not-started' };
+    const attempt: MemoryWriteAttempt = { phase: 'not-started' };
     const write = () => this.saveMemoryKnown(element, filePath, options, attempt);
     if (!this.memoryUpgrade) return write();
     // A definite pure validation refusal is not a started/unknown write.
@@ -722,7 +726,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (this.guardedUpdateAdapter) throw new Error('Guarded mutations require their existing head contract');
     const target = this.upgradeTargetKey();
     return this.memoryUpgrade.runTarget(target, async () => {
-      const summaries = await this.storageLayer.listSummaries({ includePublic: false, preserveDuplicates: true, freshMetadata: true });
+      // The root-created file layer's resolver may have a different context
+      // tracker from this session manager. Pin discovery to the same directory
+      // used by its save/read path, retaining the injected backend and filter.
+      const summaries = this.storageLayer instanceof MemoryStorageLayer
+        ? await this.storageLayer.readFreshSummariesAtDirectory(this.memoriesDir, true)
+        : await this.storageLayer.listSummaries({ includePublic: false, preserveDuplicates: true, freshMetadata: true });
       if (this.upgradeTargetKey() !== target) throw new MemoryDrainRefusedError('Memory owner changed during lookup');
       const matches = summaries.filter(summary => summary.name === name);
       if (matches.length === 0) throw new Error(`Memory '${name}' not found. Use list_elements to see available memories.`);
@@ -751,7 +760,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async saveMemoryKnown(element: Memory, filePath?: string, options?: ElementSaveOptions,
-    attempt?: { phase: 'not-started' | 'started' | 'known-committed' }): Promise<void> {
+    attempt?: MemoryWriteAttempt): Promise<void> {
     if (this.guardedUpdateAdapter) {
       await this.saveGuardedMemory(element, filePath, options, attempt);
       if (attempt) attempt.phase = 'known-committed';
@@ -1022,7 +1031,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions,
-    attempt?: { phase: 'not-started' | 'started' | 'known-committed' }): Promise<void> {
+    attempt?: MemoryWriteAttempt): Promise<void> {
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
     if (options?.expectedIdentity !== undefined || options?.expectedStorageRevision !== undefined || options?.expectedFileSnapshot !== undefined) throw new Error('Caller preconditions are unsupported by the dormant memory adapter');

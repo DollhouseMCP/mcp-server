@@ -28,15 +28,28 @@ if a==['kill','--signal=TERM','${target}']:
 sys.exit(3)
 `);
   const python = process.platform === 'win32' ? 'python' : 'python3';
-  await writeFile(path.join(directory, process.platform === 'win32' ? 'docker.cmd' : 'docker'),
-    process.platform === 'win32'
-      ? `@echo off\r\npython "${dockerFixture}" %*\r\n`
-      : `#!/usr/bin/env python3\nexec(compile(open(${JSON.stringify(dockerFixture)}).read(), ${JSON.stringify(dockerFixture)}, 'exec'))\n`,
-    { mode: 0o700 });
+  // Invoke the fixture directly: Windows .cmd treats the state-format pipes
+  // as shell pipelines and adds children that can outlive the CLI timeout.
+  const launcher = path.join(directory, 'owned-helper-launch.py');
+  await writeFile(launcher, `import runpy,subprocess,sys
+from unittest.mock import patch
+helper,fixture,target=sys.argv[1:]
+original_run=subprocess.run
+python=sys.executable
+def resolve_docker(name):
+ assert name=='docker'
+ return python
+def execute_fixture(args,**kwargs):
+ assert args[0]==python
+ return original_run([python,fixture,*args[1:]],**kwargs)
+sys.argv=[helper,target,'1']
+with patch('shutil.which',side_effect=resolve_docker), patch('subprocess.run',side_effect=execute_fixture):
+ runpy.run_path(helper,run_name='__main__')
+`);
   try {
     const started = Date.now();
-    const child = spawn(python, [helper, target, '1'], {
-      env: { ...process.env, PATH: `${directory}${path.delimiter}${process.env.PATH}`, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
+    const child = spawn(python, [launcher, helper, dockerFixture, target], {
+      env: { ...process.env, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stdout!.resume(); child.stderr!.resume();

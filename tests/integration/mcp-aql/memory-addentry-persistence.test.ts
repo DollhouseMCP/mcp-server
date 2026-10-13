@@ -13,8 +13,9 @@
  * Fixed behavior under test:
  * - addEntry on a >64KB memory succeeds AND the entries reach disk
  * - addEntry that would push a memory past MAX_YAML_SIZE errors and rolls back
- * - after a deferred save failure, the next addEntry retries the save and
- *   surfaces the error instead of silently accepting more entries
+ * - the lifecycle path awaits known persistence before acknowledging an entry
+ * - a definite pre-write failure retains its exact candidate for a known retry
+ * - persistent failure refuses additional entries instead of acknowledging RAM
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
@@ -153,21 +154,26 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(raw).not.toContain('huge-3');
   });
 
-  it('surfaces a failed deferred save on the next addEntry and recovers', async () => {
+  it('refuses the failed save before ACK and recovers its exact retained candidate', async () => {
     await createMemory('flaky-disk-2329');
 
-    expect((await addEntry('flaky-disk-2329', 'first entry before failure')).success).toBe(true);
+    // Interrupt the real known-save body before persistence starts, preserving
+    // the manager's actual runWrite accounting and error classification.
+    const known = memoryManager as unknown as { saveMemoryKnown: (...args: unknown[]) => Promise<void> };
+    const saveSpy = jest.spyOn(known, 'saveMemoryKnown')
+      .mockRejectedValueOnce(new Error('EIO: simulated prewrite disk failure'));
+    const failed = await addEntry('flaky-disk-2329', 'first entry before failure');
+    expect(failed.success).toBe(false);
+    expect(failed.error).toContain('EIO: simulated prewrite disk failure');
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    const retained = saveSpy.mock.calls[0][0];
+    const beforeRecovery = await fs.readFile(await findMemoryFile('flaky-disk-2329'), 'utf-8');
+    expect(beforeRecovery).not.toContain('first entry before failure');
 
-    // Simulate a one-off disk failure on the deferred save.
-    const saveSpy = jest.spyOn(memoryManager, 'save')
-      .mockRejectedValueOnce(new Error('EIO: simulated disk failure'));
-    await mcpAqlHandler.flushPendingSaves();
-    expect(saveSpy).toHaveBeenCalled();
-
-    // Next addEntry must first retry the failed save (succeeds now that the
-    // mock is consumed), then proceed normally.
+    // The next append first persists the exact retained object, then appends.
     const result = await addEntry('flaky-disk-2329', 'second entry after recovery');
     expect(result.success).toBe(true);
+    expect(saveSpy.mock.calls[1][0]).toBe(retained);
 
     await mcpAqlHandler.flushPendingSaves();
     const filePath = await findMemoryFile('flaky-disk-2329');
@@ -176,45 +182,57 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(raw).toContain('second entry after recovery');
   });
 
-  it('does not resurrect a deleted memory from the failure ledger (Codex P2)', async () => {
+  it('does not resurrect a durably acknowledged memory after deletion', async () => {
     await createMemory('doomed-2329');
     expect((await addEntry('doomed-2329', 'entry that will fail to save')).success).toBe(true);
 
-    // Deferred save fails once → failure ledger holds the in-RAM instance.
-    jest.spyOn(memoryManager, 'save')
-      .mockRejectedValueOnce(new Error('EIO: simulated disk failure'));
-    await mcpAqlHandler.flushPendingSaves();
-    jest.restoreAllMocks();
-
-    // Delete the memory — must also drop the ledger entry.
+    // The acknowledged append already reached disk. Its later flush cannot
+    // recreate the deleted head; legacy deferred-ledger deletion is covered
+    // independently by MemorySaveHandler.ledger.test.ts.
     const deleteResult = await mcpAqlHandler.handleDelete({
       operation: 'delete_element',
       params: { element_name: 'doomed-2329', element_type: 'memories' },
     });
     expect(deleteResult.success).toBe(true);
 
-    // A later flush must NOT re-save the retained instance and resurrect the file.
+    // A later flush must NOT resurrect the deleted file.
     await mcpAqlHandler.flushPendingSaves();
     const memoriesDir = path.join(env.testDir, 'memories');
     const files = await fs.readdir(memoriesDir, { recursive: true });
     expect(files.filter(f => String(f).includes('doomed-2329'))).toHaveLength(0);
   });
 
-  it('reports an error when both the deferred save and the retry fail', async () => {
+  it('refuses ACK and further mutation while the definite prewrite save and retry fail', async () => {
     await createMemory('dead-disk-2329');
 
     expect((await addEntry('dead-disk-2329', 'entry before persistent failure')).success).toBe(true);
 
-    // Persistent failure: deferred save fails AND the retry fails.
-    jest.spyOn(memoryManager, 'save')
+    const known = memoryManager as unknown as { saveMemoryKnown: (...args: unknown[]) => Promise<void> };
+    const saveSpy = jest.spyOn(known, 'saveMemoryKnown')
       .mockRejectedValue(new Error('EIO: simulated persistent disk failure'));
-    await mcpAqlHandler.flushPendingSaves();
+    const failed = await addEntry('dead-disk-2329', 'retained candidate before persistent failure');
+    expect(failed.success).toBe(false);
+    expect(failed.error).toContain('EIO: simulated persistent disk failure');
+    const retained = saveSpy.mock.calls[0][0];
 
     const result = await addEntry('dead-disk-2329', 'entry that must be rejected');
     expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error).toContain('NOT saved');
-      expect(result.error).toContain('save failure');
-    }
+    expect(result.error).toContain('NOT saved');
+    expect(result.error).toContain('save failure');
+    expect(saveSpy).toHaveBeenCalledTimes(2);
+    expect(saveSpy.mock.calls[1][0]).toBe(retained);
+    const beforeRecovery = await fs.readFile(await findMemoryFile('dead-disk-2329'), 'utf-8');
+    expect(beforeRecovery).toContain('entry before persistent failure');
+    expect(beforeRecovery).not.toContain('retained candidate before persistent failure');
+    expect(beforeRecovery).not.toContain('entry that must be rejected');
+
+    // Restore known storage, reconcile only the retained candidate, and prove
+    // the rejected later append never entered RAM or the persisted head.
+    saveSpy.mockRestore();
+    await mcpAqlHandler.flushPendingSaves();
+    const recovered = await fs.readFile(await findMemoryFile('dead-disk-2329'), 'utf-8');
+    expect(recovered).toContain('entry before persistent failure');
+    expect(recovered).toContain('retained candidate before persistent failure');
+    expect(recovered).not.toContain('entry that must be rejected');
   });
 });

@@ -19,7 +19,8 @@ Existing guarded delayed/retry refusal remains in force.
 
 The supported hosted update and rollback paths invoke
 `scripts/hosted-graceful-stop.sh FULL_CONTAINER_ID 60` before migrations or
-replacement. The helper requires the qualified image's
+replacement. The deployment host needs Bash, Python 3, and the Docker CLI.
+The helper requires the qualified image's
 `org.dollhousemcp.memory-upgrade-drain=v1` label, sends TERM once, and accepts only
 an observed clean exit. Its deadline bounds Docker commands and retains the old
 container; it never invokes stop/down/remove/KILL/recreate. Do not follow a

@@ -58,6 +58,52 @@ describe('BackgroundValidator', () => {
   });
 
   describe('upgrade retained background work', () => {
+    it('drains a timer-started pass through discovery and save before flushing owners', async () => {
+      jest.useFakeTimers();
+      const lifecycle = new MemoryUpgradeLifecycle();
+      const entry = { id: 'timer-entry', content: 'Ordinary benign text', trustLevel: TRUST_LEVELS.UNTRUSTED };
+      const memory = { id: 'timer-memory', getEntriesByTrustLevel: () => [entry], serialize: () => JSON.stringify(entry) };
+      let releaseDiscovery!: () => void;
+      let releaseSave!: () => void;
+      const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+      const save = new Promise<void>(resolve => { releaseSave = resolve; });
+      mockMemoryManager.list = jest.fn<() => Promise<typeof memory[]>>()
+        .mockResolvedValueOnce([])
+        .mockImplementation(async () => { await discovery; return [memory]; });
+      mockMemoryManager.save = jest.fn(async () => { await save; });
+      const timed = new BackgroundValidator(patternExtractor, mockMemoryManager,
+        { enabled: true, intervalSeconds: 1 }, lifecycle);
+      const flush = jest.spyOn(timed, 'flushPendingSaves');
+      let drain: Promise<void> | undefined;
+      try {
+        timed.start();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(lifecycle.getSummary().admitted).toBe(0);
+        await jest.advanceTimersByTimeAsync(1000);
+        expect(mockMemoryManager.list).toHaveBeenCalledTimes(2);
+        expect(lifecycle.getSummary().admitted).toBe(1);
+        drain = lifecycle.quiesceAndDrain();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(flush).not.toHaveBeenCalled();
+        releaseDiscovery();
+        await jest.advanceTimersByTimeAsync(0);
+        expect(mockMemoryManager.save).toHaveBeenCalledTimes(1);
+        expect(flush).not.toHaveBeenCalled();
+        expect(lifecycle.getSummary()).toMatchObject({ state: 'quiescing', admitted: 1 });
+        releaseSave();
+        await drain;
+        expect(flush).toHaveBeenCalledTimes(1);
+        expect(timed.hasRetainedMemoryWork()).toBe(false);
+        expect(lifecycle.getSummary()).toMatchObject({ state: 'drained', admitted: 0, failedWrites: 0 });
+      } finally {
+        releaseDiscovery();
+        releaseSave();
+        timed.stop();
+        await drain;
+        await timed.dispose();
+      }
+    });
+
     it('restores the original owner context after disposal refusal and releases only a known exact retry', async () => {
       const lifecycle = new MemoryUpgradeLifecycle();
       const ownerContext = new AsyncLocalStorage<string>();

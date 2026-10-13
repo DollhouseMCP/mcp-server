@@ -6,7 +6,7 @@ import time
 
 container = sys.argv[1] if len(sys.argv) > 1 else ''
 seconds = sys.argv[2] if len(sys.argv) > 2 else '60'
-if not re.fullmatch(r'[a-f0-9]{64}', container) or not re.fullmatch(r'[0-9]+', seconds) or not 1 <= int(seconds) <= 3600:
+if not re.fullmatch(r'[a-f0-9]{64}', container) or not re.fullmatch(r'\d+', seconds, flags=re.ASCII) or not 1 <= int(seconds) <= 3600:
     sys.exit('Invalid immutable container ID or graceful-stop deadline')
 deadline = time.monotonic() + int(seconds)
 

@@ -169,7 +169,7 @@ export class MemoryStorageLayer implements IStorageLayer {
   }
 
   async listSummaries(options?: { includePublic?: boolean; preserveDuplicates?: boolean; freshMetadata?: boolean }): Promise<ElementIndexEntry[]> {
-    if (options?.freshMetadata) return this.readFreshSummaries(options.preserveDuplicates === true);
+    if (options?.freshMetadata) return this.readFreshSummariesAtDirectory(this.memoriesDir, options.preserveDuplicates === true);
     // File-mode memories are single-user per installation; includePublic is a
     // no-op here until Step 4.5 delivers the per-user layout + shared/ dir.
     await this.scan();
@@ -177,9 +177,8 @@ export class MemoryStorageLayer implements IStorageLayer {
     return options?.preserveDuplicates ? entries : this.deduplicateByName(entries);
   }
 
-  /** Read-only guarded discovery; no mtime/index authority and no index publication. */
-  private async readFreshSummaries(preserveDuplicates: boolean): Promise<ElementIndexEntry[]> {
-    const dir = this.memoriesDir;
+  /** Internal scoped discovery using the injected backend/filter, without index publication. */
+  async readFreshSummariesAtDirectory(dir: string, preserveDuplicates = false): Promise<ElementIndexEntry[]> {
     const subdirs = await this.discoverSubdirectoriesForDir(dir, true);
     const paths = await this.enumerateYamlFiles(dir, subdirs, true);
     const entries: ElementIndexEntry[] = [];
