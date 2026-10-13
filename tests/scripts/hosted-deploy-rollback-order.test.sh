@@ -38,7 +38,7 @@ if [[ "${1:-}" == "--case" ]]; then
       *) die "unexpected compose command" ;;
     esac
   }
-  wait_for_postgres() {
+  prepare_postgres_before_app_stop() {
     printf 'postgres-ready\n' >> "${EVENTS}"
     [[ "${MODE}" != "readiness-failure" ]]
   }

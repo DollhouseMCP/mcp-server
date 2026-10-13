@@ -69,6 +69,48 @@ wait_for_postgres() {
   return 0
 }
 
+running_service_id() {
+  local service="$1"
+  local selected immutable_id running
+  selected="$(compose ps -q "${service}")" || die "cannot resolve ${service} container"
+  [[ -n "${selected}" ]] || return 0
+  immutable_id="$(docker inspect --format '{{.Id}}' "${selected}")" || die "cannot inspect ${service} identity"
+  running="$(docker inspect --format '{{.State.Running}}' "${immutable_id}")" || die "cannot inspect ${service} running state"
+  [[ "${immutable_id}" =~ ^[a-f0-9]{64}$ ]] || die "invalid ${service} container identity"
+  [[ "${running}" == true || "${running}" == false ]] || die "invalid ${service} running state"
+  [[ "${running}" == true ]] || return 0
+  printf '%s\n' "${immutable_id}"
+}
+
+wait_for_running_postgres() {
+  local immutable_id="$1"
+  local elapsed=0 selected_id
+  validate_postgres_timeout
+  log "waiting for the existing postgres container without recreating it"
+  until docker exec "${immutable_id}" pg_isready -U dollhouse -d dollhousemcp >/dev/null 2>&1; do
+    if (( elapsed >= POSTGRES_READY_TIMEOUT )); then
+      die "existing postgres did not become ready within ${POSTGRES_READY_TIMEOUT}s"
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  selected_id="$(running_service_id postgres)" || die "cannot recheck postgres identity"
+  [[ "${selected_id}" == "${immutable_id}" ]] || die "selected postgres identity changed during preparation"
+}
+
+prepare_postgres_before_app_stop() {
+  local postgres_id app_id
+  postgres_id="$(running_service_id postgres)" || die "cannot resolve running postgres"
+  if [[ -n "${postgres_id}" ]]; then
+    wait_for_running_postgres "${postgres_id}"
+    return 0
+  fi
+  app_id="$(running_service_id dollhousemcp)" || die "cannot resolve running application"
+  [[ -z "${app_id}" ]] || die "running application has no running postgres; refusing database recreation"
+  # Only an install/recovery with no running application may start PostgreSQL.
+  wait_for_postgres
+}
+
 build_app_image() {
   log "building dollhousemcp image"
   compose build dollhousemcp dollhousemcp-migrate
@@ -96,7 +138,6 @@ refresh_caddy_image() {
 }
 
 restart_caddy_proxy() {
-  refresh_caddy_image
   log "refreshing caddy proxy"
   compose up -d --no-deps --force-recreate caddy
 
@@ -167,17 +208,21 @@ start_or_update() {
   render_files
   stage_source
   build_app_image
+  prepare_postgres_before_app_stop
+  refresh_caddy_image
   gracefully_stop_existing_app
-  wait_for_postgres
+  # Schema and identity writes require the successful drain fence. Failure here
+  # leaves the app stopped; old-image restart needs a compatible recovery plan.
   run_database_migrations
   run_bootstrap_admin optional
   if [[ "${service}" == "app" ]]; then
     compose up -d dollhousemcp
     restart_caddy_proxy
   else
-    refresh_caddy_image
     compose up -d
   fi
+  printf '%s\n' "${STAGED_REVISION}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
 
   return 0
 }
@@ -320,7 +365,7 @@ rollback_server() {
   fi
 
   build_app_image
-  wait_for_postgres
+  prepare_postgres_before_app_stop
   refresh_caddy_image
   # Prepare the selected rollback bundle and images while the current app is
   # healthy. A failed move/build/pull must not create an avoidable outage.

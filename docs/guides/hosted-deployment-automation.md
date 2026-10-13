@@ -479,6 +479,12 @@ Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, en
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- update
 ```
 
+Both `install` and `update` build the app and pull Caddy before stopping an existing app. Preparation checks the immutable running PostgreSQL container without recreating it and rechecks that Compose still selects the same container. A running app with absent or stopped PostgreSQL refuses preparation; PostgreSQL may be initialized only when no app is running. Readiness is an availability check, not an authentication or grant test.
+
+The non-force graceful-stop fence precedes migrations, grants, and optional admin bootstrap. Those writes cannot safely run alongside an old app without a separately established compatibility contract. Migration, grant, or bootstrap failure leaves the app stopped. Replacement or proxy failure can leave a partially replaced stack; inspect its actual state before deliberate recovery from a compatible image and database point. The helper does not automatically restart the old app against a possibly changed schema. Keep ingress closed during recovery and verify the selected recovery state before reopening it.
+
+Deployed revision and time markers are recorded only after replacement succeeds. Failed preparation or drain refusal can leave the prepared source and image tag different from the healthy running image, with the prior bundle retained under `server.prev-*`. A post-drain failure can likewise leave prepared source with the old markers; neither state is a completed update or proof that the source pointer was restored. The subsequent health verification remains a separate step.
+
 ### `migrate`
 
 Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Postgres, and runs:
@@ -510,6 +516,8 @@ Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub 
 ### `rollback`
 
 Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, waits for PostgreSQL, and refreshes the pinned Caddy proxy image while the current app remains running. Only after that preparation succeeds does it require the non-force graceful-stop fence and replace `dollhousemcp` and Caddy, then verify:
+
+The shared PostgreSQL preparation checks the pinned running container without recreation and refuses if a running app has no running PostgreSQL. It may start PostgreSQL only when no app is running.
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
