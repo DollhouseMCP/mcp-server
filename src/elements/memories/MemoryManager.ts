@@ -683,7 +683,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
   /** Publish only known persisted state and transfer its refreshed read authority. */
   publishUnacknowledgedAppend(candidate: Memory, source: Memory, before: MemoryAppendSnapshot, entry: MemoryEntry): boolean {
     if (!this.memoryUpgrade || this.guardedUpdateAdapter) throw new MemoryDrainRefusedError();
-    if (candidate.getFilePath() !== source.getFilePath()) {
+    const savedLocator = candidate.getFilePath();
+    const sourceLocator = source.getFilePath();
+    if (!this.sameAppendStorageLocator(savedLocator, sourceLocator)) {
       throw new MemoryWriteOutcomeError('known-committed', new Error('Saved append locator changed; retain the original and persisted candidate for explicit reconciliation'));
     }
     const previousName = source.metadata.name;
@@ -692,6 +694,13 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const saved = this.upgradeLoadedSnapshots.get(candidate);
     if (saved) this.upgradeLoadedSnapshots.set(source, saved);
     return true;
+  }
+
+  private sameAppendStorageLocator(saved: string | undefined, source: string | undefined): boolean {
+    if (saved === undefined || source === undefined) return false;
+    if (isWritableStorageLayer(this.storageLayer)) return saved === source;
+    // Discovery uses forward slashes; file persistence records native separators.
+    return path.normalize(saved) === path.normalize(source);
   }
 
   private async saveAfterUpgradePreflight(element: Memory, filePath?: string, options?: ElementSaveOptions,

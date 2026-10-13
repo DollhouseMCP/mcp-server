@@ -116,6 +116,54 @@ describe('Memory manager upgrade obligations', () => {
     });
   }));
 
+  it('publishes a same-file relative alias and transfers authority for the next durable append', () => owned(async (manager, _lifecycle, memory) => {
+    await memory.addEntry('Baseline retained');
+    await manager.save(memory);
+    const ids: string[] = [];
+    await manager.runFreshMemoryMutation(memory.metadata.name, async source => {
+      source.setFilePath(`.${path.sep}${source.getFilePath()!}`);
+      for (const content of ['Alias durable append', 'Next durable append']) {
+        const before = source.captureAppendState();
+        const candidate = source.createAppendCandidate();
+        const entry = await candidate.addEntry(content);
+        await manager.saveUnacknowledgedAppend(candidate, source);
+        expect(candidate.getFilePath()).not.toBe(source.getFilePath());
+        expect(path.normalize(candidate.getFilePath()!)).toBe(path.normalize(source.getFilePath()!));
+        expect(manager.publishUnacknowledgedAppend(candidate, source, before, entry)).toBe(true);
+        ids.push(entry.id);
+      }
+    });
+    await manager.runFreshMemoryMutation(memory.metadata.name, async fresh => {
+      expect([...fresh.getEntries().values()].map(entry => entry.content)).toEqual(
+        ['Baseline retained', 'Alias durable append', 'Next durable append']);
+      for (const id of ids) expect([...fresh.getEntries().values()].filter(entry => entry.id === id)).toHaveLength(1);
+    });
+  }));
+
+  it('refuses normalized aliases for database locators before publishing any staged entry', () => owned(async (manager, _lifecycle, memory) => {
+    await memory.addEntry('Baseline retained');
+    const sourceLocator = '12345678-1234-1234-1234-123456789abc';
+    memory.setFilePath(sourceLocator);
+    const internals = manager as unknown as { storageLayer: { writeContent?: () => Promise<void> } };
+    const original = internals.storageLayer;
+    const write = jest.fn(async () => { throw new Error('Database publication guard must not write'); });
+    internals.storageLayer = { writeContent: write };
+    try {
+      const before = memory.captureAppendState();
+      for (const locator of [`.${path.sep}${sourceLocator}`, sourceLocator.toUpperCase(), undefined]) {
+        const candidate = memory.createAppendCandidate();
+        const entry = await candidate.addEntry('Unpublished candidate');
+        if (locator !== undefined) candidate.setFilePath(locator);
+        expect(() => manager.publishUnacknowledgedAppend(candidate, memory, before, entry)).toThrow(expect.objectContaining({
+          outcome: 'known-committed', cause: expect.objectContaining({ message: expect.stringContaining('Saved append locator changed') }),
+        }));
+        expect(memory.captureAppendState()).toEqual(before);
+        expect(memory.getFilePath()).toBe(sourceLocator);
+      }
+      expect(write).not.toHaveBeenCalled();
+    } finally { internals.storageLayer = original; }
+  }));
+
   it('refuses an unacknowledged append if its source changes while the storage path is resolved', () => owned(async (manager, lifecycle, memory) => {
     await memory.addEntry('Baseline retained'); await manager.save(memory);
     await manager.runFreshMemoryMutation(memory.metadata.name, async source => {

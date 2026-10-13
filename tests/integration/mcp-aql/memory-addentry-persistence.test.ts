@@ -14,7 +14,7 @@
  * - addEntry on a >64KB memory succeeds AND the entries reach disk
  * - addEntry that would push a memory past MAX_YAML_SIZE errors and rolls back
  * - the lifecycle path awaits known persistence before acknowledging an entry
- * - a definite pre-write failure retains its exact candidate for a known retry
+ * - an unacknowledged pre-write failure leaves original RAM/disk unchanged
  * - persistent failure refuses additional entries instead of acknowledging RAM
  */
 
@@ -24,6 +24,8 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { MemoryManager } from '../../../src/elements/memories/MemoryManager.js';
 import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
+import { MemoryUpgradeLifecycle } from '../../../src/lifecycle/MemoryUpgradeLifecycle.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -34,6 +36,7 @@ describe('Memory addEntry persistence (#2329)', () => {
   let server: DollhouseMCPServer;
   let mcpAqlHandler: MCPAQLHandler;
   let memoryManager: MemoryManager;
+  let lifecycle: MemoryUpgradeLifecycle;
 
   beforeEach(async () => {
     env = await createPortfolioTestEnvironment('mcp-aql-memory-persistence');
@@ -43,6 +46,7 @@ describe('Memory addEntry persistence (#2329)', () => {
     preConfirmAllOperations(container);
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
     memoryManager = container.resolve<MemoryManager>('MemoryManager');
+    lifecycle = container.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle');
   });
 
   afterEach(async () => {
@@ -154,32 +158,41 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(raw).not.toContain('huge-3');
   });
 
-  it('refuses the failed save before ACK and recovers its exact retained candidate', async () => {
+  it('rejects an unacknowledged prewrite append without publication and persists its caller retry exactly once', async () => {
     await createMemory('flaky-disk-2329');
+    const filePath = await findMemoryFile('flaky-disk-2329');
+    const originalDisk = await fs.readFile(filePath, 'utf-8');
+    const content = 'first entry before failure';
 
     // Interrupt the real known-save body before persistence starts, preserving
-    // the manager's actual runWrite accounting and error classification.
+    // the manager's actual runWrite accounting and outcome classification.
     const known = memoryManager as unknown as { saveMemoryKnown: (...args: unknown[]) => Promise<void> };
     const saveSpy = jest.spyOn(known, 'saveMemoryKnown')
       .mockRejectedValueOnce(new Error('EIO: simulated prewrite disk failure'));
-    const failed = await addEntry('flaky-disk-2329', 'first entry before failure');
-    expect(failed.success).toBe(false);
-    expect(failed.error).toContain('EIO: simulated prewrite disk failure');
+    const attemptSpy = jest.spyOn(memoryManager, 'saveUnacknowledgedAppend');
+    const failed = await addEntry('flaky-disk-2329', content);
+    expect(failed).toMatchObject({ success: false, error: 'EIO: simulated prewrite disk failure' });
+    expect(failed).not.toHaveProperty('data.id');
+    await expect(attemptSpy.mock.results[0].value).rejects.toMatchObject({
+      name: 'MemoryWriteOutcomeError', outcome: 'refused-before-write',
+    });
     expect(saveSpy).toHaveBeenCalledTimes(1);
-    const retained = saveSpy.mock.calls[0][0];
-    const beforeRecovery = await fs.readFile(await findMemoryFile('flaky-disk-2329'), 'utf-8');
-    expect(beforeRecovery).not.toContain('first entry before failure');
+    expect(attemptSpy.mock.calls[0][1].getEntries().size).toBe(0);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe(originalDisk);
+    expect(lifecycle.getSummary()).toMatchObject({ admitted: 0, writes: 0, failedWrites: 0, retainedOwners: 0 });
 
-    // The next append first persists the exact retained object, then appends.
-    const result = await addEntry('flaky-disk-2329', 'second entry after recovery');
+    // A rejected request owns no published entry. An exact caller retry creates
+    // a new quiet candidate and acknowledges only its one known persisted entry.
+    const result = await addEntry('flaky-disk-2329', content);
     expect(result.success).toBe(true);
-    expect(saveSpy.mock.calls[1][0]).toBe(retained);
-
+    expect(saveSpy).toHaveBeenCalledTimes(2);
+    expect(attemptSpy.mock.calls[1][0] === attemptSpy.mock.calls[0][0]).toBe(false);
     await mcpAqlHandler.flushPendingSaves();
-    const filePath = await findMemoryFile('flaky-disk-2329');
-    const raw = await fs.readFile(filePath, 'utf-8');
-    expect(raw).toContain('first entry before failure');
-    expect(raw).toContain('second entry after recovery');
+    expect(saveSpy).toHaveBeenCalledTimes(2); // No rejected candidate is replayed by flush.
+    const persisted = new SerializationService().parsePureYaml(await fs.readFile(filePath, 'utf-8'));
+    expect(persisted.entries).toHaveLength(1);
+    expect(persisted.entries[0]).toMatchObject({ id: (result.data as { id: string }).id, content });
+    expect(lifecycle.getSummary()).toMatchObject({ writes: 0, failedWrites: 0, retainedOwners: 0 });
   });
 
   it('does not resurrect a durably acknowledged memory after deletion', async () => {
@@ -202,37 +215,41 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(files.filter(f => String(f).includes('doomed-2329'))).toHaveLength(0);
   });
 
-  it('refuses ACK and further mutation while the definite prewrite save and retry fail', async () => {
+  it('repeated prewrite refusal leaves only acknowledged RAM/disk state and no accepted append obligation', async () => {
     await createMemory('dead-disk-2329');
-
-    expect((await addEntry('dead-disk-2329', 'entry before persistent failure')).success).toBe(true);
+    const acceptedContent = 'entry before persistent failure';
+    expect((await addEntry('dead-disk-2329', acceptedContent)).success).toBe(true);
+    const filePath = await findMemoryFile('dead-disk-2329');
+    const originalDisk = await fs.readFile(filePath, 'utf-8');
 
     const known = memoryManager as unknown as { saveMemoryKnown: (...args: unknown[]) => Promise<void> };
     const saveSpy = jest.spyOn(known, 'saveMemoryKnown')
       .mockRejectedValue(new Error('EIO: simulated persistent disk failure'));
-    const failed = await addEntry('dead-disk-2329', 'retained candidate before persistent failure');
-    expect(failed.success).toBe(false);
-    expect(failed.error).toContain('EIO: simulated persistent disk failure');
-    const retained = saveSpy.mock.calls[0][0];
-
-    const result = await addEntry('dead-disk-2329', 'entry that must be rejected');
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('NOT saved');
-    expect(result.error).toContain('save failure');
+    const attemptSpy = jest.spyOn(memoryManager, 'saveUnacknowledgedAppend');
+    for (const content of ['candidate before persistent failure', 'entry that must be rejected']) {
+      const result = await addEntry('dead-disk-2329', content);
+      expect(result).toMatchObject({ success: false, error: 'EIO: simulated persistent disk failure' });
+      expect(result).not.toHaveProperty('data.id');
+      const attempt = attemptSpy.mock.results[attemptSpy.mock.results.length - 1];
+      await expect(attempt.value).rejects.toMatchObject({
+        name: 'MemoryWriteOutcomeError', outcome: 'refused-before-write',
+      });
+      const source = attemptSpy.mock.calls[attemptSpy.mock.calls.length - 1][1];
+      expect([...source.getEntries().values()].map(entry => entry.content)).toEqual([acceptedContent]);
+      expect(await fs.readFile(filePath, 'utf-8')).toBe(originalDisk);
+      expect(lifecycle.getSummary()).toMatchObject({ admitted: 0, writes: 0, failedWrites: 0, retainedOwners: 0 });
+    }
     expect(saveSpy).toHaveBeenCalledTimes(2);
-    expect(saveSpy.mock.calls[1][0]).toBe(retained);
-    const beforeRecovery = await fs.readFile(await findMemoryFile('dead-disk-2329'), 'utf-8');
-    expect(beforeRecovery).toContain('entry before persistent failure');
-    expect(beforeRecovery).not.toContain('retained candidate before persistent failure');
-    expect(beforeRecovery).not.toContain('entry that must be rejected');
+    expect(attemptSpy.mock.calls[1][0] === attemptSpy.mock.calls[0][0]).toBe(false);
 
-    // Restore known storage, reconcile only the retained candidate, and prove
-    // the rejected later append never entered RAM or the persisted head.
+    // Restoring storage and flushing cannot invent acceptance for either failed
+    // request. Only the previously acknowledged entry remains durable.
     saveSpy.mockRestore();
     await mcpAqlHandler.flushPendingSaves();
-    const recovered = await fs.readFile(await findMemoryFile('dead-disk-2329'), 'utf-8');
-    expect(recovered).toContain('entry before persistent failure');
-    expect(recovered).toContain('retained candidate before persistent failure');
-    expect(recovered).not.toContain('entry that must be rejected');
+    expect(attemptSpy).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe(originalDisk);
+    const persisted = new SerializationService().parsePureYaml(originalDisk);
+    expect(persisted.entries.map((entry: { content: string }) => entry.content)).toEqual([acceptedContent]);
+    expect(lifecycle.getSummary()).toMatchObject({ writes: 0, failedWrites: 0, retainedOwners: 0 });
   });
 });
