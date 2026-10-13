@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const helper = fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py', import.meta.url));
 const target = 'a'.repeat(64);
 
-const helperPhases = new Set(['launcher-enter', 'stdlib-ready', 'patch-import-ready', 'helper-enter',
+const helperPhases = new Set(['launcher-enter', 'stdlib-ready', 'adapter-ready', 'helper-enter',
   'command-start', 'command-end', 'command-timeout', 'command-os-error', 'command-error']);
 type HelperPhase = { phase: string; elapsedMs: number };
 
@@ -75,12 +75,11 @@ started=time.monotonic()
 def emit(phase):
  print('OWNED_HELPER_PHASE '+json.dumps({'phase':phase,'elapsedMs':round((time.monotonic()-started)*1000,3)}),file=sys.stderr,flush=True)
 emit('launcher-enter')
-import runpy,subprocess
+import runpy,subprocess,shutil
 emit('stdlib-ready')
-from unittest.mock import patch
-emit('patch-import-ready')
 helper,fixture,target=sys.argv[1:]
 original_run=subprocess.run
+original_which=shutil.which
 python=sys.executable
 def resolve_docker(name):
  assert name=='docker'
@@ -97,9 +96,15 @@ def execute_fixture(args,**kwargs):
   emit('command-error'); raise
  finally: emit('command-end')
 sys.argv=[helper,target,'1']
-with patch('shutil.which',side_effect=resolve_docker), patch('subprocess.run',side_effect=execute_fixture):
+try:
+ shutil.which=resolve_docker
+ subprocess.run=execute_fixture
+ emit('adapter-ready')
  emit('helper-enter')
  runpy.run_path(helper,run_name='__main__')
+finally:
+ shutil.which=original_which
+ subprocess.run=original_run
 `);
   let observationReport: Promise<void> | undefined;
   try {

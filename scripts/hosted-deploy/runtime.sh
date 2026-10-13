@@ -96,6 +96,7 @@ wait_for_running_postgres() {
   done
   selected_id="$(running_service_id postgres)" || die "cannot recheck postgres identity"
   [[ "${selected_id}" == "${immutable_id}" ]] || die "selected postgres identity changed during preparation"
+  return 0
 }
 
 prepare_postgres_before_app_stop() {

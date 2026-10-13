@@ -60,10 +60,12 @@ if [[ "${1:-}" == --case ]]; then
     fi
   }
   compose() {
+    local operation="$1"
     printf 'compose:%s\n' "$*" >> "${EVENTS}"
-    case "$1" in
+    case "${operation}" in
       ps)
-        if [[ "$3" == postgres ]]; then selected_postgres
+        local service="$3"
+        if [[ "${service}" == postgres ]]; then selected_postgres
         elif [[ "${MODE}" != fresh-install ]]; then printf '%s\n' "${APP_ID}"
         fi
         ;;
@@ -82,14 +84,18 @@ if [[ "${1:-}" == --case ]]; then
     esac
   }
   docker() {
+    local operation="$1"
     printf 'docker:%s\n' "$*" >> "${EVENTS}"
-    if [[ "$1" == inspect ]]; then
+    if [[ "${operation}" == inspect ]]; then
       [[ "${MODE}" != inspect-failure ]] || return 1
-      if [[ "$3" == '{{.Id}}' ]]; then printf '%s\n' "$4"
-      elif [[ "$4" == "${PG_ID}" && "${MODE}" == stopped-pg ]]; then printf 'false\n'
+      local format="$3" inspect_target="$4"
+      if [[ "${format}" == '{{.Id}}' ]]; then printf '%s\n' "${inspect_target}"
+      elif [[ "${inspect_target}" == "${PG_ID}" && "${MODE}" == stopped-pg ]]; then printf 'false\n'
       else printf 'true\n'
       fi
-    elif [[ "$1" == exec && "$2" == "${PG_ID}" ]]; then
+    elif [[ "${operation}" == exec ]]; then
+      local exec_target="$2"
+      [[ "${exec_target}" == "${PG_ID}" ]] || die "unexpected docker operation"
       [[ "${MODE}" != readiness-failure ]] || return 1
       if [[ "${MODE}" == identity-change ]]; then touch "${DEPLOY_DIR}/selection-changed"; fi
     else die "unexpected docker operation"
