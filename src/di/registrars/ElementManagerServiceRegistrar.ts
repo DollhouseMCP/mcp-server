@@ -287,6 +287,7 @@ export class ElementManagerServiceRegistrar {
         serializationService: container.resolve('SerializationService'),
         metadataService: container.resolve('MetadataService'),
         memoryRetentionPolicyService: container.resolve('RetentionPolicyService'),
+        memoryUpgradeLifecycle: container.resolve('MemoryUpgradeLifecycle'),
         fileWatchService: filesystemWatcher ? container.resolve('FileWatchService') : undefined,
         memoryBudget: container.resolve('CacheMemoryBudget'),
         backupService: container.resolve('BackupService'),

@@ -803,7 +803,8 @@ export class DollhouseMCPServer implements IToolHandler {
         await this.container.dispose();
         logger.info("Cleanup completed");
       } catch (error) {
-        logger.error("Error during cleanup", { error });
+        logger.error("Shutdown refused; process and pending memory work retained", { error });
+        return;
       }
 
       process.exit(0);
@@ -1229,6 +1230,7 @@ export async function startStreamableHttpServer(
     ...resolveWebConsoleHttpMounts(container),
     runtimeSessionControl: runtimeSessionControl?.service,
     registerSignalHandlers: true,
+    memoryUpgradeLifecycle: container.resolve('MemoryUpgradeLifecycle'),
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());
     },

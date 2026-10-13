@@ -3,6 +3,7 @@ import type { Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import type { MemoryUpgradeLifecycle } from '../lifecycle/MemoryUpgradeLifecycle.js';
 import { createStreamableHttpApp, type OnboardingHttpRouters } from './createStreamableHttpApp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -45,6 +46,7 @@ export interface StreamableHttpRuntimeOptions {
   /** Internal, explicitly supplied routers; no environment or registrar enables them here. */
   onboarding?: OnboardingHttpRouters;
   registerSignalHandlers?: boolean;
+  memoryUpgradeLifecycle?: MemoryUpgradeLifecycle;
   rateLimitWindowMs?: number;
   rateLimitMaxRequests?: number;
   sessionIdleTimeoutMs?: number;
@@ -569,7 +571,8 @@ export async function createStreamableHttpRuntime(
     rateLimitedRequests: 0,
   };
   let closingPromise: Promise<void> | null = null;
-  const isShuttingDown = (): boolean => Boolean(closingPromise);
+  const isShuttingDown = (): boolean => Boolean(closingPromise) ||
+    (options.memoryUpgradeLifecycle !== undefined && options.memoryUpgradeLifecycle.getSummary().state !== 'running');
   let replenishPoolPromise: Promise<void> | null = null;
   let runtimeCommandPollTimer: NodeJS.Timeout | null = null;
   let runtimeCommandPollRunning = false;
@@ -642,7 +645,7 @@ export async function createStreamableHttpRuntime(
   };
 
   const pollRuntimeCommands = async (): Promise<void> => {
-    if (!options.runtimeSessionControl || runtimeCommandPollRunning || closingPromise) return;
+    if (!options.runtimeSessionControl || runtimeCommandPollRunning || isShuttingDown()) return;
     runtimeCommandPollRunning = true;
     try {
       await options.runtimeSessionControl.reconcilePendingCommands({
@@ -750,7 +753,7 @@ export async function createStreamableHttpRuntime(
   };
 
   const maintainSessionPool = async (): Promise<void> => {
-    if (sessionPoolSize <= 0 || closingPromise || replenishPoolPromise) {
+    if (sessionPoolSize <= 0 || isShuttingDown() || replenishPoolPromise) {
       return;
     }
 
@@ -978,7 +981,7 @@ export async function createStreamableHttpRuntime(
   }
 
   app.post(mcpPath, async (req, res) => {
-    if (closingPromise) {
+    if (isShuttingDown()) {
       respondWithJsonRpcError(res, 503, 'Server shutting down', getRequestId(req));
       return;
     }
@@ -1067,7 +1070,7 @@ export async function createStreamableHttpRuntime(
     res: Response,
     methodName: 'GET' | 'DELETE',
   ): Promise<void> => {
-    if (closingPromise) {
+    if (isShuttingDown()) {
       respondWithJsonRpcError(res, 503, 'Server shutting down');
       return;
     }
@@ -1164,6 +1167,8 @@ export async function createStreamableHttpRuntime(
     }
 
     closingPromise = (async () => {
+      // Refusal retains sessions, transports and storage; no destructive close precedes drain.
+      await options.memoryUpgradeLifecycle?.quiesceAndDrain();
       // Wait for any in-flight pool replenishment to finish.
       // closingPromise is set before this await, so maintainSessionPool()'s
       // while-loop guard (!closingPromise) will stop the loop from continuing
@@ -1188,7 +1193,12 @@ export async function createStreamableHttpRuntime(
       }
 
       await closeHttpServer(httpServer);
-    })();
+    })().catch(error => {
+      // Retry may settle the exact retained work after infrastructure recovers;
+      // lifecycle admission remains closed throughout the refused attempt.
+      closingPromise = null;
+      throw error;
+    });
 
     return closingPromise;
   };
@@ -1200,8 +1210,7 @@ export async function createStreamableHttpRuntime(
       void shutdown()
         .then(() => process.exit(0))
         .catch((error) => {
-          console.error('[DollhouseMCP] Streamable HTTP shutdown failed:', error);
-          process.exit(1);
+          console.error('[DollhouseMCP] Shutdown refused; process and memory retained:', error);
         });
     };
 

@@ -118,6 +118,10 @@ export function problemInputFromHandlerBody(body: unknown, status: number): Cons
 }
 
 export function problemForConsoleError(error: unknown): ConsoleProblemInput | null {
+  if (error instanceof Error && 'code' in error && error.code === 'EMEMORYDRAIN') {
+    return { status: 503, code: 'server_quiescing', title: 'Service unavailable',
+      detail: 'The server is draining; this request was not admitted. Reconnect after the upgrade.' };
+  }
   if (isRetryableInvitationContention(error)) {
     return { status: 503, code: 'invitation_busy', title: 'Service unavailable',
       detail: 'Invitation creation is temporarily busy. Retry this request.' };

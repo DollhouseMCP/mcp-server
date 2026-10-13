@@ -1,3 +1,4 @@
+import { MemoryDrainRefusedError, MemoryWriteOutcomeError } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import { MEMORY_SECURITY_EVENTS } from '../../elements/memories/constants.js';
 import { STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -66,6 +67,7 @@ export interface GuardedMutationPending {
 export class MemorySaveHandler {
   /** Serialize append validation and clear for the same in-process Memory object. */
   private static readonly mutationTails = new WeakMap<Memory, Promise<void>>();
+  private readonly startedMutations = new Set<Promise<unknown>>();
   private readonly guardedMutations = new Map<string, GuardedMutationPending>();
   private deferredSavesRefused = false;
   private readonly pendingSaves = new Map<string, PendingSave>();
@@ -87,9 +89,18 @@ export class MemorySaveHandler {
     private readonly sessionKey: (name: string) => string,
     private readonly contextScope?: SaveContextScope,
     private readonly requiresOriginBinding = false,
-  ) {}
+  ) {
+    this.handlers.memoryUpgradeLifecycle?.registerOwner(this);
+  }
 
-  async dispatch(method: string, params: Record<string, unknown>, bindingCheck?: () => void): Promise<unknown> {
+  dispatch(method: string, params: Record<string, unknown>, bindingCheck?: () => void): Promise<unknown> {
+    const mutation = Promise.resolve().then(() => this.dispatchKnown(method, params, bindingCheck));
+    this.startedMutations.add(mutation);
+    void mutation.then(() => this.startedMutations.delete(mutation), () => this.startedMutations.delete(mutation));
+    return mutation;
+  }
+
+  private async dispatchKnown(method: string, params: Record<string, unknown>, bindingCheck?: () => void): Promise<unknown> {
     const origin: SaveOrigin = { context: this.contextScope?.getContext?.(), bindingCheck };
     this.checkOrigin(origin);
     const manager = this.handlers.memoryManager;
@@ -106,20 +117,19 @@ export class MemorySaveHandler {
     }
     this.requireLegacyDeferred(manager);
 
+    const execute = async (memory: Memory): Promise<unknown> => {
+      this.checkOrigin(origin);
+      switch (method) {
+        case 'addEntry': return this.addEntry(memoryName, memory, manager, params, origin);
+        case 'clear': return this.clear(memoryName, memory, manager, origin);
+        default: throw new Error(`Unknown Memory method: ${method}`);
+      }
+    };
+    if (this.handlers.memoryUpgradeLifecycle) return manager.runFreshMemoryMutation(memoryName, execute);
     const memory = await manager.find(m => m.metadata.name === memoryName);
     this.checkOrigin(origin);
-    if (!memory) {
-      throw new Error(`Memory '${memoryName}' not found. Use list_elements to see available memories.`);
-    }
-
-    switch (method) {
-      case 'addEntry':
-        return this.addEntry(memoryName, memory, manager, params, origin);
-      case 'clear':
-        return this.clear(memoryName, memory, manager, origin);
-      default:
-        throw new Error(`Unknown Memory method: ${method}`);
-    }
+    if (!memory) throw new Error(`Memory '${memoryName}' not found. Use list_elements to see available memories.`);
+    return execute(memory);
   }
 
   private checkOrigin(origin: SaveOrigin): void {
@@ -323,8 +333,15 @@ export class MemorySaveHandler {
     this.deleteByPrefix(this.saveFrequencyCounters, prefix);
   }
 
+  hasRetainedMemoryWork(): boolean {
+    return this.startedMutations.size > 0 || this.pendingSaves.size > 0 || this.failedMemorySaves.size > 0 || this.guardedMutations.size > 0;
+  }
+
   async dispose(): Promise<void> {
+    await Promise.allSettled([...this.startedMutations]);
     await this.flushPendingSaves();
+    if (this.hasRetainedMemoryWork()) throw new Error('Memory owner remains retained; disposal refused');
+    this.handlers.memoryUpgradeLifecycle?.releaseOwner(this);
   }
 
   /**
@@ -384,7 +401,7 @@ export class MemorySaveHandler {
       this.debounceMetrics.written++;
       return true;
     } catch (err) {
-      if (this.observeDeferredRefusal(manager) || origin.bindingCheck) throw err;
+      if (this.handlers.memoryUpgradeLifecycle || this.observeDeferredRefusal(manager) || origin.bindingCheck) throw err;
       const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
       logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
       return false;
@@ -412,6 +429,8 @@ export class MemorySaveHandler {
   ): Promise<boolean> {
     this.checkOrigin(entry);
     this.requireLegacyDeferred(entry.manager);
+    if (this.handlers.memoryUpgradeLifecycle && entry.error instanceof MemoryWriteOutcomeError &&
+      entry.error.outcome !== 'refused-before-write') throw new MemoryDrainRefusedError('Unknown or committed memory outcome cannot be replayed during drain');
     let confirmedDeleted = false;
     try {
       confirmedDeleted = await entry.manager.isMemoryDeletedAt(entry.probeToken);
@@ -580,7 +599,10 @@ export class MemorySaveHandler {
     }
 
     this.trackSaveFrequency(memoryName);
-    this.debouncedMemorySave(memoryName, targetMemory, manager, origin);
+    if (this.handlers.memoryUpgradeLifecycle) {
+      // A response is never an acknowledgement of only RAM/debounce state.
+      await this.saveMemoryTracked(saveKey, targetMemory, manager, origin);
+    } else this.debouncedMemorySave(memoryName, targetMemory, manager, origin);
     // Issue #2859: removals are never silent. Expired entries and, for memories
     // with onFull 'evict_oldest', the oldest entries can be removed by this add.
     const removedCount = targetMemory.getPolicyRemovedCount() - policyRemovedBefore;

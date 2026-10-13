@@ -150,6 +150,16 @@ bootstrap_admin() {
   return 0
 }
 
+# Resolve and stop only this application's current immutable container.
+# No compose stop/down/recreate may precede this successful fence.
+gracefully_stop_existing_app() {
+  local current_id immutable_id
+  current_id="$(compose ps -q dollhousemcp)"
+  [[ -n "${current_id}" ]] || return 0
+  immutable_id="$(docker inspect --format '{{.Id}}' "${current_id}")"
+  bash "${HOSTED_DEPLOY_SCRIPT_DIR}/hosted-graceful-stop.sh" "${immutable_id}" 60
+}
+
 start_or_update() {
   local service="${1:-all}"
   ensure_prerequisites
@@ -157,6 +167,7 @@ start_or_update() {
   render_files
   stage_source
   build_app_image
+  gracefully_stop_existing_app
   wait_for_postgres
   run_database_migrations
   run_bootstrap_admin optional
@@ -296,6 +307,8 @@ rollback_server() {
   previous="$(latest_previous_bundle)"
   [[ -n "${previous}" ]] || die "no previous server bundle found in ${DEPLOY_DIR}"
   [[ -d "${SERVER_DIR}" ]] || die "no current server bundle found at ${SERVER_DIR}"
+
+  gracefully_stop_existing_app
 
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   current_backup="${DEPLOY_DIR}/server.rollback-from-${timestamp}"

@@ -23,6 +23,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
+import type { MemoryUpgradeLifecycle } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import {
   ContentValidator,
   MALICIOUS_YAML_CONTENT_PATTERN,
@@ -109,9 +110,11 @@ export class BackgroundValidator {
   constructor(
     private readonly patternExtractor: PatternExtractor,
     private readonly memoryManager: any, // MemoryManager - using any to avoid circular import
-    config?: Partial<BackgroundValidatorConfig>
+    config?: Partial<BackgroundValidatorConfig>,
+    private readonly memoryUpgrade?: MemoryUpgradeLifecycle,
   ) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.memoryUpgrade?.registerStopSource(() => this.stop());
     logger.info('BackgroundValidator initialized', {
       enabled: this.config.enabled,
       intervalSeconds: this.config.intervalSeconds,
@@ -164,6 +167,12 @@ export class BackgroundValidator {
    * This is the main background validation loop
    */
   async processUntrustedMemories(): Promise<void> {
+    const process = () => this.processKnownMemories();
+    try { await (this.memoryUpgrade ? this.memoryUpgrade.runRequest(process) : process()); }
+    catch (error) { logger.error('Background memory pass refused during quiescence', { error }); }
+  }
+
+  private async processKnownMemories(): Promise<void> {
     if (this.isProcessing) {
       logger.debug('Validation already in progress, skipping this run');
       return;

@@ -33,6 +33,7 @@ export class ServerServiceRegistrar {
       return new ServerSetup(
         container.resolve<ContextTracker>('ContextTracker'),
         sessionResolver,
+        container.resolve('MemoryUpgradeLifecycle'),
       );
     });
 

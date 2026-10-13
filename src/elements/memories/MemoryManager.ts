@@ -48,6 +48,7 @@ import type { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as crypto from 'node:crypto';
+import { MemoryDrainRefusedError, MemoryWriteOutcomeError } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
@@ -140,6 +141,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   private readonly _localActiveMemoryNames: Set<string> = new Set();
+  private readonly upgradeSaveOperations = new Set<Promise<void>>();
+  private readonly upgradeLoadedSnapshots = new WeakMap<Memory, { path: string; sha256: string; owner: string; root: string }>();
   private readonly loadedMarkdownBodyIds = new WeakMap<Memory, string>();
   // Evidence never changes source/public serialization. Only console preparation
   // grants an override to its candidate and the private persistence copy.
@@ -147,6 +150,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private readonly consoleSerializationNames = new WeakMap<Memory, string>();
 
   private readonly deferredGuardedPublications = new WeakSet<Memory>();
+  private readonly memoryUpgrade?: import('../../lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle;
 
   constructor(deps: ElementManagerDeps, private readonly guardedUpdateAdapter?: MemoryHeadUpdateAdapter) {
     super(
@@ -171,6 +175,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Phase 4.5 follow-up: `memoriesDir` is now a getter that delegates to
     // `this.elementDir`, so no construction-time capture is needed. See the
     // getter declaration above for the rationale.
+    this.memoryUpgrade = deps.memoryUpgradeLifecycle;
+    this.memoryUpgrade?.registerOwner(this);
     this.metadataService = deps.metadataService;
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
@@ -218,6 +224,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Prevents resource leaks and "Jest did not exit" warnings in tests.
    */
   override dispose(): void {
+    if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
+    this.memoryUpgrade?.releaseOwner(this);
     // storageLayer.clear() cancels pending _index.json debounced writes,
     // preventing ENOTEMPTY errors when tests delete temp directories.
     super.dispose();  // Calls BaseElementManager.dispose() — runs storageLayer.clear() + watcher cleanup
@@ -625,8 +633,112 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When path validation fails or file system errors occur
    * @throws {Error} When atomic write operation fails
    */
-  override async save(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
-    if (this.guardedUpdateAdapter) return this.saveGuardedMemory(element, filePath, options);
+  override save(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
+    if (!this.memoryUpgrade) return this.saveMemoryKnown(element, filePath, options);
+    const operation = this.saveAfterUpgradePreflight(element, filePath, options);
+    this.upgradeSaveOperations.add(operation);
+    void operation.then(() => this.upgradeSaveOperations.delete(operation), () => this.upgradeSaveOperations.delete(operation));
+    return operation;
+  }
+
+  private async saveAfterUpgradePreflight(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
+    const attempt: { phase: 'not-started' | 'started' | 'known-committed' } = { phase: 'not-started' };
+    const write = () => this.saveMemoryKnown(element, filePath, options, attempt);
+    if (!this.memoryUpgrade) return write();
+    // A definite pure validation refusal is not a started/unknown write.
+    const validation = element.validate();
+    if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
+    // Capture owner/root before the preflight await.
+    const owner = this.getCurrentUserId?.() ?? 'stdio';
+    const root = this.memoriesDir;
+    await this.assertPersistable(element);
+    if ((this.getCurrentUserId?.() ?? 'stdio') !== owner || this.memoriesDir !== root) throw new MemoryDrainRefusedError('Memory preflight ownership changed');
+    const target = JSON.stringify([isWritableStorageLayer(this.storageLayer) ? 'database' : 'file', owner, root,
+      filePath ?? element.getFilePath() ?? element.metadata.name]);
+    const candidate = element.serialize();
+    return this.memoryUpgrade.runTarget(this.upgradeTargetKey(), async () => {
+      if ((this.getCurrentUserId?.() ?? 'stdio') !== owner || this.memoriesDir !== root) throw new MemoryDrainRefusedError('Memory write ownership changed');
+      const loaded = this.upgradeLoadedSnapshots.get(element);
+      if (!this.guardedUpdateAdapter && loaded) {
+        if (loaded.owner !== owner || loaded.root !== root) throw new MemoryDrainRefusedError('Memory snapshot ownership changed');
+        const current = await this.readUpgradeContent(loaded.path);
+        if (crypto.createHash('sha256').update(current).digest('hex') !== loaded.sha256) {
+          throw Object.assign(new MemoryDrainRefusedError('Memory changed since this candidate was read; retain it without replay'), { code: 'ECONTENTCONFLICT' });
+        }
+      }
+      return this.memoryUpgrade!.runWrite(async () => {
+        try {
+          await write();
+          if (!this.guardedUpdateAdapter && loaded) this.upgradeLoadedSnapshots.set(element, {
+            ...loaded, sha256: crypto.createHash('sha256').update(await this.readUpgradeContent(loaded.path)).digest('hex'),
+          });
+        } catch (cause) {
+          throw new MemoryWriteOutcomeError(attempt.phase === 'not-started' ? 'refused-before-write' :
+            attempt.phase === 'known-committed' ? 'known-committed' : 'unknown', cause);
+        }
+      }, { owner: this, target, scope: this.upgradeTargetKey(), candidate, candidateDigest: crypto.createHash('sha256').update(candidate).digest('hex') });
+    });
+  }
+
+  private async readUpgradeContent(filePath: string): Promise<string> {
+    if (isWritableStorageLayer(this.storageLayer)) return this.storageLayer.readContent(filePath);
+    const fullPath = await this.validateAndResolvePath(filePath);
+    return this.fileOperations.readElementFile(fullPath, ElementType.MEMORY, { source: 'MemoryManager.upgradeSnapshot' });
+  }
+
+  private upgradeTargetKey(): string {
+    return JSON.stringify([isWritableStorageLayer(this.storageLayer) ? 'database' : 'file',
+      this.getCurrentUserId?.() ?? 'stdio', this.memoriesDir]);
+  }
+
+  protected override captureLoadedContent(memory: Memory, content: string, filePath: string): void {
+    if (!this.memoryUpgrade || this.guardedUpdateAdapter) return;
+    this.upgradeLoadedSnapshots.set(memory, { path: filePath,
+      sha256: crypto.createHash('sha256').update(content).digest('hex'),
+      owner: this.getCurrentUserId?.() ?? 'stdio', root: this.memoriesDir });
+  }
+
+  /** Fresh legacy read inside the process fence; never adopts/qualifies a guarded head. */
+  async runFreshMemoryMutation<T>(name: string, mutate: (memory: Memory) => Promise<T>): Promise<T> {
+    if (!this.memoryUpgrade) throw new Error('Memory upgrade lifecycle unavailable');
+    if (this.guardedUpdateAdapter) throw new Error('Guarded mutations require their existing head contract');
+    const target = this.upgradeTargetKey();
+    return this.memoryUpgrade.runTarget(target, async () => {
+      const summaries = await this.storageLayer.listSummaries({ includePublic: false, preserveDuplicates: true, freshMetadata: true });
+      if (this.upgradeTargetKey() !== target) throw new MemoryDrainRefusedError('Memory owner changed during lookup');
+      const matches = summaries.filter(summary => summary.name === name);
+      if (matches.length !== 1 || !matches[0].filePath) throw new MemoryDrainRefusedError('Memory target is missing or ambiguous');
+      const path = matches[0].filePath;
+      const content = await this.readUpgradeContent(path);
+      const memory = await this.hydrateDefinitionFromContent(content, path, { suppressLoadPolicy: true });
+      memory.setFilePath(path);
+      if (this.upgradeTargetKey() !== target) throw new MemoryDrainRefusedError('Memory owner changed during hydration');
+      if (memory.metadata.name !== name) throw new MemoryDrainRefusedError('Memory name changed during hydration');
+      return mutate(memory);
+    });
+  }
+
+  hasRetainedMemoryWork(): boolean {
+    return this.upgradeSaveOperations.size > 0 || (this.memoryUpgrade?.hasRetainedWrites(this) ?? false);
+  }
+
+  async flushPendingSaves(): Promise<void> {
+    // Preflight/FIFO work is retained too, but a definite pre-write rejection
+    // does not become a failed publication obligation.
+    while (this.upgradeSaveOperations.size) await Promise.allSettled([...this.upgradeSaveOperations]);
+    // A manager cannot blindly replay a failed publication. The originating
+    // handler may reconcile its exact candidate through the normal save path.
+    if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
+  }
+
+  private async saveMemoryKnown(element: Memory, filePath?: string, options?: ElementSaveOptions,
+    attempt?: { phase: 'not-started' | 'started' | 'known-committed' }): Promise<void> {
+    if (this.guardedUpdateAdapter) {
+      if (attempt) attempt.phase = 'started';
+      await this.saveGuardedMemory(element, filePath, options);
+      if (attempt) attempt.phase = 'known-committed';
+      return;
+    }
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -680,7 +792,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // MEMORY_SAVE_FAILED is emitted via the onSaveError hook (base class calls it
     // from its transaction rollback). No try/catch wrapper here — that would
     // double-emit alongside base's element:save:error event.
+    if (attempt) attempt.phase = 'started';
     await super.save(element, resolvedRelativePath, options);
+    if (attempt) attempt.phase = 'known-committed';
   }
 
   private async loadGuardedMemory(filePath: string, mode: 'public' | 'mutation' = 'public'): Promise<Memory> {
