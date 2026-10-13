@@ -345,4 +345,6 @@ if PATH="${FAKE_BIN}:${PATH}" \
 fi
 assert_contains "${bad_output}" "DOLLHOUSE_HOSTED_SOURCE_DIR does not exist"
 
+bash "${SCRIPT_DIR}/hosted-deploy-rollback-order.test.sh"
+
 log "workflow behavior passed"

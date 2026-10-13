@@ -114,7 +114,8 @@ dry_run_rollback() {
   else
     log "dry-run: no server.prev-* rollback candidate found yet"
   fi
-  log "dry-run: would rebuild dollhousemcp image and restart dollhousemcp + caddy"
+  log "dry-run: would rebuild dollhousemcp image, wait for postgres, and pull caddy before stopping the current app"
+  log "dry-run: would require successful non-force graceful stop immediately before replacing dollhousemcp + caddy"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
   log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 

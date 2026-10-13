@@ -308,8 +308,6 @@ rollback_server() {
   [[ -n "${previous}" ]] || die "no previous server bundle found in ${DEPLOY_DIR}"
   [[ -d "${SERVER_DIR}" ]] || die "no current server bundle found at ${SERVER_DIR}"
 
-  gracefully_stop_existing_app
-
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   current_backup="${DEPLOY_DIR}/server.rollback-from-${timestamp}"
   previous_name="$(basename "${previous}")"
@@ -321,13 +319,15 @@ rollback_server() {
     die "failed to restore ${previous_name}; current server bundle was restored"
   fi
 
-  printf 'rollback:%s\n' "${previous_name}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
-  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
-
   build_app_image
   wait_for_postgres
   refresh_caddy_image
+  # Prepare the selected rollback bundle and images while the current app is
+  # healthy. A failed move/build/pull must not create an avoidable outage.
+  gracefully_stop_existing_app
   compose up -d dollhousemcp caddy
+  printf 'rollback:%s\n' "${previous_name}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
 
   return 0
 }

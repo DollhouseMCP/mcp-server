@@ -509,13 +509,15 @@ Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub 
 
 ### `rollback`
 
-Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, refreshes the pinned Caddy proxy image, restarts `dollhousemcp` and Caddy, then verifies:
+Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, waits for PostgreSQL, and refreshes the pinned Caddy proxy image while the current app remains running. Only after that preparation succeeds does it require the non-force graceful-stop fence and replace `dollhousemcp` and Caddy, then verify:
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
 ```
 
 Rollback restores the application source bundle only. It does not roll database schema backward; use it for ordinary failed app deploys, not for a migration that requires a planned database restore.
+
+A preparation failure leaves the running app and deployed revision/timestamp markers in place; `server` and image tags may already contain the prepared rollback candidate, while `server.rollback-from-*` retains the current source. The prepared source/tag may therefore differ from the running image; this is not a completed rollback or a restored active source pointer. Use the retained bundle for source recovery. Deployed markers change only after successful replacement. A drain refusal prevents replacement and retains the old process and its work. No forced stop follows that refusal.
 
 ### `verify`
 
