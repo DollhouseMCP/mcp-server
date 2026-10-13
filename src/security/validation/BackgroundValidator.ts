@@ -318,7 +318,14 @@ export class BackgroundValidator {
           memoryId: memory.id
         });
       } catch (error) {
-        if (this.memoryUpgrade) this.retainedSaves.set(memory, { candidate, error, retry });
+        if (this.memoryUpgrade) this.retainedSaves.set(memory, {
+          // A supported legacy name repair precedes the manager's frozen write
+          // identity. Only definite prewrite failure may retain those normalized
+          // bytes; the manager ledger still refuses any changed retry candidate.
+          candidate: error instanceof MemoryWriteOutcomeError && error.outcome === 'refused-before-write'
+            ? memory.serialize() : candidate,
+          error, retry,
+        });
         logger.error('Failed to save memory after validation', {
           memoryId: memory.id,
           error

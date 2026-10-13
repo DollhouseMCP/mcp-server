@@ -649,6 +649,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const attempt: MemoryWriteAttempt = { phase: 'not-started' };
     const write = () => this.saveMemoryKnown(element, filePath, options, attempt);
     if (!this.memoryUpgrade) return write();
+    if (!this.guardedUpdateAdapter) this.repairLegacySaveName(element);
     // A definite pure validation refusal is not a started/unknown write.
     const validation = element.validate();
     if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
@@ -759,13 +760,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
   }
 
-  private async saveMemoryKnown(element: Memory, filePath?: string, options?: ElementSaveOptions,
-    attempt?: MemoryWriteAttempt): Promise<void> {
-    if (this.guardedUpdateAdapter) {
-      await this.saveGuardedMemory(element, filePath, options, attempt);
-      if (attempt) attempt.phase = 'known-committed';
-      return;
-    }
+  /** Existing legacy repair must precede the frozen retry target and payload. */
+  private repairLegacySaveName(element: Memory): void {
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -783,6 +779,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
         details: `Issue #39: Auto-repaired corrupted backup name: '${memoryName}' -> '${originalName}'`
       });
     }
+  }
+
+  private async saveMemoryKnown(element: Memory, filePath?: string, options?: ElementSaveOptions,
+    attempt?: MemoryWriteAttempt): Promise<void> {
+    if (this.guardedUpdateAdapter) {
+      await this.saveGuardedMemory(element, filePath, options, attempt);
+      if (attempt) attempt.phase = 'known-committed';
+      return;
+    }
+    this.repairLegacySaveName(element);
 
     // Validate element structure before save
     const validation = element.validate();

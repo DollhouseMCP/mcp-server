@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from '@jest/globals';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import path from 'node:path';
@@ -96,6 +96,72 @@ describe('Memory manager upgrade obligations', () => {
     expect(persisted.getEntriesByTrustLevel(TRUST_LEVELS.VALIDATED).map(entry => entry.content)).toEqual(['Ordinary benign text']);
     expect(persisted.getEntries().size).toBe(1);
     await validator.dispose();
+  }));
+
+  it('retries the exact repaired candidate after an injected prewrite directory failure and clears drain', () => owned(async (manager, lifecycle, memory) => {
+    memory.metadata.name = 'Upgrade repaired memory.backup-2025-11-14-22-40-57-303';
+    await memory.addEntry('Preserve the exact repaired entry');
+    const files = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const cause = Object.assign(new Error('Owned date directory failure'), { code: 'EIO' });
+    const create = jest.spyOn(files, 'createDirectory').mockRejectedValueOnce(cause);
+    try {
+      await expect(manager.save(memory)).rejects.toMatchObject({ outcome: 'refused-before-write', cause });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(memory.metadata.name).toBe('Upgrade repaired memory');
+      const repairedCandidate = memory.serialize();
+      expect(lifecycle.getSummary()).toMatchObject({ writes: 0, failedWrites: 1, retainedOwners: 1 });
+      expect(() => manager.dispose()).toThrow('retain');
+      await manager.save(memory);
+      expect(memory.serialize()).toBe(repairedCandidate);
+      expect(lifecycle.getSummary()).toMatchObject({ writes: 0, failedWrites: 0, retainedOwners: 0 });
+      const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+      const raw = new SerializationService().parsePureYaml(await readFile(path.join(root, memory.getFilePath()!), 'utf8'));
+      expect(raw.metadata.name).toBe('Upgrade repaired memory');
+      expect(raw.entries).toHaveLength(1);
+      expect(raw.entries[0]).toMatchObject({ id: [...memory.getEntries().keys()][0], content: 'Preserve the exact repaired entry' });
+      const persisted = await manager.load(memory.getFilePath()!);
+      expect(persisted.metadata.name).toBe('Upgrade repaired memory');
+      expect([...persisted.getEntries().values()].map(entry => entry.content)).toEqual(['Preserve the exact repaired entry']);
+      await lifecycle.quiesceAndDrain();
+      expect(lifecycle.getSummary().state).toBe('drained');
+    } finally { create.mockRestore(); }
+  }));
+
+  it('retains a normalized background candidate through directory failure and known drain retry', () => owned(async (manager, lifecycle, memory) => {
+    memory.metadata.name = 'Background repaired memory.backup-2025-11-14-22-40-57-303';
+    await memory.addEntry('Preserve the validated normalized background entry');
+    jest.spyOn(manager, 'list').mockResolvedValue([memory]);
+    const validator = new BackgroundValidator({} as PatternExtractor, manager, { enabled: false }, lifecycle);
+    const files = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const create = jest.spyOn(files, 'createDirectory').mockRejectedValueOnce(new Error('Owned background directory failure'));
+    try {
+      await validator.processUntrustedMemories();
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(memory.metadata.name).toBe('Background repaired memory');
+      expect(validator.hasRetainedMemoryWork()).toBe(true);
+      expect(lifecycle.getSummary().failedWrites).toBe(1);
+      const originalDescription = memory.metadata.description;
+      memory.metadata.description = 'Changed after the normalized failure snapshot';
+      await expect(validator.flushPendingSaves()).rejects.toThrow('without replay');
+      await expect(manager.save(memory)).rejects.toThrow('without replay');
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(lifecycle.getSummary().failedWrites).toBe(1);
+      memory.metadata.description = originalDescription;
+      await lifecycle.quiesceAndDrain();
+      expect(lifecycle.getSummary()).toMatchObject({ state: 'drained', failedWrites: 0, retainedOwners: 0 });
+      const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+      const raw = new SerializationService().parsePureYaml(await readFile(path.join(root, memory.getFilePath()!), 'utf8'));
+      expect(raw.metadata.name).toBe('Background repaired memory');
+      expect(raw.entries).toHaveLength(1);
+      expect(raw.entries[0]).toMatchObject({ id: [...memory.getEntries().keys()][0],
+        content: 'Preserve the validated normalized background entry', trustLevel: TRUST_LEVELS.VALIDATED });
+      const persisted = await manager.load(memory.getFilePath()!);
+      expect(persisted.metadata.name).toBe('Background repaired memory');
+      expect(persisted.getEntriesByTrustLevel(TRUST_LEVELS.VALIDATED).map(entry => entry.content)).toEqual(
+        ['Preserve the validated normalized background entry']);
+      expect(persisted.getEntries().size).toBe(1);
+      await validator.dispose();
+    } finally { create.mockRestore(); jest.restoreAllMocks(); }
   }));
 
   it('pure invalid unacknowledged input does not register an unknown write or block disposal', () => owned(async (manager, lifecycle, memory) => {
