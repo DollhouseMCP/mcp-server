@@ -25,11 +25,15 @@ replacement. The deployment host needs Bash, Python 3, and the Docker CLI.
 The helper requires the qualified image's
 `org.dollhousemcp.memory-upgrade-drain=v2` label and exactly one opt-in setting,
 `DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR=/app/.memory-upgrade-control`.
-Supported hosted HTTP/stdio containers have a writable root and no mount covering
+Supported hosted Streamable HTTP containers have a writable root and no mount covering
 that private UID1001, mode0700 directory. The admission latch persists in the
 container's writable layer across process/container restart; it is not in tmpfs
 or the customer portfolio. Read-only roots, covering mounts, invalid opt-in
-settings and unsupported images refuse. The web mode is not a qualified drain path.
+settings and unsupported images refuse. Opting into this control in stdio or standalone --web mode refuses startup before
+the private channel or normal owner graph is created. Standard non-opted stdio
+keeps its existing startup behavior; its retry and deferred-setup drain contract
+is not qualified by this change. Future stdio support is tracked in
+[#3056](https://github.com/DollhouseMCP/mcp-server/issues/3056).
 
 The helper requests drain through the private Unix operator channel and requires
 a bounded nonce/boot/generation-bound known-drained acknowledgement before its

@@ -905,7 +905,6 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     const container = createProcessContainer();
     const server = new DollhouseMCPServer(container);
     await server.run();
-    memoryUpgradeOperator?.enableOriginalDrain();
   } catch (error) {
     if (retriesLeft > 0 && (isNpxExecution || isCliExecution)) {
       // Try again with a longer delay
@@ -1543,10 +1542,16 @@ async function startHttpMode(): Promise<void> {
  * and environment, then runs the appropriate async startup function.
  */
 async function main(): Promise<void> {
-  // Hosted opt-in only. Any persisted hold is inspected before normal roots,
+  // Hosted Streamable HTTP opt-in only. Reject unsupported modes before control I/O.
+  // Any persisted hold is inspected before normal roots,
   // portfolio/bootstrap, backgrounds or public transports can be constructed.
+  const isWebMode = process.argv.includes('--web');
+  const transportName = getRequestedTransportName();
   const controlDirectory = process.env.DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR;
   if (controlDirectory) {
+    if (isWebMode || transportName !== 'streamable-http') {
+      throw new Error('Memory upgrade control requires streamable HTTP mode; stdio and --web are unsupported');
+    }
     memoryUpgradeOperator = await MemoryUpgradeOperator.prepare(controlDirectory);
     await memoryUpgradeOperator.listen();
     if (memoryUpgradeOperator.controlOnly) {
@@ -1560,8 +1565,6 @@ async function main(): Promise<void> {
       return;
     }
   }
-  const isWebMode = process.argv.includes('--web');
-
   if (isWebMode) {
     if (!env.DOLLHOUSE_DEBUG && !env.ENABLE_DEBUG) {
       logger.setMinLevel('error');
@@ -1569,7 +1572,7 @@ async function main(): Promise<void> {
     return startWebStandaloneMode();
   }
 
-  if (getRequestedTransportName() === 'streamable-http') {
+  if (transportName === 'streamable-http') {
     return startHttpMode();
   }
 

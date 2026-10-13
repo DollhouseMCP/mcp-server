@@ -14,6 +14,16 @@ function validHello(response: Record<string, unknown>, nonce: string): response 
     exactKeys(response, ['bootId', 'nonce', 'phase', 'protocol']);
 }
 
+function acceptHello(socket: net.Socket, response: Record<string, unknown>, nonce: string,
+  containerId: string, deadline: number): string {
+  if (!validHello(response, nonce)) throw new Error('Invalid memory drain hello');
+  const bootId = response.bootId;
+  const budget = Math.min(deadline - Date.now(), 30_000);
+  if (budget <= 0) throw new Error('Memory drain client deadline');
+  socket.write(`${JSON.stringify({ protocol: 2, phase: 'drain', nonce, bootId, containerId, remainingMs: budget })}\n`);
+  return bootId;
+}
+
 function validAcknowledgement(value: unknown, containerId: string, nonce: string, bootId: string): value is MemoryDrainAcknowledgement {
   if (!value || typeof value !== 'object') return false;
   const ack = value as MemoryDrainAcknowledgement;
@@ -49,11 +59,7 @@ export async function requestMemoryDrain(directory: string, containerId: string,
       const response = JSON.parse(pending.slice(0, boundary)) as Record<string, unknown>;
       pending = '';
       if (!bootId) {
-        if (!validHello(response, nonce)) throw new Error('Invalid memory drain hello');
-        bootId = response.bootId;
-        const budget = Math.min(deadline - Date.now(), 30_000);
-        if (budget <= 0) throw new Error('Memory drain client deadline');
-        socket.write(`${JSON.stringify({ protocol: 2, phase: 'drain', nonce, bootId, containerId, remainingMs: budget })}\n`);
+        bootId = acceptHello(socket, response, nonce, containerId, deadline);
       } else {
         if (!validAcknowledgement(response, containerId, nonce, bootId)) throw new Error('Memory drain refused');
         return response;

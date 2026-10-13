@@ -23,7 +23,9 @@ async function waitUntil(condition: () => boolean | Promise<boolean>): Promise<v
 
 async function startup(phase: 'absent' | 'requested' | 'unknown' | 'drained',
   body: (f: { child: ChildProcess; directory: string; control: string; rootAttempts: () => number;
-    closed: () => boolean; stderr: () => string; waitClose: () => Promise<void> }) => Promise<void>): Promise<void> {
+    closed: () => boolean; stderr: () => string; waitClose: () => Promise<void>;
+    initialControlFiles: Record<string, string> }) => Promise<void>,
+  profile?: { args: string[]; transport?: string; unsupported: boolean }): Promise<void> {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'mcs-')));
   await fs.chmod(directory, 0o700);
   const control = path.join(directory, 'c'); await fs.mkdir(control, {mode: 0o700});
@@ -36,6 +38,10 @@ async function startup(phase: 'absent' | 'requested' | 'unknown' | 'drained',
     const record = await state.request(containerId, sourceBootId);
     if (phase === 'drained') await state.markDrained(record);
     if (phase === 'unknown') await fs.unlink(path.join(control, 'state.json'));
+  }
+  const initialControlFiles: Record<string, string> = {};
+  for (const name of await fs.readdir(control)) {
+    initialControlFiles[name] = (await fs.readFile(path.join(control, name))).toString('base64');
   }
   const root = process.cwd();
   const preloader = path.join(directory, 'owned-startup-observer.mjs');
@@ -54,9 +60,13 @@ process.on('message', message => {
 process.channel?.unref();
 process.send?.({event:'observer-ready'});
 `, {mode: 0o600});
-  const child = spawn(process.execPath, ['--import', preloader, path.join(root, 'dist/index.js'), '--http', '--port=0'], {
+  const transport = profile ? profile.transport : 'streamable-http';
+  const transportEnv = transport ? {DOLLHOUSE_TRANSPORT: transport} : {};
+  const child = spawn(process.execPath, ['--import', preloader, path.join(root, 'dist/index.js'), ...(profile?.args ?? ['--http', '--port=0'])], {
     cwd: directory, env: {PATH: process.env.PATH, HOME: directory, NODE_ENV: 'production',
-      DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR: control, DOLLHOUSE_WEB_CONSOLE: 'false',
+      DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR: control,
+      ...transportEnv,
+      npm_command: 'exec', DOLLHOUSE_WEB_CONSOLE: 'false',
       DOLLHOUSE_HTTP_WEB_CONSOLE: 'false', DOLLHOUSE_PORTFOLIO_DIR: path.join(directory, 'portfolio'),
       DOLLHOUSE_LOG_DIR: path.join(directory, 'logs')}, stdio: ['ignore','pipe','pipe','ipc'],
   });
@@ -76,12 +86,12 @@ process.send?.({event:'observer-ready'});
   let failure: unknown;
   try {
     await waitUntil(() => observerReady);
-    if (phase !== 'absent') await waitUntil(async () => {
+    if (phase !== 'absent' && !profile?.unsupported) await waitUntil(async () => {
       if (closed) throw new Error('Owned control-only startup unexpectedly closed');
       try {return (await fs.lstat(path.join(control, 'control.sock'))).isSocket();}
       catch {return false;}
     });
-    await body({child,directory,control,rootAttempts:()=>rootAttempts,closed:()=>closed,stderr:()=>stderr,waitClose});
+    await body({child,directory,control,rootAttempts:()=>rootAttempts,closed:()=>closed,stderr:()=>stderr,waitClose,initialControlFiles});
   } catch (error) {failure = error;}
   finally {
     if (!closed && phase !== 'absent' && rootAttempts === 0 && child.connected) {
@@ -111,6 +121,25 @@ unix('compiled default entrypoint persistent memory hold', () => {
       expect(f.rootAttempts()).toBe(0);
       expect(await fs.readdir(f.directory)).not.toContain('portfolio');
     }), 30000);
+
+  it.each([
+    { name: 'default stdio', args: [], transport: undefined, phase: 'absent' as const },
+    { name: 'seeded stdio', args: [], transport: 'stdio', phase: 'drained' as const },
+    { name: '--web overriding HTTP', args: ['--web', '--http'], transport: 'streamable-http', phase: 'requested' as const },
+  ])('$name opt-in refuses before operator or normal roots', profile => startup(profile.phase, async f => {
+    await f.waitClose();
+    expect(f.child.exitCode).toBe(1); expect(f.child.signalCode).toBeNull();
+    expect(f.stderr()).toContain('Memory upgrade control requires streamable HTTP mode');
+    expect(f.rootAttempts()).toBe(0);
+    expect(await fs.readdir(f.control)).not.toContain('control.sock');
+    expect(await fs.readdir(f.directory)).not.toContain('portfolio');
+    expect((await new MemoryUpgradeControlState(f.control).read()).kind).toBe(profile.phase);
+    const finalControlFiles: Record<string, string> = {};
+    for (const name of await fs.readdir(f.control)) {
+      finalControlFiles[name] = (await fs.readFile(path.join(f.control, name))).toString('base64');
+    }
+    expect(finalControlFiles).toEqual(f.initialControlFiles);
+  }, { ...profile, unsupported: true }), 30000);
 
   it('drained successor exposes inherited closure only and real SIGTERM closes cleanly', () => startup('drained', async f => {
     const ack = await requestMemoryDrain(f.control, containerId, nonce, 1000);
