@@ -17,6 +17,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 import type { ElementCRUDHandler } from '../handlers/ElementCRUDHandler.js';
 import type { SessionResolver } from '../context/SessionContext.js';
+import type { MemoryUpgradeLifecycle } from '../lifecycle/MemoryUpgradeLifecycle.js';
 // ConfigWizardCheck import removed - auto-trigger disabled for v1.8.0
 
 export class ServerSetup {
@@ -30,7 +31,7 @@ export class ServerSetup {
   /** Issue #706 Phase 4: Promise that resolves when deferred setup completes. */
   private deferredSetupPromise: Promise<void> | null = null;
 
-  constructor(contextTracker: ContextTracker, sessionResolver?: SessionResolver) {
+  constructor(contextTracker: ContextTracker, sessionResolver?: SessionResolver, private readonly memoryUpgrade?: MemoryUpgradeLifecycle) {
     this.contextTracker = contextTracker;
     this.sessionResolver = sessionResolver;
     this.toolCache = new LRUCache<Tool[]>({
@@ -168,6 +169,7 @@ export class ServerSetup {
 
   private setupCallToolHandler(server: Server, toolRegistry: ToolRegistry): void {
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const execute = async () => {
       // Issue #706 Phase 4: Hold first request(s) until deferred setup completes
       await this.awaitDeferredSetup();
 
@@ -207,6 +209,8 @@ export class ServerSetup {
           );
         }
       });
+      };
+      return this.memoryUpgrade ? this.memoryUpgrade.runRequest(execute) : execute();
     });
   }
   

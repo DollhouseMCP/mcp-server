@@ -14,6 +14,7 @@ import * as os from 'node:os';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { MemoryUpgradeLifecycle } from '../../../src/lifecycle/MemoryUpgradeLifecycle.js';
 import { MemoryHeadUpdateAdapter } from '../../../src/storage/MemoryHeadUpdateAdapter.js';
 import { FileMemoryOwnerSnapshots } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
@@ -64,7 +65,7 @@ class ObservedManager extends MemoryManager {
   }
 }
 async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolver?: () => string, expired = false,
-  transformSeed?: (raw: string) => string) {
+  transformSeed?: (raw: string) => string, memoryUpgradeLifecycle?: MemoryUpgradeLifecycle) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-central-owned-'));
   const metadataService = new MetadataService();
   const lock = new FileLockManager();
@@ -74,7 +75,7 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
   const deps: ElementManagerDeps = { portfolioManager: new PortfolioManager(files, { baseDir: root }),
     fileLockManager: lock, fileOperationsService: files, serializationService: new SerializationService(),
     metadataService, validationRegistry: new ValidationRegistry(new ValidationService(), new TriggerValidationService(), metadataService),
-    eventDispatcher: new ElementEventDispatcher(), storageLayerFactory: createTestStorageFactory(), getCurrentUserId: currentTenant };
+    eventDispatcher: new ElementEventDispatcher(), storageLayerFactory: createTestStorageFactory(), getCurrentUserId: currentTenant, memoryUpgradeLifecycle };
   const managers: MemoryManager[] = [];
   const ordinary = new MemoryManager(deps); managers.push(ordinary);
   const memory = new Memory({ name: 'Owned memory', description: 'Original description', retentionDays: 36500,
@@ -111,6 +112,37 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
 }
 const posix = process.platform === 'win32' ? describe.skip : describe;
 posix('guarded manager early repair and seed refusal', () => {
+  it('preserves the original ESTALE cause instead of wrapping it as a replay obligation', async () => {
+    const lifecycle = new MemoryUpgradeLifecycle();
+    const f = await fixture({}, undefined, false, undefined, lifecycle);
+    try {
+      const { manager } = f.makeManager();
+      const source = await manager.load('head.yaml');
+      const cause = Object.assign(new Error('Identity changed during save'), { code: 'ESTALE', residual: false });
+      const update = jest.spyOn(f.owners, 'updateOwnedHead').mockRejectedValueOnce(cause);
+      await expect(manager.save(source)).rejects.toBe(cause);
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(manager.getPendingHeadUpdate(source)?.status).toBe('refused');
+      expect(lifecycle.getSummary().failedWrites).toBe(0);
+      await lifecycle.quiesceAndDrain();
+    } finally { await f.cleanup(); }
+  });
+  it('preserves the guarded stale-head code before acceptance without creating a replay or shutdown obligation', async () => {
+    const lifecycle = new MemoryUpgradeLifecycle();
+    const f = await fixture({}, undefined, false, undefined, lifecycle);
+    try {
+      const { manager } = f.makeManager();
+      const stale = await manager.load('head.yaml');
+      const current = await f.owners.readHeadSnapshot('head.yaml');
+      await f.owners.updateOwnedHead(current.token, current.content + '\n');
+      await expect(manager.save(stale)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
+      expect(manager.getPendingHeadUpdate(stale)?.status).toBe('refused');
+      expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, writes: 0 });
+      expect(manager.hasRetainedMemoryWork()).toBe(false);
+      await lifecycle.quiesceAndDrain();
+    } finally { await f.cleanup(); }
+  });
+
   it('refuses repair before discovery, progress, name mutation or persistence', async () => {
     const name = 'memory-one.backup-2025-11-14-10-20-30-456';
     const f = await fixture({}, undefined, false, raw => raw.replace('Owned memory', name));

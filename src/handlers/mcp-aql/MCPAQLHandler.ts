@@ -41,6 +41,7 @@ import { ConfigDispatcher } from './ConfigDispatcher.js';
 import { AgentExecutionHandler } from './AgentExecutionHandler.js';
 import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
 import { GatekeeperHandler } from './GatekeeperHandler.js';
+import type { MemoryUpgradeLifecycle } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import { MemorySaveHandler, type SaveContextScope } from './MemorySaveHandler.js';
 import { buildOperationSummary } from './OperationSummary.js';
 import { applyFieldSelection } from './FieldSelection.js';
@@ -417,6 +418,7 @@ export interface HandlerRegistry {
   performanceMonitor?: PerformanceMonitor;
   // Operation metrics: OperationMetricsTracker for CRUD operation stats
   operationMetricsTracker?: OperationMetricsTracker;
+  memoryUpgradeLifecycle?: MemoryUpgradeLifecycle;
   // Gatekeeper metrics: GatekeeperMetricsTracker for policy enforcement stats
   gatekeeperMetricsTracker?: GatekeeperMetricsTracker;
   // Resilience: DI-managed instances (moved from module-level singletons)

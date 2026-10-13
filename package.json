@@ -180,6 +180,8 @@
     "scripts/pretooluse-gemini.sh",
     "scripts/pretooluse-codex.sh",
     "scripts/hosted-deploy.sh",
+    "scripts/hosted-graceful-stop.sh",
+    "scripts/hosted-graceful-stop.py",
     "scripts/hosted-deploy/*.sh",
     "scripts/hosted-remote-deploy.sh",
     "data/personas/**/*.md",

@@ -46,6 +46,7 @@ const ROOT_ONLY_SERVICES = new Set([
   // Process-wide state holders
   'SecurityMonitor',
   'LifecycleService',
+  'MemoryUpgradeLifecycle',
   'OperationalTelemetry',
   'SecurityTelemetry',
   'RetentionPolicyService',
@@ -110,6 +111,9 @@ export class SessionContainer {
    * DOES NOT dispose parent container services.
    */
   async dispose(): Promise<void> {
+    // Do not close stores/context while this child's memory owner is unresolved.
+    const memoryHandler = this.services.get('mcpAqlHandler')?.instance as { dispose?: () => Promise<void> } | null | undefined;
+    await memoryHandler?.dispose?.();
     await this.disposeSessionServices();
     this.cleanupSharedState();
     logger.debug(`[SessionContainer] Disposed session '${this.sessionId}'`);

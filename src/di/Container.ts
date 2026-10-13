@@ -139,6 +139,7 @@ import {
 import type { OperationMetricsTracker } from '../metrics/OperationMetricsTracker.js';
 import type { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTracker.js';
 import type { LifecycleService } from '../lifecycle/LifecycleService.js';
+import { MemoryUpgradeLifecycle } from '../lifecycle/MemoryUpgradeLifecycle.js';
 import type { WebServerResult } from '../web/server.js';
 import type { RequestHandler } from 'express';
 import type { IUserPathResolver } from '../paths/IUserPathResolver.js';
@@ -207,6 +208,7 @@ const DEFAULT_REGISTER_OPTIONS: RegisterOptions = { singleton: true };
 
 export class DollhouseContainer {
   private readonly services = new Map<string, ServiceRecord>();
+  private readonly memoryUpgradeLifecycle = new MemoryUpgradeLifecycle();
   private personasDir: string | null = null;
   private readonly securityMonitorInstance: SecurityMonitor | null;
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
@@ -225,11 +227,13 @@ export class DollhouseContainer {
       source: 'DollhouseContainer.constructor',
       details: 'Dependency injection container initializing'
     });
+    this.register('MemoryUpgradeLifecycle', () => this.memoryUpgradeLifecycle);
     this.registerServices();
     const securityMonitor = this.services.get('SecurityMonitor')?.instance;
     this.securityMonitorInstance = securityMonitor instanceof SecurityMonitor ? securityMonitor : null;
     // Issue #1948: Register LifecycleService in DI if provided
     if (lifecycleService) {
+      lifecycleService.setMemoryUpgradeLifecycle(this.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle'));
       this.register('LifecycleService', () => lifecycleService);
     }
   }
@@ -1303,6 +1307,7 @@ export class DollhouseContainer {
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
+      memoryUpgradeLifecycle: this.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle'),
       operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
       gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
       circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
@@ -1675,7 +1680,7 @@ export class DollhouseContainer {
       { capabilities }
     ));
     child.register('SessionResolver', () => (() => sessionContext));
-    child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
+    child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver'), this.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle')));
     child.register('ToolRegistry', () => {
       const registry = new ToolRegistry();
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
@@ -1696,11 +1701,8 @@ export class DollhouseContainer {
         // Issue #1948: Child container disposal handles all session cleanup:
         // - Disposes session-scoped services (stores, GatekeeperSession, Server, etc.)
         // - Cleans up activation registry, Gatekeeper registry, MCPAQLHandler session state
-        try {
-          await child.dispose();
-        } finally {
-          this.resolve<SessionContainerRegistry>('SessionContainerRegistry').unregister(sid);
-        }
+        await child.dispose();
+        this.resolve<SessionContainerRegistry>('SessionContainerRegistry').unregister(sid);
       },
     };
   }
@@ -1876,6 +1878,7 @@ export class DollhouseContainer {
       verificationNotifier: this.resolve('VerificationNotifier'),
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
+      memoryUpgradeLifecycle: this.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle'),
       operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
       gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
       circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
@@ -2363,6 +2366,8 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    // Memory obligations must settle before closing any transport or storage.
+    await this.memoryUpgradeLifecycle.quiesceAndDrain();
     try {
     // Close the HTTP server first so the port is freed immediately (#1856)
     try {

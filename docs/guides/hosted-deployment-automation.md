@@ -479,6 +479,24 @@ Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, en
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- update
 ```
 
+Both `install` and `update` build the app and pull Caddy before stopping an existing app. Preparation checks the immutable running PostgreSQL container without recreating it and rechecks that Compose still selects the same container. A running app with absent or stopped PostgreSQL refuses preparation; PostgreSQL may be initialized only when no app is running. Readiness is an availability check, not an authentication or grant test.
+
+The non-force graceful-stop fence precedes migrations, grants, and optional admin bootstrap. Those writes cannot safely run alongside an old app without a separately established compatibility contract. Migration, grant, or bootstrap failure leaves the app stopped. Replacement or proxy failure can leave a partially replaced stack; inspect its actual state before deliberate recovery from a compatible image and database point. The helper does not automatically restart the old app against a possibly changed schema. Keep ingress closed during recovery and verify the selected recovery state before reopening it.
+
+The private control profile supports only the hosted Streamable HTTP transport. Opting in on stdio or standalone `--web` refuses before the private listener or normal owner graph is created; standard non-opted stdio is unchanged. Future stdio qualification is tracked in [#3056](https://github.com/DollhouseMCP/mcp-server/issues/3056).
+
+The fence requires the `org.dollhousemcp.memory-upgrade-drain=v2` image capability and the hosted renderer's explicit `DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR=/app/.memory-upgrade-control` setting. It refuses a read-only container root or any mount covering that directory. This private directory belongs to the container's writable layer, outside temporary and customer portfolio mounts. Read-only HTTP profiles and older images do not acquire this contract automatically.
+
+The operator client first requests a durable, nonce-bound drain acknowledgement from the existing root lifecycle through a private Unix socket. Admission remains closed, and the persisted intent and drain state prevent a restarted process in that same container from accepting new work. Requested, failed, corrupt, or unknown state cannot become a successful drain merely because the restarted process has empty memory. A known drained successor exposes only the closure protocol. Neither state is automatically cleared or reopened.
+
+The helper requires an initially running selected container. An already stopped container cannot supply the live acknowledgement and is refused even if its exit code was zero; it is never automatically started to obtain one.
+
+Only a validated acknowledgement with zero original obligations permits the helper's single Docker TERM. Every failure or deadline before that acknowledgement leaves Docker's restart policy and manual-stop state untouched. After acknowledgement, a close failure still refuses replacement without escalation. The helper never changes the restart policy, sends a forced kill, or exposes a public maintenance endpoint. The existing total and per-command deadlines remain in force; a disconnected client does not cancel or replay original work. These guarantees require both process and Docker-engine qualification; fixture adapter tests alone do not prove restart eligibility.
+
+The unchanged 10-second command cap also applies to the drain client. A drain taking 10–30 seconds can therefore finish after that client has disconnected, while the helper has already refused replacement. Keep the original process alive with admission closed; an explicit later invocation may read its settled, durable acknowledgement without replaying accepted work. Neither a client timeout nor empty successor accounting supplies that acknowledgement.
+
+Deployed revision and time markers are recorded only after replacement succeeds. Failed preparation or drain refusal can leave the prepared source and image tag different from the healthy running image, with the prior bundle retained under `server.prev-*`. A post-drain failure can likewise leave prepared source with the old markers; neither state is a completed update or proof that the source pointer was restored. The subsequent health verification remains a separate step.
+
 ### `migrate`
 
 Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Postgres, and runs:
@@ -509,13 +527,17 @@ Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub 
 
 ### `rollback`
 
-Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, refreshes the pinned Caddy proxy image, restarts `dollhousemcp` and Caddy, then verifies:
+Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, waits for PostgreSQL, and refreshes the pinned Caddy proxy image while the current app remains running. Only after that preparation succeeds does it require the non-force graceful-stop fence and replace `dollhousemcp` and Caddy, then verify:
+
+The shared PostgreSQL preparation checks the pinned running container without recreation and refuses if a running app has no running PostgreSQL. It may start PostgreSQL only when no app is running.
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
 ```
 
 Rollback restores the application source bundle only. It does not roll database schema backward; use it for ordinary failed app deploys, not for a migration that requires a planned database restore.
+
+A preparation failure leaves the running app and deployed revision/timestamp markers in place; `server` and image tags may already contain the prepared rollback candidate, while `server.rollback-from-*` retains the current source. The prepared source/tag may therefore differ from the running image; this is not a completed rollback or a restored active source pointer. Use the retained bundle for source recovery. Deployed markers change only after successful replacement. A drain refusal prevents replacement and retains the old process and its work. No forced stop follows that refusal.
 
 ### `verify`
 

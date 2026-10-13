@@ -449,6 +449,10 @@ export class WebConsoleRegistrar {
     return database ? 'postgres' : 'memory';
   }
 
+  private resolveMemoryUpgradeLifecycle(container: DiContainerFacade) {
+    return container.hasRegistration('MemoryUpgradeLifecycle') ? container.resolve<import('../lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle') : undefined;
+  }
+
   async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
     const onboardingConfiguration = this.cloneOnboardingConfiguration();
     const database = resolveConsoleDatabase(container);
@@ -813,6 +817,7 @@ export class WebConsoleRegistrar {
       },
     });
     const apiV1Mount = createApiV1Mount({
+      memoryUpgradeLifecycle: this.resolveMemoryUpgradeLifecycle(container),
       activationProfile,
       options: this.options,
       registry,
@@ -1180,6 +1185,7 @@ function createApiV1MountState(): Pick<WebConsoleApiV1Mount, 'mounted' | 'markMo
 }
 
 function createApiV1Mount(options: {
+  readonly memoryUpgradeLifecycle?: import('../lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle;
   readonly activationProfile: WebConsoleActivationProfile;
   readonly options: WebConsoleRegistrarOptions;
   readonly registry: ConsoleModuleRegistry;
@@ -1202,6 +1208,7 @@ function createApiV1Mount(options: {
   }
   const consoleOrigin = options.options.consoleOrigin ?? originFromPublicBaseUrl(options.integrationPublicBaseUrl);
   const router = assembleSecuredConsoleRouter(options.registry, {
+    memoryUpgradeLifecycle: options.memoryUpgradeLifecycle,
     sessionStore: options.sessionStore,
     identityResolver: options.identityResolver,
     opaqueValues: options.opaqueValues,

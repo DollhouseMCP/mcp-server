@@ -9,6 +9,7 @@ import { DatabaseMemoryReconciliationInspector } from '../../../src/storage/Data
 import { MemorySaveHandler } from '../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import { ManagerBackedPortfolioElementStore } from '../../../src/web-console/stores/ManagerBackedPortfolioElementStore.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import type { MemoryUpgradeLifecycle } from '../../../src/lifecycle/MemoryUpgradeLifecycle.js';
 import type { Memory } from '../../../src/elements/memories/Memory.js';
 import type { ElementCrudContext } from '../../../src/handlers/element-crud/types.js';
 import { editElement } from '../../../src/handlers/element-crud/editElement.js';
@@ -32,7 +33,7 @@ afterEach(async () => {
     phase(item.name, 'cleanup-end');
   }
 });
-async function fixture(name: string) {
+async function fixture(name: string, expectRetainedDrain = false) {
   phase(name, 'fixture-start'); const f = await makeEquivalentFixture();
   const item: typeof owned[number] = { name, f }; owned.push(item);
   expect(await new DatabaseMemoryReconciliationInspector(f.db, () => f.userId)
@@ -55,7 +56,25 @@ async function fixture(name: string) {
     });
     return factory.createAdmittedMemoryManager.bind(factory);
   });
-  item.dispose = () => root.container.dispose();
+  item.dispose = async () => {
+    if (!expectRetainedDrain) { await root.container.dispose(); return; }
+    const lifecycle = root.container.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle');
+    const before = lifecycle.getSummary();
+    expect(before).toMatchObject({ state: 'running', admitted: 0, writes: 0 });
+    expect(before.failedWrites).toBeGreaterThan(0);
+    expect(before.retainedOwners).toBeGreaterThan(0);
+    const databaseBefore = await f.snapshot();
+    // Only the final disposable-fixture teardown uses a fake clock. Keep the
+    // real refusal and retained candidates; do not leave its keep-alive interval
+    // holding the Jest worker after the generated database is deliberately dropped.
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask', 'Date', 'performance', 'hrtime'] });
+    try {
+      await expect(root.container.dispose()).rejects.toMatchObject({ code: 'EMEMORYDRAIN' });
+      expect(lifecycle.getSummary()).toEqual({ ...before, state: 'refused' });
+      expect(jest.getTimerCount()).toBe(1);
+    } finally { jest.useRealTimers(); }
+    expect(await f.snapshot()).toEqual(databaseBefore);
+  };
   const manager = root.manager(); expect(manager.isGuardedHeadUpdateEnabled()).toBe(true);
   const ordinary = jest.spyOn(layer, 'writeHeadIfCurrent'); const legacy = jest.spyOn(layer, 'writeContent');
   const admitted = jest.spyOn(layer, 'prepareHeadWriteInAdmission');
@@ -150,7 +169,7 @@ required('normal server dormant database foreground composition', () => {
     expect(f.admitted).not.toHaveBeenCalled(); f.done();
   });
   it('refuses changed durable mode and unknown completion without publication or ordinary fallback', async () => {
-    const f = await fixture('mode-and-unknown'); const memory = await f.manager.load(f.memoryId);
+    const f = await fixture('mode-and-unknown', true); const memory = await f.manager.load(f.memoryId);
     await memory.addEntry('Refused read-only update');
     await f.maintenance`UPDATE public.memory_backend_modes SET mode='read_only' WHERE user_id=${f.userId}::uuid`;
     const before = await f.snapshot(); await expect(memory.save()).rejects.toMatchObject({ code: 'EMEMORYADMISSION' });

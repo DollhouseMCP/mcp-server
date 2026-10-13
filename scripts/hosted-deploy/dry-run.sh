@@ -61,7 +61,9 @@ dry_run_start_or_update() {
   describe_render_plan
   describe_source_plan
   log "dry-run: would build dollhousemcp image"
-  log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
+  log "dry-run: would check the pinned running postgres without recreation for up to ${POSTGRES_READY_TIMEOUT}s; start postgres only if no application is running"
+  log "dry-run: would pull caddy before stopping the current app"
+  log "dry-run: would require non-force graceful stop before schema or admin changes"
   log "dry-run: would run database migrations"
   log "dry-run: would apply post-migration database grants"
   describe_bootstrap_plan optional
@@ -70,6 +72,7 @@ dry_run_start_or_update() {
   else
     log "dry-run: would start or update the full compose stack"
   fi
+  log "dry-run: would record deployed revision and time only after replacement succeeds"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
   log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 
@@ -114,7 +117,8 @@ dry_run_rollback() {
   else
     log "dry-run: no server.prev-* rollback candidate found yet"
   fi
-  log "dry-run: would rebuild dollhousemcp image and restart dollhousemcp + caddy"
+  log "dry-run: would rebuild dollhousemcp image, check pinned running postgres without recreation, and pull caddy before stopping the current app"
+  log "dry-run: would require successful non-force graceful stop immediately before replacing dollhousemcp + caddy"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
   log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 

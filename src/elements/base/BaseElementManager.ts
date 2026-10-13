@@ -125,6 +125,7 @@ export interface ElementManagerDeps {
   metadataService: MetadataService;
   /** Memory-only policy reference; constructor allocation invokes no policy work. */
   memoryRetentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
+  memoryUpgradeLifecycle?: import('../../lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle;
   eventDispatcher: ElementEventDispatcher;
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
@@ -246,6 +247,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     options?: { suppressLoadPolicy?: boolean },
   ): Promise<void>;
   protected beforeSave?(element: T, filePath: string): Promise<void>;
+  protected captureLoadedContent?(element: T, content: string, filePath: string): void;
   protected afterSave?(element: T, filePath: string): Promise<void>;
   /**
    * Post-delete hook. Called AFTER the underlying persistence (disk or DB)
@@ -362,6 +364,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       migrateMetadataDefaults: (d: Record<string, unknown>, fp: string) => this.migrateMetadataDefaults(d, fp),
       parseMetadata: (d: any) => this.parseMetadata(d),
       createElement: (m: T['metadata'], c: string, options?: { quietMemory?: boolean }) => this.createElement(m, c, options),
+      captureLoadedContent: (el: T, content: string, fp: string) => this.captureLoadedContent?.(el, content, fp),
       afterLoad: (el: T, fp: string, pd?: { data: Record<string, unknown>; content: string }, options?: { suppressLoadPolicy?: boolean }) =>
         this.afterLoad ? this.afterLoad(el, fp, pd, options) : Promise.resolve(),
       onLoadError: (fp: string, err: unknown) => this.onLoadError?.(fp, err),

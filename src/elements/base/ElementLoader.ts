@@ -35,6 +35,7 @@ export interface ElementLoaderHost<T extends IElement> {
   migrateMetadataDefaults(data: Record<string, unknown>, filePath: string): void;
   parseMetadata(data: any): Promise<T['metadata']>;
   createElement(metadata: T['metadata'], content: string, options?: { quietMemory?: boolean }): T;
+  captureLoadedContent?(element: T, content: string, filePath: string): void;
   afterLoad?(element: T, filePath: string, parsedData?: { data: Record<string, unknown>; content: string }, options?: { suppressLoadPolicy?: boolean }): Promise<void>;
   onLoadError?(filePath: string, error: unknown): void;
   getElementLabel(): string;
@@ -118,6 +119,7 @@ export class ElementLoader<T extends IElement> {
       this.host.migrateMetadataDefaults(parsed.data, relativePath);
       const metadata = await this.host.parseMetadata(parsed.data);
       const element = this.host.createElement(metadata, parsed.content);
+      this.host.captureLoadedContent?.(element, content, relativePath);
 
       if (this.host.afterLoad) {
         await this.host.afterLoad(element, relativePath, parsed);
@@ -167,6 +169,7 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content, options);
+    this.host.captureLoadedContent?.(element, content, relativePath);
     if (parsed.data.extensions && typeof parsed.data.extensions === 'object' && !Array.isArray(parsed.data.extensions)) {
       element.extensions = structuredClone(parsed.data.extensions as Record<string, unknown>);
     }

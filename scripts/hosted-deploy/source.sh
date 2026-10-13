@@ -94,8 +94,9 @@ stage_source() {
     mv "${SERVER_DIR}" "${previous_bundle}" || die "failed to move current server bundle to ${previous_bundle}"
   fi
   mv "${incoming}" "${SERVER_DIR}" || die "failed to promote incoming server bundle to ${SERVER_DIR}"
-  printf '%s\n' "${revision}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
-  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
+  # Consumed by start_or_update after successful replacement, not by staging.
+  # shellcheck disable=SC2034
+  STAGED_REVISION="${revision}"
 
   return 0
 }

@@ -34,9 +34,11 @@ import {
   type ConsoleUserContextOptions,
 } from './ConsoleUserContextMiddleware.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
+import type { MemoryUpgradeLifecycle } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import { requireConsoleAuthentication } from '../middleware/ConsoleAuthentication.js';
 
 export interface SecuredConsoleRouterOptions {
+  readonly memoryUpgradeLifecycle?: MemoryUpgradeLifecycle;
   readonly sessionStore: IConsoleSessionStore;
   readonly identityResolver: IConsoleIdentityResolver;
   readonly opaqueValues: IConsoleOpaqueValueService;
@@ -220,7 +222,7 @@ function createSecuredHandler(
   return (request, response, next): void => {
     const req = request as ConsoleRequest;
     const occurredAt = options.now?.() ?? new Date();
-    void (async (): Promise<void> => {
+    const execute = async (): Promise<void> => {
       try {
         const execution = await executeWithConsoleIdempotency(
           route,
@@ -251,7 +253,9 @@ function createSecuredHandler(
       } catch (error) {
         next(error);
       }
-    })();
+    };
+    const execution = options.memoryUpgradeLifecycle ? options.memoryUpgradeLifecycle.runRequest(execute) : execute();
+    void execution.catch(next);
   };
 }
 

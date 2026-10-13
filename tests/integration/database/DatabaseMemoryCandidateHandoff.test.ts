@@ -20,6 +20,7 @@ import { InMemoryUserIntegrationStore } from '../../../src/web-console/stores/In
 import { InMemoryPortfolioSyncJobStore } from '../../../src/web-console/stores/InMemoryPortfolioSyncJobStore.js';
 import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import type { MemoryUpgradeLifecycle } from '../../../src/lifecycle/MemoryUpgradeLifecycle.js';
 import { admittedMemoryContainer } from '../../helpers/storage/admitted-memory-container.js';
 import { makeEquivalentFixture, type EquivalentFixture } from './fixtures/2905-equivalent-reconciliation-fixture.js';
 
@@ -37,7 +38,7 @@ afterEach(async () => {
     phase(item.name, 'cleanup-end');
   }
 });
-async function fixture(name: string) {
+async function fixture(name: string, expectRetainedDrain = false) {
   phase(name, 'fixture-start'); const f = await makeEquivalentFixture();
   const item: typeof owned[number] = { name, f }; owned.push(item);
   // Disposable fixture eligibility/provisioning only, never a production maintenance authority.
@@ -60,7 +61,29 @@ async function fixture(name: string) {
       return composition.manager;
     };
   });
-  item.dispose = () => root.container.dispose(); const manager = root.manager();
+  item.dispose = async () => {
+    if (!expectRetainedDrain) { await root.container.dispose(); return; }
+    const lifecycle = root.container.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle');
+    const before = lifecycle.getSummary();
+    expect(before).toMatchObject({ state: 'running', admitted: 0, writes: 0 });
+    expect(before.failedWrites).toBeGreaterThan(0);
+    expect(before.retainedOwners).toBeGreaterThan(0);
+    const databaseBefore = await f.snapshot();
+    const handoffsBefore = await f.maintenance`SELECT to_jsonb(h) AS row
+      FROM public.memory_candidate_handoffs h ORDER BY id`;
+    // Only the final disposable-fixture teardown uses a fake clock. Keep the
+    // real refusal and retained candidates; do not leave its keep-alive interval
+    // holding the Jest worker after the generated database is deliberately dropped.
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask', 'Date', 'performance', 'hrtime'] });
+    try {
+      await expect(root.container.dispose()).rejects.toMatchObject({ code: 'EMEMORYDRAIN' });
+      expect(lifecycle.getSummary()).toEqual({ ...before, state: 'refused' });
+      expect(jest.getTimerCount()).toBe(1);
+    } finally { jest.useRealTimers(); }
+    expect(await f.snapshot()).toEqual(databaseBefore);
+    expect(await f.maintenance`SELECT to_jsonb(h) AS row
+      FROM public.memory_candidate_handoffs h ORDER BY id`).toEqual(handoffsBefore);
+  }; const manager = root.manager();
   await expect(manager.load(f.memoryId)).rejects.toMatchObject({ code: 'EMEMORYADMISSION' });
   await composition.qualify(async identity => { expect(identity.tenant).toBe(f.userId); expect(identity.store).toBe(layer); });
   const legacy = jest.spyOn(layer, 'writeContent'); const ordinary = jest.spyOn(layer, 'writeHeadIfCurrent');
@@ -360,7 +383,7 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
   });
 
   it.each(['handoff', 'head'] as const)('preserves exact evidence and closes boot after controlled %s completion loss', async stage => {
-    const f = await fixture(`${stage}-completion-loss`); const memory = await f.manager.load(f.memoryId);
+    const f = await fixture(`${stage}-completion-loss`, true); const memory = await f.manager.load(f.memoryId);
     await memory.addEntry(`Exact ${stage} uncertain attempt`); const before = await f.snapshot();
     const cause = new Error(`Controlled ${stage} completion loss`); const original = f.db.transaction.bind(f.db);
     let count = 0;
@@ -383,7 +406,7 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
   });
 
   it('retains prepared evidence on controlled failed head completion and never invents known rollback', async () => {
-    const f = await fixture('failed-head-completion'); const memory = await f.manager.load(f.memoryId);
+    const f = await fixture('failed-head-completion', true); const memory = await f.manager.load(f.memoryId);
     await memory.addEntry('Must stay recoverable after failed completion'); const before = await f.snapshot();
     const cause = new Error('Controlled precommit completion failure'); const original = f.db.transaction.bind(f.db); let count = 0;
     const spy = jest.spyOn(f.db, 'transaction').mockImplementation(body => ++count === 2
@@ -395,7 +418,7 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
   });
 
   it('rechecks closed admission after handoff delivery before any head dispatch', async () => {
-    const f = await fixture('close-before-dispatch'); const memory = await f.manager.load(f.memoryId);
+    const f = await fixture('close-before-dispatch', true); const memory = await f.manager.load(f.memoryId);
     await memory.addEntry('Exact closed-before-dispatch candidate'); const before = await f.snapshot();
     const original = f.db.transaction.bind(f.db);
     const spy = jest.spyOn(f.db, 'transaction').mockImplementationOnce(async body => {
@@ -409,7 +432,7 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
   });
 
   it.each(['central', 'aql', 'console'] as const)('keeps committed candidates when the actual %s owning tail fails', async kind => {
-    const f = await fixture(`${kind}-publication-failure`); const cause = new Error('Controlled owning tail failure');
+    const f = await fixture(`${kind}-publication-failure`, kind === 'central'); const cause = new Error('Controlled owning tail failure');
     if (kind === 'central') {
       const memory = await f.manager.load(f.memoryId); await memory.addEntry('Committed central tail');
       jest.spyOn(f.manager as unknown as { afterSave: (element: unknown, locator: string) => Promise<void> }, 'afterSave')
@@ -455,7 +478,7 @@ required('bounded candidate handoff and owning publication on PostgreSQL', () =>
   });
 
   it('starts a separately constructed controller closed and cannot recover admission from stored evidence', async () => {
-    const f = await fixture('fresh-process-closed'); const memory = await f.manager.load(f.memoryId);
+    const f = await fixture('fresh-process-closed', true); const memory = await f.manager.load(f.memoryId);
     await memory.addEntry('Preserved across controller replacement');
     jest.spyOn(f.manager as unknown as { afterSave: (element: unknown, locator: string) => Promise<void> }, 'afterSave')
       .mockRejectedValueOnce(new Error('Controlled unfinished publication'));

@@ -14,8 +14,16 @@
  */
 
 import { logger } from '../utils/logger.js';
+import type { MemoryUpgradeLifecycle } from './MemoryUpgradeLifecycle.js';
 
 export class LifecycleService {
+  private memoryUpgrade?: MemoryUpgradeLifecycle;
+
+  setMemoryUpgradeLifecycle(upgrade: MemoryUpgradeLifecycle): void {
+    this.memoryUpgrade = upgrade;
+    upgrade.registerStopSource(() => this.dispose());
+  }
+
   private _httpModeActive = false;
   private _handlersInstalled = false;
   private readonly _periodicTimers = new Set<NodeJS.Timeout>();
@@ -99,7 +107,8 @@ export class LifecycleService {
    */
   registerPeriodicTask(intervalMs: number, task: () => Promise<void>, label: string): NodeJS.Timeout {
     const timer = setInterval(() => {
-      task().catch((err) => {
+      const operation = this.memoryUpgrade ? this.memoryUpgrade.runRequest(task) : task();
+      operation.catch((err) => {
         logger.error(`[LifecycleService] periodic task '${label}' threw`, {
           error: err instanceof Error ? err.message : String(err),
         });

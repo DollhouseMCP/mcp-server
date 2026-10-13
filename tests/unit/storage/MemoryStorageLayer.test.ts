@@ -900,6 +900,29 @@ entries:
 });
 
 describe('guarded fresh metadata discovery', () => {
+  it('scoped discovery retains the injected backend and custom filter without changing its resolver or index', async () => {
+    const fileOps = makeMockFileOps(); const backend = createMockBackend();
+    const selected = '/selected-owner/memories';
+    (backend.listFiles as jest.Mock<any>).mockResolvedValue(['first.yaml', 'second.yaml', 'excluded.yaml']);
+    (backend.readFile as jest.Mock<any>).mockResolvedValue(makeYaml('duplicate'));
+    const filter = jest.fn((filename: string) => filename !== 'excluded.yaml');
+    const layer = new MemoryStorageLayer(fileOps, { memoriesDir: MEMORIES_DIR,
+      memoriesDirResolver: () => '/root-context/memories', storageBackend: backend, fileFilter: filter });
+    try {
+      const entries = await layer.readFreshSummariesAtDirectory(selected, true);
+      expect(entries.map(entry => entry.name)).toEqual(['duplicate', 'duplicate']);
+      expect(backend.listFiles).toHaveBeenCalledWith(selected, '.yaml');
+      expect((backend.readFile as jest.Mock<any>).mock.calls.map(([value]) => value)).toEqual(
+        [path.join(selected, 'first.yaml'), path.join(selected, 'second.yaml')]);
+      expect(filter).toHaveBeenCalledWith('excluded.yaml');
+      expect(backend.statMany).not.toHaveBeenCalled();
+      expect(fileOps.writeFile).not.toHaveBeenCalled();
+      jest.clearAllMocks();
+      await layer.listSummaries({ freshMetadata: true });
+      expect(backend.listFiles).toHaveBeenCalledWith('/root-context/memories', '.yaml');
+    } finally { await layer.dispose(); }
+  });
+
   it.each(['discover', 'enumerate', 'read', 'stat'])('propagates %s failures rather than returning a partial inventory', async step => {
     const fileOps = makeMockFileOps(); const backend = createMockBackend();
     const cause = Object.assign(new Error(`Controlled ${step} failure`), { code: 'EIO' });

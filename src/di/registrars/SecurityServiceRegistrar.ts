@@ -93,7 +93,9 @@ export class SecurityServiceRegistrar {
       }
       return new BackgroundValidator(
       container.resolve('PatternExtractor'),
-      container.resolve('MemoryManager')
+      container.resolve('MemoryManager'),
+      undefined,
+      container.resolve('MemoryUpgradeLifecycle'),
       );
     });
     container.register('SecurityTelemetry', () => new SecurityTelemetry());
