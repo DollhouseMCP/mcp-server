@@ -11,6 +11,11 @@ import { makeEquivalentFixture } from './2905-equivalent-reconciliation-fixture.
 
 export type UpgradeFrame = Record<string, any>;
 
+const redactDiagnostic = (value: string): string => value
+  .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/gu, '[owned fixture token redacted]')
+  .replace(/postgres(?:ql)?:\/\/[^@\s]+@/gu, 'postgres://[owned fixture credential redacted]@')
+  .slice(0, 5000);
+
 // Only the owned memory's inner persistence body is delayed, AFTER the real
 // MemoryManager.save has registered its lifecycle promise. The original production
 // MemorySaveHandler, admission/lifecycle and SQL writer still execute.
@@ -155,6 +160,15 @@ export class MemoryUpgradeRuntime {
     return client;
   }
   sessionId(client: Client): string | undefined { return this.transports.get(client)?.sessionId; }
+  async terminateSession(client: Client): Promise<void> {
+    const transport = this.transports.get(client);
+    if (!transport) throw new Error('Owned client transport unavailable');
+    await transport.terminateSession();
+  }
+  diagnostic(): UpgradeFrame {
+    return { childPid: this.child.pid, finalClosed: this.closed, exitCode: this.exitCode,
+      exitSignal: this.exitSignal, frames: this.messages.slice(-16) };
+  }
   signal(): void {
     if (!this.child.kill('SIGTERM')) throw new Error('Owned child did not receive graceful signal');
   }
@@ -212,7 +226,15 @@ export async function ownedUpgradeProcess(caseName: string,
         DOLLHOUSE_LOG_DIR: path.join(childDirectory, 'logs') });
       runtimes.push(runtime); await runtime.ready(); return runtime;
     } });
-  } catch (cause) { failure = cause; }
+  } catch (cause) {
+    failure = cause;
+    // Preserve the original bounded failure and IPC phase evidence before
+    // owned directory cleanup; outer AggregateError alone hides it in Jest.
+    console.error(`[memory-upgrade:${caseName}] original-failure`, cause instanceof Error
+      ? { name: cause.name, message: redactDiagnostic(cause.message), stack: cause.stack ? redactDiagnostic(cause.stack) : undefined }
+      : redactDiagnostic(String(cause)));
+    for (const runtime of runtimes) console.error(`[memory-upgrade:${caseName}] phase-evidence`, runtime.diagnostic());
+  }
   const closes = await Promise.allSettled(runtimes.map(runtime => runtime.close()));
   if (runtimes.some(runtime => !runtime.finalClosed) || [...auxiliary.values()].some(closed => !closed)) throw new AggregateError([
     ...(failure ? [failure] : []), ...closes.filter(x => x.status === 'rejected').map(x => (x as PromiseRejectedResult).reason),

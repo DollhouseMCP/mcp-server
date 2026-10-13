@@ -148,8 +148,9 @@ required('memory-safe actual compiled process upgrade', () => {
         expect((await runtime.rpc('summary')).failedWrites).toBeGreaterThan(0);
         const beforeRecovery = await f.maintenance`SELECT entry_id,content FROM public.memory_entries WHERE memory_id=${f.memoryId}::uuid`;
         expect(beforeRecovery.some(row => row.content === 'Retained failed upgrade candidate')).toBe(false);
-        // Real transport closure invokes production child disposal. It must
-        // refuse while the exact failed candidate remains retained.
+        // SDK close only disconnects locally. Explicit HTTP DELETE requests
+        // real server session disposal; refusal must retain the failed candidate.
+        await runtime.terminateSession(client).catch(() => undefined);
         await client.close().catch(() => undefined);
         await runtime.waitUntil(() => runtime.messages.some(frame => frame.event === 'retained-owner-dispose-refused'));
         expect((await runtime.rpc('summary')).retainedOwners).toBeGreaterThan(0);
