@@ -47,9 +47,9 @@ RUN chmod -R 750 /app && \
     chown -R dollhouse:nodejs /app
 
 # Create writable directories with restricted permissions
-RUN mkdir -p /app/tmp /app/logs && \
-    chown -R dollhouse:nodejs /app/tmp /app/logs && \
-    chmod -R 700 /app/tmp /app/logs
+RUN mkdir -p /app/tmp /app/logs /app/.memory-upgrade-control && \
+    chown -R dollhouse:nodejs /app/tmp /app/logs /app/.memory-upgrade-control && \
+    chmod -R 700 /app/tmp /app/logs /app/.memory-upgrade-control
 
 # Switch to non-root user
 USER dollhouse
@@ -57,7 +57,7 @@ USER dollhouse
 # No ports exposed - stdio-based MCP servers don't need network access
 
 # Add security labels for container metadata
-LABEL org.dollhousemcp.memory-upgrade-drain="v1"
+LABEL org.dollhousemcp.memory-upgrade-drain="v2"
 LABEL security.non-root="true" \
       security.no-new-privileges="true" \
       security.read-only-root="true" \

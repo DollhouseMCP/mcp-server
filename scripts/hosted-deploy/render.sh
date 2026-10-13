@@ -53,6 +53,8 @@ services:
       DOLLHOUSE_DISABLE_UPDATES: "true"
       DOLLHOUSE_SECURITY_MODE: strict
       DOLLHOUSE_TRANSPORT: streamable-http
+      # Private per-container hold; outside tmpfs and customer mounts.
+      DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR: /app/.memory-upgrade-control
       DOLLHOUSE_HTTP_HOST: 0.0.0.0
       DOLLHOUSE_HTTP_PORT: "${MCP_PORT}"
       # The app is reachable only on the Compose network; Caddy owns the public socket.

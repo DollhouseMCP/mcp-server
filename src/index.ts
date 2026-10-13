@@ -65,6 +65,8 @@ import type { AuthClaims } from './auth/IAuthProvider.js';
 // The service is created eagerly here (before DI container) because error
 // handlers must be installed before any async work begins.
 import { LifecycleService } from './lifecycle/LifecycleService.js';
+import { MemoryUpgradeOperator } from './lifecycle/MemoryUpgradeOperator.js';
+import type { MemoryUpgradeLifecycle } from './lifecycle/MemoryUpgradeLifecycle.js';
 
 type LowLevelMcpServer = {
   connect(transport: StdioServerTransport): Promise<void>;
@@ -75,6 +77,14 @@ _lifecycleService.installErrorHandlers();
 
 /** The singleton LifecycleService instance. Exported for DI container registration. */
 export { _lifecycleService as lifecycleService };
+
+let memoryUpgradeOperator: MemoryUpgradeOperator | undefined;
+
+function createProcessContainer(): DollhouseContainer {
+  const container = new DollhouseContainer(_lifecycleService);
+  memoryUpgradeOperator?.bindLifecycle(container.resolve<MemoryUpgradeLifecycle>('MemoryUpgradeLifecycle'));
+  return container;
+}
 
 /** Check if HTTP mode error handling is active. Re-exported for backward compat. */
 export function isHttpModeActive(): boolean {
@@ -801,6 +811,7 @@ export class DollhouseMCPServer implements IToolHandler {
 
       try {
         await this.container.dispose();
+        await memoryUpgradeOperator?.closeAfterDrain();
         logger.info("Cleanup completed");
       } catch (error) {
         logger.error("Shutdown refused; process and pending memory work retained", { error });
@@ -891,9 +902,10 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     console.error("DEBUG: startServerWithRetry called.");
   }
   try {
-    const container = new DollhouseContainer(_lifecycleService);
+    const container = createProcessContainer();
     const server = new DollhouseMCPServer(container);
     await server.run();
+    memoryUpgradeOperator?.enableOriginalDrain();
   } catch (error) {
     if (retriesLeft > 0 && (isNpxExecution || isCliExecution)) {
       // Try again with a longer delay
@@ -947,7 +959,7 @@ async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
   if (env.DOLLHOUSE_DATABASE_MEMORY_GUARDED && !env.DOLLHOUSE_AUTH_ENABLED) {
     throw new Error('Configured database memory HTTP requires verified authentication');
   }
-  const container = new DollhouseContainer(_lifecycleService);
+  const container = createProcessContainer();
   await container.preparePortfolio();
   await container.bootstrapHttpHandlers();
   await container.completeSinkSetup();
@@ -1231,6 +1243,7 @@ export async function startStreamableHttpServer(
     runtimeSessionControl: runtimeSessionControl?.service,
     registerSignalHandlers: true,
     memoryUpgradeLifecycle: container.resolve('MemoryUpgradeLifecycle'),
+    onShutdownComplete: memoryUpgradeOperator ? () => memoryUpgradeOperator!.closeAfterDrain() : undefined,
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());
     },
@@ -1356,7 +1369,7 @@ async function bootstrapWebContainer(): Promise<{
   let logManager: LogManager | undefined;
 
   try {
-    container = new DollhouseContainer(_lifecycleService);
+    container = createProcessContainer();
     await container.preparePortfolio();
     const bundle = await container.bootstrapHandlers();
     await container.completeSinkSetup();
@@ -1514,6 +1527,7 @@ async function startHttpMode(): Promise<void> {
   }
 
   const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
+  memoryUpgradeOperator?.enableOriginalDrain();
   console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
   const connectorUrl = env.DOLLHOUSE_PUBLIC_BASE_URL
     ? joinUrl(env.DOLLHOUSE_PUBLIC_BASE_URL, runtime.mcpPath)
@@ -1529,6 +1543,23 @@ async function startHttpMode(): Promise<void> {
  * and environment, then runs the appropriate async startup function.
  */
 async function main(): Promise<void> {
+  // Hosted opt-in only. Any persisted hold is inspected before normal roots,
+  // portfolio/bootstrap, backgrounds or public transports can be constructed.
+  const controlDirectory = process.env.DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR;
+  if (controlDirectory) {
+    memoryUpgradeOperator = await MemoryUpgradeOperator.prepare(controlDirectory);
+    await memoryUpgradeOperator.listen();
+    if (memoryUpgradeOperator.controlOnly) {
+      const closeControlOnly = () => {
+        void memoryUpgradeOperator!.closeAfterDrain().then(() => process.exit(0)).catch(() => {
+          console.error('[DollhouseMCP] Memory control hold refuses shutdown');
+        });
+      };
+      process.on('SIGTERM', closeControlOnly);
+      process.on('SIGINT', closeControlOnly);
+      return;
+    }
+  }
   const isWebMode = process.argv.includes('--web');
 
   if (isWebMode) {

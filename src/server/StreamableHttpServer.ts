@@ -47,6 +47,8 @@ export interface StreamableHttpRuntimeOptions {
   onboarding?: OnboardingHttpRouters;
   registerSignalHandlers?: boolean;
   memoryUpgradeLifecycle?: MemoryUpgradeLifecycle;
+  /** Private hosted operator cleanup, invoked after successful runtime teardown. */
+  onShutdownComplete?: () => Promise<void>;
   rateLimitWindowMs?: number;
   rateLimitMaxRequests?: number;
   sessionIdleTimeoutMs?: number;
@@ -1193,6 +1195,8 @@ export async function createStreamableHttpRuntime(
       }
 
       await closeHttpServer(httpServer);
+      // Keep the private retry channel through every refusing teardown step.
+      await options.onShutdownComplete?.();
     })().catch(error => {
       // Retry may settle the exact retained work after infrastructure recovers;
       // lifecycle admission remains closed throughout the refused attempt.

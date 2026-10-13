@@ -141,9 +141,26 @@ required('memory-safe actual compiled process upgrade', () => {
       const bin = path.join(directory, 'helper-bin'); await mkdir(bin, { mode: 0o700 });
       const trace = path.join(directory, 'helper-command-trace.jsonl');
       const target = 'a'.repeat(64);
-      // Fixed command adapter exercises the ACTUAL shell helper and real Node
-      // SIGTERM/liveness. This is a process proof, not Docker-engine acceptance.
-      const adapter = `#!${process.execPath}\nconst fs=require('node:fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(a)+'\\n');const pid=${runtime.child.pid};const id=${JSON.stringify(target)};if(a[0]==='kill'&&a.includes(id)&&a.some(x=>x==='--signal=TERM'||x==='--signal=SIGTERM'||x==='SIGTERM'||x==='TERM')){process.kill(pid,'SIGTERM');process.exit(0)}if(a[0]==='inspect'&&a.includes(id)&&a[2]===${JSON.stringify('{{index .Config.Labels "org.dollhousemcp.memory-upgrade-drain"}}')}){process.stdout.write('v1\\n');process.exit(0)}if(a[0]==='inspect'&&a.includes(id)&&a[2]===${JSON.stringify('{{.Id}}|{{.State.Running}}|{{.State.ExitCode}}|{{.State.OOMKilled}}')}){let alive;try{process.kill(pid,0);alive=true}catch{alive=false}process.stdout.write(id+'|'+String(alive)+'|0|false\\n');process.exit(0)}process.stderr.write('Unsupported owned helper command\\n');process.exit(3);\n`;
+      // Fixed adapter runs the actual client on this owned process's Unix
+      // socket. Selected Docker metadata is synthetic; engine eligibility is
+      // qualified separately by the real Docker witness.
+      const stateFormat = "{\"id\":{{json .Id}},\"running\":{{json .State.Running}},\"exitCode\":{{json .State.ExitCode}},\"oomKilled\":{{json .State.OOMKilled}},\"startedAt\":{{json .State.StartedAt}},\"restartCount\":{{json .RestartCount}},\"restarting\":{{json .State.Restarting}},\"readonly\":{{json .HostConfig.ReadonlyRootfs}},\"mounts\":{{json .Mounts}},\"enabled\":\"{{range .Config.Env}}{{if eq (index (split . \"=\") 0) \"DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR\"}}{{if eq . \"DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR=/app/.memory-upgrade-control\"}}enabled{{else}}invalid{{end}}{{end}}{{end}}\",\"capability\":{{json (index .Config.Labels \"org.dollhousemcp.memory-upgrade-drain\")}}}";
+      const adapter = `#!/usr/bin/env python3
+import os,sys,json,signal,re
+from pathlib import Path
+a=sys.argv[1:];p=Path(${JSON.stringify(trace)});pid=${runtime.child.pid};cid=${JSON.stringify(target)}
+with p.open('a') as f: f.write(json.dumps(a)+'\\n')
+if a==['inspect','--format',${JSON.stringify(stateFormat)},cid]:
+ try: os.kill(pid,0);alive=True
+ except ProcessLookupError: alive=False
+ print(json.dumps({'id':cid,'running':alive,'exitCode':0,'oomKilled':False,'startedAt':'owned-'+str(pid),'restartCount':0,'restarting':False,'readonly':False,'mounts':[],'enabled':'enabled','capability':'v2'}));sys.exit(0)
+if a[:8]==['exec','--user','1001:1001','--workdir','/app',cid,'node','/app/dist/lifecycle/requestMemoryDrain.js'] and len(a)==11 and a[8]==cid and re.fullmatch('[a-f0-9]{64}',a[9]) and a[10].isdigit():
+ os.environ['DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR']=${JSON.stringify(runtime.controlDirectory)}
+ os.execv(${JSON.stringify(process.execPath)},[${JSON.stringify(process.execPath)},${JSON.stringify(path.join(process.cwd(), 'dist/lifecycle/requestMemoryDrain.js'))},*a[8:]])
+if a==['kill','--signal=TERM',cid]:
+ os.kill(pid,signal.SIGTERM);sys.exit(0)
+sys.exit(3)
+`;
       await writeFile(path.join(bin, 'docker'), adapter, { mode: 0o700 });
       try {
         await runtime.waitUntil(() => runtime.messages.some(frame => frame.event === 'save-enter' && frame.held));
@@ -179,44 +196,52 @@ required('memory-safe actual compiled process upgrade', () => {
         await client.close().catch(() => undefined);
         await runtime.waitUntil(() => runtime.messages.some(frame => frame.event === 'retained-owner-dispose-refused'));
         expect((await runtime.rpc('summary')).retainedOwners).toBeGreaterThan(0);
-        const helper = spawn('bash', [path.join(process.cwd(), 'scripts/hosted-graceful-stop.sh'), target, '1'], {
-          env: { PATH: `${bin}:${process.env.PATH}`, HOME: directory }, stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        ownAuxiliary(helper); helper.stdout!.resume(); helper.stderr!.resume();
-        const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-          // Cap the owned helper process, never the old application. Require
-          // final helper close even on a diagnostic cutoff; no SIGKILL.
-          let cutoff = false;
-          let closeCap: ReturnType<typeof setTimeout> | undefined;
-          const cap = setTimeout(() => {
-            cutoff = true; helper.kill('SIGTERM');
-            closeCap = setTimeout(() => reject(new Error('Owned helper final close unproven')), 5000);
-          }, 15000);
-          helper.once('error', cause => { clearTimeout(cap); if (closeCap) clearTimeout(closeCap); reject(cause); });
-          helper.once('close', (code, signal) => {
-            clearTimeout(cap); if (closeCap) clearTimeout(closeCap);
-            if (cutoff) reject(new Error('Owned non-force helper exceeded its bound'));
-            else resolve({ code, signal });
+        const invokeHelper = () => {
+          const helper = spawn('bash', [path.join(process.cwd(), 'scripts/hosted-graceful-stop.sh'), target, '1'], {
+            env: { PATH: `${bin}:${process.env.PATH}`, HOME: directory }, stdio: ['ignore', 'pipe', 'pipe'],
           });
-        });
+          ownAuxiliary(helper); helper.stdout!.resume(); helper.stderr!.resume();
+          return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+            // Cap the owned helper process, never the old application. Require
+            // final helper close even on a diagnostic cutoff; no SIGKILL.
+            let cutoff = false;
+            let closeCap: ReturnType<typeof setTimeout> | undefined;
+            const cap = setTimeout(() => {
+              cutoff = true; helper.kill('SIGTERM');
+              closeCap = setTimeout(() => reject(new Error('Owned helper final close unproven')), 5000);
+            }, 15000);
+            helper.once('error', cause => { clearTimeout(cap); if (closeCap) clearTimeout(closeCap); reject(cause); });
+            helper.once('close', (code, signal) => {
+              clearTimeout(cap); if (closeCap) clearTimeout(closeCap);
+              if (cutoff) reject(new Error('Owned non-force helper exceeded its bound'));
+              else resolve({ code, signal });
+            });
+          });
+        };
+        const outcome = await invokeHelper();
         expect(outcome.code).not.toBe(0); expect(outcome.signal).toBeNull();
         expect(runtime.finalClosed).toBe(false); expect(runtime.child.exitCode).toBeNull();
         const blocked = await runtime.rpc('summary');
         expect(blocked.state).toBe('refused'); expect(blocked.failedWrites).toBeGreaterThan(0);
         expect(blocked.retainedOwners).toBeGreaterThan(0);
         const commands = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[]);
-        expect(commands.some(argv => argv[0] === 'kill')).toBe(true);
-        expect(commands.every(argv => ['kill', 'inspect'].includes(argv[0]))).toBe(true);
+        expect(commands.some(argv => argv[0] === 'exec')).toBe(true);
+        expect(commands.some(argv => argv[0] === 'kill')).toBe(false);
+        expect(commands.every(argv => ['exec', 'kill', 'inspect'].includes(argv[0]))).toBe(true);
         expect(commands.flat().some(arg => /KILL|^stop$|^rm$|^run$|^start$/u.test(arg))).toBe(false);
         // The private manual caller accepted Memory.addEntry before the
         // injected prewrite failure. This is actual tracked manual work, not
         // a signed HTTP ACK, a DB rollback, or an unknown commit.
-        // Remove only the owned synthetic storage fault. A fresh real signal
-        // must cause the production flush to persist the retained candidate;
+        // Remove only the owned synthetic storage fault. A fresh actual client
+        // handshake must flush the retained candidate before its single TERM;
         // no test-only ledger clear or force-kill is allowed.
         await runtime.rpc('fault', { enabled: false });
-        runtime.signal();
+        const settled = await invokeHelper();
+        expect(settled).toEqual({code:0,signal:null});
         await runtime.waitForClose(); expect(runtime.exitCode).toBe(0);
+        const finalCommands = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[]);
+        expect(finalCommands.filter(argv => argv[0] === 'kill')).toHaveLength(1);
+        expect(finalCommands.filter(argv => argv[0] === 'exec')).toHaveLength(2);
         const persisted = await f.maintenance`SELECT entry_id,content FROM public.memory_entries WHERE memory_id=${f.memoryId}::uuid`;
         expect(persisted.filter(row => row.content === 'Retained failed upgrade candidate')).toHaveLength(1);
         expect(persisted.find(row => row.entry_id === manual.id)?.content).toBe('Retained failed upgrade candidate');

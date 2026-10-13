@@ -246,6 +246,7 @@ jobs:
             --platform ${{ matrix.platform }} \
             --target production \
             --tag dollhousemcp:latest-${PLATFORM_TAG} \
+            --label org.dollhousemcp.engine-proof-source=${{ github.sha }} \
             --cache-from type=local,src=/tmp/.buildx-cache \
             --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
             --progress=plain \
@@ -281,6 +282,22 @@ jobs:
           fi
 
           set -e  # Re-enable exit on error
+
+      - name: Verify private drain hold against native Docker restart manager
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id=$(docker image inspect --format '{{.Id}}' dollhousemcp:latest-linux-amd64)
+          python3 tests/scripts/memory-upgrade-docker-engine.py "$image_id" "$GITHUB_SHA" | tee /tmp/memory-upgrade-engine-proof.json
+
+      - name: Preserve owned Docker drain proof
+        if: always() && matrix.platform == 'linux/amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-upgrade-engine-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/memory-upgrade-engine-proof.json
+          if-no-files-found: ignore
 
       - name: Scan Docker image for vulnerabilities
         uses: anchore/scan-action@v3

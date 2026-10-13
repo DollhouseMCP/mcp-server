@@ -159,14 +159,20 @@ export class MemoryUpgradeLifecycle {
       retainedOwners: [...this.owners].filter(owner => owner.hasRetainedMemoryWork()).length };
   }
 
+  /** Close admission synchronously without starting flushes or other asynchronous teardown. */
+  closeAdmission(): void {
+    if (this.state === 'drained') return;
+    this.state = 'quiescing';
+    // Refusal must keep the process alive even when its remaining timers are unref'ed.
+    this.hold ??= setInterval(() => {}, 60_000);
+  }
+
   /** No timeout cancellation, forced process exit, service close or candidate replay. */
   quiesceAndDrain(timeoutMs = 30_000): Promise<void> {
     if (this.drainPromise) return this.drainPromise;
     if (this.state === 'drained') return Promise.resolve();
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) return Promise.reject(new TypeError('Invalid memory drain deadline'));
-    this.state = 'quiescing';
-    // Refusal must keep the process alive even when its remaining timers are unref'ed.
-    this.hold ??= setInterval(() => {}, 60_000);
+    this.closeAdmission();
     this.drainPromise = this.drain(timeoutMs);
     return this.drainPromise;
   }

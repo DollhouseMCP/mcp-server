@@ -1,7 +1,7 @@
 /** Owned OFF-mode compiled process proof. No production endpoint or force-kill cleanup. */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, chmod, writeFile, rm, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -131,9 +131,11 @@ export class MemoryUpgradeRuntime {
   exitCode: number | null = null;
   exitSignal: NodeJS.Signals | null = null;
   get finalClosed(): boolean { return this.closed; }
+  readonly controlDirectory: string;
 
   constructor(directory: string, preloader: string, environment: Record<string, string>) {
     const root = process.cwd();
+    this.controlDirectory = environment.DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR;
     this.child = spawn(process.execPath, ['--import', preloader, path.join(root, 'dist/index.js'), '--http', '--port=0'], {
       cwd: directory,
       env: { PATH: process.env.PATH, HOME: directory, ...environment, DOLLHOUSE_UPGRADE_PROOF_ROOT: path.join(root, 'dist') },
@@ -238,7 +240,7 @@ export async function ownedUpgradeProcess(caseName: string,
   const auxiliary = new Map<ChildProcess, boolean>();
   let failure: unknown;
   try {
-    directory = await mkdtemp(path.join(os.tmpdir(), 'memory-upgrade-'));
+    directory = await mkdtemp(path.join(os.tmpdir(), 'mu-'));
     const preloader = path.join(directory, 'owned-upgrade-observer.mjs');
     await writeFile(preloader, observer, { mode: 0o600 });
     const subject = `owned-upgrade-${randomUUID()}`;
@@ -260,8 +262,12 @@ export async function ownedUpgradeProcess(caseName: string,
     await body({ f, directory, token, ownAuxiliary: child => {
       auxiliary.set(child, false); child.once('close', () => auxiliary.set(child, true));
     }, spawn: async () => {
-      const childDirectory = path.join(directory!, `runtime-${randomUUID()}`); await mkdir(childDirectory, { mode: 0o700 });
+      const childDirectory = await mkdtemp(path.join(directory!, 'r-')); await chmod(childDirectory, 0o700);
+      const controlDirectory = path.join(childDirectory, 'c'); await mkdir(controlDirectory, {mode: 0o700});
+      const canonicalControlDirectory = await realpath(controlDirectory);
+      if (Buffer.byteLength(path.join(canonicalControlDirectory, 'control.sock')) > 103) throw new Error('Owned process socket exceeds portable Unix path bound');
       const runtime = new MemoryUpgradeRuntime(childDirectory, preloader, { ...environment,
+        DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR: canonicalControlDirectory,
         DOLLHOUSE_PORTFOLIO_DIR: path.join(childDirectory, 'portfolio'), DOLLHOUSE_CACHE_DIR: path.join(childDirectory, 'cache'),
         DOLLHOUSE_LOG_DIR: path.join(childDirectory, 'logs') });
       runtimes.push(runtime); await runtime.ready(); return runtime;

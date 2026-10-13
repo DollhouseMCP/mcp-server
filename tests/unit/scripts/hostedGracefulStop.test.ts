@@ -40,6 +40,7 @@ function boundedCommandCategories(contents: string): string[] {
       const args = JSON.parse(line);
       if (!Array.isArray(args)) continue;
       if (args[0] === 'inspect') categories.push('inspect');
+      else if (args[0] === 'exec') categories.push('drain');
       else if (args[0] === 'kill') categories.push('term');
     } catch { /* Partial trace remains unavailable. */ }
     if (categories.length >= 16) break;
@@ -55,14 +56,31 @@ async function run(mode: string) {
 from pathlib import Path
 a=sys.argv[1:]; p=Path(os.environ['OWNED_TRACE']); mode=os.environ['OWNED_MODE']
 with p.open('a') as f: f.write(json.dumps(a)+'\\n')
-if a[0]=='inspect' and 'org.dollhousemcp.memory-upgrade-drain' in a[2]:
- print('v1' if mode!='unsupported' else '<no value>'); sys.exit(0)
 if a[0]=='inspect':
  if mode=='hung': time.sleep(30)
- stopped=Path(str(p)+'.stopped').exists() or mode=='unclean'
- print(('b'*64 if mode=='changed' else '${target}')+'|'+('false' if stopped else 'true')+'|'+('1' if mode=='unclean' else '0')+'|false'); sys.exit(0)
+ stopped=Path(str(p)+'.stopped').exists() or mode in ['unclean','stopped-clean']
+ changed_boot=mode=='changed-boot' and Path(str(p)+'.acked').exists()
+ enabled='enabled'
+ if mode=='disabled': enabled=''
+ if mode=='wrong-dir': enabled='invalid'
+ if mode=='duplicate-env': enabled='enabledenabled'
+ print(json.dumps({'id':'b'*64 if mode=='changed' else '${target}','running':not stopped,'exitCode':1 if mode=='unclean' else 0,'oomKilled':False,'startedAt':'second' if changed_boot else 'first','restartCount':1 if changed_boot else 0,'restarting':False,'readonly':mode=='readonly','mounts':[{'Destination':'/app'}] if mode=='mounted' else [],'enabled':enabled,'capability':'v1' if mode=='unsupported' else 'v2'})); sys.exit(0)
+if a[0]=='exec':
+ assert a[:8]==['exec','--user','1001:1001','--workdir','/app','${target}','node','/app/dist/lifecycle/requestMemoryDrain.js']
+ assert a[8]=='${target}' and len(a[9])==64 and 0<int(a[10])<=1000
+ if mode=='drain-timeout': time.sleep(30)
+ if mode in ['held','lost-ack','unknown']: sys.exit(1)
+ ack={'protocol':2,'phase':'drained','containerId':'${target}','nonce':a[9],'bootId':'b'*64,'generation':'c'*64,'sourceBootId':'d'*64 if mode=='successor' else 'b'*64,'mode':'drained-successor' if mode=='successor' else 'same-boot','admitted':0,'writes':0,'failedWrites':0,'retainedOwners':0}
+ if mode=='stale-nonce': ack['nonce']='e'*64
+ if mode=='wrong-container': ack['containerId']='f'*64
+ if mode=='pending': ack['writes']=1
+ if mode=='unknown-phase': ack['phase']='unknown'
+ if mode=='wrong-boot': ack['sourceBootId']='e'*64
+ if mode=='oversize': print('x'*1025); sys.exit(0)
+ Path(str(p)+'.acked').touch(); print(json.dumps(ack)); sys.exit(0)
 if a==['kill','--signal=TERM','${target}']:
- if mode=='success': Path(str(p)+'.stopped').touch()
+ assert Path(str(p)+'.acked').exists()
+ if mode in ['success','successor']: Path(str(p)+'.stopped').touch()
  sys.exit(0)
 sys.exit(3)
 `);
@@ -141,7 +159,7 @@ finally:
     finally { clearTimeout(observation); }
     try {
       const commands = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[]);
-      expect(commands.every(args => ['inspect', 'kill'].includes(args[0]))).toBe(true);
+      expect(commands.every(args => ['inspect', 'exec', 'kill'].includes(args[0]))).toBe(true);
       expect(commands.filter(args => args[0] === 'kill').every(args => args.join('|') === `kill|--signal=TERM|${target}`)).toBe(true);
       const elapsed = Date.now() - started;
       return { result, commands, elapsed };
@@ -156,17 +174,36 @@ describe('non-force hosted graceful stop', () => {
   it('permits replacement only after known clean closure', async () => {
     const outcome = await run('success'); expect(outcome.result).toBe(0);
     expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(1);
+    expect(outcome.commands.findIndex(args => args[0] === 'exec')).toBeLessThan(outcome.commands.findIndex(args => args[0] === 'kill'));
   });
   it('a refused old process reaches the deadline without stop/remove/start or escalation', async () => {
     const outcome = await run('held'); expect(outcome.result).toBe(1); expect(outcome.elapsed).toBeLessThan(2500);
-    expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(1);
+    expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(0);
   });
   it('bounds a hung Docker state query and never signals the old process', async () => {
     const outcome = await run('hung'); expect(outcome.result).toBe(1); expect(outcome.elapsed).toBeLessThan(2500);
     expect(outcome.commands.some(args => args[0] === 'kill')).toBe(false);
   });
+  it('retains a drained child that fails to close without any signal escalation', async () => {
+    const outcome = await run('postack-held'); expect(outcome.result).toBe(1); expect(outcome.elapsed).toBeLessThan(2500);
+    expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(1);
+  });
+  it('bounds a waiting drain client without committing Docker TERM', async () => {
+    const outcome = await run('drain-timeout'); expect(outcome.result).toBe(1); expect(outcome.elapsed).toBeLessThan(2500);
+    expect(outcome.commands.some(args => args[0] === 'exec')).toBe(true);
+    expect(outcome.commands.some(args => args[0] === 'kill')).toBe(false);
+  });
   it.each(['unsupported', 'changed', 'unclean'])('refuses %s state before replacement', async mode => {
     const outcome = await run(mode); expect(outcome.result).toBe(1);
     expect(outcome.commands.some(args => args[0] === 'kill')).toBe(false);
+  });
+  it.each(['stopped-clean', 'readonly', 'mounted', 'disabled', 'wrong-dir', 'duplicate-env', 'lost-ack', 'unknown', 'stale-nonce',
+    'wrong-container', 'pending', 'unknown-phase', 'wrong-boot', 'oversize', 'changed-boot'])('refuses %s without changing Docker restart eligibility', async mode => {
+    const outcome = await run(mode); expect(outcome.result).toBe(1);
+    expect(outcome.commands.some(args => args[0] === 'kill')).toBe(false);
+  });
+  it('allows only a bound known-drained successor to commit the single final TERM', async () => {
+    const outcome = await run('successor'); expect(outcome.result).toBe(0);
+    expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(1);
   });
 });

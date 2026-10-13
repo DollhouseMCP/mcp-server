@@ -90,9 +90,9 @@ RUN chmod -R 750 /app && \
     chown -R dollhouse:nodejs /app
 
 # Create writable directories with restricted permissions
-RUN mkdir -p /app/tmp /app/logs && \
-    chown -R dollhouse:nodejs /app/tmp /app/logs && \
-    chmod -R 700 /app/tmp /app/logs
+RUN mkdir -p /app/tmp /app/logs /app/.memory-upgrade-control && \
+    chown -R dollhouse:nodejs /app/tmp /app/logs /app/.memory-upgrade-control && \
+    chmod -R 700 /app/tmp /app/logs /app/.memory-upgrade-control
 
 # Switch to non-root user
 USER dollhouse
@@ -108,7 +108,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:'+(process.env.DOLLHOUSE_HTTP_PORT||3000)+'/healthz').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
 
 # Add security labels for container metadata
-LABEL org.dollhousemcp.memory-upgrade-drain="v1"
+LABEL org.dollhousemcp.memory-upgrade-drain="v2"
 LABEL security.non-root="true" \
       security.no-new-privileges="true" \
       security.read-only-root="true"
