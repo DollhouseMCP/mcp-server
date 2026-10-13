@@ -561,6 +561,8 @@ export class MemorySaveHandler {
     this.checkOrigin(origin);
     this.requireLegacyDeferred(manager);
     if (failure) {
+      if (this.handlers.memoryUpgradeLifecycle && failure.error instanceof MemoryWriteOutcomeError &&
+        failure.error.outcome !== 'refused-before-write') throw new MemoryDrainRefusedError('Unknown or committed append cannot be replayed');
       try {
         await this.runInOrigin(failure, () => this.saveMemoryTracked(saveKey, targetMemory, failure.manager, failure));
         this.checkOrigin(origin);
@@ -591,7 +593,23 @@ export class MemorySaveHandler {
     if (origin.bindingCheck) this.checkCurrentRetained(saveKey, targetMemory);
     this.checkOrigin(origin);
     this.requireLegacyDeferred(manager);
-    if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {
+    if (this.handlers.memoryUpgradeLifecycle) {
+      // Keep unacknowledged append/eviction state quiet until persistence is known.
+      if (targetMemory.captureAppendState().fingerprint !== before.fingerprint) {
+        throw new Error(`Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. Check the current memory and retry.`);
+      }
+      await this.saveMemoryTracked(saveKey, candidate, manager, origin, targetMemory);
+      try {
+        this.checkOrigin(origin);
+        if (!manager.publishUnacknowledgedAppend(candidate, targetMemory, before, entryResult)) {
+          throw new Error('Memory changed before committed append publication');
+        }
+      } catch (cause) {
+        const error = new MemoryWriteOutcomeError('known-committed', cause);
+        this.retainFailedSave(saveKey, candidate, manager, origin, error);
+        throw error;
+      }
+    } else if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {
       throw new Error(
         `Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. ` +
         `Check the current memory and retry.`
@@ -599,10 +617,7 @@ export class MemorySaveHandler {
     }
 
     this.trackSaveFrequency(memoryName);
-    if (this.handlers.memoryUpgradeLifecycle) {
-      // A response is never an acknowledgement of only RAM/debounce state.
-      await this.saveMemoryTracked(saveKey, targetMemory, manager, origin);
-    } else this.debouncedMemorySave(memoryName, targetMemory, manager, origin);
+    if (!this.handlers.memoryUpgradeLifecycle) this.debouncedMemorySave(memoryName, targetMemory, manager, origin);
     // Issue #2859: removals are never silent. Expired entries and, for memories
     // with onFull 'evict_oldest', the oldest entries can be removed by this add.
     const removedCount = targetMemory.getPolicyRemovedCount() - policyRemovedBefore;
@@ -737,15 +752,19 @@ export class MemorySaveHandler {
     memory: Memory,
     manager: MemoryManager,
     origin: SaveOrigin = {},
+    unacknowledgedSource?: Memory,
   ): Promise<void> {
     this.checkOrigin(origin);
     const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;
     this.memorySaveAttempts.set(key, attempt);
     let originalProbeToken: string | null = null;
+    let knownSaved = false;
     try {
       this.requireLegacyDeferred(manager);
       if (origin.bindingCheck) originalProbeToken = manager.getMemoryProbeToken(memory);
-      await manager.save(memory);
+      if (unacknowledgedSource) await manager.saveUnacknowledgedAppend(memory, unacknowledgedSource);
+      else await manager.save(memory);
+      knownSaved = true;
       this.checkOrigin(origin);
       // A save already in flight cannot be cancelled. Keep its evidence if the
       // boundary closes before bookkeeping; never claim that it rolled back.
@@ -757,22 +776,26 @@ export class MemorySaveHandler {
         // undefined !== its attempt and correctly skips ledger updates.
         this.memorySaveAttempts.delete(key);
       }
-    } catch (err) {
+    } catch (cause) {
+      const error = unacknowledgedSource && knownSaved ? new MemoryWriteOutcomeError('known-committed', cause) : cause;
       if (this.memorySaveAttempts.get(key) === attempt) {
-        this.failedMemorySaves.set(key, {
-          error: err instanceof Error ? err : new Error(String(err)),
-          memory,
-          manager,
-          probeToken: this.failedSaveProbeToken(origin, manager, memory, originalProbeToken),
-          // getContext() here returns the ambient context on the normal debounced
-          // path, and the re-established context when retried from the shutdown
-          // flush (flushOne runs saveMemoryTracked inside runInSaveContext).
-          context: origin.context ?? this.contextScope?.getContext?.(),
-          bindingCheck: origin.bindingCheck,
-        });
+        if (unacknowledgedSource && error instanceof MemoryWriteOutcomeError && error.outcome === 'refused-before-write') {
+          // No live append was published and no storage write started. This is
+          // an explicit failed request, not pending work for a later append/drain.
+          this.memorySaveAttempts.delete(key);
+        } else this.retainFailedSave(key, memory, manager, origin, error, originalProbeToken);
       }
-      throw err;
+      throw error;
     }
+  }
+
+  private retainFailedSave(key: string, memory: Memory, manager: MemoryManager, origin: SaveOrigin,
+    error: unknown, originalProbeToken: string | null = null): void {
+    this.failedMemorySaves.set(key, {
+      error: error instanceof Error ? error : new Error(String(error)), memory, manager,
+      probeToken: this.failedSaveProbeToken(origin, manager, memory, originalProbeToken),
+      context: origin.context ?? this.contextScope?.getContext?.(), bindingCheck: origin.bindingCheck,
+    });
   }
 
   private failedSaveProbeToken(origin: SaveOrigin, manager: MemoryManager, memory: Memory,

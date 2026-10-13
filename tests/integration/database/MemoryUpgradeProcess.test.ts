@@ -122,8 +122,14 @@ required('memory-safe actual compiled process upgrade', () => {
       }
     }), 180000);
 
-  it('failed persistence retains the disposed child owner and refuses non-force cutover until its exact candidate is known saved', () =>
+  it('failed accepted manual persistence retains the disposed child owner and refuses non-force cutover until its exact candidate is known saved', () =>
     ownedUpgradeProcess('nonforce-deadline', async ({ f, directory, token, spawn: start, ownAuxiliary }) => {
+      // Two actual ordinary DB rows share the normalized name. Appending to
+      // the corrupted-name row must refuse before upsert can select its sibling.
+      const corruptedName = f.name + '.backup-2025-11-14-22-40-57-303';
+      const corruptedId = await f.layer.writeContent('memories', corruptedName, f.raw.replaceAll(f.name, corruptedName),
+        {author:'test-author',version:'1.0.0',description:'',tags:[]});
+      expect(corruptedId).not.toBe(f.memoryId);
       const runtime = await start(); const client = await runtime.connect(token);
       await runtime.rpc('fault', { enabled: true });
       await runtime.rpc('arm', { count: 1 });
@@ -145,6 +151,25 @@ required('memory-safe actual compiled process upgrade', () => {
         const refused = await append;
         const refusedReceipt = JSON.parse(text(refused)) as { success?: boolean };
         expect(refused.isError === true || refusedReceipt.success === false).toBe(true);
+        // A rejected signed append is unacknowledged and never mutates live RAM.
+        expect((await runtime.rpc('summary')).failedWrites).toBe(0);
+        const afterRejected = await f.maintenance`SELECT entry_id,content FROM public.memory_entries WHERE memory_id=${f.memoryId}::uuid`;
+        expect(afterRejected.some(row => row.content === 'Retained failed upgrade candidate')).toBe(false);
+        const identityBefore = await f.maintenance`SELECT to_jsonb(e) AS value FROM public.elements e ORDER BY id`;
+        const childrenBefore = await f.snapshot();
+        // This proof must reach the real identity guard, not the separate
+        // injected save fault (normalization produces this fixture's name).
+        await runtime.rpc('fault', {enabled:false});
+        let rename;
+        try { rename = await runtime.rpc('renamed-append-refusal'); }
+        finally { await runtime.rpc('fault', {enabled:true}); }
+        expect(rename).toMatchObject({saved:false,outcome:'refused-before-write',relocationRefused:true,sourceUnchanged:true,locatorUnchanged:true});
+        expect(await f.maintenance`SELECT to_jsonb(e) AS value FROM public.elements e ORDER BY id`).toEqual(identityBefore);
+        expect(await f.snapshot()).toEqual(childrenBefore);
+        expect((await runtime.rpc('summary')).failedWrites).toBe(0);
+        const manual = await runtime.rpc('manual-retained-save');
+        expect(manual.saved).toBe(false); expect(manual.outcome).toBe('refused-before-write');
+        expect(typeof manual.id).toBe('string');
         expect((await runtime.rpc('summary')).failedWrites).toBeGreaterThan(0);
         const beforeRecovery = await f.maintenance`SELECT entry_id,content FROM public.memory_entries WHERE memory_id=${f.memoryId}::uuid`;
         expect(beforeRecovery.some(row => row.content === 'Retained failed upgrade candidate')).toBe(false);
@@ -183,8 +208,9 @@ required('memory-safe actual compiled process upgrade', () => {
         expect(commands.some(argv => argv[0] === 'kill')).toBe(true);
         expect(commands.every(argv => ['kill', 'inspect'].includes(argv[0]))).toBe(true);
         expect(commands.flat().some(arg => /KILL|^stop$|^rm$|^run$|^start$/u.test(arg))).toBe(false);
-        // The injected error precedes the original SQL body: this proves an
-        // actual-process tracked failure, not a DB rollback/unknown commit.
+        // The private manual caller accepted Memory.addEntry before the
+        // injected prewrite failure. This is actual tracked manual work, not
+        // a signed HTTP ACK, a DB rollback, or an unknown commit.
         // Remove only the owned synthetic storage fault. A fresh real signal
         // must cause the production flush to persist the retained candidate;
         // no test-only ledger clear or force-kill is allowed.
@@ -193,6 +219,8 @@ required('memory-safe actual compiled process upgrade', () => {
         await runtime.waitForClose(); expect(runtime.exitCode).toBe(0);
         const persisted = await f.maintenance`SELECT entry_id,content FROM public.memory_entries WHERE memory_id=${f.memoryId}::uuid`;
         expect(persisted.filter(row => row.content === 'Retained failed upgrade candidate')).toHaveLength(1);
+        expect(persisted.find(row => row.entry_id === manual.id)?.content).toBe('Retained failed upgrade candidate');
+        expect(new Set(persisted.map(row => row.entry_id)).size).toBe(persisted.length);
         expect(persisted.some(row => row.content === 'Preserved entry')).toBe(true);
       } finally {
         if (!runtime.finalClosed) {

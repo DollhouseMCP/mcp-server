@@ -654,8 +654,9 @@ export class Memory extends BaseElement implements IElement {
   }
 
   /** Commit a validated candidate only if no other live mutation intervened. */
-  public commitAppendCandidate(before: MemoryAppendSnapshot, candidate: Memory, entry: MemoryEntry): boolean {
+  public commitAppendCandidate(before: MemoryAppendSnapshot, candidate: Memory, entry: MemoryEntry, publishSavedName = false): boolean {
     if (this.captureAppendState().fingerprint !== before.fingerprint) return false;
+    if (publishSavedName) this.metadata.name = candidate.metadata.name;
     const removedCount = candidate.policyRemovedCount - this.policyRemovedCount;
     this.replaceEntries(candidate.entries);
     this.policyRemovedCount = candidate.policyRemovedCount;

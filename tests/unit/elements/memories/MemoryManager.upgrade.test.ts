@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import path from 'node:path';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
+import { MemorySaveHandler } from '../../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import { Memory } from '../../../../src/elements/memories/Memory.js';
 import { BackgroundValidator } from '../../../../src/security/validation/BackgroundValidator.js';
 import type { PatternExtractor } from '../../../../src/security/validation/PatternExtractor.js';
@@ -21,7 +22,7 @@ import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispa
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
-async function owned(body: (manager: MemoryManager, lifecycle: MemoryUpgradeLifecycle, memory: Memory) => Promise<void>) {
+async function owned(body: (manager: MemoryManager, lifecycle: MemoryUpgradeLifecycle, memory: Memory) => Promise<void>, retainedFixture = false) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'memory-upgrade-unit-'));
   const metadata = createTestMetadataService();
   const locks = new FileLockManager();
@@ -37,13 +38,155 @@ async function owned(body: (manager: MemoryManager, lifecycle: MemoryUpgradeLife
   try { await body(manager, lifecycle, memory); }
   finally {
     // Never hide or discard an unresolved original write in fixture teardown.
-    await lifecycle.quiesceAndDrain();
-    manager.dispose();
+    if (retainedFixture) {
+      // Disposable unit fixture only: prove refusal without leaving a real
+      // keepalive timer. The retained owners/candidates are never cleared.
+      jest.useFakeTimers();
+      try {
+        await expect(lifecycle.quiesceAndDrain()).rejects.toMatchObject({ code: 'EMEMORYDRAIN' });
+        expect(lifecycle.getSummary()).toMatchObject({ admitted: 0, writes: 0 });
+        expect(lifecycle.getSummary().retainedOwners).toBeGreaterThan(0);
+        expect(jest.getTimerCount()).toBe(1);
+      } finally { jest.useRealTimers(); }
+    } else {
+      await lifecycle.quiesceAndDrain();
+      manager.dispose();
+    }
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 describe('Memory manager upgrade obligations', () => {
+  it('does not duplicate an unacknowledged append after an injected definite prewrite failure', () => owned(async (manager, lifecycle, memory) => {
+    await memory.addEntry('Baseline retained');
+    await manager.save(memory);
+    const handler = new MemorySaveHandler({ memoryManager: manager, memoryUpgradeLifecycle: lifecycle } as
+      ConstructorParameters<typeof MemorySaveHandler>[0], name => `owned-session:${name}`);
+    const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+    const disk = async () => new SerializationService().parsePureYaml(await readFile(path.join(root, memory.getFilePath()!), 'utf8'));
+    let source!: Memory;
+    const fresh = manager.runFreshMemoryMutation.bind(manager);
+    const lookup = jest.spyOn(manager, 'runFreshMemoryMutation').mockImplementation((name, mutate) => fresh(name, current => {
+      source = current;
+      return mutate(current);
+    }));
+    const paths = manager as unknown as { resolveMemorySavePath: (memory: Memory, filePath?: string) => Promise<string> };
+    const create = jest.spyOn(paths, 'resolveMemorySavePath').mockRejectedValueOnce(new Error('Owned append path prewrite refusal'));
+    const params = { element_name: memory.metadata.name, content: 'Original client retry' };
+    try {
+      const firstFailure = await handler.dispatch('addEntry', params).then(() => undefined, error => error);
+      const firstEntries = [...source.getEntries().values()].map(entry => entry.content);
+      const firstDisk = await disk();
+      const firstSummary = lifecycle.getSummary();
+      const receipt = await handler.dispatch('addEntry', params) as { id: string };
+      const raw = await disk();
+      await handler.dispatch('addEntry', params); // A later intentional identical append remains a distinct operation.
+      const intentional = await disk();
+      // Settle before assertions so a historical failure cannot hide the original operands.
+      await lifecycle.quiesceAndDrain();
+      await handler.dispose();
+      expect(raw.entries.filter((entry: { content: string }) => entry.content === params.content)).toHaveLength(1);
+      expect(firstFailure).toMatchObject({ outcome: 'refused-before-write' });
+      expect(firstEntries).toEqual(['Baseline retained']);
+      expect(firstDisk.entries.map((entry: { content: string }) => entry.content)).toEqual(['Baseline retained']);
+      expect(firstSummary).toMatchObject({ failedWrites: 0, retainedOwners: 0 });
+      expect(raw.entries.find((entry: { id: string }) => entry.id === receipt.id)?.content).toBe(params.content);
+      expect(raw.entries.filter((entry: { content: string }) => entry.content === 'Baseline retained')).toHaveLength(1);
+      expect(intentional.entries.filter((entry: { content: string }) => entry.content === params.content)).toHaveLength(2);
+      expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, retainedOwners: 0 });
+    } finally { create.mockRestore(); lookup.mockRestore(); }
+  }));
+  it('transfers persisted append read authority back to the same source instance', () => owned(async (manager, _lifecycle, memory) => {
+    await memory.addEntry('Baseline retained');
+    await manager.save(memory);
+    await manager.runFreshMemoryMutation(memory.metadata.name, async source => {
+      for (const content of ['First durable append', 'Second durable append']) {
+        const before = source.captureAppendState();
+        const candidate = source.createAppendCandidate();
+        const entry = await candidate.addEntry(content);
+        await manager.saveUnacknowledgedAppend(candidate, source);
+        expect(manager.publishUnacknowledgedAppend(candidate, source, before, entry)).toBe(true);
+      }
+      expect([...source.getEntries().values()].map(entry => entry.content)).toEqual(
+        ['Baseline retained', 'First durable append', 'Second durable append']);
+    });
+    await manager.runFreshMemoryMutation(memory.metadata.name, async fresh => {
+      expect([...fresh.getEntries().values()].map(entry => entry.content)).toEqual(
+        ['Baseline retained', 'First durable append', 'Second durable append']);
+    });
+  }));
+
+  it('refuses an unacknowledged append if its source changes while the storage path is resolved', () => owned(async (manager, lifecycle, memory) => {
+    await memory.addEntry('Baseline retained'); await manager.save(memory);
+    await manager.runFreshMemoryMutation(memory.metadata.name, async source => {
+      const candidate = source.createAppendCandidate();
+      await candidate.addEntry('Rejected staged append');
+      const paths = manager as unknown as { resolveMemorySavePath: (memory: Memory, filePath?: string) => Promise<string> };
+      const resolve = paths.resolveMemorySavePath.bind(manager);
+      const path = jest.spyOn(paths, 'resolveMemorySavePath').mockImplementationOnce(async (...args) => {
+        const result = await resolve(...args);
+        await source.addEntry('Concurrent caller state');
+        return result;
+      });
+      try {
+        await expect(manager.saveUnacknowledgedAppend(candidate, source)).rejects.toMatchObject({ outcome: 'refused-before-write' });
+        expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, writes: 0 });
+      } finally { path.mockRestore(); }
+      // The actual concurrent caller can persist its own state; the rejected
+      // candidate is never replayed, copied, or acknowledged.
+      await manager.save(source);
+    });
+    const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+    const raw = new SerializationService().parsePureYaml(await readFile(path.join(root, memory.getFilePath()!), 'utf8'));
+    expect(raw.entries.map((entry: { content: string }) => entry.content)).toEqual(['Concurrent caller state', 'Baseline retained']);
+  }));
+
+  it('retains an unknown unacknowledged append without publishing or replaying it', () => owned(async (manager, lifecycle, memory) => {
+    await memory.addEntry('Baseline retained'); await manager.save(memory);
+    const handler = new MemorySaveHandler({ memoryManager: manager, memoryUpgradeLifecycle: lifecycle } as
+      ConstructorParameters<typeof MemorySaveHandler>[0], name => `owned-session:${name}`);
+    const files = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const write = jest.spyOn(files, 'writeFile').mockRejectedValueOnce(new Error('Owned started write outcome unknown'));
+    const params = { element_name: memory.metadata.name, content: 'Unknown client append' };
+    try {
+      await expect(handler.dispatch('addEntry', params)).rejects.toMatchObject({ outcome: 'unknown' });
+      const retained = [...(handler as unknown as { failedMemorySaves: Map<string, { memory: Memory }> }).failedMemorySaves.values()][0].memory;
+      expect([...retained.getEntries().values()].map(entry => entry.content)).toEqual(['Baseline retained', params.content]);
+      await expect(handler.dispatch('addEntry', params)).rejects.toThrow('cannot be replayed');
+      await expect(handler.flushPendingSaves()).rejects.toThrow('cannot be replayed');
+      expect(write).toHaveBeenCalledTimes(1);
+      const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+      const raw = new SerializationService().parsePureYaml(await readFile(path.join(root, memory.getFilePath()!), 'utf8'));
+      expect(raw.entries.map((entry: { content: string }) => entry.content)).toEqual(['Baseline retained']);
+      expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 1, writes: 0 });
+    } finally { write.mockRestore(); }
+  }, true));
+
+  it.each(['source-state', 'saved-locator'])('retains a known committed append on %s publication conflict and never replays it', conflict => owned(async (manager, lifecycle, memory) => {
+    await memory.addEntry('Baseline retained'); await manager.save(memory);
+    const handler = new MemorySaveHandler({ memoryManager: manager, memoryUpgradeLifecycle: lifecycle } as
+      ConstructorParameters<typeof MemorySaveHandler>[0], name => `owned-session:${name}`);
+    const save = manager.saveUnacknowledgedAppend.bind(manager);
+    const pending = jest.spyOn(manager, 'saveUnacknowledgedAppend').mockImplementation(async (candidate, source) => {
+      await save(candidate, source);
+      if (conflict === 'source-state') await source.addEntry('Owned concurrent RAM publication');
+      else candidate.setFilePath('unexpected-saved-locator.yaml');
+    });
+    const files = (manager as unknown as { fileOperations: FileOperationsService }).fileOperations;
+    const write = jest.spyOn(files, 'writeFile');
+    const params = { element_name: memory.metadata.name, content: 'Committed client append' };
+    try {
+      await expect(handler.dispatch('addEntry', params)).rejects.toMatchObject({ outcome: 'known-committed' });
+      await expect(handler.dispatch('addEntry', params)).rejects.toThrow('cannot be replayed');
+      await expect(handler.flushPendingSaves()).rejects.toThrow('cannot be replayed');
+      expect(write).toHaveBeenCalledTimes(1);
+      const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+      const raw = new SerializationService().parsePureYaml(await readFile(path.join(root, memory.getFilePath()!), 'utf8'));
+      expect(raw.entries.map((entry: { content: string }) => entry.content)).toEqual([params.content, 'Baseline retained']);
+      expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, writes: 0, retainedOwners: 1 });
+    } finally { pending.mockRestore(); write.mockRestore(); }
+  }, true));
+
   it('fresh file discovery follows each current owner root instead of the root-created storage resolver', () => owned(async (manager, _lifecycle, memory) => {
     const owner = new AsyncLocalStorage<string>();
     const internals = manager as unknown as { portfolioManager: PortfolioManager; getCacheNamespace: () => string };

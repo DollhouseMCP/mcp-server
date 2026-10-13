@@ -12,7 +12,7 @@ import { matchesPortfolioName } from '../../utils/portfolioName.js';
  * 5. MEDIUM: Path validation prevents directory traversal attacks
  */
 
-import type { MemoryEntry, MemoryMetadata } from './Memory.js';
+import type { MemoryEntry, MemoryMetadata, MemoryAppendSnapshot } from './Memory.js';
 import { Memory } from './Memory.js';
 import type { MemoryHeadUpdateAdapter, MemoryUpdateCandidate, PendingMemoryUpdate } from '../../storage/MemoryHeadUpdateAdapter.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
@@ -645,11 +645,61 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return operation;
   }
 
-  private async saveAfterUpgradePreflight(element: Memory, filePath?: string, options?: ElementSaveOptions): Promise<void> {
+  /** Persist a quiet, not-yet-acknowledged append without accepting a proven prewrite refusal.
+   * Unknown/committed outcomes retain the same ordinary lifecycle obligations. */
+  saveUnacknowledgedAppend(candidate: Memory, source: Memory): Promise<void> {
+    if (!this.memoryUpgrade || this.guardedUpdateAdapter) return Promise.reject(new MemoryDrainRefusedError('Unacknowledged append requires the ordinary upgrade path'));
+    const path = source.getFilePath();
+    if (!path) return Promise.reject(new MemoryWriteOutcomeError('refused-before-write', new Error('Original append storage path unavailable')));
+    candidate.setFilePath(path);
+    const owner = this.captureUpgradeOwner();
+    const root = this.memoriesDir;
+    const sourceName = source.metadata.name;
+    const database = isWritableStorageLayer(this.storageLayer);
+    const options = database ? { expectedIdentity: { id: path, name: sourceName } } : undefined;
+    const sourceState = source.captureAppendState().fingerprint;
+    const verifyUnacknowledgedSource = () => {
+      if (database && candidate.metadata.name !== sourceName) {
+        throw new MemoryWriteOutcomeError('refused-before-write', new Error('Database append cannot relocate a renamed memory; repair and reload through an identity-preserving operation first'));
+      }
+      if (this.captureUpgradeOwner() !== owner || this.memoriesDir !== root ||
+        source.captureAppendState().fingerprint !== sourceState) {
+        throw new MemoryWriteOutcomeError('refused-before-write', new Error('Original append state or ownership changed before persistence'));
+      }
+    };
+    const loaded = this.upgradeLoadedSnapshots.get(source);
+    if (loaded) this.upgradeLoadedSnapshots.set(candidate, loaded);
+    const operation = this.saveAfterUpgradePreflight(candidate, undefined, options, true, verifyUnacknowledgedSource).catch(cause => {
+      if (cause instanceof MemoryWriteOutcomeError) throw cause;
+      // All persistence-body failures are classified inside runWrite below;
+      // this branch is an unstarted preflight/authority refusal.
+      throw new MemoryWriteOutcomeError('refused-before-write', cause);
+    });
+    this.upgradeSaveOperations.add(operation);
+    void operation.then(() => this.upgradeSaveOperations.delete(operation), () => this.upgradeSaveOperations.delete(operation));
+    return operation;
+  }
+
+  /** Publish only known persisted state and transfer its refreshed read authority. */
+  publishUnacknowledgedAppend(candidate: Memory, source: Memory, before: MemoryAppendSnapshot, entry: MemoryEntry): boolean {
+    if (!this.memoryUpgrade || this.guardedUpdateAdapter) throw new MemoryDrainRefusedError();
+    if (candidate.getFilePath() !== source.getFilePath()) {
+      throw new MemoryWriteOutcomeError('known-committed', new Error('Saved append locator changed; retain the original and persisted candidate for explicit reconciliation'));
+    }
+    const previousName = source.metadata.name;
+    if (!source.commitAppendCandidate(before, candidate, entry, true)) return false;
+    if (previousName !== candidate.metadata.name) this.recordLegacyNameRepair(previousName, candidate.metadata.name);
+    const saved = this.upgradeLoadedSnapshots.get(candidate);
+    if (saved) this.upgradeLoadedSnapshots.set(source, saved);
+    return true;
+  }
+
+  private async saveAfterUpgradePreflight(element: Memory, filePath?: string, options?: ElementSaveOptions,
+    unacknowledgedAppend = false, verifyUnacknowledgedSource?: () => void): Promise<void> {
     const attempt: MemoryWriteAttempt = { phase: 'not-started' };
-    const write = () => this.saveMemoryKnown(element, filePath, options, attempt);
+    const write = () => this.saveMemoryKnown(element, filePath, options, attempt, verifyUnacknowledgedSource);
     if (!this.memoryUpgrade) return write();
-    if (!this.guardedUpdateAdapter) this.repairLegacySaveName(element);
+    if (!this.guardedUpdateAdapter) this.repairLegacySaveName(element, !unacknowledgedAppend);
     // A definite pure validation refusal is not a started/unknown write.
     const validation = element.validate();
     if (!validation.valid) throw new Error(`Invalid memory: ${validation.errors?.map(error => error.message).join(', ')}`);
@@ -688,7 +738,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
         const pending = this.guardedUpdateAdapter!.getPendingUpdate(element);
         if (pending?.status === 'refused' || (!pending && attempt.phase === 'not-started')) return undefined;
         return pending?.status === 'committed-publication-failed' ? 'known-committed' : 'unknown';
-      } : undefined);
+      } : unacknowledgedAppend ? error => error instanceof MemoryWriteOutcomeError ?
+        (error.outcome === 'refused-before-write' ? undefined : error.outcome) : 'unknown' : undefined);
     });
   }
 
@@ -761,7 +812,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /** Existing legacy repair must precede the frozen retry target and payload. */
-  private repairLegacySaveName(element: Memory): void {
+  private repairLegacySaveName(element: Memory, emitAudit = true): void {
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -772,17 +823,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
       );
       element.metadata.name = originalName;
 
-      SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
-        severity: 'MEDIUM',
-        source: 'MemoryManager.save',
-        details: `Issue #39: Auto-repaired corrupted backup name: '${memoryName}' -> '${originalName}'`
-      });
+      if (emitAudit) this.recordLegacyNameRepair(memoryName, originalName);
     }
   }
 
+  private recordLegacyNameRepair(memoryName: string, originalName: string): void {
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
+      severity: 'MEDIUM',
+      source: 'MemoryManager.save',
+      details: `Issue #39: Auto-repaired corrupted backup name: '${memoryName}' -> '${originalName}'`,
+    });
+  }
+
   private async saveMemoryKnown(element: Memory, filePath?: string, options?: ElementSaveOptions,
-    attempt?: MemoryWriteAttempt): Promise<void> {
+    attempt?: MemoryWriteAttempt, verifyUnacknowledgedSource?: () => void): Promise<void> {
     if (this.guardedUpdateAdapter) {
       await this.saveGuardedMemory(element, filePath, options, attempt);
       if (attempt) attempt.phase = 'known-committed';
@@ -825,6 +880,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // MEMORY_SAVE_FAILED is emitted via the onSaveError hook (base class calls it
     // from its transaction rollback). No try/catch wrapper here — that would
     // double-emit alongside base's element:save:error event.
+    verifyUnacknowledgedSource?.();
     if (attempt) attempt.phase = 'started';
     await super.save(element, resolvedRelativePath, options);
     if (attempt) attempt.phase = 'known-committed';

@@ -34,6 +34,14 @@ DollhouseContainer.prototype.resolve = function(name, ...args) {
   if (name === 'MemoryUpgradeLifecycle') rootLifecycle = value;
   return value;
 };
+// Capture only this synthetic session's real source/context. The manual-work
+// control below calls existing APIs, never fabricates a ledger or a client ACK.
+let manualSource;
+const originalAppend = MemorySaveHandler.prototype.appendValidated;
+MemorySaveHandler.prototype.appendValidated = async function(name, memory, manager, key, prior, input) {
+  if (name === process.env.DOLLHOUSE_UPGRADE_PROOF_MEMORY) manualSource = {handler:this,memory,manager,key,origin:input.origin};
+  return Reflect.apply(originalAppend, this, [name,memory,manager,key,prior,input]);
+};
 const original = MemoryManager.prototype.saveMemoryKnown;
 if (typeof original !== 'function') throw new Error('Actual compiled tracked persistence body unavailable');
 let remaining = 0, persistenceFault = false;
@@ -65,6 +73,35 @@ MemorySaveHandler.prototype.dispose = async function(...args) {
 process.on('message', message => {
   if (!message || typeof message.id !== 'string') return;
   let result;
+  if (message.command === 'renamed-append-refusal') {
+    if (!manualSource || !rootLifecycle) { send({id:message.id,error:'Actual captured database owner unavailable'}); return; }
+    const source = manualSource;
+    const name = process.env.DOLLHOUSE_UPGRADE_PROOF_MEMORY + '.backup-2025-11-14-22-40-57-303';
+    void rootLifecycle.runRequest(() => source.handler.runInOrigin(source.origin, () =>
+      source.manager.runFreshMemoryMutation(name, async memory => {
+        const original = memory.serialize(), locator = memory.getFilePath();
+        const candidate = memory.createAppendCandidate();
+        await candidate.addEntry('Rejected cross-row append');
+        try { await source.manager.saveUnacknowledgedAppend(candidate,memory); return {saved:true}; }
+        catch (error) { return {saved:false,outcome:error.outcome,relocationRefused:error.message.startsWith('Database append cannot relocate'),sourceUnchanged:memory.serialize()===original,locatorUnchanged:memory.getFilePath()===locator}; }
+      })
+    )).then(result => send({id:message.id,result}), () => send({id:message.id,error:'Renamed owner context refused'}));
+    return;
+  }
+  if (message.command === 'manual-retained-save') {
+    if (!manualSource || !rootLifecycle) { send({id:message.id,error:'Actual captured manual owner unavailable'}); return; }
+    const source = manualSource;
+    void rootLifecycle.runRequest(() => source.handler.runInOrigin(source.origin, async () => {
+      // An internal manual caller accepts this actual Memory.addEntry result.
+      // Persistence then fails; this is intentionally NOT a signed HTTP ACK.
+      const entry = await source.memory.addEntry('Retained failed upgrade candidate');
+      try {
+        await source.handler.saveMemoryTracked(source.key,source.memory,source.manager,source.origin);
+        return {saved:true,id:entry.id};
+      } catch (error) { return {saved:false,id:entry.id,outcome:error.outcome}; }
+    })).then(result => send({id:message.id,result}), () => send({id:message.id,error:'Manual owner context refused'}));
+    return;
+  }
   if (message.command === 'arm' && Number.isSafeInteger(message.count) && message.count > 0 && message.count <= 4) { remaining=message.count; result={armed:remaining}; }
   else if (message.command === 'release-all') { for (const release of held.values()) release(); result={released:held.size}; }
   else if (message.command === 'fault' && typeof message.enabled === 'boolean') { persistenceFault=message.enabled; result={enabled:persistenceFault}; }
@@ -135,7 +172,7 @@ export class MemoryUpgradeRuntime {
       return !!this.url && this.messages.some(frame => frame.event === 'observer-ready');
     }, 60000);
   }
-  async rpc(command: 'arm' | 'release-all' | 'fault' | 'stats' | 'summary', fields: UpgradeFrame = {}): Promise<UpgradeFrame> {
+  async rpc(command: 'arm' | 'release-all' | 'fault' | 'stats' | 'summary' | 'manual-retained-save' | 'renamed-append-refusal', fields: UpgradeFrame = {}): Promise<UpgradeFrame> {
     if (!this.child.connected) throw new Error('Owned upgrade IPC disconnected');
     const id = randomUUID();
     let cap: ReturnType<typeof setTimeout> | undefined;
