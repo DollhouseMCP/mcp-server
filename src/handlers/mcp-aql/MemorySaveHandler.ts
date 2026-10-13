@@ -4,7 +4,7 @@ import { STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
-import type { Memory } from '../../elements/memories/Memory.js';
+import type { Memory, MemoryAppendSnapshot } from '../../elements/memories/Memory.js';
 import type { ExecutionContext } from '../../security/encryption/ContextTracker.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { validateRequiredString } from './shared.js';
@@ -561,8 +561,7 @@ export class MemorySaveHandler {
     this.checkOrigin(origin);
     this.requireLegacyDeferred(manager);
     if (failure) {
-      if (this.handlers.memoryUpgradeLifecycle && failure.error instanceof MemoryWriteOutcomeError &&
-        failure.error.outcome !== 'refused-before-write') throw new MemoryDrainRefusedError('Unknown or committed append cannot be replayed');
+      this.requireReplayableAppend(failure);
       try {
         await this.runInOrigin(failure, () => this.saveMemoryTracked(saveKey, targetMemory, failure.manager, failure));
         this.checkOrigin(origin);
@@ -599,16 +598,7 @@ export class MemorySaveHandler {
         throw new Error(`Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. Check the current memory and retry.`);
       }
       await this.saveMemoryTracked(saveKey, candidate, manager, origin, targetMemory);
-      try {
-        this.checkOrigin(origin);
-        if (!manager.publishUnacknowledgedAppend(candidate, targetMemory, before, entryResult)) {
-          throw new Error('Memory changed before committed append publication');
-        }
-      } catch (cause) {
-        const error = new MemoryWriteOutcomeError('known-committed', cause);
-        this.retainFailedSave(saveKey, candidate, manager, origin, error);
-        throw error;
-      }
+      this.publishSavedAppend(saveKey, targetMemory, candidate, before, entryResult, manager, origin);
     } else if (!targetMemory.commitAppendCandidate(before, candidate, entryResult)) {
       throw new Error(
         `Entry NOT saved to memory '${memoryName}': memory changed during validation, so the append was not applied. ` +
@@ -629,6 +619,26 @@ export class MemorySaveHandler {
       trustLevel: entryResult.trustLevel,
       ...this.removalWarningFields(memoryName, removedCount),
     };
+  }
+
+  private requireReplayableAppend(failure: FailedSave): void {
+    if (this.handlers.memoryUpgradeLifecycle && failure.error instanceof MemoryWriteOutcomeError &&
+      failure.error.outcome !== 'refused-before-write') throw new MemoryDrainRefusedError('Unknown or committed append cannot be replayed');
+  }
+
+  /** Synchronous publication preserves the caller's original post-save boundary. */
+  private publishSavedAppend(saveKey: string, targetMemory: Memory, candidate: Memory, before: MemoryAppendSnapshot,
+    entry: Awaited<ReturnType<Memory['addEntry']>>, manager: MemoryManager, origin: SaveOrigin): void {
+    try {
+      this.checkOrigin(origin);
+      if (!manager.publishUnacknowledgedAppend(candidate, targetMemory, before, entry)) {
+        throw new Error('Memory changed before committed append publication');
+      }
+    } catch (cause) {
+      const error = new MemoryWriteOutcomeError('known-committed', cause);
+      this.retainFailedSave(saveKey, candidate, manager, origin, error);
+      throw error;
+    }
   }
 
   /** Bound work preserves its original cause; ordinary retries retain the existing explanation. */

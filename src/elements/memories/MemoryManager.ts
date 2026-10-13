@@ -48,7 +48,7 @@ import type { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as crypto from 'node:crypto';
-import { MemoryDrainRefusedError, MemoryWriteOutcomeError } from '../../lifecycle/MemoryUpgradeLifecycle.js';
+import { MemoryDrainRefusedError, MemoryWriteOutcomeError, type MemoryWriteOutcome } from '../../lifecycle/MemoryUpgradeLifecycle.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
@@ -699,6 +699,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const attempt: MemoryWriteAttempt = { phase: 'not-started' };
     const write = () => this.saveMemoryKnown(element, filePath, options, attempt, verifyUnacknowledgedSource);
     if (!this.memoryUpgrade) return write();
+    // Quiet candidates still normalize; the repair audit waits for live publication.
     if (!this.guardedUpdateAdapter) this.repairLegacySaveName(element, !unacknowledgedAppend);
     // A definite pure validation refusal is not a started/unknown write.
     const validation = element.validate();
@@ -734,13 +735,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
           else if (attempt.phase === 'known-committed') outcome = 'known-committed';
           throw new MemoryWriteOutcomeError(outcome, cause);
         }
-      }, { owner: this, target, scope: this.upgradeTargetKey(), candidate, candidateDigest: crypto.createHash('sha256').update(candidate).digest('hex') }, this.guardedUpdateAdapter ? () => {
-        const pending = this.guardedUpdateAdapter!.getPendingUpdate(element);
-        if (pending?.status === 'refused' || (!pending && attempt.phase === 'not-started')) return undefined;
-        return pending?.status === 'committed-publication-failed' ? 'known-committed' : 'unknown';
-      } : unacknowledgedAppend ? error => error instanceof MemoryWriteOutcomeError ?
-        (error.outcome === 'refused-before-write' ? undefined : error.outcome) : 'unknown' : undefined);
+      }, { owner: this, target, scope: this.upgradeTargetKey(), candidate, candidateDigest: crypto.createHash('sha256').update(candidate).digest('hex') }, this.upgradeWriteFailureClassifier(element, attempt, unacknowledgedAppend));
     });
+  }
+
+  private upgradeWriteFailureClassifier(element: Memory, attempt: MemoryWriteAttempt,
+    unacknowledgedAppend: boolean): ((error: unknown) => MemoryWriteOutcome | undefined) | undefined {
+    if (this.guardedUpdateAdapter) return () => {
+      const pending = this.guardedUpdateAdapter!.getPendingUpdate(element);
+      if (pending?.status === 'refused' || (!pending && attempt.phase === 'not-started')) return undefined;
+      if (pending?.status === 'committed-publication-failed') return 'known-committed';
+      return 'unknown';
+    };
+    if (unacknowledgedAppend) return error => {
+      if (!(error instanceof MemoryWriteOutcomeError)) return 'unknown';
+      if (error.outcome === 'refused-before-write') return undefined;
+      return error.outcome;
+    };
+    return undefined;
   }
 
   private async readUpgradeContent(filePath: string): Promise<string> {

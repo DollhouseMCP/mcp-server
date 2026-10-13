@@ -19,8 +19,9 @@ if [[ "${1:-}" == "--case" ]]; then
   render_files() { :; }
   # Real moves exercise bundle restoration on failed promotion.
   mv() {
-    printf 'move:%s\n' "$(basename "$1")" >> "${EVENTS}"
-    if [[ "${MODE}" == "promotion-failure" && "$1" == *server.prev-* ]]; then
+    local source_path="$1"
+    printf 'move:%s\n' "$(basename "${source_path}")" >> "${EVENTS}"
+    if [[ "${MODE}" == "promotion-failure" && "${source_path}" == *server.prev-* ]]; then
       return 1
     fi
     command mv "$@"
