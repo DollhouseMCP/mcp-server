@@ -23,7 +23,8 @@ function identity(value: unknown): value is MemoryControlIdentity {
 }
 
 function exactKeys(value: object, keys: string[]): boolean {
-  return Object.keys(value).sort().join(',') === keys.sort().join(',');
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every(key => actual.includes(key));
 }
 
 /** Private admission hold, not a payload journal or recovery authority. Never cleared automatically. */

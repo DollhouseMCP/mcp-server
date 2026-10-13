@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
-import { MemoryUpgradeOperator } from '/app/dist/lifecycle/MemoryUpgradeOperator.js';
-import { MemoryUpgradeLifecycle } from '/app/dist/lifecycle/MemoryUpgradeLifecycle.js';
+import { MemoryUpgradeOperator } from '../app/dist/lifecycle/MemoryUpgradeOperator.js';
+import { MemoryUpgradeLifecycle } from '../app/dist/lifecycle/MemoryUpgradeLifecycle.js';
 
 // Synthetic engine witness only: no app root, clients, payloads or database.
 const directory = '/app/.memory-upgrade-control';

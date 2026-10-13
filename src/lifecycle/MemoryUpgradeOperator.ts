@@ -133,11 +133,12 @@ export class MemoryUpgradeOperator {
 
   private parseRequest(raw: string): ControlRequest {
     const request = JSON.parse(raw) as ControlRequest;
-    if (!request || request.protocol !== 2 || typeof request.nonce !== 'string' || !CONTROL_TOKEN.test(request.nonce) ||
+    if (request?.protocol !== 2 || typeof request.nonce !== 'string' || !CONTROL_TOKEN.test(request.nonce) ||
       !['hello', 'drain'].includes(request.phase)) throw new Error('Invalid memory control request');
     const keys = request.phase === 'hello' ? ['protocol', 'phase', 'nonce'] :
       ['protocol', 'phase', 'nonce', 'bootId', 'containerId', 'remainingMs'];
-    if (Object.keys(request).sort().join(',') !== keys.sort().join(',')) throw new Error('Invalid memory control fields');
+    const actualKeys = Object.keys(request);
+    if (actualKeys.length !== keys.length || !keys.every(key => actualKeys.includes(key))) throw new Error('Invalid memory control fields');
     if (request.phase === 'drain' && (typeof request.bootId !== 'string' || !CONTROL_TOKEN.test(request.bootId) ||
       typeof request.containerId !== 'string' || !CONTROL_TOKEN.test(request.containerId) ||
       !Number.isSafeInteger(request.remainingMs) || request.remainingMs! <= 0 || request.remainingMs! > 30_000)) {

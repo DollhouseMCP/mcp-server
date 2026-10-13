@@ -3,12 +3,23 @@ import path from 'node:path';
 import { CONTROL_MAX_BYTES, CONTROL_TOKEN } from './MemoryUpgradeControlState.js';
 import type { MemoryDrainAcknowledgement } from './MemoryUpgradeOperator.js';
 
+function exactKeys(value: object, keys: string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every(key => actual.includes(key));
+}
+
+function validHello(response: Record<string, unknown>, nonce: string): response is Record<string, unknown> & { bootId: string } {
+  return response.protocol === 2 && response.phase === 'hello' && response.nonce === nonce &&
+    typeof response.bootId === 'string' && CONTROL_TOKEN.test(response.bootId) &&
+    exactKeys(response, ['bootId', 'nonce', 'phase', 'protocol']);
+}
+
 function validAcknowledgement(value: unknown, containerId: string, nonce: string, bootId: string): value is MemoryDrainAcknowledgement {
   if (!value || typeof value !== 'object') return false;
   const ack = value as MemoryDrainAcknowledgement;
   const keys = ['protocol', 'phase', 'containerId', 'nonce', 'bootId', 'generation', 'sourceBootId', 'mode',
     'admitted', 'writes', 'failedWrites', 'retainedOwners'];
-  if (Object.keys(value).sort().join(',') !== keys.sort().join(',')) return false;
+  if (!exactKeys(value, keys)) return false;
   return ack.protocol === 2 && ack.phase === 'drained' && ack.containerId === containerId && ack.nonce === nonce &&
     ack.bootId === bootId && typeof ack.generation === 'string' && CONTROL_TOKEN.test(ack.generation) &&
     typeof ack.sourceBootId === 'string' && CONTROL_TOKEN.test(ack.sourceBootId) &&
@@ -38,9 +49,7 @@ export async function requestMemoryDrain(directory: string, containerId: string,
       const response = JSON.parse(pending.slice(0, boundary)) as Record<string, unknown>;
       pending = '';
       if (!bootId) {
-        if (response.protocol !== 2 || response.phase !== 'hello' || response.nonce !== nonce ||
-          typeof response.bootId !== 'string' || !CONTROL_TOKEN.test(response.bootId) ||
-          Object.keys(response).sort().join(',') !== 'bootId,nonce,phase,protocol') throw new Error('Invalid memory drain hello');
+        if (!validHello(response, nonce)) throw new Error('Invalid memory drain hello');
         bootId = response.bootId;
         const budget = Math.min(deadline - Date.now(), 30_000);
         if (budget <= 0) throw new Error('Memory drain client deadline');
@@ -59,7 +68,10 @@ if (direct) {
   const [containerId, nonce, budget] = process.argv.slice(2);
   const directory = process.env.DOLLHOUSE_MEMORY_UPGRADE_CONTROL_DIR;
   if (!directory || process.argv.length !== 5) process.exitCode = 1;
-  else void requestMemoryDrain(directory, containerId, nonce, Number(budget))
-    .then(ack => process.stdout.write(`${JSON.stringify(ack)}\n`))
-    .catch(() => { process.exitCode = 1; });
+  else {
+    try {
+      const ack = await requestMemoryDrain(directory, containerId, nonce, Number(budget));
+      process.stdout.write(`${JSON.stringify(ack)}\n`);
+    } catch { process.exitCode = 1; }
+  }
 }
