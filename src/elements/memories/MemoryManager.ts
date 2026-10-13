@@ -734,9 +734,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
       return this.memoryUpgrade!.runWrite(async () => {
         try {
           await write();
-          if (!this.guardedUpdateAdapter && loaded) this.upgradeLoadedSnapshots.set(element, {
-            ...loaded, sha256: crypto.createHash('sha256').update(await this.readUpgradeContent(loaded.path)).digest('hex'),
-          });
+          if (!this.guardedUpdateAdapter && loaded) {
+            // afterSave records the actual persisted locator, including explicit relocation.
+            const savedLocator = element.getFilePath();
+            if (savedLocator === undefined) throw new MemoryDrainRefusedError('Persisted memory locator unavailable; retain it without replay');
+            this.upgradeLoadedSnapshots.set(element, {
+              ...loaded, path: savedLocator,
+              sha256: crypto.createHash('sha256').update(await this.readUpgradeContent(savedLocator)).digest('hex'),
+            });
+          }
         } catch (cause) {
           if (this.guardedUpdateAdapter) throw cause;
           let outcome: 'refused-before-write' | 'unknown' | 'known-committed' = 'unknown';

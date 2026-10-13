@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from '@jest/globals';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import path from 'node:path';
@@ -374,6 +374,37 @@ describe('Memory manager upgrade obligations', () => {
     await manager.save(memory);
     expect(manager.hasRetainedMemoryWork()).toBe(false);
     expect(lifecycle.getSummary().failedWrites).toBe(0);
+  }));
+
+  it.each(['old-source', 'saved-destination'])('refreshes explicit relocation authority when %s is externally edited', edited => owned(async (manager, lifecycle, memory) => {
+    const baseline = await memory.addEntry('Original durable entry');
+    await manager.save(memory);
+    const root = (manager as unknown as { portfolioManager: PortfolioManager }).portfolioManager.getElementDir(ElementType.MEMORY);
+    const oldLocator = memory.getFilePath()!;
+    const destination = 'relocated-upgrade-memory.yaml';
+    await manager.runFreshMemoryMutation(memory.metadata.name, async loaded => {
+      await manager.save(loaded, destination);
+      expect(loaded.getFilePath()).toBe(destination);
+      const editedPath = path.join(root, edited === 'old-source' ? oldLocator : destination);
+      const externalBytes = `${await readFile(editedPath, 'utf8')}\n# Owned external edit\n`;
+      await writeFile(editedPath, externalBytes, 'utf8');
+      const next = await loaded.addEntry('After explicit relocation');
+      const result = await manager.save(loaded).then(() => ({ saved: true, error: undefined }), error => ({ saved: false, error }));
+      const editedAfter = await readFile(editedPath, 'utf8');
+      const finalDestination = new SerializationService().parsePureYaml(await readFile(path.join(root, destination), 'utf8'));
+      // Settle first: a stale refusal is before write and must create no accepted obligation.
+      await lifecycle.quiesceAndDrain();
+      expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, retainedOwners: 0, writes: 0 });
+      expect(editedAfter).toBe(externalBytes);
+      if (edited === 'old-source') {
+        expect(result).toEqual({ saved: true, error: undefined });
+        expect(finalDestination.entries.map((entry: { id: string }) => entry.id).sort()).toEqual([baseline.id, next.id].sort());
+      } else {
+        expect(result.saved).toBe(false);
+        expect(result.error).toMatchObject({ code: 'ECONTENTCONFLICT' });
+        expect(finalDestination.entries.map((entry: { id: string }) => entry.id)).toEqual([baseline.id]);
+      }
+    });
   }));
 
   it('fresh same-target FIFO preserves both independent Memory instances and rejects a stale loaded candidate', () => owned(async (manager, lifecycle, memory) => {
