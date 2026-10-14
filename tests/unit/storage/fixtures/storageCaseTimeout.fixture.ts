@@ -6,7 +6,7 @@ import { observeDirectoryReads, cleanupDirectoryReadObservers } from './aggregat
 
 const root = process.env.STORAGE_CASE_PROOF_ROOT!;
 const events: string[] = [];
-const method = { read: async () => null, observed: () => 'original' };
+const method = { read: () => Promise.resolve(null), observed: () => 'original' };
 const originalRead = method.read;
 
 describe('settling original callback', () => {
@@ -65,7 +65,7 @@ describe('unsettled original callback', () => {
     await new Promise<void>(resolve => { releaseBlocked = resolve; });
     events.push('late-settlement'); bodySettled();
   }), 100);
-  it('refuses the following body', owner.own(async () => { events.push('forbidden-body'); }));
+  it('refuses the following body', owner.own(() => { events.push('forbidden-body'); return Promise.resolve(); }));
   afterAll(async () => {
     releaseBlocked(); await settled;
     await new Promise<void>(resolve => setImmediate(resolve));

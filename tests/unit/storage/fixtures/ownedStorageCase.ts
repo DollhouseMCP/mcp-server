@@ -40,7 +40,7 @@ export class OwnedStorageCase {
     });
     try {
       await Promise.race([deadline, (async () => {
-        await Promise.allSettled([...this.pending]);
+        await Promise.allSettled(this.pending);
         if (expired) return; // Never resume teardown after failing closed.
         await cleanup();
         if (!expired) this.state = 'idle';
