@@ -16,10 +16,10 @@ export function parseLinuxProcess(raw: string): LinuxProcess {
     return Number(value);
   };
   const started = fields[19];
-  if (!started || !/^\d+$/.test(started) || BigInt(started) <= 0n || !/^[A-Za-z]$/.test(fields[0])) throw new Error('Invalid Linux process state or start time');
+  if (!started || !/^\d+$/.test(started) || !/^[A-Za-z]$/.test(fields[0])) throw new Error('Invalid Linux process state or start time');
   const value = { pid: integer(match[1]), state: fields[0], group: integer(fields[2]), session: integer(fields[3]),
     started, threads: integer(fields[17]) };
-  if (value.pid <= 0 || value.group <= 0 || value.session <= 0 || value.threads <= 0) throw new Error('Invalid Linux process identity');
+  if (value.pid <= 0 || value.threads <= 0) throw new Error('Invalid Linux process identity');
   return value;
 }
 
@@ -67,7 +67,7 @@ function census(group: number, deadline: number): LinuxProcess[] {
 
 /** Pure identity/state predicate; never accepts a new, reused, live or threaded member. */
 export function exactOwnedZombies(previous: readonly LinuxProcess[], current: readonly LinuxProcess[], group: number): boolean {
-  return current.length > 0 && current.every(value => value.group === group && value.session === group &&
+  return Number.isSafeInteger(group) && group > 0 && current.length > 0 && current.every(value => BigInt(value.started) > 0n && value.group === group && value.session === group &&
     value.state === 'Z' && value.threads === 1 && previous.some(before => sameLinuxProcess(before, value)));
 }
 
@@ -79,7 +79,7 @@ export class LinuxOwnedGroup {
   constructor(private readonly group: number) {
     try {
       const leader = processEvidence(group);
-      if (leader?.group === group && leader.session === group) this.leader = leader;
+      if (group > 0 && leader?.group === group && leader.session === group && BigInt(leader.started) > 0n) this.leader = leader;
     } catch { /* Unknown evidence never authorizes zombie-only completion. */ }
   }
 

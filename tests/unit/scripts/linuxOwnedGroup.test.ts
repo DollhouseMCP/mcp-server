@@ -15,6 +15,13 @@ describe('Linux fixture process evidence (synthetic metadata)', () => {
   it.each(['', '101 name Z 1', '101 (x) Z 1 100 100', `101 (x) Z 1 100 100 ${'0 '.repeat(30)}`])('refuses missing or malformed identity %p', raw => {
     expect(() => parseLinuxProcess(raw)).toThrow();
   });
+  it('parses valid unrelated kernel-thread zero group/session/start ticks without authorizing ownership', () => {
+    const fields = ['I', '0', '0', '0', ...Array.from({ length: 13 }, () => '0'), '1', '0', '0'];
+    const kernel = parseLinuxProcess(`2 (kthreadd) ${fields.join(' ')} 0`);
+    expect(kernel).toEqual({ pid: 2, state: 'I', group: 0, session: 0, started: '0', threads: 1 });
+    expect(exactOwnedZombies([kernel], [{ ...kernel, state: 'Z' }], 0)).toBe(false);
+    expect(exactOwnedZombies([leader, child], [kernel], 100)).toBe(false);
+  });
   it('accepts only exact captured zombies and never describes them as absent', () => {
     expect(exactOwnedZombies([leader, child], [zombie], 100)).toBe(true);
     expect(sameLinuxProcess(child, zombie)).toBe(true);
