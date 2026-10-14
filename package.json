@@ -310,6 +310,15 @@
     "qs": "6.15.2",
     "proxy-addr": "2.0.8",
     "shell-quote": "1.11.0",
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "@babel/core": "7.29.6",
+    "handlebars": "4.7.10",
+    "@humanfs/node": "0.16.8",
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    },
+    "@babel/helpers": "7.29.7",
+    "@babel/traverse": "7.29.8",
+    "update-browserslist-db": "1.2.3"
   }
 }
