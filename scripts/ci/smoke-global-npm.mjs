@@ -18,14 +18,14 @@ export async function smokeGlobalNpm(root) {
   delete current['.dollhouse-security-patches.json'];
   assert.deepEqual(current, receipt.after, 'Installed npm tree differs from exact patched inventory');
   for (const patch of receipt.patches) assert.equal(require(`./node_modules/${patch.name}/package.json`).version, patch.to);
-  const minimatch = require('./node_modules/minimatch');
+  const minimatch = require('minimatch');
   assert.equal(minimatch.minimatch('second.txt', '{first,second}.txt'), true);
   const socksRequire = createRequire(join(root, 'node_modules/socks/package.json'));
   assert.equal(socksRequire.resolve('ip-address'), require.resolve('./node_modules/ip-address'));
   assert.equal(new (socksRequire('ip-address').Address6)('2001:db8::1').correctForm(), '2001:db8::1');
   const queryRequire = createRequire(join(root, 'node_modules/@npmcli/query/package.json'));
   assert.equal(queryRequire.resolve('postcss-selector-parser'), require.resolve('./node_modules/postcss-selector-parser'));
-  assert.equal(require('./node_modules/@npmcli/query').parser(':root > .dependencies').nodes.length, 1);
+  assert.equal(require('@npmcli/query').parser(':root > .dependencies').nodes.length, 1);
   const gypRequire = createRequire(join(root, 'node_modules/node-gyp/package.json'));
   assert.equal(gypRequire.resolve('undici'), require.resolve('./node_modules/undici'));
   const { MockAgent, fetch } = gypRequire('undici');

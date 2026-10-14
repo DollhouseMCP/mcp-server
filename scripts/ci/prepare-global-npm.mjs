@@ -12,11 +12,13 @@ const MAX_DOWNLOAD = 2 * 1024 * 1024;
 const MAX_EXPANDED = 8 * 1024 * 1024;
 const MAX_FILE = 1024 * 1024;
 const MAX_ENTRIES = 1024;
-const sameObject = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+const compareEntryKeys = ([left], [right]) => left.localeCompare(right);
+const sameObject = (a, b) => JSON.stringify(Object.entries(a).sort(compareEntryKeys)) === JSON.stringify(Object.entries(b).sort(compareEntryKeys));
 const hash = data => createHash('sha256').update(data).digest('hex');
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
 const within = (name, root) => name === root || name.startsWith(`${root}/`);
 
+// Walk/hash one file at a time: bounded I/O and deterministic preorder for both snapshots.
 export async function inventory(root, prefix = '') {
   const result = {};
   for (const name of (await readdir(join(root, prefix))).sort()) {
@@ -116,6 +118,7 @@ function validateManifest(manifest) {
   }
 }
 
+// Consumer checks stay bounded and finish before accepting this package's payload.
 async function originalPackage(root, patch, semver) {
   const path = join(root, 'node_modules', patch.name);
   if (!(await lstat(path)).isDirectory() || await realpath(path) !== path) throw new Error('Unexpected npm leaf path');
@@ -141,6 +144,7 @@ async function stagePayload(patch, getPayload, Parser) {
   return files;
 }
 
+// Read manifests sequentially rather than creating unbounded pending file reads.
 async function validateOccurrences(root, records, patches) {
   for (const patch of patches) {
     const occurrences = [];
@@ -159,6 +163,7 @@ function unchangedOutside(before, after, patches) {
   if (JSON.stringify(select(before)) !== JSON.stringify(select(after))) throw new Error('Unexpected npm core/bundle change');
 }
 
+// Ordered parent/file creation and publication; no concurrent writes remain pending after rejection.
 async function writePayload(root, patch, files) {
   const target = join(root, 'node_modules', patch.name);
   const stage = join(root, 'node_modules', `.dollhouse-${patch.name}`);
@@ -188,11 +193,13 @@ export async function prepareGlobalNpm(root, manifest, getPayload = download) {
     if (Object.hasOwn(before, `node_modules/.dollhouse-${patch.name}`)) throw new Error('Existing npm patch staging path');
   }
   if (Object.hasOwn(before, '.dollhouse-security-patches.json')) throw new Error('npm bundle already patched');
+  // One download/parser at a time; validate ALL payloads before ANY replacement.
   const payloads = [];
   for (const patch of manifest.patches) {
     await originalPackage(root, patch, semver);
     payloads.push(await stagePayload(patch, getPayload, Parser));
   }
+  // Publish sequentially so no concurrent mutation remains on a failure.
   for (let i = 0; i < manifest.patches.length; i++) await writePayload(root, manifest.patches[i], payloads[i]);
   const after = await inventory(root);
   await validateOccurrences(root, after, manifest.patches);
