@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, writeFile, readFile, readlink, lstat, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readlink, lstat, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,8 +15,10 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 function runNode(directory: string, args: string[]) {
   const env = { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory, TMPDIR: directory, TMP: directory, TEMP: directory, NO_COLOR: '1' };
   const result = spawnSync(process.execPath, args, { cwd: directory, env, encoding: 'utf8', timeout: 8_000, maxBuffer: 1024 * 1024 });
-  expect(result.error).toBeUndefined();
-  expect(result.status).toBe(0);
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Owned Node fixture exited ${result.status}: ${[result.stderr, result.stdout].join('\n').slice(0, 2048)}`);
+  }
   return result.stdout;
 }
 
@@ -58,19 +60,27 @@ describe('build tool dependency security boundaries', () => {
 
   it('preserves a copied symlink instead of materializing an external file', async () => {
     await fixture(async directory => {
-      const { symlink } = await import('node:fs/promises');
       const source = join(directory, 'source');
       const target = join(directory, 'outside.txt');
       await mkdir(source);
       await writeFile(target, 'synthetic-outside-file');
       await writeFile(join(source, 'ordinary.txt'), 'ordinary-file');
-      await symlink(target, join(source, 'link.txt'), 'file');
+      try {
+        await symlink(target, join(source, 'link.txt'), 'file');
+      } catch (error) {
+        if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+          console.warn('BUILD_TOOL_CAPABILITY_UNAVAILABLE: Windows file symlink creation requires privilege');
+          return;
+        }
+        throw error;
+      }
       const hfs = new NodeHfs();
       await hfs.copyAll(source, join(directory, 'copied'));
       await hfs.copy(join(source, 'link.txt'), join(directory, 'direct-link'));
       expect((await lstat(join(directory, 'copied/link.txt'))).isSymbolicLink()).toBe(true);
       expect(await readlink(join(directory, 'copied/link.txt'))).toBe(target);
       expect((await lstat(join(directory, 'direct-link'))).isSymbolicLink()).toBe(true);
+      expect(await readlink(join(directory, 'direct-link'))).toBe(target);
       expect(await readFile(join(directory, 'copied/ordinary.txt'), 'utf8')).toBe('ordinary-file');
     });
   });

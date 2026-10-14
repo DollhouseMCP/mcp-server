@@ -58,6 +58,14 @@ The normal Jest suite includes ten regression and consumer cases:
 - The actual ts-jest `config:init`, ESM TypeScript loader, and offline Drizzle
   PostgreSQL migration generator execute successfully in owned temporary roots.
 
+The symlink consumer case reports a fixed capability-unavailable diagnostic only
+when initial file-symlink creation on Windows returns `EPERM`, consistent with
+the repository's existing unprivileged Windows treatment. Linux/macOS creation
+errors and every other Windows error still fail. Once creation succeeds, both
+copy APIs must retain real symlinks with their exact link targets; unrelated
+copy failures are not swallowed. This conditional Windows capability result is
+not claimed as exercised symlink coverage.
+
 The old installed Babel 7.28.3, humanfs 0.16.7, and Handlebars 4.7.9 were matched
 to their signed published file contents. All six corresponding old security
 properties failed using benign fixture strings and files. No injected code was
@@ -99,3 +107,19 @@ braces and sprintf-js have no official patched release in the examined primary
 records. This candidate does not invent replacement versions or remove their
 feature callers. Fresh CI and final independent review remain required. No
 deployment, merge, or security-exception approval is implied by this document.
+
+## Integration status
+
+The successor incorporates beta `ed3e4201` and its application/browser dependency
+remediation using strict three-way JSON composition, with no lock regeneration.
+Every complete non-root lock record matches an exact parent; all third-party
+production records from that beta remain intact. The owned safety version/range
+metadata remains 1.0.5. Earlier broad local suite and audit totals above describe
+the pre-integration `f535d279` candidate and are retained as historical evidence;
+they are not new combined results. The merged exact-lock install (`--ignore-scripts`), complete `npm ls` without
+invalid edges, 36 focused consumer/checker tests, targeted typecheck and lint
+pass. Its fresh lock-only audits still fail: root 44 package entries
+(38 High / 6 Moderate), safety 41 (36 High / 5 Moderate). Three direct advisories
+remain in root (braces, sprintf-js and the separately remediated SDK); safety
+retains braces and sprintf-js. Fresh CI and actual affected build/image
+qualification remain necessary.
