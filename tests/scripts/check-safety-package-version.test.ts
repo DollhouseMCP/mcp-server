@@ -62,7 +62,7 @@ describe('check-safety-package-version', () => {
 
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'safety-version-check-'));
-    git(repo, ['init', '--initial-branch=main']);
+    git(repo, ['init', '--initial-branch=main', '--object-format=sha1']);
     git(repo, ['config', 'user.name', 'Safety Check Test']);
     git(repo, ['config', 'user.email', 'safety-check@example.test']);
     // Prevent detached Git maintenance as a precaution; the macOS cleanup cause is unproven.
