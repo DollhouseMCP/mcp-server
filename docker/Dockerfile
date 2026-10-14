@@ -36,11 +36,21 @@ COPY oauth-state-coordinator.mjs oauth-state-coordinator.d.mts ./
 # Build the application
 RUN npm run build
 
-# Prepare a dependency-free runtime workspace without publishing its build tools
-# into any final image layer. Keep the complete builder target for CI/migrations.
-FROM builder AS safety-runtime
+# npm can materialize workspace build tools even with --omit=dev. Prepare the
+# complete runtime dependency tree before copying it into any final image layer.
+# Keep the complete builder target unchanged for CI/migrations.
+FROM node:24-slim AS runtime-dependencies
+WORKDIR /app
+COPY package*.json ./
+COPY --from=builder /app/packages ./packages
 COPY scripts/ci/prepare-safety-runtime.mjs /tmp/prepare-safety-runtime.mjs
-RUN node /tmp/prepare-safety-runtime.mjs
+RUN npm ci --omit=dev --ignore-scripts \
+    --fetch-retries=5 \
+    --fetch-retry-factor=2 \
+    --fetch-retry-mintimeout=20000 \
+    --fetch-retry-maxtimeout=120000 \
+    && node /tmp/prepare-safety-runtime.mjs \
+    && npm cache clean --force
 
 # Production stage with security hardening
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
@@ -71,13 +81,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install only production dependencies
-RUN npm ci --omit=dev --ignore-scripts \
-    --fetch-retries=5 \
-    --fetch-retry-factor=2 \
-    --fetch-retry-mintimeout=20000 \
-    --fetch-retry-maxtimeout=120000 \
-    && npm cache clean --force
+# Copy the prepared production dependencies; do not reinstall workspace tools.
+COPY --from=runtime-dependencies /app/node_modules ./node_modules
 
 # Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
@@ -85,7 +90,7 @@ COPY --from=builder /app/data/personas ./data/personas
 COPY --from=builder /app/oauth-state-coordinator.mjs ./oauth-state-coordinator.mjs
 COPY oauth-helper.mjs ./oauth-helper.mjs
 # Copy built workspace packages (required for local file: dependencies)
-COPY --from=safety-runtime /app/packages ./packages
+COPY --from=runtime-dependencies /app/packages ./packages
 
 # Remove test files that shouldn't be in production image
 # These files can cause Docker build to hang due to large pathological test datasets
