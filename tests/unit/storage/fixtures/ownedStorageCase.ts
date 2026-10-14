@@ -18,7 +18,7 @@ export class OwnedStorageCase {
     return (...args) => {
       this.checkpoint();
       // Register before invoking the callback, including its synchronous prefix.
-      const original = Promise.resolve().then(() => body(...args));
+      const original = Promise.resolve().then(() => { this.checkpoint(); return body(...args); });
       this.pending.add(original);
       void original.then(() => this.pending.delete(original), () => this.pending.delete(original));
       return original;

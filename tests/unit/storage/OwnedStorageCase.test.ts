@@ -1,4 +1,4 @@
-import { expect, it } from '@jest/globals';
+import { expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import * as fs from 'node:fs/promises';
@@ -10,6 +10,18 @@ it('preserves falsy original rejections', async () => {
   const owner = new OwnedStorageCase(); owner.begin();
   await expect(owner.own(async () => { throw undefined; })()).rejects.toBeUndefined();
   await owner.teardown(async () => {});
+});
+
+
+it('closes callback admission before a registered body enters its first microtask', async () => {
+  const owner = new OwnedStorageCase(); owner.begin();
+  const body = jest.fn(async () => {});
+  const original = owner.own(body)();
+  const cleanup = jest.fn(async () => {});
+  const teardown = owner.teardown(cleanup);
+  await expect(original).rejects.toThrow('Storage case work admission is closed');
+  await teardown;
+  expect(body).not.toHaveBeenCalled(); expect(cleanup).toHaveBeenCalledTimes(1);
 });
 
 // This NEW harness bound observes a nested unchanged 10s failure and its cleanup.
