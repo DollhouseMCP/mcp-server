@@ -3,11 +3,11 @@
 import os,sys,pathlib,subprocess,json,hashlib,secrets,time,tarfile,shutil,gzip
 S=pathlib.Path(sys.argv[1]).resolve(); O=pathlib.Path(sys.argv[2]).resolve(); O.mkdir(mode=0o700)
 P=O.parent/'private-native'; P.mkdir(mode=0o700); os.umask(0o077)
-SHA='bc8077f5b1cb76996456b54f7ec105800a070f79'; TREE='0202ebacfd9055cfc7c6f65434f8efc445e434f6'
+SHA='dc0d95ab6131550de54efa89dbf42e1ff260f4c6'; TREE='3311610cbf87e29960508618ee73b78c87f91713'
 BASE_REF='node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
 EXPECTED_OS={'libc-bin':'2.41-12+deb13u4','libc6':'2.41-12+deb13u4','perl-base':'5.40.1-6+deb13u1','openssl':'3.5.7-1~deb13u3','libssl3t64':'3.5.7-1~deb13u3','openssl-provider-legacy':'3.5.7-1~deb13u3'}
-EXPECTED_APP={'@modelcontextprotocol/sdk':'1.31.0','@hono/node-server':'1.19.15','hono':'4.13.7','body-parser':'2.3.0','dompurify':'3.4.16','fast-uri':'3.1.8','ip-address':'10.7.1','qs':'6.16.0','smol-toml':'1.9.0'}
-COMPONENT_HEADS={'3066':'0666f933e8a473dc1c7bf870ec8a6ea4cac4451b','3067':'6554eb9b4a8d4e31bfb468d7224c663843835936','3068':'8f034210db3a1f9ec022ce1fe06f4650ac7b2d2b','3070':'ceae50713b326096c958989bc401e4d7ea741a62'}
+EXPECTED_APP={'@modelcontextprotocol/sdk':'1.31.0','@hono/node-server':'1.19.15','hono':'4.13.7','body-parser':'2.3.0','dompurify':'3.4.16','fast-uri':'3.1.8','ip-address':'10.7.1','qs':'6.16.0','smol-toml':'1.9.0','@dollhousemcp/safety':'1.0.5'}
+COMPONENT_HEADS={'3066': '0666f933e8a473dc1c7bf870ec8a6ea4cac4451b', '3067': '6554eb9b4a8d4e31bfb468d7224c663843835936', '3068': '65eb68484ba05386bf35a3884ba9e791c3303bb6', '3077': 'dc0aa8bcba3be7635008f261de581c63664c0903', '3081': '344a037484c3f93323fdb41e3fcd6efd33251023', '3076': 'eb3ff07a0bc13dad7163ca67e6610670bf8705bb', '3079': '26880c2255659d1a7092d615bc9f63624b92f98f', '3083': '88347907f30aa841e840056eed7309df499724f2', '3084': 'a81682e81a6dcc38ba89074084307ceed676d895', '3070': 'ceae50713b326096c958989bc401e4d7ea741a62', '3086': 'd085d0281e0d4bbbd574d71d57c0d3d60988190b'}
 N='d3050-release-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']; NET=N+'-net'; PG=N+'-pg'; APP=N+'-app'; MIG=N+'-migrate'; B=N+'-build'; VOL=N+'-pgdata'
 DOCKER=['docker','--host','unix:///var/run/docker.sock']
 for selector in ('DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'): os.environ.pop(selector,None)
@@ -159,7 +159,13 @@ def archive_safety_exclusion(path, image, label):
 
 def base_package_smoke(image, label):
  name=N+'-'+label+'-base-packages';containers.append(name)
- code="const fs=require('fs');const cp=require('child_process');console.log(JSON.stringify({node:process.version,arch:process.arch,release:fs.readFileSync('/etc/os-release','utf8'),packages:cp.execFileSync('dpkg-query',['-W','-f=${Package} ${Version}\\n'],{encoding:'utf8'})}));"
+ code="""const fs=require('fs'), cp=require('child_process'), crypto=require('crypto');
+const hash=path=>crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+const optionalTools={};for(const path of ['/usr/bin/infocmp','/usr/bin/nsenter']){try{const st=fs.lstatSync(path);if(!st.isFile())throw Error('unexpected optional tool type');optionalTools[path]={present:true,sha256:hash(path)};}catch(error){if(error.code!=='ENOENT')throw error;optionalTools[path]={present:false};}}
+const retained={};for(const path of ['/usr/local/bin/node','/usr/bin/tput','/usr/bin/setpriv','/usr/bin/unshare','/usr/bin/lsns','/usr/lib/x86_64-linux-gnu/libtinfo.so.6']){const st=fs.statSync(path);if(!st.isFile())throw Error('retained file missing');retained[path]={sha256:hash(path),mode:st.mode&4095,uid:st.uid,gid:st.gid};}
+const terminfo={};function walk(path){const st=fs.lstatSync(path);if(st.isSymbolicLink()){terminfo[path]={type:'link',target:fs.readlinkSync(path)};}else if(st.isFile()){terminfo[path]={type:'file',sha256:hash(path),mode:st.mode&4095,uid:st.uid,gid:st.gid};}else if(st.isDirectory()){terminfo[path]={type:'directory',mode:st.mode&4095,uid:st.uid,gid:st.gid};for(const name of fs.readdirSync(path).sort())walk(path+'/'+name);}else throw Error('unexpected terminfo member');}
+walk('/etc/terminfo');walk('/usr/share/terminfo');if(!Object.values(terminfo).some(x=>x.type==='file'))throw Error('empty terminfo');
+console.log(JSON.stringify({node:process.version,arch:process.arch,release:fs.readFileSync('/etc/os-release','utf8'),packages:cp.execFileSync('dpkg-query',['-W','-f=${Package} ${Version}\\n'],{encoding:'utf8'}),optionalTools,retained,terminfo}));"""
  cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1','--entrypoint','node',image,'-e',code]).decode().strip()
  if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('base inventory creation identity unavailable')
  pins[name]=cid;inspect('container',name)
@@ -167,6 +173,14 @@ def base_package_smoke(image, label):
  if state['Running'] or state['ExitCode'] or state['OOMKilled'] or data['node']!='v24.21.0' or data['arch']!='x64' or 'VERSION_CODENAME=trixie' not in data['release']: raise RuntimeError('actual Node/platform/Trixie identity mismatch')
  packages={name.split(':')[0]:version for name,version in (line.rsplit(' ',1) for line in data['packages'].splitlines())}
  if any(packages.get(name)!=version for name,version in EXPECTED_OS.items()): raise RuntimeError('actual supported security package pin mismatch')
+ if any(value['present']!=(label=='builder') for value in data['optionalTools'].values()): raise RuntimeError('optional runtime tool presence mismatch')
+ manifest.setdefault('baseProfileAssets',{})[label]={'retained':data['retained'],'terminfo':data['terminfo'],'optionalTools':data['optionalTools']}
+ if label=='builder':
+  reference=manifest['baseProfileAssets']['production']
+  if reference['retained']!=data['retained'] or reference['terminfo']!=data['terminfo']: raise RuntimeError('production retained files differ from complete builder')
+ elif label=='prebuilt':
+  reference=manifest['baseProfileAssets']['builder']
+  if reference['retained']!=data['retained'] or reference['terminfo']!=data['terminfo']: raise RuntimeError('prebuilt retained files differ from complete builder')
  (O/(label+'-base-packages.json')).write_text(json.dumps({'image':image,'actual':data,'requiredPins':EXPECTED_OS},indent=2))
  run([*DOCKER,'rm',cid],record=False);containers.remove(name);pins.pop(name)
 
@@ -211,9 +225,20 @@ const versions={};for(const [name,version] of Object.entries(expected)){const ac
 for(const [source,digest] of Object.entries(assets)){const actual=createHash('sha256').update(fs.readFileSync('/app/'+source.replace(/^src\//,'dist/'))).digest('hex');assert.equal(actual,digest,source);}
 const receipt=JSON.parse(fs.readFileSync('/usr/local/lib/node_modules/npm/.dollhouse-security-patches.json','utf8'));
 assert.equal(receipt.npmCore,'11.19.0');assert.equal(receipt.locallyPatched,true);assert.deepEqual(receipt.patches,patches);
+let buildTooling=null;
+if(BUILDER_REQUIRED){
+ const {createRequire}=await import('node:module');const require=createRequire('/app/package.json');
+ const pins={'@babel/core':'7.29.6','@humanfs/node':'0.16.8','handlebars':'4.7.10'};for(const [name,version] of Object.entries(pins))assert.equal(JSON.parse(fs.readFileSync('/app/node_modules/'+name+'/package.json','utf8')).version,version,name);
+ const babel=require('@babel/core');assert.match(babel.transformSync('const answer = 42;', {configFile:false,babelrc:false}).code,/42/);
+ const handlebars=require('handlebars');const source='safe</script><script>fixture</script>';assert.doesNotMatch(handlebars.precompile(source),/<\/script>/i);assert.equal(handlebars.compile(source)({}),source);
+ const {NodeHfs}=await import('@humanfs/node');assert.equal(typeof new NodeHfs().copyAll,'function');
+ const loaderRequire=createRequire(require.resolve('@esbuild-kit/esm-loader')), core=loaderRequire('@esbuild-kit/core-utils'), nested=createRequire(loaderRequire.resolve('@esbuild-kit/core-utils'));
+ assert.equal(nested('esbuild').version,'0.25.12');const input='enum Choice { one = 41 }; export const answer: number = Choice.one + 1;';assert.match(core.transformSync(input,'/fixture/input.cts').code,/exports/);assert.match((await core.transform(input,'/fixture/input.mts')).code,/export/);
+ buildTooling={pins,coreUtilsEsbuild:'0.25.12',babelTransform:true,handlebarsTerminatorEscaped:true,humanfsConsumerImport:true,coreUtilsSyncAsyncTransform:true};
+}
 const smoke=await smokeGlobalNpm('/usr/local/lib/node_modules/npm');
-console.log(JSON.stringify({versions,browserAssetSha256:assets,browserScope:'exact built copies of tested source/SRI declarations; no CDN network or scanner coverage claim',receipt,smoke,uid:process.getuid(),arch:process.arch}));
-""".replace('EXPECTED_APP_JSON',json.dumps(EXPECTED_APP)).replace('EXPECTED_ASSETS_JSON',json.dumps(assets)).replace('EXPECTED_PATCHES_JSON',json.dumps(expected_manifest['patches']))
+console.log(JSON.stringify({versions,browserAssetSha256:assets,browserScope:'exact built copies of tested source/SRI declarations; no CDN network or scanner coverage claim',receipt,smoke,buildTooling,uid:process.getuid(),arch:process.arch}));
+""".replace('EXPECTED_APP_JSON',json.dumps(EXPECTED_APP)).replace('EXPECTED_ASSETS_JSON',json.dumps(assets)).replace('EXPECTED_PATCHES_JSON',json.dumps(expected_manifest['patches'])).replace('BUILDER_REQUIRED',json.dumps(label=='builder'))
  cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1','--mount','type=bind,src='+str(S/'scripts/ci')+',dst=/qualification,readonly','--entrypoint','node',image,'--input-type=module','-e',code]).decode().strip()
  if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('remediation smoke creation identity unavailable')
  pins[name]=cid;inspect('container',name)
@@ -223,10 +248,35 @@ console.log(JSON.stringify({versions,browserAssetSha256:assets,browserScope:'exa
  run([*DOCKER,'rm',cid],record=False);containers.remove(name);pins.pop(name)
  manifest.setdefault('remediation',{})[label]={'image':image,'versions':data['versions'],'browserAssetSha256':assets,'globalNpmSmoke':data['smoke'],'receiptFile':label+'-remediation-smoke.json','scope':'actual installed package pins/unchanged npm core/five patched leaves/inventory/offline consumers and built browser copies; no residual acceptance'}
 
+def fixture_ownership_control(builder_image):
+ # Separate synthetic test capsule: never starts the application/default command.
+ phase('actual-linux-owned-zombie-control')
+ harness=pathlib.Path(__file__).resolve().parent/'linux_subreaper_control.py'
+ harness_hash=hashlib.sha256(harness.read_bytes()).hexdigest()
+ if harness_hash!='b6eb9820589a2f4d2547e70a33dd9b38c7f23eb71db121bc37ff11eca752e5a9': raise RuntimeError('reviewed subreaper harness changed')
+ name=N+'-owned-zombie-control';containers.append(name)
+ cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1','--workdir','/app','--mount','type=bind,src='+str(S/'tests')+',dst=/app/tests,readonly','--mount','type=bind,src='+str(harness)+',dst=/qualification-control.py,readonly','--entrypoint','python3',builder_image,'/qualification-control.py']).decode().strip()
+ if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('ownership capsule creation identity unavailable')
+ pins[name]=cid;created=inspect('container',name);caps=created['HostConfig']
+ if caps['Memory']!=536870912 or caps['NanoCpus']!=1000000000 or caps['NetworkMode']!='none': raise RuntimeError('ownership capsule caps changed')
+ mounts={m['Destination']:m for m in created['Mounts']}
+ if set(mounts)!={'/app/tests','/qualification-control.py'} or any(m['RW'] for m in mounts.values()): raise RuntimeError('ownership capsule mounts not exact readonly inputs')
+ raw=run([*DOCKER,'start','--attach',cid],timeout=60);state=inspect('container',name)['State']
+ frames=[line[len('OWNED_ZOMBIE_CONTROL '):] for line in raw.decode().splitlines() if line.startswith('OWNED_ZOMBIE_CONTROL ')]
+ if len(frames)!=1: raise RuntimeError('ownership actual result missing or ambiguous')
+ data=json.loads(frames[0])
+ if state['Running'] or state['ExitCode'] or state['OOMKilled'] or data.get('subreaper') is not True or type(data.get('jestCode')) is not int or data['jestCode']!=0: raise RuntimeError('ownership capsule failed or unsettled')
+ adopted=data.get('reaped')
+ if not isinstance(adopted,list) or not adopted or any(not isinstance(p,dict) or set(p)!={'pid','status'} or type(p['pid']) is not int or p['pid']<=0 or type(p['status']) is not int or p['status']<0 for p in adopted): raise RuntimeError('ownership adopted zombie evidence invalid')
+ files=['tests/helpers/ownedFixtureProcess.ts','tests/helpers/linuxOwnedGroup.ts','tests/helpers/owned_python_job.py','tests/unit/scripts/ownedFixtureProcess.test.ts','tests/jest.config.cjs']
+ result={'builderImage':builder_image,'source':SHA,'tree':TREE,'harnessSha256':harness_hash,'files':{p:hashlib.sha256((S/p).read_bytes()).hexdigest() for p in files},'actual':data,'caps':{k:caps[k] for k in ['Memory','NanoCpus','NetworkMode']},'scope':'actual isolated Linux subreaper/fixture ownership proof; no application/main/auth/database/deployment claim'}
+ (O/'linux-owned-zombie-control.json').write_text(json.dumps(result,indent=2));manifest['fixtureOwnershipControl']=result
+ run([*DOCKER,'rm',cid],record=False);containers.remove(name);pins.pop(name)
+
 def prebuilt_compatibility(builder_image):
  phase('prebuilt-clean-context-from-exact-builder')
  context=P/'prebuilt-context';context.mkdir(mode=0o700);(context/'docker').mkdir();(context/'scripts/ci').mkdir(parents=True)
- for filename in ['package.json','package-lock.json','oauth-helper.mjs','oauth-state-coordinator.mjs','docker/Dockerfile.prebuilt','scripts/ci/prepare-safety-runtime.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs']:
+ for filename in ['package.json','package-lock.json','oauth-helper.mjs','oauth-state-coordinator.mjs','docker/Dockerfile.prebuilt','scripts/ci/prepare-safety-runtime.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs','docker/remove-optional-runtime-tools.mjs']:
   shutil.copyfile(S/filename,context/filename)
  # No ambient .dockerignore/.env/node_modules: only these exact source inputs
  # plus builder-produced runtime assets are admitted to the clean context.
@@ -263,7 +313,7 @@ try:
  if run(['uname','-m']).strip()!=b'x86_64': raise RuntimeError('runner not native AMD64')
  if run(['git','rev-parse','HEAD'],cwd=S).strip().decode()!=SHA or run(['git','rev-parse','HEAD^{tree}'],cwd=S).strip().decode()!=TREE: raise RuntimeError('source pin')
  if run(['git','status','--porcelain'],cwd=S).strip(): raise RuntimeError('dirty source')
- manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package-lock.json','packages/safety/package-lock.json','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs','src/web-console/ui/vendor/manifest.json','src/web/public/index.html'] if (S/f).exists()},'images':{},'componentHeads':COMPONENT_HEADS}
+ manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package-lock.json','packages/safety/package-lock.json','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs','docker/remove-optional-runtime-tools.mjs','src/web-console/ui/vendor/manifest.json','src/web/public/index.html'] if (S/f).exists()},'images':{},'componentHeads':COMPONENT_HEADS}
  run([*DOCKER,'version']); run([*DOCKER,'buildx','version'])
  for filename in ['docker/Dockerfile','docker/Dockerfile.prebuilt']:
   if [line for line in (S/filename).read_text().splitlines() if line.startswith('FROM node@')]!=['FROM '+BASE_REF+' AS node-base']: raise RuntimeError('candidate source base reference mismatch')
@@ -311,6 +361,7 @@ try:
  archive_safety_exclusion(O/'production.docker.tar',manifest['images']['production'],'production')
  packaging_smoke(manifest['images']['production']['Id'],'production')
  prebuilt_compatibility(manifest['images']['builder']['Id'])
+ fixture_ownership_control(manifest['images']['builder']['Id'])
  audit_image(manifest['images']['production']['Id'])
  run([*DOCKER,'pull','--platform','linux/amd64','postgres:17-alpine'],timeout=180); pgimage=inspect('image','postgres:17-alpine'); manifest['postgres']=pgimage
  admin=secrets.token_hex(24); app=secrets.token_hex(24); master=__import__('base64').b64encode(secrets.token_bytes(32)).decode()
@@ -379,7 +430,7 @@ try:
   proof=pathlib.Path('/tmp/memory-upgrade-engine-proof.json')
   if proof.exists(): shutil.copyfile(proof,O/'native-engine-proof.json')
  manifest['nativeRuntimePassed']=True
- manifest['scope']='native AMD64 exact four-component combined qualification tree0202ebac remediation candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
+ manifest['scope']='native AMD64 exact coherent runtime/build remediation candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
  if audit_needs_disposition: raise RuntimeError('Image audit high/critical findings require explicit release disposition')
 except BaseException as e:
  failure=type(e).__name__+': '+str(e)

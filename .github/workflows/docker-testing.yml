@@ -1,4 +1,4 @@
-name: Native AMD64 merged release qualification
+name: Native AMD64 combined remediation qualification
 on:
   workflow_dispatch:
 permissions:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout exact qualified candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: bc8077f5b1cb76996456b54f7ec105800a070f79
+          ref: dc0d95ab6131550de54efa89dbf42e1ff260f4c6
           path: candidate
           persist-credentials: false
       - id: acquire
@@ -69,6 +69,7 @@ jobs:
             (out/'actual-image-grype.json').write_bytes(raw)
             counts=dict(collections.Counter(x['vulnerability']['severity'] for x in data['matches']))
             available=True
+            print('ACTUAL_PRODUCTION_GRYPE '+json.dumps({'image':image,'counts':counts,'scannerVersion':version,'qualified':False,'scope':'raw scan only; full qualification/dispositions remain required'}),flush=True)
           except Exception as error:
             scan_error=type(error).__name__+': '+str(error)
           result=json.loads((out/'result.json').read_text()) if (out/'result.json').exists() else {'success':False,'failure':'acquisition result unavailable'}
@@ -83,7 +84,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: native-amd64-combined-0202ebac-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-amd64-remediation-3311610c-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-artifacts/
           if-no-files-found: error
           retention-days: 7
