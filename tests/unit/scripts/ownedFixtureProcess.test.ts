@@ -7,6 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { LinuxOwnedGroup } from '../../helpers/linuxOwnedGroup.js';
 import { OwnedFixtureRegistry, type OwnedFixtureProcess } from '../../helpers/ownedFixtureProcess.js';
 
+const windowsIt = process.platform === 'win32' ? it : it.skip;
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const jobSupport = readFileSync(new URL('../../helpers/owned_python_job.py', import.meta.url), 'utf8');
 const registry = new OwnedFixtureRegistry();
@@ -27,6 +28,15 @@ function expectNotExecuting(owner: OwnedFixtureProcess, pid: number): Promise<vo
     };
     poll();
   });
+}
+
+async function waitForOwnedFile(target: string, deadline: number): Promise<void> {
+  while (performance.now() < deadline) {
+    try { await stat(target); return; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    await new Promise<void>(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Owned Windows acknowledgement gate did not settle within cleanup budget');
 }
 
 function deferred() {
@@ -54,18 +64,27 @@ describe('owned fixture teardown', () => {
 
   it('preserves ordinary child exit0 and removes only its owned directory', async () => {
     let directory = '';
+    let owned!: OwnedFixtureProcess, pid!: number;
     const result = await registry.run(async owner => {
       directory = await mkdtemp(join(tmpdir(), 'owned-process-'));
       owner.ownDirectory(directory);
+      owned = owner;
       const launcher = join(directory, 'normal.py');
       await writeFile(launcher, `import sys\n${jobSupport}\nfinish_job=establish_fixture_job()\ntry:\n print('fixture-normal',flush=True)\nfinally:\n finish_job()\n`);
       const child = owner.spawn(python, [launcher], { stdio: ['ignore', 'pipe', 'pipe'] });
+      pid = child.pid!;
       child.stdout!.resume(); child.stderr!.resume();
       return new Promise<number | null>((resolve, reject) => {
         child.once('error', reject); child.once('close', resolve);
       });
     });
     expect(result).toBe(0);
+    if (process.platform === 'win32') await registry.run(async () => {
+      expect(owned.processSettlement(pid)).toBe('absent');
+      const phases = owned.events.map(event => event.phase);
+      expect(phases.indexOf('windows-job-quiescent')).toBeGreaterThanOrEqual(0);
+      expect(phases.indexOf('windows-job-quiescent')).toBeLessThan(phases.indexOf('close'));
+    });
     await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     registry.assertSettled();
   });
@@ -74,13 +93,27 @@ describe('owned fixture teardown', () => {
     const ready = deferred();
     let pids: number[] = [];
     let owned: OwnedFixtureProcess | undefined;
-    let directory = '';
+    let directory = '', gateReady = '', gateRelease = '';
     const work = registry.run(async owner => {
       directory = await mkdtemp(join(tmpdir(), 'owned-process-'));
       owner.ownDirectory(directory);
       owned = owner;
       const launcher = join(directory, 'hung.py');
-      await writeFile(launcher, `import sys\n${jobSupport}\nfinish_job=establish_fixture_job()\nimport os,json,subprocess,time\nchild=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\nprint(json.dumps([os.getpid(),child.pid]),flush=True)\ntry:\n time.sleep(30)\nfinally:\n finish_job()\n`);
+      gateReady = join(directory, 'ack.ready'); gateRelease = join(directory, 'ack.release');
+      // Hold the actual Windows proof frame, rather than relying on a timing race
+      // between kernel termination and registry admission.
+      const gate = process.platform === 'win32' ? `import os,time
+original_stderr=sys.stderr
+class HeldAcknowledgement:
+ def write(self,text):
+  if text.startswith('OWNED_FIXTURE_JOB_QUIESCENT '):
+   open(${JSON.stringify(gateReady)},'x').close()
+   while not os.path.exists(${JSON.stringify(gateRelease)}): time.sleep(.005)
+  return original_stderr.write(text)
+ def flush(self): return original_stderr.flush()
+sys.stderr=HeldAcknowledgement()
+` : '';
+      await writeFile(launcher, `import sys\n${gate}${jobSupport}\nfinish_job=establish_fixture_job()\nimport os,json,subprocess,time\nchild=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\nprint(json.dumps([os.getpid(),child.pid]),flush=True)\ntry:\n time.sleep(30)\nfinally:\n finish_job()\n`);
       const child = owner.spawn(python, [launcher], { stdio: ['ignore', 'pipe', 'pipe'] });
       child.stderr!.resume();
       let output = '';
@@ -105,15 +138,61 @@ describe('owned fixture teardown', () => {
       expect(live.captureBeforeKill(performance.now() + 2500)).toBe(true);
       expect(live.zombieOnly(performance.now() + 100)).toBe(false);
     }
-    await registry.cancelUnfinished();
+    if (process.platform === 'win32') {
+      const deadline = performance.now() + 2500;
+      const cleanup = registry.cancelUnfinished();
+      try {
+        await waitForOwnedFile(gateReady, deadline);
+        expect((await stat(directory)).isDirectory()).toBe(true);
+        expect(owned!.events.some(event => event.phase === 'windows-job-quiescent')).toBe(false);
+        await expect(registry.run(async () => 'must-not-enter-before-proof')).rejects.toThrow('unsettled');
+      } finally { await writeFile(gateRelease, 'release'); }
+      await cleanup;
+      // These are immediate checks INSIDE the first newly admitted callback;
+      // no post-cleanup PID polling can conceal an admission ordering defect.
+      await registry.run(async () => {
+        expect(pids.map(pid => owned!.processSettlement(pid))).toEqual(['absent', 'absent']);
+        const phases = owned!.events.map(event => event.phase);
+        expect(phases.indexOf('windows-job-quiescent')).toBeGreaterThanOrEqual(0);
+        expect(phases.indexOf('windows-job-quiescent')).toBeLessThan(phases.indexOf('close'));
+      });
+    } else {
+      await registry.cancelUnfinished();
+      await Promise.all(pids.map(pid => expectNotExecuting(owned!, pid)));
+    }
     expect(await outcome).toContain('cancelled');
-    await Promise.all(pids.map(pid => expectNotExecuting(owned!, pid)));
     if (process.env.OWNED_FIXTURE_REQUIRE_ZOMBIE === '1') {
       expect(owned!.events.some(event => event.phase === 'owned-group-zombie-only')).toBe(true);
       expect(pids.some(pid => owned!.processSettlement(pid) === 'owned-zombie')).toBe(true);
     }
     await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     registry.assertSettled();
+  });
+
+  windowsIt.each(['missing', 'wrong-nonce'] as const)('retains resources and admission after %s Windows proof', async mode => {
+    const isolated = new OwnedFixtureRegistry(), ready = deferred();
+    let owned!: OwnedFixtureProcess, directory = '';
+    const work = isolated.run(async owner => {
+      owned = owner;
+      directory = await mkdtemp(join(tmpdir(), 'owned-windows-refusal-'));
+      owner.ownDirectory(directory);
+      // Exactly one child, no descendants: this intentionally violates only the
+      // acknowledgement protocol and never claims Job Object settlement.
+      const frame = mode === 'wrong-nonce' ? "print('OWNED_FIXTURE_JOB_QUIESCENT wrong-nonce %d'%os.getpid(),file=sys.stderr,flush=True);" : '';
+      const child = owner.spawn(python, ['-c', `import os,sys,time;${frame}print('ready',flush=True);time.sleep(30)`], { stdio: ['ignore', 'pipe', 'pipe'] });
+      child.stderr!.resume(); child.stdout!.once('data', () => ready.release());
+      return new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
+    });
+    const outcome = work.then(() => 'unexpected-success', error => (error as Error).message);
+    await ready.promise;
+    await expect(isolated.cancelUnfinished()).rejects.toThrow(/2500ms|unsettled/);
+    await outcome;
+    expect(owned.events.some(event => event.phase === 'windows-job-quiescent')).toBe(false);
+    expect((await stat(directory)).isDirectory()).toBe(true);
+    await expect(isolated.run(async () => 'must-not-enter')).rejects.toThrow('unsettled');
+    // The exact sole child has closed; retain the registry refusal, then remove
+    // only this control's known directory after the no-admission proof.
+    await rm(directory, { recursive: true, force: true });
   });
 
   (process.platform === 'linux' ? it : it.skip)('refuses a group signal and retains admission after unknown Linux identity', async () => {

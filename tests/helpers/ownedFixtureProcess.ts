@@ -3,6 +3,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { rm } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { LinuxOwnedGroup } from './linuxOwnedGroup.js';
+import { OwnedWindowsJob } from './ownedWindowsJob.js';
 
 export const FIXTURE_CLEANUP_MS = 2500;
 
@@ -20,6 +21,7 @@ async function bounded<T>(work: Promise<T>): Promise<T> {
 export class OwnedFixtureProcess {
   private cancelled = false;
   private linuxGroup?: LinuxOwnedGroup;
+  private windowsJob?: OwnedWindowsJob;
   private cleanupDeadline?: number;
   private signalRefused = false;
   private child?: ChildProcess;
@@ -49,8 +51,15 @@ export class OwnedFixtureProcess {
     this.record('spawn-requested');
     // POSIX gets a dedicated process group. The Python launcher establishes and
     // verifies a non-inheritable Windows Job Object before creating descendants.
-    const child = spawn(command, args, { ...options, detached: process.platform !== 'win32' });
+    if (process.platform === 'win32') {
+      if (!this.directory) throw new Error('Windows fixture must own its directory before spawn');
+      this.windowsJob = new OwnedWindowsJob(this.directory);
+    }
+    const child = spawn(command, args, { ...options,
+      ...(this.windowsJob ? { env: { ...(options.env ?? process.env), ...this.windowsJob.environment() } } : {}),
+      detached: process.platform !== 'win32' });
     this.child = child;
+    if (this.windowsJob) child.stderr?.on('data', (chunk: Buffer) => this.windowsJob!.observe(chunk, child, () => this.record('windows-job-quiescent')));
     child.once('spawn', () => {
       if (process.platform === 'linux' && child.pid) this.linuxGroup = new LinuxOwnedGroup(child.pid);
       this.record('spawn');
@@ -74,9 +83,7 @@ export class OwnedFixtureProcess {
     if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
     this.record('cleanup-terminate-owned-tree');
     if (process.platform === 'win32') {
-      // libuv holds the exact child process handle; no PID search/taskkill.
-      // Its verified KILL_ON_JOB_CLOSE job owns every fixture descendant.
-      child.kill('SIGKILL');
+      this.windowsJob!.requestCancellation(child, this.cleanupDeadline);
     } else if (this.authorizePosixSignal()) {
       this.killPosixGroup(child.pid);
     }
@@ -89,6 +96,7 @@ export class OwnedFixtureProcess {
       await bounded(this.close);
     }
     this.cleanupDeadline ??= performance.now() + FIXTURE_CLEANUP_MS;
+    if (this.windowsJob && this.child) await this.windowsJob.wait(this.cleanupDeadline, this.child);
     let orphanedGroup = false;
     if (process.platform !== 'win32' && this.child?.pid && this.groupExists()) {
       orphanedGroup = !this.cancelled;

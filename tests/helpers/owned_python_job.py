@@ -69,14 +69,119 @@ def establish_fixture_job():
     require(kernel.IsProcessInJob(kernel.GetCurrentProcess(), job, ctypes.byref(member)))
     require(member.value)
 
-    def finish_job():
-        # Preserve normal helper exit codes. Only disarm the job after verifying
-        # that this launcher is its sole remaining process and cannot spawn more.
+    import os
+    import threading
+    import time
+
+    class ProcessIds(ctypes.Structure):
+        _fields_ = [('Assigned', wintypes.DWORD), ('Listed', wintypes.DWORD),
+                    ('Ids', ctypes.c_size_t * 128)]
+
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateProcess.restype = wintypes.BOOL
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    cancel_file = os.environ['OWNED_FIXTURE_CANCEL_FILE']
+    token = os.environ['OWNED_FIXTURE_JOB_TOKEN']
+    require(bool(cancel_file) and bool(token))
+    own_pid = os.getpid()
+    lock = threading.Lock()
+    armed = threading.Event()
+    stop = threading.Event()
+    state = {'proved': False, 'closed': False}
+
+    def members():
+        ids = ProcessIds()
+        require(kernel.QueryInformationJobObject(job, 3, ctypes.byref(ids), ctypes.sizeof(ids), None))
+        require(ids.Listed == ids.Assigned and 0 < ids.Listed <= 128)
+        result = list(ids.Ids[:ids.Listed])
+        require(own_pid in result and len(set(result)) == len(result))
+        return result
+
+    def active_count():
         accounting = Accounting()
         require(kernel.QueryInformationJobObject(job, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None))
-        require(accounting.ActiveProcesses == 1)
-        limits.Basic.LimitFlags = 0
-        require(kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
-        require(kernel.CloseHandle(job))
+        return accounting.ActiveProcesses
+
+    def terminate_and_wait(pid, deadline):
+        # Open the exact candidate and verify membership on that handle before
+        # termination; a reused/unrelated PID can never authorize a signal.
+        handle = kernel.OpenProcess(0x100001 | 0x1000, False, pid)
+        require(handle)
+        try:
+            member = wintypes.BOOL()
+            require(kernel.IsProcessInJob(handle, job, ctypes.byref(member)) and member.value)
+            result = kernel.WaitForSingleObject(handle, 0)
+            require(result in (0, 258))  # WAIT_OBJECT_0 or WAIT_TIMEOUT only.
+            if result == 258:
+                require(kernel.TerminateProcess(handle, 3))
+            remaining = max(0, int((deadline - time.monotonic()) * 1000))
+            require(kernel.WaitForSingleObject(handle, remaining) == 0)
+        finally:
+            require(kernel.CloseHandle(handle))
+
+    def quiesce(deadline, cancelling):
+        if state['proved']:
+            return
+        first = True
+        while time.monotonic() < deadline:
+            current = members()
+            if not cancelling:
+                require(current == [own_pid] and active_count() == 1)
+            for pid in current:
+                if pid != own_pid:
+                    terminate_and_wait(pid, deadline)
+            # Fence AFTER verified-handle termination. Preserve containment and
+            # bar any new association, including descendants racing the census.
+            if first:
+                limits.Basic.LimitFlags = 0x2000 | 0x8
+                limits.Basic.ActiveProcessLimit = 1
+                require(kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+                observed = ExtendedLimits()
+                require(kernel.QueryInformationJobObject(job, 9, ctypes.byref(observed), ctypes.sizeof(observed), None))
+                require(observed.Basic.LimitFlags & 0x2000 and observed.Basic.LimitFlags & 0x8)
+                require(not observed.Basic.LimitFlags & (0x800 | 0x1000))
+                require(observed.Basic.ActiveProcessLimit == 1)
+                first = False
+            # Re-query after the fence, with completed handles already closed.
+            # A raced member requires another bounded settlement iteration.
+            if members() == [own_pid] and active_count() == 1:
+                state['proved'] = True
+                print('OWNED_FIXTURE_JOB_QUIESCENT %s %d' % (token, own_pid), file=sys.stderr, flush=True)
+                return
+        raise OSError('Owned fixture Job Object settlement exceeded cleanup budget')
+
+    def monitor():
+        armed.set()
+        while not stop.wait(.01):
+            if os.path.exists(cancel_file):
+                try:
+                    with lock:
+                        if not state['closed']:
+                            quiesce(time.monotonic() + 2.5, True)
+                except BaseException:
+                    # No acknowledgement on any unknown API/membership/wait.
+                    print('OWNED_FIXTURE_JOB_PROOF_FAILED', file=sys.stderr, flush=True)
+                return
+
+    threading.Thread(target=monitor, daemon=True).start()
+    armed.wait()  # The cancellation monitor arms before any fixture body work.
+
+    def finish_job():
+        stop.set()
+        with lock:
+            quiesce(time.monotonic() + 2.5, False)
+            # Preserve normal helper exit codes. Clear only kill-on-close; the
+            # verified admission fence remains until this sole launcher exits.
+            limits.Basic.LimitFlags &= ~0x2000
+            require(kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+            observed = ExtendedLimits()
+            require(kernel.QueryInformationJobObject(job, 9, ctypes.byref(observed), ctypes.sizeof(observed), None))
+            require(observed.Basic.LimitFlags & 0x8 and not observed.Basic.LimitFlags & (0x2000 | 0x800 | 0x1000))
+            require(observed.Basic.ActiveProcessLimit == 1)
+            require(kernel.CloseHandle(job))
+            state['closed'] = True
 
     return finish_job
