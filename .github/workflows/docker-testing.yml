@@ -101,6 +101,7 @@ jobs:
           node-version: '24.21.0'
 
       - name: Verify global npm artifact safety and refusal controls
+        shell: bash
         run: |
           test "$(node --version)" = "v24.21.0"
           test "$(npm --version)" = "11.19.0"
