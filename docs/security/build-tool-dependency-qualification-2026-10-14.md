@@ -1,8 +1,10 @@
 # Build and test dependency candidate — 2026-10-14
 
 This candidate addresses the development dependencies tracked by #3071. It does
-not change application handlers or Dockerfiles, and the complete production
-dependency lock map is unchanged. Package/lock and build inputs do change, so
+not change application handlers or Dockerfiles, and third-party production
+dependency records are unchanged. The owned safety workspace is bumped from
+1.0.4 to 1.0.5, with consistent root range and lock metadata, because its changed
+manifest/lock no longer match the repository’s exact published-1.0.4 exception. Package/lock and build inputs do change, so
 future builder graphs and image bytes can differ. Actual combined build/output
 correspondence requires separate qualification.
 
@@ -30,10 +32,11 @@ pins avoid unrelated October releases; `update-browserslist-db` stays at the
 existing 1.2.3 version.
 
 Handlebars 4.7.10 was published October 5 at 22:37:37.837 UTC. It is younger than
-21 days and remains a candidate pending a **new, explicit age exception**.
+21 days. The owner explicitly approved this exact version and artifact on
+October 14 ([approval record](https://github.com/DollhouseMCP/mcp-server/pull/3077#issuecomment-6175758106)).
 Its tarball SHA-256 is
 `14f356e6cadb5b064a156d2b39dd843abba8f4b1a38ee036935adecc1a13ad9f`.
-Earlier approvals for SDK, Node-image, or OpenSSL artifacts do not cover it.
+This one-version age exception is not security, merge, or deployment approval.
 
 The esbuild override is scoped to `@esbuild-kit/core-utils`. It reuses the
 existing 0.25.12 artifact and platform-package family already locked beneath

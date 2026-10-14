@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/safety",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Tiered safety infrastructure for MCP servers",
   "type": "module",
   "main": "dist/index.js",
