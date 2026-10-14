@@ -22,35 +22,58 @@ jobs:
       - id: acquire
         name: Serial builds and same-image synthetic OFF proof
         run: python3 driver/scripts/ci/native-amd64-acquire.py "$GITHUB_WORKSPACE/candidate" "$RUNNER_TEMP/native-artifacts"
-      - name: Scan the exact production image with existing Grype action
-        id: image_scan
-        if: always() && steps.acquire.outputs.image != ''
-        uses: anchore/scan-action@v3
-        with:
-          image: ${{ steps.acquire.outputs.image }}
-          output-format: json
-          fail-build: false
-          severity-cutoff: high
-        continue-on-error: true
-      - name: Preserve scan and enforce release audit disposition
+      - name: Scan exact image with pinned age-compliant Grype and enforce disposition
         if: always()
         env:
-          SCAN_JSON: ${{ steps.image_scan.outputs.json }}
-          SCAN_OUTCOME: ${{ steps.image_scan.outcome }}
+          SCAN_IMAGE: ${{ steps.acquire.outputs.image }}
+          DOCKER_HOST: unix:///var/run/docker.sock
+          GRYPE_DB_VALIDATE_AGE: 'true'
+          GRYPE_DB_MAX_ALLOWED_BUILT_AGE: 120h
         run: |
           python3 - <<'PY_AUDIT'
-          import pathlib,os,json,shutil,hashlib,collections
+          import pathlib,os,json,hashlib,collections,subprocess,urllib.request,tarfile,io,re
           out=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-artifacts'
           out.mkdir(exist_ok=True)
-          source=pathlib.Path(os.environ.get('SCAN_JSON') or '/nonexistent-native-scan')
-          counts={}; available=os.environ.get('SCAN_OUTCOME')=='success' and source.is_file()
-          if available:
-            shutil.copyfile(source,out/'actual-image-grype.json')
-            data=json.loads(source.read_text())
+          image=os.environ.get('SCAN_IMAGE',''); counts={}; available=False; scan_error=None; executions=[]
+          version='0.119.0'
+          expected='3fa2dc4b924621ab65404cf08d0b8438d896d80ab949c9d5a4ca283c36004c9b'
+          def execute(args,name,limit):
+            try:
+              p=subprocess.run(args,capture_output=True,timeout=limit)
+              (out/(name+'.stdout')).write_bytes(p.stdout); (out/(name+'.stderr')).write_bytes(p.stderr)
+              executions.append({'name':name,'exitCode':p.returncode,'timeoutSeconds':limit})
+              if p.returncode: raise RuntimeError(name+' returned '+str(p.returncode))
+              return p.stdout
+            except subprocess.TimeoutExpired as error:
+              executions.append({'name':name,'errorClass':'TimeoutExpired','timeoutSeconds':limit})
+              (out/(name+'.stdout')).write_bytes(error.stdout or b''); (out/(name+'.stderr')).write_bytes(error.stderr or b'')
+              raise RuntimeError(name+' timed out') from None
+          try:
+            if not re.fullmatch(r'sha256:[a-f0-9]{64}',image): raise RuntimeError('Exact production image unavailable')
+            url='https://github.com/anchore/grype/releases/download/v'+version+'/grype_'+version+'_linux_amd64.tar.gz'
+            asset=urllib.request.urlopen(url,timeout=60).read()
+            if hashlib.sha256(asset).hexdigest()!=expected: raise RuntimeError('Official scanner asset checksum mismatch')
+            tool=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-grype-0.119.0'
+            tool.mkdir(mode=0o700)
+            with tarfile.open(fileobj=io.BytesIO(asset),mode='r:gz') as archive:
+              member=archive.getmember('grype')
+              if not member.isfile(): raise RuntimeError('Scanner binary archive member invalid')
+              binary=tool/'grype'; binary.write_bytes(archive.extractfile(member).read()); binary.chmod(0o700)
+            execute([str(binary),'version'],'grype-version',30)
+            raw=execute([str(binary),'docker:'+image,'-o','json'],'actual-image-grype',300)
+            data=json.loads(raw)
+            if not isinstance(data,dict) or not isinstance(data.get('matches'),list) or not isinstance(data.get('source'),dict): raise RuntimeError('Scanner report schema invalid')
+            if any(not isinstance(x,dict) or not isinstance(x.get('vulnerability'),dict) or not isinstance(x['vulnerability'].get('severity'),str) for x in data['matches']): raise RuntimeError('Scanner match schema invalid')
+            db=json.loads(execute([str(binary),'db','status','-o','json'],'grype-db-status',30))
+            if not isinstance(db,dict): raise RuntimeError('Scanner database status schema invalid')
+            (out/'actual-image-grype.json').write_bytes(raw)
             counts=dict(collections.Counter(x['vulnerability']['severity'] for x in data['matches']))
+            available=True
+          except Exception as error:
+            scan_error=type(error).__name__+': '+str(error)
           result=json.loads((out/'result.json').read_text()) if (out/'result.json').exists() else {'success':False,'failure':'acquisition result unavailable'}
           passed=available and result.get('success') is True and not any(counts.get(x,0) for x in ['High','Critical'])
-          (out/'release-audit-result.json').write_text(json.dumps({'qualified':passed,'acquisition':result,'osScanAvailable':available,'osCounts':counts,'requiresExplicitDisposition':not passed},indent=2))
+          (out/'release-audit-result.json').write_text(json.dumps({'qualified':passed,'acquisition':result,'osScanAvailable':available,'osCounts':counts,'scannerVersion':version,'scannerAssetSha256':expected,'scannerError':scan_error,'executions':executions,'freshnessValidation':True,'maxDatabaseBuiltAgeHours':120,'requiresExplicitDisposition':not passed},indent=2))
           with (out/'SHA256SUMS').open('w') as checks:
             for f in sorted(out.iterdir()):
               if f.is_file() and f.name!='SHA256SUMS': checks.write(hashlib.file_digest(f.open('rb'),'sha256').hexdigest()+'  '+f.name+'\n')

@@ -18,7 +18,15 @@ def redact(data):
 def run(args,timeout=60,stdin=None,record=True,cwd=None):
  global counter
  counter+=1
- r=subprocess.run(args,input=stdin,capture_output=True,timeout=timeout,cwd=cwd)
+ try:
+  r=subprocess.run(args,input=stdin,capture_output=True,timeout=timeout,cwd=cwd)
+ except (subprocess.TimeoutExpired,OSError) as e:
+  detail={'step':counter,'errorClass':type(e).__name__,'timeoutSeconds':timeout,'command':pathlib.Path(args[0]).name,'fixtureSecretsRedacted':True}
+  (O/f'{counter:03}-execution-error.json').write_text(json.dumps(detail,indent=2))
+  for stream in ['stdout','stderr']:
+   value=getattr(e,stream,None)
+   if value: (O/f'{counter:03}-partial-{stream}.txt').write_bytes(redact(value if isinstance(value,bytes) else value.encode())[:16384])
+  raise RuntimeError('bounded command execution failed: '+type(e).__name__+' step '+str(counter)) from None
  if record:
   (O/f'{counter:03}-stdout.txt').write_bytes(redact(r.stdout)); (O/f'{counter:03}-stderr.txt').write_bytes(redact(r.stderr))
  if r.returncode:
@@ -88,7 +96,7 @@ def cleanup():
   except Exception: errors.append('network cleanup')
  if builder:
   try: run([*DOCKER,'buildx','rm',B],timeout=30)
-  except Exception: errors.append('builder cleanup')
+  except Exception as e: errors.append('builder cleanup: '+type(e).__name__+': '+str(e))
  absent={}
  for kind,names in [('container',containers),('volume',[VOL]),('network',[NET]),('container',['buildx_buildkit_'+B+'0']),('volume',['buildx_buildkit_'+B+'0_state'])]:
   for name in names:
@@ -102,7 +110,7 @@ def audit_image(image):
  global audit_needs_disposition
  phase('actual-image-inventory-and-audit')
  inventory="const fs=require('fs');let p=[];function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){if(e.isSymbolicLink())continue;const q=d+'/'+e.name;if(e.isDirectory())walk(q);else if(e.name==='package.json'){try{const j=JSON.parse(fs.readFileSync(q));if(j.name&&j.version)p.push({path:q,name:j.name,version:j.version})}catch{}}}}walk('/app');console.log(JSON.stringify({node:process.version,arch:process.arch,uid:process.getuid(),packages:p}));"
- for suffix,entry,args in [('inventory', 'node', ['-e', inventory]), ('os-release', 'node', ['-e', "process.stdout.write(require('fs').readFileSync('/etc/os-release'))"]), ('os-packages', 'dpkg-query', ['-W', '-f=${Package} ${Version}\n']), ('audit-production', 'npm', ['audit', '--omit=dev', '--json']), ('audit-full-lock', 'npm', ['audit', '--json']), ('audit-safety', 'npm', ['--prefix', '/app/packages/safety', 'audit', '--json'])]:
+ for suffix,entry,args in [('inventory', 'node', ['-e', inventory]), ('os-release', 'node', ['-e', "process.stdout.write(require('fs').readFileSync('/etc/os-release'))"]), ('os-packages', 'dpkg-query', ['-W', '-f=${Package} ${Version}\n']), ('audit-production', 'npm', ['audit', '--omit=dev', '--json']), ('audit-full-lock', 'npm', ['audit', '--include=dev', '--json']), ('audit-safety', 'npm', ['--prefix', '/app/packages/safety', 'audit', '--include=dev', '--json'])]:
   name=N+'-'+suffix
   containers.append(name)
   cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','bridge','--memory','512m','--cpus','1','--entrypoint',entry,image,*args]).decode().strip()
@@ -142,7 +150,7 @@ try:
  for target in ['production','builder']:
   phase('build-'+target)
   tag=N+':'+target
-  run([*DOCKER,'buildx','build','--builder',B,'--platform','linux/amd64','--target',target,'--label','org.opencontainers.image.revision='+SHA,'--label','dollhouse.native='+N,'--label','org.dollhousemcp.ci.source='+SHA,'--tag',tag,'--load','--provenance=false','--file','docker/Dockerfile','.'],timeout=1200,cwd=S)
+  run([*DOCKER,'buildx','build','--builder',B,'--platform','linux/amd64','--target',target,'--label','org.opencontainers.image.revision='+SHA,'--label','dollhouse.native='+N,'--label','org.dollhousemcp.engine-proof-source='+SHA,'--tag',tag,'--load','--provenance=false','--file','docker/Dockerfile','.'],timeout=1200,cwd=S)
   build_output=(O/f'{counter:03}-stdout.txt').read_text(errors='replace')+(O/f'{counter:03}-stderr.txt').read_text(errors='replace')
   resolved=sorted(set(__import__('re').findall(r'FROM (?:docker.io/library/)?node:24-slim@(sha256:[a-f0-9]{64})',build_output)))
   expected_base={x.rsplit('@',1)[-1] for x in base.get('RepoDigests',[])}
@@ -154,6 +162,20 @@ try:
   manifest['images'][target]=image
   if target=='production' and os.environ.get('GITHUB_OUTPUT'):
    with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('image='+image['Id']+'\n')
+ # Diagnostic archives of the exact built IDs survive later audit/runtime refusal.
+ for target in ['production','builder']:
+  phase('export-'+target)
+  image=manifest['images'][target]; archive=O/(target+'.docker.tar')
+  run([*DOCKER,'save','--output',str(archive),image['Id']],timeout=180)
+  with tarfile.open(archive) as t:
+   m=json.load(t.extractfile('manifest.json'))
+   if len(m)!=1 or pathlib.PurePosixPath(m[0]['Config']).stem!=image['Id'].split(':')[1]: raise RuntimeError('archive image config identity')
+   config=t.extractfile(m[0]['Config']).read()
+   if hashlib.sha256(config).hexdigest()!=image['Id'].split(':')[1]: raise RuntimeError('archive config digest')
+  manifest['images'][target]['archiveSha256']=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
+  manifest['images'][target]['archiveBytes']=archive.stat().st_size
+ manifest['archivesAreDiagnosticUntilQualified']=True
+ audit_image(manifest['images']['production']['Id'])
  run([*DOCKER,'pull','--platform','linux/amd64','postgres:17-alpine'],timeout=180); pgimage=inspect('image','postgres:17-alpine'); manifest['postgres']=pgimage
  admin=secrets.token_hex(24); app=secrets.token_hex(24); master=__import__('base64').b64encode(secrets.token_bytes(32)).decode()
  fixture_secrets.extend([admin,app,master])
@@ -221,18 +243,6 @@ try:
   proof=pathlib.Path('/tmp/memory-upgrade-engine-proof.json')
   if proof.exists(): shutil.copyfile(proof,O/'native-engine-proof.json')
  manifest['nativeRuntimePassed']=True
- audit_image(manifest['images']['production']['Id'])
- for target in ['production','builder']:
-  phase('export-'+target)
-  image=manifest['images'][target]; archive=O/(target+'.docker.tar')
-  run([*DOCKER,'save','--output',str(archive),image['Id']],timeout=180)
-  with tarfile.open(archive) as t:
-   m=json.load(t.extractfile('manifest.json'))
-   if len(m)!=1 or pathlib.PurePosixPath(m[0]['Config']).stem!=image['Id'].split(':')[1]: raise RuntimeError('archive image config identity')
-   config=t.extractfile(m[0]['Config']).read()
-   if hashlib.sha256(config).hexdigest()!=image['Id'].split(':')[1]: raise RuntimeError('archive config digest')
-  manifest['images'][target]['archiveSha256']=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
-  manifest['images'][target]['archiveBytes']=archive.stat().st_size
  manifest['scope']='native AMD64 exact6c migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
  if audit_needs_disposition: raise RuntimeError('Image audit high/critical findings require explicit release disposition')
 except BaseException as e:
