@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import { deepStrictEqual } from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -16,6 +17,8 @@ import { FileMemoryFence } from '../../../src/storage/FileMemoryFence.js';
 import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemoryTransactionCoordinator.js';
 import { cleanupDirectoryReadObservers, observeDirectoryReads } from './fixtures/aggregateDirectoryReadObserver.js';
 
+const lifecycle = new OwnedStorageCase();
+beforeEach(() => lifecycle.begin());
 const USER = '11111111-1111-4111-8111-111111111111';
 const CONTENT = 'name: Original\nentries: []\n';
 const roots: string[] = [];
@@ -25,12 +28,16 @@ async function evidence(target: string) {
     identity: stat.isDirectory() ? [stat.dev, stat.ino, stat.mode, stat.uid] : [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.nlink] };
 }
 async function fixture(nested = false) {
+  lifecycle.checkpoint();
   const supplied = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-owned-rename-'));
   roots.push(supplied); const root = await fs.realpath(supplied);
   const sourceLocator = nested ? 'Notes/Original.yaml' : 'Original.yaml', destinationLocator = nested ? 'Notes/Renamed.yaml' : 'Renamed.yaml';
   await fs.mkdir(path.dirname(path.join(root, sourceLocator)), { recursive: true });
   const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: root, getCurrentUserId: () => USER, fence: new FileMemoryFence() });
-  const store = (hook?: (phase: RenamePublication) => void | Promise<void>) => new FileMemoryOwnerSnapshots({ coordinator, afterRenamePublication: hook });
+  const store = (hook?: (phase: RenamePublication) => void | Promise<void>) => {
+    lifecycle.checkpoint();
+    return new FileMemoryOwnerSnapshots({ coordinator, afterRenamePublication: hook });
+  };
   const token = await store().createOwned({ operationId: randomUUID(), locator: sourceLocator, content: CONTENT });
   const request: RenameOwnedRequest = { operationId: randomUUID(), expectedToken: token, destinationLocator };
   const source = path.join(root, sourceLocator), destination = path.join(root, destinationLocator);
@@ -51,7 +58,7 @@ afterEach(async () => {
   const profile = renameProfile; renameProfile = undefined;
   profile?.mark('cleanup-start');
   try {
-    await cleanupDirectoryReadObservers(cleanupRenameFixtures);
+    await lifecycle.teardown(() => cleanupDirectoryReadObservers(cleanupRenameFixtures));
     profile?.mark('cleanup-end');
   } finally { profile?.mark('cleanup-finally'); profile?.flush(); }
 });
@@ -92,11 +99,11 @@ function restoreRenameObservation(observation?: { restore: () => void }, directo
 }
 describe('dormant same-parent managed RENAME', () => {
   if (process.platform === 'win32') {
-    it('retains the POSIX-only owner-store boundary', () => {
+    it('retains the POSIX-only owner-store boundary', lifecycle.own(() => {
       expect(() => new FileMemoryOwnerSnapshots({ tenantRoot: 'C:\\', getCurrentUserId: () => USER, fence: new FileMemoryFence() })).toThrow('requires POSIX');
-    }); return;
+    })); return;
   }
-  it('does not report optional initial absence as an audit failure during a successful rename', async () => {
+  it('does not report optional initial absence as an audit failure during a successful rename', lifecycle.own(async () => {
     const f = await fixture();
     await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.lstat(f.destinationJournal)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -112,8 +119,8 @@ describe('dormant same-parent managed RENAME', () => {
       expect(await fs.readFile(f.destination, 'utf8')).toBe(CONTENT);
       expect(failures).toEqual([]);
     } finally { detach(); }
-  });
-  it.each([false, true])('preserves owner/content/inode and increments revision nested=%s', async nested => {
+  }));
+  it.each([false, true])('preserves owner/content/inode and increments revision nested=%s', lifecycle.own(async nested => {
     const f = await fixture(nested), before = await fs.lstat(f.source, { bigint: true }), foreign = await evidence(f.foreign);
     const admission = FileMemoryOwnedRename.prototype as unknown as { reserve: () => void };
     const reserve = admission.reserve;
@@ -144,15 +151,15 @@ describe('dormant same-parent managed RENAME', () => {
     expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(result);
     expect(await evidence(f.foreign)).toEqual(foreign);
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
-  });
-  it('does not revive the original token after A to B to A', async () => {
+  }));
+  it('does not revive the original token after A to B to A', lifecycle.own(async () => {
     const f = await fixture(); const moved = await f.store().renameOwned(f.request);
     const returned = await f.store().renameOwned({ operationId: randomUUID(), expectedToken: moved, destinationLocator: f.token.locator });
     expect(returned.ownerId).toBe(f.token.ownerId); expect(returned.revision).toBe(String(BigInt(f.token.revision) + 2n));
     await expect(f.store().updateOwnedHead(f.token, CONTENT)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
-  });
+  }));
   it.each(['prepared-durable', 'linked-durable', 'moved-durable', 'destination-metadata-durable', 'metadata-durable', 'final-durable', 'after-old-sidecar', 'after-source-journal'] as RenamePublication[])(
-    'forwards exact durable phase %s with the same reserved revision', async stop => {
+    'forwards exact durable phase %s with the same reserved revision', lifecycle.own(async stop => {
       const f = await fixture(true), cause = new Error('controlled phase interruption'), foreign = await evidence(f.foreign);
       await expect(f.store(phase => { if (phase === stop) throw cause; }).renameOwned(f.request)).rejects.toMatchObject({ cause });
       const sourceJournal = await evidence(f.sourceJournal).catch(cause => { if (cause.code !== 'ENOENT') throw cause; return undefined; });
@@ -165,9 +172,9 @@ describe('dormant same-parent managed RENAME', () => {
       expect(moved.revision).toBe(String(BigInt(f.token.revision) + 1n));
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
       expect(await evidence(f.foreign)).toEqual(foreign);
-    });
+    }));
   it.each(['partial-base', 'base-durable', 'partial-reservation', 'reservation-durable', 'after-link', 'after-source-unlink', 'after-destination-sidecar', 'after-registry', 'partial-final'] as RenamePublication[])(
-    'preserves manual-only gap %s without a reconstructed receipt', async stop => {
+    'preserves manual-only gap %s without a reconstructed receipt', lifecycle.own(async stop => {
       const f = await fixture(), cause = new Error('controlled unsupported gap');
       await expect(f.store(phase => { if (phase === stop) throw cause; }).renameOwned(f.request)).rejects.toMatchObject({ cause });
       const parent = path.dirname(f.source), names = (await fs.readdir(parent)).sort();
@@ -177,31 +184,31 @@ describe('dormant same-parent managed RENAME', () => {
       expect(failure.committed).not.toBe(true); expect(failure.token).toBeUndefined();
       expect((await fs.readdir(parent)).sort()).toEqual(names);
       expect(await Promise.all(names.map(async name => [name, await evidence(path.join(parent, name))]))).toEqual(before);
-    });
-  it('preserves foreign destination and performs no replacement', async () => {
+    }));
+  it('preserves foreign destination and performs no replacement', lifecycle.own(async () => {
     const f = await fixture(); await fs.writeFile(f.destination, 'same bytes or foreign inode', { mode: 0o600 }); const before = await evidence(f.destination);
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
     expect(await evidence(f.destination)).toEqual(before); expect((await f.store().readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
-  });
-  it.each(['Original.yaml', 'original.yaml', 'Elsewhere/Renamed.yaml'])('refuses unsupported destination %s before artifacts', async destinationLocator => {
+  }));
+  it.each(['Original.yaml', 'original.yaml', 'Elsewhere/Renamed.yaml'])('refuses unsupported destination %s before artifacts', lifecycle.own(async destinationLocator => {
     const f = await fixture(), before = (await fs.readdir(f.root)).sort();
     await expect(f.store().renameOwned({ ...f.request, destinationLocator })).rejects.toThrow();
     expect((await fs.readdir(f.root)).sort()).toEqual(before);
-  });
-  it('retains a genuine current receipt after post-audit failure', async () => {
+  }));
+  it('retains a genuine current receipt after post-audit failure', lifecycle.own(async () => {
     const f = await fixture(), cause = new Error('audit consumer failure');
     const error = await f.store(phase => { if (phase === 'after-audit') throw cause; }).renameOwned(f.request).catch(value => value);
     expect(error).toMatchObject({ code: 'EHEADCOMMITTED', committed: true, cause });
     expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(error.token);
-  });
-  it('sanitizes an earlier committed marker before this invocation acquires authority', async () => {
+  }));
+  it('sanitizes an earlier committed marker before this invocation acquires authority', lifecycle.own(async () => {
     const f = await fixture(), cause = Object.assign(new Error('forged'), { code: 'EHEADCOMMITTED', committed: true, token: f.token });
     const coordinator = new FileMemoryTransactionCoordinator({ tenantRoot: f.root, getCurrentUserId: () => { throw cause; }, fence: new FileMemoryFence() });
     const failure = await new FileMemoryOwnerSnapshots({ coordinator }).renameOwned(f.request).catch(value => value);
     expect(failure).toMatchObject({ code: 'EOWNERRECOVERY', cause }); expect(failure.committed).not.toBe(true); expect(failure.token).toBeUndefined();
-  });
+  }));
 
-  it('preserves primary optional failure when its code getter throws', async () => {
+  it('preserves primary optional failure when its code getter throws', lifecycle.own(async () => {
     const f = await fixture(), primary = new Error('primary filesystem failure');
     Object.defineProperty(primary, 'code', { get() { throw new Error('code getter failure'); } });
     const before = await evidence(f.source), names = (await fs.readdir(f.root)).sort();
@@ -215,7 +222,7 @@ describe('dormant same-parent managed RENAME', () => {
     expect(failure).toBeInstanceOf(Error); expect(reached).toBe(true); expect(failure.cause).toBe(primary);
     expect(failure.committed).not.toBe(true); expect(failure.token).toBeUndefined();
     expect(await evidence(f.source)).toEqual(before); expect((await fs.readdir(f.root)).sort()).toEqual(names);
-  });
+  }));
   const causeProgram = `
     import { createRequire, syncBuiltinESMExports } from 'node:module';
     import path from 'node:path';
@@ -234,7 +241,7 @@ describe('dormant same-parent managed RENAME', () => {
     try {await new FileMemoryOwnerSnapshots({coordinator}).renameOwned(request);process.stdout.write(JSON.stringify({reached,rejected:false}));}
     catch(error){process.stdout.write(JSON.stringify({reached,rejected:true,primary:error.cause===primary,token:'token' in error,committed:error.committed===true}));}
   `;
-  it.each(['absent', 'link'] as const)('preserves primary %s failure when its actual syscall code getter throws', async seam => {
+  it.each(['absent', 'link'] as const)('preserves primary %s failure when its actual syscall code getter throws', lifecycle.own(async seam => {
     const f = await fixture();
     if (seam === 'absent') await expect(f.store(phase => { if (phase === 'prepared-durable') throw new Error('stop'); }).renameOwned(f.request)).rejects.toThrow();
     const before = await evidence(f.source), names = (await fs.readdir(f.root)).sort();
@@ -259,9 +266,9 @@ describe('dormant same-parent managed RENAME', () => {
       if (seam === 'absent') expect((await fs.readdir(f.root)).sort()).toEqual(names);
       else { expect(await fs.readFile(f.sourceJournal, 'utf8')).toContain('PREPARED_RENAME'); expect(await fs.readFile(f.destinationJournal, 'utf8')).toContain('RESERVED_RENAME'); }
     } finally { clearTimeout(timer); if (!didClose) child.kill('SIGKILL'); await closed; }
-  });
+  }));
 
-  it.each([false, true])('retains foreign baseline and refuses persistent transition drift with callback=%s', async callback => {
+  it.each([false, true])('retains foreign baseline and refuses persistent transition drift with callback=%s', lifecycle.own(async callback => {
     const f = await fixture(), original = await evidence(f.source);
     const seam = FileMemoryOwnedRename.prototype as unknown as { observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
     const capture = seam.observeTransition; let injected = false, reachedPartial = false;
@@ -280,8 +287,8 @@ describe('dormant same-parent managed RENAME', () => {
     const raw = await fs.readFile(f.sourceJournal, 'utf8');
     if (callback) expect(raw).not.toContain('PREPARED_RENAME');
     else expect(raw).toContain('PREPARED_RENAME');
-  });
-  it('permits exactly restored transient foreign descriptors between full checkpoints through a disclosed descriptor seam', async () => {
+  }));
+  it('permits exactly restored transient foreign descriptors between full checkpoints through a disclosed descriptor seam', lifecycle.own(async () => {
     const f = await fixture(), foreign = await evidence(f.foreign);
     const seam = FileMemoryOwnedRename.prototype as unknown as {
       observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown>;
@@ -306,8 +313,8 @@ describe('dormant same-parent managed RENAME', () => {
     expect(started && restored).toBe(true); expect(transientFullObservations).toBe(0);
     expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
     expect(await evidence(f.foreign)).toEqual(foreign);
-  });
-  it('refuses own descriptor replacement after tracking inside the targeted transition sandwich', async () => {
+  }));
+  it('refuses own descriptor replacement after tracking inside the targeted transition sandwich', lifecycle.own(async () => {
     const f = await fixture(), head = await evidence(f.source);
     const seam = FileMemoryOwnedRename.prototype as unknown as {
       observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
@@ -326,8 +333,8 @@ describe('dormant same-parent managed RENAME', () => {
     expect(replaced && rejectedInsideInspect).toBe(true);
     expect((await fs.lstat(f.sourceJournal, { bigint: true })).ino).not.toBe((await fs.lstat(backup, { bigint: true })).ino); expect(await fs.readFile(f.sourceJournal)).toEqual(await fs.readFile(backup));
     expect(await evidence(f.source)).toEqual(head); await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('rejects a foreign changed-child delta without rebinding its baseline', async () => {
+  }));
+  it('rejects a foreign changed-child delta without rebinding its baseline', lifecycle.own(async () => {
     const f = await fixture(), foreign = await evidence(f.foreign), head = await evidence(f.source);
     const seam = FileMemoryOwnedRename.prototype as unknown as {
       transition: (target: string, add?: string[], remove?: string[], changed?: string[]) => Promise<void> };
@@ -339,8 +346,8 @@ describe('dormant same-parent managed RENAME', () => {
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
     expect(injected).toBe(true); expect(await evidence(f.foreign)).toEqual(foreign); expect(await evidence(f.source)).toEqual(head);
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('rejects an untracked foreign removal delta without adopting observed absence as ownership', async () => {
+  }));
+  it('rejects an untracked foreign removal delta without adopting observed absence as ownership', lifecycle.own(async () => {
     const f = await fixture(), foreign = await evidence(f.foreign), head = await evidence(f.source);
     const seam = FileMemoryOwnedRename.prototype as unknown as {
       transition: (target: string, add?: string[], remove?: string[], changed?: string[]) => Promise<void> };
@@ -352,8 +359,8 @@ describe('dormant same-parent managed RENAME', () => {
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
     expect(injected).toBe(true); expect(await evidence(f.foreign)).toEqual(foreign); expect(await evidence(f.source)).toEqual(head);
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('refuses a directory namespace change after targeted reads before transition rebinding', async () => {
+  }));
+  it('refuses a directory namespace change after targeted reads before transition rebinding', lifecycle.own(async () => {
     const f = await fixture(), head = await evidence(f.source);
     const seam = FileMemoryOwnedRename.prototype as unknown as { observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
     const capture = seam.observeTransition; let injected = false;
@@ -366,8 +373,8 @@ describe('dormant same-parent managed RENAME', () => {
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
     expect(injected).toBe(true); expect(await fs.readFile(extra, 'utf8')).toBe('foreign addition'); expect(await evidence(f.source)).toEqual(head);
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('freshly binds the selected child directory inside the ancestor transition sandwich', async () => {
+  }));
+  it('freshly binds the selected child directory inside the ancestor transition sandwich', lifecycle.own(async () => {
     const f = await fixture(true), head = await evidence(f.source), target = path.dirname(f.source);
     const seam = FileMemoryOwnedRename.prototype as unknown as { observeTransition: (locator: string, inspect: () => Promise<void>) => Promise<unknown> };
     const capture = seam.observeTransition; let injected = false;
@@ -381,9 +388,9 @@ describe('dormant same-parent managed RENAME', () => {
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
     expect(injected).toBe(true); expect(await evidence(f.source)).toEqual(head);
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
 
-  it('refuses a replaced partial journal before another write on the original descriptor', async () => {
+  it('refuses a replaced partial journal before another write on the original descriptor', lifecycle.own(async () => {
     const f = await fixture(), originalRead = (FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<unknown> }).read;
     const internals = FileMemoryOwnedRename.prototype as unknown as { read: typeof originalRead };
     let intercepted = false; const backup = `${f.sourceJournal}.foreign-backup`;
@@ -398,8 +405,8 @@ describe('dormant same-parent managed RENAME', () => {
     expect(intercepted).toBe(true); expect(await fs.readFile(backup)).toEqual(await fs.readFile(f.sourceJournal));
     expect(await fs.readFile(f.source, 'utf8')).toBe(CONTENT);
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['link', 'unlink'] as const)('refuses original head mode drift in the actual %s syscall window', async operation => {
+  }));
+  it.each(['link', 'unlink'] as const)('refuses original head mode drift in the actual %s syscall window', lifecycle.own(async operation => {
     const f = await fixture(), internals = FileMemoryOwnedRename.prototype as unknown as { read: (target: string, maximum: number, links?: string, privateFile?: boolean, options?: { optionalInitialAbsence: true }) => Promise<unknown> };
     const originalRead = internals.read; let changed = false;
     jest.spyOn(internals, 'read').mockImplementation(async function(this: typeof internals, target, maximum, links, privateFile, options) {
@@ -412,8 +419,8 @@ describe('dormant same-parent managed RENAME', () => {
     expect(changed).toBe(true); expect(failure).toMatchObject({ code: 'EHEADCOMMITUNKNOWN' });
     expect(failure.committed).not.toBe(true); expect(failure.token).toBeUndefined();
     expect(await fs.readFile(f.destination, 'utf8')).toBe(CONTENT);
-  });
-  it('refuses laundering PREPARED ctime through an edited otherwise complete record', async () => {
+  }));
+  it('refuses laundering PREPARED ctime through an edited otherwise complete record', lifecycle.own(async () => {
     const f = await fixture(); await expect(f.store(phase => { if (phase === 'prepared-durable') throw new Error('stop'); }).renameOwned(f.request)).rejects.toThrow();
     await fs.chmod(f.source, 0o640); await fs.chmod(f.source, 0o600);
     const value = JSON.parse(await fs.readFile(f.sourceJournal, 'utf8')), current = await fs.lstat(f.source, { bigint: true });
@@ -421,15 +428,16 @@ describe('dormant same-parent managed RENAME', () => {
     const before = await evidence(f.sourceJournal);
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY', residual: true });
     expect(await evidence(f.sourceJournal)).toEqual(before); await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each([`.${'a'.repeat(64)}.memory-owner.json`, `.${'b'.repeat(64)}.memory-write.json`, 'C:/Renamed.yaml'])('rejects unreadable reserved destination %s before artifacts', async destinationLocator => {
+  }));
+  it.each([`.${'a'.repeat(64)}.memory-owner.json`, `.${'b'.repeat(64)}.memory-write.json`, 'C:/Renamed.yaml'])('rejects unreadable reserved destination %s before artifacts', lifecycle.own(async destinationLocator => {
     const f = await fixture(), before = await evidence(f.source), names = (await fs.readdir(f.root)).sort();
     await expect(f.store().renameOwned({ ...f.request, destinationLocator })).rejects.toThrow();
     expect(await evidence(f.source)).toEqual(before); expect((await fs.readdir(f.root)).sort()).toEqual(names);
-  });
+  }));
   async function fixtureBatch<T, R>(items: readonly T[], observe: (item: T) => Promise<R>): Promise<R[]> {
     const results: R[] = [];
     for (let offset = 0; offset < items.length; offset += 16) {
+      lifecycle.checkpoint();
       const batch = await Promise.allSettled(items.slice(offset, offset + 16).map(async item => observe(item)));
       for (const result of batch) {
         if (result.status === 'rejected') throw result.reason;
@@ -491,7 +499,7 @@ describe('dormant same-parent managed RENAME', () => {
 
   }
   it.each([[false, 100], [false, 250], [false, 1000], [true, 100], [true, 250], [true, 1000]] as const)(
-    'qualifies populated same-parent RENAME nested=%s owners=%i', async (nested, count) => {
+    'qualifies populated same-parent RENAME nested=%s owners=%i', lifecycle.own(async (nested, count) => {
       const diagnostic = renameDiagnostics({ nested, stop: 'fresh', count });
       const f = await fixture(nested), retained = await populated(f, count);
       const archive = new FileMemoryVolumeStore({ coordinator: f.coordinator, owners: f.store() });
@@ -516,11 +524,13 @@ describe('dormant same-parent managed RENAME', () => {
       diagnostic('retained-verification-start');
       await fixtureBatch(retained, async item => { deepStrictEqual(await evidence(item.target), item.before, `Retained RENAME evidence changed: ${item.target}`); });
       diagnostic('retained-verification-end');
+      lifecycle.checkpoint();
       diagnostic('archive-verification-start');
       expect((await fs.readdir(archiveRoot)).sort()).toEqual(archiveNames);
       expect((await archive.read(moved, receipt.volume)).status).toBe('found');
       await expect(archive.read(f.token, receipt.volume)).rejects.toThrow();
       diagnostic('archive-verification-end');
+      lifecycle.checkpoint();
       diagnostic('head-verification-start');
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
       diagnostic('head-verification-end');
@@ -528,9 +538,9 @@ describe('dormant same-parent managed RENAME', () => {
       try { process.stderr.write(`RENAME capacity ${JSON.stringify({ nested, count, reads: directory!.measured.attemptedReads,
         completedCensuses: directory!.measured.completedCensuses })}\n`); }
       catch { /* Diagnostic output cannot replace completed preservation assertions. */ }
-    });
+    }));
   it.each([[false, 'prepared-durable'], [true, 'prepared-durable'], [false, 'linked-durable'], [true, 'linked-durable'], [false, 'final-durable'], [true, 'final-durable']] as const)(
-    'qualifies populated 1000-owner fresh recovery nested=%s phase=%s', async (nested, stop) => {
+    'qualifies populated 1000-owner fresh recovery nested=%s phase=%s', lifecycle.own(async (nested, stop) => {
       const diagnostic = renameDiagnostics({ nested, stop, count: 1000 });
       const f = await fixture(nested), retained = await populated(f, 1000);
       diagnostic('setup-complete');
@@ -541,6 +551,7 @@ describe('dormant same-parent managed RENAME', () => {
         diagnostic('interrupted-start');
         await expect(f.store(phase => { if (phase === stop) throw new Error('controlled populated stop'); }).renameOwned(f.request)).rejects.toThrow();
         diagnostic('interrupted-end', observation.counts);
+        lifecycle.checkpoint();
         diagnostic('retry-start');
         moved = await f.store().renameOwned(f.request); diagnostic('retry-end', observation.counts);
       } catch (cause) { primary = { cause }; throw cause; }
@@ -549,27 +560,28 @@ describe('dormant same-parent managed RENAME', () => {
       diagnostic('retained-verification-start');
       await fixtureBatch(retained, async item => { deepStrictEqual(await evidence(item.target), item.before, `Retained RENAME evidence changed: ${item.target}`); });
       diagnostic('retained-verification-end');
+      lifecycle.checkpoint();
       diagnostic('head-verification-start');
       expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token).toEqual(moved);
       diagnostic('head-verification-end');
       diagnostic('assertions-complete');
-    });
-  it.each(['symlink', 'hardlink'] as const)('preserves a foreign %s destination without publication', async kind => {
+    }));
+  it.each(['symlink', 'hardlink'] as const)('preserves a foreign %s destination without publication', lifecycle.own(async kind => {
     const f = await fixture(), before = await evidence(f.source);
     if (kind === 'symlink') await fs.symlink(f.foreign, f.destination); else await fs.link(f.foreign, f.destination);
     const foreign = await evidence(f.foreign), destination = await evidence(f.destination);
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
     expect(await evidence(f.source)).toEqual(before); expect(await evidence(f.destination)).toEqual(destination); expect(await evidence(f.foreign)).toEqual(foreign);
-  });
+  }));
   it.each(['prepared-durable', 'linked-durable', 'final-durable'] as RenamePublication[])(
-    'refuses a changed foreign inode on fresh recovery from %s', async stop => {
+    'refuses a changed foreign inode on fresh recovery from %s', lifecycle.own(async stop => {
       const f = await fixture(); await expect(f.store(phase => { if (phase === stop) throw new Error('stop'); }).renameOwned(f.request)).rejects.toThrow();
       const bytes = await fs.readFile(f.foreign); await fs.rename(f.foreign, `${f.foreign}.old`); await fs.writeFile(f.foreign, bytes, { mode: 0o600 }); await fs.unlink(`${f.foreign}.old`);
       const names = (await fs.readdir(f.root)).sort(), before = await evidence(f.destinationJournal);
       await expect(f.store().renameOwned(f.request)).rejects.toThrow();
       expect((await fs.readdir(f.root)).sort()).toEqual(names); expect(await evidence(f.destinationJournal)).toEqual(before);
-    });
-  it.each(['duplicate-key', 'whitespace', 'unknown-schema', 'changed-commitment'] as const)('preserves noncanonical or mismatched %s evidence', async change => {
+    }));
+  it.each(['duplicate-key', 'whitespace', 'unknown-schema', 'changed-commitment'] as const)('preserves noncanonical or mismatched %s evidence', lifecycle.own(async change => {
     const f = await fixture(true); await expect(f.store(phase => { if (phase === 'prepared-durable') throw new Error('stop'); }).renameOwned(f.request)).rejects.toThrow();
     const raw = await fs.readFile(f.sourceJournal, 'utf8'); let changed = raw;
     if (change === 'duplicate-key') changed = raw.replace('"schema":4', '"schema":4,"schema":4');
@@ -578,20 +590,20 @@ describe('dormant same-parent managed RENAME', () => {
     await fs.writeFile(f.sourceJournal, changed); const before = await evidence(f.sourceJournal);
     await expect(f.store().renameOwned(f.request)).rejects.toThrow(); expect(await evidence(f.sourceJournal)).toEqual(before);
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('refuses projected aggregate namespace overflow before RENAME artifacts', async () => {
+  }));
+  it('refuses projected aggregate namespace overflow before RENAME artifacts', lifecycle.own(async () => {
     const f = await fixture(true), retained = await populated(f, 1370), names = (await fs.readdir(path.dirname(f.source))).sort();
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT', cause: { code: 'EHEADRESOURCE' } });
     expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
     await fixtureBatch(retained, async item => { expect(await evidence(item.target)).toEqual(item.before); });
     expect((await f.store().readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
-  });
-  it('rejects maximum revision before artifacts', async () => {
+  }));
+  it('rejects maximum revision before artifacts', lifecycle.own(async () => {
     const f = await fixture(), names = (await fs.readdir(f.root)).sort();
     await expect(f.store().renameOwned({ ...f.request, expectedToken: { ...f.token, revision: '9223372036854775807' } })).rejects.toThrow();
     expect((await fs.readdir(f.root)).sort()).toEqual(names);
-  });
-  it('refuses moving a genuinely adopted published archive payload before RENAME artifacts', async () => {
+  }));
+  it('refuses moving a genuinely adopted published archive payload before RENAME artifacts', lifecycle.own(async () => {
     const f = await fixture(), archive = new FileMemoryVolumeStore({ coordinator: f.coordinator, owners: f.store() });
     const receipt = await archive.createExclusive(f.token, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-10-01') });
     const locator = `volumes/by-id/${f.token.ownerId}/v1/g-${receipt.generationId}/payload.yaml`;
@@ -604,8 +616,8 @@ describe('dormant same-parent managed RENAME', () => {
     expect((await fs.readdir(parent)).sort()).toEqual(names);
     expect(await Promise.all(names.map(async name => [name, await evidence(path.join(parent, name))]))).toEqual(before);
     expect(await evidence(registry)).toEqual(registryBefore);
-  });
-  it.each(['.MEMORY-OWNERS', 'VOLUMES'])('distinguishes physical reserved aliases from a genuinely distinct %s parent', async upperName => {
+  }));
+  it.each(['.MEMORY-OWNERS', 'VOLUMES'])('distinguishes physical reserved aliases from a genuinely distinct %s parent', lifecycle.own(async upperName => {
     const f = await fixture(), upper = path.join(f.root, upperName);
     if (upperName === 'VOLUMES') await new FileMemoryVolumeStore({ coordinator: f.coordinator, owners: f.store() }).createExclusive(f.token, { minimumVolume: 1, rawContent: 'entries: []\n', entryCount: 0, sealedAt: new Date('2026-10-01') });
     try { await fs.mkdir(upper, { mode: 0o700 }); } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; }
@@ -628,8 +640,8 @@ describe('dormant same-parent managed RENAME', () => {
       const moved = await f.store().renameOwned(request);
       expect((await f.store().readHeadSnapshot(request.destinationLocator)).token).toEqual(moved);
     }
-  });
-  it('does not capture a token when the actual final directory close rejects', async () => {
+  }));
+  it('does not capture a token when the actual final directory close rejects', lifecycle.own(async () => {
     const f = await fixture(), cause = new Error('controlled final close'), internals = FileMemoryOwnedRename.prototype as unknown as {
       closed: (handle: fs.FileHandle, body: () => Promise<unknown>) => Promise<unknown> };
     const original = internals.closed; let armed = false, injected = false;
@@ -645,16 +657,16 @@ describe('dormant same-parent managed RENAME', () => {
     expect(failure.committed).not.toBe(true); expect(failure.token).toBeUndefined();
     await expect(f.store().renameOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
     expect((await f.store().readHeadSnapshot(f.request.destinationLocator)).token.ownership).toBe('owned');
-  });
-  it('checks real callback-induced foreign drift before head publication', async () => {
+  }));
+  it('checks real callback-induced foreign drift before head publication', lifecycle.own(async () => {
     const f = await fixture(), foreign = await fs.readFile(f.foreign);
     const failure = await f.store(async phase => {
       if (phase === 'before-link') { await fs.rename(f.foreign, `${f.foreign}.old`); await fs.writeFile(f.foreign, foreign, { mode: 0o600 }); await fs.unlink(`${f.foreign}.old`); }
     }).renameOwned(f.request).catch(error => error);
     expect(failure).toMatchObject({ code: 'EOWNERRECOVERY' }); expect(failure.token).toBeUndefined();
     await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it.each(['byte-ceiling', 'size-mismatch'] as const)('refuses recovery %s before reading head payload', async change => {
+  }));
+  it.each(['byte-ceiling', 'size-mismatch'] as const)('refuses recovery %s before reading head payload', lifecycle.own(async change => {
     const f = await fixture(); await expect(f.store(phase => { if (phase === 'prepared-durable') throw new Error('stop'); }).renameOwned(f.request)).rejects.toThrow();
     const record = JSON.parse(await fs.readFile(f.sourceJournal, 'utf8'));
     if (change === 'byte-ceiling') { record.binding.contentBytes = 3 * 2 * 1024 * 1024 + 1; record.binding.originalSourceIdentity.size = String(record.binding.contentBytes); }
@@ -662,7 +674,7 @@ describe('dormant same-parent managed RENAME', () => {
     await fs.writeFile(f.sourceJournal, JSON.stringify(record)); const before = await evidence(f.sourceJournal);
     await expect(f.store().renameOwned(f.request)).rejects.toThrow(); expect(await evidence(f.sourceJournal)).toEqual(before);
     expect(await fs.readFile(f.source, 'utf8')).toBe(CONTENT); await expect(fs.lstat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
   const childProgram = `
     const [ownersUrl,coordinatorUrl,fenceUrl,root,user,request,stop]=process.argv.slice(1);
     const {FileMemoryOwnerSnapshots}=await import(ownersUrl);
@@ -676,7 +688,7 @@ describe('dormant same-parent managed RENAME', () => {
   `;
   it.each(['partial-base', 'reservation-durable', 'prepared-durable', 'after-link', 'linked-durable', 'after-source-unlink',
     'moved-durable', 'destination-metadata-durable', 'metadata-durable', 'final-durable', 'after-old-sidecar', 'after-source-journal', 'after-final'] as RenamePublication[])(
-    'preserves actual SIGKILL evidence at %s and never invents a past receipt', async stop => {
+    'preserves actual SIGKILL evidence at %s and never invents a past receipt', lifecycle.own(async stop => {
       const f = await fixture(true), foreign = await evidence(f.foreign);
       const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
       const modules = ['FileMemoryOwnerSnapshots', 'FileMemoryTransactionCoordinator', 'FileMemoryFence']
@@ -716,23 +728,23 @@ describe('dormant same-parent managed RENAME', () => {
       } finally {
         clearTimeout(timer); if (!didClose) child.kill('SIGKILL'); await closed;
       }
-    });
+    }));
 
   it.each(['a'.repeat(251) + '.yaml', '界'.repeat(86) + '.yaml', 'volumes', 'VOLUMES', '.memory-owners', '.MEMORY-FENCES'])(
-    'rejects unusable root destination %s before artifacts', async destinationLocator => {
+    'rejects unusable root destination %s before artifacts', lifecycle.own(async destinationLocator => {
       const f = await fixture(), names = (await fs.readdir(f.root)).sort(), before = await evidence(f.source);
       await expect(f.store().renameOwned({ ...f.request, destinationLocator })).rejects.toThrow();
       expect((await fs.readdir(f.root)).sort()).toEqual(names); expect(await evidence(f.source)).toEqual(before);
       expect((await f.store().readHeadSnapshot(f.token.locator)).token).toEqual(f.token);
-    });
-  it('permits an exact 255-byte destination component', async () => {
+    }));
+  it('permits an exact 255-byte destination component', lifecycle.own(async () => {
     const f = await fixture(), destinationLocator = 'a'.repeat(250) + '.yaml';
     expect(Buffer.byteLength(destinationLocator)).toBe(255);
     const moved = await f.store().renameOwned({ ...f.request, destinationLocator });
     expect(moved.locator).toBe(destinationLocator);
     expect((await f.store().readHeadSnapshot(destinationLocator)).token).toEqual(moved);
-  });
-  it.each(['sidecar', 'registry'] as const)('rejects conflicting %s bytes captured after the real owner reader', async kind => {
+  }));
+  it.each(['sidecar', 'registry'] as const)('rejects conflicting %s bytes captured after the real owner reader', lifecycle.own(async kind => {
     const f = await fixture(), store = f.store(), headBefore = await evidence(f.source), names = (await fs.readdir(f.root)).sort();
     const target = kind === 'sidecar' ? f.sourceJournal.replace('.memory-write.json', '.memory-owner.json') : path.join(f.root, '.memory-owners', 'owners', `${f.token.ownerId}.json`);
     const reader = store as unknown as { readAtRoot(root: string, user: string, locator: string, ...rest: unknown[]): Promise<FileMemorySnapshot> };
@@ -751,8 +763,8 @@ describe('dormant same-parent managed RENAME', () => {
     expect(await evidence(f.source)).toEqual(headBefore); expect((await fs.readdir(f.root)).sort()).toEqual(names);
     await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.lstat(f.destinationJournal)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-  it('rejects a canonical volume identity matching a deeper captured source ancestor', async () => {
+  }));
+  it('rejects a canonical volume identity matching a deeper captured source ancestor', lifecycle.own(async () => {
     const f = await fixture(), locator = 'Alias/Nested/Original.yaml';
     await fs.mkdir(path.join(f.root, 'Alias', 'Nested'), { recursive: true });
     const token = await f.store().createOwned({ operationId: randomUUID(), locator, content: CONTENT });
@@ -765,9 +777,9 @@ describe('dormant same-parent managed RENAME', () => {
     finally { spy.mockRestore(); }
     expect(await evidence(target)).toEqual(before); expect((await fs.readdir(parent)).sort()).toEqual(names);
     expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
-  });
+  }));
 
-  it('refuses an over-envelope generated stage while the real original head and owner records remain readable', async () => {
+  it('refuses an over-envelope generated stage while the real original head and owner records remain readable', lifecycle.own(async () => {
     const f = await fixture(), limit = process.platform === 'linux' ? 4096 : 1024;
     let root = f.root;
     const rootBytes = limit - 150;
@@ -798,16 +810,16 @@ describe('dormant same-parent managed RENAME', () => {
     expect(await Promise.all([source, sidecar, registry].map(evidence))).toEqual(before);
     expect((await fs.readdir(root)).sort()).toEqual(names); await expect(fs.lstat(journal)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await store.readHeadSnapshot(locator)).token).toEqual(token);
-  });
-  it('refuses unqualified platforms before capturing a RENAME request', async () => {
+  }));
+  it('refuses unqualified platforms before capturing a RENAME request', lifecycle.own(async () => {
     const f = await fixture(); const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
     try {
       Object.defineProperty(process, 'platform', { ...descriptor, value: 'freebsd' });
       expect(() => captureRenameRequest(f.request)).toThrow('qualified only on Linux and Darwin');
     } finally { Object.defineProperty(process, 'platform', descriptor); }
-  });
+  }));
 
-  it('rejects a canonical fence identity matching a deeper captured source ancestor', async () => {
+  it('rejects a canonical fence identity matching a deeper captured source ancestor', lifecycle.own(async () => {
     const f = await fixture(), locator = 'Alias/Nested/Original.yaml';
     await fs.mkdir(path.join(f.root, 'Alias', 'Nested'), { recursive: true });
     const token = await f.store().createOwned({ operationId: randomUUID(), locator, content: CONTENT });
@@ -827,15 +839,15 @@ describe('dormant same-parent managed RENAME', () => {
     finally { spy.mockRestore(); }
     expect(reached).toBe(true); expect(await Promise.all([target, sidecar, registry].map(evidence))).toEqual(beforeEvidence);
     expect((await fs.readdir(parent)).sort()).toEqual(names); expect((await f.store().readHeadSnapshot(locator)).token).toEqual(token);
-  });
-  it('rejects a coerced operation UUID array before operation I/O', async () => {
+  }));
+  it('rejects a coerced operation UUID array before operation I/O', lifecycle.own(async () => {
     const f = await fixture();
     const transaction = jest.spyOn(f.coordinator, 'withTenantTransaction');
     expect(() => captureRenameRequest({ ...f.request, operationId: [f.request.operationId] } as unknown as RenameOwnedRequest)).toThrow(TypeError);
     expect(transaction).not.toHaveBeenCalled();
-  });
+  }));
 
-  it('reports an observed malformed canonical journal as preserved manual residual', async () => {
+  it('reports an observed malformed canonical journal as preserved manual residual', lifecycle.own(async () => {
     const f = await fixture(); await fs.writeFile(f.sourceJournal, '{"schema":4', { mode: 0o600 });
     const targets = [f.source, f.sourceJournal, f.foreign], before = await Promise.all(targets.map(evidence));
     const names = (await fs.readdir(f.root)).sort();
@@ -843,9 +855,9 @@ describe('dormant same-parent managed RENAME', () => {
     expect(await Promise.all(targets.map(evidence))).toEqual(before);
     expect((await fs.readdir(f.root)).sort()).toEqual(names);
     await expect(fs.lstat(f.destinationJournal)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
 
-  it.each([false, true])('binds original artifact devices to their captured containing directories on recovery=%s', async recovery => {
+  it.each([false, true])('binds original artifact devices to their captured containing directories on recovery=%s', lifecycle.own(async recovery => {
     const f = await fixture(true);
     if (recovery) await expect(f.store(phase => { if (phase === 'prepared-durable') throw new Error('stop'); }).renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     const sidecar = path.join(path.dirname(f.source), `.${createHash('sha256').update('Original.yaml').digest('hex')}.memory-owner.json`);
@@ -872,9 +884,9 @@ describe('dormant same-parent managed RENAME', () => {
     expect(await Promise.all(targets.map(evidence))).toEqual(before);
     expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
     if (!recovery) await expect(fs.lstat(f.sourceJournal)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }));
 
-  it.each(['prepared-durable', 'final-durable'] as RenamePublication[])('binds the present recovery journal device before parsing at %s', async phase => {
+  it.each(['prepared-durable', 'final-durable'] as RenamePublication[])('binds the present recovery journal device before parsing at %s', lifecycle.own(async phase => {
     const f = await fixture(true);
     await expect(f.store(stop => { if (stop === phase) throw new Error('stop'); }).renameOwned(f.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
     const selected = phase === 'prepared-durable' ? f.sourceJournal : f.destinationJournal;
@@ -900,9 +912,9 @@ describe('dormant same-parent managed RENAME', () => {
     finally { observation.mockRestore(); binding.mockRestore(); }
     expect(reached).toBe(true); expect(await Promise.all(targets.map(evidence))).toEqual(before);
     expect((await fs.readdir(path.dirname(f.source))).sort()).toEqual(names);
-  });
+  }));
 
-  it('preflights real composed/decomposed destination resolution without assuming filesystem normalization', async () => {
+  it('preflights real composed/decomposed destination resolution without assuming filesystem normalization', lifecycle.own(async () => {
     const f = await fixture(), sourceLocator = 'Café.yaml', destinationLocator = 'Cafe\u0301.yaml';
     expect(sourceLocator.toLowerCase()).not.toBe(destinationLocator.toLowerCase());
     const token = await f.store().createOwned({ operationId: randomUUID(), locator: sourceLocator, content: CONTENT });
@@ -930,6 +942,6 @@ describe('dormant same-parent managed RENAME', () => {
       await expect(fs.lstat(source)).rejects.toMatchObject({ code: 'ENOENT' });
     }
     expect((await fs.readdir(f.root)).some(name => name.endsWith('.memory-write.json') || name.includes('.rename-'))).toBe(false);
-  });
+  }));
 
 });
