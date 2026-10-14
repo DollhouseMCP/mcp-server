@@ -1,0 +1,29 @@
+# MCP SDK issuer-binding remediation candidate
+
+Tracks [#3057](https://github.com/DollhouseMCP/mcp-server/issues/3057) on beta `f535d279cbfe7ac65509c3db5afcd59c822025c0`. This candidate pins `@modelcontextprotocol/sdk` **1.31.0** for [GHSA-6qxp-vccf-f47h / CVE-2026-104850](https://github.com/advisories/GHSA-6qxp-vccf-f47h). It is not merge, deployment or security acceptance of the remaining image findings.
+
+## Age and artifact review
+
+The exact registry version was published **2026-09-28 18:59:36.307 UTC**: 16 calendar days before October 14. [#2452](https://github.com/DollhouseMCP/mcp-server/issues/2452) requires 21 days and an explicit Mick-approved exception under its stated conditions before adopting a younger version. That exception is **pending**; the remediation instruction is not treated as an age waiver. The old 1.27.1 remains affected, and no aged fixed 1.x version exists. No exception for other dependencies transfers here.
+
+Downloaded old/new tarballs match registry SHA512; registry ECDSA signatures verify for both. Candidate SLSA verifies against GitHub's OIDC issuer and the exact `modelcontextprotocol/typescript-sdk/.github/workflows/main.yml@refs/tags/1.31.0` identity, including the tarball subject, transparency/certificate trust checks. Wrong-identity and tampered-payload controls reject. The upstream tag `1.31.0`, npm gitHead and provenance resolved commit agree at `4b0051f400219f8d8855f9a5433c6df35f15a639`. These checks establish observed identity, not absence of compromise.
+
+Registry maintainer metadata changes between 1.27.1 and 1.31.0: `ashwin-ant` is removed, `ochafik` becomes `ochafik-ant`, and `pcarleton`/`thedsp` emails change to the project domain. The repository identity is unchanged and the candidate uses GitHub trusted publishing. No preinstall/install/postinstall/prepare hook is added. Published ESM/CommonJS output and declarations are present. The artifact comparison adds 24 files, removes none and changes 142, covering issuer binding, HTTP media/body handling and SSE keepalive, stdio buffering/Windows behavior, schemas and protocol fixes across 31 upstream commits; this is not represented as a one-line upstream security patch.
+
+The only declared runtime range change is `@hono/node-server` from `^1.19.9` to `^1.19.9 || ^2.0.5`. The existing override keeps 1.19.13. Scripts-disabled npm 11.19.0 lock generation changes only the root exact SDK pin and the SDK package record; **no other resolved package version, integrity or dependency record changes**, including workspace locks. The package remains a direct runtime dependency and inspector/client consumers deduplicate to this root version. No broad audit fix is used.
+
+## Credential compatibility boundary
+
+The production remote-MCP bridge supplies an explicit bearer header through its policy-gated, address-pinned fetch. It does not configure SDK `authProvider`, `withOAuth`, `auth()` or `fetchToken()`, and has no SDK OAuth client credential store to migrate. The application's incoming embedded/GitHub OAuth stores are distinct; no unrelated token or database schema migration is introduced.
+
+The SDK's published token/client-information schemas now preserve `issuer`. Synthetic discovery tests exercise actual installed SDK code: a changed advertised issuer cannot receive an old client secret or refresh token; re-registration sends no old credential; original-issuer refresh and schema-backed JSON storage retain the binding; bundled client credentials with `expectedIssuer` and direct token exchange reject another issuer. All five controls fail against the actual 1.27.1 artifact, without modifying product source. The actual application bridge also rejects an OAuth challenge through its existing pinned-bearer path without metadata discovery or default-fetch egress.
+
+This update does **not** make unbound historical SDK credentials safe: upstream still uses credentials without `issuer` at first use. Before adding any SDK OAuth provider, supply its trusted `expectedIssuer`, preserve saved `issuer` unchanged and bind or clear/re-authenticate historical credentials. Interactive authorization-server trust and direct low-level exchanges remain separate constraints described by the advisory. No outgoing OAuth feature is enabled by this PR.
+
+## Local checks and remaining qualification
+
+On the candidate, production TypeScript compilation without emission and focused ESLint pass. Seven focused SDK/bridge/SSRF/response-safety/embedded-console/onboarding suites pass **63 tests**; real loopback HTTP parity passes **29 tests**, including initialization, tools, CRUD, sessions, health/readiness and rate limits. These run with a whitelisted environment and private empty working directory; no external OAuth grants or emails are used. Existing deadlines and cases remain unchanged.
+
+Same-day lock audits remove exactly GHSA-6qxp-vccf-f47h and introduce no new advisory identity. Full npm metadata counts change 38 High/1 Critical to 37 High/1 Critical; production-only counts change 1 High/0 Critical to 0 High/0 Critical, with 16 Moderate remaining. The full graph still includes development findings, and npm package counts are not the native image's 77-match baseline. Existing OS/global-tooling remediations and all remaining image advisories require separate fresh image scans; none is cleared by this source update.
+
+Fresh final-head Claude/Codex review, Sonar/security, platform/container/full CI and the exact age decision remain required before merge. A final combined image must include all merged fixes and be rebuilt, inventoried and scanned; the previous 44702 image is not successor evidence. Source rollback restores this PR's parent manifest/lock and reinstates the known SDK advisory; any deployed rollback remains subject to the existing state-preservation procedures.
