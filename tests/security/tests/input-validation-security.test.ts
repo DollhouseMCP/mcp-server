@@ -1,4 +1,6 @@
 import { describe, test, expect } from '@jest/globals';
+import { invitationCredentialMatches } from '../../../src/invitations/InvitationToken.js';
+import { HmacConsoleOpaqueValueService } from '../../../src/web-console/security/ConsoleOpaqueValues.js';
 import { 
   validateFilename, 
   validatePath, 
@@ -140,37 +142,39 @@ describe('Input Validation Security Tests', () => {
     });
   });
   
-  describe('Timing Attack Prevention', () => {
-    test('string comparisons should be timing-safe', async () => {
-      // This is a simplified test - real timing attack tests need more samples
-      const secret = 'correct-secret-value';
-      const attempts = [
-        'wrong',
-        'correct',
-        'correct-',
-        'correct-secret',
-        'correct-secret-value'
-      ];
-      
-      const timings: number[] = [];
-      
-      for (const attempt of attempts) {
-        const start = process.hrtime.bigint();
-        // Simulate constant-time comparison
-        const _match = attempt.length === secret.length &&
-                      attempt.split('').every((char, i) => char === secret[i]);
-        const end = process.hrtime.bigint();
+  describe('Credential comparison behavior', () => {
+    // These are actual authentication comparisons, not wall-clock benchmarks.
+    const digest = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 0x7b));
+    const value = 'synthetic-console-credential';
 
-        timings.push(Number(end - start));
-      }
-      
-      // Check that timing variance is minimal
-      const maxTiming = Math.max(...timings);
-      const minTiming = Math.min(...timings);
-      const variance = maxTiming - minTiming;
-      
-      // Timing should not vary significantly based on how much matches
-      expect(variance).toBeLessThan(5_000_000); // 5ms
+    test('accepts equal invitation digests and console credential hashes', () => {
+      expect(invitationCredentialMatches(digest, Buffer.from(digest))).toBe(true);
+      expect(opaqueValues.matchesHash(value, opaqueValues.hashOpaqueValue(value))).toBe(true);
+    });
+
+    test.each([0, 15, 31])('rejects a digest mismatch at byte %i', index => {
+      const invitationMismatch = Buffer.from(digest);
+      invitationMismatch[index] ^= 0xff;
+      expect(invitationCredentialMatches(digest, invitationMismatch)).toBe(false);
+
+      const consoleMismatch = opaqueValues.hashOpaqueValue(value);
+      consoleMismatch[index] ^= 0xff;
+      expect(opaqueValues.matchesHash(value, consoleMismatch)).toBe(false);
+    });
+
+    test.each([0, 1, 31, 33, 64])('rejects malformed digest length %i without throwing', length => {
+      const malformed = Buffer.alloc(length);
+      expect(invitationCredentialMatches(digest, malformed)).toBe(false);
+      expect(invitationCredentialMatches(malformed, digest)).toBe(false);
+      expect(opaqueValues.matchesHash(value, malformed)).toBe(false);
+    });
+
+    test('binds a console hash to both the credential and HMAC key', () => {
+      const hash = opaqueValues.hashOpaqueValue(value);
+      expect(opaqueValues.matchesHash(`${value}-changed`, hash)).toBe(false);
+      const differentKey = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 0x7c));
+      expect(differentKey.matchesHash(value, hash)).toBe(false);
     });
   });
 });
