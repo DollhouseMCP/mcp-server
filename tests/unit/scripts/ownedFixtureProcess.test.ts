@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { LinuxOwnedGroup } from '../../helpers/linuxOwnedGroup.js';
 import { OwnedFixtureRegistry, type OwnedFixtureProcess } from '../../helpers/ownedFixtureProcess.js';
 
 const python = process.platform === 'win32' ? 'python' : 'python3';
@@ -12,11 +13,11 @@ const registry = new OwnedFixtureRegistry();
 beforeEach(() => { registry.assertSettled(); });
 afterEach(async () => { await registry.cancelUnfinished(); });
 
-function expectAbsent(pid: number): Promise<void> {
+function expectNotExecuting(owner: OwnedFixtureProcess, pid: number): Promise<void> {
   const deadline = performance.now() + 2500;
   return new Promise((resolve, reject) => {
     const poll = () => {
-      try { process.kill(pid, 0); }
+      try { if (owner.processSettlement(pid) !== 'unsettled') { resolve(); return; } }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ESRCH') { resolve(); return; }
         reject(error); return;
@@ -72,10 +73,12 @@ describe('owned fixture teardown', () => {
   it('cancels a deliberately hung launcher and its actual grandchild before another operation', async () => {
     const ready = deferred();
     let pids: number[] = [];
+    let owned: OwnedFixtureProcess | undefined;
     let directory = '';
     const work = registry.run(async owner => {
       directory = await mkdtemp(join(tmpdir(), 'owned-process-'));
       owner.ownDirectory(directory);
+      owned = owner;
       const launcher = join(directory, 'hung.py');
       await writeFile(launcher, `import sys\n${jobSupport}\nfinish_job=establish_fixture_job()\nimport os,json,subprocess,time\nchild=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\nprint(json.dumps([os.getpid(),child.pid]),flush=True)\ntry:\n time.sleep(30)\nfinally:\n finish_job()\n`);
       const child = owner.spawn(python, [launcher], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -97,9 +100,18 @@ describe('owned fixture teardown', () => {
     // Attach rejection handling before requesting cancellation.
     const outcome = work.then(() => 'unexpected-success', error => (error as Error).message);
     await ready.promise;
+    if (process.platform === 'linux') {
+      const live = new LinuxOwnedGroup(pids[0]);
+      live.captureBeforeKill(performance.now() + 2500);
+      expect(live.zombieOnly(performance.now() + 100)).toBe(false);
+    }
     await registry.cancelUnfinished();
     expect(await outcome).toContain('cancelled');
-    await Promise.all(pids.map(expectAbsent));
+    await Promise.all(pids.map(pid => expectNotExecuting(owned!, pid)));
+    if (process.env.OWNED_FIXTURE_REQUIRE_ZOMBIE === '1') {
+      expect(owned!.events.some(event => event.phase === 'owned-group-zombie-only')).toBe(true);
+      expect(pids.some(pid => owned!.processSettlement(pid) === 'owned-zombie')).toBe(true);
+    }
     await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     registry.assertSettled();
   });

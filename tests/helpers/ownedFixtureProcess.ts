@@ -2,6 +2,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
+import { LinuxOwnedGroup } from './linuxOwnedGroup.js';
 
 export const FIXTURE_CLEANUP_MS = 2500;
 
@@ -18,6 +19,8 @@ async function bounded<T>(work: Promise<T>): Promise<T> {
 
 export class OwnedFixtureProcess {
   private cancelled = false;
+  private linuxGroup?: LinuxOwnedGroup;
+  private cleanupDeadline?: number;
   private child?: ChildProcess;
   private directory?: string;
   private closed = false;
@@ -47,7 +50,10 @@ export class OwnedFixtureProcess {
     // verifies a non-inheritable Windows Job Object before creating descendants.
     const child = spawn(command, args, { ...options, detached: process.platform !== 'win32' });
     this.child = child;
-    child.once('spawn', () => this.record('spawn'));
+    child.once('spawn', () => {
+      if (process.platform === 'linux' && child.pid) this.linuxGroup = new LinuxOwnedGroup(child.pid);
+      this.record('spawn');
+    });
     child.stderr?.once('data', () => this.record('first-stderr'));
     child.once('exit', () => this.record('exit'));
     child.once('error', () => this.record('spawn-error'));
@@ -61,6 +67,7 @@ export class OwnedFixtureProcess {
 
   cancel(): void {
     this.cancelled = true;
+    this.cleanupDeadline ??= performance.now() + FIXTURE_CLEANUP_MS;
     const child = this.child;
     if (!child || this.closed || !child.pid) return;
     this.record('cleanup-terminate-owned-tree');
@@ -69,6 +76,7 @@ export class OwnedFixtureProcess {
       // Its verified KILL_ON_JOB_CLOSE job owns every fixture descendant.
       child.kill('SIGKILL');
     } else {
+      this.linuxGroup?.captureBeforeKill(this.cleanupDeadline);
       try { process.kill(-child.pid, 'SIGKILL'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
     }
@@ -79,13 +87,15 @@ export class OwnedFixtureProcess {
       this.cancel();
       await bounded(this.close);
     }
+    this.cleanupDeadline ??= performance.now() + FIXTURE_CLEANUP_MS;
     let orphanedGroup = false;
     if (process.platform !== 'win32' && this.child?.pid && this.groupExists()) {
       orphanedGroup = !this.cancelled;
       this.cancelled = true;
+      this.linuxGroup?.captureBeforeKill(this.cleanupDeadline);
       try { process.kill(-this.child.pid, 'SIGKILL'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      await this.waitForGroupAbsence();
+      await this.waitForGroupSettlement();
     }
     if (this.directory) await rm(this.directory, { recursive: true, force: true });
     this.cleaned = true;
@@ -107,12 +117,23 @@ export class OwnedFixtureProcess {
     }
   }
 
-  private waitForGroupAbsence(): Promise<void> {
-    const deadline = performance.now() + FIXTURE_CLEANUP_MS;
+  /** Distinguish PID absence from exact owned zombie evidence in controls. */
+  processSettlement(pid: number): 'absent' | 'owned-zombie' | 'unsettled' {
+    try { process.kill(pid, 0); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return 'absent';
+      throw error;
+    }
+    return this.linuxGroup?.processIsOwnedZombie(pid, performance.now() + 100) ? 'owned-zombie' : 'unsettled';
+  }
+
+  private waitForGroupSettlement(): Promise<void> {
+    const deadline = this.cleanupDeadline!;
     return new Promise((resolve, reject) => {
       const poll = () => {
         try {
           if (!this.groupExists()) resolve();
+          else if (this.linuxGroup?.zombieOnly(deadline)) { this.record('owned-group-zombie-only'); resolve(); }
           else if (performance.now() >= deadline) reject(new Error('Owned fixture group did not close'));
           else setTimeout(poll, 20);
         } catch (error) { reject(error); }
