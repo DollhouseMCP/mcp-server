@@ -36,6 +36,12 @@ COPY oauth-state-coordinator.mjs oauth-state-coordinator.d.mts ./
 # Build the application
 RUN npm run build
 
+# Prepare a dependency-free runtime workspace without publishing its build tools
+# into any final image layer. Keep the complete builder target for CI/migrations.
+FROM builder AS safety-runtime
+COPY scripts/ci/prepare-safety-runtime.mjs /tmp/prepare-safety-runtime.mjs
+RUN node /tmp/prepare-safety-runtime.mjs
+
 # Production stage with security hardening
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
 FROM node:24-slim AS production
@@ -79,13 +85,7 @@ COPY --from=builder /app/data/personas ./data/personas
 COPY --from=builder /app/oauth-state-coordinator.mjs ./oauth-state-coordinator.mjs
 COPY oauth-helper.mjs ./oauth-helper.mjs
 # Copy built workspace packages (required for local file: dependencies)
-COPY --from=builder /app/packages ./packages
-
-# Prune only the safety workspace's build dependencies after its complete copy.
-# Keep declared production/optional dependencies, compiled exports and runtime assets.
-COPY scripts/ci/prune-safety-runtime.mjs /tmp/prune-safety-runtime.mjs
-RUN node /tmp/prune-safety-runtime.mjs /app && \
-    rm /tmp/prune-safety-runtime.mjs && npm cache clean --force
+COPY --from=safety-runtime /app/packages ./packages
 
 # Remove test files that shouldn't be in production image
 # These files can cause Docker build to hang due to large pathological test datasets
