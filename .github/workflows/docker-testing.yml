@@ -92,6 +92,10 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Verify optional runtime tool hardening offline
+        shell: bash
+        run: node --test tests/scripts/remove-optional-runtime-tools.test.mjs
+
       - name: Verify safety production packaging offline
         run: node --test tests/scripts/prepare-safety-runtime.test.mjs
 
