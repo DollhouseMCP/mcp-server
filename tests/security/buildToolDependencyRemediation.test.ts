@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, writeFile, readFile, readlink, lstat, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { NodeHfs } from '@humanfs/node';
 
@@ -138,7 +138,7 @@ describe('actual build tool CLI consumers', () => {
     await fixture(async directory => {
       await writeFile(join(directory, 'package.json'), '{"type":"module"}');
       await writeFile(join(directory, 'input.ts'), 'enum Choice { one = 41 }; console.log(Choice.one + 1);\n');
-      const output = runNode(directory, ['--loader', require.resolve('@esbuild-kit/esm-loader'), join(directory, 'input.ts')]);
+      const output = runNode(directory, ['--loader', pathToFileURL(require.resolve('@esbuild-kit/esm-loader')).href, join(directory, 'input.ts')]);
       expect(output.trim()).toBe('42');
     });
   });
