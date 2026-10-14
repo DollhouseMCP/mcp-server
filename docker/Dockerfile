@@ -13,6 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
+# Deterministic build-only leaf fixes; preserve npm core and npm/npx callers.
+COPY docker/global-npm-security-patches.json scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node /tmp/npm-tooling/prepare-global-npm.mjs \
+    && node /tmp/npm-tooling/smoke-global-npm.mjs \
+    && rm -rf /tmp/npm-tooling
+
 # Copy package files and local workspace packages
 COPY package*.json ./
 COPY tsconfig.json ./
@@ -41,6 +47,12 @@ RUN npm run build
 # Keep the complete builder target unchanged for CI/migrations.
 FROM node:24-slim AS runtime-dependencies
 WORKDIR /app
+
+# Deterministic build-only leaf fixes; preserve npm core and npm/npx callers.
+COPY docker/global-npm-security-patches.json scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node /tmp/npm-tooling/prepare-global-npm.mjs \
+    && node /tmp/npm-tooling/smoke-global-npm.mjs \
+    && rm -rf /tmp/npm-tooling
 COPY package*.json ./
 COPY --from=builder /app/packages ./packages
 COPY scripts/ci/prepare-safety-runtime.mjs /tmp/prepare-safety-runtime.mjs
@@ -66,7 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && apt-get autoremove -y \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/local/lib/node_modules/npm
 
 # Create non-root user for security
 # Using specific UID/GID for consistency across containers
@@ -83,6 +95,10 @@ COPY package*.json ./
 
 # Copy the prepared production dependencies; do not reinstall workspace tools.
 COPY --from=runtime-dependencies /app/node_modules ./node_modules
+COPY --from=runtime-dependencies /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+# Verify the final copied bundle too; no stale base-package files may survive.
+COPY scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node /tmp/npm-tooling/smoke-global-npm.mjs && rm -rf /tmp/npm-tooling
 
 # Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
