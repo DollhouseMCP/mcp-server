@@ -3,7 +3,7 @@
 import os,sys,pathlib,subprocess,json,hashlib,secrets,time,tarfile,shutil,gzip
 S=pathlib.Path(sys.argv[1]).resolve(); O=pathlib.Path(sys.argv[2]).resolve(); O.mkdir(mode=0o700)
 P=O.parent/'private-native'; P.mkdir(mode=0o700); os.umask(0o077)
-SHA='0a58c3bb2f1a51e5efb61e07b30e6fc393ff50f8'; TREE='fe4c65c5d36fee5e06c6d6acad3eb1183020022a'
+SHA='44702f5711827baacd1f49c87b46fbf6731aece7'; TREE='ea67cd0ad147597a16b4b9f71e35411a0983be8f'
 N='d3050-release-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']; NET=N+'-net'; PG=N+'-pg'; APP=N+'-app'; MIG=N+'-migrate'; B=N+'-build'; VOL=N+'-pgdata'
 DOCKER=['docker','--host','unix:///var/run/docker.sock']
 for selector in ('DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'): os.environ.pop(selector,None)
@@ -330,7 +330,7 @@ try:
   proof=pathlib.Path('/tmp/memory-upgrade-engine-proof.json')
   if proof.exists(): shutil.copyfile(proof,O/'native-engine-proof.json')
  manifest['nativeRuntimePassed']=True
- manifest['scope']='native AMD64 exact 0a58c3bb candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
+ manifest['scope']='native AMD64 exact 44702f57 candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
  if audit_needs_disposition: raise RuntimeError('Image audit high/critical findings require explicit release disposition')
 except BaseException as e:
  failure=type(e).__name__+': '+str(e)
