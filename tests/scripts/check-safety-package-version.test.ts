@@ -117,14 +117,21 @@ describe('check-safety-package-version', () => {
     const lock = JSON.parse(await readFile(lockPath, 'utf8'));
     lock.packages['node_modules/tool'] = { version: '2.0.0' };
     await writeFile(lockPath, JSON.stringify(lock));
-    git(repo, ['add', 'packages/safety']);
-    git(repo, ['commit', '-m', 'own synthetic development metadata']);
-    recordedFiles = ['package.json', 'package-lock.json'].map(file => {
-      const path = `packages/safety/${file}`;
+    const paths = ['packages/safety/package.json', 'packages/safety/package-lock.json'];
+    // Both files are already tracked. Commit only these working-tree paths,
+    // leaving any unrelated index entries and untracked files out of the fixture.
+    git(repo, ['commit', '--only', '-m', 'own synthetic development metadata', '--', ...paths]);
+    const blobs = git(repo, ['rev-parse', ...paths.flatMap(path => [
+      `${publishedGitHead}:${path}`, `HEAD:${path}`,
+    ])]).split(/\r?\n/);
+    if (blobs.length !== paths.length * 2 || blobs.some(blob => !/^[0-9a-f]{40}$/.test(blob))) {
+      throw new Error('Fixture Git blob lookup did not return four exact object IDs');
+    }
+    recordedFiles = paths.map((path, index) => {
       return {
         path,
-        published: git(repo, ['rev-parse', `${publishedGitHead}:${path}`]),
-        beta: git(repo, ['rev-parse', `HEAD:${path}`]),
+        published: blobs[index * 2],
+        beta: blobs[index * 2 + 1],
       };
     });
   }
@@ -158,8 +165,7 @@ describe('check-safety-package-version', () => {
     const manifest = JSON.parse(await readFile(path, 'utf8'));
     manifest[field as string] = value;
     await writeFile(path, JSON.stringify(manifest));
-    git(repo, ['add', 'packages/safety']);
-    git(repo, ['commit', '-m', 'mutate reviewed manifest']);
+    git(repo, ['commit', '--only', '-m', 'mutate reviewed manifest', '--', 'packages/safety/package.json']);
     expect(compareRecordedTree()).toBe(false);
   });
 
