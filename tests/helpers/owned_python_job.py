@@ -77,6 +77,9 @@ def establish_fixture_job():
         _fields_ = [('Assigned', wintypes.DWORD), ('Listed', wintypes.DWORD),
                     ('Ids', ctypes.c_size_t * 128)]
 
+    require(ProcessIds.Ids.offset == 8)
+    require(ctypes.sizeof(ProcessIds) == 8 + 128 * ctypes.sizeof(ctypes.c_size_t))
+
     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel.OpenProcess.restype = wintypes.HANDLE
     kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
@@ -90,7 +93,7 @@ def establish_fixture_job():
     lock = threading.Lock()
     armed = threading.Event()
     stop = threading.Event()
-    state = {'proved': False, 'closed': False}
+    state = {'proved': False, 'closed': False, 'failure': None, 'failure_sent': False}
 
     def members():
         ids = ProcessIds()
@@ -122,7 +125,21 @@ def establish_fixture_job():
         finally:
             require(kernel.CloseHandle(handle))
 
-    def quiesce(deadline, cancelling):
+    def refuse_locked(cause):
+        # Both callers hold the same mutex. Never turn a prior unknown result
+        # into a later successful proof, even after an earlier ACK was emitted.
+        if state['failure'] is None:
+            state['failure'] = cause
+        if not state['failure_sent']:
+            state['failure_sent'] = True
+            try:
+                print('OWNED_FIXTURE_JOB_PROOF_FAILED %s %d' % (token, own_pid), file=sys.stderr, flush=True)
+            except BaseException:
+                pass  # Broken stderr cannot authorize another proof attempt.
+
+    def quiesce_locked(deadline, cancelling):
+        if state['failure'] is not None:
+            raise state['failure']
         if state['proved']:
             return
         first = True
@@ -148,8 +165,8 @@ def establish_fixture_job():
             # Re-query after the fence, with completed handles already closed.
             # A raced member requires another bounded settlement iteration.
             if members() == [own_pid] and active_count() == 1:
-                state['proved'] = True
                 print('OWNED_FIXTURE_JOB_QUIESCENT %s %d' % (token, own_pid), file=sys.stderr, flush=True)
+                state['proved'] = True
                 return
         raise OSError('Owned fixture Job Object settlement exceeded cleanup budget')
 
@@ -157,13 +174,12 @@ def establish_fixture_job():
         armed.set()
         while not stop.wait(.01):
             if os.path.exists(cancel_file):
-                try:
-                    with lock:
+                with lock:
+                    try:
                         if not state['closed']:
-                            quiesce(time.monotonic() + 2.5, True)
-                except BaseException:
-                    # No acknowledgement on any unknown API/membership/wait.
-                    print('OWNED_FIXTURE_JOB_PROOF_FAILED', file=sys.stderr, flush=True)
+                            quiesce_locked(time.monotonic() + 2.5, True)
+                    except BaseException as cause:
+                        refuse_locked(cause)
                 return
 
     threading.Thread(target=monitor, daemon=True).start()
@@ -172,16 +188,24 @@ def establish_fixture_job():
     def finish_job():
         stop.set()
         with lock:
-            quiesce(time.monotonic() + 2.5, False)
-            # Preserve normal helper exit codes. Clear only kill-on-close; the
-            # verified admission fence remains until this sole launcher exits.
-            limits.Basic.LimitFlags &= ~0x2000
-            require(kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
-            observed = ExtendedLimits()
-            require(kernel.QueryInformationJobObject(job, 9, ctypes.byref(observed), ctypes.sizeof(observed), None))
-            require(observed.Basic.LimitFlags & 0x8 and not observed.Basic.LimitFlags & (0x2000 | 0x800 | 0x1000))
-            require(observed.Basic.ActiveProcessLimit == 1)
-            require(kernel.CloseHandle(job))
-            state['closed'] = True
+            if state['failure'] is not None:
+                raise state['failure']
+            if state['closed']:
+                return
+            try:
+                quiesce_locked(time.monotonic() + 2.5, False)
+                # Clear only kill-on-close after proof. Retain the admission
+                # fence until this sole launcher exits; repeated finish is inert.
+                limits.Basic.LimitFlags &= ~0x2000
+                require(kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+                observed = ExtendedLimits()
+                require(kernel.QueryInformationJobObject(job, 9, ctypes.byref(observed), ctypes.sizeof(observed), None))
+                require(observed.Basic.LimitFlags & 0x8 and not observed.Basic.LimitFlags & (0x2000 | 0x800 | 0x1000))
+                require(observed.Basic.ActiveProcessLimit == 1)
+                require(kernel.CloseHandle(job))
+                state['closed'] = True
+            except BaseException as cause:
+                refuse_locked(cause)
+                raise
 
     return finish_job

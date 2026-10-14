@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, writeFile, stat, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import type { ChildProcess } from 'node:child_process';
+import { OwnedWindowsJob } from '../../helpers/ownedWindowsJob.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -39,6 +41,16 @@ async function waitForOwnedFile(target: string, deadline: number): Promise<void>
   throw new Error('Owned Windows acknowledgement gate did not settle within cleanup budget');
 }
 
+async function withinCleanupDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+  if (performance.now() >= deadline) throw new Error('Original cancellation exceeded cleanup budget');
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Original cancellation did not settle within cleanup budget')), Math.max(0, deadline - performance.now()));
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 function deferred() {
   let release!: () => void;
   const promise = new Promise<void>(resolve => { release = resolve; });
@@ -46,6 +58,22 @@ function deferred() {
 }
 
 describe('owned fixture teardown', () => {
+  it('keeps a bound Windows failure sticky after an earlier ACK (synthetic protocol only)', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'owned-protocol-'));
+    try {
+      const job = new OwnedWindowsJob(directory), child = { pid: 123 } as ChildProcess;
+      const token = job.environment().OWNED_FIXTURE_JOB_TOKEN;
+      const acknowledged = jest.fn();
+      const ack = Buffer.from(`OWNED_FIXTURE_JOB_QUIESCENT ${token} 123\n`);
+      job.observe(ack, child, acknowledged);
+      await job.wait(performance.now() + 2500, child);
+      job.observe(Buffer.from(`OWNED_FIXTURE_JOB_PROOF_FAILED ${token} 123\n`), child, acknowledged);
+      job.observe(ack, child, acknowledged); // A fresh ACK cannot repair failure.
+      await expect(job.wait(performance.now() + 2500, child)).rejects.toThrow('refused descendant settlement');
+      expect(acknowledged).toHaveBeenCalledTimes(1);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it.each([undefined, null, false, 0, ''])('preserves an original falsy rejection (%p) after owned cleanup', async failure => {
     let directory = '';
     const work = registry.run(async owner => {
@@ -140,14 +168,31 @@ sys.stderr=HeldAcknowledgement()
     }
     if (process.platform === 'win32') {
       const deadline = performance.now() + 2500;
-      const cleanup = registry.cancelUnfinished();
+      const cleanup = registry.cancelUnfinished().then(
+        () => ({ failed: false as const }), cause => ({ failed: true as const, cause }),
+      );
+      let primary: { cause: unknown } | undefined;
+      const cleanupFailures: unknown[] = [];
       try {
         await waitForOwnedFile(gateReady, deadline);
         expect((await stat(directory)).isDirectory()).toBe(true);
         expect(owned!.events.some(event => event.phase === 'windows-job-quiescent')).toBe(false);
         await expect(registry.run(async () => 'must-not-enter-before-proof')).rejects.toThrow('unsettled');
-      } finally { await writeFile(gateRelease, 'release'); }
-      await cleanup;
+      } catch (cause) { primary = { cause }; }
+      finally {
+        try { await writeFile(gateRelease, 'release'); } catch (cause) { cleanupFailures.push(cause); }
+        try {
+          // Await BOTH the bounded hook and original callback under the SAME
+          // deadline, even if the held-proof assertions failed.
+          const [settled] = await withinCleanupDeadline(Promise.all([cleanup, outcome]), deadline);
+          if (settled.failed) cleanupFailures.push(settled.cause);
+        } catch (cause) { cleanupFailures.push(cause); }
+      }
+      if (primary) {
+        if (cleanupFailures.length) throw new AggregateError([primary.cause, ...cleanupFailures], 'Windows proof gate and original cancellation settlement failed');
+        throw primary.cause;
+      }
+      if (cleanupFailures.length) throw new AggregateError(cleanupFailures, 'Original Windows cancellation settlement failed');
       // These are immediate checks INSIDE the first newly admitted callback;
       // no post-cleanup PID polling can conceal an admission ordering defect.
       await registry.run(async () => {
@@ -169,7 +214,7 @@ sys.stderr=HeldAcknowledgement()
     registry.assertSettled();
   });
 
-  windowsIt.each(['missing', 'wrong-nonce'] as const)('retains resources and admission after %s Windows proof', async mode => {
+  windowsIt.each(['missing', 'wrong-nonce', 'post-ack-failure'] as const)('retains resources and admission after %s Windows proof', async mode => {
     const isolated = new OwnedFixtureRegistry(), ready = deferred();
     let owned!: OwnedFixtureProcess, directory = '';
     const work = isolated.run(async owner => {
@@ -178,7 +223,9 @@ sys.stderr=HeldAcknowledgement()
       owner.ownDirectory(directory);
       // Exactly one child, no descendants: this intentionally violates only the
       // acknowledgement protocol and never claims Job Object settlement.
-      const frame = mode === 'wrong-nonce' ? "print('OWNED_FIXTURE_JOB_QUIESCENT wrong-nonce %d'%os.getpid(),file=sys.stderr,flush=True);" : '';
+      const frame = mode === 'post-ack-failure'
+        ? "token=os.environ['OWNED_FIXTURE_JOB_TOKEN'];print('OWNED_FIXTURE_JOB_QUIESCENT %s %d'%(token,os.getpid()),file=sys.stderr,flush=True);print('OWNED_FIXTURE_JOB_PROOF_FAILED %s %d'%(token,os.getpid()),file=sys.stderr,flush=True);"
+        : mode === 'wrong-nonce' ? "print('OWNED_FIXTURE_JOB_QUIESCENT wrong-nonce %d'%os.getpid(),file=sys.stderr,flush=True);" : '';
       const child = owner.spawn(python, ['-c', `import os,sys,time;${frame}print('ready',flush=True);time.sleep(30)`], { stdio: ['ignore', 'pipe', 'pipe'] });
       child.stderr!.resume(); child.stdout!.once('data', () => ready.release());
       return new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
@@ -187,7 +234,7 @@ sys.stderr=HeldAcknowledgement()
     await ready.promise;
     await expect(isolated.cancelUnfinished()).rejects.toThrow(/2500ms|unsettled/);
     await outcome;
-    expect(owned.events.some(event => event.phase === 'windows-job-quiescent')).toBe(false);
+    expect(owned.events.some(event => event.phase === 'windows-job-quiescent')).toBe(mode === 'post-ack-failure');
     expect((await stat(directory)).isDirectory()).toBe(true);
     await expect(isolated.run(async () => 'must-not-enter')).rejects.toThrow('unsettled');
     // The exact sole child has closed; retain the registry refusal, then remove

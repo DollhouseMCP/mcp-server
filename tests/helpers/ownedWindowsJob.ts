@@ -59,6 +59,13 @@ export class OwnedWindowsJob {
   }
 
   private line(line: string, child: ChildProcess, onProof: () => void): void {
+    if (line.startsWith('OWNED_FIXTURE_JOB_PROOF_FAILED ')) {
+      const expected = `OWNED_FIXTURE_JOB_PROOF_FAILED ${this.token} ${child.pid}`;
+      this.fail(new Error(line === expected
+        ? 'Owned Windows job refused descendant settlement'
+        : 'Owned Windows job failure has the wrong nonce or launcher identity'));
+      return; // Invalidate even a previously resolved quiescence promise.
+    }
     if (!line.startsWith('OWNED_FIXTURE_JOB_QUIESCENT ')) return;
     if (line !== `OWNED_FIXTURE_JOB_QUIESCENT ${this.token} ${child.pid}`) {
       this.fail(new Error('Owned Windows job proof has the wrong nonce or launcher identity')); return;
