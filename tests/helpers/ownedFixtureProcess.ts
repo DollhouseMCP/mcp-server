@@ -77,11 +77,8 @@ export class OwnedFixtureProcess {
       // libuv holds the exact child process handle; no PID search/taskkill.
       // Its verified KILL_ON_JOB_CLOSE job owns every fixture descendant.
       child.kill('SIGKILL');
-    } else {
-      if (this.authorizePosixSignal()) {
-        try { process.kill(-child.pid, 'SIGKILL'); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      }
+    } else if (this.authorizePosixSignal()) {
+      this.killPosixGroup(child.pid);
     }
   }
 
@@ -96,10 +93,7 @@ export class OwnedFixtureProcess {
     if (process.platform !== 'win32' && this.child?.pid && this.groupExists()) {
       orphanedGroup = !this.cancelled;
       this.cancelled = true;
-      if (this.authorizePosixSignal()) {
-        try { process.kill(-this.child.pid, 'SIGKILL'); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-      }
+      if (this.authorizePosixSignal()) this.killPosixGroup(this.child.pid);
       await this.waitForGroupSettlement();
     }
     if (this.directory) await rm(this.directory, { recursive: true, force: true });
@@ -111,6 +105,11 @@ export class OwnedFixtureProcess {
 
   private record(phase: string): void {
     this.events.push({ phase, elapsedMs: Math.round((performance.now() - this.started) * 1000) / 1000 });
+  }
+
+  private killPosixGroup(pid: number): void {
+    try { process.kill(-pid, 'SIGKILL'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
   }
 
   private authorizePosixSignal(): boolean {
