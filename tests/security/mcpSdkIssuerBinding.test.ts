@@ -26,8 +26,9 @@ function fixture() {
   let redirected: URL | undefined;
   const requests: { url: string; method: string; headers: Headers; body: string }[] = [];
   const fetchFn: typeof fetch = async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    requests.push({ url: url.href, method: init?.method ?? 'GET', headers: new Headers(init?.headers), body: String(init?.body ?? '') });
+    const request = new Request(input instanceof Request ? input.clone() : input, init);
+    const url = new URL(request.url);
+    requests.push({ url: url.href, method: request.method, headers: request.headers, body: await request.clone().text() });
     if (url.origin === 'https://mcp.example.test' && url.pathname.startsWith('/.well-known/')) {
       return Response.json({ resource: RESOURCE, authorization_servers: [advertisedIssuer] });
     }
@@ -82,6 +83,27 @@ function expectNoStoredCredentials(requests: ReturnType<typeof fixture>['request
 }
 
 describe('installed MCP SDK OAuth issuer binding', () => {
+  it('observes Request-carried credentials and native init precedence without consuming the input', async () => {
+    const f = fixture();
+    const request = new Request(`${OTHER}/token`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CLIENT_SECRET}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ refresh_token: REFRESH_TOKEN }),
+    });
+    await f.fetchFn(request);
+    expect(f.requests[0]).toMatchObject({ url: `${OTHER}/token`, method: 'POST', body: `refresh_token=${REFRESH_TOKEN}` });
+    expect(f.requests[0].headers.get('Authorization')).toBe(`Bearer ${CLIENT_SECRET}`);
+    expect(request.bodyUsed).toBe(false);
+
+    await f.fetchFn(request, {
+      method: 'PUT', headers: { Authorization: 'Bearer replacement-token' }, body: 'replacement-body',
+    });
+    expect(f.requests[1]).toMatchObject({ url: `${OTHER}/token`, method: 'PUT', body: 'replacement-body' });
+    expect(f.requests[1].headers.get('Authorization')).toBe('Bearer replacement-token');
+    expect(request.bodyUsed).toBe(false);
+    expect(await request.text()).toBe(`refresh_token=${REFRESH_TOKEN}`);
+  });
+
   it('retains issuer through both published credential schemas and JSON storage', () => {
     const f = fixture();
     expect(OAuthClientInformationSchema.parse(JSON.parse(JSON.stringify(f.client()))).issuer).toBe(TRUSTED);
