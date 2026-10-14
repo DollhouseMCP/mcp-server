@@ -92,7 +92,7 @@ describe('installed MCP SDK OAuth issuer binding', () => {
     const f = fixture();
     f.advertise(OTHER);
     await expect(auth(f.provider, { serverUrl: RESOURCE, fetchFn: f.fetchFn })).rejects.toThrow('is not presented to');
-    expect(f.requests.some(request => request.url.startsWith(OTHER))).toBe(true);
+    expect(f.requests.some(request => new URL(request.url).origin === OTHER)).toBe(true);
     expect(f.requests.every(request => request.method === 'GET')).toBe(true);
     expectNoStoredCredentials(f.requests);
     expect(f.tokens().refresh_token).toBe(REFRESH_TOKEN);
