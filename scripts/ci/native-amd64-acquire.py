@@ -3,9 +3,11 @@
 import os,sys,pathlib,subprocess,json,hashlib,secrets,time,tarfile,shutil,gzip
 S=pathlib.Path(sys.argv[1]).resolve(); O=pathlib.Path(sys.argv[2]).resolve(); O.mkdir(mode=0o700)
 P=O.parent/'private-native'; P.mkdir(mode=0o700); os.umask(0o077)
-SHA='69b8649f529e8eda0bfbe013bf41e2cfb94005df'; TREE='84857d56e8f538fd25f65937e4044137f75dd64a'
+SHA='bc8077f5b1cb76996456b54f7ec105800a070f79'; TREE='0202ebacfd9055cfc7c6f65434f8efc445e434f6'
 BASE_REF='node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
 EXPECTED_OS={'libc-bin':'2.41-12+deb13u4','libc6':'2.41-12+deb13u4','perl-base':'5.40.1-6+deb13u1','openssl':'3.5.7-1~deb13u3','libssl3t64':'3.5.7-1~deb13u3','openssl-provider-legacy':'3.5.7-1~deb13u3'}
+EXPECTED_APP={'@modelcontextprotocol/sdk':'1.31.0','@hono/node-server':'1.19.15','hono':'4.13.7','body-parser':'2.3.0','dompurify':'3.4.16','fast-uri':'3.1.8','ip-address':'10.7.1','qs':'6.16.0','smol-toml':'1.9.0'}
+COMPONENT_HEADS={'3066':'0666f933e8a473dc1c7bf870ec8a6ea4cac4451b','3067':'6554eb9b4a8d4e31bfb468d7224c663843835936','3068':'8f034210db3a1f9ec022ce1fe06f4650ac7b2d2b','3070':'ceae50713b326096c958989bc401e4d7ea741a62'}
 N='d3050-release-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']; NET=N+'-net'; PG=N+'-pg'; APP=N+'-app'; MIG=N+'-migrate'; B=N+'-build'; VOL=N+'-pgdata'
 DOCKER=['docker','--host','unix:///var/run/docker.sock']
 for selector in ('DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'): os.environ.pop(selector,None)
@@ -195,10 +197,36 @@ def packaging_smoke(image, label):
  run([*DOCKER,'rm',cid],record=False); containers.remove(name); pins.pop(name)
  manifest.setdefault('packaging',{})[label]={'image':image,'actualInstalledSafetyDependencies':len(installed),'importsPreserved':True,'scope':'actual installed presence and library imports only; not audit clearance'}
 
+def remediation_smoke(image, label):
+ # Use the exact source smoke against the installed bundle, without mutation or
+ # network. Browser bytes are bound separately; Grype does not cover CDN fetches.
+ name=N+'-'+label+'-remediation';containers.append(name)
+ assets={relative:hashlib.sha256((S/relative).read_bytes()).hexdigest() for relative in ['src/web-console/ui/vendor/purify.min.js','src/web-console/ui/vendor/js-yaml.min.js','src/web-console/ui/vendor/manifest.json','src/web/public/index.html']}
+ expected_manifest=json.loads((S/'docker/global-npm-security-patches.json').read_text())
+ code="""import assert from 'node:assert/strict';
+import fs from 'node:fs';import {createHash} from 'node:crypto';
+import {smokeGlobalNpm} from '/qualification/smoke-global-npm.mjs';
+const expected=EXPECTED_APP_JSON, assets=EXPECTED_ASSETS_JSON, patches=EXPECTED_PATCHES_JSON;
+const versions={};for(const [name,version] of Object.entries(expected)){const actual=JSON.parse(fs.readFileSync('/app/node_modules/'+name+'/package.json','utf8')).version;assert.equal(actual,version,name);versions[name]=actual;}
+for(const [source,digest] of Object.entries(assets)){const actual=createHash('sha256').update(fs.readFileSync('/app/'+source.replace(/^src\//,'dist/'))).digest('hex');assert.equal(actual,digest,source);}
+const receipt=JSON.parse(fs.readFileSync('/usr/local/lib/node_modules/npm/.dollhouse-security-patches.json','utf8'));
+assert.equal(receipt.npmCore,'11.19.0');assert.equal(receipt.locallyPatched,true);assert.deepEqual(receipt.patches,patches);
+const smoke=await smokeGlobalNpm('/usr/local/lib/node_modules/npm');
+console.log(JSON.stringify({versions,browserAssetSha256:assets,browserScope:'exact built copies of tested source/SRI declarations; no CDN network or scanner coverage claim',receipt,smoke,uid:process.getuid(),arch:process.arch}));
+""".replace('EXPECTED_APP_JSON',json.dumps(EXPECTED_APP)).replace('EXPECTED_ASSETS_JSON',json.dumps(assets)).replace('EXPECTED_PATCHES_JSON',json.dumps(expected_manifest['patches']))
+ cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1','--mount','type=bind,src='+str(S/'scripts/ci')+',dst=/qualification,readonly','--entrypoint','node',image,'--input-type=module','-e',code]).decode().strip()
+ if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('remediation smoke creation identity unavailable')
+ pins[name]=cid;inspect('container',name)
+ raw=run([*DOCKER,'start','--attach',cid]);data=json.loads(raw);state=inspect('container',name)['State']
+ if state['Running'] or state['ExitCode'] or state['OOMKilled'] or data['uid']!=(0 if label=='builder' else 1001) or data['arch']!='x64': raise RuntimeError('remediation smoke runtime invalid')
+ (O/(label+'-remediation-smoke.json')).write_text(json.dumps(data,indent=2))
+ run([*DOCKER,'rm',cid],record=False);containers.remove(name);pins.pop(name)
+ manifest.setdefault('remediation',{})[label]={'image':image,'versions':data['versions'],'browserAssetSha256':assets,'globalNpmSmoke':data['smoke'],'receiptFile':label+'-remediation-smoke.json','scope':'actual installed package pins/unchanged npm core/five patched leaves/inventory/offline consumers and built browser copies; no residual acceptance'}
+
 def prebuilt_compatibility(builder_image):
  phase('prebuilt-clean-context-from-exact-builder')
  context=P/'prebuilt-context';context.mkdir(mode=0o700);(context/'docker').mkdir();(context/'scripts/ci').mkdir(parents=True)
- for filename in ['package.json','package-lock.json','oauth-helper.mjs','oauth-state-coordinator.mjs','docker/Dockerfile.prebuilt','scripts/ci/prepare-safety-runtime.mjs']:
+ for filename in ['package.json','package-lock.json','oauth-helper.mjs','oauth-state-coordinator.mjs','docker/Dockerfile.prebuilt','scripts/ci/prepare-safety-runtime.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs']:
   shutil.copyfile(S/filename,context/filename)
  # No ambient .dockerignore/.env/node_modules: only these exact source inputs
  # plus builder-produced runtime assets are admitted to the clean context.
@@ -228,13 +256,14 @@ def prebuilt_compatibility(builder_image):
  archive.unlink() # diagnostic layer receipt retained; only primary deployment archives are published
  base_package_smoke(image['Id'],'prebuilt')
  packaging_smoke(image['Id'],'prebuilt')
+ remediation_smoke(image['Id'],'prebuilt')
 
 failure=None; manifest={}
 try:
  if run(['uname','-m']).strip()!=b'x86_64': raise RuntimeError('runner not native AMD64')
  if run(['git','rev-parse','HEAD'],cwd=S).strip().decode()!=SHA or run(['git','rev-parse','HEAD^{tree}'],cwd=S).strip().decode()!=TREE: raise RuntimeError('source pin')
  if run(['git','status','--porcelain'],cwd=S).strip(): raise RuntimeError('dirty source')
- manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package-lock.json','packages/safety/package-lock.json','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs'] if (S/f).exists()},'images':{}}
+ manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package-lock.json','packages/safety/package-lock.json','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs','src/web-console/ui/vendor/manifest.json','src/web/public/index.html'] if (S/f).exists()},'images':{},'componentHeads':COMPONENT_HEADS}
  run([*DOCKER,'version']); run([*DOCKER,'buildx','version'])
  for filename in ['docker/Dockerfile','docker/Dockerfile.prebuilt']:
   if [line for line in (S/filename).read_text().splitlines() if line.startswith('FROM node@')]!=['FROM '+BASE_REF+' AS node-base']: raise RuntimeError('candidate source base reference mismatch')
@@ -276,7 +305,9 @@ try:
   manifest['images'][target]['archiveSha256']=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
   manifest['images'][target]['archiveBytes']=archive.stat().st_size
  manifest['archivesAreDiagnosticUntilQualified']=True
- for target in ['production','builder']: base_package_smoke(manifest['images'][target]['Id'],target)
+ for target in ['production','builder']:
+  base_package_smoke(manifest['images'][target]['Id'],target)
+  remediation_smoke(manifest['images'][target]['Id'],target)
  archive_safety_exclusion(O/'production.docker.tar',manifest['images']['production'],'production')
  packaging_smoke(manifest['images']['production']['Id'],'production')
  prebuilt_compatibility(manifest['images']['builder']['Id'])
@@ -348,7 +379,7 @@ try:
   proof=pathlib.Path('/tmp/memory-upgrade-engine-proof.json')
   if proof.exists(): shutil.copyfile(proof,O/'native-engine-proof.json')
  manifest['nativeRuntimePassed']=True
- manifest['scope']='native AMD64 exact 69b8649f Trixie remediation candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
+ manifest['scope']='native AMD64 exact four-component combined qualification tree0202ebac remediation candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
  if audit_needs_disposition: raise RuntimeError('Image audit high/critical findings require explicit release disposition')
 except BaseException as e:
  failure=type(e).__name__+': '+str(e)
