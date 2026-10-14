@@ -2,14 +2,14 @@
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
 # Exact official Node 24.21.0 multi-platform image; qualification: #3064.
 # Apply supported Trixie fixes to every target, including the migration builder.
-FROM node:24.21.0-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS node-base
+FROM node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS node-base
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libc-bin=2.41-12+deb13u4 \
     libc6=2.41-12+deb13u4 \
-    perl-base=5.40.1-6+deb13u1 \
-    openssl=3.5.7-1~deb13u3 \
     libssl3t64=3.5.7-1~deb13u3 \
+    openssl=3.5.7-1~deb13u3 \
     openssl-provider-legacy=3.5.7-1~deb13u3 \
+    perl-base=5.40.1-6+deb13u1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
