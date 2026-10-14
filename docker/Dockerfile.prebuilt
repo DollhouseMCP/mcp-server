@@ -38,6 +38,12 @@ COPY dist ./dist
 COPY data/personas ./data/personas
 COPY oauth-helper.mjs oauth-state-coordinator.mjs ./
 
+# Prune only the safety workspace's build dependencies after its complete copy.
+# Keep declared production/optional dependencies, compiled exports and runtime assets.
+COPY scripts/ci/prune-safety-runtime.mjs /tmp/prune-safety-runtime.mjs
+RUN node /tmp/prune-safety-runtime.mjs /app && \
+    rm /tmp/prune-safety-runtime.mjs && npm cache clean --force
+
 # Remove test files that shouldn't be in production image
 # These files can cause Docker build to hang due to large pathological test datasets
 RUN rm -rf ./dist/test ./dist/__tests__ ./dist/**/*.test.js ./dist/**/*.spec.js || true
