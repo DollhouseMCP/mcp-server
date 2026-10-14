@@ -118,7 +118,7 @@ jobs:
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|hostedGracefulStop)[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|hostedGracefulStop|ownedFixtureProcess)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Enforce all required test groups
@@ -238,7 +238,7 @@ jobs:
         continue-on-error: true
       - name: Run required hosted graceful stop suite
         id: helper_tests
-        run: npm test -- --runInBand --runTestsByPath tests/unit/scripts/hostedGracefulStop.test.ts
+        run: npm test -- --runInBand --runTestsByPath tests/unit/scripts/hostedGracefulStop.test.ts tests/unit/scripts/ownedFixtureProcess.test.ts
         continue-on-error: true
       - name: Enforce every serial storage suite
         if: always()
