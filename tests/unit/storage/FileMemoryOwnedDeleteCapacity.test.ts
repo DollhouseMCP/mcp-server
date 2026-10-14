@@ -1,3 +1,4 @@
+import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
 import { afterEach, beforeEach, describe, expect, it as jestIt, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { type BigIntStats } from 'node:fs';
@@ -12,6 +13,8 @@ import { FileMemoryVolumeStore } from '../../../src/storage/FileMemoryVolumeStor
 import { cleanupDirectoryReadObservers, observeDirectoryReads } from './fixtures/aggregateDirectoryReadObserver.js';
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
+const lifecycle = new OwnedStorageCase();
+beforeEach(() => lifecycle.begin());
 const USER = '11111111-1111-4111-8111-111111111111';
 const RAW = 'entries: []\n';
 const roots: string[] = [];
@@ -51,6 +54,7 @@ async function capture(target: string): Promise<Evidence> {
 async function verify(evidence: readonly Evidence[]) {
   const changed: string[] = [];
   for (const before of evidence) {
+    lifecycle.checkpoint();
     const stat = await fs.lstat(before.target, { bigint: true });
     if (!isDeepStrictEqual(identity(stat), before.identity) ||
       (before.bytes && !(await fs.readFile(before.target)).equals(before.bytes))) changed.push(before.target);
@@ -60,6 +64,7 @@ async function verify(evidence: readonly Evidence[]) {
 async function treeEvidence(root: string): Promise<Evidence[]> {
   const result: Evidence[] = [];
   async function walk(target: string) {
+    lifecycle.checkpoint();
     const value = await capture(target); result.push(value);
     if (!value.bytes) for (const name of (await fs.readdir(target)).sort()) await walk(path.join(target, name));
   }
@@ -67,6 +72,7 @@ async function treeEvidence(root: string): Promise<Evidence[]> {
 }
 
 async function fixture(nested: boolean, count: number) {
+  lifecycle.checkpoint();
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'archive-cleanup-capacity-')));
   roots.push(root);
   const locator = nested ? 'Notes/Memory.yaml' : 'Memory.yaml';
@@ -85,6 +91,7 @@ async function fixture(nested: boolean, count: number) {
   // Strict persistent fixture setup, not a claim about adoption throughput. Every
   // record binds the actual captured inode/bytes and uses the released ACTIVE format.
   for (let index = 0; index < count; index++) {
+    lifecycle.checkpoint();
     const existing = path.posix.join(path.posix.dirname(locator), `Existing${index}.yaml`);
     const target = path.join(root, existing), ownerId = randomUUID();
     await fs.writeFile(target, RAW, { mode: 0o600 });
@@ -121,9 +128,9 @@ afterEach(async () => {
   const profile = cleanupProfile; cleanupProfile = undefined;
   profile?.mark('cleanup-start');
   try {
-    await cleanupDirectoryReadObservers(async () => {
+    await lifecycle.teardown(() => cleanupDirectoryReadObservers(async () => {
       jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
-    });
+    }));
     profile?.mark('cleanup-end');
   } finally { profile?.mark('cleanup-finally'); profile?.flush(); }
 });
@@ -132,15 +139,15 @@ describe('dormant head DELETE populated owner portfolios', () => {
     'retains all foreign owner evidence at %i existing owners, nested=%s', (count, nested) => {
       let f: Awaited<ReturnType<typeof fixture>>, archived: Evidence[], lifecycleStarted: number | undefined;
       let diagnostic: ReturnType<typeof phaseDiagnostic>, profile: ReturnType<typeof bufferedProfile>;
-      beforeEach(async () => {
+      beforeEach(lifecycle.own(async () => {
         profile = bufferedProfile(count, nested, 'fresh'); cleanupProfile = profile; profile.mark('setup-start');
         diagnostic = phaseDiagnostic(count, nested, 'fresh', () => lifecycleStarted);
         const setup = observeDirectoryReads(); let primary: { cause: unknown } | undefined;
         try { f = await fixture(nested, count); archived = await treeEvidence(f.owner); }
         catch (cause) { primary = { cause }; throw cause; }
         finally { setup.restore(primary); diagnostic('setup-complete', setup.measured); profile.mark('setup-end'); }
-      }, 10000);
-      it('completes fresh deletion and all preservation verification', async () => {
+      }), 10000);
+      it('completes fresh deletion and all preservation verification', lifecycle.own(async () => {
         const currentProfile = profile;
         try {
           lifecycleStarted = performance.now();
@@ -165,6 +172,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           const parent = path.dirname(path.join(f.root, f.locator));
           const sidecarName = `.${hash(path.posix.basename(f.locator))}.memory-owner.json`;
           for (const namespace of f.namespaces) {
+            lifecycle.checkpoint();
             const expected = namespace.target === parent ? namespace.names.filter(name => name !== path.basename(f.locator) && name !== sidecarName) : namespace.names;
             expect((await fs.readdir(namespace.target)).sort()).toEqual(expected);
           }
@@ -173,7 +181,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           diagnostic('assertions-complete', reads.measured);
           currentProfile.mark('assertions-complete');
         } finally { currentProfile.mark('lifecycle-finally'); }
-      }, 10000);
+      }), 10000);
     });
   describe.each([[false, 'pair-durable'], [true, 'pair-durable'], [true, 'head-durable']] as const)(
     'retains populated recovery authority at 1,000 owners, nested=%s phase=%s', (nested, phase) => {
@@ -181,15 +189,15 @@ describe('dormant head DELETE populated owner portfolios', () => {
       let diagnostic: ReturnType<typeof phaseDiagnostic>, profile: ReturnType<typeof bufferedProfile>;
       // Fixture construction and baseline capture remain serial, with a separate
       // explicit bound; all interruption, recovery and verification share one test.
-      beforeEach(async () => {
+      beforeEach(lifecycle.own(async () => {
         profile = bufferedProfile(1000, nested, phase); cleanupProfile = profile; profile.mark('setup-start');
         diagnostic = phaseDiagnostic(1000, nested, phase, () => lifecycleStarted);
         const setup = observeDirectoryReads(); let primary: { cause: unknown } | undefined;
         try { f = await fixture(nested, 1000); archived = await treeEvidence(f.owner); }
         catch (cause) { primary = { cause }; throw cause; }
         finally { setup.restore(primary); diagnostic('setup-complete', setup.measured); profile.mark('setup-end'); }
-      }, 10000);
-      it('completes interruption, recovery and all preservation verification', async () => {
+      }), 10000);
+      it('completes interruption, recovery and all preservation verification', lifecycle.own(async () => {
         const currentProfile = profile;
         try {
           lifecycleStarted = performance.now();
@@ -205,6 +213,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           finally { interruptedReads.restore(interruptedFailure); diagnostic('interrupted-operation-end', interruptedReads.measured); }
           expect(reached).toBe(true); stop = false;
           currentProfile.mark('interruption-asserted');
+          lifecycle.checkpoint();
           const reads = observeDirectoryReads(); let result, retryFailure: { cause: unknown } | undefined;
           try { result = await owners.deleteOwned(request); }
           catch (cause) { retryFailure = { cause }; throw cause; }
@@ -220,6 +229,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           await verify(archived); currentProfile.mark('archive-verification-end');
           currentProfile.mark('namespace-verification-start');
           for (const namespace of f.namespaces) {
+            lifecycle.checkpoint();
             const parent = path.dirname(path.join(f.root, f.locator)), sidecar = `.${hash(path.posix.basename(f.locator))}.memory-owner.json`;
             const expected = namespace.target === parent ? namespace.names.filter(name => name !== path.basename(f.locator) && name !== sidecar) : namespace.names;
             expect((await fs.readdir(namespace.target)).sort()).toEqual(expected);
@@ -228,7 +238,7 @@ describe('dormant head DELETE populated owner portfolios', () => {
           diagnostic('assertions-complete', reads.measured);
           currentProfile.mark('assertions-complete');
         } finally { currentProfile.mark('lifecycle-finally'); }
-      }, 10000);
+      }), 10000);
     });
 
 });
