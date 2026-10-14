@@ -21,6 +21,7 @@ export class OwnedFixtureProcess {
   private cancelled = false;
   private linuxGroup?: LinuxOwnedGroup;
   private cleanupDeadline?: number;
+  private signalRefused = false;
   private child?: ChildProcess;
   private directory?: string;
   private closed = false;
@@ -70,19 +71,22 @@ export class OwnedFixtureProcess {
     this.cleanupDeadline ??= performance.now() + FIXTURE_CLEANUP_MS;
     const child = this.child;
     if (!child || this.closed || !child.pid) return;
+    if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
     this.record('cleanup-terminate-owned-tree');
     if (process.platform === 'win32') {
       // libuv holds the exact child process handle; no PID search/taskkill.
       // Its verified KILL_ON_JOB_CLOSE job owns every fixture descendant.
       child.kill('SIGKILL');
     } else {
-      this.linuxGroup?.captureBeforeKill(this.cleanupDeadline);
-      try { process.kill(-child.pid, 'SIGKILL'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+      if (this.authorizePosixSignal()) {
+        try { process.kill(-child.pid, 'SIGKILL'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+      }
     }
   }
 
   async finish(): Promise<void> {
+    if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
     if (this.child && !this.closed) {
       this.cancel();
       await bounded(this.close);
@@ -92,9 +96,10 @@ export class OwnedFixtureProcess {
     if (process.platform !== 'win32' && this.child?.pid && this.groupExists()) {
       orphanedGroup = !this.cancelled;
       this.cancelled = true;
-      this.linuxGroup?.captureBeforeKill(this.cleanupDeadline);
-      try { process.kill(-this.child.pid, 'SIGKILL'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+      if (this.authorizePosixSignal()) {
+        try { process.kill(-this.child.pid, 'SIGKILL'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+      }
       await this.waitForGroupSettlement();
     }
     if (this.directory) await rm(this.directory, { recursive: true, force: true });
@@ -106,6 +111,16 @@ export class OwnedFixtureProcess {
 
   private record(phase: string): void {
     this.events.push({ phase, elapsedMs: Math.round((performance.now() - this.started) * 1000) / 1000 });
+  }
+
+  private authorizePosixSignal(): boolean {
+    if (process.platform !== 'linux') return true;
+    if (!this.groupExists()) return false;
+    if (!this.linuxGroup?.captureBeforeKill(this.cleanupDeadline!)) {
+      this.signalRefused = true;
+      throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+    }
+    return true;
   }
 
   private groupExists(): boolean {

@@ -83,17 +83,26 @@ export class LinuxOwnedGroup {
     } catch { /* Unknown evidence never authorizes zombie-only completion. */ }
   }
 
-  captureBeforeKill(deadline: number): void {
-    if (this.attempted) return;
-    this.attempted = true;
+  captureBeforeKill(deadline: number): boolean {
     try {
-      if (!this.leader) return;
+      const slice = Math.min(deadline, performance.now() + CENSUS_MS);
+      if (this.attempted) {
+        if (!this.members) return false;
+        const current = census(this.group, slice);
+        return current.length > 0 && current.every(value => this.members!.some(before => sameLinuxProcess(before, value)));
+      }
+      this.attempted = true;
+      if (!this.leader) return false;
       const leader = processEvidence(this.group);
-      if (!leader || !sameLinuxProcess(this.leader, leader)) return;
-      const members = census(this.group, Math.min(deadline, performance.now() + CENSUS_MS));
-      if (!members.some(value => sameLinuxProcess(value, leader)) || members.some(value => value.session !== this.group)) return;
+      if (!leader || !sameLinuxProcess(this.leader, leader)) return false;
+      const members = census(this.group, slice);
+      if (!members.some(value => sameLinuxProcess(value, leader)) || members.some(value => value.session !== this.group)) return false;
+      // Recheck the actual launcher after the census, before authorizing a signal.
+      const currentLeader = processEvidence(this.group);
+      if (!currentLeader || !sameLinuxProcess(this.leader, currentLeader)) return false;
       this.members = members;
-    } catch { /* Overflow, permissions and parse failures refuse the fallback. */ }
+      return true;
+    } catch { return false; } // Unknown evidence never authorizes a group signal.
   }
 
   zombieOnly(deadline: number): boolean {

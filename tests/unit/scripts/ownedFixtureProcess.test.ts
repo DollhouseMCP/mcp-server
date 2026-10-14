@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
-import { mkdtemp, writeFile, stat } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { mkdtemp, writeFile, stat, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,7 +102,7 @@ describe('owned fixture teardown', () => {
     await ready.promise;
     if (process.platform === 'linux') {
       const live = new LinuxOwnedGroup(pids[0]);
-      live.captureBeforeKill(performance.now() + 2500);
+      expect(live.captureBeforeKill(performance.now() + 2500)).toBe(true);
       expect(live.zombieOnly(performance.now() + 100)).toBe(false);
     }
     await registry.cancelUnfinished();
@@ -114,6 +114,40 @@ describe('owned fixture teardown', () => {
     }
     await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     registry.assertSettled();
+  });
+
+  (process.platform === 'linux' ? it : it.skip)('refuses a group signal and retains admission after unknown Linux identity', async () => {
+    const isolated = new OwnedFixtureRegistry(), ready = deferred();
+    let owned!: OwnedFixtureProcess, child!: ReturnType<OwnedFixtureProcess['spawn']>, directory = '';
+    const work = isolated.run(async owner => {
+      owned = owner;
+      directory = await mkdtemp(join(tmpdir(), 'owned-process-refusal-'));
+      owner.ownDirectory(directory);
+      child = owner.spawn(python, ['-c', "import time;print('ready',flush=True);time.sleep(30)"], { stdio: ['ignore', 'pipe', 'pipe'] });
+      child.stderr!.resume(); child.stdout!.once('data', () => ready.release());
+      return new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
+    });
+    const outcome = work.then(() => 'unexpected-success', error => (error as Error).message);
+    await ready.promise;
+    const refuse = jest.spyOn(LinuxOwnedGroup.prototype, 'captureBeforeKill').mockReturnValue(false);
+    const signals = jest.spyOn(process, 'kill');
+    try {
+      expect(() => owned.cancel()).toThrow('refusing signal');
+      expect(() => owned.cancel()).toThrow('refusing signal');
+      await expect(owned.finish()).rejects.toThrow('refusing signal');
+      expect(signals.mock.calls.some(([, signal]) => signal === 'SIGKILL')).toBe(false);
+      expect(() => isolated.assertSettled()).toThrow('unsettled');
+      expect((await stat(directory)).isDirectory()).toBe(true);
+    } finally {
+      signals.mockRestore(); refuse.mockRestore();
+      // This control has exactly one child and no descendants. Reap that exact
+      // child handle after proving the group guard refused every signal.
+      const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
+      child.kill('SIGKILL'); await closed;
+      await outcome;
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(() => isolated.assertSettled()).toThrow('unsettled');
   });
 
   it('refuses a late spawn after cancellation during asynchronous setup', async () => {
