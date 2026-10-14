@@ -16,7 +16,7 @@ jobs:
       - name: Checkout exact qualified candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 6c4322d29e05608b91dc0150fcdb804f9069c7b7
+          ref: 0a58c3bb2f1a51e5efb61e07b30e6fc393ff50f8
           path: candidate
           persist-credentials: false
       - id: acquire
@@ -83,7 +83,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: native-amd64-6c4322-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-amd64-0a58c3-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-artifacts/
           if-no-files-found: error
           retention-days: 7

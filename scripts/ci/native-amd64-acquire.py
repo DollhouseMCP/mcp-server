@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Single hosted native artifact acquisition; synthetic inputs only, no publish/deploy."""
-import os,sys,pathlib,subprocess,json,hashlib,secrets,time,tarfile,shutil
+import os,sys,pathlib,subprocess,json,hashlib,secrets,time,tarfile,shutil,gzip
 S=pathlib.Path(sys.argv[1]).resolve(); O=pathlib.Path(sys.argv[2]).resolve(); O.mkdir(mode=0o700)
 P=O.parent/'private-native'; P.mkdir(mode=0o700); os.umask(0o077)
-SHA='6c4322d29e05608b91dc0150fcdb804f9069c7b7'; TREE='3fa5ccba6dc7991c38cf13a582f9d9c347899c65'
+SHA='0a58c3bb2f1a51e5efb61e07b30e6fc393ff50f8'; TREE='fe4c65c5d36fee5e06c6d6acad3eb1183020022a'
 N='d3050-release-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']; NET=N+'-net'; PG=N+'-pg'; APP=N+'-app'; MIG=N+'-migrate'; B=N+'-build'; VOL=N+'-pgdata'
 DOCKER=['docker','--host','unix:///var/run/docker.sock']
 for selector in ('DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'): os.environ.pop(selector,None)
@@ -129,12 +129,96 @@ def audit_image(image):
   run([*DOCKER,'rm',cid],record=False); containers.remove(name); pins.pop(name)
  manifest['auditNeedsReleaseDisposition']=audit_needs_disposition
 
+def archive_safety_exclusion(path, image, label):
+ # A merged-filesystem absence cannot prove lower layers were clean. Inspect
+ # every exported final-image layer, including whiteouts and directory entries.
+ counts=[]
+ with tarfile.open(path) as outer:
+  records=json.load(outer.extractfile('manifest.json'))
+  if len(records)!=1: raise RuntimeError('layer inspection requires one exact image')
+  record=records[0];config=outer.extractfile(record['Config']).read()
+  if 'sha256:'+hashlib.sha256(config).hexdigest()!=image['Id']: raise RuntimeError('layer inspection config identity mismatch')
+  expected=json.loads(config)['rootfs']['diff_ids']
+  if len(record['Layers'])!=len(expected): raise RuntimeError('layer inspection count mismatch')
+  for name,digest in zip(record['Layers'],expected):
+   def uncompressed():
+    f=outer.extractfile(name);magic=f.read(2);f.seek(0)
+    return gzip.GzipFile(fileobj=f) if magic==b'\x1f\x8b' else f
+   if 'sha256:'+hashlib.file_digest(uncompressed(),'sha256').hexdigest()!=digest: raise RuntimeError('layer inspection diffID mismatch')
+   entries=0
+   with tarfile.open(fileobj=uncompressed(),mode='r|') as layer:
+    for member in layer:
+     entries+=1;n=member.name.removeprefix('./').lstrip('/')
+     if n=='app/packages/safety/node_modules' or n.startswith('app/packages/safety/node_modules/') or n=='app/packages/safety/.wh.node_modules': raise RuntimeError('safety development dependency bytes or deletion remain in final image layers')
+   counts.append({'diffId':digest,'entriesInspected':entries})
+ (O/(label+'-final-layer-exclusion.json')).write_text(json.dumps({'image':image['Id'],'archiveSha256':hashlib.file_digest(path.open('rb'),'sha256').hexdigest(),'archiveBytes':path.stat().st_size,'layers':counts,'safetyNodeModulesEntries':0,'scope':'all entries of all exact finalimage layers; no packagewide or OS audit waiver'},indent=2))
+
+def packaging_smoke(image, label):
+ # Installed inventory is distinct from lockfile audit: removed dev tools may
+ # remain in a valid unchanged full-development lockfile.
+ inventory_script = "const fs=require('fs');let p=[];function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){if(e.isSymbolicLink())continue;const q=d+'/'+e.name;if(e.isDirectory())walk(q);else if(e.name==='package.json'){const j=JSON.parse(fs.readFileSync(q));if(j.name&&j.version)p.push({path:q,name:j.name,version:j.version})}}}walk('/app/packages/safety');console.log(JSON.stringify({packages:p,uid:process.getuid(),arch:process.arch}));"
+ name=N+'-'+label+'-packaging'; containers.append(name)
+ cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1','--entrypoint','node',image,'-e',inventory_script]).decode().strip()
+ if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('packaging inventory creation identity unavailable')
+ pins[name]=cid; inspect('container',name)
+ raw=run([*DOCKER,'start','--attach',cid]); data=json.loads(raw); state=inspect('container',name)['State']
+ if state['Running'] or state['ExitCode'] or state['OOMKilled'] or data['uid']!=1001 or data['arch']!='x64': raise RuntimeError('packaging inventory runtime invalid')
+ declarations=json.loads((S/'packages/safety/package.json').read_text())
+ if declarations.get('dependencies') or declarations.get('optionalDependencies'): raise RuntimeError('current candidate safety runtime dependency assumption changed')
+ installed=[p for p in data['packages'] if '/node_modules/' in p['path']]
+ if installed: raise RuntimeError('safety build dependencies remain physically installed')
+ (O/(label+'-packaging-inventory.json')).write_text(json.dumps(data,indent=2))
+ run([*DOCKER,'rm',cid],record=False); containers.remove(name); pins.pop(name)
+ name=N+'-'+label+'-imports'; containers.append(name)
+ code="const s=await import('@dollhousemcp/safety');await import('postgres');await import('undici');await import('@modelcontextprotocol/sdk/server/index.js');if(!Object.keys(s).length)throw Error('empty safety exports');console.log(JSON.stringify({importsPreserved:true,safetyExportCount:Object.keys(s).length,uid:process.getuid(),arch:process.arch}));"
+ cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1','--entrypoint','node',image,'--input-type=module','-e',code]).decode().strip()
+ if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('packaging import creation identity unavailable')
+ pins[name]=cid; inspect('container',name)
+ raw=run([*DOCKER,'start','--attach',cid]); outcome=json.loads(raw);state=inspect('container',name)['State']
+ if state['Running'] or state['ExitCode'] or state['OOMKilled'] or outcome.get('importsPreserved') is not True or outcome['uid']!=1001 or outcome['arch']!='x64': raise RuntimeError('packaging runtime imports failed')
+ (O/(label+'-packaging-imports.json')).write_text(json.dumps(outcome,indent=2))
+ run([*DOCKER,'rm',cid],record=False); containers.remove(name); pins.pop(name)
+ manifest.setdefault('packaging',{})[label]={'image':image,'actualInstalledSafetyDependencies':len(installed),'importsPreserved':True,'scope':'actual installed presence and library imports only; not audit clearance'}
+
+def prebuilt_compatibility(builder_image):
+ phase('prebuilt-clean-context-from-exact-builder')
+ context=P/'prebuilt-context';context.mkdir(mode=0o700);(context/'docker').mkdir();(context/'scripts/ci').mkdir(parents=True)
+ for filename in ['package.json','package-lock.json','oauth-helper.mjs','oauth-state-coordinator.mjs','docker/Dockerfile.prebuilt','scripts/ci/prepare-safety-runtime.mjs']:
+  shutil.copyfile(S/filename,context/filename)
+ # No ambient .dockerignore/.env/node_modules: only these exact source inputs
+ # plus builder-produced runtime assets are admitted to the clean context.
+ name=N+'-prebuilt-assets';containers.append(name)
+ cid=run([*DOCKER,'create','--name',name,'--label','dollhouse.native='+N,'--network','none','--memory','512m','--cpus','1',builder_image,'true']).decode().strip()
+ if not __import__('re').fullmatch('[a-f0-9]{64}',cid): raise RuntimeError('prebuilt asset creation identity unavailable')
+ pins[name]=cid;inspect('container',name)
+ for src,dst in [('dist','dist'),('packages','packages'),('data/personas','data/personas')]:
+  (context/dst).parent.mkdir(parents=True,exist_ok=True)
+  run([*DOCKER,'cp',cid+':/app/'+src,str(context/dst)],timeout=60)
+ # Asset carrier is never started and has no accepted work or services.
+ run([*DOCKER,'rm',cid],record=False);containers.remove(name);pins.pop(name)
+ context_hashes={str(p.relative_to(context)):hashlib.sha256(p.read_bytes()).hexdigest() for p in context.rglob('*') if p.is_file() and not p.is_symlink()}
+ (O/'prebuilt-context-file-hashes.json').write_text(json.dumps(context_hashes,sort_keys=True))
+ phase('build-prebuilt-compatibility-only')
+ tag=N+':prebuilt-compatibility'
+ run([*DOCKER,'buildx','build','--builder',B,'--platform','linux/amd64','--target','production','--label','org.opencontainers.image.revision='+SHA,'--label','dollhouse.native='+N,'--tag',tag,'--load','--provenance=false','--file',str(context/'docker/Dockerfile.prebuilt'),str(context)],timeout=1200)
+ output=(O/f'{counter:03}-stdout.txt').read_text(errors='replace')+(O/f'{counter:03}-stderr.txt').read_text(errors='replace')
+ resolved=sorted(set(__import__('re').findall(r'FROM (?:docker.io/library/)?node:24-slim@(sha256:[a-f0-9]{64})',output)))
+ if not resolved or not set(resolved)<={x.rsplit('@',1)[-1] for x in base.get('RepoDigests',[])}: raise RuntimeError('prebuilt mutable base changed or not observed')
+ image=inspect('image',tag)
+ if image['Architecture']!='amd64' or image['Os']!='linux' or image['Config']['Labels']['org.opencontainers.image.revision']!=SHA or image['RootFS']['Layers'][:len(base['RootFS']['Layers'])]!=base['RootFS']['Layers']: raise RuntimeError('prebuilt compatibility image binding mismatch')
+ manifest['prebuiltCompatibility']={'image':image,'source':SHA,'tree':TREE,'builderImage':builder_image,'sourceInputs':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile.prebuilt','scripts/ci/prepare-safety-runtime.mjs']},'scope':'separate prebuilt path compatibility/import/inventory smoke only; not deployment artifact or full auth/database/runtime audit'}
+ archive=P/'prebuilt-compatibility.docker.tar'
+ run([*DOCKER,'save','--output',str(archive),image['Id']],timeout=180)
+ archive_safety_exclusion(archive,image,'prebuilt')
+ archive.unlink() # diagnostic layer receipt retained; only primary deployment archives are published
+ packaging_smoke(image['Id'],'prebuilt')
+
 failure=None; manifest={}
 try:
  if run(['uname','-m']).strip()!=b'x86_64': raise RuntimeError('runner not native AMD64')
  if run(['git','rev-parse','HEAD'],cwd=S).strip().decode()!=SHA or run(['git','rev-parse','HEAD^{tree}'],cwd=S).strip().decode()!=TREE: raise RuntimeError('source pin')
  if run(['git','status','--porcelain'],cwd=S).strip(): raise RuntimeError('dirty source')
- manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','package-lock.json','packages/safety/package-lock.json'] if (S/f).exists()},'images':{}}
+ manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package-lock.json','packages/safety/package-lock.json','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs'] if (S/f).exists()},'images':{}}
  run([*DOCKER,'version']); run([*DOCKER,'buildx','version'])
  run([*DOCKER,'pull','--platform','linux/amd64','node:24-slim'],timeout=180)
  base=inspect('image','node:24-slim'); manifest['freshNodeBase']=base; manifest['buildResolvedBaseDigests']={}
@@ -175,6 +259,9 @@ try:
   manifest['images'][target]['archiveSha256']=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
   manifest['images'][target]['archiveBytes']=archive.stat().st_size
  manifest['archivesAreDiagnosticUntilQualified']=True
+ archive_safety_exclusion(O/'production.docker.tar',manifest['images']['production'],'production')
+ packaging_smoke(manifest['images']['production']['Id'],'production')
+ prebuilt_compatibility(manifest['images']['builder']['Id'])
  audit_image(manifest['images']['production']['Id'])
  run([*DOCKER,'pull','--platform','linux/amd64','postgres:17-alpine'],timeout=180); pgimage=inspect('image','postgres:17-alpine'); manifest['postgres']=pgimage
  admin=secrets.token_hex(24); app=secrets.token_hex(24); master=__import__('base64').b64encode(secrets.token_bytes(32)).decode()
@@ -243,7 +330,7 @@ try:
   proof=pathlib.Path('/tmp/memory-upgrade-engine-proof.json')
   if proof.exists(): shutil.copyfile(proof,O/'native-engine-proof.json')
  manifest['nativeRuntimePassed']=True
- manifest['scope']='native AMD64 exact6c migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
+ manifest['scope']='native AMD64 exact 0a58c3bb candidate migration/OFF localauth default startup/v2 drain and four-case engine witness; actual installed/npm/OS inventory; no historical restore/production auth/key/SMTP/deployment/guard activation'
  if audit_needs_disposition: raise RuntimeError('Image audit high/critical findings require explicit release disposition')
 except BaseException as e:
  failure=type(e).__name__+': '+str(e)
