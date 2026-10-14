@@ -157,6 +157,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string; refresh_token?: string };
     expect(tokenBody.access_token).toBeTruthy();
+    expect(tokenBody.refresh_token).toEqual(expect.any(String));
 
     // Validate the access token via the AS.
     const validation = await harness.as.validate(tokenBody.access_token);
@@ -167,6 +168,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
 
     // auth_time claim is on the issued token (must-fix #12).
     const decoded = decodeJwt(tokenBody.access_token);
+    expect((decoded.scope as string).split(' ').sort()).toEqual(['mcp', 'offline_access']);
     expect(typeof decoded.auth_time).toBe('number');
     expect(decoded.auth_time).toBeGreaterThan(0);
 
@@ -179,7 +181,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
             providerEvent: 'access_token.issued',
             tokenKind: 'AccessToken',
             clientId: CLIENT_ID,
-            scope: 'mcp',
+            scope: expect.stringMatching(/^(?:mcp offline_access|offline_access mcp)$/),
             audience: `${harness.publicBaseUrl}/mcp`,
           }),
         }),

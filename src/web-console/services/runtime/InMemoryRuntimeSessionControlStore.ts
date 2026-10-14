@@ -5,6 +5,7 @@ import type {
   RuntimeOperationalCursor,
   RuntimeOperationalListQuery,
   RuntimeOperationalPresencePage,
+  RuntimeSessionLeaseInput,
   RuntimeSessionHeartbeatInput,
   RuntimeSessionHeartbeatResult,
   RuntimeSessionListQuery,
@@ -21,6 +22,7 @@ import {
   cloneRuntimeTerminationCommand,
   validateRuntimeListQuery,
   validateRuntimeOperationalListQuery,
+  validateRuntimeSessionLeaseInput,
   validateRuntimeSessionHeartbeatInput,
   validateRuntimeSessionPresenceInput,
   validateRuntimeTerminationAckInput,
@@ -69,17 +71,30 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
       lastActiveAt: new Date(input.lastActiveAt),
       requestCount: input.requestCount,
       errorCount: input.errorCount,
-      leaseUntil: new Date(input.leaseUntil),
+      leaseUntil: new Date(Math.max(current.leaseUntil.getTime(), input.leaseUntil.getTime())),
     };
     this.presence.set(input.sessionId, cloneRuntimeSessionPresence(updated));
     return { kind: 'updated', presence: cloneRuntimeSessionPresence(updated) };
   }
 
-  async markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null> {
+  async renewSessionLease(input: RuntimeSessionLeaseInput): Promise<RuntimeSessionHeartbeatResult> {
+    await Promise.resolve();
+    validateRuntimeSessionLeaseInput(input);
+    const current = this.presence.get(input.sessionId);
+    if (!current) return { kind: 'lost', reason: 'missing' };
+    if (current.replicaId !== input.replicaId) return { kind: 'lost', reason: 'replica_mismatch' };
+    if (current.status !== 'active') return { kind: 'lost', reason: 'closing' };
+    const updated = { ...current, leaseUntil: new Date(Math.max(current.leaseUntil.getTime(), input.leaseUntil.getTime())) };
+    this.presence.set(input.sessionId, updated);
+    return { kind: 'updated', presence: cloneRuntimeSessionPresence(updated) };
+  }
+
+  async markPresenceClosing(sessionId: string, closedAt: Date, replicaId?: string): Promise<RuntimeSessionPresence | null> {
     await Promise.resolve();
     validateSessionId(sessionId);
+    if (replicaId !== undefined) validateReplicaId(replicaId);
     const current = this.presence.get(sessionId);
-    if (!current) return null;
+    if (!current || (replicaId !== undefined && current.replicaId !== replicaId)) return null;
     const updated: RuntimeSessionPresence = {
       ...current,
       status: 'closing',

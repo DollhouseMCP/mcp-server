@@ -18,7 +18,10 @@ import { DollhouseContainer } from '../../src/di/Container.js';
 import {
   createStreamableHttpRuntime,
   type StreamableHttpRuntimeHandle,
+  type StreamableHttpRuntimeSessionControl,
+  type StreamableHttpSessionAttachment,
 } from '../../src/server/StreamableHttpServer.js';
+import { SseStallWatcher } from '../../src/server/http/SseStallWatcher.js';
 import { createHttpSession } from '../../src/context/HttpSession.js';
 import type { SessionContext } from '../../src/context/SessionContext.js';
 import { setHttpModeActive } from '../../src/index.js';
@@ -34,6 +37,16 @@ export interface HttpTestEnvironmentOptions {
   rateLimitWindowMs?: number;
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
+  streamKeepaliveMs?: number;
+  streamMaxLifetimeMs?: number;
+  streamExpiryGraceMs?: number;
+  sseStallWatcher?: import('../../src/server/http/SseStallWatcher.js').ISseStallWatcher;
+  memoryUpgradeLifecycle?: import('../../src/lifecycle/MemoryUpgradeLifecycle.js').MemoryUpgradeLifecycle;
+  authMiddleware?: import('express').RequestHandler;
+  onTransport?: (transport: import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport) => void;
+  runtimeCommandPollIntervalMs?: number;
+  runtimeSessionControl?: StreamableHttpRuntimeSessionControl;
+  runtimeSession?: NonNullable<StreamableHttpSessionAttachment['runtimeSession']>;
   /**
    * Override `DOLLHOUSE_HOME_DIR` for the test. By default the helper creates
    * a fresh temp home with no `.dollhouse/` legacy root so
@@ -132,6 +145,7 @@ export async function createHttpTestEnvironment(
   // Create HTTP runtime with session factory
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
+      options.onTransport?.(transport);
       const userIdForSession = options.userIdSequence?.[sessionUserIdIdx++];
       const sessionContext = userIdForSession === undefined
         ? createHttpSession()
@@ -139,7 +153,7 @@ export async function createHttpTestEnvironment(
       sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
-      return { dispose };
+      return { dispose, contextSessionId: sessionContext.sessionId, runtimeSession: options.runtimeSession };
     },
     {
       host: '127.0.0.1',
@@ -150,6 +164,14 @@ export async function createHttpTestEnvironment(
       sessionIdleTimeoutMs: options.sessionIdleTimeoutMs ?? 0,
       sessionPoolSize: options.sessionPoolSize ?? 0,
       registerSignalHandlers: false,
+      memoryUpgradeLifecycle: options.memoryUpgradeLifecycle,
+      streamMaxLifetimeMs: options.streamMaxLifetimeMs,
+      streamExpiryGraceMs: options.streamExpiryGraceMs,
+      authMiddleware: options.authMiddleware,
+      streamKeepaliveMs: options.streamKeepaliveMs ?? 15000,
+      sseStallWatcher: options.sseStallWatcher ?? new SseStallWatcher(options.streamKeepaliveMs ?? 15000),
+      runtimeSessionControl: options.runtimeSessionControl,
+      runtimeCommandPollIntervalMs: options.runtimeCommandPollIntervalMs,
     },
   );
 
@@ -227,11 +249,12 @@ export async function createHttpTestEnvironmentWithConsole(
 
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
+      options.onTransport?.(transport);
       const sessionContext = createHttpSession();
       sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
-      return { dispose };
+      return { dispose, contextSessionId: sessionContext.sessionId, runtimeSession: options.runtimeSession };
     },
     {
       host: '127.0.0.1',
@@ -242,6 +265,13 @@ export async function createHttpTestEnvironmentWithConsole(
       sessionIdleTimeoutMs: options.sessionIdleTimeoutMs ?? 0,
       sessionPoolSize: options.sessionPoolSize ?? 0,
       registerSignalHandlers: false,
+      streamMaxLifetimeMs: options.streamMaxLifetimeMs,
+      streamExpiryGraceMs: options.streamExpiryGraceMs,
+      authMiddleware: options.authMiddleware,
+      streamKeepaliveMs: options.streamKeepaliveMs ?? 15000,
+      sseStallWatcher: options.sseStallWatcher ?? new SseStallWatcher(options.streamKeepaliveMs ?? 15000),
+      runtimeSessionControl: options.runtimeSessionControl,
+      runtimeCommandPollIntervalMs: options.runtimeCommandPollIntervalMs,
       onSessionCreated: (sessionId) => {
         ingestRoutes.registerHttpSession(sessionId, Date.now());
       },

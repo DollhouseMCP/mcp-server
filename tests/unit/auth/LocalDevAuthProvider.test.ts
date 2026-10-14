@@ -51,6 +51,7 @@ describe('LocalDevAuthProvider', () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.claims.sub).toBe('alice');
+        expect(result.claims.credentialBinding).toEqual({ issuer: 'dollhousemcp-local', clientId: undefined, authorizedParty: undefined, grantId: undefined, sessionId: undefined });
       }
     });
 

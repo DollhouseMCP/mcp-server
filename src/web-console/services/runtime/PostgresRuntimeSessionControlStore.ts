@@ -13,6 +13,7 @@ import type {
   IRuntimeSessionControlStore,
   RuntimeOperationalListQuery,
   RuntimeOperationalPresencePage,
+  RuntimeSessionLeaseInput,
   RuntimeSessionHeartbeatInput,
   RuntimeSessionHeartbeatResult,
   RuntimeSessionListQuery,
@@ -29,6 +30,7 @@ import {
   cloneRuntimeTerminationCommand,
   validateRuntimeListQuery,
   validateRuntimeOperationalListQuery,
+  validateRuntimeSessionLeaseInput,
   validateRuntimeSessionHeartbeatInput,
   validateRuntimeSessionPresenceInput,
   validateRuntimeTerminationAckInput,
@@ -49,8 +51,13 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
     return withSystemContext(this.db, tx => heartbeatRuntimePresenceWithTx(tx, input));
   }
 
-  async markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null> {
-    return withSystemContext(this.db, tx => markRuntimePresenceClosingWithTx(tx, sessionId, closedAt));
+  async renewSessionLease(input: RuntimeSessionLeaseInput): Promise<RuntimeSessionHeartbeatResult> {
+    validateRuntimeSessionLeaseInput(input);
+    return withSystemContext(this.db, tx => renewRuntimeSessionLeaseWithTx(tx, input));
+  }
+
+  async markPresenceClosing(sessionId: string, closedAt: Date, replicaId?: string): Promise<RuntimeSessionPresence | null> {
+    return withSystemContext(this.db, tx => markRuntimePresenceClosingWithTx(tx, sessionId, closedAt, replicaId));
   }
 
   async sweepStalePresence(before: Date = new Date()): Promise<number> {
@@ -233,7 +240,7 @@ export async function heartbeatRuntimePresenceWithTx(
     lastActiveAt: input.lastActiveAt,
     requestCount: input.requestCount,
     errorCount: input.errorCount,
-    leaseUntil: input.leaseUntil,
+    leaseUntil: sql`GREATEST(${runtimeSessionPresence.leaseUntil}, ${input.leaseUntil.toISOString()}::timestamptz)`,
   }).where(and(
     eq(runtimeSessionPresence.sessionId, input.sessionId),
     eq(runtimeSessionPresence.replicaId, input.replicaId),
@@ -241,6 +248,25 @@ export async function heartbeatRuntimePresenceWithTx(
   )).returning();
   if (rows[0]) return { kind: 'updated', presence: fromPresenceRow(rows[0]) };
 
+  return lostPresenceResult(tx, input);
+}
+
+export async function renewRuntimeSessionLeaseWithTx(
+  tx: DrizzleTx,
+  input: RuntimeSessionLeaseInput,
+): Promise<RuntimeSessionHeartbeatResult> {
+  validateRuntimeSessionLeaseInput(input);
+  const rows = await tx.update(runtimeSessionPresence).set({
+    leaseUntil: sql`GREATEST(${runtimeSessionPresence.leaseUntil}, ${input.leaseUntil.toISOString()}::timestamptz)`,
+  }).where(and(
+    eq(runtimeSessionPresence.sessionId, input.sessionId),
+    eq(runtimeSessionPresence.replicaId, input.replicaId),
+    eq(runtimeSessionPresence.status, 'active'),
+  )).returning();
+  return rows[0] ? { kind: 'updated', presence: fromPresenceRow(rows[0]) } : lostPresenceResult(tx, input);
+}
+
+async function lostPresenceResult(tx: DrizzleTx, input: RuntimeSessionLeaseInput): Promise<RuntimeSessionHeartbeatResult> {
   const current = await tx.select({
     replicaId: runtimeSessionPresence.replicaId,
     status: runtimeSessionPresence.status,
@@ -256,12 +282,17 @@ export async function markRuntimePresenceClosingWithTx(
   tx: DrizzleTx,
   sessionId: string,
   closedAt: Date,
+  replicaId?: string,
 ): Promise<RuntimeSessionPresence | null> {
   validateSessionId(sessionId);
+  if (replicaId !== undefined) validateReplicaId(replicaId);
   const rows = await tx.update(runtimeSessionPresence).set({
     status: 'closing',
     closedAt,
-  }).where(eq(runtimeSessionPresence.sessionId, sessionId)).returning();
+  }).where(and(
+    eq(runtimeSessionPresence.sessionId, sessionId),
+    replicaId === undefined ? undefined : eq(runtimeSessionPresence.replicaId, replicaId),
+  )).returning();
   return rows[0] ? fromPresenceRow(rows[0]) : null;
 }
 
