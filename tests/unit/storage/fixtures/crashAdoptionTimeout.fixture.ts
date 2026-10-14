@@ -9,16 +9,18 @@ const owner = new OwnedStorageCase();
 const events: string[] = [];
 const observer = { read: () => 'original' };
 let child: ChildProcess | undefined;
-let callbackClosed = false;
+let callbackClosed = false, childClosed = false;
 beforeEach(() => owner.begin());
 afterEach(async () => {
   events.push('teardown-enter');
   child?.stdin?.end(); // Actual Jest rejection is recorded before this hook.
-  await owner.teardown(async () => {
+  await owner.teardown(async checkpoint => {
+    checkpoint();
     events.push('adoption-cleanup');
     expect(callbackClosed).toBe(true);
-    jest.restoreAllMocks();
-    await fs.rm(path.join(root, 'adoption'), { recursive: true });
+    checkpoint(); jest.restoreAllMocks();
+    checkpoint(); await fs.rm(path.join(root, 'adoption'), { recursive: true });
+    checkpoint();
   });
 });
 it('retains the original timeout while child work and callback cleanup settle', owner.own(async () => {
@@ -26,7 +28,7 @@ it('retains the original timeout while child work and callback cleanup settle', 
   await fs.mkdir(path.join(root, 'adoption'));
   jest.spyOn(observer, 'read').mockReturnValue('installed');
   child = spawn(process.execPath, ['-e', 'process.stdin.resume();process.stdin.on("end",()=>process.exit(0))'], { stdio: ['pipe', 'ignore', 'ignore'] });
-  const closed = new Promise<void>((resolve, reject) => { child!.once('error', reject); child!.once('close', () => resolve()); });
+  const closed = new Promise<void>((resolve, reject) => { child!.once('error', reject); child!.once('close', () => { childClosed = true; resolve(); }); });
   try {
     await closed;
     expect(observer.read()).toBe('installed');
@@ -49,4 +51,7 @@ it('admits subsequent work only after original callback and both cleanups', owne
   await expect(fs.stat(path.join(root, 'adoption'))).rejects.toMatchObject({ code: 'ENOENT' });
   await fs.mkdir(path.join(root, 'adoption')); // Preserve the same teardown contract for this case.
 }));
-afterAll(async () => { await fs.writeFile(path.join(root, 'events.json'), JSON.stringify(events)); });
+afterAll(async () => {
+  await fs.writeFile(path.join(root, 'events.json'), JSON.stringify(events));
+  await fs.writeFile(path.join(root, 'child-cleanup.json'), JSON.stringify({ pid: child?.pid, childClosed, callbackClosed }));
+});

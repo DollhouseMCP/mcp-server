@@ -23,9 +23,15 @@ const roots: string[] = [];
 const it = process.platform === 'win32' ? test.skip : test;
 afterEach(async () => {
   mark(`settlement-wait:${phase}`);
-  await ownership.teardown(async () => {
-    mark('cleanup'); jest.restoreAllMocks();
-    for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  await ownership.teardown(async checkpoint => {
+    checkpoint(); mark('cleanup');
+    checkpoint(); jest.restoreAllMocks();
+    while (roots.length) {
+      checkpoint();
+      await fs.rm(roots[0], { recursive: true, force: true });
+      checkpoint();
+      roots.shift(); // Keep unresolved entries if a removal settles after expiry.
+    }
   });
   mark('settled-and-cleaned');
 });
