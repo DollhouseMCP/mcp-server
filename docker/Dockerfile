@@ -71,12 +71,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Remove only unused final-image diagnostics; retain the complete builder,
 # package metadata, other commands and shared libraries. Guard both paths first.
 COPY docker/remove-optional-runtime-tools.mjs /tmp/remove-optional-runtime-tools.mjs
-RUN node /tmp/remove-optional-runtime-tools.mjs \
-    && rm /tmp/remove-optional-runtime-tools.mjs
-
 # Create non-root user for security
 # Using specific UID/GID for consistency across containers
-RUN groupadd -g 1001 nodejs && \
+RUN node /tmp/remove-optional-runtime-tools.mjs && \
+    rm /tmp/remove-optional-runtime-tools.mjs && \
+    groupadd -g 1001 nodejs && \
     useradd -u 1001 -g nodejs -s /bin/false -m dollhouse && \
     mkdir -p /app && \
     chown -R dollhouse:nodejs /app
