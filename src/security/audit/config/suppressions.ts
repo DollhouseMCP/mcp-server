@@ -1109,6 +1109,16 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: RULE_DMCP_SEC_006,
+    file: 'src/auth/IAuthProvider.ts',
+    reason: 'credentialBindingFromPayload only maps five claims from an already signature-verified payload; concrete auth providers own token validation and security audit logging. This mapping does not authenticate or authorize requests.'
+  },
+  {
+    rule: RULE_DMCP_SEC_006,
+    file: '**/src/auth/IAuthProvider.ts',
+    reason: 'credentialBindingFromPayload only maps five claims from an already signature-verified payload; concrete auth providers own token validation and security audit logging. This mapping does not authenticate or authorize requests.'
+  },
+  {
+    rule: RULE_DMCP_SEC_006,
     file: 'src/auth/instrumentAuthProvider.ts',
     reason: 'Performance-only instrumentation wrapper. Concrete auth providers own TOKEN_VALIDATION_FAILURE audit logging with issuer/key/provider context, and this wrapper intentionally avoids duplicate security events.'
   },

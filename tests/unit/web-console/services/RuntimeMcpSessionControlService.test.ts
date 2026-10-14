@@ -113,33 +113,15 @@ describe('RuntimeMcpSessionControlService', () => {
     expect(service.getLocalSessionCount()).toBe(0);
   });
 
-  it('lazy re-registers when heartbeat finds missing durable presence', async () => {
+  it('reports missing presence without recreating a potentially revoked row', async () => {
     const store = new InMemoryRuntimeSessionControlStore();
-    const service = new RuntimeMcpSessionControlService({
-      store,
-      replicaId: 'replica-a',
-      now: () => T0,
-      leaseDurationMs: 45_000,
-    });
-    await service.registerSession({
-      sessionId: SESSION_ID,
-      userId: USER_ID,
-      accountCorrelationId: ACCOUNT_CORRELATION_ID,
-    });
-    await expect(store.sweepStalePresence(new Date(T0.getTime() + 60_000))).resolves.toBe(1);
-
-    await expect(service.recordActivity(SESSION_ID)).resolves.toMatchObject({
-      kind: 'updated',
-      presence: {
-        sessionId: SESSION_ID,
-        requestCount: 1,
-      },
-    });
-    expect(service.getLocalSessionCount()).toBe(1);
-    await expect(store.findPresence(SESSION_ID, T0)).resolves.toMatchObject({
-      sessionId: SESSION_ID,
-      replicaId: 'replica-a',
-    });
+    const service = new RuntimeMcpSessionControlService({ store, replicaId: 'replica-a', now: () => T0, leaseDurationMs: 45_000 });
+    await service.registerSession({ sessionId: SESSION_ID, userId: USER_ID, accountCorrelationId: ACCOUNT_CORRELATION_ID });
+    await store.sweepStalePresence(new Date(T0.getTime() + 60_000));
+    await expect(service.recordActivity(SESSION_ID)).resolves.toEqual({ kind: 'lost', reason: 'missing' });
+    await service.markSessionDisposed(SESSION_ID);
+    expect(service.getLocalSessionCount()).toBe(0);
+    await expect(store.findPresence(SESSION_ID, T0)).resolves.toBeNull();
   });
 
   it('terminates pending local commands and records already-absent acknowledgements', async () => {

@@ -1,3 +1,4 @@
+import { decodeJwt } from 'jose';
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { promises as fs } from 'node:fs';
 import * as net from 'node:net';
@@ -230,6 +231,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       resource: runtime.url,
       scope: requestedScope,
     });
+    if (requestedScope.includes('offline_access')) authorizeParams.set('prompt', 'consent');
     const authorize = await fetch(`${authServer.authorization_endpoint}?${authorizeParams}`, {
       method: 'GET',
       redirect: 'manual',
@@ -323,7 +325,22 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string; refresh_token?: string; scope?: string };
     expect(tokenBody.access_token).toBeTruthy();
-    expect(tokenBody.scope).toBe('mcp');
+    expect(tokenBody.scope?.split(' ').sort()).toEqual(requestedScope.split(' ').sort());
+    const openingClaims = decodeJwt(tokenBody.access_token);
+    expect(openingClaims.client_id).toBe(clientId);
+    expect(openingClaims.grant_id).toEqual(expect.any(String));
+    if (requestedScope.includes('offline_access')) {
+      expect(tokenBody.refresh_token).toBeTruthy();
+      const refreshed = await fetch(authServer.token_endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, refresh_token: tokenBody.refresh_token!, resource: runtime.url }),
+      });
+      expect(refreshed.status).toBe(200);
+      const refreshedBody = await refreshed.json() as { access_token: string };
+      const refreshedClaims = decodeJwt(refreshedBody.access_token);
+      expect(refreshedClaims).toMatchObject({ sub: openingClaims.sub, client_id: clientId, grant_id: openingClaims.grant_id });
+    }
+
 
     // 8. Use the access token over the MCP transport.
     const transport = new StreamableHTTPClientTransport(new URL(runtime.url), {
