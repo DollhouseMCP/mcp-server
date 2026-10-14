@@ -1,0 +1,26 @@
+# Application dependency remediation qualification
+
+Issue #3069. The intermediate Trixie image scan reported 21 scanner-fixed application matches across these eight families. This change uses exact compatible versions and updates active browser DOMPurify copies too. SDK, global npm and OS remediation remain separate. A fresh combined image inventory and all-severity scan must confirm resolved, residual and new findings; no deployment or residual-risk acceptance is implied.
+
+| Package | Previous lock | Exact target | Registry publication UTC |
+| --- | --- | --- | --- |
+| @hono/node-server | 1.19.13 | 1.19.15 | July 24 00:46:09 |
+| body-parser | 2.2.1 | 2.3.0 | June 15 10:46:12 |
+| DOMPurify | 3.4.11; browser 3.2.4 | 3.4.16 | September 23 15:29:57 |
+| fast-uri | 3.1.7 | 3.1.8 | September 15 07:36:25 |
+| Hono | 4.12.27 | 4.13.7 | September 4 19:18:07 |
+| ip-address | 10.3.1 | 10.7.1 | September 15 04:14:13 |
+| qs | 6.15.2 | 6.16.0 | August 29 23:50:15 |
+| smol-toml | 1.7.1 | 1.9.0 | September 22 17:15:34 |
+
+Dates are exact registry publication times in 2026, not scanner first-observed or advisory dates. Every selected artifact, including the required transitive closure, exceeded 21 full days when selected. DOMPurify reached that boundary October 14 at 15:29:57 UTC. No additional age exception is required. Registry SHA512 integrity, SHA256 and cryptographic registry signatures were verified for the eight old/new direct artifacts and all 17 unique artifacts represented by changed lock records. Registry signatures establish artifact identity, not independent reproducible builds or a SLSA claim. Exact metadata, signing keys, artifact file differences, selected source comparisons and publication operands are retained with the qualification evidence.
+
+The lock change is bounded: eight target families; required content-type 2.1.0 (two nested locations), iconv-lite 0.7.3, type-is 2.1.0, side-channel 1.1.1 and side-channel-list 1.0.1; four unchanged versions gain previously absent registry URL/integrity fields. No SDK version or unrelated package version changes. body-parser's newer minimums and qs's additional es-define-property dependency explain that closure; es-define-property was already installed at a satisfying version. All closure artifacts were separately age/integrity/signature checked. No install scripts ran during lock generation or installation. DOMPurify's build tooling changed upstream; the published dist is used without running its build/prepare scripts.
+
+The application consumes DOMPurify in YAML metadata and memory sanitization. Express consumes body-parser/qs; the SDK/inspector stack consumes Hono/its adapter, and SDK/Ajv consumes fast-uri. ip-address is pinned across transitive consumers. smol-toml is an existing declared dependency without a direct application source import; its package remains supported and its parser receives a compatibility check. The selected versions are outside all 28 relevant primary advisory range entries examined, including alternate major ranges; this is not a claim that every advisory path is enabled in this profile.
+
+Primary advisories include [Hono adapter traversal](https://github.com/advisories/GHSA-frvp-7c67-39w9), [Hono JSX escaping](https://github.com/advisories/GHSA-hxh3-vqpv-xpqv), [body-parser limit refusal](https://github.com/advisories/GHSA-v422-hmwv-36x6), [DOMPurify removed-root handling](https://github.com/advisories/GHSA-6688-9rhm-gjv2), [fast-uri host normalization](https://github.com/advisories/GHSA-hrr3-gc8f-f4qj), [ip-address family boundaries](https://github.com/advisories/GHSA-j6r3-76f7-8jcv), [qs array limits](https://github.com/advisories/GHSA-x5fp-wj9c-mxmx), [qs constructor handling](https://github.com/advisories/GHSA-4mjr-xmp4-gh2g), and [smol-toml parsing complexity](https://github.com/advisories/GHSA-r4xh-jqrq-34v2).
+
+The self-hosted browser vendor file and legacy CDN URL now use the exact same DOMPurify 3.4.16 artifact as the installed server package. Vendor SHA256 and CDN SHA384 SRI match those bytes; the CDN response was independently byte-compared with the tarball. Hosted console URLs already incorporate a hash of every served file, so changing sanitizer bytes changes its asset namespace; existing no-store policies remain. The CDN URL contains the new exact version. Tests exercise that namespace change, the actual portfolio detail renderer with vendored marked/DOMPurify, its escaping fallback, and server/browser removal refusal.
+
+Local checks passed: 57 focused parser/security/consumer tests, vendor integrity, 29 actual loopback HTTP parity tests, two existing console cache policy controls, the final 17-case dependency/browser regression file, production typecheck after compiling the local safety workspace, and changed-test lint. Exact prior package artifacts fail seven of the new security properties; that bounded baseline uses the new dependency closure only for module lookup and is not an old full application/image execution. Initial missing-workspace load/typecheck failures and test harness corrections are preserved separately. Final current-head CI, independent review and combined native image/runtime/audit qualification remain required.
