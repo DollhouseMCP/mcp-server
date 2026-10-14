@@ -183,3 +183,47 @@ describe('server and active browser sanitizer copies', () => {
     } finally { dom.window.close(); }
   });
 });
+
+
+describe('active browser YAML artifact', () => {
+  const vendor = source('src/web-console/ui/vendor/js-yaml.min.js');
+
+  it('matches the installed patched server package and exact versioned CDN integrity', () => {
+    const bytes = readFileSync(vendor);
+    const installed = readFileSync(require.resolve('js-yaml').replace(/index\.js$/, 'dist/js-yaml.min.js'));
+    expect(bytes.equals(installed)).toBe(true);
+    const manifest = JSON.parse(readFileSync(source('src/web-console/ui/vendor/manifest.json'), 'utf8'));
+    const asset = manifest.assets.find((item: { package: string }) => item.package === 'js-yaml');
+    expect(asset.packageVersion).toBe('4.3.2');
+    expect(asset.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+    const dom = new JSDOM(readFileSync(source('src/web/public/index.html'), 'utf8'));
+    try {
+      const tag = dom.window.document.querySelector('script[src*="/js-yaml@"]');
+      expect(tag?.getAttribute('src')).toBe('https://cdn.jsdelivr.net/npm/js-yaml@4.3.2/dist/js-yaml.min.js');
+      expect(tag?.getAttribute('integrity')).toBe(`sha384-${createHash('sha384').update(bytes).digest('base64')}`);
+    } finally { dom.window.close(); }
+  });
+
+  it('preserves browser YAML parsing and refuses empty-source merge budget exhaustion', async () => {
+    const { parseBrowserYaml } = await import(source('src/web-console/ui/yaml-safety.js'));
+    const dom = new JSDOM('', { runScripts: 'outside-only' });
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'jsyaml');
+    try {
+      dom.window.eval(readFileSync(vendor, 'utf8'));
+      const yaml = Reflect.get(dom.window, 'jsyaml') as typeof import('js-yaml');
+      Reflect.set(globalThis, 'jsyaml', yaml);
+      expect(parseBrowserYaml('name: retained\ncount: 2')).toEqual({ name: 'retained', count: 2 });
+      expect(() => parseBrowserYaml('value: &ref [*ref]')).toThrow('YAML aliases may not create cyclic data.');
+      const options = { json: false, maxTotalMergeKeys: 4 };
+      expect(() => yaml.load('arr: &arr [{}, {}, {}]\ntargets:\n  - <<: *arr\n  - <<: *arr\n', options))
+        .toThrow('merge keys exceeded maxTotalMergeKeys (4)');
+      const parsed = yaml.load('base: &base\n  __proto__: { polluted: true }\nresult:\n  <<: *base\n') as { result: Record<string, unknown> };
+      expect(Object.getPrototypeOf(parsed.result)).toBe(dom.window.Object.prototype);
+      expect(parsed.result.polluted).toBeUndefined();
+    } finally {
+      if (previous) Object.defineProperty(globalThis, 'jsyaml', previous);
+      else Reflect.deleteProperty(globalThis, 'jsyaml');
+      dom.window.close();
+    }
+  });
+});
