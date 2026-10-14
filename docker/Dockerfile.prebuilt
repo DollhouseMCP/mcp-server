@@ -2,6 +2,17 @@
 # Skips TypeScript compilation to avoid timeout issues with large index.ts
 # Requires dist/ directory to be built locally before Docker build
 
+# Install first: npm can materialize workspace build tools with --omit=dev.
+# Sanitize the resulting dependency tree before it enters any final image layer.
+FROM node:24-slim AS runtime-dependencies
+WORKDIR /app
+COPY package*.json ./
+COPY packages/ ./packages/
+COPY scripts/ci/prepare-safety-runtime.mjs /tmp/prepare-safety-runtime.mjs
+RUN npm ci --omit=dev --ignore-scripts \
+    && node /tmp/prepare-safety-runtime.mjs \
+    && npm cache clean --force
+
 FROM node:24-slim AS production
 
 # Install only essential runtime dependencies and remove unnecessary packages
@@ -28,10 +39,8 @@ WORKDIR /app
 
 # Copy package files and local workspace packages
 COPY package*.json ./
-COPY packages/ ./packages/
-
-# Install only production dependencies (includes local @dollhousemcp/safety)
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY --from=runtime-dependencies /app/packages/ ./packages/
+COPY --from=runtime-dependencies /app/node_modules ./node_modules
 
 # Copy pre-built application (dist/ must exist locally)
 COPY dist ./dist
