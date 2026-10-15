@@ -1,6 +1,19 @@
 # Multi-stage build for production efficiency and security
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-FROM node:24-slim AS builder
+# Exact official Node 24.21.0 multi-platform image; qualification: #3064.
+# Apply supported Trixie fixes to every target, including the migration builder.
+FROM node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS node-base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libc-bin=2.41-12+deb13u4 \
+    libc6=2.41-12+deb13u4 \
+    libssl3t64=3.5.7-1~deb13u3 \
+    openssl-provider-legacy=3.5.7-1~deb13u3 \
+    openssl=3.5.7-1~deb13u3 \
+    perl-base=5.40.1-6+deb13u1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM node-base AS builder
 
 # Install build dependencies for better cross-platform compatibility
 # These are especially important for ARM64 builds
@@ -12,6 +25,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Set working directory
 WORKDIR /app
+
+# Deterministic build-only leaf fixes; preserve npm core and npm/npx callers.
+COPY docker/global-npm-security-patches.json scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node /tmp/npm-tooling/prepare-global-npm.mjs \
+    && node /tmp/npm-tooling/smoke-global-npm.mjs \
+    && rm -rf /tmp/npm-tooling
 
 # Copy package files and local workspace packages
 COPY package*.json ./
@@ -39,8 +58,14 @@ RUN npm run build
 # npm can materialize workspace build tools even with --omit=dev. Prepare the
 # complete runtime dependency tree before copying it into any final image layer.
 # Keep the complete builder target unchanged for CI/migrations.
-FROM node:24-slim AS runtime-dependencies
+FROM node-base AS runtime-dependencies
 WORKDIR /app
+
+# Deterministic build-only leaf fixes; preserve npm core and npm/npx callers.
+COPY docker/global-npm-security-patches.json scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node /tmp/npm-tooling/prepare-global-npm.mjs \
+    && node /tmp/npm-tooling/smoke-global-npm.mjs \
+    && rm -rf /tmp/npm-tooling
 COPY package*.json ./
 COPY --from=builder /app/packages ./packages
 COPY scripts/ci/prepare-safety-runtime.mjs /tmp/prepare-safety-runtime.mjs
@@ -54,7 +79,7 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 # Production stage with security hardening
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-FROM node:24-slim AS production
+FROM node-base AS production
 
 # Install only essential runtime dependencies and remove unnecessary packages
 # This reduces attack surface by removing tools commonly used in exploits
@@ -66,7 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && apt-get autoremove -y \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/local/lib/node_modules/npm
 
 # Create non-root user for security
 # Using specific UID/GID for consistency across containers
@@ -83,6 +108,10 @@ COPY package*.json ./
 
 # Copy the prepared production dependencies; do not reinstall workspace tools.
 COPY --from=runtime-dependencies /app/node_modules ./node_modules
+COPY --from=runtime-dependencies /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+# Verify the final copied bundle too; no stale base-package files may survive.
+COPY scripts/ci/prepare-global-npm.mjs scripts/ci/smoke-global-npm.mjs /tmp/npm-tooling/
+RUN node /tmp/npm-tooling/smoke-global-npm.mjs && rm -rf /tmp/npm-tooling
 
 # Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
