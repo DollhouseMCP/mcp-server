@@ -1,6 +1,6 @@
 import { expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
-import { observeLiveOwnerLockCalls, decodeLiveOwnerLockProbe } from './fixtures/liveOwnerLockProbe.mjs';
+import { observeLiveOwnerLockCalls, decodeLiveOwnerLockProbe } from './fixtures/liveOwnerLockProbe.js';
 
 function fixture() {
   const fs = { existsSync: jest.fn((..._args: unknown[]) => false), statSync: jest.fn((..._args: unknown[]) => ({ marker: true })),
@@ -69,7 +69,7 @@ it('strictly decodes bounded safe fields and never overwrites a later method own
 });
 
 it('binds and restores the actual Node named export in an isolated child without executing a provider', () => {
-  const helper = new URL('./fixtures/liveOwnerLockProbe.mjs', import.meta.url).href;
+  const helper = new URL('./fixtures/liveOwnerLockProbe.js', import.meta.url).href;
   const source = `
     import fs from 'node:fs';
     import cp, { execFileSync } from 'node:child_process';

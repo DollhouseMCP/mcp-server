@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
-import { decodeLiveOwnerLockProbe } from './fixtures/liveOwnerLockProbe.mjs';
+import { decodeLiveOwnerLockProbe } from './fixtures/liveOwnerLockProbe.js';
 import {
   withOAuthStateLock,
   withOAuthStateLockSync
@@ -77,7 +77,7 @@ const liveOwnerChildScript = `
   try {
     if (['native', 'directory-fallback'].includes(publication)) {
       try {
-        const { observeLiveOwnerLockCalls } = await import(${JSON.stringify(new URL('./fixtures/liveOwnerLockProbe.mjs', import.meta.url).href)});
+        const { observeLiveOwnerLockCalls } = await import(${JSON.stringify(new URL('./fixtures/liveOwnerLockProbe.js', import.meta.url).href)});
         probe = observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExports, stateFile, pid: process.pid,
           clock: () => performance.now(), started });
       } catch { unavailable = true; }
