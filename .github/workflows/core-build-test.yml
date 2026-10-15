@@ -22,7 +22,7 @@ jobs:
     name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    needs: [owner-erasure-capacity, serial-storage-tests]
+    needs: [owner-erasure-capacity, serial-storage-tests, ordinary-unit-shard-2]
     if: ${{ always() }}
 
     strategy:
@@ -30,6 +30,181 @@ jobs:
       matrix: &core-platforms
         os: [ubuntu-latest, windows-latest, macos-latest]
         node-version: ['20.x']
+
+    steps:
+      - name: Enforce complete required storage matrices
+        shell: bash
+        env:
+          ERASURE_MATRIX_RESULT: ${{ needs.owner-erasure-capacity.result }}
+          STORAGE_MATRIX_RESULT: ${{ needs.serial-storage-tests.result }}
+          UNIT_SHARD_2_MATRIX_RESULT: ${{ needs.ordinary-unit-shard-2.result }}
+        run: |
+          if [ "$ERASURE_MATRIX_RESULT" != "success" ] || [ "$STORAGE_MATRIX_RESULT" != "success" ] || [ "$UNIT_SHARD_2_MATRIX_RESULT" != "success" ]; then
+            echo "Every owner erasure, serial storage and ordinary shard 2 matrix job must succeed; failed, cancelled, skipped or missing results refuse this gate."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          fetch-tags: true
+          persist-credentials: true
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Set cross-platform TEST_PERSONAS_DIR
+        shell: bash
+        run: |
+          # Use Node.js to create proper cross-platform path with escaped quotes for shell safety
+          TEST_PERSONAS_DIR=$(node -e "console.log(require('path').join(process.argv[1], 'test-personas'))" "${{ github.workspace }}")
+          echo "TEST_PERSONAS_DIR=$TEST_PERSONAS_DIR" >> $GITHUB_ENV
+          echo "Set TEST_PERSONAS_DIR to: $TEST_PERSONAS_DIR"
+
+      - name: Validate environment
+        # Use bash for cross-platform compatibility (Windows/macOS/Linux)
+        shell: bash
+        run: |
+          echo "🔍 Validating CI environment..."
+          echo "TEST_PERSONAS_DIR: $TEST_PERSONAS_DIR"
+          echo "NODE_OPTIONS: $NODE_OPTIONS"
+          echo "CI: $CI"
+
+          # Verify TEST_PERSONAS_DIR is set
+          if [ -z "$TEST_PERSONAS_DIR" ]; then
+            echo "❌ TEST_PERSONAS_DIR is not set!"
+            exit 1
+          fi
+
+          # Display workspace info for debugging
+          echo "GitHub workspace: ${{ github.workspace }}"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Current directory: $(pwd)"
+
+          echo "✅ Environment validation passed"
+
+      # Temporarily disabled TypeScript cache to debug CI issues
+      # - name: Cache TypeScript build
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       dist/
+      #       build/
+      #       *.tsbuildinfo
+      #     key: typescript-build-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('src/**/*.ts', 'tsconfig*.json', 'package.json', 'package-lock.json') }}
+      #     restore-keys: |
+      #       typescript-build-${{ runner.os }}-${{ matrix.node-version }}-
+      #       typescript-build-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build project
+        run: npm run build
+
+      - name: Debug file structure
+        shell: bash
+        run: |
+          echo "=== Current directory ==="
+          pwd
+          echo "=== Node version ==="
+          node --version
+          echo "=== NPM version ==="
+          npm --version
+          echo "=== Root files ==="
+          if ls jest.* >/dev/null 2>&1; then ls jest.*; else echo "No jest files found"; fi
+          echo "=== Source files ==="
+          if [ -d "src/update/" ]; then ls src/update/; else echo "src/update not found"; fi
+          echo "=== Config files ==="
+          if [ -d "src/config/" ]; then ls src/config/; else echo "src/config not found"; fi
+          echo "=== Dist files ==="
+          if [ -d "dist/update/" ]; then ls dist/update/; else echo "dist/update not found"; fi
+          echo "=== Test files ==="
+          if [ -d "tests/unit/auto-update/" ]; then ls tests/unit/auto-update/; else echo "auto-update tests not found"; fi
+          echo "=== NODE_PATH ==="
+          echo $NODE_PATH
+          echo "=== Jest config ==="
+          if [ -f "tests/jest.config.cjs" ]; then cat tests/jest.config.cjs; else echo "Jest config not found"; fi
+
+      - name: Cache Jest
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            .jest-cache/
+            tests/coverage/
+            node_modules/.cache/jest/
+          key: jest-cache-${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('tests/**/*.ts', 'tests/jest.config.*', 'src/**/*.ts', 'package.json', 'package-lock.json') }}
+          restore-keys: |
+            jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
+            jest-cache-${{ runner.os }}-
+
+      - name: Clear Jest cache
+        run: node node_modules/jest/bin/jest.js --clearCache
+
+      - name: Run ordinary unit matrix
+        id: original_tests
+        # Preserve npm test's VM flags and full-suite timing-selection signal.
+        env:
+          NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
+          npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --shard=1/2 --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop)[.]test[.]ts$).*'
+        continue-on-error: true
+
+      - name: Run performance tests (separate process)
+        id: performance_tests
+        run: npm run test:performance
+        continue-on-error: true
+
+      - name: Debug failed tests environment
+        if: steps.original_tests.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "=== Original tests failed, debugging environment ==="
+          echo "Current directory: $(pwd)"
+          echo "Contents of current directory:"
+          ls -la
+          echo "=== Checking if package.json exists ==="
+          if [ -f "package.json" ]; then
+            echo "✓ package.json exists"
+            echo "First 5 lines:"
+            head -5 package.json
+          else
+            echo "✗ package.json NOT FOUND"
+          fi
+
+      - name: Enforce unit test result
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Ordinary unit tests must pass the core build gate."
+            exit 1
+          fi
+
+      - name: Validation complete
+        run: |
+          echo "✅ Core Build & Test Complete!"
+          echo "Platform: ${{ matrix.os }}"
+          echo "Node.js: ${{ matrix.node-version }}"
+
+  # A fresh job owns the other native Jest partition; total setup and workflow allowance increase.
+  ordinary-unit-shard-2:
+    name: Core ordinary shard 2/2 (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    needs: [owner-erasure-capacity, serial-storage-tests]
+    if: ${{ always() }}
+
+    strategy:
+      fail-fast: false
+      matrix: *core-platforms
 
     steps:
       - name: Enforce complete required storage matrices
@@ -151,12 +326,7 @@ jobs:
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop)[.]test[.]ts$).*'
-        continue-on-error: true
-
-      - name: Run performance tests (separate process)
-        id: performance_tests
-        run: npm run test:performance
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --shard=2/2 --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Debug failed tests environment
@@ -187,9 +357,9 @@ jobs:
             exit 1
           fi
 
-      - name: Validation complete
+      - name: Shard 2 validation complete
         run: |
-          echo "✅ Core Build & Test Complete!"
+          echo "✅ Core Ordinary Unit Shard 2/2 Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
 
