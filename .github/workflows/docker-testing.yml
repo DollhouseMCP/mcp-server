@@ -99,6 +99,18 @@ jobs:
       - name: Verify safety production packaging offline
         run: node --test tests/scripts/prepare-safety-runtime.test.mjs
 
+      - name: Select the matching Node/npm toolchain for bundle controls
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '24.21.0'
+
+      - name: Verify global npm artifact safety and refusal controls
+        shell: bash
+        run: |
+          test "$(node --version)" = "v24.21.0"
+          test "$(npm --version)" = "11.19.0"
+          node --test tests/scripts/prepare-global-npm.test.mjs
+
       - name: 🔧 Set up QEMU (AMD64 only - ARM64 uses native runner)
         uses: docker/setup-qemu-action@v3
         with:
