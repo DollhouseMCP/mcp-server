@@ -98,7 +98,7 @@ describe('owned fixture failure context (resource-free)', () => {
   it('preserves and renders a real cleanup Error from another VM realm', async () => {
     const registry = new OwnedFixtureRegistry();
     const secondary: unknown = runInNewContext("new Error('synthetic-cross-realm-cleanup-marker')");
-    expect(secondary instanceof Error).toBe(false);
+    expect(secondary).not.toBeInstanceOf(Error);
     const finish = jest.spyOn(OwnedFixtureProcess.prototype, 'finish').mockImplementationOnce(async () => { throw secondary; });
     try {
       const outcome = captured(registry.run(async () => { throw undefined; }));
