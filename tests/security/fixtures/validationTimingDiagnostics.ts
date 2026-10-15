@@ -12,7 +12,7 @@ export function validationTimingFailureSummary(
   if (results.every(result => result.duration < individualLimitMs) && totalMs < totalLimitMs) return undefined;
   const durations = results.map(result => result.duration);
   const ordered = [...durations].sort((a, b) => a - b);
-  const maxMs = ordered[ordered.length - 1], middle = Math.floor(ordered.length / 2);
+  const maxMs = ordered.at(-1)!, middle = Math.floor(ordered.length / 2);
   return {
     count: durations.length, worstIndex: durations.indexOf(maxMs), indexBase: 0,
     minMs: ordered[0], medianMs: (ordered[middle - 1] + ordered[middle]) / 2,
