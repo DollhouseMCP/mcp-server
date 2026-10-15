@@ -14,7 +14,8 @@ it.each(['fail-fast', 'setup-timeout', 'blocked'])(
       const result = spawnSync(process.execPath, [require.resolve('jest/bin/jest'), '--config', 'tests/jest.config.cjs',
         '--runInBand', '--no-coverage', '--testMatch', '**/eofSetupOwnership.fixture.ts',
         '--testNamePattern', 'EOF census fixture|controlled next', '--json', '--outputFile', path.join(root, 'result.json')], {
-        cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: root,
+        cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME,
+          SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT, TMPDIR: root, TEMP: root, TMP: root,
           NODE_OPTIONS: '--experimental-vm-modules --no-warnings', EOF_SETUP_PROOF_ROOT: root, EOF_SETUP_PROOF_MODE: mode },
         encoding: 'utf8', timeout: 25000, maxBuffer: 4 * 1024 * 1024,
       });

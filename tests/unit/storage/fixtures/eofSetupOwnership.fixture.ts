@@ -17,13 +17,20 @@ const writeFile = (...args: Parameters<typeof actualFs.writeFile>): Promise<void
   const name = typeof args[0] === 'string' ? path.basename(args[0]) : '';
   if (!/^n\d+$/.test(name)) return actualFs.writeFile(...args);
   ownedRoot = path.dirname(String(args[0]));
-  const write = name === 'n0' && mode !== 'setup-timeout' ? Promise.reject(undefined)
-    : name === 'n1' ? actualFs.writeFile(...args).then(async () => {
+  let write: Promise<void>;
+  if (name === 'n0' && mode !== 'setup-timeout') {
+    // Intentionally falsy: the regression must preserve Promise.all's original rejection.
+    write = Promise.reject(undefined);
+  } else if (name === 'n1') {
+    write = actualFs.writeFile(...args).then(async () => {
       await held;
       expect(await actualFs.readFile(String(args[0]), 'utf8')).toBe('x');
       expect(observer.read()).toBe('retained');
       events.push('sibling-settled-with-resources');
-    }) : actualFs.writeFile(...args);
+    });
+  } else {
+    write = actualFs.writeFile(...args);
+  }
   writes.push(write);
   void write.then(() => { settled++; }, () => { settled++; rejected++; });
   return write;
