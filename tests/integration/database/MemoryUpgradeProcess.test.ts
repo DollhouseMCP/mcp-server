@@ -5,6 +5,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ownedUpgradeProcess } from './fixtures/memory-upgrade-process.js';
 import { text } from './fixtures/authenticated-memory-runtime.js';
+import { captureHostedStopOutput } from './fixtures/hosted-stop-output.js';
 
 const required = process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1' ? describe : describe.skip;
 
@@ -196,11 +197,15 @@ sys.exit(3)
         await client.close().catch(() => undefined);
         await runtime.waitUntil(() => runtime.messages.some(frame => frame.event === 'retained-owner-dispose-refused'));
         expect((await runtime.rpc('summary')).retainedOwners).toBeGreaterThan(0);
-        const invokeHelper = () => {
+        const invokeHelper = (output?: ReturnType<typeof captureHostedStopOutput>) => {
           const helper = spawn('bash', [path.join(process.cwd(), 'scripts/hosted-graceful-stop.sh'), target, '1'], {
             env: { PATH: `${bin}:${process.env.PATH}`, HOME: directory }, stdio: ['ignore', 'pipe', 'pipe'],
           });
-          ownAuxiliary(helper); helper.stdout!.resume(); helper.stderr!.resume();
+          ownAuxiliary(helper);
+          if (output) {
+            helper.stdout!.on('data', output.stdout); helper.stderr!.on('data', output.stderr);
+          }
+          helper.stdout!.resume(); helper.stderr!.resume();
           return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
             // Cap the owned helper process, never the old application. Require
             // final helper close even on a diagnostic cutoff; no SIGKILL.
@@ -236,8 +241,14 @@ sys.exit(3)
         // handshake must flush the retained candidate before its single TERM;
         // no test-only ledger clear or force-kill is allowed.
         await runtime.rpc('fault', { enabled: false });
-        const settled = await invokeHelper();
-        expect(settled).toEqual({code:0,signal:null});
+        const secondHelperOutput = captureHostedStopOutput();
+        const settled = await invokeHelper(secondHelperOutput);
+        try { expect(settled).toEqual({code:0,signal:null}); }
+        catch (cause) {
+          throw new Error(`Second owned stop helper failed: ${JSON.stringify({
+            ...settled, ...secondHelperOutput.snapshot(),
+          })}`, { cause });
+        }
         await runtime.waitForClose(); expect(runtime.exitCode).toBe(0);
         const finalCommands = (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[]);
         expect(finalCommands.filter(argv => argv[0] === 'kill')).toHaveLength(1);
