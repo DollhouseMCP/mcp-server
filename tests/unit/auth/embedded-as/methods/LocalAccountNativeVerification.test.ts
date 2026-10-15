@@ -70,7 +70,7 @@ describe('LocalAccountMethod native password verification', () => {
       expect(verify).toHaveBeenCalledTimes(1);
       const [digest, password] = verify.mock.calls[0];
       expect(EXPECTED_PHC.test(digest)).toBe(true);
-      expect(password === WRONG_PASSWORD).toBe(true);
+      expect(password).toBe(WRONG_PASSWORD);
       expect(digest === account.credentials!.passwordHash).toBe(username === 'alice');
       expect(nativeOutcome).toBe(false);
       release.resolve();
@@ -98,7 +98,7 @@ describe('LocalAccountMethod native password verification', () => {
         formBody: { action: 'login', username: 'alice', password: WRONG_PASSWORD }, ip: CLIENT_PRIMARY,
       });
       expect(verify).toHaveBeenCalledTimes(1);
-      expect(verify.mock.calls[0][0] === 'not-a-phc').toBe(true);
+      expect(verify.mock.calls[0][0]).toBe('not-a-phc');
       await expect(verify.mock.results[0].value).rejects.toThrow();
       expect(result).toEqual(DENIED);
     } finally {
