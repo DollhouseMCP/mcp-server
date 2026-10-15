@@ -14,8 +14,10 @@ let HmacConsoleOpaqueValueService: typeof import('../../../src/web-console/secur
 
 beforeAll(async () => {
   const recordedCrypto = { ...realCrypto, timingSafeEqual: compare };
-  // Mock only this test file's module registry before importing the consumers.
+  // Register the same recorder in both repository Jest modes before importing
+  // consumers; each test file retains its own isolated module registries.
   jest.unstable_mockModule('node:crypto', () => recordedCrypto);
+  jest.doMock('node:crypto', () => recordedCrypto);
   ({ invitationCredentialMatches } = await import('../../../src/invitations/InvitationToken.js'));
   ({ HmacConsoleOpaqueValueService } = await import('../../../src/web-console/security/ConsoleOpaqueValues.js'));
 });
