@@ -173,9 +173,14 @@ export class OwnedFixtureProcess {
 
 export class OwnedFixtureRegistry {
   private readonly active = new Set<OwnedFixtureProcess>();
+  private readonly retainedFailures = new WeakMap<OwnedFixtureProcess, { cause: unknown }>();
 
   assertSettled(): void {
-    if (this.active.size) throw new Error('Prior owned fixture is unsettled; refusing another spawn');
+    if (this.active.size) {
+      const owner = this.active.values().next().value!;
+      const retained = this.retainedFailures.get(owner);
+      throw new Error('Prior owned fixture is unsettled; refusing another spawn', retained ? { cause: retained.cause } : undefined);
+    }
   }
 
   async run<T>(work: (owner: OwnedFixtureProcess) => Promise<T>): Promise<T> {
@@ -188,9 +193,17 @@ export class OwnedFixtureRegistry {
     try { value = await work(owner); owner.checkCancellation(); }
     catch (error) { failure = error; failed = true; }
     try { await owner.finish(); }
-    catch (error) { if (!failed) { failure = error; failed = true; } }
+    catch (error) {
+      if (failed) {
+        failure = new AggregateError([failure, error], 'Owned fixture operation and cleanup both failed', {
+          // Jest's ordinary test formatter follows cause, not AggregateError.errors.
+          cause: error instanceof Error ? error : new Error('Owned fixture cleanup rejected with a non-Error payload'),
+        });
+      } else { failure = error; failed = true; }
+    }
     finally {
       if (owner.cleaned) this.active.delete(owner);
+      else if (failed) this.retainedFailures.set(owner, { cause: failure });
       owner.complete();
     }
     if (failed) throw failure;
