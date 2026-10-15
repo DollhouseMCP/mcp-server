@@ -118,7 +118,7 @@ jobs:
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|hostedGracefulStop)[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|hostedGracefulStop)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Enforce all required test groups
@@ -225,6 +225,11 @@ jobs:
         shell: bash
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts
         continue-on-error: true
+      - name: Run required adoption recovery scan budget suite
+        id: adoption_scan_tests
+        shell: bash
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryAdoptionRecoveryScanBudget.test.ts
+        continue-on-error: true
       - name: Run required CREATE capacity suite
         id: create_tests
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedCreate.test.ts
@@ -252,13 +257,14 @@ jobs:
           LIFECYCLE_OUTCOME: ${{ steps.lifecycle_tests.outcome }}
           ACCEPTANCE_OUTCOME: ${{ steps.acceptance_tests.outcome }}
           CRASH_OUTCOME: ${{ steps.crash_tests.outcome }}
+          ADOPTION_SCAN_OUTCOME: ${{ steps.adoption_scan_tests.outcome }}
           CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
           CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
           RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
           DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
           HELPER_OUTCOME: ${{ steps.helper_tests.outcome }}
         run: |
-          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ]; then
+          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$ADOPTION_SCAN_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ]; then
             echo "Every serial storage and hosted graceful stop suite must execute successfully."
             exit 1
           fi
