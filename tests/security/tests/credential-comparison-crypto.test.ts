@@ -1,7 +1,8 @@
 /**
  * Verify use of the native full-digest comparison primitive (Issue #3075).
  * This is a deterministic delegation contract, not an end-to-end timing proof.
- * The recorder delegates to real crypto; unmocked behavior is tested separately.
+ * The recorder delegates to real crypto except for isolated result-flow controls;
+ * unmocked behavior is tested separately.
  */
 import { beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import * as realCrypto from 'node:crypto';
@@ -20,7 +21,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  compare.mockClear();
+  compare.mockReset();
+  compare.mockImplementation(nativeTimingSafeEqual);
 });
 
 function expectFullDigestCall(left: Buffer, right: Buffer): void {
@@ -50,6 +52,34 @@ describe('Native credential comparison delegation', () => {
     if (index >= 0) expectedHash[index] ^= 0xff;
 
     expect(service.matchesHash(value, expectedHash)).toBe(index === -1);
+    expectFullDigestCall(actualHash, expectedHash);
+  });
+
+  test.each([
+    { equal: true, nativeResult: false },
+    { equal: false, nativeResult: true },
+  ])('uses the native invitation result $nativeResult when byte equality is $equal', ({ equal, nativeResult }) => {
+    const expected = Buffer.alloc(32, 0x5a);
+    const actual = Buffer.from(expected);
+    if (!equal) actual[31] ^= 0xff;
+    compare.mockReturnValueOnce(nativeResult);
+
+    expect(invitationCredentialMatches(expected, actual)).toBe(nativeResult);
+    expectFullDigestCall(expected, actual);
+  });
+
+  test.each([
+    { equal: true, nativeResult: false },
+    { equal: false, nativeResult: true },
+  ])('uses the native console result $nativeResult when byte equality is $equal', ({ equal, nativeResult }) => {
+    const service = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 0x7b));
+    const value = 'synthetic-console-credential';
+    const actualHash = service.hashOpaqueValue(value);
+    const expectedHash = Buffer.from(actualHash);
+    if (!equal) expectedHash[31] ^= 0xff;
+    compare.mockReturnValueOnce(nativeResult);
+
+    expect(service.matchesHash(value, expectedHash)).toBe(nativeResult);
     expectFullDigestCall(actualHash, expectedHash);
   });
 
