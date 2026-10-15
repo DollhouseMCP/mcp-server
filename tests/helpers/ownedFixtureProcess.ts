@@ -2,6 +2,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
+import { types } from 'node:util';
 import { LinuxOwnedGroup } from './linuxOwnedGroup.js';
 import { OwnedWindowsJob } from './ownedWindowsJob.js';
 
@@ -197,7 +198,7 @@ export class OwnedFixtureRegistry {
       if (failed) {
         failure = new AggregateError([failure, error], 'Owned fixture operation and cleanup both failed', {
           // Jest's ordinary test formatter follows cause, not AggregateError.errors.
-          cause: error instanceof Error ? error : new Error('Owned fixture cleanup rejected with a non-Error payload'),
+          cause: types.isNativeError(error) || error instanceof Error ? error : new Error('Owned fixture cleanup rejected with a non-Error payload'),
         });
       } else { failure = error; failed = true; }
     }

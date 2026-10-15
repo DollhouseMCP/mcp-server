@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { formatResultsErrors } from 'jest-message-util';
+import { runInNewContext } from 'node:vm';
 import { OwnedFixtureProcess, OwnedFixtureRegistry } from '../../helpers/ownedFixtureProcess.js';
 
 const UNSETTLED = 'Prior owned fixture is unsettled; refusing another spawn';
@@ -91,6 +92,26 @@ describe('owned fixture failure context (resource-free)', () => {
       expect(pair.errors[0]).toBeUndefined(); expect(pair.errors[1]).toBe(secondary);
       expect((pair.cause as Error).message).toBe('Owned fixture cleanup rejected with a non-Error payload');
       expect(stringify).not.toHaveBeenCalled();
+    } finally { finish.mockRestore(); }
+  });
+
+  it('preserves and renders a real cleanup Error from another VM realm', async () => {
+    const registry = new OwnedFixtureRegistry();
+    const secondary: unknown = runInNewContext("new Error('synthetic-cross-realm-cleanup-marker')");
+    expect(secondary instanceof Error).toBe(false);
+    const finish = jest.spyOn(OwnedFixtureProcess.prototype, 'finish').mockImplementationOnce(async () => { throw secondary; });
+    try {
+      const outcome = captured(registry.run(async () => { throw undefined; }));
+      const refusal = await captured(registry.cancelUnfinished());
+      expect(refusal.failed).toBe(true);
+      if (!refusal.failed) throw new Error('Expected retained-owner refusal');
+      const pair = (refusal.cause as Error).cause as AggregateError;
+      expect(pair.errors[0]).toBeUndefined(); expect(pair.errors[1]).toBe(secondary);
+      expect(renderedTestFailure(refusal.cause as Error)).toContain('synthetic-cross-realm-cleanup-marker');
+      expect(pair.cause).toBe(secondary);
+      const result = await outcome;
+      expect(result.failed).toBe(true);
+      if (result.failed) expect(result.cause).toBe(pair);
     } finally { finish.mockRestore(); }
   });
 
