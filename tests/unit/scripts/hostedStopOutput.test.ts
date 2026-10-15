@@ -37,4 +37,21 @@ describe('owned stop-helper failure output', () => {
     expect(stream.text).toBe('[unrecognized helper output redacted]');
     expect(Buffer.byteLength(JSON.stringify(output.snapshot()))).toBeLessThan(512);
   });
+
+  it.each([
+    'Old process closed cleanly', '\tOld process closed cleanly\n',
+    ' Old process closed cleanly\n', 'Old process closed cleanly \n',
+    'Old process closed cleanly\t\n', 'Old process closed cleanly\n\n',
+    'Old process closed cleanly\r', '\nOld process closed cleanly\n',
+  ])('rejects noncanonical emitted bytes %j', value => {
+    const output = captureHostedStopOutput(); output.stdout(Buffer.from(value));
+    expect(output.snapshot().stdout.redacted).toBe(true);
+    expect(output.snapshot().stdout.text).toBe('[unrecognized helper output redacted]');
+  });
+
+  it('accepts exactly one CRLF emitted terminator as well as LF', () => {
+    const output = captureHostedStopOutput(); output.stdout(Buffer.from('Old process closed cleanly\r\n'));
+    expect(output.snapshot().stdout.text).toBe('Old process closed cleanly');
+    expect(output.snapshot().stdout.redacted).toBe(false);
+  });
 });

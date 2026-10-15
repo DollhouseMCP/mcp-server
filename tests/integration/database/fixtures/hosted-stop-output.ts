@@ -36,10 +36,13 @@ export function captureHostedStopOutput() {
     if (remaining > 0) stream.prefix = Buffer.concat([stream.prefix, chunk.subarray(0, remaining)]);
   };
   const snapshot = (stream: typeof stdout, allowed: ReadonlySet<string>) => {
-    const value = stream.prefix.toString('utf8').trim();
+    const value = stream.prefix.toString('utf8');
+    let message: string | undefined;
+    if (value.endsWith('\r\n')) message = value.slice(0, -2);
+    else if (value.endsWith('\n')) message = value.slice(0, -1);
     const truncated = stream.bytes > stream.prefix.length;
-    const redacted = truncated || (value.length > 0 && !allowed.has(value));
-    return { text: redacted ? '[unrecognized helper output redacted]' : value,
+    const redacted = truncated || (value.length > 0 && (message === undefined || !allowed.has(message)));
+    return { text: redacted ? '[unrecognized helper output redacted]' : message ?? '',
       observedBytes: stream.bytes, truncated, redacted };
   };
   return {
