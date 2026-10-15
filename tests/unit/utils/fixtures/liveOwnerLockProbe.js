@@ -1,9 +1,9 @@
 // Test-child observations only. No probe is issued here: wrappers delegate each
 // existing call exactly once and never interpret its output as identity authority.
 const providers = ['wmic', 'pwsh', 'powershell'];
-const outcomes = ['unobserved', 'returned', 'empty', 'timeout', 'not-found', 'error'];
-const markerOutcomes = ['unobserved', 'stat-ok', 'stat-missing', 'stat-error', 'read-ok', 'read-missing', 'read-error'];
-const allocationOutcomes = ['unobserved', 'returned', 'missing', 'error'];
+const outcomes = new Set(['unobserved', 'returned', 'empty', 'timeout', 'not-found', 'error']);
+const markerOutcomes = new Set(['unobserved', 'stat-ok', 'stat-missing', 'stat-error', 'read-ok', 'read-missing', 'read-error']);
+const allocationOutcomes = new Set(['unobserved', 'returned', 'missing', 'error']);
 
 export function observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExports, stateFile, pid, clock, started }) {
   const data = { providers: Object.fromEntries(providers.map(name => [name,
@@ -33,7 +33,8 @@ export function observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExpo
     const wrapped = function(...args) {
       let entry, stats;
       safe(() => {
-        const leaf = typeof args[0] === 'string' ? args[0].split(String.fromCharCode(92)).pop().split('/').pop().toLowerCase() : '';
+        // Normalize Windows separators for classification without changing the delegated arguments.
+        const leaf = typeof args[0] === 'string' ? args[0].split(String.fromCodePoint(92)).pop().split('/').pop().toLowerCase() : '';
         const name = { 'wmic.exe': 'wmic', 'pwsh.exe': 'pwsh', 'powershell.exe': 'powershell' }[leaf];
         stats = name ? data.providers[name] : undefined;
         if (stats) {
@@ -47,7 +48,11 @@ export function observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExpo
         if (result === '') outcome = 'empty';
         return result;
       } catch (error) {
-        safe(() => { outcome = error?.code === 'ETIMEDOUT' ? 'timeout' : error?.code === 'ENOENT' ? 'not-found' : 'error'; });
+        safe(() => {
+          if (error?.code === 'ETIMEDOUT') outcome = 'timeout';
+          else if (error?.code === 'ENOENT') outcome = 'not-found';
+          else outcome = 'error';
+        });
         throw error;
       } finally {
         if (stats) safe(() => {
@@ -69,12 +74,18 @@ export function observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExpo
     });
     for (const [method, label] of [['statSync', 'stat'], ['readFileSync', 'read']]) {
       wrap(fs, method, (args, _result, failed, cause) => {
-        if (marker(args[0])) data.lastMarker = `${label}-${failed ? cause?.code === 'ENOENT' ? 'missing' : 'error' : 'ok'}`;
+        if (marker(args[0])) {
+          let outcome = 'ok';
+          if (failed) outcome = cause?.code === 'ENOENT' ? 'missing' : 'error';
+          data.lastMarker = `${label}-${outcome}`;
+        }
       });
     }
     wrap(fs, 'rmSync', (args, _result, failed, cause) => {
       if (typeof args[0] === 'string' && args[0].startsWith(`${lock}/.${pid}.`) && args[0].endsWith('.slot.tmp.publish')) {
-        data.allocationFinallyLastAttempt = failed ? cause?.code === 'ENOENT' ? 'missing' : 'error' : 'returned';
+        if (!failed) data.allocationFinallyLastAttempt = 'returned';
+        else if (cause?.code === 'ENOENT') data.allocationFinallyLastAttempt = 'missing';
+        else data.allocationFinallyLastAttempt = 'error';
       }
     });
     syncBuiltinESMExports(); // Before coordinator import: capture named execFileSync.
@@ -82,7 +93,8 @@ export function observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExpo
   return { snapshot: () => data, restore() {
     if (restored) return;
     restored = true;
-    for (const restore of restorations.reverse()) safe(restore);
+    restorations.reverse();
+    for (const restore of restorations) safe(restore);
     safe(syncBuiltinESMExports);
   } };
 }
@@ -92,13 +104,13 @@ export function observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExpo
 export function decodeLiveOwnerLockProbe(value) {
   const integer = number => Number.isSafeInteger(number) && number >= 0;
   if (!value || typeof value !== 'object' || !value.providers ||
-      typeof value.unavailable !== 'boolean' || !allocationOutcomes.includes(value.allocationFinallyLastAttempt) ||
-      !markerOutcomes.includes(value.lastMarker) || (value.lastDone !== null && typeof value.lastDone !== 'boolean')) return null;
+      typeof value.unavailable !== 'boolean' || !allocationOutcomes.has(value.allocationFinallyLastAttempt) ||
+      !markerOutcomes.has(value.lastMarker) || (value.lastDone !== null && typeof value.lastDone !== 'boolean')) return null;
   const decoded = {};
   for (const name of providers) {
     const item = value.providers[name];
     if (!item || !integer(item.count) || !integer(item.totalMs) || !integer(item.maxMs) ||
-        (item.firstEntryMs !== null && !integer(item.firstEntryMs)) || !outcomes.includes(item.outcome)) return null;
+        (item.firstEntryMs !== null && !integer(item.firstEntryMs)) || !outcomes.has(item.outcome)) return null;
     decoded[name] = { count: item.count, firstEntryMs: item.firstEntryMs, totalMs: item.totalMs, maxMs: item.maxMs, outcome: item.outcome };
   }
   return { providers: decoded, allocationFinallyLastAttempt: value.allocationFinallyLastAttempt,
