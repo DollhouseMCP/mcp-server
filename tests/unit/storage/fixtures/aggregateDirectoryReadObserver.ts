@@ -37,15 +37,25 @@ export function observeDirectoryReads(owner: object = Dir.prototype) {
   return { measured, restore };
 }
 
-/** Backstop for a Jest deadline: restore wrappers, then always run original cleanup.
- * This does not cancel pending reads or stop an expired test issuing later reads.
+/** Existing unowned callers retain their backstop behavior. Owned callers supply
+ * a checkpoint to gate each restore and cleanup boundary; admitted private-root
+ * deletion is not cancelled, and no filesystem quiescence is claimed.
  */
-export async function cleanupDirectoryReadObservers(cleanup: () => Promise<void>): Promise<void> {
+export async function cleanupDirectoryReadObservers(cleanup: () => Promise<void>, checkpoint?: () => void): Promise<void> {
   const failures: unknown[] = [];
+  const check = () => {
+    try { checkpoint?.(); } catch (cause) {
+      if (failures.length) throw new AggregateError([...failures, cause], 'Directory cleanup failed before its admission closed');
+      throw cause;
+    }
+  };
   for (const restore of [...active].reverse()) {
+    check();
     try { restore(); }
     catch (cause) { active.delete(restore); failures.push(cause); }
   }
+  check();
   try { await cleanup(); } catch (cause) { failures.push(cause); }
+  check();
   if (failures.length) throw new AggregateError(failures, 'Directory observation or original cleanup failed');
 }
