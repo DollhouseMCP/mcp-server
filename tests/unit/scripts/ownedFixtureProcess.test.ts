@@ -90,6 +90,64 @@ describe('owned fixture teardown', () => {
     registry.assertSettled();
   });
 
+  (process.platform === 'linux' ? it : it.skip)('settles same-stack cancellation before the spawn event without losing Linux identity', async () => {
+    let child: ChildProcess | undefined, closed: Promise<void> | undefined;
+    let childClosed = false, spawnObserved = false, directory = '', pid = 0;
+    let owned!: OwnedFixtureProcess, spawnFailure: unknown;
+    const deadline = performance.now() + 2500;
+    const work = registry.run(async owner => {
+      directory = await mkdtemp(join(tmpdir(), 'owned-immediate-cancel-'));
+      owner.ownDirectory(directory);
+      owned = owner;
+      // Exactly one sleeping child, with no descendant or filesystem work.
+      child = owner.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      pid = child.pid!;
+      closed = new Promise<void>(resolve => child!.once('close', () => { childClosed = true; resolve(); }));
+      child.once('error', error => { spawnFailure = error; });
+      child.once('spawn', () => { spawnObserved = true; });
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+      expect(spawnObserved).toBe(false);
+      owner.cancel(); // No await or event-loop turn between spawn and cancel.
+      expect(spawnObserved).toBe(false);
+      await closed;
+    });
+    const outcome = work.then(() => ({ failed: false as const }), cause => ({ failed: true as const, cause }));
+    let primary: { cause: unknown } | undefined;
+    const cleanupFailures: unknown[] = [];
+    try {
+      const result = await withinCleanupDeadline(outcome, deadline);
+      expect(result.failed).toBe(true);
+      if (result.failed) expect(result.cause).toMatchObject({ message: expect.stringContaining('cancelled') });
+      expect(spawnFailure).toBeUndefined();
+      expect(childClosed).toBe(true);
+      await registry.run(async () => {
+        expect(owned.processSettlement(pid)).toBe('absent');
+        await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+      });
+    } catch (cause) { primary = { cause }; }
+    finally {
+      try {
+        if (child && !childClosed) {
+          // Negative controls may hit the old refusal. Reap only this exact sole
+          // child handle; fallback cleanup never turns that failure into success.
+          child.kill('SIGKILL');
+          await withinCleanupDeadline(closed!, deadline);
+        }
+        await withinCleanupDeadline(outcome, deadline);
+        if (primary && childClosed && directory) {
+          if (performance.now() >= deadline) cleanupFailures.push(new Error('Immediate cancellation control cleanup exceeded its budget'));
+          else await withinCleanupDeadline(rm(directory, { recursive: true, force: true }), deadline);
+        }
+      } catch (cause) { cleanupFailures.push(cause); }
+    }
+    if (primary) {
+      if (cleanupFailures.length) throw new AggregateError([primary.cause, ...cleanupFailures], 'Immediate cancellation control and owned cleanup failed');
+      throw primary.cause;
+    }
+    if (cleanupFailures.length) throw new AggregateError(cleanupFailures, 'Immediate cancellation control cleanup failed');
+    registry.assertSettled();
+  });
+
   it('preserves ordinary child exit0 and removes only its owned directory', async () => {
     let directory = '';
     let owned!: OwnedFixtureProcess, pid!: number;

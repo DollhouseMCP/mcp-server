@@ -59,9 +59,11 @@ export class OwnedFixtureProcess {
       ...(this.windowsJob ? { env: { ...(options.env ?? process.env), ...this.windowsJob.environment() } } : {}),
       detached: process.platform !== 'win32' });
     this.child = child;
+    // A successful spawn returns its PID before the next-tick spawn event.
+    // Cancellation may run in this same stack; never defer or replace identity.
+    if (process.platform === 'linux' && child.pid) this.linuxGroup = new LinuxOwnedGroup(child.pid);
     if (this.windowsJob) child.stderr?.on('data', (chunk: Buffer) => this.windowsJob!.observe(chunk, child, () => this.record('windows-job-quiescent')));
     child.once('spawn', () => {
-      if (process.platform === 'linux' && child.pid) this.linuxGroup = new LinuxOwnedGroup(child.pid);
       this.record('spawn');
     });
     child.stderr?.once('data', () => this.record('first-stderr'));
