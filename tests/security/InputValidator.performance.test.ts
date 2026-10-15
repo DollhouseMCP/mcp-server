@@ -298,14 +298,23 @@ describe('InputValidator Performance Tests', () => {
         (';echo hack;' + '&&' + '|cat' + '`cmd`').repeat(500),
       ];
 
-      for (const input of dangerousInputs) {
+      const inputCategories = ['special-characters', 'control-characters', 'rtl-overrides', 'zero-width-characters', 'shell-metacharacters'];
+      for (const [index, input] of dangerousInputs.entries()) {
         const startTime = performance.now();
 
         const result = sanitizeInput(input, 10000);
         expect(result).toBeDefined();
 
         const duration = performance.now() - startTime;
-        expect(duration).toBeLessThan(getPerformanceThreshold(10));
+        const threshold = getPerformanceThreshold(10);
+        if (!(duration < threshold)) {
+          try {
+            process.stderr.write(`SANITIZER pathological failure ${JSON.stringify({
+              category: inputCategories[index], index, inputLength: input.length, durationMs: duration, thresholdMs: threshold,
+            })}\n`);
+          } catch { /* Diagnostic failure must not replace the unchanged duration assertion. */ }
+        }
+        expect(duration).toBeLessThan(threshold);
 
         // eslint-disable-next-line no-control-regex
         console.log(`   ✓ Sanitized pathological input (${input.substring(0, 30).replace(/[\u0000-\u001F]/g, '.')}) in ${duration.toFixed(3)}ms`);
