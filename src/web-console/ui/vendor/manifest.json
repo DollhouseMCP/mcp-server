@@ -4,10 +4,10 @@
     {
       "file": "purify.min.js",
       "package": "dompurify",
-      "packageVersion": "3.2.4",
+      "packageVersion": "3.4.16",
       "license": "Apache-2.0 OR MPL-2.0",
-      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.2.4.tgz",
-      "sha256": "8eb41b658831fab175fad9bcd00fcb2d84e0ed3a25a55053d4ecd4444b8b43a0"
+      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.16.tgz",
+      "sha256": "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
     },
     {
       "file": "marked.min.js",
@@ -20,10 +20,10 @@
     {
       "file": "js-yaml.min.js",
       "package": "js-yaml",
-      "packageVersion": "4.1.0",
+      "packageVersion": "4.3.2",
       "license": "MIT",
-      "source": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.1.0.tgz",
-      "sha256": "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7"
+      "source": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.2.tgz",
+      "sha256": "32391560601990bb6e0daabd8106a35a6a539de088532413931a70a4cb4f4769"
     }
   ]
 }
