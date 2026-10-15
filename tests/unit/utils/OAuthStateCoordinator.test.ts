@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
+import { decodeLiveOwnerLockProbe } from './fixtures/liveOwnerLockProbe.mjs';
 import {
   withOAuthStateLock,
   withOAuthStateLockSync
@@ -41,11 +42,14 @@ function liveOwnerTrace() {
 // Only this fixture emits these bounded records; never include exception messages or paths.
 const liveOwnerChildScript = `
   import fs from 'node:fs';
+  import childProcess from 'node:child_process';
+  import { syncBuiltinESMExports } from 'node:module';
   const [moduleUrl, role, stateFile, readyFile, enteredFile, releaseFile, publication] = process.argv.slice(1);
   let phase = 'import';
   let sequence = 0;
   let unavailable = false;
   let started = 0;
+  let probe;
   try { started = performance.now(); } catch { unavailable = true; }
   const reason = (error) => {
     try {
@@ -59,16 +63,25 @@ const liveOwnerChildScript = `
   const emit = (event, error) => {
     try {
       if (sequence === 6) return;
+      if (['complete', 'error'].includes(event)) probe?.restore();
       const failure = error === undefined ? {} : {
         reason: reason(error),
         name: ${JSON.stringify(liveOwnerErrorNames)}.includes(error?.name) ? error.name : 'Unknown',
         code: ${JSON.stringify(liveOwnerErrorCodes)}.includes(error?.code) ? error.code : null
       };
       process.stderr.write(JSON.stringify({ event, phase, sequence: ++sequence,
-        elapsedMs: Math.round(performance.now() - started), unavailable, ...failure }) + '\\n');
+        elapsedMs: Math.round(performance.now() - started), unavailable, ...failure,
+        ...(['complete', 'error'].includes(event) && probe ? { probe: probe.snapshot() } : {}) }) + '\\n');
     } catch { unavailable = true; }
   };
   try {
+    if (['native', 'directory-fallback'].includes(publication)) {
+      try {
+        const { observeLiveOwnerLockCalls } = await import(${JSON.stringify(new URL('./fixtures/liveOwnerLockProbe.mjs', import.meta.url).href)});
+        probe = observeLiveOwnerLockCalls({ fs, childProcess, syncBuiltinESMExports, stateFile, pid: process.pid,
+          clock: () => performance.now(), started });
+      } catch { unavailable = true; }
+    }
     const { withOAuthStateLockSync } = await import(moduleUrl);
     if (publication === 'directory-fallback') fs.linkSync = () => {
       const error = new Error('Fixture hard links unsupported');
@@ -92,12 +105,14 @@ const liveOwnerChildScript = `
     phase = 'complete';
     emit('complete');
   } catch (error) { emit('error', error); process.exitCode = 1; }
+  finally { try { probe?.restore(); } catch { unavailable = true; } }
 `;
 
 function observedChild(args: string[], onClose?: () => void) {
   const child = spawn(process.execPath, ['--input-type=module', '--eval', liveOwnerChildScript, ...args],
     { stdio: ['ignore', 'ignore', 'pipe'] });
   const started = performance.now();
+  let probe: ReturnType<typeof decodeLiveOwnerLockProbe> = null;
   let diagnostic: { phase: string; name: string; code: string | null; reason: string } | null = null;
   const samples: { event: string; sequence: number; elapsedMs: number }[] = [];
   let unavailable = false;
@@ -110,12 +125,16 @@ function observedChild(args: string[], onClose?: () => void) {
   let signal: string | null = null;
   child.stderr.on('data', (chunk: Buffer) => {
     stderr += chunk.toString('utf8');
-    if (stderr.length > 1_024) { stderr = stderr.slice(-1_024); truncated = true; }
+    if (stderr.length > 4_096) { stderr = stderr.slice(-4_096); truncated = true; }
     const lines = stderr.split('\n');
     stderr = lines.pop() ?? '';
     for (const line of lines) {
       try {
         const value = JSON.parse(line) as Record<string, unknown>;
+        if (['complete', 'error'].includes(String(value.event)) && value.probe !== undefined) {
+          probe = decodeLiveOwnerLockProbe(value.probe);
+          unavailable ||= probe === null || probe.unavailable;
+        }
         if (liveOwnerPhases.includes(value.event as (typeof liveOwnerPhases)[number]) &&
             Number.isInteger(value.sequence) && Number(value.sequence) > 0 && Number(value.sequence) <= 6 &&
             typeof value.elapsedMs === 'number' && Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0) {
@@ -146,7 +165,7 @@ function observedChild(args: string[], onClose?: () => void) {
     try { onClose?.(); } catch { unavailable = true; }
   }));
   const snapshot = () => ({ role: args[1], exitCode, signal,
-    elapsedMs: Math.round(performance.now() - started), diagnostic, samples,
+    elapsedMs: Math.round(performance.now() - started), diagnostic, samples, probe,
     unavailable: unavailable || samples.length === 0 ||
       samples.some((sample, index) => sample.sequence !== index + 1) ||
       (closed && (failed ? diagnostic?.reason !== 'CHILD_SPAWN_ERROR' &&
