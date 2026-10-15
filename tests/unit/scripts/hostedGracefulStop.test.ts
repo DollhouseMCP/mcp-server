@@ -192,6 +192,7 @@ finally:
       console.log('OWNED_HELPER_DIAGNOSTIC', JSON.stringify({ mode, phase, code,
         elapsedMs: Date.now() - started, frames, commands: categories,
         capturedStderrBytes: stderr.length, discardedBytes, parentEvents: owner.events,
+        windowsFailure: owner.windowsFailureDetail(),
         python: boundedPythonIdentity(stderr),
         observationTimerLagMs: phase === 'still-running' ? Math.max(0, Date.now() - started - 9000) : undefined }));
     };

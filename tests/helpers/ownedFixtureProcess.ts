@@ -35,6 +35,10 @@ export class OwnedFixtureProcess {
   private readonly started = performance.now();
   readonly events: { phase: string; elapsedMs: number }[] = [];
 
+  windowsFailureDetail(): ReturnType<OwnedWindowsJob['failureDetail']> {
+    return this.windowsJob?.failureDetail();
+  }
+
   ownDirectory(directory: string): void {
     if (this.directory) throw new Error('Fixture already owns a directory');
     this.directory = directory;
