@@ -45,12 +45,23 @@ async function fixture(nested = false) {
   const foreign = path.join(root, 'Unrelated.yaml'); await fs.writeFile(foreign, 'foreign content', { mode: 0o600 });
   return { root, token, request, store, coordinator, source, destination, foreign, sourceJournal: journal(source), destinationJournal: journal(destination) };
 }
-async function cleanupRenameFixtures() {
+async function cleanupRenameFixtures(checkpoint: () => void) {
   const failures: unknown[] = [];
+  const check = () => {
+    try { checkpoint(); } catch (cause) {
+      if (failures.length) throw new AggregateError([...failures, cause], 'RENAME cleanup failed before its admission closed');
+      throw cause;
+    }
+  };
+  check();
   try { jest.restoreAllMocks(); } catch (cause) { failures.push(cause); }
-  for (const root of roots.splice(0)) {
-    try { await fs.rm(root, { recursive: true, force: true }); }
+  for (const root of [...roots]) {
+    check();
+    let removed = false;
+    try { await fs.rm(root, { recursive: true, force: true }); removed = true; }
     catch (cause) { failures.push(cause); }
+    check();
+    if (removed) roots.splice(roots.indexOf(root), 1);
   }
   if (failures.length) throw new AggregateError(failures, 'RENAME fixture cleanup failed');
 }
@@ -58,7 +69,7 @@ afterEach(async () => {
   const profile = renameProfile; renameProfile = undefined;
   profile?.mark('cleanup-start');
   try {
-    await lifecycle.teardown(() => cleanupDirectoryReadObservers(cleanupRenameFixtures));
+    await lifecycle.teardown(checkpoint => cleanupDirectoryReadObservers(() => cleanupRenameFixtures(checkpoint), checkpoint));
     profile?.mark('cleanup-end');
   } finally { profile?.mark('cleanup-finally'); profile?.flush(); }
 });

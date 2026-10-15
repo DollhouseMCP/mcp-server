@@ -128,9 +128,13 @@ afterEach(async () => {
   const profile = cleanupProfile; cleanupProfile = undefined;
   profile?.mark('cleanup-start');
   try {
-    await lifecycle.teardown(() => cleanupDirectoryReadObservers(async () => {
-      jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
-    }));
+    await lifecycle.teardown(checkpoint => cleanupDirectoryReadObservers(async () => {
+      checkpoint(); jest.restoreAllMocks();
+      while (roots.length) {
+        checkpoint(); await fs.rm(roots[0], { recursive: true, force: true });
+        checkpoint(); roots.shift();
+      }
+    }, checkpoint));
     profile?.mark('cleanup-end');
   } finally { profile?.mark('cleanup-finally'); profile?.flush(); }
 });

@@ -18,10 +18,12 @@ describe('settling original callback', () => {
     // Jest invokes this only after recording the original 10s body failure.
     // Release the actual admitted operation deterministically at that boundary.
     events.push('teardown-enter'); release?.();
-    await owner.teardown(() => cleanupDirectoryReadObservers(async () => {
-      events.push('cleanup'); jest.restoreAllMocks();
-      await fs.rm(path.join(root, 'settling'), { recursive: true, force: true });
-    }));
+    await owner.teardown(checkpoint => cleanupDirectoryReadObservers(async () => {
+      checkpoint();
+      events.push('cleanup'); checkpoint(); jest.restoreAllMocks();
+      checkpoint(); await fs.rm(path.join(root, 'settling'), { recursive: true, force: true });
+      checkpoint();
+    }, checkpoint));
   });
   it('preserves the original ten second timeout', owner.own(async () => {
     await fs.mkdir(path.join(root, 'settling'));
@@ -55,9 +57,10 @@ describe('unsettled original callback', () => {
   let bodySettled!: () => void;
   const settled = new Promise<void>(resolve => { bodySettled = resolve; });
   beforeEach(() => owner.begin());
-  afterEach(() => owner.teardown(async () => {
-    events.push('forbidden-cleanup'); jest.restoreAllMocks();
-    await fs.rm(path.join(root, 'blocked'), { recursive: true, force: true });
+  afterEach(() => owner.teardown(async checkpoint => {
+    checkpoint(); events.push('forbidden-cleanup'); checkpoint(); jest.restoreAllMocks();
+    checkpoint(); await fs.rm(path.join(root, 'blocked'), { recursive: true, force: true });
+    checkpoint();
   }, 200));
   it('retains resources if the actual callback exceeds the cleanup budget', owner.own(async () => {
     await fs.mkdir(path.join(root, 'blocked'));
