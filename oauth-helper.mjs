@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * OAuth Helper Process - Standalone OAuth polling script
+ * OAuth Helper Process - Generation-owned detached OAuth polling script
  * 
  * This script runs independently of the MCP server to handle OAuth device flow polling.
  * It's spawned as a detached process when authentication is initiated, polls GitHub
  * for the OAuth token, stores it securely, and then exits.
  * 
  * Usage: DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE=<device_code> node oauth-helper.mjs <interval> <expires_in> <client_id>
+ *   Requires nonempty DOLLHOUSE_OAUTH_HELPER_FLOW_ID and matching coordinated prepared state.
+ *   Use the server setup_github_auth controller; see docs/developer-guide/oauth-helper-generation-ownership.md.
  *   (device_code is passed via env, not argv, to keep the bearer secret out of ps/proc)
  * 
  * This solves the MCP server lifecycle issue where the server may shut down
@@ -30,7 +32,7 @@ const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
 const DOLLHOUSE_HOME_DIR = process.env.DOLLHOUSE_HOME_DIR || homedir();
 // Per-user paths: the server passes DOLLHOUSE_OAUTH_HELPER_AUTH_DIR / _LOG_FILE
 // resolved for the current user (hosted HTTP mode). Fall back to the legacy
-// global home layout for standalone/operator use.
+// global home layout for coordinated operator use.
 const AUTH_DIR = process.env.DOLLHOUSE_OAUTH_HELPER_AUTH_DIR || join(DOLLHOUSE_HOME_DIR, '.dollhouse', '.auth');
 const PID_FILE = join(AUTH_DIR, 'oauth-helper.pid');
 const STATE_FILE = join(AUTH_DIR, 'oauth-helper-state.json');
@@ -93,12 +95,17 @@ let terminalResultWritten = false;
 let terminalOutcome = null;
 let handoffWritten = false;
 
+if (!FLOW_ID) {
+  writeStartupError('OAUTH_HELPER: nonempty DOLLHOUSE_OAUTH_HELPER_FLOW_ID and matching prepared state are required');
+  process.exit(1);
+}
+let terminalCleanupAttempted = false;
+let terminalCleanupResult;
 installTerminationHandlers();
 if (!claimPreparedStateSync()) {
-  // A failed lock/identity claim can outlive the parent process that prepared
-  // the generation. Retry one flow-checked transaction so a PID-less state
-  // cannot remain indefinitely; a superseding flow is never removed.
-  cleanupStateFileSync();
+  // A separate, once-attempt transaction may remove only this flow's
+  // still PID-less preparation. Exit must never retry it or remove a PID.
+  cleanupUnclaimedStateSync();
   writeStartupError('OAUTH_HELPER_44: Unable to claim prepared OAuth flow state');
   process.exit(1);
 }
@@ -213,39 +220,54 @@ async function storeToken(token) {
   }
 }
 
-function cleanupPidFileSync() {
+// Capture callback and admission/release outcomes separately. The coordinator's
+// finally may throw even after an operation committed; never retry it as success.
+function generationTransaction(operation) {
+  let operationOutcome;
   try {
-    if (pidFileBelongsToThisHelperSync()) {
-      fsSync.unlinkSync(PID_FILE);
-    }
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-function cleanupStateFileSync() {
-  try {
-    return withOAuthStateLockSync(STATE_FILE, () => {
-      if (!stateFileBelongsToThisHelperSync()) return false;
-      fsSync.unlinkSync(STATE_FILE);
-      return true;
+    withOAuthStateLockSync(STATE_FILE, () => {
+      try { operationOutcome = { returned: true, value: operation() }; }
+      catch (error) { operationOutcome = { returned: false, error }; }
     });
-  } catch {
-    return false;
+  } catch (error) {
+    return { operation: operationOutcome, lockFailure: { error } };
   }
+  return { operation: operationOutcome };
 }
 
-async function cleanupPidFile() {
-  try {
-    if (await pidFileBelongsToThisHelper()) {
-      await fs.unlink(PID_FILE).catch(() => {});
-      await log('PID file cleaned up');
-    } else {
-      await log('PID file belongs to another helper flow; leaving it in place');
-    }
-  } catch {
-    // Ignore cleanup errors
-  }
+function transactionSucceeded(outcome) {
+  return !outcome.lockFailure && outcome.operation?.returned === true && outcome.operation.value === true;
+}
+
+function cleanupOwnedGenerationSync() {
+  if (terminalCleanupAttempted) return terminalCleanupResult;
+  terminalCleanupAttempted = true; // Includes failed admission; exit must not retry.
+  const keepState = terminalOutcome?.status === 'success' || hasCommittedHandoffSync();
+  terminalCleanupResult = generationTransaction(() => {
+    const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+    if (state?.flowId !== FLOW_ID || state.pid !== process.pid) return false;
+    let pid;
+    try { pid = fsSync.readFileSync(PID_FILE, 'utf8'); }
+    catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    // Both owners are known before either unlink. PID contents are advisory at
+    // publication, but cleanup may remove only this exact generation's own PID.
+    if (pid !== undefined && pid !== String(process.pid)) return false;
+    if (pid !== undefined) fsSync.unlinkSync(PID_FILE);
+    if (!keepState) fsSync.unlinkSync(STATE_FILE);
+    return true;
+  });
+  return terminalCleanupResult;
+}
+
+function cleanupUnclaimedStateSync() {
+  terminalCleanupAttempted = true;
+  terminalCleanupResult = generationTransaction(() => {
+    const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+    if (state?.flowId !== FLOW_ID || Object.hasOwn(state, 'pid')) return false;
+    fsSync.unlinkSync(STATE_FILE);
+    return true;
+  });
+  return terminalCleanupResult;
 }
 
 function buildTerminalResult(status, attempts, errorCode = '') {
@@ -280,13 +302,13 @@ function commitTerminalResultSync(status, attempts, errorCode, exitCode) {
 
   try {
     fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-    terminalResultWritten = withOAuthStateLockSync(STATE_FILE, () => {
+    terminalResultWritten = transactionSucceeded(generationTransaction(() => {
       // Flow-scoped helpers may publish only while their own generation is
       // current. This serializes against replacement state/result cleanup.
       if (FLOW_ID && !stateFileBelongsToThisHelperSync()) return false;
       writeFileAtomicallySync(RESULT_FILE, JSON.stringify(terminalOutcome.result, null, 2));
       return true;
-    });
+    }));
   } catch {
     // Preserve the existing best-effort terminal-reporting contract.
   }
@@ -295,10 +317,8 @@ function commitTerminalResultSync(status, attempts, errorCode, exitCode) {
 }
 
 function claimPreparedStateSync() {
-  if (!FLOW_ID) return true;
-
   try {
-    return withOAuthStateLockSync(STATE_FILE, () => {
+    return transactionSucceeded(generationTransaction(() => {
       const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
       if (state?.flowId !== FLOW_ID) return false;
 
@@ -307,7 +327,7 @@ function claimPreparedStateSync() {
         JSON.stringify({ ...state, pid: process.pid }, null, 2)
       );
       return true;
-    });
+    }));
   } catch {
     return false;
   }
@@ -323,32 +343,10 @@ async function logTerminalCommit(outcome) {
   await log(`Terminal result written: ${outcome.status}${resultSuffix}`);
 }
 
-async function pidFileBelongsToThisHelper() {
-  if (!FLOW_ID) return true;
-  try {
-    const pid = (await fs.readFile(PID_FILE, 'utf8')).trim();
-    return pid === String(process.pid);
-  } catch {
-    return false;
-  }
-}
-
-function pidFileBelongsToThisHelperSync() {
-  if (!FLOW_ID) return fsSync.existsSync(PID_FILE);
-  try {
-    const pid = fsSync.readFileSync(PID_FILE, 'utf8').trim();
-    return pid === String(process.pid);
-  } catch {
-    return false;
-  }
-}
-
 function stateFileBelongsToThisHelperSync() {
-  if (!FLOW_ID) return fsSync.existsSync(STATE_FILE);
   try {
     const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
-    return state?.flowId === FLOW_ID &&
-      (typeof state.pid !== 'number' || state.pid === process.pid);
+    return state?.flowId === FLOW_ID && state.pid === process.pid;
   } catch {
     return false;
   }
@@ -357,10 +355,18 @@ function stateFileBelongsToThisHelperSync() {
 async function writePidFile() {
   try {
     await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
-    await fs.writeFile(PID_FILE, process.pid.toString(), { mode: 0o600 });
+    const outcome = generationTransaction(() => {
+      const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+      if (state?.flowId !== FLOW_ID || state.pid !== process.pid) return false;
+      writeFileAtomicallySync(PID_FILE, String(process.pid));
+      return true;
+    });
+    if (!transactionSucceeded(outcome)) return { published: false, outcome };
     await log(`PID file written: ${PID_FILE}`);
-  } catch {
+    return { published: true, outcome };
+  } catch (error) {
     await log('Failed to write PID file');
+    return { published: false, failure: { error } };
   }
 }
 
@@ -379,10 +385,10 @@ function hasCommittedHandoffSync() {
 function installTerminationHandlers() {
   // Install handlers before the first startup await and before publishing the
   // PID file. The PID file is the parent process's readiness signal.
-  process.once('exit', cleanupPidFileSync);
+  process.once('exit', cleanupOwnedGenerationSync);
   process.once('beforeExit', async () => {
     await log('OAuth helper completing cleanup');
-    await cleanupPidFile();
+    cleanupOwnedGenerationSync();
   });
 
   const handleInterruption = () => {
@@ -395,10 +401,7 @@ function installTerminationHandlers() {
       handoffCommitted ? 'success' : 'interrupted',
       handoffCommitted ? 0 : 1
     );
-    if (outcome?.status !== 'success') {
-      cleanupStateFileSync();
-    }
-    cleanupPidFileSync();
+    cleanupOwnedGenerationSync();
     process.exit(outcome?.exitCode ?? 1);
   };
 
@@ -506,7 +509,11 @@ async function main() {
   }
   
   // Write PID file for tracking
-  await writePidFile();
+  const publication = await writePidFile();
+  if (!publication.published) {
+    writeStartupError('OAUTH_HELPER: PID publication refused; polling not started');
+    process.exit(1);
+  }
   
   // Write initial heartbeat
   const heartbeatInterval = setInterval(async () => {
@@ -530,13 +537,7 @@ async function main() {
     }
     // The server needs successful flow state to correlate and consume the
     // encrypted token handoff. Failed flows have no handoff to import.
-    if (outcome?.status !== 'success') {
-      const stateCleaned = cleanupStateFileSync();
-      await log(stateCleaned
-        ? 'OAuth helper state file cleaned up'
-        : 'OAuth helper state belongs to another flow; leaving it in place');
-    }
-    await cleanupPidFile();
+    cleanupOwnedGenerationSync();
     process.exit(outcome?.exitCode ?? exitCode);
   }
   
@@ -586,9 +587,6 @@ try {
     handoffCommitted ? 0 : 1
   );
   await logTerminalCommit(outcome);
-  if (outcome?.status !== 'success') {
-    cleanupStateFileSync();
-  }
-  await cleanupPidFile();
+  cleanupOwnedGenerationSync();
   process.exit(outcome?.exitCode ?? 1);
 }
