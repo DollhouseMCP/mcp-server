@@ -132,7 +132,12 @@ export class OwnedFixtureProcess {
     if (!this.groupExists()) return false;
     if (!this.linuxGroup?.captureBeforeKill(this.cleanupDeadline!)) {
       this.signalRefused = true;
-      throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+      let cause: Error | undefined;
+      try {
+        const detail = this.linuxGroup?.refusalDetail();
+        if (detail) cause = new Error(`Owned Linux capture refusal ${JSON.stringify(detail)}`);
+      } catch { /* Diagnostic failure cannot replace the original authorization refusal. */ }
+      throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup', cause ? { cause } : undefined);
     }
     return true;
   }

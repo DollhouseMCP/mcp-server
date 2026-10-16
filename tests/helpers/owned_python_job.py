@@ -125,17 +125,20 @@ def establish_fixture_job():
         diagnostic['active'] = accounting.ActiveProcesses
         return accounting.ActiveProcesses
 
-    def terminate_and_wait(pid, deadline):
+    def terminate_and_wait(pid, deadline, cancelling):
         # Open the exact candidate and verify membership on that handle before
         # termination; a reused/unrelated PID can never authorize a signal.
-        handle = api_result(kernel.OpenProcess(0x100001 | 0x1000, False, pid), 'process-open')
+        rights = 0x100000 | 0x1000  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+        if cancelling:
+            rights |= 0x1  # PROCESS_TERMINATE is never acquired by normal finish.
+        handle = api_result(kernel.OpenProcess(rights, False, pid), 'process-open')
         require(handle)
         try:
             member = wintypes.BOOL()
             require(api_result(kernel.IsProcessInJob(handle, job, ctypes.byref(member)), 'process-member-query') and member.value, 'process-member-guard')
             result = api_result(kernel.WaitForSingleObject(handle, 0), 'process-wait-before', wait=True)
             require(result in (0, 258), 'process-wait-result')  # WAIT_OBJECT_0 or WAIT_TIMEOUT only.
-            if result == 258:
+            if result == 258 and cancelling:
                 require(api_result(kernel.TerminateProcess(handle, 3), 'process-terminate'))
             remaining = max(0, int((deadline - time.monotonic()) * 1000))
             require(api_result(kernel.WaitForSingleObject(handle, remaining), 'process-wait-after', wait=True) == 0, 'process-wait-timeout')
@@ -168,12 +171,17 @@ def establish_fixture_job():
         first = True
         while time.monotonic() < deadline:
             current = members()
-            if not cancelling:
-                require(current == [own_pid] and active_count() == 1, 'normal-members')
             for pid in current:
                 if pid != own_pid:
-                    terminate_and_wait(pid, deadline)
-            # Fence AFTER verified-handle termination. Preserve containment and
+                    terminate_and_wait(pid, deadline, cancelling)
+            if not cancelling:
+                require(time.monotonic() < deadline, 'settlement-budget')
+            if not cancelling and not (members() == [own_pid] and active_count() == 1):
+                # Observe normal child exit within this SAME deadline. Never
+                # terminate a normal member or authorize an earlier census.
+                time.sleep(min(.01, max(0, deadline - time.monotonic())))
+                continue
+            # Fence AFTER verified-handle settlement. Preserve containment and
             # bar any new association, including descendants racing the census.
             if first:
                 limits.Basic.LimitFlags = 0x2000 | 0x8
@@ -188,6 +196,8 @@ def establish_fixture_job():
             # Re-query after the fence, with completed handles already closed.
             # A raced member requires another bounded settlement iteration.
             if members() == [own_pid] and active_count() == 1:
+                if not cancelling:
+                    require(time.monotonic() < deadline, 'settlement-budget')
                 print('OWNED_FIXTURE_JOB_QUIESCENT %s %d' % (token, own_pid), file=sys.stderr, flush=True)
                 state['proved'] = True
                 return

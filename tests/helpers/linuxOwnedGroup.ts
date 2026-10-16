@@ -71,38 +71,76 @@ export function exactOwnedZombies(previous: readonly LinuxProcess[], current: re
     value.state === 'Z' && value.threads === 1 && previous.some(before => sameLinuxProcess(before, value)));
 }
 
+type CaptureStage = 'initial-leader' | 'current-leader' | 'census' | 'member-match' | 'post-leader';
+type CaptureReason = 'missing-snapshot' | 'missing-leader' | 'leader-mismatch' | 'members-mismatch' | 'observation-error';
+export type LinuxCaptureRefusal = {
+  mode: 'first' | 'repeated'; stage: CaptureStage; reason: CaptureReason;
+  retained: number | null; observed: number | null; code: string | null;
+};
+const safeCodes = new Set(['EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EMFILE', 'ENFILE']);
+function safeCode(error: unknown): string | null {
+  try {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return typeof code === 'string' && safeCodes.has(code) ? code : null;
+  } catch { return null; } // Arbitrary thrown payloads never enter diagnostics.
+}
+
 export class LinuxOwnedGroup {
   private readonly leader?: LinuxProcess;
   private members?: LinuxProcess[];
   private attempted = false;
+  private initialFailed = false;
+  private initialCode: string | null = null;
+  private refusal?: LinuxCaptureRefusal;
+
+  refusalDetail(): LinuxCaptureRefusal | undefined {
+    return this.refusal ? { ...this.refusal } : undefined;
+  }
 
   constructor(private readonly group: number) {
     try {
       const leader = processEvidence(group);
       if (group > 0 && leader?.group === group && leader.session === group && BigInt(leader.started) > 0n) this.leader = leader;
-    } catch { /* Unknown evidence never authorizes zombie-only completion. */ }
+    } catch (error) { this.initialFailed = true; this.initialCode = safeCode(error); } // Unknown evidence never authorizes completion.
   }
 
   captureBeforeKill(deadline: number): boolean {
+    const mode = this.attempted ? 'repeated' : 'first';
+    let stage: CaptureStage = 'initial-leader';
+    let observed: number | null = null;
+    const refuse = (reason: CaptureReason, code: string | null = null): false => {
+      this.refusal ??= { mode, stage, reason, retained: this.members?.length ?? null, observed, code };
+      return false;
+    };
     try {
       const slice = Math.min(deadline, performance.now() + CENSUS_MS);
       if (this.attempted) {
-        if (!this.members) return false;
+        if (!this.members) return refuse('missing-snapshot');
+        stage = 'census';
         const current = census(this.group, slice);
-        return current.length > 0 && current.every(value => this.members!.some(before => sameLinuxProcess(before, value)));
+        observed = current.length;
+        stage = 'member-match';
+        const accepted = current.length > 0 && current.every(value => this.members!.some(before => sameLinuxProcess(before, value)));
+        if (!accepted) return refuse('members-mismatch');
+        return true;
       }
       this.attempted = true;
-      if (!this.leader) return false;
+      if (!this.leader) return refuse(this.initialFailed ? 'observation-error' : 'missing-leader', this.initialCode);
+      stage = 'current-leader';
       const leader = processEvidence(this.group);
-      if (!leader || !sameLinuxProcess(this.leader, leader)) return false;
+      if (!leader || !sameLinuxProcess(this.leader, leader)) return refuse('leader-mismatch');
+      stage = 'census';
       const members = census(this.group, slice);
-      if (!members.some(value => sameLinuxProcess(value, leader)) || members.some(value => value.session !== this.group)) return false;
+      observed = members.length;
+      stage = 'member-match';
+      if (!members.some(value => sameLinuxProcess(value, leader)) || members.some(value => value.session !== this.group)) return refuse('members-mismatch');
       // Recheck the actual launcher after the census, before authorizing a signal.
+      stage = 'post-leader';
       const currentLeader = processEvidence(this.group);
-      if (!currentLeader || !sameLinuxProcess(this.leader, currentLeader)) return false;
+      if (!currentLeader || !sameLinuxProcess(this.leader, currentLeader)) return refuse('leader-mismatch');
       this.members = members;
       return true;
-    } catch { return false; } // Unknown evidence never authorizes a group signal.
+    } catch (error) { return refuse('observation-error', safeCode(error)); } // Never authorize an unknown group signal.
   }
 
   zombieOnly(deadline: number): boolean {
