@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/safety",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Tiered safety infrastructure for MCP servers",
   "type": "module",
   "main": "dist/index.js",
@@ -62,6 +62,11 @@
     "node-releases": "2.0.51",
     "js-yaml@>=3 <3.15.2": "3.15.2",
     "js-yaml@>=4 <4.3.2": "4.3.2",
-    "picomatch@<2.3.2": "2.3.2"
+    "picomatch@<2.3.2": "2.3.2",
+    "@babel/core": "7.29.6",
+    "handlebars": "4.7.10",
+    "@babel/helpers": "7.29.7",
+    "@babel/traverse": "7.29.8",
+    "update-browserslist-db": "1.2.3"
   }
 }
