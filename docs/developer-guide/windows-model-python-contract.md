@@ -30,12 +30,16 @@ Image rotation that removes the exact version or changes the layout intentionall
 fails qualification; updating this dependency requires an explicit reviewed
 change, never an automatic version substitution.
 
-Core's two ordinary shards, Extended's ordinary matrix, and Cross-Platform
-Simple's unfiltered unit command declare the contract. Their events, selections,
-matrices, outcomes, guards and job limits are unchanged. The latter remains a
-manual/main workflow with its existing ten-minute limit; Core/Extended keep
-fifteen minutes. Other Python fixtures and performance-only selection are not
-retargeted.
+The model runs as a separate required whole-file `--runInBand` step in Core
+and Extended serial storage jobs and Cross-Platform Simple. Each model step
+declares the cache contract. Ordinary selections exclude only this model entry
+in addition to their existing exclusions; the pure selector tests stay ordinary.
+Strict outcome guards reject a failed, cancelled, skipped or missing model step.
+Events, matrices and check names stay unchanged. Cross-Platform Simple remains
+a manual/main workflow with its existing ten-minute limit; Core/Extended keep
+fifteen minutes. The serial step adds a Jest startup and its child execution to
+the serial job; no job allowance increases or completion-fit guarantee follows.
+Other Python fixtures and performance-only selection are not retargeted.
 
 The model still runs one child, with the same two arguments, 5,000 ms total
 `spawnSync` timeout, 64 KiB output bound, eleven methods and 43 actual-helper
