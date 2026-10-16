@@ -88,4 +88,6 @@ jobs:
             jest-cache-${{ runner.os }}-
 
       - name: Test
+        env:
+          DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
         run: npm test
