@@ -185,7 +185,7 @@ describe(HELPER_FILENAME, () => {
     expect(helperSource).not.toMatch(/\bcleanupStateFile\s*\(/);
     const mainAwaitIndex = helperSource.indexOf('await main();');
     const fatalCatchIndex = helperSource.indexOf('} catch (error) {', mainAwaitIndex);
-    const fatalCleanupIndex = helperSource.indexOf('cleanupStateFileSync();', fatalCatchIndex);
+    const fatalCleanupIndex = helperSource.indexOf('cleanupOwnedGenerationSync();', fatalCatchIndex);
     expect(mainAwaitIndex).toBeGreaterThan(-1);
     expect(fatalCatchIndex).toBeGreaterThan(mainAwaitIndex);
     expect(fatalCleanupIndex).toBeGreaterThan(fatalCatchIndex);
@@ -217,6 +217,25 @@ describe(HELPER_FILENAME, () => {
     } finally {
       await fs.rm(sourceDirectory, { recursive: true, force: true });
     }
+  });
+
+  it('refuses unscoped standalone use before changing shared generation files', async () => {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-unscoped-'));
+    const authDir = path.join(tempHome, DOLLHOUSE_DIR, '.auth');
+    await fs.mkdir(authDir, { recursive: true });
+    const original = new Map([
+      [HELPER_PID_FILE, '999999'], [HELPER_STATE_FILE, '{"flowId":"new-flow","pid":999999}'],
+      [HELPER_RESULT_FILE, '{"status":"success","flowId":"new-flow"}'],
+    ]);
+    for (const [name, content] of original) await fs.writeFile(path.join(authDir, name), content);
+    try {
+      const result = await runHelper(path.join(process.cwd(), HELPER_FILENAME), 'http://127.0.0.1:1/token', tempHome,
+        { DOLLHOUSE_OAUTH_HELPER_FLOW_ID: '' });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('nonempty DOLLHOUSE_OAUTH_HELPER_FLOW_ID');
+      for (const [name, content] of original) await expect(fs.readFile(path.join(authDir, name), 'utf8')).resolves.toBe(content);
+      expect((await fs.readdir(authDir)).sort()).toEqual([...original.keys()].sort());
+    } finally { await fs.rm(tempHome, { recursive: true, force: true }); }
   });
 
   it('exits without polling when it cannot claim its prepared flow', async () => {
@@ -518,10 +537,10 @@ describe(HELPER_FILENAME, () => {
 
     const authDir = path.join(tempHome, DOLLHOUSE_DIR, '.auth');
     await fs.mkdir(authDir, { recursive: true });
-    await fs.writeFile(path.join(authDir, HELPER_STATE_FILE), JSON.stringify({ stale: true }), 'utf-8');
+    await fs.writeFile(path.join(authDir, HELPER_STATE_FILE), JSON.stringify({ flowId: TEST_FLOW_ID }), 'utf-8');
 
     try {
-      const child = spawnHelper(helperPath, `http://127.0.0.1:${address.port}/token`, tempHome);
+      const child = spawnHelper(helperPath, `http://127.0.0.1:${address.port}/token`, tempHome, { DOLLHOUSE_OAUTH_HELPER_FLOW_ID: TEST_FLOW_ID });
       await waitForFile(path.join(authDir, HELPER_PID_FILE));
 
       expect(child.kill(signal)).toBe(true);
