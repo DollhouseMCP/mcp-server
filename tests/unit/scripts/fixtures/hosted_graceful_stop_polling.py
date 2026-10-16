@@ -36,7 +36,7 @@ class Scenario:
     def sleep(self, duration):
         if duration < 0:
             raise AssertionError('Negative sleep')
-        self.sleeps.append(duration)
+        self.sleeps.append((duration, float(Decimal(self.seconds) - self.now)))
         if self.mode != 'frozen-clock':
             self.now += Decimal(str(duration))
 
@@ -63,7 +63,7 @@ class Scenario:
                 self.post_inspects += 1
             if self.mode == 'exhausted-initial' and not after_term:
                 self.now = Decimal('1.1')
-            delay = Decimal('1.2') if self.mode == 'late-close' else Decimal('0.35')
+            delay = Decimal('1.2') if self.mode == 'late-close' else Decimal('0.94') if self.mode == 'tail-close' else Decimal('0.35')
             closed = after_term and self.mode not in ('live', 'frozen-clock', 'restart') and self.now >= self.term_at + delay
             if self.mode in ('late-observation', 'deadline-observation') and after_term:
                 self.now = Decimal(self.seconds) + (Decimal('0.1') if self.mode == 'late-observation' else 0)
@@ -128,6 +128,27 @@ class ActualHelperPolling(unittest.TestCase):
         self.assertLess(scenario.now, 1)
         self.assertGreater(scenario.post_inspects, 1)
         self.assertEqual(sum(args[0] == 'kill' for args, _ in scenario.calls), 1)
+
+    def test_tail_clean_close_before_same_deadline(self):
+        # TERM at model .04s; closure at .98s. A full remaining-tail sleep
+        # misses it, whereas another bounded observation can still prove it.
+        scenario, code, out, err = execute('tail-close')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out.strip(), 'Old process closed cleanly')
+        self.assertLess(scenario.now, 1)
+        self.assertEqual(scenario.post_inspects, 11)
+        self.assertEqual(sum(args[0] == 'kill' for args, _ in scenario.calls), 1)
+
+    def test_every_sleep_leaves_half_the_positive_remaining_window(self):
+        for mode in ['delayed', 'tail-close', 'live']:
+            with self.subTest(mode=mode):
+                scenario, _, _, _ = execute(mode)
+                for duration, remaining in scenario.sleeps:
+                    self.assertGreater(remaining, 0)
+                    self.assertGreaterEqual(duration, 0)
+                    # Numeric allowance covers float conversion only, not an
+                    # extension to the product's strict absolute deadline.
+                    self.assertLessEqual(duration, min(0.1, remaining / 2) + 1e-12)
 
     def test_live_late_and_unsafe_closure_stay_refused(self):
         for mode in ['live', 'late-close', 'nonzero', 'oom', 'restart', 'late-observation', 'deadline-observation']:

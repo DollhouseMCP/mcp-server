@@ -146,7 +146,7 @@ try:
                 raise RuntimeError('Old process did not close cleanly; replacement refused')
             print('Old process closed cleanly')
             break
-        time.sleep(min(1 / CLOSURE_POLLS_PER_SECOND, remaining))
+        time.sleep(min(1 / CLOSURE_POLLS_PER_SECOND, remaining / 2))
 except (RuntimeError, OSError, ValueError, TypeError, KeyError) as error:
     # Never print Docker metadata, environment, protocol text or arbitrary exceptions.
     print(str(error) if isinstance(error, RuntimeError) else 'Verified memory drain or clean closure unavailable; replacement refused', file=sys.stderr)
