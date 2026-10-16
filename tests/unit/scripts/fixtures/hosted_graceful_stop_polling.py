@@ -8,13 +8,15 @@ import contextlib
 from decimal import Decimal
 import io
 import json
+import os
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 import sys
+import time
 import types
 import unittest
-from unittest.mock import patch
 
 HELPER = Path(sys.argv.pop(1)).resolve()
 TARGET = 'a' * 64
@@ -120,16 +122,25 @@ def execute(mode='delayed', seconds=1, entropy=bytes.fromhex(NONCE), entropy_err
 
     stdout, stderr = io.StringIO(), io.StringIO()
     code = 0
-    with patch.object(sys, 'argv', [str(HELPER), TARGET, str(seconds)]), \
-            patch('time.monotonic', scenario.monotonic), patch('time.sleep', scenario.sleep), \
-            patch('shutil.which', return_value='synthetic-docker'), \
-            patch('os.urandom', entropy_source), patch('subprocess.run', scenario.run), \
-            patch('builtins.__import__', observe_import), \
-            contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        try:
-            runpy.run_path(str(HELPER), run_name='__main__')
-        except SystemExit as result:
-            code = result.code
+    bindings = (
+        (sys, 'argv', [str(HELPER), TARGET, str(seconds)]),
+        (time, 'monotonic', scenario.monotonic),
+        (time, 'sleep', scenario.sleep),
+        (shutil, 'which', lambda *_args, **_kwargs: 'synthetic-docker'),
+        (os, 'urandom', entropy_source),
+        (subprocess, 'run', scenario.run),
+        (builtins, '__import__', observe_import),
+    )
+    with contextlib.ExitStack() as originals:
+        for module, attribute, replacement in bindings:
+            original = getattr(module, attribute)
+            originals.callback(setattr, module, attribute, original)
+            setattr(module, attribute, replacement)
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            try:
+                runpy.run_path(str(HELPER), run_name='__main__')
+            except SystemExit as result:
+                code = result.code
     if 'os' not in scenario.helper_imports or 'secrets' in scenario.helper_imports:
         raise AssertionError('Changed direct helper nonce import boundary')
     if len(scenario.entropy_calls) > 1 or any(size != 32 for size in scenario.entropy_calls):
