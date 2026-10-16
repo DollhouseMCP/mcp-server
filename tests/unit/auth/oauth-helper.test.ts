@@ -682,7 +682,11 @@ describe(HELPER_FILENAME, () => {
         tempHome,
         { DOLLHOUSE_OAUTH_HELPER_FLOW_ID: 'old-flow' }
       );
+      const childPid = child.pid;
       await waitForHelperRequest(server, child);
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+      expect(childPid).toBeGreaterThan(0);
+      expect(await fs.readFile(pidFile, 'utf-8')).toBe(String(childPid));
 
       await fs.writeFile(pidFile, '999999', 'utf-8');
       await fs.writeFile(
