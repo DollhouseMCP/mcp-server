@@ -87,5 +87,26 @@ jobs:
             jest-cache-${{ runner.os }}-${{ matrix.node-version }}-
             jest-cache-${{ runner.os }}-
 
+      - name: Run required graceful-stop polling model
+        id: polling_tests
+        env:
+          DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
+        run: npm test -- --runInBand --runTestsByPath tests/unit/scripts/hostedGracefulStopPolling.test.ts
+        continue-on-error: true
       - name: Test
-        run: npm test
+        id: original_tests
+        env:
+          DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
+        run: npm test -- --testPathPatterns='^(?!.*(?:^|/)hostedGracefulStopPolling[.]test[.]ts$).*'
+        continue-on-error: true
+      - name: Enforce every test group
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
+          POLLING_OUTCOME: ${{ steps.polling_tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" != "success" ] || [ "$POLLING_OUTCOME" != "success" ]; then
+            echo "Ordinary tests and the complete polling model must execute successfully."
+            exit 1
+          fi
