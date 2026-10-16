@@ -1,11 +1,16 @@
 import json
 import re
-import secrets
+import os
 import shutil
 import subprocess
 import sys
 import time
 
+# Nominal 100ms sleeps plus bounded finer-tail observations. This is a total
+# count bound, not an instantaneous 10Hz rate; never extend the deadline.
+CLOSURE_POLLS_PER_SECOND = 10
+CLOSURE_TAIL_POLL_ALLOWANCE = 10
+CLOSURE_MIN_SLEEP_SECONDS = 0.001
 CONTROL_DIR = '/app/.memory-upgrade-control'
 CLIENT = '/app/dist/lifecycle/requestMemoryDrain.js'
 STATE_FORMAT = ('{"id":{{json .Id}},"running":{{json .State.Running}},'
@@ -105,7 +110,7 @@ def require_boot_binding(ack):
 
 
 def drain_before_term(before):
-    nonce = secrets.token_hex(32)
+    nonce = os.urandom(32).hex()
     remaining_ms = int((deadline - time.monotonic()) * 1000)
     if remaining_ms <= 0:
         raise RuntimeError('Graceful stop deadline reached; replacement refused')
@@ -129,17 +134,22 @@ try:
     if not observed['running']:
         raise RuntimeError('Stopped container has no live drain acknowledgement; replacement refused')
     drain_before_term(observed)
+    polls_remaining = int(seconds) * CLOSURE_POLLS_PER_SECOND + CLOSURE_TAIL_POLL_ALLOWANCE
     while True:
+        if polls_remaining <= 0:
+            raise RuntimeError('Graceful stop refused or timed out; old process retained, replacement refused')
+        polls_remaining -= 1
         observed = state()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('Graceful stop refused or timed out; old process retained, replacement refused')
         if not observed['running'] and not observed['restarting']:
             if observed['exitCode'] != 0 or observed['oomKilled']:
                 raise RuntimeError('Old process did not close cleanly; replacement refused')
             print('Old process closed cleanly')
             break
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError('Graceful stop refused or timed out; old process retained, replacement refused')
-        time.sleep(min(1, remaining))
+        time.sleep(min(remaining, max(CLOSURE_MIN_SLEEP_SECONDS,
+                                     min(1 / CLOSURE_POLLS_PER_SECOND, remaining / 2))))
 except (RuntimeError, OSError, ValueError, TypeError, KeyError) as error:
     # Never print Docker metadata, environment, protocol text or arbitrary exceptions.
     print(str(error) if isinstance(error, RuntimeError) else 'Verified memory drain or clean closure unavailable; replacement refused', file=sys.stderr)

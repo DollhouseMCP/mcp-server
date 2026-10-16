@@ -13,8 +13,36 @@ const windowsIt = process.platform === 'win32' ? it : it.skip;
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const jobSupport = readFileSync(new URL('../../helpers/owned_python_job.py', import.meta.url), 'utf8');
 const registry = new OwnedFixtureRegistry();
-beforeEach(() => { registry.assertSettled(); });
-afterEach(async () => { await registry.cancelUnfinished(); });
+let teardownSnapshot: (() => void) | undefined;
+beforeEach(() => { teardownSnapshot = undefined; registry.assertSettled(); });
+afterEach(async () => {
+  try { await registry.cancelUnfinished(); }
+  catch (error) {
+    try { teardownSnapshot?.(); } catch { /* Evidence cannot replace cleanup failure, including falsy errors. */ }
+    throw error;
+  } finally { teardownSnapshot = undefined; }
+});
+
+type FixtureBootstrap = { version: number[]; executableCategory: 'python' | 'python-exe' | 'other' };
+function boundedFixtureBootstrap(stderr: string): FixtureBootstrap | undefined {
+  for (const line of stderr.split('\n').slice(0, -1)) {
+    const match = /^OWNED_FIXTURE_BOOTSTRAP v1 (\d{1,2}) (\d{1,2}) (\d{1,2}) (python|python-exe|other)$/.exec(line.replace(/\r$/, ''));
+    if (match) return { version: match.slice(1, 4).map(Number), executableCategory: match[4] as FixtureBootstrap['executableCategory'] };
+  }
+  return undefined;
+}
+const fixtureMilestones = new Set(['job-setup-start', 'job-ready', 'body-enter', 'finish-enter', 'finish-return']);
+function boundedFixtureMilestones(stderr: string): string[] {
+  const result: string[] = [];
+  for (const line of stderr.split('\n').slice(0, -1)) {
+    const label = line.replace(/\r$/, '').replace(/^OWNED_FIXTURE_MILESTONE /, '');
+    if (line.startsWith('OWNED_FIXTURE_MILESTONE ') && fixtureMilestones.has(label)) result.push(label);
+    if (result.length >= 8) break;
+  }
+  return result;
+}
+const fixtureParentPhases = new Set(['spawn-requested', 'spawn', 'first-stderr', 'spawn-error', 'exit', 'close',
+  'cleanup-terminate-owned-tree', 'windows-job-quiescent', 'owned-group-zombie-only']);
 
 function expectNotExecuting(owner: OwnedFixtureProcess, pid: number): Promise<void> {
   const deadline = performance.now() + 2500;
@@ -152,16 +180,29 @@ describe('owned fixture teardown', () => {
     let directory = '';
     let owned!: OwnedFixtureProcess, pid!: number;
     const result = await registry.run(async owner => {
+      let stderr = '', discardedBytes = 0, terminalEventObserved = false;
+      teardownSnapshot = () => console.log('OWNED_FIXTURE_BOOTSTRAP_DIAGNOSTIC', JSON.stringify({
+        fixture: 'normal', phase: 'teardown-failed', requestedCommand: python, terminalEventObserved,
+        bootstrap: boundedFixtureBootstrap(stderr), milestones: boundedFixtureMilestones(stderr),
+        capturedStderrCharacters: stderr.length, discardedCharacters: discardedBytes,
+        parentEvents: owner.events.slice(0, 16).filter(event => fixtureParentPhases.has(event.phase) && Number.isFinite(event.elapsedMs) && event.elapsedMs >= 0).map(({ phase, elapsedMs }) => ({ phase, elapsedMs })),
+        windowsFailure: owner.windowsFailureDetail(),
+      }));
       directory = await mkdtemp(join(tmpdir(), 'owned-process-'));
       owner.ownDirectory(directory);
       owned = owner;
       const launcher = join(directory, 'normal.py');
-      await writeFile(launcher, `import sys\n${jobSupport}\nfinish_job=establish_fixture_job()\ntry:\n print('fixture-normal',flush=True)\nfinally:\n finish_job()\n`);
+      await writeFile(launcher, `import sys\ntry:\n _fixture_executable=sys.executable.replace(chr(92),'/').rsplit('/',1)[-1].lower()\n print('OWNED_FIXTURE_BOOTSTRAP v1 %d %d %d %s' % (sys.version_info[0],sys.version_info[1],sys.version_info[2],'python-exe' if _fixture_executable=='python.exe' else 'python' if _fixture_executable=='python' else 'other'),file=sys.stderr,flush=True)\nexcept BaseException:\n pass\ndef _fixture_milestone(label):\n try:\n  print('OWNED_FIXTURE_MILESTONE '+label,file=sys.stderr,flush=True)\n except BaseException:\n  pass\n${jobSupport}\n_fixture_milestone('job-setup-start')\nfinish_job=establish_fixture_job()\n_fixture_milestone('job-ready')\ntry:\n _fixture_milestone('body-enter')\n print('fixture-normal',flush=True)\nfinally:\n _fixture_milestone('finish-enter')\n finish_job()\n _fixture_milestone('finish-return')\n`);
       const child = owner.spawn(python, [launcher], { stdio: ['ignore', 'pipe', 'pipe'] });
       pid = child.pid!;
       child.stdout!.resume(); child.stderr!.resume();
+      child.stderr!.on('data', (chunk: Buffer) => {
+        const text = chunk.toString(); const available = Math.max(0, 4096 - stderr.length);
+        stderr += text.slice(0, available); discardedBytes += Math.max(0, text.length - available);
+      });
       return new Promise<number | null>((resolve, reject) => {
-        child.once('error', reject); child.once('close', resolve);
+        child.once('error', error => { terminalEventObserved = true; reject(error); });
+        child.once('close', code => { terminalEventObserved = true; resolve(code); });
       });
     });
     expect(result).toBe(0);
