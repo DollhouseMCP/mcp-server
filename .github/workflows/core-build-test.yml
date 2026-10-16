@@ -151,8 +151,9 @@ jobs:
         # Preserve npm test's VM flags and full-suite timing-selection signal.
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
+          DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --shard=1/2 --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop|ownedFixtureProcess)[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --shard=1/2 --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop|ownedFixtureProcess|hostedGracefulStopPolling)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Run performance tests (separate process)
@@ -325,8 +326,9 @@ jobs:
         # Preserve npm test's VM flags and full-suite timing-selection signal.
         env:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
+          DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --shard=2/2 --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop|ownedFixtureProcess)[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --shard=2/2 --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop|ownedFixtureProcess|hostedGracefulStopPolling)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Debug failed tests environment
@@ -468,6 +470,12 @@ jobs:
         id: helper_tests
         run: npm test -- --runInBand --runTestsByPath tests/unit/scripts/hostedGracefulStop.test.ts tests/unit/scripts/ownedFixtureProcess.test.ts
         continue-on-error: true
+      - name: Run required graceful-stop polling model
+        id: polling_tests
+        env:
+          DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
+        run: npm test -- --runInBand --runTestsByPath tests/unit/scripts/hostedGracefulStopPolling.test.ts
+        continue-on-error: true
       - name: Enforce every serial storage suite
         if: always()
         shell: bash
@@ -481,9 +489,10 @@ jobs:
           RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
           DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
           HELPER_OUTCOME: ${{ steps.helper_tests.outcome }}
+          POLLING_OUTCOME: ${{ steps.polling_tests.outcome }}
         run: |
-          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$ADOPTION_SCAN_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ]; then
-            echo "Every serial storage and hosted graceful stop suite must execute successfully."
+          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$ADOPTION_SCAN_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ] || [ "$POLLING_OUTCOME" != "success" ]; then
+            echo "Every serial storage, hosted graceful stop and polling model suite must execute successfully."
             exit 1
           fi
 
