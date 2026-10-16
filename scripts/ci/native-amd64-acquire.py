@@ -3,11 +3,11 @@
 import os,sys,pathlib,subprocess,json,hashlib,secrets,time,tarfile,shutil,gzip
 S=pathlib.Path(sys.argv[1]).resolve(); O=pathlib.Path(sys.argv[2]).resolve(); O.mkdir(mode=0o700)
 P=O.parent/'private-native'; P.mkdir(mode=0o700); os.umask(0o077)
-SHA='dc0d95ab6131550de54efa89dbf42e1ff260f4c6'; TREE='3311610cbf87e29960508618ee73b78c87f91713'
+SHA='4afcea7f2cf5b5349b7bb2a8f04d57f84fd5918f'; TREE='25896289da9eb089cd8d80d6ddea573869c87f67'
 BASE_REF='node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
 EXPECTED_OS={'libc-bin':'2.41-12+deb13u4','libc6':'2.41-12+deb13u4','perl-base':'5.40.1-6+deb13u1','openssl':'3.5.7-1~deb13u3','libssl3t64':'3.5.7-1~deb13u3','openssl-provider-legacy':'3.5.7-1~deb13u3'}
 EXPECTED_APP={'@modelcontextprotocol/sdk':'1.31.0','@hono/node-server':'1.19.15','hono':'4.13.7','body-parser':'2.3.0','dompurify':'3.4.16','fast-uri':'3.1.8','ip-address':'10.7.1','qs':'6.16.0','smol-toml':'1.9.0','@dollhousemcp/safety':'1.0.5'}
-COMPONENT_HEADS={'3066': '0666f933e8a473dc1c7bf870ec8a6ea4cac4451b', '3067': '6554eb9b4a8d4e31bfb468d7224c663843835936', '3068': '65eb68484ba05386bf35a3884ba9e791c3303bb6', '3077': 'dc0aa8bcba3be7635008f261de581c63664c0903', '3081': '344a037484c3f93323fdb41e3fcd6efd33251023', '3076': 'eb3ff07a0bc13dad7163ca67e6610670bf8705bb', '3079': '26880c2255659d1a7092d615bc9f63624b92f98f', '3083': '88347907f30aa841e840056eed7309df499724f2', '3084': 'a81682e81a6dcc38ba89074084307ceed676d895', '3070': 'ceae50713b326096c958989bc401e4d7ea741a62', '3086': 'd085d0281e0d4bbbd574d71d57c0d3d60988190b'}
+COMPONENT_HEADS={'3076': '810a665a23dadc382db1c6ebb62d21cb73582ace', '3109': 'f5da80605ef2cd2db55cd23eb8c4bdb305512ec7', '3112': '0e34f5b82f8ae830dde16cd41935fad83e6da91a', '3066': '47ce9a68d2315b18532dd74913a4fd66688c01b5', '3115': '92b97c1232bfbb4377b2e5545cc1ce2e8978970b', '3077': '551b5e2f50cbe6ec74e7dd2a1351ce31c28e7956'}
 N='d3050-release-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']; NET=N+'-net'; PG=N+'-pg'; APP=N+'-app'; MIG=N+'-migrate'; B=N+'-build'; VOL=N+'-pgdata'
 DOCKER=['docker','--host','unix:///var/run/docker.sock']
 for selector in ('DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH'): os.environ.pop(selector,None)
@@ -268,7 +268,7 @@ def fixture_ownership_control(builder_image):
  if state['Running'] or state['ExitCode'] or state['OOMKilled'] or data.get('subreaper') is not True or type(data.get('jestCode')) is not int or data['jestCode']!=0: raise RuntimeError('ownership capsule failed or unsettled')
  adopted=data.get('reaped')
  if not isinstance(adopted,list) or not adopted or any(not isinstance(p,dict) or set(p)!={'pid','status'} or type(p['pid']) is not int or p['pid']<=0 or type(p['status']) is not int or p['status']<0 for p in adopted): raise RuntimeError('ownership adopted zombie evidence invalid')
- files=['tests/helpers/ownedFixtureProcess.ts','tests/helpers/linuxOwnedGroup.ts','tests/helpers/owned_python_job.py','tests/unit/scripts/ownedFixtureProcess.test.ts','tests/jest.config.cjs']
+ files=['tests/helpers/ownedFixtureProcess.ts','tests/helpers/linuxOwnedGroup.ts','tests/helpers/owned_python_job.py','tests/unit/scripts/ownedFixtureProcess.test.ts','tests/jest.config.cjs','tests/helpers/ownedWindowsJob.ts','tests/transforms/jestShared.cjs','tests/jest.setup.mjs']
  result={'builderImage':builder_image,'source':SHA,'tree':TREE,'harnessSha256':harness_hash,'files':{p:hashlib.sha256((S/p).read_bytes()).hexdigest() for p in files},'actual':data,'caps':{k:caps[k] for k in ['Memory','NanoCpus','NetworkMode']},'scope':'actual isolated Linux subreaper/fixture ownership proof; no application/main/auth/database/deployment claim'}
  (O/'linux-owned-zombie-control.json').write_text(json.dumps(result,indent=2));manifest['fixtureOwnershipControl']=result
  run([*DOCKER,'rm',cid],record=False);containers.remove(name);pins.pop(name)
@@ -313,7 +313,7 @@ try:
  if run(['uname','-m']).strip()!=b'x86_64': raise RuntimeError('runner not native AMD64')
  if run(['git','rev-parse','HEAD'],cwd=S).strip().decode()!=SHA or run(['git','rev-parse','HEAD^{tree}'],cwd=S).strip().decode()!=TREE: raise RuntimeError('source pin')
  if run(['git','status','--porcelain'],cwd=S).strip(): raise RuntimeError('dirty source')
- manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package-lock.json','packages/safety/package-lock.json','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs','docker/remove-optional-runtime-tools.mjs','src/web-console/ui/vendor/manifest.json','src/web/public/index.html'] if (S/f).exists()},'images':{},'componentHeads':COMPONENT_HEADS}
+ manifest={'source':SHA,'tree':TREE,'driver':os.environ['GITHUB_SHA'],'run':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':'linux/amd64','files':{f:hashlib.sha256((S/f).read_bytes()).hexdigest() for f in ['docker/Dockerfile','docker/Dockerfile.prebuilt','package.json','package-lock.json','packages/safety/package.json','packages/safety/package-lock.json','scripts/hosted-graceful-stop.py','oauth-helper.mjs','oauth-state-coordinator.mjs','scripts/ci/prepare-safety-runtime.mjs','tests/scripts/prepare-safety-runtime.test.mjs','docker/global-npm-security-patches.json','scripts/ci/prepare-global-npm.mjs','scripts/ci/smoke-global-npm.mjs','docker/remove-optional-runtime-tools.mjs','src/web-console/ui/vendor/manifest.json','src/web/public/index.html'] if (S/f).exists()},'images':{},'componentHeads':COMPONENT_HEADS}
  run([*DOCKER,'version']); run([*DOCKER,'buildx','version'])
  for filename in ['docker/Dockerfile','docker/Dockerfile.prebuilt']:
   if [line for line in (S/filename).read_text().splitlines() if line.startswith('FROM node@')]!=['FROM '+BASE_REF+' AS node-base']: raise RuntimeError('candidate source base reference mismatch')
