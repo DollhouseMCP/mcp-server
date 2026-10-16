@@ -38,6 +38,32 @@ const PRIVATE_IP = ['10', '0', '0', '5'].join('.');
 const PUBLIC_IP = ['8', '8', '8', '8'].join('.');
 
 describe('IntegrationRemoteMcpBridge', () => {
+  it('keeps SDK authentication challenges on pinned bearer transport without OAuth discovery', async () => {
+    const requests: { url: string; authorization: string | null }[] = [];
+    const { bridge, contextTracker, closePinned } = fixture({
+      clientFactory: null,
+      pinnedOutbound: () => ({
+        fetch: async (input, init) => {
+          requests.push({ url: String(input), authorization: new Headers(init?.headers).get('Authorization') });
+          return new Response(null, {
+            status: 401,
+            headers: { 'WWW-Authenticate': 'Bearer resource_metadata="https://untrusted.example.test/metadata"' },
+          });
+        },
+        close: closePinned,
+      }),
+    });
+    const defaultFetch = jest.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.reject(new Error('Unexpected unpinned fetch')));
+    try {
+      await expect(runAsUser(contextTracker, () => bridge.listAllowedTools())).resolves.toEqual([]);
+      expect(requests).toEqual([{ url: REMOTE_MCP_URL, authorization: `Bearer ${REMOTE_ACCESS_TOKEN}` }]);
+      expect(defaultFetch).not.toHaveBeenCalled();
+      expect(closePinned).toHaveBeenCalledTimes(1);
+    } finally {
+      defaultFetch.mockRestore();
+    }
+  });
+
   it('rejects a connected credential bound to a different same-name descriptor', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>();
     const { bridge, contextTracker } = fixture({
@@ -725,7 +751,7 @@ function fixture(options: {
   readonly integrations?: readonly UserIntegrationRecord[];
   readonly integrationStore?: IUserIntegrationStore;
   readonly secretEncryption?: AeadSecretEncryptionService;
-  readonly clientFactory?: RemoteMcpClientFactory;
+  readonly clientFactory?: RemoteMcpClientFactory | null;
   readonly providers?: IntegrationProviderRegistry;
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
@@ -776,7 +802,7 @@ function fixture(options: {
       dnsLookup: options.dnsLookup ?? publicDnsLookup,
       timeoutMs: options.timeoutMs,
       maxResponseBytes: options.maxResponseBytes,
-      clientFactory: options.clientFactory ?? (() => Promise.resolve({
+      clientFactory: options.clientFactory === null ? undefined : options.clientFactory ?? (() => Promise.resolve({
         listTools: () => Promise.resolve({ tools: [] }),
         callTool: () => Promise.resolve({}),
         close: () => Promise.resolve(),
