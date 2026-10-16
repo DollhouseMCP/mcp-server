@@ -1,15 +1,26 @@
-import { describe, it, expect } from '@jest/globals';
-import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { afterAll, afterEach, beforeEach, describe, it, expect } from '@jest/globals';
+import { readFileSync } from 'node:fs';
+import { OwnedFixtureRegistry } from '../../helpers/ownedFixtureProcess.js';
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const helper = fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py', import.meta.url));
 const target = 'a'.repeat(64);
+const jobSupport = readFileSync(new URL('../../helpers/owned_python_job.py', import.meta.url), 'utf8');
+const ownedFixtures = new OwnedFixtureRegistry();
+beforeEach(() => ownedFixtures.assertSettled());
+afterEach(async () => { await ownedFixtures.cancelUnfinished(); });
+afterAll(async () => {
+  await ownedFixtures.cancelUnfinished();
+  console.log('OWNED_HELPER_SUITE_SETTLED', JSON.stringify({ allOwnedOperationsClosed: true }));
+});
 
 const helperPhases = new Set(['launcher-enter', 'stdlib-ready', 'adapter-ready', 'helper-enter',
-  'command-start', 'command-end', 'command-timeout', 'command-os-error', 'command-error']);
+  'command-start', 'command-end', 'command-timeout', 'command-os-error', 'command-error',
+  'json-import-start', 'json-import-end', 'job-setup-start', 'job-ready',
+  'secrets-import-start', 'secrets-import-end']);
 type HelperPhase = { phase: string; elapsedMs: number };
 
 function parseHelperPhase(line: string): HelperPhase | undefined {
@@ -33,6 +44,20 @@ function boundedHelperPhases(stderr: string): HelperPhase[] {
   return frames;
 }
 
+function boundedPythonIdentity(stderr: string): { executable: string; version: number[] } | undefined {
+  const line = stderr.split('\n').find(value => value.startsWith('OWNED_HELPER_IDENTITY '));
+  if (!line) return undefined;
+  try {
+    const value = JSON.parse(line.slice('OWNED_HELPER_IDENTITY '.length));
+    if (typeof value.executable === 'string' && /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i.test(value.executable) &&
+        Array.isArray(value.version) && value.version.length === 3 &&
+        value.version.every((part: unknown) => Number.isSafeInteger(part) && Number(part) >= 0 && Number(part) < 100)) {
+      return { executable: value.executable, version: value.version };
+    }
+  } catch { /* Only the fixed identity schema is emitted. */ }
+  return undefined;
+}
+
 function boundedCommandCategories(contents: string): string[] {
   const categories: string[] = [];
   for (const line of contents.slice(0, 4096).split('\n')) {
@@ -49,7 +74,9 @@ function boundedCommandCategories(contents: string): string[] {
 }
 
 async function run(mode: string) {
+  return ownedFixtures.run(async owner => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'owned-graceful-stop-'));
+  owner.ownDirectory(directory);
   const trace = path.join(directory, 'trace.jsonl');
   const dockerFixture = path.join(directory, 'docker-fixture.py');
   await writeFile(dockerFixture, `import json,os,sys,time
@@ -88,16 +115,31 @@ sys.exit(3)
   // Invoke the fixture directly: Windows .cmd treats the state-format pipes
   // as shell pipelines and adds children that can outlive the CLI timeout.
   const launcher = path.join(directory, 'owned-helper-launch.py');
-  await writeFile(launcher, `import json,sys,time
+  await writeFile(launcher, `import sys,time
 started=time.monotonic()
 def emit(phase):
- print('OWNED_HELPER_PHASE '+json.dumps({'phase':phase,'elapsedMs':round((time.monotonic()-started)*1000,3)}),file=sys.stderr,flush=True)
+ print('OWNED_HELPER_PHASE {"phase":"%s","elapsedMs":%.3f}' % (phase,(time.monotonic()-started)*1000),file=sys.stderr,flush=True)
 emit('launcher-enter')
+emit('json-import-start')
+import json
+emit('json-import-end')
+${jobSupport}
+emit('job-setup-start')
+finish_job=establish_fixture_job()
+emit('job-ready')
+print('OWNED_HELPER_IDENTITY '+json.dumps({'version':list(sys.version_info[:3]),'executable':sys.executable.replace(chr(92),'/').rsplit('/',1)[-1]}),file=sys.stderr,flush=True)
 import runpy,subprocess,shutil
 emit('stdlib-ready')
 helper,fixture,target=sys.argv[1:]
 original_run=subprocess.run
 original_which=shutil.which
+builtins=sys.modules['builtins']
+original_import=builtins.__import__
+def traced_import(name,*args,**kwargs):
+ if name!='secrets': return original_import(name,*args,**kwargs)
+ emit('secrets-import-start')
+ try: return original_import(name,*args,**kwargs)
+ finally: emit('secrets-import-end')
 python=sys.executable
 def resolve_docker(name):
  assert name=='docker'
@@ -117,17 +159,20 @@ sys.argv=[helper,target,'1']
 try:
  shutil.which=resolve_docker
  subprocess.run=execute_fixture
+ builtins.__import__=traced_import
  emit('adapter-ready')
  emit('helper-enter')
  runpy.run_path(helper,run_name='__main__')
 finally:
  shutil.which=original_which
  subprocess.run=original_run
+ builtins.__import__=original_import
+ finish_job()
 `);
   let observationReport: Promise<void> | undefined;
   try {
     const started = Date.now();
-    const child = spawn(python, [launcher, helper, dockerFixture, target], {
+    const child = owner.spawn(python, [launcher, helper, dockerFixture, target], {
       env: { ...process.env, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -146,7 +191,10 @@ finally:
       catch { /* Trace may not exist while Python is starting. */ }
       console.log('OWNED_HELPER_DIAGNOSTIC', JSON.stringify({ mode, phase, code,
         elapsedMs: Date.now() - started, frames, commands: categories,
-        capturedStderrBytes: stderr.length, discardedBytes }));
+        capturedStderrBytes: stderr.length, discardedBytes, parentEvents: owner.events,
+        windowsFailure: owner.windowsFailureDetail(),
+        python: boundedPythonIdentity(stderr),
+        observationTimerLagMs: phase === 'still-running' ? Math.max(0, Date.now() - started - 9000) : undefined }));
     };
     // Observation only, before unchanged10s Jest ceiling; no deadline or child behavior changes.
     const observation = setTimeout(() => { observationReport = report('still-running', null); }, 9000);
@@ -166,8 +214,8 @@ finally:
     } finally { await report('child-close', result); }
   } finally {
     await observationReport;
-    await rm(directory, { recursive: true, force: true });
   }
+  });
 }
 
 describe('non-force hosted graceful stop', () => {
