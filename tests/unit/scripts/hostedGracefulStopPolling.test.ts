@@ -22,12 +22,32 @@ describe('hosted graceful-stop observation cadence', () => {
         const signal = result.signal;
         const count = (value: unknown) => typeof value === 'string' ? Math.min(value.length, 64 * 1024) : null;
         const stderrTail = typeof result.stderr === 'string' ? result.stderr.slice(-256) : '';
+        const errorCategory = () => {
+          if (result.error === undefined) return 'none';
+          if (['ETIMEDOUT', 'ENOBUFS', 'ENOENT', 'EACCES', 'EPERM'].includes(code ?? '')) return code;
+          return 'other';
+        };
+        const statusCategory = () => {
+          if (result.status === 0) return 'zero';
+          if (typeof result.status === 'number' && Number.isSafeInteger(result.status)) return 'nonzero';
+          return 'unknown';
+        };
+        const signalCategory = () => {
+          if (signal === null) return 'none';
+          if (['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT', 'SIGSEGV'].includes(signal ?? '')) return signal;
+          return 'other';
+        };
+        const unittestCategory = () => {
+          if (/(?:^|\n)OK\r?\n?$/.test(stderrTail)) return 'ok';
+          if (/(?:^|\n)FAILED \((?:failures|errors)=\d+(?:, (?:failures|errors|skipped)=\d+)*\)\r?\n?$/.test(stderrTail)) return 'failed';
+          return 'unknown';
+        };
         console.error('[hosted-stop-polling:returned-failure]', JSON.stringify({
-          error: result.error === undefined ? 'none' : ['ETIMEDOUT', 'ENOBUFS', 'ENOENT', 'EACCES', 'EPERM'].includes(code ?? '') ? code : 'other',
-          status: result.status === 0 ? 'zero' : typeof result.status === 'number' && Number.isSafeInteger(result.status) ? 'nonzero' : 'unknown',
-          signal: signal === null ? 'none' : ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT', 'SIGSEGV'].includes(signal ?? '') ? signal : 'other',
+          error: errorCategory(),
+          status: statusCategory(),
+          signal: signalCategory(),
           stdoutCodeUnitsCapped: count(result.stdout), stderrCodeUnitsCapped: count(result.stderr),
-          unittest: /(?:^|\n)OK\r?\n?$/.test(stderrTail) ? 'ok' : /(?:^|\n)FAILED \((?:failures|errors)=\d+(?:, (?:failures|errors|skipped)=\d+)*\)\r?\n?$/.test(stderrTail) ? 'failed' : 'unknown',
+          unittest: unittestCategory(),
         }));
       } catch { /* Evidence failure cannot replace the original assertion failure. */ }
       throw error;
