@@ -8,6 +8,7 @@ const read = jest.fn<(fd: number, buffer: Buffer) => number>();
 const close = jest.fn();
 const directories = jest.fn<(path: string) => { readSync(): { name: string } | null; closeSync(): void }>();
 let LinuxOwnedGroup: typeof import('../../helpers/linuxOwnedGroup.js').LinuxOwnedGroup;
+let OwnedFixtureProcess: typeof import('../../helpers/ownedFixtureProcess.js').OwnedFixtureProcess;
 let OwnedFixtureRegistry: typeof import('../../helpers/ownedFixtureProcess.js').OwnedFixtureRegistry;
 let metadata: Map<number, string>, files: Map<number, number>;
 let entries: string[], nextFd: number;
@@ -21,7 +22,7 @@ beforeAll(async () => {
   const fs = { ...nativeFs, openSync: open, readSync: read, closeSync: close, opendirSync: directories };
   jest.unstable_mockModule('node:fs', () => fs); jest.doMock('node:fs', () => fs);
   ({ LinuxOwnedGroup } = await import('../../helpers/linuxOwnedGroup.js'));
-  ({ OwnedFixtureRegistry } = await import('../../helpers/ownedFixtureProcess.js'));
+  ({ OwnedFixtureRegistry, OwnedFixtureProcess } = await import('../../helpers/ownedFixtureProcess.js'));
 });
 beforeEach(() => {
   metadata = new Map([[123, stat(123)], [124, stat(124)]]);
@@ -195,6 +196,168 @@ describe('Linux authorization refusal evidence without OS resources', () => {
     } finally {
       release(); await original;
       Object.defineProperty(process, 'platform', platform); kill.mockRestore();
+    }
+  });
+
+  it('settles an issued request through fresh absence after an empty census without another signal', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const registry = new OwnedFixtureRegistry();
+    let owner!: InstanceType<typeof OwnedFixtureProcess>, release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let presence = 0, absent = false;
+    const kill = jest.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 0 && ++presence >= 4) { absent = true; throw Object.assign(new Error('absent'), { code: 'ESRCH' }); }
+      return true;
+    });
+    let result!: Promise<{ error: unknown }>;
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      result = registry.run(async value => {
+        owner = value;
+        Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: new LinuxOwnedGroup(123) });
+        await gate; throw false;
+      }).then(() => ({ error: 'unexpected success' }), error => ({ error }));
+      owner.cancel();
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+      expect(owner.cleaned).toBe(false);
+      expect(() => registry.assertSettled()).toThrow('unsettled');
+      entries = []; Object.assign(owner, { closed: true }); release();
+      expect((await result).error).toBe(false);
+      expect(absent).toBe(true); // Empty census alone did not permit cleanup.
+      expect(owner.cleaned).toBe(true);
+      expect(directories).toHaveBeenCalledTimes(2); // First capture and unsettled zombie observation.
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+      await expect(registry.run(async () => 'next admission')).resolves.toBe('next admission');
+    } finally {
+      release(); await result;
+      Object.defineProperty(process, 'platform', platform); kill.mockRestore();
+    }
+  });
+
+  it.each(['live', 'reused', 'unknown', 'empty', 'census-error'])('never treats issued request as settlement for %s evidence', async mode => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      const owner = new OwnedFixtureProcess();
+      Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: new LinuxOwnedGroup(123) });
+      owner.cancel();
+      if (mode !== 'live') { metadata.set(123, stat(123).replace(') S ', ') Z ')); metadata.set(124, stat(124).replace(') S ', ') Z ')); }
+      if (mode === 'reused') metadata.set(124, stat(124, '101').replace(') S ', ') Z '));
+      if (mode === 'unknown') { metadata.set(125, stat(125).replace(') S ', ') Z ')); entries.push('125'); }
+      if (mode === 'empty') entries = [];
+      if (mode === 'census-error') directories.mockImplementation(() => { throw new Error('unknown census'); });
+      Object.assign(owner, { closed: true, cleanupDeadline: performance.now() + 10 });
+      await expect(owner.finish()).rejects.toThrow('Owned fixture group did not close');
+      expect(owner.cleaned).toBe(false);
+      expect(directories.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+    } finally { Object.defineProperty(process, 'platform', platform); kill.mockRestore(); }
+  });
+
+  it.each(['undefined', 'null', 'false', 'zero', 'empty', 'EPERM', 'throwing-errno'])('retains exact signal failure without retry or success (%s)', async mode => {
+    const failures: Record<string, unknown> = { undefined, null: null, false: false, zero: 0, empty: '',
+      EPERM: Object.assign(new Error('signal denied'), { code: 'EPERM' }),
+      'throwing-errno': { get code() { throw new Error('errno unavailable'); } } };
+    const failure = failures[mode];
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const kill = jest.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGKILL') throw failure;
+      return true;
+    });
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      const owner = new OwnedFixtureProcess();
+      Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: new LinuxOwnedGroup(123) });
+      let caught = false;
+      try { owner.cancel(); } catch (error) { caught = true; expect(error).toBe(failure); }
+      expect(caught).toBe(true);
+      try { owner.cancel(); } catch (error) { expect(error).toBe(failure); }
+      const outcome = await owner.finish().then(() => ({ failed: false, error: undefined }), error => ({ failed: true, error }));
+      expect(outcome.failed).toBe(true); expect(outcome.error).toBe(failure);
+      expect(owner.cleaned).toBe(false);
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+    } finally { Object.defineProperty(process, 'platform', platform); kill.mockRestore(); }
+  });
+
+  it('records ESRCH request return but still requires child close before cleanup', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    let signalled = false;
+    const kill = jest.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 'SIGKILL') { signalled = true; throw Object.assign(new Error('gone'), { code: 'ESRCH' }); }
+      if (signalled) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      return true;
+    });
+    let finish!: Promise<void>;
+    let owner!: InstanceType<typeof OwnedFixtureProcess>;
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      owner = new OwnedFixtureProcess();
+      Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: new LinuxOwnedGroup(123) });
+      owner.cancel(); owner.cancel(); finish = owner.finish();
+      await Promise.resolve(); expect(owner.cleaned).toBe(false);
+      Object.assign(owner, { closed: true });
+      (owner as unknown as { resolveClose(): void }).resolveClose();
+      await finish; expect(owner.cleaned).toBe(true);
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+    } finally {
+      if (owner) (owner as unknown as { resolveClose(): void }).resolveClose();
+      await finish;
+      Object.defineProperty(process, 'platform', platform); kill.mockRestore();
+    }
+  });
+
+  it('still permits only exact retained single-thread zombies after the issued request', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      const owner = new OwnedFixtureProcess();
+      Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: new LinuxOwnedGroup(123) });
+      owner.cancel();
+      metadata.set(123, stat(123).replace(') S ', ') Z ')); metadata.set(124, stat(124).replace(') S ', ') Z '));
+      directories.mockImplementation(path => {
+        const names = path.endsWith('/task') ? [path.split('/')[2]] : [...entries]; let index = 0;
+        return { readSync: () => index < names.length ? { name: names[index++] } : null, closeSync: () => {} };
+      });
+      Object.assign(owner, { closed: true });
+      await owner.finish(); expect(owner.cleaned).toBe(true);
+      expect(owner.events.some(event => event.phase === 'owned-group-zombie-only')).toBe(true);
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+    } finally { Object.defineProperty(process, 'platform', platform); kill.mockRestore(); }
+  });
+
+  it('preserves refusal for a normal exited launcher without a prior authorized request', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      const owner = new OwnedFixtureProcess();
+      const group = new LinuxOwnedGroup(123); metadata.delete(123); entries = ['124'];
+      Object.assign(owner, { child: { pid: 123 }, closed: true, linuxGroup: group });
+      await expect(owner.finish()).rejects.toThrow('identity is unproved');
+      expect(owner.cleaned).toBe(false);
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(0);
+    } finally { Object.defineProperty(process, 'platform', platform); kill.mockRestore(); }
+  });
+
+  it('refuses cleanup when an issued request never obtains child close within the existing bound', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    jest.useFakeTimers();
+    let owner!: InstanceType<typeof OwnedFixtureProcess>;
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      owner = new OwnedFixtureProcess();
+      Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: new LinuxOwnedGroup(123) });
+      owner.cancel();
+      const rejected = expect(owner.finish()).rejects.toThrow('Owned fixture cleanup did not settle within 2500ms');
+      await jest.advanceTimersByTimeAsync(2500); await rejected;
+      expect(owner.cleaned).toBe(false);
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGKILL')).toHaveLength(1);
+    } finally {
+      if (owner) (owner as unknown as { resolveClose(): void }).resolveClose();
+      jest.useRealTimers(); Object.defineProperty(process, 'platform', platform); kill.mockRestore();
     }
   });
 
