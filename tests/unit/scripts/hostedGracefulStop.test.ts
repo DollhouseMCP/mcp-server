@@ -1,15 +1,54 @@
-import { describe, it, expect } from '@jest/globals';
-import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { afterAll, afterEach, beforeEach, describe, it, expect } from '@jest/globals';
+import { readFileSync } from 'node:fs';
+import { OwnedFixtureRegistry } from '../../helpers/ownedFixtureProcess.js';
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const helper = fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py', import.meta.url));
 const target = 'a'.repeat(64);
+const jobSupport = readFileSync(new URL('../../helpers/owned_python_job.py', import.meta.url), 'utf8');
+const ownedFixtures = new OwnedFixtureRegistry();
+let teardownSnapshot: (() => void) | undefined;
+beforeEach(() => { teardownSnapshot = undefined; ownedFixtures.assertSettled(); });
+afterEach(async () => {
+  try { await ownedFixtures.cancelUnfinished(); }
+  catch (error) {
+    try { teardownSnapshot?.(); } catch { /* Evidence cannot replace cleanup failure, including falsy errors. */ }
+    throw error;
+  } finally { teardownSnapshot = undefined; }
+});
+afterAll(async () => {
+  await ownedFixtures.cancelUnfinished();
+  console.log('OWNED_HELPER_SUITE_SETTLED', JSON.stringify({ allOwnedOperationsClosed: true }));
+});
+
+type FixtureBootstrap = { version: number[]; executableCategory: 'python' | 'python-exe' | 'other' };
+function boundedFixtureBootstrap(stderr: string): FixtureBootstrap | undefined {
+  for (const line of stderr.split('\n').slice(0, -1)) {
+    const match = /^OWNED_FIXTURE_BOOTSTRAP v1 (\d{1,2}) (\d{1,2}) (\d{1,2}) (python|python-exe|other)$/.exec(line.replace(/\r$/, ''));
+    if (match) return { version: match.slice(1, 4).map(Number), executableCategory: match[4] as FixtureBootstrap['executableCategory'] };
+  }
+  return undefined;
+}
+const fixtureMilestones = new Set(['job-setup-start', 'job-ready', 'body-enter', 'finish-enter', 'finish-return']);
+function boundedFixtureMilestones(stderr: string): string[] {
+  const result: string[] = [];
+  for (const line of stderr.split('\n').slice(0, -1)) {
+    const label = line.replace(/\r$/, '').replace(/^OWNED_FIXTURE_MILESTONE /, '');
+    if (line.startsWith('OWNED_FIXTURE_MILESTONE ') && fixtureMilestones.has(label)) result.push(label);
+    if (result.length >= 8) break;
+  }
+  return result;
+}
+const fixtureParentPhases = new Set(['spawn-requested', 'spawn', 'first-stderr', 'spawn-error', 'exit', 'close',
+  'cleanup-terminate-owned-tree', 'windows-job-quiescent', 'owned-group-zombie-only']);
 
 const helperPhases = new Set(['launcher-enter', 'stdlib-ready', 'adapter-ready', 'helper-enter',
-  'command-start', 'command-end', 'command-timeout', 'command-os-error', 'command-error']);
+  'command-start', 'command-end', 'command-timeout', 'command-os-error', 'command-error',
+  'json-import-start', 'json-import-end', 'job-setup-start', 'job-ready',
+  'secrets-import-start', 'secrets-import-end']);
 type HelperPhase = { phase: string; elapsedMs: number };
 
 function parseHelperPhase(line: string): HelperPhase | undefined {
@@ -33,6 +72,20 @@ function boundedHelperPhases(stderr: string): HelperPhase[] {
   return frames;
 }
 
+function boundedPythonIdentity(stderr: string): { executable: string; version: number[] } | undefined {
+  const line = stderr.split('\n').find(value => value.startsWith('OWNED_HELPER_IDENTITY '));
+  if (!line) return undefined;
+  try {
+    const value = JSON.parse(line.slice('OWNED_HELPER_IDENTITY '.length));
+    if (typeof value.executable === 'string' && /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i.test(value.executable) &&
+        Array.isArray(value.version) && value.version.length === 3 &&
+        value.version.every((part: unknown) => Number.isSafeInteger(part) && Number(part) >= 0 && Number(part) < 100)) {
+      return { executable: value.executable, version: value.version };
+    }
+  } catch { /* Only the fixed identity schema is emitted. */ }
+  return undefined;
+}
+
 function boundedCommandCategories(contents: string): string[] {
   const categories: string[] = [];
   for (const line of contents.slice(0, 4096).split('\n')) {
@@ -49,7 +102,18 @@ function boundedCommandCategories(contents: string): string[] {
 }
 
 async function run(mode: string) {
+  return ownedFixtures.run(async owner => {
+  let stderr = '', discardedBytes = 0;
+  let terminalEventObserved = false;
+  teardownSnapshot = () => console.log('OWNED_FIXTURE_BOOTSTRAP_DIAGNOSTIC', JSON.stringify({
+    fixture: 'hosted', mode, phase: 'teardown-failed', requestedCommand: process.platform === 'win32' ? 'python' : 'python3', terminalEventObserved,
+    bootstrap: boundedFixtureBootstrap(stderr), milestones: boundedFixtureMilestones(stderr), frames: boundedHelperPhases(stderr),
+    capturedStderrCharacters: stderr.length, discardedCharacters: discardedBytes,
+    parentEvents: owner.events.slice(0, 16).filter(event => fixtureParentPhases.has(event.phase) && Number.isFinite(event.elapsedMs) && event.elapsedMs >= 0).map(({ phase, elapsedMs }) => ({ phase, elapsedMs })),
+    windowsFailure: owner.windowsFailureDetail(),
+  }));
   const directory = await mkdtemp(path.join(os.tmpdir(), 'owned-graceful-stop-'));
+  owner.ownDirectory(directory);
   const trace = path.join(directory, 'trace.jsonl');
   const dockerFixture = path.join(directory, 'docker-fixture.py');
   await writeFile(dockerFixture, `import json,os,sys,time
@@ -88,16 +152,42 @@ sys.exit(3)
   // Invoke the fixture directly: Windows .cmd treats the state-format pipes
   // as shell pipelines and adds children that can outlive the CLI timeout.
   const launcher = path.join(directory, 'owned-helper-launch.py');
-  await writeFile(launcher, `import json,sys,time
+  await writeFile(launcher, `import sys
+try:
+ _fixture_executable=sys.executable.replace(chr(92),'/').rsplit('/',1)[-1].lower()
+ print('OWNED_FIXTURE_BOOTSTRAP v1 %d %d %d %s' % (sys.version_info[0],sys.version_info[1],sys.version_info[2],'python-exe' if _fixture_executable=='python.exe' else 'python' if _fixture_executable=='python' else 'other'),file=sys.stderr,flush=True)
+except BaseException:
+ pass
+def _fixture_milestone(label):
+ try:
+  print('OWNED_FIXTURE_MILESTONE '+label,file=sys.stderr,flush=True)
+ except BaseException:
+  pass
+import time
 started=time.monotonic()
 def emit(phase):
- print('OWNED_HELPER_PHASE '+json.dumps({'phase':phase,'elapsedMs':round((time.monotonic()-started)*1000,3)}),file=sys.stderr,flush=True)
+ print('OWNED_HELPER_PHASE {"phase":"%s","elapsedMs":%.3f}' % (phase,(time.monotonic()-started)*1000),file=sys.stderr,flush=True)
 emit('launcher-enter')
+emit('json-import-start')
+import json
+emit('json-import-end')
+${jobSupport}
+emit('job-setup-start')
+finish_job=establish_fixture_job()
+emit('job-ready')
+print('OWNED_HELPER_IDENTITY '+json.dumps({'version':list(sys.version_info[:3]),'executable':sys.executable.replace(chr(92),'/').rsplit('/',1)[-1]}),file=sys.stderr,flush=True)
 import runpy,subprocess,shutil
 emit('stdlib-ready')
 helper,fixture,target=sys.argv[1:]
 original_run=subprocess.run
 original_which=shutil.which
+builtins=sys.modules['builtins']
+original_import=builtins.__import__
+def traced_import(name,*args,**kwargs):
+ if name!='secrets': return original_import(name,*args,**kwargs)
+ emit('secrets-import-start')
+ try: return original_import(name,*args,**kwargs)
+ finally: emit('secrets-import-end')
 python=sys.executable
 def resolve_docker(name):
  assert name=='docker'
@@ -117,21 +207,25 @@ sys.argv=[helper,target,'1']
 try:
  shutil.which=resolve_docker
  subprocess.run=execute_fixture
+ builtins.__import__=traced_import
  emit('adapter-ready')
  emit('helper-enter')
  runpy.run_path(helper,run_name='__main__')
 finally:
  shutil.which=original_which
  subprocess.run=original_run
+ builtins.__import__=original_import
+ _fixture_milestone('finish-enter')
+ finish_job()
+ _fixture_milestone('finish-return')
 `);
   let observationReport: Promise<void> | undefined;
   try {
     const started = Date.now();
-    const child = spawn(python, [launcher, helper, dockerFixture, target], {
+    const child = owner.spawn(python, [launcher, helper, dockerFixture, target], {
       env: { ...process.env, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let stderr = ''; let discardedBytes = 0;
     child.stdout!.resume();
     child.stderr!.on('data', (chunk: Buffer) => {
       const text = chunk.toString(); const available = Math.max(0, 4096 - stderr.length);
@@ -146,14 +240,18 @@ finally:
       catch { /* Trace may not exist while Python is starting. */ }
       console.log('OWNED_HELPER_DIAGNOSTIC', JSON.stringify({ mode, phase, code,
         elapsedMs: Date.now() - started, frames, commands: categories,
-        capturedStderrBytes: stderr.length, discardedBytes }));
+        capturedStderrBytes: stderr.length, discardedBytes, parentEvents: owner.events,
+        windowsFailure: owner.windowsFailureDetail(),
+        python: boundedPythonIdentity(stderr), bootstrap: boundedFixtureBootstrap(stderr), milestones: boundedFixtureMilestones(stderr),
+        observationTimerLagMs: phase === 'still-running' ? Math.max(0, Date.now() - started - 9000) : undefined }));
     };
     // Observation only, before unchanged10s Jest ceiling; no deadline or child behavior changes.
     const observation = setTimeout(() => { observationReport = report('still-running', null); }, 9000);
     let result: number | null;
     try {
       result = await new Promise<number | null>((resolve, reject) => {
-        child.once('error', reject); child.once('close', code => resolve(code));
+        child.once('error', error => { terminalEventObserved = true; reject(error); });
+        child.once('close', code => { terminalEventObserved = true; resolve(code); });
       });
     } catch (error) { await report('spawn-error', null); throw error; }
     finally { clearTimeout(observation); }
@@ -166,8 +264,8 @@ finally:
     } finally { await report('child-close', result); }
   } finally {
     await observationReport;
-    await rm(directory, { recursive: true, force: true });
   }
+  });
 }
 
 describe('non-force hosted graceful stop', () => {

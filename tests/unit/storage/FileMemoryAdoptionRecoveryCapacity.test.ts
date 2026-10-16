@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it as test, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it as test, jest } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -8,10 +8,33 @@ import { FileMemoryTransactionCoordinator } from '../../../src/storage/FileMemor
 import { FileMemoryOwnerSnapshots, type UnownedFileMemoryToken } from '../../../src/storage/FileMemoryOwnerSnapshots.js';
 import { FileMemoryAdoptionRecoveryScanBudget } from '../../../src/storage/FileMemoryAdoptionRecoveryScanBudget.js';
 
+import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+
+const ownership = new OwnedStorageCase();
+let phase = 'idle';
+function mark(next: string): void {
+  phase = next;
+  process.stderr.write(`ADOPTION case phase ${JSON.stringify({ test: expect.getState().currentTestName, phase, at: performance.now() })}\n`);
+}
+beforeEach(() => { ownership.begin(); mark('setup'); });
+
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
 const it = process.platform === 'win32' ? test.skip : test;
-afterEach(async () => { jest.restoreAllMocks(); for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  mark(`settlement-wait:${phase}`);
+  await ownership.teardown(async checkpoint => {
+    checkpoint(); mark('cleanup');
+    checkpoint(); jest.restoreAllMocks();
+    while (roots.length) {
+      checkpoint();
+      await fs.rm(roots[0], { recursive: true, force: true });
+      checkpoint();
+      roots.shift(); // Keep unresolved entries if a removal settles after expiry.
+    }
+  });
+  mark('settled-and-cleaned');
+});
 async function recordProof(file: string) {
   const stat = await fs.lstat(file, { bigint: true });
   return { raw: await fs.readFile(file, 'utf8'), identity: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.nlink] };
@@ -34,6 +57,7 @@ async function portfolio(count: number, nested: boolean, pair: boolean) {
   const owners = path.join(root, '.memory-owners', 'owners'), registry = path.join(owners, `${ownerId}.json`);
   // Valid ACTIVE persisted fixtures qualify recovery, not ordinary adoption throughput.
   for (let index = 1; index < count; index++) {
+    ownership.checkpoint();
     const siblingLocator = path.posix.join(path.posix.dirname(locator), `Existing${index}.yaml`), target = path.join(root, siblingLocator);
     await fs.writeFile(target, content, { mode: 0o600 });
     const stat = await fs.stat(target, { bigint: true }), siblingOwner = randomUUID();
@@ -50,7 +74,7 @@ async function portfolio(count: number, nested: boolean, pair: boolean) {
 }
 
 describe('populated RESERVED adoption recovery', () => {
-  it.each([false, true])('covers ownership-directory disappearance after discovery (both=%s)', async both => {
+  it.each([false, true])('covers ownership-directory disappearance after discovery (both=%s)', ownership.own(async both => {
     const f = await portfolio(2, false, true), originalHead = await recordProof(f.head);
     const internals = f.store as unknown as { recoverAdoptionAtScope: (...args: unknown[]) => Promise<unknown> };
     const recover = internals.recoverAdoptionAtScope;
@@ -61,15 +85,16 @@ describe('populated RESERVED adoption recovery', () => {
       return recover.apply(this, args);
     });
     const reads = jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read');
+    ownership.checkpoint(); mark('recovery');
     expect((await f.store.recoverReservedAdoption(f.request)).status).toBe('known-adopted');
     expect(await recordProof(f.head)).toEqual(originalHead);
     const budgets = new Set(reads.mock.contexts as FileMemoryAdoptionRecoveryScanBudget[]);
     expect(budgets.size).toBe(1);
     const budget = [...budgets][0]; expect(budget.consumed).toBeLessThanOrEqual(budget.limit);
     expect((await f.store.readHeadSnapshot(f.request.locator)).token.ownership).toBe('owned');
-  });
+  }));
   it.each([[false, false], [false, true], [true, false], [true, true]])(
-    'prepares missing ownership directories among 1000 unrelated files (nested=%s, parentPresent=%s)', async (nested, parentPresent) => {
+    'prepares missing ownership directories among 1000 unrelated files (nested=%s, parentPresent=%s)', ownership.own(async (nested, parentPresent) => {
       const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'adoption-missing-capacity-'))); roots.push(root);
       const locator = nested ? 'Notes/head.yaml' : 'head.yaml', head = path.join(root, locator);
       if (nested) await fs.mkdir(path.dirname(head));
@@ -90,20 +115,23 @@ describe('populated RESERVED adoption recovery', () => {
       await Promise.all(names.map(name => fs.writeFile(path.join(path.dirname(head), name), 'preserved')));
       const sentinel = path.join(path.dirname(head), names[999]), original = await recordProof(sentinel);
       const originalHead = await recordProof(head);
+      ownership.checkpoint(); mark('recovery');
       expect((await store.recoverReservedAdoption({ locator, ownerId })).status).toBe('known-adopted');
       expect(await recordProof(head)).toEqual(originalHead); expect(await recordProof(sentinel)).toEqual(original);
       for (const name of names) expect(await fs.readFile(path.join(path.dirname(head), name), 'utf8')).toBe('preserved');
       expect(await store.recoverReservedAdoption({ locator, ownerId })).toEqual({ status: 'already-clean-no-attribution' });
-    });
+    }));
   for (const count of [100, 250, 1000]) {
     it.each([[false, false], [false, true], [true, false], [true, true]])(
-      `recovers ${count} memories (nested=%s, pair=%s)`, async (nested, pair) => {
+      `recovers ${count} memories (nested=%s, pair=%s)`, ownership.own(async (nested, pair) => {
         const f = await portfolio(count, nested, pair);
         const files = [f.head, f.sidecar, f.registry];
+        mark('setup-proof');
         const before = await Promise.all(files.map(recordProof));
         const directories = [f.root, path.dirname(f.head), path.dirname(f.owners), f.owners];
         const names = await Promise.all(directories.map(directory => fs.readdir(directory).then(value => value.sort())));
         const read = jest.spyOn(FileMemoryAdoptionRecoveryScanBudget.prototype, 'read');
+        ownership.checkpoint(); mark('recovery');
         const start = performance.now();
         let failure: { cause: unknown } | undefined;
         let result;
@@ -118,6 +146,7 @@ describe('populated RESERVED adoption recovery', () => {
           process.stderr.write(`Adoption capacity negative ${JSON.stringify({ count, nested, pair, consumed: budget?.consumed, readCalls: read.mock.calls.length, code: error.code, causeCode: error.cause?.code, elapsedMs: performance.now() - start })}\n`);
           throw failure.cause;
         }
+        mark('recovery-proof');
         expect(result).toMatchObject({ status: 'known-adopted' });
         const budgets = new Set(read.mock.contexts as FileMemoryAdoptionRecoveryScanBudget[]);
         expect(budgets.size).toBe(1);
@@ -130,6 +159,6 @@ describe('populated RESERVED adoption recovery', () => {
         const token = (result as { token: unknown }).token;
         expect((await f.store.readHeadSnapshot(f.request.locator)).token).toEqual(token);
         await expect(f.store.recoverReservedAdoption(f.request)).resolves.toEqual({ status: 'already-clean-no-attribution' });
-      });
+      }));
   }
 });

@@ -180,21 +180,32 @@ describe('LocalAccountMethod', () => {
     // to satisfy.
     const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
-    await method.completeInteraction(CTX, {
+    const setup = await method.completeInteraction(CTX, {
       formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
     });
 
+    expect(setup.kind).toBe('authenticated');
+    const stored = await storage.getAccount('local_alice');
+    // Check the encoded work factor without logging a credential on failure.
+    expect(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/.test(
+      stored?.credentials?.passwordHash ?? '',
+    )).toBe(true);
+    expect(await storage.getAccount('local_nobody')).toBeNull();
+
     const wrongPasswordStart = Date.now();
-    await method.completeInteraction(CTX, {
+    const wrongPassword = await method.completeInteraction(CTX, {
       formBody: { action: 'login', username: 'alice', password: 'incorrect' }, ip: CLIENT_SECONDARY,
     });
     const wrongPasswordMs = Date.now() - wrongPasswordStart;
 
     const unknownStart = Date.now();
-    await method.completeInteraction(CTX, {
+    const unknown = await method.completeInteraction(CTX, {
       formBody: { action: 'login', username: 'nobody', password: 'whatever' }, ip: CLIENT_TERTIARY,
     });
     const unknownMs = Date.now() - unknownStart;
+
+    expect(wrongPassword).toEqual({ kind: 'denied', reason: 'invalid credentials' });
+    expect(unknown).toEqual({ kind: 'denied', reason: 'invalid credentials' });
 
     // Both branches should be in the same order of magnitude.
     expect(unknownMs).toBeGreaterThanOrEqual(Math.floor(wrongPasswordMs / 2));

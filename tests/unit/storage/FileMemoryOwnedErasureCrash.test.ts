@@ -1,4 +1,4 @@
-import { describe, expect, it as jestIt } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it as jestIt } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -6,10 +6,26 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { makeOwnedErasureFixture, captureErasureTree, captureErasureFiles } from './fixtures/ownedErasureFixture.js';
 
+import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+
+const ownership = new OwnedStorageCase();
+let phase = 'idle';
+function mark(next: string): void {
+  phase = next;
+  process.stderr.write(`ERASURE case phase ${JSON.stringify({ test: expect.getState().currentTestName, phase, at: performance.now() })}\n`);
+}
+beforeEach(() => { ownership.begin(); mark('setup'); });
+afterEach(async () => {
+  mark(`settlement-wait:${phase}`);
+  await ownership.teardown(() => Promise.resolve());
+  mark('original-callback-settled');
+});
+
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 async function cleanupWithCompletion(fixture: Awaited<ReturnType<typeof makeOwnedErasureFixture>>,
   primary: { cause: unknown } | undefined, completion: Record<string, unknown> | undefined): Promise<void> {
   let cleanup = 'completed';
+  mark('cleanup');
   try { await fixture.cleanup(); }
   catch (cause) {
     cleanup = 'failed';
@@ -74,7 +90,7 @@ const owners=new FileMemoryOwnerSnapshots({coordinator,afterErasurePublication:p
 await owners.eraseOwned(JSON.parse(requestRaw));
 `;
 describe('actual process interruption of dormant owner erasure', () => {
-  it('observes the same rejecting public InTransaction promise when a caller omits await', async () => {
+  it('observes the same rejecting public InTransaction promise when a caller omits await', ownership.own(async () => {
     const fixture = await makeOwnedErasureFixture({ volumes: 2 });
     let primary: { cause: unknown } | undefined;
     let completion: Record<string, unknown> | undefined;
@@ -99,6 +115,7 @@ catch(cause){rejected=true;if(cause?.result||cause?.headDeleted)throw new Error(
 if(!rejected)throw new Error('Coordinator omitted tracked failure');
 await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVED_REJECTION\\n');
 `;
+      mark('child-operation');
       const childStarted = performance.now();
       const child = spawn(process.execPath, ['--unhandled-rejections=strict', ...loader, '--input-type=module', '-e', source,
         ...modules, fixture.root, fixture.token.userId, JSON.stringify(fixture.request)], { cwd: fixture.root, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -117,20 +134,21 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       });
       let code: number | null;
       try { code = await closed; } finally { clearTimeout(timer); }
+      mark('child-closed');
       if (spawnFailure) throw spawnFailure.cause;
       expect({ code, output, diagnostics }).toEqual({ code: 0, output: 'OBSERVED_REJECTION\n', diagnostics: '' });
       expect({ archive: await captureErasureTree(path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId)),
         registry: await captureErasureTree(path.join(fixture.root, '.memory-owners/owners')) }).toEqual(before);
     } catch (cause) { primary = { cause }; throw cause; }
     finally { await cleanupWithCompletion(fixture, primary, completion); }
-  }, 10_000);
+  }), 10_000);
   it.each(['head-prepared-durable', 'ready-durable', 'inventory-durable', 'action-prepared-durable',
     'after-owner-action', 'owner-root-removed-durable', 'evidence-retiring-durable',
     'retire-action-prepared-durable', 'after-evidence-retirement', 'partial-segment-stage',
     'gap-final-journal-unlink', 'gap-final-sync', 'gap-final-close',
     'gap-directory-rmdir', 'gap-directory-sync', 'gap-directory-close',
     'gap-root-rmdir', 'gap-root-sync', 'gap-root-close'] as const)(
-    'qualifies recovery or preserves manual residual after SIGKILL at %s', async stop => {
+    'qualifies recovery or preserves manual residual after SIGKILL at %s', ownership.own(async stop => {
       const fixture = await makeOwnedErasureFixture({ nested: true, volumes: 2,
         foreignOwners: stop.startsWith('gap-directory-') || stop.startsWith('gap-root-') ? 100 : 0 });
       const extension = import.meta.url.endsWith('.js') ? 'js' : 'ts';
@@ -139,6 +157,7 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       const loader = extension === 'ts' ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : [];
       const selected = path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId);
       const before = await captureErasureTree(selected), foreign = await captureErasureFiles(fixture.foreignFiles);
+      mark('child-operation');
       const childStarted = performance.now();
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules,
         fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], { cwd: fixture.root, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -163,7 +182,8 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       void ready.catch(() => undefined);
       const timer = setTimeout(() => { if (!dead) watchdogKillSent = child.kill('SIGKILL'); }, 5000);
       try {
-        await ready; child.kill('SIGKILL'); await closed; expect(signal).toBe('SIGKILL');
+        await ready; child.kill('SIGKILL'); await closed; mark('child-closed'); expect(signal).toBe('SIGKILL');
+        ownership.checkpoint(); mark('recovery-proof');
         if (stop.startsWith('gap-directory-') || stop.startsWith('gap-root-')) {
           const journal = JSON.parse(await fs.readFile(path.join(fixture.root, '.memory-owners/owners',
             `${fixture.token.ownerId}.erase.json`), 'utf8'));
@@ -212,5 +232,5 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
         await cleanupWithCompletion(fixture, primary, { stop, exitCode, signal, lifetimeMs, watchdogKillSent,
           stdout: output.slice(0, 256), stderr: diagnostics, barrierReached });
       }
-    }, 10_000);
+    }), 10_000);
 });
