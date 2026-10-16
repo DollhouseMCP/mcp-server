@@ -51,7 +51,7 @@ class Scenario:
         if argv[0] != 'synthetic-docker' or args[0] not in ('inspect', 'exec', 'kill'):
             raise AssertionError('Unexpected CLI command')
         self.calls.append((args, float(self.now)))
-        if self.mode != 'frozen-clock':
+        if self.mode not in ('frozen-clock', 'zero-cost-tail', 'zero-cost-live', 'resolution-close'):
             self.now += Decimal('0.01')
         if self.mode == 'api-failure':
             return types.SimpleNamespace(returncode=1, stdout='')
@@ -63,8 +63,8 @@ class Scenario:
                 self.post_inspects += 1
             if self.mode == 'exhausted-initial' and not after_term:
                 self.now = Decimal('1.1')
-            delay = Decimal('1.2') if self.mode == 'late-close' else Decimal('0.94') if self.mode == 'tail-close' else Decimal('0.35')
-            closed = after_term and self.mode not in ('live', 'frozen-clock', 'restart') and self.now >= self.term_at + delay
+            delay = Decimal('1.2') if self.mode == 'late-close' else Decimal('0.94') if self.mode == 'tail-close' else Decimal('0.96') if self.mode == 'zero-cost-tail' else Decimal('0.9998') if self.mode == 'resolution-close' else Decimal('0.35')
+            closed = after_term and self.mode not in ('live', 'zero-cost-live', 'frozen-clock', 'restart') and self.now >= self.term_at + delay
             if self.mode in ('late-observation', 'deadline-observation') and after_term:
                 self.now = Decimal(self.seconds) + (Decimal('0.1') if self.mode == 'late-observation' else 0)
                 closed = True
@@ -111,10 +111,12 @@ def execute(mode='delayed', seconds=1):
         except SystemExit as result:
             code = result.code
     # These guards apply to every positive and negative actual-helper execution.
-    if scenario.post_inspects > seconds * 10 + 1:
+    if scenario.post_inspects > seconds * 10 + 10:
         raise AssertionError('Post-TERM inspect count exceeded explicit bound')
-    if sum(args[0] == 'inspect' for args, _ in scenario.calls) > seconds * 10 + 3:
+    if sum(args[0] == 'inspect' for args, _ in scenario.calls) > seconds * 10 + 12:
         raise AssertionError('Total inspect count exceeded initial two plus post-TERM bound')
+    if len(scenario.calls) > seconds * 10 + 14:
+        raise AssertionError('Total CLI count exceeded explicit bound')
     if sum(args[0] == 'kill' for args, _ in scenario.calls) > 1:
         raise AssertionError('Repeated TERM')
     return scenario, code, stdout.getvalue(), stderr.getvalue()
@@ -139,8 +141,8 @@ class ActualHelperPolling(unittest.TestCase):
         self.assertEqual(scenario.post_inspects, 11)
         self.assertEqual(sum(args[0] == 'kill' for args, _ in scenario.calls), 1)
 
-    def test_every_sleep_leaves_half_the_positive_remaining_window(self):
-        for mode in ['delayed', 'tail-close', 'live']:
+    def test_every_sleep_obeys_bounded_resolution_and_remaining_window(self):
+        for mode in ['delayed', 'tail-close', 'live', 'zero-cost-tail', 'zero-cost-live']:
             with self.subTest(mode=mode):
                 scenario, _, _, _ = execute(mode)
                 for duration, remaining in scenario.sleeps:
@@ -148,7 +150,36 @@ class ActualHelperPolling(unittest.TestCase):
                     self.assertGreaterEqual(duration, 0)
                     # Numeric allowance covers float conversion only, not an
                     # extension to the product's strict absolute deadline.
-                    self.assertLessEqual(duration, min(0.1, remaining / 2) + 1e-12)
+                    self.assertLessEqual(duration, remaining + 1e-12)
+                    self.assertAlmostEqual(duration, min(remaining, max(0.001, min(0.1, remaining / 2))), delta=1e-12)
+
+    def test_zero_cost_tail_close_is_observed_before_count_exhaustion(self):
+        scenario, code, out, err = execute('zero-cost-tail')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out.strip(), 'Old process closed cleanly')
+        self.assertGreaterEqual(scenario.now, Decimal('0.96'))
+        self.assertLess(scenario.now, 1)
+        self.assertEqual(scenario.post_inspects, 12)
+
+    def test_advancing_live_clock_reaches_expiry_before_count_cap(self):
+        scenario, code, out, err = execute('zero-cost-live')
+        self.assertEqual(code, 1)
+        self.assertEqual(out, '')
+        self.assertIn('refused', err)
+        self.assertGreaterEqual(scenario.now, 1)
+        self.assertLess(scenario.post_inspects, 20)
+        self.assertTrue(any(remaining <= 0.001 for _, remaining in scenario.sleeps))
+        # At the declared resolution the last positive sub-ms window is
+        # deliberately consumed, without accepting a later observation.
+        self.assertAlmostEqual(scenario.sleeps[-1][0], scenario.sleeps[-1][1], delta=1e-12)
+
+    def test_final_submillisecond_close_is_not_claimed_observed(self):
+        scenario, code, out, err = execute('resolution-close')
+        self.assertEqual(code, 1)
+        self.assertEqual(out, '')
+        self.assertIn('refused', err)
+        self.assertGreaterEqual(scenario.now, 1)
+        self.assertLess(scenario.post_inspects, 20)
 
     def test_live_late_and_unsafe_closure_stay_refused(self):
         for mode in ['live', 'late-close', 'nonzero', 'oom', 'restart', 'late-observation', 'deadline-observation']:
@@ -175,7 +206,8 @@ class ActualHelperPolling(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(out, '')
                 self.assertIn('refused', err)
-                self.assertEqual(scenario.post_inspects, seconds * 10 + 1)
+                self.assertEqual(scenario.post_inspects, seconds * 10 + 10)
+                self.assertEqual(len(scenario.calls), seconds * 10 + 14)
 
 
 if __name__ == '__main__':
