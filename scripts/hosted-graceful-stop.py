@@ -1,6 +1,6 @@
 import json
 import re
-import secrets
+import os
 import shutil
 import subprocess
 import sys
@@ -110,7 +110,7 @@ def require_boot_binding(ack):
 
 
 def drain_before_term(before):
-    nonce = secrets.token_hex(32)
+    nonce = os.urandom(32).hex()
     remaining_ms = int((deadline - time.monotonic()) * 1000)
     if remaining_ms <= 0:
         raise RuntimeError('Graceful stop deadline reached; replacement refused')

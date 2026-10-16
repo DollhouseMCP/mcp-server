@@ -3,6 +3,7 @@
 The Jest entry point invokes this standard-library control synchronously. The
 helper's real validation, ACK binding, TERM decision and polling loop execute.
 """
+import builtins
 import contextlib
 from decimal import Decimal
 import io
@@ -21,8 +22,11 @@ NONCE = 'b' * 64
 
 
 class Scenario:
-    def __init__(self, mode='delayed', seconds=1):
+    def __init__(self, mode='delayed', seconds=1, nonce=NONCE):
         self.mode = mode
+        self.nonce = nonce
+        self.entropy_calls = []
+        self.helper_imports = []
         self.seconds = seconds
         self.now = Decimal(0)
         self.term_at = None
@@ -77,9 +81,9 @@ class Scenario:
         if args[0] == 'exec':
             if args[:8] != ['exec', '--user', '1001:1001', '--workdir', '/app', TARGET, 'node', '/app/dist/lifecycle/requestMemoryDrain.js']:
                 raise AssertionError('Changed drain binding')
-            if args[8] != TARGET or args[9] != NONCE or not 0 < int(args[10]) <= self.seconds * 1000:
+            if args[8] != TARGET or args[9] != self.nonce or not 0 < int(args[10]) <= self.seconds * 1000:
                 raise AssertionError('Changed drain identity or budget')
-            ack = dict(protocol=2, phase='drained', containerId=TARGET, nonce=NONCE,
+            ack = dict(protocol=2, phase='drained', containerId=TARGET, nonce=self.nonce,
                        bootId='c' * 64, generation='d' * 64, sourceBootId='c' * 64,
                        mode='same-boot', admitted=0, writes=0, failedWrites=0, retainedOwners=0)
             if self.mode == 'wrong-nonce':
@@ -97,19 +101,39 @@ class Scenario:
         return types.SimpleNamespace(returncode=0, stdout='')
 
 
-def execute(mode='delayed', seconds=1):
-    scenario = Scenario(mode, seconds)
+def execute(mode='delayed', seconds=1, entropy=bytes.fromhex(NONCE), entropy_error=None):
+    scenario = Scenario(mode, seconds, entropy.hex())
+    original_import = builtins.__import__
+
+    def observe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if globals and globals.get('__file__') == str(HELPER):
+            scenario.helper_imports.append(name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    def entropy_source(size):
+        scenario.entropy_calls.append(size)
+        if size != 32:
+            raise AssertionError('Changed nonce entropy byte count')
+        if entropy_error is not None:
+            raise entropy_error
+        return entropy
+
     stdout, stderr = io.StringIO(), io.StringIO()
     code = 0
     with patch.object(sys, 'argv', [str(HELPER), TARGET, str(seconds)]), \
             patch('time.monotonic', scenario.monotonic), patch('time.sleep', scenario.sleep), \
             patch('shutil.which', return_value='synthetic-docker'), \
-            patch('secrets.token_hex', return_value=NONCE), patch('subprocess.run', scenario.run), \
+            patch('os.urandom', entropy_source), patch('subprocess.run', scenario.run), \
+            patch('builtins.__import__', observe_import), \
             contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         try:
             runpy.run_path(str(HELPER), run_name='__main__')
         except SystemExit as result:
             code = result.code
+    if 'os' not in scenario.helper_imports or 'secrets' in scenario.helper_imports:
+        raise AssertionError('Changed direct helper nonce import boundary')
+    if len(scenario.entropy_calls) > 1 or any(size != 32 for size in scenario.entropy_calls):
+        raise AssertionError('Repeated or changed entropy request')
     # These guards apply to every positive and negative actual-helper execution.
     if scenario.post_inspects > seconds * 10 + 10:
         raise AssertionError('Post-TERM inspect count exceeded explicit bound')
@@ -123,6 +147,41 @@ def execute(mode='delayed', seconds=1):
 
 
 class ActualHelperPolling(unittest.TestCase):
+    def test_exact_nonce_bytes_width_and_single_entropy_request(self):
+        vectors = [(bytes(range(start, start + 32)), expected) for start, expected in [
+            (0, '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'),
+            (32, '202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f'),
+            (64, '404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f'),
+            (96, '606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f'),
+            (128, '808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f'),
+            (160, 'a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf'),
+            (192, 'c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf'),
+            (224, 'e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'),
+        ]]
+        vectors.append((bytes(32), '0' * 64))
+        for entropy, expected in vectors:
+            with self.subTest(expected=expected):
+                scenario, code, out, err = execute(entropy=entropy)
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(out.strip(), 'Old process closed cleanly')
+                self.assertEqual(scenario.entropy_calls, [32])
+                nonce = next(args[9] for args, _ in scenario.calls if args[0] == 'exec')
+                self.assertEqual(nonce, expected)
+                self.assertRegex(nonce, r'^[a-f0-9]{64}$')
+
+    def test_entropy_failures_refuse_before_exec_or_term_without_retry(self):
+        for failure in [OSError('entropy unavailable'), RuntimeError('entropy unavailable'),
+                        ValueError('entropy unavailable'), TypeError('entropy unavailable'),
+                        KeyError('entropy unavailable'), NotImplementedError('entropy unavailable')]:
+            with self.subTest(error=type(failure).__name__):
+                scenario, code, out, err = execute(entropy_error=failure)
+                self.assertEqual(code, 1)
+                self.assertEqual(out, '')
+                self.assertNotEqual(err, '')
+                self.assertEqual(scenario.entropy_calls, [32])
+                self.assertEqual([args[0] for args, _ in scenario.calls], ['inspect'])
+                self.assertIsNone(scenario.term_at)
+
     def test_delayed_clean_close_before_same_deadline(self):
         scenario, code, out, err = execute()
         self.assertEqual((code, err), (0, ''))
