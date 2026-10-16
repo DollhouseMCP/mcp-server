@@ -6,6 +6,9 @@ import subprocess
 import sys
 import time
 
+# At most ten post-TERM observations per second of the requested budget,
+# plus one boundary observation; never extend the absolute deadline.
+CLOSURE_POLLS_PER_SECOND = 10
 CONTROL_DIR = '/app/.memory-upgrade-control'
 CLIENT = '/app/dist/lifecycle/requestMemoryDrain.js'
 STATE_FORMAT = ('{"id":{{json .Id}},"running":{{json .State.Running}},'
@@ -129,17 +132,21 @@ try:
     if not observed['running']:
         raise RuntimeError('Stopped container has no live drain acknowledgement; replacement refused')
     drain_before_term(observed)
+    polls_remaining = int(seconds) * CLOSURE_POLLS_PER_SECOND + 1
     while True:
+        if polls_remaining <= 0:
+            raise RuntimeError('Graceful stop refused or timed out; old process retained, replacement refused')
+        polls_remaining -= 1
         observed = state()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError('Graceful stop refused or timed out; old process retained, replacement refused')
         if not observed['running'] and not observed['restarting']:
             if observed['exitCode'] != 0 or observed['oomKilled']:
                 raise RuntimeError('Old process did not close cleanly; replacement refused')
             print('Old process closed cleanly')
             break
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError('Graceful stop refused or timed out; old process retained, replacement refused')
-        time.sleep(min(1, remaining))
+        time.sleep(min(1 / CLOSURE_POLLS_PER_SECOND, remaining))
 except (RuntimeError, OSError, ValueError, TypeError, KeyError) as error:
     # Never print Docker metadata, environment, protocol text or arbitrary exceptions.
     print(str(error) if isinstance(error, RuntimeError) else 'Verified memory drain or clean closure unavailable; replacement refused', file=sys.stderr)
