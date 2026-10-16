@@ -100,6 +100,34 @@ function waitForClose(child: ReturnType<typeof spawnHelper>) {
   });
 }
 
+// The first token request follows the helper's awaited initial PID publication.
+// File existence alone can become visible while that original write is pending.
+function waitForHelperRequest(server: ReturnType<typeof createServer>, child: ReturnType<typeof spawnHelper>, timeoutMs = 5_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const settle = (failure?: { error: unknown }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      server.removeListener('request', onRequest);
+      server.removeListener('error', onError);
+      child.removeListener('error', onError);
+      child.removeListener('close', onClose);
+      if (failure) reject(failure.error);
+      else resolve();
+    };
+    const onRequest = () => settle();
+    const onError = (error: unknown) => settle({ error });
+    const onClose = () => settle({ error: new Error('OAuth helper closed before its first token request') });
+    server.once('request', onRequest);
+    server.once('error', onError);
+    child.once('error', onError);
+    child.once('close', onClose);
+    timer = setTimeout(() => settle({ error: new Error('OAuth helper did not make its first token request within 5000ms') }), timeoutMs);
+  });
+}
+
 async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -654,7 +682,7 @@ describe(HELPER_FILENAME, () => {
         tempHome,
         { DOLLHOUSE_OAUTH_HELPER_FLOW_ID: 'old-flow' }
       );
-      await waitForFile(pidFile);
+      await waitForHelperRequest(server, child);
 
       await fs.writeFile(pidFile, '999999', 'utf-8');
       await fs.writeFile(
