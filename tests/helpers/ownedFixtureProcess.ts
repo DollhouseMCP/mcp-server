@@ -22,9 +22,12 @@ async function bounded<T>(work: Promise<T>): Promise<T> {
 export class OwnedFixtureProcess {
   private cancelled = false;
   private linuxGroup?: LinuxOwnedGroup;
+  // Request completion suppresses another Linux signal; it never proves settlement.
+  private linuxSignalRequestIssued = false;
+  private linuxSignalFailure?: { error: unknown };
   private windowsJob?: OwnedWindowsJob;
   private cleanupDeadline?: number;
-  private signalRefused = false;
+  private signalRefused?: Error;
   private child?: ChildProcess;
   private directory?: string;
   private closed = false;
@@ -87,7 +90,8 @@ export class OwnedFixtureProcess {
     this.cleanupDeadline ??= performance.now() + FIXTURE_CLEANUP_MS;
     const child = this.child;
     if (!child || this.closed || !child.pid) return;
-    if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+    if (this.signalRefused) throw this.signalRefused;
+    if (this.linuxSignalFailure) throw this.linuxSignalFailure.error;
     this.record('cleanup-terminate-owned-tree');
     if (process.platform === 'win32') {
       this.windowsJob!.requestCancellation(child, this.cleanupDeadline);
@@ -97,7 +101,8 @@ export class OwnedFixtureProcess {
   }
 
   async finish(): Promise<void> {
-    if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+    if (this.signalRefused) throw this.signalRefused;
+    if (this.linuxSignalFailure) throw this.linuxSignalFailure.error;
     if (this.child && !this.closed) {
       this.cancel();
       await bounded(this.close);
@@ -124,15 +129,31 @@ export class OwnedFixtureProcess {
 
   private killPosixGroup(pid: number): void {
     try { process.kill(-pid, 'SIGKILL'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    catch (error) {
+      if (process.platform === 'linux') {
+        // Retain even falsy failures before inspecting optional errno evidence.
+        this.linuxSignalFailure = { error };
+        let absent = false;
+        try { absent = (error as NodeJS.ErrnoException | null)?.code === 'ESRCH'; } catch { /* Preserve the original signal failure. */ }
+        if (!absent) throw error;
+        this.linuxSignalFailure = undefined;
+      } else if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+    if (process.platform === 'linux') this.linuxSignalRequestIssued = true;
   }
 
   private authorizePosixSignal(): boolean {
     if (process.platform !== 'linux') return true;
+    if (this.linuxSignalFailure) throw this.linuxSignalFailure.error;
+    if (this.linuxSignalRequestIssued) return false;
     if (!this.groupExists()) return false;
     if (!this.linuxGroup?.captureBeforeKill(this.cleanupDeadline!)) {
-      this.signalRefused = true;
-      throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+      this.signalRefused = new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+      try {
+        const detail = this.linuxGroup?.refusalDetail();
+        if (detail) this.signalRefused.cause = new Error(`Owned Linux capture refusal ${JSON.stringify(detail)}`);
+      } catch { /* Diagnostic failure cannot replace the original authorization refusal. */ }
+      throw this.signalRefused;
     }
     return true;
   }

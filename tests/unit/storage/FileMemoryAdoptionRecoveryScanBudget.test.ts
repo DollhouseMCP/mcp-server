@@ -130,7 +130,9 @@ describe('recovery-private resource reservation', () => {
       diagnostic('setup-start');
       try {
         root = await fixture();
+        try { diagnostic('root-ready'); } catch { /* Evidence cannot change setup. */ }
         await Promise.all(Array.from({ length: 4096 }, (_, index) => writeFixtureFile(path.join(root, `n${index}`), 'x')));
+        try { diagnostic('writes-fulfilled'); } catch { /* Evidence cannot change setup. */ }
       } finally { diagnostic('setup-end'); }
     }), 10000);
     it('requires room for EOF without creating artifacts', ownership.own(async () => {

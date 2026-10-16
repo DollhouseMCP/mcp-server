@@ -10,12 +10,40 @@ const helper = fileURLToPath(new URL('../../../scripts/hosted-graceful-stop.py',
 const target = 'a'.repeat(64);
 const jobSupport = readFileSync(new URL('../../helpers/owned_python_job.py', import.meta.url), 'utf8');
 const ownedFixtures = new OwnedFixtureRegistry();
-beforeEach(() => ownedFixtures.assertSettled());
-afterEach(async () => { await ownedFixtures.cancelUnfinished(); });
+let teardownSnapshot: (() => void) | undefined;
+beforeEach(() => { teardownSnapshot = undefined; ownedFixtures.assertSettled(); });
+afterEach(async () => {
+  try { await ownedFixtures.cancelUnfinished(); }
+  catch (error) {
+    try { teardownSnapshot?.(); } catch { /* Evidence cannot replace cleanup failure, including falsy errors. */ }
+    throw error;
+  } finally { teardownSnapshot = undefined; }
+});
 afterAll(async () => {
   await ownedFixtures.cancelUnfinished();
   console.log('OWNED_HELPER_SUITE_SETTLED', JSON.stringify({ allOwnedOperationsClosed: true }));
 });
+
+type FixtureBootstrap = { version: number[]; executableCategory: 'python' | 'python-exe' | 'other' };
+function boundedFixtureBootstrap(stderr: string): FixtureBootstrap | undefined {
+  for (const line of stderr.split('\n').slice(0, -1)) {
+    const match = /^OWNED_FIXTURE_BOOTSTRAP v1 (\d{1,2}) (\d{1,2}) (\d{1,2}) (python|python-exe|other)$/.exec(line.replace(/\r$/, ''));
+    if (match) return { version: match.slice(1, 4).map(Number), executableCategory: match[4] as FixtureBootstrap['executableCategory'] };
+  }
+  return undefined;
+}
+const fixtureMilestones = new Set(['job-setup-start', 'job-ready', 'body-enter', 'finish-enter', 'finish-return']);
+function boundedFixtureMilestones(stderr: string): string[] {
+  const result: string[] = [];
+  for (const line of stderr.split('\n').slice(0, -1)) {
+    const label = line.replace(/\r$/, '').replace(/^OWNED_FIXTURE_MILESTONE /, '');
+    if (line.startsWith('OWNED_FIXTURE_MILESTONE ') && fixtureMilestones.has(label)) result.push(label);
+    if (result.length >= 8) break;
+  }
+  return result;
+}
+const fixtureParentPhases = new Set(['spawn-requested', 'spawn', 'first-stderr', 'spawn-error', 'exit', 'close',
+  'cleanup-terminate-owned-tree', 'windows-job-quiescent', 'owned-group-zombie-only']);
 
 const helperPhases = new Set(['launcher-enter', 'stdlib-ready', 'adapter-ready', 'helper-enter',
   'command-start', 'command-end', 'command-timeout', 'command-os-error', 'command-error',
@@ -75,6 +103,15 @@ function boundedCommandCategories(contents: string): string[] {
 
 async function run(mode: string) {
   return ownedFixtures.run(async owner => {
+  let stderr = '', discardedBytes = 0;
+  let terminalEventObserved = false;
+  teardownSnapshot = () => console.log('OWNED_FIXTURE_BOOTSTRAP_DIAGNOSTIC', JSON.stringify({
+    fixture: 'hosted', mode, phase: 'teardown-failed', requestedCommand: process.platform === 'win32' ? 'python' : 'python3', terminalEventObserved,
+    bootstrap: boundedFixtureBootstrap(stderr), milestones: boundedFixtureMilestones(stderr), frames: boundedHelperPhases(stderr),
+    capturedStderrCharacters: stderr.length, discardedCharacters: discardedBytes,
+    parentEvents: owner.events.slice(0, 16).filter(event => fixtureParentPhases.has(event.phase) && Number.isFinite(event.elapsedMs) && event.elapsedMs >= 0).map(({ phase, elapsedMs }) => ({ phase, elapsedMs })),
+    windowsFailure: owner.windowsFailureDetail(),
+  }));
   const directory = await mkdtemp(path.join(os.tmpdir(), 'owned-graceful-stop-'));
   owner.ownDirectory(directory);
   const trace = path.join(directory, 'trace.jsonl');
@@ -115,7 +152,18 @@ sys.exit(3)
   // Invoke the fixture directly: Windows .cmd treats the state-format pipes
   // as shell pipelines and adds children that can outlive the CLI timeout.
   const launcher = path.join(directory, 'owned-helper-launch.py');
-  await writeFile(launcher, `import sys,time
+  await writeFile(launcher, `import sys
+try:
+ _fixture_executable=sys.executable.replace(chr(92),'/').rsplit('/',1)[-1].lower()
+ print('OWNED_FIXTURE_BOOTSTRAP v1 %d %d %d %s' % (sys.version_info[0],sys.version_info[1],sys.version_info[2],'python-exe' if _fixture_executable=='python.exe' else 'python' if _fixture_executable=='python' else 'other'),file=sys.stderr,flush=True)
+except BaseException:
+ pass
+def _fixture_milestone(label):
+ try:
+  print('OWNED_FIXTURE_MILESTONE '+label,file=sys.stderr,flush=True)
+ except BaseException:
+  pass
+import time
 started=time.monotonic()
 def emit(phase):
  print('OWNED_HELPER_PHASE {"phase":"%s","elapsedMs":%.3f}' % (phase,(time.monotonic()-started)*1000),file=sys.stderr,flush=True)
@@ -167,7 +215,9 @@ finally:
  shutil.which=original_which
  subprocess.run=original_run
  builtins.__import__=original_import
+ _fixture_milestone('finish-enter')
  finish_job()
+ _fixture_milestone('finish-return')
 `);
   let observationReport: Promise<void> | undefined;
   try {
@@ -176,7 +226,6 @@ finally:
       env: { ...process.env, HOME: directory, OWNED_TRACE: trace, OWNED_MODE: mode },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let stderr = ''; let discardedBytes = 0;
     child.stdout!.resume();
     child.stderr!.on('data', (chunk: Buffer) => {
       const text = chunk.toString(); const available = Math.max(0, 4096 - stderr.length);
@@ -193,7 +242,7 @@ finally:
         elapsedMs: Date.now() - started, frames, commands: categories,
         capturedStderrBytes: stderr.length, discardedBytes, parentEvents: owner.events,
         windowsFailure: owner.windowsFailureDetail(),
-        python: boundedPythonIdentity(stderr),
+        python: boundedPythonIdentity(stderr), bootstrap: boundedFixtureBootstrap(stderr), milestones: boundedFixtureMilestones(stderr),
         observationTimerLagMs: phase === 'still-running' ? Math.max(0, Date.now() - started - 9000) : undefined }));
     };
     // Observation only, before unchanged10s Jest ceiling; no deadline or child behavior changes.
@@ -201,7 +250,8 @@ finally:
     let result: number | null;
     try {
       result = await new Promise<number | null>((resolve, reject) => {
-        child.once('error', reject); child.once('close', code => resolve(code));
+        child.once('error', error => { terminalEventObserved = true; reject(error); });
+        child.once('close', code => { terminalEventObserved = true; resolve(code); });
       });
     } catch (error) { await report('spawn-error', null); throw error; }
     finally { clearTimeout(observation); }
