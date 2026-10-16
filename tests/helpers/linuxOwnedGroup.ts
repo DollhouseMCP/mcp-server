@@ -89,8 +89,8 @@ export class LinuxOwnedGroup {
   private readonly leader?: LinuxProcess;
   private members?: LinuxProcess[];
   private attempted = false;
-  private initialFailed = false;
-  private initialCode: string | null = null;
+  private readonly initialFailed: boolean = false;
+  private readonly initialCode: string | null = null;
   private refusal?: LinuxCaptureRefusal;
 
   refusalDetail(): LinuxCaptureRefusal | undefined {

@@ -149,4 +149,53 @@ describe('Linux authorization refusal evidence without OS resources', () => {
       await expect(registry.run(async () => 'must-not-enter')).rejects.toThrow('unsettled');
     } finally { Object.defineProperty(process, 'platform', platform); kill.mockRestore(); }
   });
+  it.each([[undefined, false], [null, false], [false, false], [0, false], ['', false], [new Error('synthetic-original'), false], [false, true]])('retains the initial cancel refusal before original work settles (%p, sink failure %p)', async (primary, sinkFails) => {
+    const group = new LinuxOwnedGroup(123); expect(group.captureBeforeKill(deadline())).toBe(true);
+    metadata.set(124, stat(124, '101'));
+    if (sinkFails) jest.spyOn(group, 'refusalDetail').mockImplementation(() => { throw new Error('private/sink'); });
+    const registry = new OwnedFixtureRegistry();
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const kill = jest.spyOn(process, 'kill').mockReturnValue(true);
+    let release!: () => void, enter!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    let settled = false;
+    let original!: Promise<AggregateError | undefined>;
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      original = registry.run(async owner => {
+        Object.assign(owner, { child: { pid: 123 }, closed: false, linuxGroup: group });
+        enter(); await gate; throw primary;
+      }).then(() => { settled = true; return undefined; }, error => { settled = true; return error as AggregateError; });
+      await entered;
+      let first!: Error;
+      try { await registry.cancelUnfinished(); } catch (error) { first = error as Error; }
+      expect(first.message).toBe('Owned Linux group identity is unproved; refusing signal and cleanup');
+      expect(settled).toBe(false); // Initial throw must not wait for the original callback.
+      if (sinkFails) expect(first.cause).toBeUndefined();
+      else expect((first.cause as Error).message).toContain('members-mismatch');
+      release();
+      const pair = await original;
+      expect(pair!.errors[0]).toBe(primary);
+      let final!: Error;
+      try { registry.assertSettled(); } catch (error) { final = error as Error; }
+      expect(final.cause).toBe(pair);
+      const rendered = formatResultsErrors([{ ancestorTitles: [], title: 'initial cancel refusal', fullName: 'initial cancel refusal',
+        numPassingAsserts: 0, status: 'failed', failureMessages: [final.message], failureDetails: [final] }],
+      { rootDir: process.cwd(), testMatch: [] } as Parameters<typeof formatResultsErrors>[1], { noStackTrace: true }, 'synthetic.test.ts');
+      if (sinkFails) {
+        expect(rendered).toContain('Owned Linux group identity is unproved');
+        expect(rendered).not.toContain('private/sink');
+      } else expect(rendered).toContain('members-mismatch');
+      expect(pair!.errors[1]).toBe(first);
+      expect(pair!.cause).toBe(first);
+      await expect(registry.cancelUnfinished()).rejects.toBe(first);
+      await expect(registry.run(async () => 'must-not-enter')).rejects.toThrow('unsettled');
+      expect(kill.mock.calls).toEqual([[-123, 0]]);
+    } finally {
+      release(); await original;
+      Object.defineProperty(process, 'platform', platform); kill.mockRestore();
+    }
+  });
+
 });
