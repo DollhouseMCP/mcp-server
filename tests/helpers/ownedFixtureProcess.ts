@@ -24,7 +24,7 @@ export class OwnedFixtureProcess {
   private linuxGroup?: LinuxOwnedGroup;
   private windowsJob?: OwnedWindowsJob;
   private cleanupDeadline?: number;
-  private signalRefused = false;
+  private signalRefused?: Error;
   private child?: ChildProcess;
   private directory?: string;
   private closed = false;
@@ -87,7 +87,7 @@ export class OwnedFixtureProcess {
     this.cleanupDeadline ??= performance.now() + FIXTURE_CLEANUP_MS;
     const child = this.child;
     if (!child || this.closed || !child.pid) return;
-    if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+    if (this.signalRefused) throw this.signalRefused;
     this.record('cleanup-terminate-owned-tree');
     if (process.platform === 'win32') {
       this.windowsJob!.requestCancellation(child, this.cleanupDeadline);
@@ -97,7 +97,7 @@ export class OwnedFixtureProcess {
   }
 
   async finish(): Promise<void> {
-    if (this.signalRefused) throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+    if (this.signalRefused) throw this.signalRefused;
     if (this.child && !this.closed) {
       this.cancel();
       await bounded(this.close);
@@ -131,8 +131,12 @@ export class OwnedFixtureProcess {
     if (process.platform !== 'linux') return true;
     if (!this.groupExists()) return false;
     if (!this.linuxGroup?.captureBeforeKill(this.cleanupDeadline!)) {
-      this.signalRefused = true;
-      throw new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+      this.signalRefused = new Error('Owned Linux group identity is unproved; refusing signal and cleanup');
+      try {
+        const detail = this.linuxGroup?.refusalDetail();
+        if (detail) this.signalRefused.cause = new Error(`Owned Linux capture refusal ${JSON.stringify(detail)}`);
+      } catch { /* Diagnostic failure cannot replace the original authorization refusal. */ }
+      throw this.signalRefused;
     }
     return true;
   }
