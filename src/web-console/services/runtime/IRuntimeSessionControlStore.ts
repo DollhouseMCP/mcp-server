@@ -56,6 +56,12 @@ export interface RuntimeSessionPresenceInput {
   readonly leaseUntil: Date;
 }
 
+export interface RuntimeSessionLeaseInput {
+  readonly sessionId: string;
+  readonly replicaId: string;
+  readonly leaseUntil: Date;
+}
+
 export interface RuntimeSessionHeartbeatInput {
   readonly sessionId: string;
   readonly replicaId: string;
@@ -158,7 +164,8 @@ export interface RuntimeTerminationAckInput {
 export interface IRuntimeSessionControlStore {
   registerPresence(input: RuntimeSessionPresenceInput): Promise<RuntimeSessionPresence>;
   heartbeatPresence(input: RuntimeSessionHeartbeatInput): Promise<RuntimeSessionHeartbeatResult>;
-  markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null>;
+  renewSessionLease(input: RuntimeSessionLeaseInput): Promise<RuntimeSessionHeartbeatResult>;
+  markPresenceClosing(sessionId: string, closedAt: Date, replicaId?: string): Promise<RuntimeSessionPresence | null>;
   sweepStalePresence(before?: Date): Promise<number>;
   findPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null>;
   listPresenceByUser(userId: string, query?: RuntimeSessionListQuery): Promise<RuntimeSessionPresence[]>;
@@ -198,6 +205,14 @@ export function validateRuntimeSessionPresenceInput(input: RuntimeSessionPresenc
   }
   if (input.leaseUntil <= input.lastActiveAt) {
     throw new ConsoleStoreValidationError('leaseUntil must be after lastActiveAt');
+  }
+}
+
+export function validateRuntimeSessionLeaseInput(input: RuntimeSessionLeaseInput): void {
+  validateSessionId(input.sessionId);
+  validateReplicaId(input.replicaId);
+  if (!Number.isFinite(input.leaseUntil.getTime())) {
+    throw new ConsoleStoreValidationError('leaseUntil must be a valid date');
   }
 }
 

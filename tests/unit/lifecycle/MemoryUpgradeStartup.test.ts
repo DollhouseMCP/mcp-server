@@ -93,16 +93,14 @@ process.send?.({event:'observer-ready'});
     });
     await body({child,directory,control,rootAttempts:()=>rootAttempts,closed:()=>closed,stderr:()=>stderr,waitClose,initialControlFiles});
   } catch (error) {failure = error;}
-  finally {
-    if (!closed && phase !== 'absent' && rootAttempts === 0 && child.connected) {
-      // Only this no-root synthetic fixture may use its private IPC cleanup.
-      // It is not an unknown-state drain certificate or an operator stop route.
-      child.send('owned-fixture-finish');
-    }
-    await waitClose();
-    if (!closed) throw new Error('Owned startup child remains; directory retained');
-    await fs.rm(directory, {recursive:true,force:true});
+  if (!closed && phase !== 'absent' && rootAttempts === 0 && child.connected) {
+    // Only this no-root synthetic fixture may use its private IPC cleanup.
+    // It is not an unknown-state drain certificate or an operator stop route.
+    child.send('owned-fixture-finish');
   }
+  await waitClose();
+  if (!closed) throw new Error('Owned startup child remains; directory retained');
+  await fs.rm(directory, {recursive:true,force:true});
   if (failure) throw failure;
 }
 

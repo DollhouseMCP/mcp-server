@@ -34,6 +34,7 @@ const UNKNOWN_KEY_ID_REASON = 'unknown key id';
 const LOCAL_USER_SUB = 'local-user';
 
 interface TokenOpts {
+  bindingClaims?: Record<string, string>;
   alg?: string;
   typ?: string;
   kid?: string;
@@ -100,7 +101,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
 
     // scope: 'mcp' by default; null suppresses the claim entirely so the
     // missing-scope negative-path test can exercise the H6 reject path.
-    const claims: Record<string, unknown> = {};
+    const claims: Record<string, unknown> = { ...opts.bindingClaims };
     if (opts.scope === undefined) {
       claims.scope = 'mcp';
     } else if (opts.scope !== null) {
@@ -115,6 +116,11 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       .setExpirationTime(opts.exp ?? now + 3600);
     return jwt.sign(signKey);
   }
+
+  it('preserves verified OAuth client and grant bindings', async () => {
+    const token = await mintToken({ bindingClaims: { client_id: 'client', azp: 'party', grant_id: 'grant', sid: 'login' } });
+    expect(await as.validate(token)).toMatchObject({ ok: true, claims: { credentialBinding: { issuer: ISSUER, clientId: 'client', authorizedParty: 'party', grantId: 'grant', sessionId: 'login' } } });
+  });
 
   it('rejects direct issuance and existing tokens when the account becomes pending', async () => {
     const token = await as.issue(LOCAL_USER_SUB);

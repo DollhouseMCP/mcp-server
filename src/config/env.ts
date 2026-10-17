@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod';
+import { MAX_TIMER_DELAY_MS } from '../utils/timers.js';
 
 /**
  * Parse a boolean env var correctly. z.coerce.boolean() uses JavaScript's
@@ -124,6 +125,16 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(0).default(60000),
   /** Maximum requests per client per rate limit window. */
   DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(0).default(300),
+  /**
+   * SDK keepalive interval in milliseconds for all MCP SSE responses, and the
+   * stall-detection sampling interval for standalone GET streams; 0 disables both.
+   * Nonzero values must be at least 1000 ms.
+   */
+  DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS: z.coerce.number().int().min(0).max(MAX_TIMER_DELAY_MS)
+    .refine(value => value === 0 || value >= 1000, 'DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS: 0 disables keepalive and stall detection; minimum nonzero interval is 1000 ms')
+    .default(15000),
+  /** Optional standalone MCP stream lifetime cap; zero disables the cap, not credential-expiry payload gating. */
+  DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS: z.coerce.number().int().min(0).max(MAX_TIMER_DELAY_MS).default(0),
   /** Session idle timeout in milliseconds (0 = no timeout). */
   DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().min(0).default(900000),
   /** Pre-warmed session pool size (0 = disabled). */

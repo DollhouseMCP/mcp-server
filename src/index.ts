@@ -4,7 +4,7 @@
 // This ensures .env.local and .env are loaded for all modules
 import { env } from './config/env.js';
 
-import * as path from 'path';
+import * as path from 'node:path';
 import { realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -40,6 +40,7 @@ import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
 import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
 import type { ResourceHandler } from './handlers/ResourceHandler.js';
 import type { WebConsoleComposition } from './web-console/WebConsoleRegistrar.js';
+import type { ISseStallWatcher } from './server/http/SseStallWatcher.js';
 import type { RuntimeMcpSessionControlService } from './web-console/services/runtime/index.js';
 import type { ServerSetup } from './server/ServerSetup.js';
 import type { IngestRoutesResult } from './web/console/IngestRoutes.js';
@@ -54,7 +55,7 @@ import type { SessionActivationRegistry } from './state/SessionActivationState.j
 import type { TlsConfig } from './server/TlsConfig.js';
 import type { PerformanceMonitor } from './utils/PerformanceMonitor.js';
 import { ConfigManager } from "./config/ConfigManager.js";
-import * as os from "os";
+import * as os from "node:os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
 import { validateUserId } from './paths/validateUserId.js';
 import { validateUserId as validateDatabaseUserId } from './state/db-persistence-utils.js';
@@ -126,10 +127,10 @@ export class DollhouseMCPServer implements IToolHandler {
   private server: LowLevelMcpServer | undefined;
   private readonly capabilities: Record<string, unknown>;
   public personasDir: string | null;
-  private currentUser: string | null = null;
+  private readonly currentUser: string | null = null;
   private isInitialized: boolean = false;
   private initializationPromise: Promise<void> | null = null;
-  private container: DollhouseContainer;
+  private readonly container: DollhouseContainer;
   private toolRegistry?: ToolRegistry;
   private enhancedIndexHandler?: EnhancedIndexHandler;
   private personaHandler?: PersonaHandler;
@@ -312,7 +313,7 @@ export class DollhouseMCPServer implements IToolHandler {
     }
     
     // If initialization is already in progress, wait for it
-    if (this.initializationPromise) {
+    if (this.initializationPromise !== null) {
       await this.initializationPromise;
       return;
     }
@@ -1240,6 +1241,7 @@ export async function startStreamableHttpServer(
       : undefined,
     ...resolveWebConsoleHttpMounts(container),
     runtimeSessionControl: runtimeSessionControl?.service,
+    sseStallWatcher: container.resolve<ISseStallWatcher>('SseStallWatcher'),
     registerSignalHandlers: true,
     memoryUpgradeLifecycle: container.resolve('MemoryUpgradeLifecycle'),
     onShutdownComplete: memoryUpgradeOperator ? () => memoryUpgradeOperator!.closeAfterDrain() : undefined,

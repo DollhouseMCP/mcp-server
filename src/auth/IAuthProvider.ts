@@ -28,6 +28,8 @@
 export interface AuthClaims {
   /** Unique subject identifier (e.g. "todd", a UUID, an OIDC sub claim). */
   sub: string;
+  /** Verified token identity used to bind stream credential renewal. */
+  credentialBinding?: CredentialBinding;
   /** Human-readable display name, if available. */
   displayName?: string;
   /** Email address, if available. */
@@ -87,4 +89,19 @@ export interface IssueOptions {
   scopes?: string[];
   /** Token lifetime in seconds. Default: provider-specific. */
   ttlSeconds?: number;
+}
+
+/** Refresh-stable identity only: never token jti, iat, or mutable auth_time. */
+export interface CredentialBinding {
+  issuer?: string;
+  clientId?: string;
+  authorizedParty?: string;
+  grantId?: string;
+  sessionId?: string;
+}
+
+/** Call only with a signature-verified payload. Preserve both client claims. */
+export function credentialBindingFromPayload(payload: Record<string, unknown>): CredentialBinding {
+  const claim = (name: string): string | undefined => typeof payload[name] === 'string' && payload[name].length > 0 ? payload[name] : undefined;
+  return { issuer: claim('iss'), clientId: claim('client_id'), authorizedParty: claim('azp'), grantId: claim('grant_id'), sessionId: claim('sid') };
 }

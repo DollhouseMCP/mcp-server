@@ -82,9 +82,10 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     exp?: number;
     sub?: string;
     scope?: string;
+    claims?: Record<string, unknown>;
   } = {}): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
-    return new SignJWT({ scope: opts.scope ?? 'mcp' })
+    return new SignJWT({ scope: opts.scope ?? 'mcp', ...opts.claims })
       .setProtectedHeader({ alg: ALGORITHM, kid: 'test-kid' })
       .setIssuer(opts.iss ?? ISSUER)
       .setAudience(opts.aud ?? AUDIENCE)
@@ -93,6 +94,11 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
       .setExpirationTime(opts.exp ?? now + 3600)
       .sign(signKey);
   }
+
+  it('preserves verified client and sign-in bindings without substituting token identity', async () => {
+    const result = await provider.validate(await mintToken({ claims: { client_id: 'client', azp: 'party', grant_id: 'grant', sid: 'login', jti: 'token' } }));
+    expect(result).toMatchObject({ ok: true, claims: { credentialBinding: { issuer: ISSUER, clientId: 'client', authorizedParty: 'party', grantId: 'grant', sessionId: 'login' } } });
+  });
 
   it('positive control: a properly-signed token is accepted', async () => {
     const token = await mintToken();
