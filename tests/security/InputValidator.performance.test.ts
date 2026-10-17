@@ -18,6 +18,7 @@
  */
 
 import { performance } from 'perf_hooks';
+import { validationTimingFailureSummary } from './fixtures/validationTimingDiagnostics.js';
 import { validatePath, sanitizeInput, validateFilename, MCPInputValidator } from '../../src/security/InputValidator.js';
 
 /**
@@ -406,6 +407,10 @@ describe('InputValidator Performance Tests', () => {
       // No validation should take unreasonably long
       // Issue #506: Use getPerformanceThreshold() for platform-aware scaling
       const maxIndividualDuration = Math.max(...results.map((r) => r.duration));
+      const failureSummary = validationTimingFailureSummary(results, totalDuration,
+        getPerformanceThreshold(5), getPerformanceThreshold(100), { platform: process.platform, node: process.version,
+          worker: process.env.JEST_WORKER_ID });
+      if (failureSummary) process.stderr.write(`INPUT_VALIDATOR timing failure ${JSON.stringify(failureSummary)}\n`);
       expect(maxIndividualDuration).toBeLessThan(getPerformanceThreshold(5));
 
       // Total concurrent execution should be fast
