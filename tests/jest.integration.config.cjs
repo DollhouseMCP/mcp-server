@@ -30,6 +30,8 @@ const config = {
 
   // Run tests sequentially to avoid conflicts
   maxWorkers: 1,
+  // Jest retains ESM module registries across suites; use its worker recycling mitigation.
+  workerIdleMemoryLimit: '1800MB',
 
   // Clear mocks between tests
   clearMocks: true,

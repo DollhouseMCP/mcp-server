@@ -50,7 +50,7 @@ export function checkPartition(inventory, shards) {
 
 function discover(shard) {
   // Native Jest discovery and native default-sequencer partition; never a static filename list.
-  const args = ['--silent', 'run', 'test:integration', '--', '--runInBand', '--listTests', '--json'];
+  const args = ['--silent', 'run', 'test:integration', '--', '--listTests', '--json'];
   if (shard) args.push(`--shard=${shard}/2`);
   assert.ok(existsSync(npmCli), 'Qualified Node installation must include its npm CLI');
   const result = spawnSync(process.execPath, [npmCli, ...args], { encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
@@ -145,7 +145,7 @@ async function run(shard, directory) {
   };
   save(file, evidence);
   const resultPath = path.join(directory, 'jest-result.json');
-  const args = ['run', 'test:integration', '--', '--runInBand', '--runTestsByPath', ...evidence.selected, '--json', '--outputFile', resultPath];
+  const args = ['run', 'test:integration', '--', '--runTestsByPath', ...evidence.selected, '--json', '--outputFile', resultPath];
   assert.ok(existsSync(npmCli), 'Qualified Node installation must include its npm CLI');
   const child = spawn(process.execPath, [npmCli, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   let tail = '';
