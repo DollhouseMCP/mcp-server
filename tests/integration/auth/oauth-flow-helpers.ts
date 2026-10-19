@@ -189,12 +189,13 @@ export async function startAuthorizeFlow(opts: {
   redirectUri: string;
   resource: string;
   scope: string;
-  /** Optional `prompt` param. Use `'consent'` to force the consent prompt
-   * needed for offline_access to actually be granted under standard OIDC. */
+  /** Optional explicit prompt; the server normalizes consent for requested offline access. */
   prompt?: string;
+  loginHint?: string;
+  pushedAuthorizationEndpoint?: string;
 }): Promise<AuthorizeResult> {
   const verifier = newPkceVerifier();
-  const params = new URLSearchParams({
+  let params = new URLSearchParams({
     response_type: 'code',
     client_id: opts.clientId,
     redirect_uri: opts.redirectUri,
@@ -204,6 +205,15 @@ export async function startAuthorizeFlow(opts: {
     scope: opts.scope,
   });
   if (opts.prompt) params.set('prompt', opts.prompt);
+  if (opts.loginHint) params.set('login_hint', opts.loginHint);
+  if (opts.pushedAuthorizationEndpoint) {
+    const pushed = await fetch(opts.pushedAuthorizationEndpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params,
+    });
+    if (pushed.status !== 201) throw new Error(`PAR failed: ${pushed.status} ${await pushed.text()}`);
+    const { request_uri: requestUri } = await pushed.json() as { request_uri: string };
+    params = new URLSearchParams({ client_id: opts.clientId, request_uri: requestUri });
+  }
   const jar = new CookieJar();
   const authorize = await fetch(`${opts.authServerMetadata.authorization_endpoint}?${params}`, {
     method: 'GET',

@@ -8,6 +8,12 @@ import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/stora
 const ADMIN_STEPUP_ACR = 'urn:dollhouse:acr:admin-stepup';
 
 describe('EmbeddedASOidcAccount', () => {
+  it('binds the authorization grant even when the auth method has no stored profile', async () => {
+    const account = new EmbeddedASOidcAccount([], new InMemoryAuthStorageLayer());
+    await expect(account.extraTokenClaims({}, { accountId: 'transient', grantId: 'grant' }))
+      .resolves.toEqual({ grant_id: 'grant' });
+  });
+
   it('emits AS-issued administrative ACR, AMR, and fresh auth_time for the matching grant', async () => {
     const storage = await storageWithAdmin();
     await storage.genericSet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-admin', {
@@ -20,6 +26,7 @@ describe('EmbeddedASOidcAccount', () => {
 
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-admin' }))
       .resolves.toMatchObject({
+        grant_id: 'grant-admin',
         acr: ADMIN_STEPUP_ACR,
         amr: ['otp'],
         auth_time: 1779883200,
@@ -30,6 +37,7 @@ describe('EmbeddedASOidcAccount', () => {
     // acr/amr and the BFF would reject the step-up.
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-admin' }))
       .resolves.toMatchObject({
+        grant_id: 'grant-admin',
         acr: ADMIN_STEPUP_ACR,
         amr: ['otp'],
         auth_time: 1779883200,
@@ -47,7 +55,7 @@ describe('EmbeddedASOidcAccount', () => {
     const account = new EmbeddedASOidcAccount([] satisfies IAuthMethod[], storage);
 
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-other' }))
-      .resolves.toEqual({ auth_time: 0 });
+      .resolves.toEqual({ auth_time: 0, grant_id: 'grant-other' });
   });
 
   it('ignores missing, malformed, and expired administrative grant claims', async () => {
@@ -69,9 +77,9 @@ describe('EmbeddedASOidcAccount', () => {
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin' }))
       .resolves.toEqual({ auth_time: 0 });
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-malformed' }))
-      .resolves.toEqual({ auth_time: 0 });
+      .resolves.toEqual({ auth_time: 0, grant_id: 'grant-malformed' });
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-expired' }))
-      .resolves.toEqual({ auth_time: 0 });
+      .resolves.toEqual({ auth_time: 0, grant_id: 'grant-expired' });
   });
 });
 

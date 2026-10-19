@@ -1,3 +1,4 @@
+import { credentialBindingFromPayload } from '../IAuthProvider.js';
 import {
   decodeProtectedHeader,
   importJWK,
@@ -155,9 +156,10 @@ export async function loadPublicSigningJwksFromStore(
   };
 }
 
-function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
+function claimsFromPayload(payload: Record<string, unknown>, sub: string): AuthClaims {
   return {
-    sub: String(payload.sub),
+    sub,
+    credentialBinding: credentialBindingFromPayload(payload),
     displayName: typeof payload.name === 'string' ? payload.name : undefined,
     email: typeof payload.email === 'string' ? payload.email : undefined,
     tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
@@ -180,7 +182,7 @@ function buildEmbeddedAsAuthResult(
   if (protectedHeader.kid !== activeKid) {
     return { ok: false, reason: 'unknown key id' };
   }
-  if (!payload.sub) {
+  if (typeof payload.sub !== 'string' || !payload.sub) {
     return { ok: false, reason: 'token missing sub claim' };
   }
   const scopeClaim = typeof payload.scope === 'string' ? payload.scope : '';
@@ -188,7 +190,7 @@ function buildEmbeddedAsAuthResult(
   if (!scopes.has('mcp')) {
     return { ok: false, reason: 'token missing mcp scope' };
   }
-  return { ok: true, claims: claimsFromPayload(payload) };
+  return { ok: true, claims: claimsFromPayload(payload, payload.sub) };
 }
 
 function mapEmbeddedAsVerifyError(error: unknown): string {

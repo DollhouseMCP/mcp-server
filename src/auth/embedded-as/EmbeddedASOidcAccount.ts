@@ -14,16 +14,20 @@ export class EmbeddedASOidcAccount {
     if (!await this.storage.isAccountAllowed(accountId)) {
       throw new Error('Account is not available for authentication');
     }
-    const account = await this.storage.getAccount(accountId);
-    if (!account) return undefined;
-    if (account.sub !== accountId) return undefined;
     const extras: Record<string, unknown> = {};
-    if (account.lastAuthAt) {
-      extras.auth_time = Math.floor(account.lastAuthAt / 1000);
-    }
     const grantId = typeof (token as { grantId?: unknown }).grantId === 'string'
       ? (token as { grantId: string }).grantId
       : null;
+    if (grantId) {
+      // oidc-provider preserves grantId through refresh-token rotation. Unlike
+      // account auth_time, it cannot change when another client signs in.
+      extras.grant_id = grantId;
+    }
+    // Some auth methods resolve identity without a stored profile. The grant
+    // still comes from the verified authorization flow and must be bound.
+    const account = await this.storage.getAccount(accountId);
+    if (account?.sub !== accountId) return Object.keys(extras).length > 0 ? extras : undefined;
+    if (account.lastAuthAt) extras.auth_time = Math.floor(account.lastAuthAt / 1000);
     if (grantId) {
       // extraTokenClaims runs once PER TOKEN (access_token AND id_token) of a
       // single issuance, so the admin step-up claims must be injected into all

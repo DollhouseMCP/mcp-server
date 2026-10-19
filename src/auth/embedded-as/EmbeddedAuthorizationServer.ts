@@ -1,3 +1,4 @@
+import { offlineAccessConsentHandlers, offlineAccessParConsentHandlers } from './offlineAccessConsent.js';
 /**
  * EmbeddedAuthorizationServer
  *
@@ -182,7 +183,7 @@ function servePackagedAuthAsset(relativePath: string, contentType: string): Requ
 }
 
 function servePackagedAuthFont(): RequestHandler {
-  return async (req, res, next) => {
+  return (req, res, next) => {
     const file = req.params.file;
     if (typeof file !== 'string' || !AUTH_FONT_FILE_RE.test(file)) {
       res.sendStatus(404);
@@ -449,7 +450,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         resource: this.resource,
         authorization_servers: [this.issuer],
         bearer_methods_supported: ['header'],
-        scopes_supported: ['mcp'],
+        scopes_supported: ['mcp', 'offline_access'],
         resource_documentation: joinUrl(this.publicBaseUrl, '/'),
       });
     });
@@ -571,6 +572,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // Both /interaction and the catch-all need the initialized state. We
     // route through ensureInitialized() per request and dispatch into the
     // already-built interaction middleware (constructed once during init).
+    // OIDC check_scope otherwise strips offline_access before our consent UI.
+    // Prompt normalization asks for consent; it never grants scopes by itself.
+    router.get('/auth', ...offlineAccessConsentHandlers());
+    router.post('/request', ...offlineAccessParConsentHandlers());
     router.use('/interaction', (req, res, next) => {
       void (async () => {
         try {

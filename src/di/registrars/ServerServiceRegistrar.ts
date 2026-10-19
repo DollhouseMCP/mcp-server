@@ -12,6 +12,8 @@
  * @module di/registrars/ServerServiceRegistrar
  */
 
+import { SseStallWatcher } from '../../server/http/SseStallWatcher.js';
+import { env } from '../../config/env.js';
 import { createStdioSession } from '../../context/StdioSession.js';
 import { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import type { SessionResolver } from '../../context/SessionContext.js';
@@ -24,6 +26,7 @@ export class ServerServiceRegistrar {
   public register(container: DiContainerFacade): void {
     // TLS configuration for HTTP transport (and any future HTTPS surface).
     // Reads DOLLHOUSE_TLS_CERT_PATH / DOLLHOUSE_TLS_KEY_PATH from env.
+    container.register('SseStallWatcher', () => new SseStallWatcher(env.DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS));
     container.register('TlsConfig', () => new TlsConfig());
 
     // SERVER

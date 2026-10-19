@@ -6,6 +6,8 @@
 
 ---
 
+Environment values are validated once at startup for every transport; an invalid HTTP-only variable also fails a stdio start, by design, to fail fast on misconfiguration.
+
 ## Quick Start
 
 ### Production Setup (5 minutes)
@@ -48,6 +50,7 @@ That's it! The `.env` file already has all the defaults configured.
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [HTTP session liveness](#http-session-liveness)
 - [Production Configuration](#production-configuration)
 - [Testing & Development Configuration](#testing--development-configuration)
 - [All Environment Variables](#all-environment-variables)
@@ -78,6 +81,129 @@ That's it! The `.env` file already has all the defaults configured.
 - [Troubleshooting](#troubleshooting)
 
 ---
+
+## HTTP session liveness
+
+| Variable | Default | Behavior |
+|---|---:|---|
+| `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` | `900000` | Grace period in milliseconds when no accepted standalone GET stream is open. Requests reset the grace; the final stream close starts a fresh grace. `0` disables idle expiry. |
+| `DOLLHOUSE_HTTP_STREAM_KEEPALIVE_MS` | `15000` | SDK keepalive interval in milliseconds for all MCP SSE responses, and stall-detection sampling interval for standalone GET streams. `0` disables both; minimum nonzero interval is `1000` ms. Idle expiry and presence renewal remain independent of heartbeats. |
+| `DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS` | `0` | Optional standalone MCP stream lifetime cap in milliseconds; `0` disables the cap; minimum nonzero lifetime is `1000` ms. Positive values end streams gracefully so clients can reconnect within the idle window and retain their session. |
+| `DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS` | `300000` | Milliseconds after credential expiry before gracefully ending an unrenewed standalone stream. Renewal cancels the close; `0` disables it. Minimum nonzero grace is `1000` ms. Credentials without expiry are unaffected. |
+
+An open accepted GET holds its existing MCP session alive. A reconnect from the
+same authenticated owner replaces the old standalone stream. Explicit DELETE,
+operator termination and shutdown still end the session immediately.
+Disabling an account or revoking all of its credentials in the console also
+terminates that user's open MCP sessions through runtime termination commands.
+This depends on registered runtime presence and the owning replica processing
+the commands; the console reports termination failures or acknowledgement timeouts.
+The opening credential's expiry does not immediately close an accepted stream. After expiry,
+only SSE keepalive comments (the SDK's `: keepalive` frame) continue; MCP notifications, requests and responses
+routed to that standalone stream are dropped, not queued for later delivery.
+The server logs once at debug level when the stream becomes credential-expired.
+A POST with a matching credential binding renews the current accepted stream after
+authentication and the session owner check succeed. It extends the deadline to the
+later of its current value and the POST token's `exp`, even if the JSON-RPC
+operation fails. An exp-less token cannot extend the deadline.
+A matching renewal resumes delivery on the original GET, with one debug log on
+un-gating. If any payload was dropped, the server sends one `tools/list_changed`
+notification to trigger resync; it never replays dropped messages. If the expired stream closes first, the next accepted stream receives the pending resync once.
+
+Renewal requires exact equality of the verified subject, tenant (when present),
+issuer, `client_id`, `azp`, `grant_id`, and `sid`. Both client claims are compared
+separately when present. A claim missing on just one side rejects renewal; a claim
+missing on both sides leaves the remaining comparisons in force:
+
+- Embedded OAuth flows emit `client_id` and a `grant_id` stable across refreshes.
+  Legacy tokens without `grant_id` cannot renew a GET with a new grant-bearing
+  token; replace that GET once.
+- External OIDC uses the signed claims supplied by the issuer. Without a grant or
+  `sid`, binding is limited to subject, tenant, issuer and available client claims.
+- Local development issuance has neither client nor grant identity: its fallback
+  is subject and issuer, plus any tenant or other binding claims actually present.
+
+A POST with a different binding still receives its normal response but cannot
+renew or disturb the stream. This prevents another client or grant's activity
+from reviving a copied bearer/session-ID stream. Providers lacking those claims
+cannot distinguish sign-ins, and possession of the same grant's bearer remains
+indistinguishable from its legitimate use. A replacement authenticated GET uses
+its own credential and binding.
+
+`DOLLHOUSE_HTTP_STREAM_MAX_LIFETIME_MS` defaults to `0` (no wall-clock cap).
+A positive cap ends the stream gracefully; connected clients can reconnect within
+the session idle window and retain their session and activations. Credential expiry
+gates MCP messages immediately while keepalive comments continue. The default
+`DOLLHOUSE_HTTP_STREAM_EXPIRY_GRACE_MS=300000` allows five minutes for a validated
+credential from the same login to renew the stream before a graceful end. Renewal
+cancels that deadline; `0` disables expiry-based closure. Every POST and replacement
+GET still passes authentication and ownership checks.
+
+Graceful stream closure waits up to one second for completion; a socket that cannot
+drain is then destroyed. A session normally ends after disconnect plus the idle
+timeout, or on DELETE, console account disable or revoke-all, shutdown, or a lapsed
+presence lease. These terminal paths close sockets immediately. A refused memory
+drain retains session ownership until it is safe to dispose. Setting the idle
+timeout to `0` disables idle expiry. A credential without expiry never arms the
+expiry deadline; with no lifetime cap, the server logs a warning once for each
+accepted authenticated unbounded stream. Unauthenticated streams do not emit this warning.
+
+The embedded authorization server issues refresh tokens when the client requests
+`offline_access`, allows the `refresh_token` grant, and the user approves consent.
+Clients need not supply `prompt=consent`; the server requests consent when needed.
+Refresh tokens allow clients to obtain fresh access credentials without signing in
+again, but do not themselves renew an open stream until a request is made.
+
+For occupancy planning, a stream whose socket keeps draining is treated as a
+connected client and kept until an applicable expiry grace, lifetime cap or other
+closure condition. If a vanished client's socket stops draining, the
+stall watcher closes it after about three keepalive intervals of sustained
+backpressure; this is not a deadline measured from the client's disappearance.
+A proxy that keeps its origin connection open and draining after the end client
+leaves keeps the stream until the proxy's own idle timeout. Disabling keepalive
+also disables stall detection. Credentials without an expiry have no expiry gate;
+the optional lifetime cap still applies.
+Disconnect, explicit session disposal and
+presence-lease loss still close it. Signing-key retirement does not terminate
+existing sessions or reauthenticate an open stream: payload delivery can continue
+until the current credential deadline, after which only heartbeats pass unless a
+newly validated, matching credential renews it. A
+non-expiring credential has no expiry gate. Console account disable and
+revoke-all use the runtime termination path described above.
+When idle expiry is disabled (`DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS=0`),
+stream-less sessions renew presence periodically too, at the same cadence as open
+streams. Healthy quiet sessions are not removed by cleanup and remain visible to admin termination;
+lease-only writes do not count as requests or move last activity. With idle expiry
+enabled, quiet stream-less sessions stop renewing: the idle window ends before
+the presence lease (idle timeout plus a 60-second grace).
+
+Existing-session POSTs and GET admissions check the local confirmed lease before
+SDK dispatch, including after queued GET admission waits. This is a local check
+of the confirmed lease; a missing, closing, or other-replica row within a still-valid
+lease is detected by the next renewal or heartbeat. A lapsed lease returns
+404 and disposes the session without executing the request, even if the expiry
+timer is delayed. There is no quiet revalidation window or missing-row resurrection.
+Open streams and idle-disabled sessions retain the confirmed-lease outage cutoff.
+Admin termination reaches healthy quiet sessions through their renewed presence.
+If an outage has already hidden a lapsed row from admin lookup, the local expiry
+and admission guards close that session; every request also passes authentication.
+
+Three missed comment intervals bound local backpressure only; neither a writable
+proxy socket nor comment delivery proves client liveness.
+
+Keepalive comments and lease renewals do not count as requests or update the
+console's last-activity timestamp. A writer blocked for three consecutive
+intervals destroys that response and starts the normal idle grace. This bounds
+backpressure only; a writable proxy socket does not prove the client is alive. Presence
+renews every third of its configured lease and once on final stream close. A
+closing/wrong-replica result closes locally. Missing rows and transient store errors
+retry with jittered backoff within the last confirmed lease; slow writes remain
+coalesced and log a warning. Without a new confirmation by lease expiry, the local
+session closes. This guard also covers POST-only sessions and failures after
+the last stream closes. Initial registration retries within one lease window,
+with disposal fencing; quiet stream-less sessions renew periodically only when
+transport idle expiry is disabled.
+Presence is never recreated from a missing-row heartbeat.
 
 ## Production Configuration
 

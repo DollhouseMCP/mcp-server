@@ -23,6 +23,7 @@ import * as path from 'node:path';
 import { SignJWT, jwtVerify, importJWK, exportJWK, generateKeyPair, errors as joseErrors } from 'jose';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { credentialBindingFromPayload } from './IAuthProvider.js';
 import type { IAuthProvider, AuthResult, AuthClaims, IssueOptions } from './IAuthProvider.js';
 
 const ISSUER = 'dollhousemcp-local';
@@ -83,6 +84,7 @@ function buildLocalAuthResult(
 
   const claims: AuthClaims = {
     sub: payload.sub,
+    credentialBinding: credentialBindingFromPayload(payload),
     displayName: typeof payload.display_name === 'string' ? payload.display_name : undefined,
     email: typeof payload.email === 'string' ? payload.email : undefined,
     tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,

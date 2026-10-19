@@ -199,7 +199,7 @@ sys.exit(3)
         expect((await runtime.rpc('summary')).retainedOwners).toBeGreaterThan(0);
         const invokeHelper = (output?: ReturnType<typeof captureHostedStopOutput>) => {
           const helper = spawn('bash', [path.join(process.cwd(), 'scripts/hosted-graceful-stop.sh'), target, '1'], {
-            env: { PATH: `${bin}:${process.env.PATH}`, HOME: directory }, stdio: ['ignore', 'pipe', 'pipe'],
+            env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, HOME: directory }, stdio: ['ignore', 'pipe', 'pipe'],
           });
           ownAuxiliary(helper);
           if (output) {

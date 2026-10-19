@@ -18,6 +18,7 @@
 import { jwtVerify, createRemoteJWKSet, errors as joseErrors } from 'jose';
 import type { JWTVerifyGetKey } from 'jose';
 import { logger } from '../utils/logger.js';
+import { credentialBindingFromPayload } from './IAuthProvider.js';
 import type { IAuthProvider, AuthResult, AuthClaims } from './IAuthProvider.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 
@@ -184,6 +185,7 @@ function buildOidcAuthResult(payload: Record<string, unknown>): AuthResult {
 
   const claims: AuthClaims = {
     sub: payload.sub,
+    credentialBinding: credentialBindingFromPayload(payload),
     displayName: extractStringClaim(payload, 'name', 'display_name', 'preferred_username'),
     email: extractStringClaim(payload, 'email'),
     tenantId: extractStringClaim(payload, 'tenant_id', 'org_id') ?? null,

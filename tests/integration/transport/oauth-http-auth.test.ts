@@ -1,3 +1,4 @@
+import { decodeJwt } from 'jose';
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { promises as fs } from 'node:fs';
 import * as net from 'node:net';
@@ -179,7 +180,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(protectedResource.status).toBe(200);
     expect(await protectedResource.json()).toMatchObject({
       resource: runtime.url,
-      scopes_supported: ['mcp'],
+      scopes_supported: ['mcp', 'offline_access'],
     });
 
     // 2. Discover the AS metadata.
@@ -199,23 +200,23 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(metadata.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(metadata.headers.get('x-frame-options')).toBe('DENY');
 
-    let clientId = 'dollhouse-claude-connector';
-    let redirectUri = 'http://127.0.0.1/callback';
-    if (requestedScope === 'mcp') {
-      redirectUri = 'https://client.example.test/callback';
-      const registration = await fetch(authServer.registration_endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          redirect_uris: [redirectUri],
-          scope: 'mcp',
-          application_type: 'web',
-          token_endpoint_auth_method: 'none',
-        }),
-      });
-      expect(registration.status).toBe(201);
-      clientId = ((await registration.json()) as { client_id: string }).client_id;
-    }
+    // Both clients allow refresh; only the requested authorization scope differs.
+    const redirectUri = 'https://client.example.test/callback';
+    const registration = await fetch(authServer.registration_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        redirect_uris: [redirectUri],
+        scope: 'mcp offline_access',
+        grant_types: ['authorization_code', 'refresh_token'],
+        application_type: 'web',
+        token_endpoint_auth_method: 'none',
+      }),
+    });
+    expect(registration.status).toBe(201);
+    const registered = await registration.json() as { client_id: string; grant_types: string[] };
+    expect(registered.grant_types).toEqual(expect.arrayContaining(['authorization_code', 'refresh_token']));
+    const clientId = registered.client_id;
 
     // 3. Begin the OAuth flow. Browsers send GET to /authorize per RFC 6749;
     //    expect 303 redirect to the interaction URL.
@@ -323,7 +324,26 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string; refresh_token?: string; scope?: string };
     expect(tokenBody.access_token).toBeTruthy();
-    expect(tokenBody.scope).toBe('mcp');
+    expect(tokenBody.scope?.split(' ').sort()).toEqual(requestedScope.split(' ').sort());
+    const openingClaims = decodeJwt(tokenBody.access_token);
+    expect(openingClaims.client_id).toBe(clientId);
+    expect(openingClaims.grant_id).toEqual(expect.any(String));
+    if (requestedScope.includes('offline_access')) {
+      expect(tokenBody.refresh_token).toBeTruthy();
+      const refreshed = await fetch(authServer.token_endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, refresh_token: tokenBody.refresh_token!, resource: runtime.url }),
+      });
+      expect(refreshed.status).toBe(200);
+      const refreshedBody = await refreshed.json() as { access_token: string; refresh_token: string };
+      expect(refreshedBody.refresh_token).toEqual(expect.any(String));
+      expect(refreshedBody.refresh_token).not.toBe(tokenBody.refresh_token);
+      const refreshedClaims = decodeJwt(refreshedBody.access_token);
+      expect(refreshedClaims).toMatchObject({ sub: openingClaims.sub, client_id: clientId, grant_id: openingClaims.grant_id });
+    } else {
+      expect(tokenBody.refresh_token).toBeUndefined();
+    }
+
 
     // 8. Use the access token over the MCP transport.
     const transport = new StreamableHTTPClientTransport(new URL(runtime.url), {
