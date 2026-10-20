@@ -390,12 +390,12 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       // policy (migration 0005) returns rows where user_id matches the caller
       // OR visibility = 'public'. Adding an explicit user_id filter here would
       // re-block public reads and defeat the whole point of the policy — so
-      // the only predicate is the primary-key lookup. RLS enforces the
-      // visibility rule; the pk lookup stays O(1) via the id index.
+      // RLS enforces visibility while the element-type predicate confines reads
+      // to this typed layer. The primary-key lookup still uses the id index.
       const rows = await tx
         .select({ rawContent: elements.rawContent })
         .from(elements)
-        .where(eq(elements.id, relativePath))
+        .where(and(eq(elements.id, relativePath), eq(elements.elementType, this.elementType)))
         .limit(1);
       // `.at(0)` (vs `rows[0]`) keeps `undefined` in the type so the
       // not-found guard below stays meaningful without noUncheckedIndexedAccess.

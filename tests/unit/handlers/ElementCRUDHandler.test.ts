@@ -128,6 +128,117 @@ describe('ElementCRUDHandler (DI)', () => {
     );
   });
 
+  describe.each([ElementType.SKILL, ElementType.TEMPLATE, ElementType.MEMORY, ElementType.ENSEMBLE])(
+    'activation persistence for %s', type => {
+      function prepare(success: boolean) {
+        const recordActivation = jest.fn();
+        (handler as any).activationStore = { recordActivation, getSessionId: () => 'test-session' };
+        const element = { metadata: { name: 'Display Name', activationStrategy: 'sequential' },
+          instructions: 'Instructions', getStats: () => ({ totalEntries: 0, totalSize: 0 }),
+          activateEnsemble: async () => ({ success: true, activatedElements: [], failedElements: [],
+            elementResults: [], totalDuration: 0 }),
+        };
+        skillManager.activateSkill = jest.fn().mockResolvedValue({ success, skill: success ? element : undefined } as any);
+        templateManager.list = jest.fn().mockResolvedValue(success ? [element] as any : []);
+        memoryManager.activateMemory = jest.fn().mockResolvedValue({ success, memory: success ? element : undefined } as any);
+        ensembleManager.activateEnsemble = jest.fn().mockResolvedValue({ success, ensemble: success ? element : undefined } as any);
+        return recordActivation;
+      }
+
+      it('preserves the requested-name tuple after successful activation', async () => {
+        const record = prepare(true);
+        await handler.activateElement('display-name', type);
+        expect(record).toHaveBeenCalledWith(type, 'display-name', undefined, undefined);
+        expect(record).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not persist a refused activation', async () => {
+        const record = prepare(false);
+        const response = await handler.activateElement('missing', type);
+        if (type === ElementType.SKILL || type === ElementType.MEMORY) {
+          const label = type === ElementType.SKILL ? 'Skill' : 'Memory';
+          expect(response.content[0].text).toBe(`❌ ${label} 'missing' not found`);
+        }
+        expect(record).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  describe('sequential policy lookup equivalence', () => {
+    it('continues bounded member lookups after an individual rejection', async () => {
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'team', elements: Array.from({ length: 10 }, (_, i) => ({
+          element_type: 'skill', element_name: `member-${i}`,
+        })) },
+      } as any]);
+      skillManager.findByName.mockImplementation(async name => {
+        if (name === 'member-0') throw new Error('unreadable member');
+        return { metadata: { name, gatekeeper: { deny: ['delete_element'] } } } as any;
+      });
+      const result = await handler.getActiveElementsForPolicy();
+      expect(skillManager.findByName).toHaveBeenCalledTimes(10);
+      expect(result.filter(element => element.type === 'skill').map(element => element.name))
+        .toEqual(Array.from({ length: 9 }, (_, i) => `member-${i + 1}`));
+    });
+
+    it('preserves persisted-state rejection identity and stops before later states', async () => {
+      const failure = new Error('state unavailable');
+      const later = jest.fn(() => ({}));
+      (handler as any).activationStore = {
+        isEnabled: () => true, getSessionId: () => 'current',
+        listPersistedActivationStates: async () => [
+          { sessionId: 'first', get activations() { throw failure; } },
+          { sessionId: 'later', get activations() { return later(); } },
+        ],
+      };
+      await expect(handler.getPolicyElementsForReport('foreign')).rejects.toBe(failure);
+      expect(later).not.toHaveBeenCalled();
+    });
+
+    it('continues persisted lookups after rejection and preserves session order', async () => {
+      (handler as any).activationStore = {
+        isEnabled: () => true, getSessionId: () => 'current',
+        listPersistedActivationStates: async () => ['bad', 'good'].map(name => ({
+          sessionId: name, activations: { skill: [{ name }] },
+        })),
+      };
+      skillManager.findByName.mockImplementation(async name => {
+        if (name === 'bad') throw new Error('unreadable persisted member');
+        return { metadata: { name, gatekeeper: { deny: ['delete_element'] } } } as any;
+      });
+      const result = await handler.getPolicyElementsForReport('foreign');
+      expect(result).toEqual([expect.objectContaining({ name: 'good', sessionIds: ['good'] })]);
+      expect(skillManager.findByName.mock.calls.map(args => args[0])).toEqual(['bad', 'good']);
+    });
+
+    it('keeps deactivation failures and continues to the next active target', async () => {
+      skillManager.getActiveSkills.mockResolvedValue(['first', 'second'].map(name => ({ metadata: { name } })) as any);
+      skillManager.deactivateSkill.mockRejectedValueOnce('raw failure');
+      const result = await handler.releaseDeadlock();
+      expect(result.failed).toEqual([{ type: ElementType.SKILL, name: 'first', error: 'raw failure' }]);
+      expect(result.deactivated).toEqual([{ type: ElementType.SKILL, name: 'second' }]);
+      expect(skillManager.deactivateSkill.mock.calls.map(args => args[0])).toEqual(['first', 'second']);
+    });
+
+    it('continues aggregation after failure and visits live strategy additions', async () => {
+      const strategies = (handler as any).strategies as Map<string, any>;
+      strategies.clear();
+      const order: string[] = [];
+      strategies.set('first', { getActiveElements: async () => {
+        order.push('first');
+        strategies.delete('removed');
+        strategies.set('added', { getActiveElements: async () => {
+          order.push('added'); return { content: [{ text: 'added content' }] };
+        } });
+        throw new Error('first failed');
+      } });
+      strategies.set('removed', { getActiveElements: jest.fn() });
+      const result = await handler.getActiveElements();
+      expect(order).toEqual(['first', 'added']);
+      expect(result.content[0].text).toBe('[added]\nadded content');
+    });
+  });
+
   it('ensures initialization and delegates to skill manager for create', async () => {
     skillManager.create.mockResolvedValue({ metadata: { name: 'created' } } as any);
 

@@ -36,33 +36,34 @@ export class TemplateActivationStrategy extends BaseActivationStrategy implement
     if (gatekeeperWarning) {
       text += gatekeeperWarning;
     }
-    return this.createSuccessResponse(text);
+    return { ...this.createSuccessResponse(text),
+      activationRecord: { name, filename: undefined, identity: undefined } };
   }
 
   /**
    * Deactivate a template (templates are stateless)
    * Extracted from ElementCRUDHandler.ts lines 543-550
    */
-  async deactivate(_name: string): Promise<MCPResponse> {
-    return {
+  deactivate(_name: string): Promise<MCPResponse> {
+    return Promise.resolve({
       content: [{
         type: "text",
         text: "📝 Templates are stateless - nothing to deactivate"
       }]
-    };
+    });
   }
 
   /**
    * Get active templates (templates are stateless)
    * Extracted from ElementCRUDHandler.ts lines 414-421
    */
-  async getActiveElements(): Promise<MCPResponse> {
-    return {
+  getActiveElements(): Promise<MCPResponse> {
+    return Promise.resolve({
       content: [{
         type: "text",
         text: "📝 Templates are stateless and activated on-demand when rendering"
       }]
-    };
+    });
   }
 
   /**

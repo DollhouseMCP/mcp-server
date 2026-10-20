@@ -22,7 +22,7 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
     const result = await this.skillManager.activateSkill(name);
 
     if (!result.success || !result.skill) {
-      return this.createNotFoundResponse(name, 'Skill');
+      return this.createErrorResponse(`❌ Skill '${name}' not found`);
     }
 
     const skill = result.skill;
@@ -42,14 +42,10 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
       parts.push('Skill becomes active and ready for execution');
     }
 
-    parts.push('');
-    parts.push('**Instructions:**');
-    parts.push(skill.instructions);
+    parts.push('', '**Instructions:**', skill.instructions);
 
     if (skill.content?.trim()) {
-      parts.push('');
-      parts.push('**Reference:**');
-      parts.push(skill.content);
+      parts.push('', '**Reference:**', skill.content);
     }
 
     // Issue #642: Fail-safe warning for CLI restrictions
@@ -67,7 +63,8 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
       content: [{
         type: "text",
         text: parts.join('\n')
-      }]
+      }],
+      activationRecord: { name, filename: undefined, identity: undefined },
     };
   }
 

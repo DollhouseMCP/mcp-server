@@ -552,8 +552,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
   /**
    * Resolve an element by its backend-owned durable key. File-backed managers
-   * accept the indexed relative path; database-backed managers accept a row
-   * UUID. Unlike findByName(), this never interprets the key as display text.
+   * accept indexed relative paths with the manager's file extension, refusing
+   * other strings; database-backed managers refuse non-UUID keys. Unlike
+   * findByName(), this never interprets the key as display text.
    */
   async findByStorageIdentity(identity: string): Promise<T | undefined> {
     if (typeof identity !== 'string' || identity.trim() === '') return undefined;
@@ -561,6 +562,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     if (
       isWritableStorageLayer(this.storageLayer) &&
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(normalizedIdentity)
+    ) {
+      return undefined;
+    }
+    if (
+      !isWritableStorageLayer(this.storageLayer) &&
+      !normalizedIdentity.toLowerCase().endsWith(this.getFileExtension().toLowerCase())
     ) {
       return undefined;
     }

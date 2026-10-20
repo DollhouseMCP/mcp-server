@@ -290,12 +290,23 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     return 'persona';
   }
 
+  /** Run immediately, preserving async-style success and rejection values. */
+  private settle<T>(fn: () => T): Promise<T> {
+    try {
+      return Promise.resolve(fn());
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   /**
    * Initialize and load all personas
    */
-  async initialize(): Promise<void> {
-    this.initializePathValidator();
-    // Base class handles element loading
+  initialize(): Promise<void> {
+    return this.settle(() => {
+      this.initializePathValidator();
+      // Base class handles element loading
+    });
   }
 
   /**
@@ -588,7 +599,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   private async performDiskLookup(identifier: string): Promise<PersonaElement | undefined> {
     try {
-      const fromDisk = await this.findByName(identifier);
+      // Activation references are storage identities: filenames or database UUIDs.
+      const fromDisk = (await this.findByStorageIdentity(identifier)) ?? (await this.findByName(identifier));
       if (fromDisk && this.matchesIdentifier(fromDisk, identifier)) {
         this.cacheMissMetrics.diskRecoveries++;
         logger.info(`[PersonaManager] Cache miss recovered from disk: "${identifier}" (total recoveries: ${this.cacheMissMetrics.diskRecoveries}, miss rate: ${this.cacheMissMetrics.cacheMisses}/${this.cacheMissMetrics.cacheHits + this.cacheMissMetrics.cacheMisses})`);
@@ -751,10 +763,15 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   async resolveActivePersonas(): Promise<PersonaElement[]> {
     const personas: PersonaElement[] = [];
-    for (const filename of this.getActivationSet()) {
-      const persona = await this.findPersonaAsync(filename);
+    // Walk the live iterator so activation changes during lookup retain Set semantics.
+    const step = async (it: Iterator<string>): Promise<void> => {
+      const next = it.next();
+      if (next.done) return;
+      const persona = await this.findPersonaAsync(next.value);
       if (persona) personas.push(persona);
-    }
+      await step(it);
+    };
+    await step(this.getActivationSet().values());
     return personas;
   }
 
@@ -909,12 +926,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * @returns Validated and sanitized inputs ready for metadata construction
    * @throws Error if validation fails
    */
-  private async validatePersonaInputs(
+  private validatePersonaInputs(
     name: string,
     description: string,
     instructions: string,
     triggers?: string
-  ): Promise<ValidatedPersonaInputs> {
+  ): ValidatedPersonaInputs {
     // Validate required fields
     if (!name || !description || !instructions) {
       throw new Error('Missing required fields: name, description, instructions');
@@ -1125,7 +1142,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Validate and sanitize all inputs - throws on validation failure
-    const validatedInputs = await this.validatePersonaInputs(name, description, effectiveInstructions, triggersString);
+    const validatedInputs = this.validatePersonaInputs(name, description, effectiveInstructions, triggersString);
 
     // Check for duplicate - throw instead of returning result object
     await super.list();
@@ -1694,15 +1711,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
   // BaseElementManager overrides ------------------------------------------------
 
-  protected override async parseMetadata(data: any): Promise<PersonaElementMetadata> {
-    const personaData = data as PersonaMetadata;
-    const metadata = this.toPersonaElementMetadata(personaData);
+  protected override parseMetadata(data: any): Promise<PersonaElementMetadata> {
+    return this.settle(() => {
+      const personaData = data as PersonaMetadata;
+      const metadata = this.toPersonaElementMetadata(personaData);
 
-    if (!metadata.unique_id) {
-      metadata.unique_id = generateUniqueId(metadata.name, metadata.author);
-    }
+      if (!metadata.unique_id) {
+        metadata.unique_id = generateUniqueId(metadata.name, metadata.author);
+      }
 
-    return metadata;
+      return metadata;
+    });
   }
 
   protected createElement(metadata: PersonaElementMetadata, bodyText: string): PersonaElement {
@@ -1746,113 +1765,121 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     return personaElement;
   }
 
-  protected async serializeElement(element: PersonaElement): Promise<string> {
-    // Fix #909: Use spread copy to avoid mutating live element metadata in-place
-    const metadata: Record<string, any> = { ...element.metadata };
+  protected serializeElement(element: PersonaElement): Promise<string> {
+    return this.settle(() => {
+      // Fix #909: Use spread copy to avoid mutating live element metadata in-place
+      const metadata: Record<string, any> = { ...element.metadata };
 
-    // Issue #755: Serialize type as singular and persist unique_id
-    metadata.type = toSingularLabel(ElementType.PERSONA);
-    metadata.format_version = 'v2';  // Fix #912: Explicit format marker
-    metadata.unique_id = element.id;
+      // Issue #755: Serialize type as singular and persist unique_id
+      metadata.type = toSingularLabel(ElementType.PERSONA);
+      metadata.format_version = 'v2';  // Fix #912: Explicit format marker
+      metadata.unique_id = element.id;
 
-    // v2.0 dual-field format: instructions in YAML frontmatter
-    if (element.instructions) {
-      metadata.instructions = element.instructions;
-    }
+      // v2.0 dual-field format: instructions in YAML frontmatter
+      if (element.instructions) {
+        metadata.instructions = element.instructions;
+      }
 
-    // Build body: content (reference material) below '---', with name heading.
-    // The prepend is idempotent: an element round-trips through serialize more
-    // than once per write (save, then record projection), and the v1→v2 format
-    // flip turns a previously-serialized body into `content` — so re-adding the
-    // heading unconditionally would stack duplicate "# name" titles on each pass.
-    const name = element.metadata.name;
-    const bodyContent = element.content || '';
-    const description = element.metadata.description.trim();
+      // Build body: content (reference material) below '---', with name heading.
+      // The prepend is idempotent: an element round-trips through serialize more
+      // than once per write (save, then record projection), and the v1→v2 format
+      // flip turns a previously-serialized body into `content` — so re-adding the
+      // heading unconditionally would stack duplicate "# name" titles on each pass.
+      const name = element.metadata.name;
+      const bodyContent = element.content || '';
+      const description = element.metadata.description.trim();
 
-    let body: string;
-    if (bodyContent.trim()) {
-      body = bodyOpensWithHeading(bodyContent, name)
-        ? bodyContent.replace(/^\s+/, '')
-        : `# ${name}\n\n${bodyContent}`;
-    } else if (description) {
-      body = `# ${name}\n\n${description}`;
-    } else {
-      body = `# ${name}`;
-    }
+      let body: string;
+      if (bodyContent.trim()) {
+        body = bodyOpensWithHeading(bodyContent, name)
+          ? bodyContent.replace(/^\s+/, '')
+          : `# ${name}\n\n${bodyContent}`;
+      } else if (description) {
+        body = `# ${name}\n\n${description}`;
+      } else {
+        body = `# ${name}`;
+      }
 
-    // Fix #909: Use SerializationService instead of manual YAML construction.
-    // JSON schema preserves booleans and numbers; remove-both cleans null/undefined.
-    const personaContent = this.serializationService.createFrontmatter(metadata, body, {
-      method: 'manual',
-      schema: 'json',
-      cleanMetadata: true,
-      cleaningStrategy: 'remove-both',
-      sortKeys: true
+      // Fix #909: Use SerializationService instead of manual YAML construction.
+      // JSON schema preserves booleans and numbers; remove-both cleans null/undefined.
+      const personaContent = this.serializationService.createFrontmatter(metadata, body, {
+        method: 'manual',
+        schema: 'json',
+        cleanMetadata: true,
+        cleaningStrategy: 'remove-both',
+        sortKeys: true
+      });
+
+      validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
+
+      return personaContent;
     });
-
-    validateContentSize(personaContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
-
-    return personaContent;
   }
 
   getFileExtension(): string {
     return '.md';
   }
 
-  async importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<PersonaElement> {
-    let metadata: PersonaMetadata;
-    let instructions: string;
-    let content: string;
+  private validateImportYaml(data: string): void {
+    // SECURITY: Phase 4.5 - Validate YAML content before parsing
+    // SECURITY: Phase 4.7 - Throw descriptive error message for test expectations
+    if (data.includes('---')) {
+      const yamlPart = data.split('---')[1];
+      if (yamlPart) {
+        const yamlValidation = ContentValidator.validateYamlContent(yamlPart);
+        if (!yamlValidation) {
+          SecurityMonitor.logSecurityEvent({
+            type: 'YAML_INJECTION_ATTEMPT',
+            severity: 'HIGH',
+            source: 'PersonaManager.importElement',
+            details: 'Malicious YAML content detected'
+          });
+          throw new Error('Failed to parse markdown: Malicious YAML content detected');
+        }
+      }
+    }
+  }
 
-    if (format === 'json' || format === 'yaml') {
-      const parsed = JSON.parse(data) as Persona;
-      metadata = parsed.metadata;
-      instructions = parsed.instructions || '';
-      content = parsed.content || '';
-    } else {
-      // SECURITY: Phase 4.5 - Validate YAML content before parsing
-      // SECURITY: Phase 4.7 - Throw descriptive error message for test expectations
-      if (data.includes('---')) {
-        const yamlPart = data.split('---')[1];
-        if (yamlPart) {
-          const yamlValidation = ContentValidator.validateYamlContent(yamlPart);
-          if (!yamlValidation) {
-            SecurityMonitor.logSecurityEvent({
-              type: 'YAML_INJECTION_ATTEMPT',
-              severity: 'HIGH',
-              source: 'PersonaManager.importElement',
-              details: 'Malicious YAML content detected'
-            });
-            throw new Error('Failed to parse markdown: Malicious YAML content detected');
-          }
+  importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<PersonaElement> {
+    return this.settle(() => {
+      let metadata: PersonaMetadata;
+      let instructions: string;
+      let content: string;
+
+      if (format === 'json' || format === 'yaml') {
+        const parsed = JSON.parse(data) as Persona;
+        metadata = parsed.metadata;
+        instructions = parsed.instructions || '';
+        content = parsed.content || '';
+      } else {
+        this.validateImportYaml(data);
+
+        const parsed = SecureYamlParser.safeMatter(data);
+
+        // SECURITY: Validate metadata keys to prevent prototype pollution
+        this.validateMetadataKeys(parsed.data);
+
+        metadata = parsed.data as PersonaMetadata;
+        const bodyText = parsed.content;
+
+        // Dual-field loading: detect v2 format (instructions in YAML frontmatter)
+        if (metadata.instructions) {
+          // v2 format: instructions from YAML, body text is content (reference material)
+          instructions = metadata.instructions;
+          content = bodyText;
+        } else {
+          // v1 format: body text maps to instructions (it IS behavioral directives)
+          instructions = bodyText;
+          content = '';
         }
       }
 
-      const parsed = SecureYamlParser.safeMatter(data);
-
-      // SECURITY: Validate metadata keys to prevent prototype pollution
-      this.validateMetadataKeys(parsed.data);
-
-      metadata = parsed.data as PersonaMetadata;
-      const bodyText = parsed.content;
-
-      // Dual-field loading: detect v2 format (instructions in YAML frontmatter)
-      if (metadata.instructions) {
-        // v2 format: instructions from YAML, body text is content (reference material)
-        instructions = metadata.instructions;
-        content = bodyText;
-      } else {
-        // v1 format: body text maps to instructions (it IS behavioral directives)
-        instructions = bodyText;
-        content = '';
-      }
-    }
-
-    // Convert legacy PersonaMetadata to PersonaElementMetadata before creating element
-    const elementMetadata = this.toPersonaElementMetadata(metadata);
-    const element = this.createElement(elementMetadata, instructions);
-    element.content = content;
-    return element;
+      // Convert legacy PersonaMetadata to PersonaElementMetadata before creating element
+      const elementMetadata = this.toPersonaElementMetadata(metadata);
+      const element = this.createElement(elementMetadata, instructions);
+      element.content = content;
+      return element;
+    });
   }
 
   async exportElement(persona: PersonaElement, _format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<string> {
@@ -1863,28 +1890,32 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     return await this.serializeElement(element);
   }
 
-  protected override async canDelete(element: PersonaElement): Promise<{ allowed: boolean; reason?: string }> {
-    if (isDefaultPersona(element.filename)) {
-      return {
-        allowed: false,
-        reason: 'Cannot delete a default persona. Edit it to create a personal copy instead.'
-      };
-    }
+  protected override canDelete(element: PersonaElement): Promise<{ allowed: boolean; reason?: string }> {
+    return this.settle(() => {
+      if (isDefaultPersona(element.filename)) {
+        return {
+          allowed: false,
+          reason: 'Cannot delete a default persona. Edit it to create a personal copy instead.'
+        };
+      }
 
-    // Issue #281: Check if persona is in the active set
-    if (this.getActivationSet().has(element.filename)) {
-      return {
-        allowed: false,
-        reason: 'Cannot delete an active persona. Deactivate it first.'
-      };
-    }
+      // Issue #281: Check if persona is in the active set
+      if (this.getActivationSet().has(element.filename)) {
+        return {
+          allowed: false,
+          reason: 'Cannot delete an active persona. Deactivate it first.'
+        };
+      }
 
-    return { allowed: true };
+      return { allowed: true };
+    });
   }
 
-  protected override async beforeSave(persona: PersonaElement): Promise<void> {
-    this.initializePathValidator();
-    this.normalizePersonaForSave(persona);
-    // Path validation handled by BaseElementManager.save() before this hook is called
+  protected override beforeSave(persona: PersonaElement): Promise<void> {
+    return this.settle(() => {
+      this.initializePathValidator();
+      this.normalizePersonaForSave(persona);
+      // Path validation handled by BaseElementManager.save() before this hook is called
+    });
   }
 }

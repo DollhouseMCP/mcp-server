@@ -130,7 +130,8 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
   // BaseElementManager.load() uses fileOperations.readElementFile(), not fileLockManager.atomicReadFile()
   mockFileOperationsService.readElementFile.mockImplementation(async (filepath: string) => {
     const filename = path.basename(filepath);
-    return fileContents[filename] || '';
+    if (fileContents[filename]) return fileContents[filename];
+    throw Object.assign(new Error(`ENOENT: no such file: ${filename}`), { code: 'ENOENT' });
   });
 };
 
@@ -232,7 +233,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       mockFileOperationsService.readElementFile.mockImplementation(async (filepath: string) => {
         const filename = path.basename(filepath);
         if (fileContents[filename]) return fileContents[filename];
-        throw new Error(`ENOENT: no such file: ${filename}`);
+        throw Object.assign(new Error(`ENOENT: no such file: ${filename}`), { code: 'ENOENT' });
       });
     });
 
