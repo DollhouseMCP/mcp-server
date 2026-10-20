@@ -34,7 +34,7 @@ import { deleteElement as deleteElementCommand } from './element-crud/deleteElem
 import { editElement as editElementCommand } from './element-crud/editElement.js';
 import { upgradeElement as upgradeElementCommand } from './element-crud/upgradeElement.js';
 import { listElements as listElementsCommand } from './element-crud/listElements.js';
-import { findElementFlexibly, sanitizeMetadata as sanitizeMetadataRecord } from './element-crud/helpers.js';
+import { sanitizeMetadata as sanitizeMetadataRecord } from './element-crud/helpers.js';
 import { validateElement as validateElementCommand } from './element-crud/validateElement.js';
 import { ElementCrudContext } from './element-crud/types.js';
 import { InitializationService } from '../services/InitializationService.js';
@@ -99,10 +99,10 @@ async function mapPolicyLookups<TInput, TOutput>(
   let nextCandidateIndex = 0;
 
   const resolveNext = async (): Promise<void> => {
-    while (nextCandidateIndex < candidates.length) {
-      const candidateIndex = nextCandidateIndex++;
-      resolved[candidateIndex] = await lookup(candidates[candidateIndex], candidateIndex);
-    }
+    if (nextCandidateIndex >= candidates.length) return;
+    const candidateIndex = nextCandidateIndex++;
+    resolved[candidateIndex] = await lookup(candidates[candidateIndex], candidateIndex);
+    await resolveNext();
   };
 
   const workerCount = Math.min(ACTIVE_POLICY_LOOKUP_CONCURRENCY, candidates.length);
@@ -256,14 +256,6 @@ export class ElementCRUDHandler {
       backupService: this.backupService,
       forkOnEditStrategy: this.forkOnEditStrategy,
     };
-  }
-
-  /**
-   * Find an element by name, supporting both exact display name and filename (slug) matching
-   * Helper method extracted from index.ts:346-379
-   */
-  private async findElementFlexibly(name: string, elementList: any[]): Promise<any> {
-    return findElementFlexibly(name, elementList);
   }
 
   /**
@@ -541,17 +533,12 @@ export class ElementCRUDHandler {
 
       // Issue #598, #1946: Persist activation state for session restore (per-session)
       const sessionStore = this.getSessionActivationStore();
-      if (sessionStore) {
-        const filename = result.activationRecord?.filename ?? (
-          normalizedType === ElementType.PERSONA
-            ? (await this.personaManager.findPersonaAsync(name))?.filename
-            : undefined
-        );
+      if (sessionStore && result.activationRecord) {
         sessionStore.recordActivation(
           normalizedType,
-          result.activationRecord?.name ?? name,
-          filename,
-          result.activationRecord?.identity,
+          result.activationRecord.name,
+          result.activationRecord.filename,
+          result.activationRecord.identity,
         );
       }
 
@@ -992,9 +979,13 @@ export class ElementCRUDHandler {
         return lookup;
       };
 
-      for (const state of persistedStates) {
-        await this.mergePersistedPolicyState(state, addElement, findPersistedElement);
-      }
+      const mergeNext = async (iterator: Iterator<PersistedActivationStateSnapshot>): Promise<void> => {
+        const next = iterator.next();
+        if (next.done) return;
+        await this.mergePersistedPolicyState(next.value, addElement, findPersistedElement);
+        await mergeNext(iterator);
+      };
+      await mergeNext(persistedStates.values());
     }
 
     return Array.from(merged.values()).map((entry) => ({
@@ -1049,7 +1040,10 @@ export class ElementCRUDHandler {
     const deactivated: Array<{ type: string; name: string }> = [];
     const failed: Array<{ type: string; name: string; error: string }> = [];
 
-    for (const element of activeElementTargets) {
+    const deactivateNext = async (iterator: Iterator<DeadlockReliefElement>): Promise<void> => {
+      const next = iterator.next();
+      if (next.done) return;
+      const element = next.value;
       const strategy = this.strategies.get(element.type);
       if (!strategy) {
         failed.push({
@@ -1057,7 +1051,7 @@ export class ElementCRUDHandler {
           name: element.name,
           error: `No activation strategy registered for type '${element.type}'`,
         });
-        continue;
+        return deactivateNext(iterator);
       }
 
       try {
@@ -1070,7 +1064,9 @@ export class ElementCRUDHandler {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    }
+      await deactivateNext(iterator);
+    };
+    await deactivateNext(activeElementTargets.values());
 
     const persistedStateCleared = Boolean(this.activationStore?.isEnabled());
     const snapshotFile = await this.writeDeadlockReliefSnapshot({
@@ -1696,7 +1692,10 @@ export class ElementCRUDHandler {
   private async aggregateActiveElements(): Promise<MCPResponse> {
     const sections: string[] = [];
 
-    for (const [elementType, strategy] of this.strategies) {
+    const collectNext = async (iterator: Iterator<[string, ElementActivationStrategy]>): Promise<void> => {
+      const next = iterator.next();
+      if (next.done) return;
+      const [elementType, strategy] = next.value;
       try {
         const result = await strategy.getActiveElements();
         const text = result.content[0]?.text;
@@ -1706,7 +1705,9 @@ export class ElementCRUDHandler {
       } catch (err) {
         logger.debug(`Failed to get active ${elementType} elements`, { error: err });
       }
-    }
+      await collectNext(iterator);
+    };
+    await collectNext(this.strategies.entries());
 
     return {
       content: [{

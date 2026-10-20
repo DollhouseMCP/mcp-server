@@ -69,7 +69,7 @@ describe('Persona lookup after cache eviction (Issue #2800)', () => {
     expect(await manager.resolveActivePersonas()).toEqual([]);
   });
 
-  it('records the stored filename when activation omits its activation record', async () => {
+  it('does not infer activation success from text when the activation record is absent', async () => {
     const handler = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
     const recordActivation = jest.fn();
     const storeHost = handler as unknown as { getSessionActivationStore(): { recordActivation: typeof recordActivation; getSessionId(): string } };
@@ -77,6 +77,6 @@ describe('Persona lookup after cache eviction (Issue #2800)', () => {
     jest.spyOn(PersonaActivationStrategy.prototype, 'activate').mockResolvedValue({ content: [{ type: 'text', text: 'Activated' }] });
     const result = await handler.activateElement(name, 'personas');
     expect(result.content[0].text).toBe('Activated');
-    expect(recordActivation).toHaveBeenCalledWith('personas', name, 'cold-cache-persona.md', undefined);
+    expect(recordActivation).not.toHaveBeenCalled();
   });
 });

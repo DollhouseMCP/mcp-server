@@ -29,6 +29,10 @@ import { ElementType } from '../../../src/portfolio/types.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
+import { InitializationService } from '../../../src/services/InitializationService.js';
+import { ContentValidator } from '../../../src/security/contentValidator.js';
+import { UnicodeValidator } from '../../../src/security/validators/unicodeValidator.js';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('PersonaElementManager Integration', () => {
   let personaManager: PersonaManager;
@@ -411,6 +415,133 @@ describe('PersonaElementManager Integration', () => {
   // ============================================================================
 
   describe('Error Handling', () => {
+    it('preserves initialization rejection and permits a service retry', async () => {
+      const setup = jest.spyOn(personaManager as any, 'initializePathValidator')
+        .mockImplementationOnce(() => { throw new Error('path validator unavailable'); });
+      const service = new InitializationService(personaManager);
+      await expect(service.ensureInitialized()).rejects.toThrow('path validator unavailable');
+      await expect(service.ensureInitialized()).resolves.toBeUndefined();
+      expect(setup).toHaveBeenCalledTimes(2);
+    });
+
+    it('preserves metadata adapter errors through the public loader', async () => {
+      mockFileOperationsService.readElementFile = jest.fn<any>().mockResolvedValue('---\nname: Test\n---\nBody');
+      jest.spyOn(personaManager as any, 'toPersonaElementMetadata')
+        .mockImplementation(() => { throw new Error('metadata adapter failed'); });
+      await expect(personaManager.load('test.md')).rejects.toThrow('metadata adapter failed');
+    });
+
+    it.each(['serialization failed', 'Content too large'])('preserves export rejection: %s', async message => {
+      const persona = await personaManager.importElement('---\nname: Test\ndescription: Example\n---\nInstructions');
+      const serialize = jest.spyOn(SerializationService.prototype, 'createFrontmatter');
+      if (message === 'Content too large') {
+        serialize.mockReturnValue('x'.repeat(SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES + 1));
+      } else {
+        serialize.mockImplementation(() => { throw new Error(message); });
+      }
+      await expect(personaManager.exportElement(persona)).rejects.toThrow(message === 'Content too large'
+        ? `Content too large (${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES + 1} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`
+        : message);
+    });
+
+    it('returns a rejected import promise for invalid JSON', async () => {
+      await expect(personaManager.importElement('{', 'json'))
+        .rejects.toThrow("Expected property name or '}' in JSON at position 1");
+    });
+
+    it('returns a rejected import promise for malicious YAML', async () => {
+      jest.spyOn(ContentValidator, 'validateYamlContent').mockReturnValue(false);
+      await expect(personaManager.importElement('---\nname: Test\n---\nBody'))
+        .rejects.toThrow('Failed to parse markdown: Malicious YAML content detected');
+    });
+
+    it('preserves error identity in a direct import rejection', async () => {
+      const failure = new Error('YAML validator unavailable');
+      jest.spyOn(ContentValidator, 'validateYamlContent').mockImplementation(() => { throw failure; });
+      await expect(personaManager.importElement('---\nname: Test\n---\nBody')).rejects.toBe(failure);
+    });
+
+    it('preserves a non-Error serialization rejection through export', async () => {
+      const persona = await personaManager.importElement('---\nname: Test\n---\nInstructions');
+      const failure: unknown = 'raw serialization failure';
+      jest.spyOn(SerializationService.prototype, 'createFrontmatter').mockImplementation(() => { throw failure; });
+      await expect(personaManager.exportElement(persona)).rejects.toBe(failure);
+    });
+
+    it('preserves save rejection from metadata normalization', async () => {
+      const persona = await personaManager.importElement('---\nname: Test\n---\nInstructions');
+      const failure = new Error('metadata normalization failed');
+      jest.spyOn(personaManager['metadataService'], 'normalizeMetadata')
+        .mockImplementation(() => { throw failure; });
+      const result = personaManager.save(persona, 'test.md');
+      await expect(result).rejects.toBe(failure);
+      await expect(result).rejects.toThrow('metadata normalization failed');
+    });
+
+    it('preserves save rejection from filename validation', async () => {
+      const persona = await personaManager.importElement('---\nname: Test\n---\nInstructions');
+      persona.filename = '.';
+      await expect(personaManager.save(persona, 'test.md')).rejects.toThrow('Invalid filename format. Use alphanumeric characters, hyphens, underscores, and dots only.');
+    });
+
+    it('preserves the default-persona deletion denial', async () => {
+      mockFileOperationsService.readElementFile = jest.fn<any>()
+        .mockResolvedValue('---\nname: Business Consultant\n---\nInstructions');
+      await personaManager.load('business-consultant.md');
+      await expect(personaManager.delete('business-consultant.md'))
+        .rejects.toThrow('Cannot delete a default persona. Edit it to create a personal copy instead.');
+    });
+
+    it('preserves canDelete dependency rejection through delete', async () => {
+      const persona = await personaManager.importElement('---\nname: Test\n---\nInstructions');
+      jest.spyOn(personaManager['_loader'], 'loadElementSnapshot').mockImplementation(async () => {
+        jest.spyOn(personaManager as any, 'getActivationSet')
+          .mockImplementation(() => { throw new Error('activation state unavailable'); });
+        return persona;
+      });
+      await expect(personaManager.delete('test.md')).rejects.toThrow('activation state unavailable');
+    });
+
+    describe('creation input rejection messages', () => {
+      const input = { name: 'Valid Name', description: 'Valid description', instructions: 'Valid instructions' };
+      beforeEach(() => {
+        jest.spyOn(personaManager['validator'], 'validateCreate')
+          .mockResolvedValue({ isValid: true, errors: [], warnings: [] });
+      });
+
+      it.each([
+        [{ ...input, description: '' }, 'Missing required fields: name, description, instructions'],
+        [{ ...input, name: 'x' }, 'Persona name must be at least 2 characters long'],
+        [{ ...input, description: 'x'.repeat(2001) }, 'Content too large (2001 bytes, max 2000 bytes)'],
+        [{ ...input, instructions: 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1) },
+          `Content too large (${SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1} bytes, max ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} bytes)`],
+      ] as const)('preserves validation failure %#', async (data, message) => {
+        jest.spyOn(ContentValidator, 'validateAndSanitize').mockImplementation(content => ({
+          isValid: true, sanitizedContent: content,
+        }));
+        await expect(personaManager.create(data)).rejects.toThrow(message);
+      });
+
+      it.each(['name', 'description', 'instructions'] as const)('preserves critical Unicode failure for %s', async field => {
+        jest.spyOn(UnicodeValidator, 'normalize').mockImplementation(content => ({
+          normalizedContent: content, isValid: content !== input[field],
+          severity: 'critical', detectedIssues: ['critical test pattern'],
+        }));
+        const label = field.charAt(0).toUpperCase() + field.slice(1);
+        const verb = field === 'instructions' ? 'contain' : 'contains';
+        await expect(personaManager.create(input)).rejects.toThrow(`${label} ${verb} dangerous Unicode patterns: critical test pattern`);
+      });
+
+      it.each(['name', 'description', 'instructions'] as const)('preserves prohibited content failure for %s', async field => {
+        jest.spyOn(ContentValidator, 'validateAndSanitize').mockImplementation(content => ({
+          isValid: content !== input[field], sanitizedContent: content, detectedPatterns: ['test threat'], severity: 'high',
+        }));
+        const label = field.charAt(0).toUpperCase() + field.slice(1);
+        const message = field === 'instructions' ? 'Instructions contain security threats' : `${label} contains prohibited content`;
+        await expect(personaManager.create(input)).rejects.toThrow(`${message}: test threat`);
+      });
+    });
+
     it('should handle corrupted YAML gracefully', async () => {
       const corruptedYaml = `---
 name: Test

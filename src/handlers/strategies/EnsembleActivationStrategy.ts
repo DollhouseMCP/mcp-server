@@ -90,7 +90,9 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
         content: [{
           type: "text",
           text: details.join('\n')
-        }]
+        }],
+        // The ensemble is active even when individual members fail.
+        activationRecord: { name, filename: undefined, identity: undefined },
       };
     } catch (activationError) {
       return {

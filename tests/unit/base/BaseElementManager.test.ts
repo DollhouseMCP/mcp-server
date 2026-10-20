@@ -804,6 +804,33 @@ describe('BaseElementManager - Requirements & Contract', () => {
   // ============================================
 
   describe('findByName() Cache Key Consistency', () => {
+    it('refuses display text as a file storage identity without loading it', async () => {
+      const load = jest.spyOn(manager, 'load');
+      await expect(manager.findByStorageIdentity('Finance v2.0')).resolves.toBeUndefined();
+      expect(load).not.toHaveBeenCalled();
+      load.mockRestore();
+    });
+
+    it('preserves path validation for a traversal storage identity', async () => {
+      await expect(manager.findByStorageIdentity('../outside.md')).rejects.toThrow(/Invalid.*path/i);
+    });
+
+    it('refuses a non-UUID database storage identity without loading it', async () => {
+      const fallback = createTestStorageFactory(fileOperationsService);
+      const dbManager = createManager({
+        storageLayerFactory: {
+          createForElement: (type, options) => Object.assign(fallback.createForElement(type, options), {
+            writeContent: jest.fn(),
+          }),
+        },
+      });
+      const load = jest.spyOn(dbManager, 'load');
+      await expect(dbManager.findByStorageIdentity('stable-element.md')).resolves.toBeUndefined();
+      expect(load).not.toHaveBeenCalled();
+      load.mockRestore();
+      dbManager.dispose();
+    });
+
     it('findByStorageIdentity() reuses a stable path when the display name has changed', async () => {
       await fs.writeFile(
         path.join(elementsDir, 'stable-element.md'),

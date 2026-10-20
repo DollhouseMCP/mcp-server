@@ -26,7 +26,7 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
     const result = await this.memoryManager.activateMemory(name);
 
     if (!result.success || !result.memory) {
-      return this.createNotFoundResponse(name, 'Memory');
+      return this.createErrorResponse(`❌ Memory '${name}' not found`);
     }
 
     const memory = result.memory;
@@ -57,17 +57,14 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
       parts.push('Memory becomes active, context loaded into working set');
     }
 
-    parts.push('');
-    parts.push(`**Retention**: ${retentionDays} days`);
-    parts.push(`**Tags**: ${tags}`);
-    parts.push(`**Entries**: ${stats.totalEntries}`);
+    parts.push('', `**Retention**: ${retentionDays} days`,
+      `**Tags**: ${tags}`, `**Entries**: ${stats.totalEntries}`);
 
     if (stats.totalSize > 0) {
       parts.push(`**Size**: ${stats.totalSize} bytes`);
     }
 
-    parts.push('');
-    parts.push('This memory is now available for context and will be used to enhance responses.');
+    parts.push('', 'This memory is now available for context and will be used to enhance responses.');
 
     const gatekeeperWarning = this.formatGatekeeperValidityWarning(memory.metadata as unknown as Record<string, unknown>);
     if (gatekeeperWarning) {
@@ -78,7 +75,8 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
       content: [{
         type: "text",
         text: parts.join('\n')
-      }]
+      }],
+      activationRecord: { name, filename: undefined, identity: undefined },
     };
   }
 
