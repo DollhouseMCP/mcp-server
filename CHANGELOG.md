@@ -11,6 +11,36 @@
 - Incorporate the 2.0.42 macOS verification dialog security fix and prepare safety package 1.0.3, retaining beta’s timing-safe challenge comparison. (#2686)
 - Publish the safety package before the server and retain beta channel protection during version-safe release dry runs. (#2686)
 
+## [2.1.0-beta.3] - 2026-10-21
+
+See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
+
+### security
+
+- Update issuer-bound MCP SDK credentials, application/browser sanitizers, Safety ^1.0.5 and build dependencies; harden container dependency layers and remove unused runtime diagnostics. (#3066, #3070, #3077, #3059, #3067, #3068, #3081)
+
+### hosted/HTTP
+
+- Keep quiet SSE sessions and runtime presence alive, gate expired-stream payloads, and renew only matching credential bindings. Add configurable stream lifetime/expiry grace and memory-aware graceful replacement that refuses unknown drain or closure outcomes. (#3061, #3050, #3109)
+
+### OAuth
+
+- Preserve eligible offline-access consent and serialize helper PID publication/cleanup by generation. Standalone helpers now require a flow ID with matching prepared state; use the existing coordinated controller lifecycle. (#3061, #3116)
+
+### Gatekeeper
+
+- Keep infrastructure enforcement reachable before active-policy collection; return audited permission denial when policy collection fails. (#3126)
+
+### personas/memory
+
+- Resolve active personas by durable identity after cache eviction. Add authenticated tenant-bound database-memory composition, conditional updates and fail-closed mutation/read-fidelity guards. Guarded cohort activation remains separately qualified; unsupported mutations remain refused. (#3121, #3012, #3014, #3015, #3016, #3017, #3018, #3020, #3023, #3029, #3032, #3034, #3035, #3037, #3038, #3042, #3043)
+
+### CI/test
+
+- Isolate PostgreSQL/Core shards and required serial proofs, recycle integration workers, and retain asynchronous fixture/process ownership through cleanup. Add native authentication, causal PID-publication, cache-counter and sanitized failure diagnostics. (#3048, #3083, #3084, #3086, #3089, #3093, #3096, #3098, #3099, #3101, #3102, #3112, #3115, #3119, #3125)
+
+These notes describe merged code, not deployment, activation, an image audit waiver or a general timing guarantee.
+
 ## [2.1.0-beta.2] - 2026-09-04
 
 - Deployment candidate following the main-to-beta reconciliation in PR #2653.
