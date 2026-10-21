@@ -1027,10 +1027,8 @@ export class MCPAQLHandler {
 
       // Step 1b: In HTTP+DB mode, require identity before data operations.
       // Identity operations (set/get/clear) and gatekeeper infra are exempt.
-      if (this.requiresIdentityCheck(operation)) {
-        const identityError = this.checkHttpIdentity();
-        if (identityError) return this.failure(identityError, startTime);
-      }
+      const identityError = this.checkOperationIdentity(operation);
+      if (identityError) return this.failure(identityError, startTime);
 
       const view = this.memoryProvider ? await this.captureMemoryView() : undefined;
       const gatekeeperFailure = await this.enforceOperationGatekeeper(parsedInput, endpoint, startTime, view?.handlers);
@@ -1108,13 +1106,15 @@ export class MCPAQLHandler {
       return null;
     }
 
-    const activeElements = await this.getActiveElements(undefined, handlers);
+    // Recovery infrastructure must remain reachable when policy collection fails.
+    const skipElementPolicies = isGatekeeperInfraOperation(operation);
+    const activeElements = skipElementPolicies ? [] : await this.getActiveElements(undefined, handlers);
     const decision = this.gatekeeper.enforce({
       operation,
       endpoint,
       elementType,
       activeElements,
-      skipElementPolicies: isGatekeeperInfraOperation(operation),
+      skipElementPolicies,
     }, this.operations);
 
     this.recordGatekeeperDecision(decision);
@@ -1322,7 +1322,9 @@ export class MCPAQLHandler {
     let succeeded = 0;
     let failed = 0;
 
-    for (let i = 0; i < batch.operations.length; i++) {
+    // Operations can depend on earlier mutations; retain sequential dispatch.
+    const executeNext = async (i: number): Promise<void> => {
+      if (i >= batch.operations.length) return;
       const op = normalizedOperations[i] ?? batch.operations[i];
 
       // Dispatch the same normalized operation inspected by the batch preflight.
@@ -1339,7 +1341,9 @@ export class MCPAQLHandler {
       } else {
         failed++;
       }
-    }
+      await executeNext(i + 1);
+    };
+    await executeNext(0);
 
     // Log batch completion
     SecurityMonitor.logSecurityEvent({
@@ -2386,6 +2390,10 @@ export class MCPAQLHandler {
     'confirm_operation', 'verify_challenge', 'approve_cli_permission',
     'introspect', 'get_build_info', 'get_logs',
   ]);
+
+  private checkOperationIdentity(operation: string): string | null {
+    return this.requiresIdentityCheck(operation) ? this.checkHttpIdentity() : null;
+  }
 
   private requiresIdentityCheck(operation: string): boolean {
     // Let route validation reject unavailable operations before identity handling.

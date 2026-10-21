@@ -6,12 +6,13 @@
  * Phase 2 allowPatterns, enriched responses, and get_effective_cli_policies.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { ElementCRUDHandler } from '../../../src/handlers/ElementCRUDHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
 const EXTERNAL_FILE_PATH = '/some/file.ts';
@@ -227,6 +228,38 @@ describe('permission_prompt Integration', () => {
   });
 
   describe('gatekeeper policy', () => {
+    it('should return a normal deny when active element policy collection fails', async () => {
+      const collectorError = 'private policy storage failure';
+      const elementCRUD = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
+      const collect = jest.spyOn(elementCRUD, 'getActiveElementsForPolicy')
+        .mockRejectedValue(new Error(collectorError));
+
+      try {
+        // Edit is not statically decided, so the real dispatcher reaches element policies.
+        const result = await mcpAqlHandler.handleRead({
+          operation: 'permission_prompt',
+          params: {
+            tool_name: 'Edit',
+            input: { file_path: SOURCE_FILE_PATH, old_string: 'a', new_string: 'b' },
+          },
+        });
+
+        expect(result).toMatchObject({
+          success: true,
+          data: {
+            behavior: 'deny',
+            classification: { stage: 'element_policy' },
+            message: 'Unable to evaluate active element policies. Permission denied.',
+          },
+        });
+        expect(JSON.stringify(result)).not.toContain(collectorError);
+        expect(collect).toHaveBeenCalledTimes(1);
+        expect(collect).toHaveBeenCalledWith({ allowCoalescing: false });
+      } finally {
+        collect.mockRestore();
+      }
+    });
+
     it('should not require confirmation (AUTO_APPROVE)', async () => {
       // permission_prompt should work without any prior confirm_operation call
       const result = await mcpAqlHandler.handleRead({
