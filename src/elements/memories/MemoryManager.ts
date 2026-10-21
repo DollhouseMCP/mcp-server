@@ -793,6 +793,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   protected override captureLoadedContent(memory: Memory, content: string, filePath: string): void {
+    // The existing loader supplies the exact captured source before hydration;
+    // keep oversized legacy owners read-only without adding parser metadata or a reread.
+    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) memory.markOversizedLegacyReadOnly();
     if (!this.memoryUpgrade || this.guardedUpdateAdapter) return;
     this.upgradeLoadedSnapshots.set(memory, { path: filePath,
       sha256: crypto.createHash('sha256').update(content).digest('hex'),

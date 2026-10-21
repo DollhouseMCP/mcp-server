@@ -1,0 +1,856 @@
+{
+  "beta": "d0278ad58d962a3386be34379475c40600c141a1",
+  "main": "b2b93accf670c8c3dfa884e9f6c379bf93768001",
+  "mergeBase": "7de1f2983bc17469233ea6fb50254b49e2ff302f",
+  "conflictFileCount": 22,
+  "conflictHunkCount": 55,
+  "lineNumberConvention": "Original conflicted worktree, before resolution. Side digests hash the exact stored UTF-8 hunk text; no trailing newline is inserted.",
+  "files": [
+    {
+      "path": "CHANGELOG.md",
+      "decision": "Combine beta history with exact main2.0.43 section; preserve both release histories without changing beta version.",
+      "stageSHA256": {
+        "1": "6cc74be42f4389351692ef5171f98bfe211a03e0fbfeefd9c9f2dc672eacd811",
+        "2": "55fdf9ee1cbab7bf058c3dee37ca0c878f88aa40f7bdc9d3ba6e8eac8954ddbb",
+        "3": "f41e8cbfbc61ea91112956ed67f5a1e62258a43d6a375cfbe48407bd3186293d"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 5,
+          "originalEndLine": 49,
+          "betaSideSHA256": "b907098925dd10a48edef64cecf5938026f26e7d08cc85f8756c5186d7b9927e",
+          "mainSideSHA256": "8e5393cbea598037c0b47c03ed386b4269740c520872555aa114fb23f234b210",
+          "resolution": "Combine beta history with exact main2.0.43 section; preserve both release histories without changing beta version.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact main 2.0.43 section preserved alongside beta history; no release identity change.",
+      "testReferences": [
+        "Static exact-section comparison against origin/main"
+      ]
+    },
+    {
+      "path": "manifest.json",
+      "decision": "Keep beta2.1 prerelease manifest; main2.0.43 metadata belongs to stable release, not beta.",
+      "stageSHA256": {
+        "1": "424af7694a79207e02bcf393a06dc258ac44142b4a5e33e1bdf0cae8a3cf3819",
+        "2": "2bb1c10f54a15e7466fa0eb47fd0ce781f8dfbaddd040c8f19afe9fc4941448d",
+        "3": "e12fe5848fd7caa642ba71341a6536560ae3cb9edf0f951f2eef3df21d2ae5a6"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 5,
+          "originalEndLine": 9,
+          "betaSideSHA256": "d3a816af6514c4b2da578cd6ba4804672748217a2ee5c5cd56a5c752e025aa2c",
+          "mainSideSHA256": "2e39a02ced38d764adf930b11ca0fbc51e539f68d2bf8351c842fd765afb9f95",
+          "resolution": "Keep beta2.1 prerelease manifest; main2.0.43 metadata belongs to stable release, not beta.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact beta whole-file payload retained; main security pin/UUID behavior already represented, with no Phase2 dependency resolution.",
+      "testReferences": [
+        "Static six-file metadata/lock byte comparison against beta",
+        "npm run build",
+        "packages/safety: npm test -- --runInBand"
+      ]
+    },
+    {
+      "path": "package-lock.json",
+      "decision": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+      "stageSHA256": {
+        "1": "98f407f47023c51a3da137c087832067885c92a7a95254c480f92f8043864441",
+        "2": "be2cf5d23d8ac8514afaee7b30ff1d1fb1ecb5a5f1e5ecda8d040133e0e68ba8",
+        "3": "3fa17c3b2ac1bc6a306e0d3344b48d068f9f7edcc6bea98fc520cdf05d8bac92"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 3,
+          "originalEndLine": 7,
+          "betaSideSHA256": "d3a816af6514c4b2da578cd6ba4804672748217a2ee5c5cd56a5c752e025aa2c",
+          "mainSideSHA256": "2e39a02ced38d764adf930b11ca0fbc51e539f68d2bf8351c842fd765afb9f95",
+          "resolution": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 13,
+          "originalEndLine": 17,
+          "betaSideSHA256": "ad7f9e2263a473eaf4a915702534a60348aee9551215f4082e0ef17f6721fd8a",
+          "mainSideSHA256": "7b9eff1126a937a1606bc20eefef834f2d76c3fe40b67acaaa98eb10453fe8cc",
+          "resolution": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 3,
+          "originalStartLine": 23,
+          "originalEndLine": 30,
+          "betaSideSHA256": "24f42d749d03256111a478c9c4fda13f559f21eec7ad5801c34bcefdb9af7c68",
+          "mainSideSHA256": "e63548405399e23012f549cede867d73534b362b359f7a4291320c0a302948fc",
+          "resolution": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 4,
+          "originalStartLine": 41,
+          "originalEndLine": 44,
+          "betaSideSHA256": "33d74e33404a9cd991c8018f958634e353a13afb50ce881ec2338247f29a4b8b",
+          "mainSideSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "resolution": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 5,
+          "originalStartLine": 13458,
+          "originalEndLine": 13462,
+          "betaSideSHA256": "5543ccb15bd604f8df6ada9f106e8468a497d84e812990ae92e720cd223cbb77",
+          "mainSideSHA256": "42c5ab040e1a19db93dd3f084afee1fe560a441e7ba0d7efd44093ecee965619",
+          "resolution": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 6,
+          "originalStartLine": 13478,
+          "originalEndLine": 13517,
+          "betaSideSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "mainSideSHA256": "37058ca103484dae61e269f7f516f0659ccc158d4882397c8f7903547735d2b3",
+          "resolution": "Keep newer beta whole lock; main proxy2.0.8/shellquote1.11/jsyaml4.3.2 and SafetyUUID fixes already represented. No Phase2 resolution or main extract-zip downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact beta whole-file payload retained; main security pin/UUID behavior already represented, with no Phase2 dependency resolution.",
+      "testReferences": [
+        "Static six-file metadata/lock byte comparison against beta",
+        "npm run build",
+        "packages/safety: npm test -- --runInBand"
+      ]
+    },
+    {
+      "path": "package.json",
+      "decision": "Keep beta2.1 metadata and newer reviewed dependency graph; main security pins already equal. No dependency remediation mixed into merge.",
+      "stageSHA256": {
+        "1": "e7f55bd48fd2e096b8979f4ec03075eff9d5cd5cea0db7cef72e3b8473695e29",
+        "2": "9ffc8cf111d10edf6224e64386b1248576cc07dd48946fb634394514cc9992eb",
+        "3": "98710c2fad07f9e4cdf1a249593f107a9206023af43a499ec07165b3c132ad89"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 3,
+          "originalEndLine": 7,
+          "betaSideSHA256": "d3a816af6514c4b2da578cd6ba4804672748217a2ee5c5cd56a5c752e025aa2c",
+          "mainSideSHA256": "2e39a02ced38d764adf930b11ca0fbc51e539f68d2bf8351c842fd765afb9f95",
+          "resolution": "Keep beta2.1 metadata and newer reviewed dependency graph; main security pins already equal. No dependency remediation mixed into merge.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 217,
+          "originalEndLine": 224,
+          "betaSideSHA256": "3ffbaffc116e2404f70d213014acecc243851a2bb26e604dd9bc6a52e74f8ef7",
+          "mainSideSHA256": "448b4b501646038df3e76d2694ae232cc6a039fa8ec6d554858fe10878776d69",
+          "resolution": "Keep beta2.1 metadata and newer reviewed dependency graph; main security pins already equal. No dependency remediation mixed into merge.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 3,
+          "originalStartLine": 235,
+          "originalEndLine": 238,
+          "betaSideSHA256": "4b2488d43a266feacfad98d1e626afd757b3c43874c4a48f32dc387da96d40a3",
+          "mainSideSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "resolution": "Keep beta2.1 metadata and newer reviewed dependency graph; main security pins already equal. No dependency remediation mixed into merge.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 4,
+          "originalStartLine": 322,
+          "originalEndLine": 342,
+          "betaSideSHA256": "6ea72b788784f4879a24e1ee9bd41b8554ab9bcc5b1a75f9304e2db614e4fe39",
+          "mainSideSHA256": "4258a54a6fc5a10d1a9fed2e1eb8b608ddb41b29f2a0daeccebe72b1c6e14470",
+          "resolution": "Keep beta2.1 metadata and newer reviewed dependency graph; main security pins already equal. No dependency remediation mixed into merge.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact beta whole-file payload retained; main security pin/UUID behavior already represented, with no Phase2 dependency resolution.",
+      "testReferences": [
+        "Static six-file metadata/lock byte comparison against beta",
+        "npm run build",
+        "packages/safety: npm test -- --runInBand"
+      ]
+    },
+    {
+      "path": "packages/safety/package-lock.json",
+      "decision": "Keep beta Safety1.0.5 lock; UUID implementation/test exact main, newer beta development pins retained.",
+      "stageSHA256": {
+        "1": "c69620bdcac52f232f636612d35566b2fa4990398e91ab3f81c0e4da869bfa6d",
+        "2": "ef19e666b4b14df06b45bd22301d31bb9ad95b40090ec2cc4069f6e37c7e5986",
+        "3": "2b4f7a351858fc646b5112844d32db42cd06c69d6824d7584914a4116c76bb14"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 3,
+          "originalEndLine": 7,
+          "betaSideSHA256": "78c40481fe645403f71f000ac50bbd5013f6238064f94effdeb316a732b89764",
+          "mainSideSHA256": "7efe3c5ff76b51b146cf9536b24c87708d2a1be4447adb49d8c0e347f9f2f50b",
+          "resolution": "Keep beta Safety1.0.5 lock; UUID implementation/test exact main, newer beta development pins retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 13,
+          "originalEndLine": 17,
+          "betaSideSHA256": "5543ccb15bd604f8df6ada9f106e8468a497d84e812990ae92e720cd223cbb77",
+          "mainSideSHA256": "42c5ab040e1a19db93dd3f084afee1fe560a441e7ba0d7efd44093ecee965619",
+          "resolution": "Keep beta Safety1.0.5 lock; UUID implementation/test exact main, newer beta development pins retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact beta whole-file payload retained; main security pin/UUID behavior already represented, with no Phase2 dependency resolution.",
+      "testReferences": [
+        "Static six-file metadata/lock byte comparison against beta",
+        "npm run build",
+        "packages/safety: npm test -- --runInBand"
+      ]
+    },
+    {
+      "path": "packages/safety/package.json",
+      "decision": "Keep beta Safety1.0.5/floor; UUID behavior already exact main1.0.4. No version downgrade.",
+      "stageSHA256": {
+        "1": "60fddc22f6e50738eade26d5f1b77a4d08254fef0680e5213101499ba2d5a74b",
+        "2": "9ec0d95a8297a06d251231070335f3dae4f34f1a8c00561bda074348c3cff054",
+        "3": "0f4c890732cbb25e2361af7fd3311a98802658d012f29fa43cb29ff0bda1325c"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 3,
+          "originalEndLine": 7,
+          "betaSideSHA256": "78c40481fe645403f71f000ac50bbd5013f6238064f94effdeb316a732b89764",
+          "mainSideSHA256": "7efe3c5ff76b51b146cf9536b24c87708d2a1be4447adb49d8c0e347f9f2f50b",
+          "resolution": "Keep beta Safety1.0.5/floor; UUID behavior already exact main1.0.4. No version downgrade.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact beta whole-file payload retained; main security pin/UUID behavior already represented, with no Phase2 dependency resolution.",
+      "testReferences": [
+        "Static six-file metadata/lock byte comparison against beta",
+        "npm run build",
+        "packages/safety: npm test -- --runInBand"
+      ]
+    },
+    {
+      "path": "server.json",
+      "decision": "Keep beta registry version at both required locations; do not import stable2.0.43 identity.",
+      "stageSHA256": {
+        "1": "4bb3968b924d03340623f88fe8a8752e259bfdd6be8b84ad8bcb6b5b7439e137",
+        "2": "570bc1e4b72d046063ce78da05d953e5fb65d85244b3e1a40ac033e066284e12",
+        "3": "8ec2e570de0af6004f8f79d49618a16c992e92592fccb889c29ec25c0adb03a6"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 6,
+          "originalEndLine": 10,
+          "betaSideSHA256": "d3a816af6514c4b2da578cd6ba4804672748217a2ee5c5cd56a5c752e025aa2c",
+          "mainSideSHA256": "2e39a02ced38d764adf930b11ca0fbc51e539f68d2bf8351c842fd765afb9f95",
+          "resolution": "Keep beta registry version at both required locations; do not import stable2.0.43 identity.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 36,
+          "originalEndLine": 40,
+          "betaSideSHA256": "ad7f9e2263a473eaf4a915702534a60348aee9551215f4082e0ef17f6721fd8a",
+          "mainSideSHA256": "7b9eff1126a937a1606bc20eefef834f2d76c3fe40b67acaaa98eb10453fe8cc",
+          "resolution": "Keep beta registry version at both required locations; do not import stable2.0.43 identity.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Exact beta whole-file payload retained; main security pin/UUID behavior already represented, with no Phase2 dependency resolution.",
+      "testReferences": [
+        "Static six-file metadata/lock byte comparison against beta",
+        "npm run build",
+        "packages/safety: npm test -- --runInBand"
+      ]
+    },
+    {
+      "path": "src/cli/convert.ts",
+      "decision": "Keep beta typed yauzl extraction/callback and exact private-root cleanup; main cleanup semantics already met without older exists precheck.",
+      "stageSHA256": {
+        "1": "c17dfb547a35e7f3763919d395a1ace902411da254fc4a16481e55c317eff454",
+        "2": "5ff00792e48d19d6894f3e280a3eddb64ccb634f0eba78785368d1ade3ab0b64",
+        "3": "00142a1d95da67d368b6cf8434791439ab8cfafd64b231581ce78433440a9a76"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 45,
+          "originalEndLine": 49,
+          "betaSideSHA256": "196b955c32272e853908263774b9c6c38dcbbbd7e8de7406af55dfc27be7a29a",
+          "mainSideSHA256": "c60c9707fbbfb800a83401c9f599728dbf1d8a70db3de4c323a9f56e38c559bb",
+          "resolution": "Keep beta typed yauzl extraction/callback and exact private-root cleanup; main cleanup semantics already met without older exists precheck.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 115,
+          "originalEndLine": 173,
+          "betaSideSHA256": "0aae79dfccaade5474588aa9ff2b6e103037c7f5b09820a297838b15e56b0161",
+          "mainSideSHA256": "8870e4bef6b67518bf02d5203e48f0e0dfc1465708594dcd4e9cbd64f868bab5",
+          "resolution": "Keep beta typed yauzl extraction/callback and exact private-root cleanup; main cleanup semantics already met without older exists precheck.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Beta private-root ownership retained; exact main ZIP regressions execute against beta implementation.",
+      "testReferences": [
+        "tests/unit/cli/zipExtraction.test.ts",
+        "tests/unit/cli/zipExtraction.main-hotfix.test.ts"
+      ]
+    },
+    {
+      "path": "src/cli/zipExtraction.ts",
+      "decision": "Keep beta newer sequential yauzl validation/stream ceilings/fd-close ownership. Main link refusal/private-root semantics covered by added main-hotfix archive suite.",
+      "stageSHA256": {
+        "2": "d8fd2ed53423009d35159f56739d70e1457288c2a02ec5d3774bb3ae90d641af",
+        "3": "1b07f34eb78faf1eb35409b9f1747349d809428d70623c3d119ffca8f69df54d"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 4,
+          "originalEndLine": 161,
+          "betaSideSHA256": "94f368d9c1afbd18f3a9e243502faac52125ed95084a2e50ea28dbca5fbb08fd",
+          "mainSideSHA256": "8c0d6fefeaa692dbca31b966c45ca26ac6a1fb2ddab1ed8176a3e2b18fa7958e",
+          "resolution": "Keep beta newer sequential yauzl validation/stream ceilings/fd-close ownership. Main link refusal/private-root semantics covered by added main-hotfix archive suite.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 169,
+          "originalEndLine": 537,
+          "betaSideSHA256": "fb07b843f2797a118a8b5329685433a3a91ede480f767e0ac28d4ee7e5831fd2",
+          "mainSideSHA256": "e4eda4407f73fd9916ad944dae9d5e245f81f20e1a3597cd0ecfcfc7e34e8a40",
+          "resolution": "Keep beta newer sequential yauzl validation/stream ceilings/fd-close ownership. Main link refusal/private-root semantics covered by added main-hotfix archive suite.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Main link/sentinel/cleanup behaviors retained with stronger beta stream/type/byte/fd closure.",
+      "testReferences": [
+        "tests/unit/cli/zipExtraction.test.ts",
+        "tests/unit/cli/zipExtraction.main-hotfix.test.ts"
+      ]
+    },
+    {
+      "path": "src/elements/memories/Memory.ts",
+      "decision": "Retain beta DI, authoritative Map/onFull rules, persisted ordering, policy counters and guarded candidates; port main synchronous enforcement failure boundary, index cleanup and oversized append refusal explicitly.",
+      "stageSHA256": {
+        "1": "22262d83837c5d3d666e45b656b3400a061b0151d86e06a8a66c1f85ec879900",
+        "2": "64eed2eaa8d4b4560f29fe8f26475292ad09bb608c8efea811de082686825226",
+        "3": "2dab0752c661ff0b9b38f50b0b09038296d739e9cc4b594083fc1c9e483d96f8"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 92,
+          "originalEndLine": 100,
+          "betaSideSHA256": "e9ac04b86de17606735c42344db949179f29eee23d3dc0445473a895fc84e794",
+          "mainSideSHA256": "2bd3e7a33aa305af572896af231cb4c7c969e525a6d179c7f70f4be3a44afddd",
+          "resolution": "Keep beta optional onFull documentation and dynamic expiring default.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 259,
+          "originalEndLine": 265,
+          "betaSideSHA256": "235aa702fff528a16ad7841584bb9953e60fdc577da534a254ba48f08570c28b",
+          "mainSideSHA256": "8e4ac070c738781ed935082c236612e4d5fa866f04e62076a0086097b23c9c2c",
+          "resolution": "Keep beta authoritative Map and bounded admission comments.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 3,
+          "originalStartLine": 272,
+          "originalEndLine": 278,
+          "betaSideSHA256": "b37124d7936ebdad02daa6224618b9c85dac205e339cfc61b7158ac15e91c3f9",
+          "mainSideSHA256": "80dbe064036038c9c53881d4a24eb1f0d4de27b3ae8f8d50a7b2f57980723779",
+          "resolution": "Combine beta policyRemovedCount with main oversizedLegacyReadOnly; copy flag through beta candidate/persistence state and fingerprint.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 4,
+          "originalStartLine": 344,
+          "originalEndLine": 357,
+          "betaSideSHA256": "386b0c77af40b164e5ff8b1b1f4d6b49b30c7d9dbadde5f6996c6ba26f676d4e",
+          "mainSideSHA256": "da266f1a85fae96cfabdef74491d1e4776e068b8ae0465db8847523e243165d8",
+          "resolution": "Keep beta Map initialization and derived cache design.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 5,
+          "originalStartLine": 375,
+          "originalEndLine": 385,
+          "betaSideSHA256": "6d5141b58e5f72891f3e7c3dd3df15c4fed0253ef8ffd8d01de4db33caf7a19f",
+          "mainSideSHA256": "30d286a29b2658da8d6cab3b428db3c92f33fc058abd45696d3abba75609f643",
+          "resolution": "Keep beta invalid-onFull fail-closed normalization; retain main alias and permanent-capacity regressions.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 6,
+          "originalStartLine": 485,
+          "originalEndLine": 493,
+          "betaSideSHA256": "94a2cc4c5cc44f25c1b1ac800fd99aeed92b2243425e497aa259aa3a50a4f142",
+          "mainSideSHA256": "50fc4b9a1d3ea09ed4ae5e8e0f6e7e29f37becb2ced8d37e8a0ef6dd7bfdd031",
+          "resolution": "Keep beta synchronous pre-insert admission; add main read-only refusal before retention or mutation.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 7,
+          "originalStartLine": 1163,
+          "originalEndLine": 1193,
+          "betaSideSHA256": "7cc6ca672a2c2e760e4db7274067d67bdc35f683dbe81f73539d56999331b7c8",
+          "mainSideSHA256": "00af02d2f620463afc77d084bde391c368628afd168f74164039eccd599e27d9",
+          "resolution": "Keep beta counted eviction helper and policy counters; add expired-entry search-index removal and synchronous internal enforcement core.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 8,
+          "originalStartLine": 1509,
+          "originalEndLine": 1513,
+          "betaSideSHA256": "3cfb1a030344bff40ebae0186e876ca6677b66407bdc6ac2ef32383921bc5535",
+          "mainSideSHA256": "8502e30d38a4ec8beac4e0a997e0e4c7eea5429b73e3aa06124a41ada0334939",
+          "resolution": "Keep beta deserialize options/suppressLoadPolicy; port main synchronous enforcement error propagation outside optional-service lookup catch.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Main capacity/read-only/load-error/index/reused-instance behaviors combined with beta DI, suppressLoadPolicy, quiet candidates and counted eviction.",
+      "testReferences": [
+        "tests/unit/elements/memories/Memory.capacity.test.ts",
+        "tests/unit/elements/memories/Memory.retentionFailures.test.ts",
+        "tests/unit/elements/memories/MemoryManager.legacyRecovery.test.ts",
+        "tests/unit/elements/memories/Memory.concurrent.test.ts"
+      ]
+    },
+    {
+      "path": "src/elements/memories/MemoryManager.ts",
+      "decision": "Retain beta storage/tenant/load hooks and metadata normalization; bind main read-only behavior to existing captured raw-content hook, not old file-only loader.",
+      "stageSHA256": {
+        "1": "947df54453972e42c8a57c1ab6727a3e9967214a881677bb300bbb2e5d512fe7",
+        "2": "96c7f236bb8f005b60f8c716885f0b7f6750fc61f754822b250e9467cc5c7eab",
+        "3": "6b2f5a8b40670c551a06f75fc84c0c979600adde1442bf9a44be3fe542c64a6a"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 286,
+          "originalEndLine": 417,
+          "betaSideSHA256": "094cac97d9ca95e216ae44e0edf61dda6062f62c8298a928ff413cce1b139ac6",
+          "mainSideSHA256": "dc1ef090b60155a3f7eecd0a0580234f5aea3fff764c5765e5132d17f3fcc5b5",
+          "resolution": "Retain beta storage/tenant/load hooks and metadata normalization; bind main read-only behavior to existing captured raw-content hook, not old file-only loader.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 2852,
+          "originalEndLine": 2860,
+          "betaSideSHA256": "0372403618f0458929169d3e2128357f7c200e172d64fab04dc6d32043c9983b",
+          "mainSideSHA256": "1efb846a8670193f0c05497559072473ce12fea1426628db2440931ea840a04d",
+          "resolution": "Retain beta storage/tenant/load hooks and metadata normalization; bind main read-only behavior to existing captured raw-content hook, not old file-only loader.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Captured raw-content read-only mark occurs before beta early return, without extra read or changed storage/tenant ownership.",
+      "testReferences": [
+        "tests/unit/elements/memories/MemoryManager.legacyRecovery.test.ts",
+        "tests/unit/elements/memories/MemoryManager.saveLimits.test.ts"
+      ]
+    },
+    {
+      "path": "src/elements/memories/constants.ts",
+      "decision": "Keep beta documented limits: same256Ki/2Mi string-unit values as main; no raised limits.",
+      "stageSHA256": {
+        "1": "c832eba2fb854061cd31bf6352d1ba5147638684a180ac50891e9e58dab95dcb",
+        "2": "6db3e5c52c355cecace27e9cae79aa74ef061a16e3968ab5f4166cb7166919d7",
+        "3": "847070c74f9659768294f78d85a4977c3f8b0eb67ab89f2c5418c757ce9b952b"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 69,
+          "originalEndLine": 84,
+          "betaSideSHA256": "a88be022573a6cb3125583f1a6d70481dd724ad41def30c0bc8c75620e914dbb",
+          "mainSideSHA256": "d6b2bb577d52555b0068907d7c568793e5dc1a0ac079fd4a8c8e438f273e5c18",
+          "resolution": "Keep beta documented limits: same256Ki/2Mi string-unit values as main; no raised limits.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Beta and main preserve the same 256Ki string-unit write ceiling /2Mi legacy read ceiling.",
+      "testReferences": [
+        "tests/unit/elements/memories/MemoryManager.legacyRecovery.test.ts",
+        "tests/unit/elements/memories/MemoryManager.saveLimits.test.ts"
+      ]
+    },
+    {
+      "path": "src/generated/version.ts",
+      "decision": "Keep the exact beta generated file; restore build-only timestamp churn after proving every other byte equal.",
+      "stageSHA256": {
+        "1": "89cc00d069e215e44530910cc758cc61a7b2d40354eb98c935089a38f2579ab4",
+        "2": "5b7401bc2bb74677cbe6b38a73b924a3d261c7d91bc37650990136ae583449e6",
+        "3": "cfaf84f03d84d58ccb2bb9649da7393907c3626656e276190bab8296a80cbd12"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 6,
+          "originalEndLine": 12,
+          "betaSideSHA256": "f5b87a84b1fd249d2c44ef7398c425053e24e9fd8b84ad17c84e1ead586bcd65",
+          "mainSideSHA256": "da9520e6831ff60cb1417788293dc16476d57b3c56b057e3fcc34a82ae2e326d",
+          "resolution": "Keep the exact beta generated file; restore build-only timestamp churn after proving every other byte equal.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Beta version/type/name retained; main stable 2.0.43 identity not imported. Exact beta file restored after timestamp-only inverse proof.",
+      "testReferences": [
+        "npm run build",
+        "Static generated version comparison against beta"
+      ]
+    },
+    {
+      "path": "src/storage/MemoryMetadataExtractor.ts",
+      "decision": "Keep beta recovery-aware extractor; main limit/name recovery behavior already met.",
+      "stageSHA256": {
+        "1": "30e6c2d6516eead93869e62e46af7297d6b0b46a648fd2c0f0ae1ee6f1b893df",
+        "2": "6a7d333e450326b9a5f1ea7be1f5a442bf14a0197b8d44c7a85bfc51fd80fc41",
+        "3": "81e1e6418c46441fd312f3a97130ee2395bf67cf5224bdd315e1bce8aae9c490"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 20,
+          "originalEndLine": 27,
+          "betaSideSHA256": "3f4cf94b1af055e6fd7d5db726d7bc0c85bd18cc55de514860c219b7c59e84cd",
+          "mainSideSHA256": "09dbbf864bf7c9f0d14240a5e469358bd33f2d7620627e7b2644a7bc56d929ea",
+          "resolution": "Keep beta recovery-aware extractor; main limit/name recovery behavior already met.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Newer beta recovery-aware implementation retained.",
+      "testReferences": [
+        "npm test -- --maxWorkers=2 (unfiltered default; literal failures reported separately)"
+      ]
+    },
+    {
+      "path": "tests/unit/base/ElementFileOperations.frontmatterSecurity.test.ts",
+      "decision": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+      "stageSHA256": {
+        "2": "b548bde53a8222d678d32c0133ef963dcf99caa05b92866ddb616bf100587965",
+        "3": "0fe9794399ef2661644656aa331a07094d04093c1f2ebdc714fa1431c4915a8d"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 7,
+          "originalEndLine": 10,
+          "betaSideSHA256": "ba9d7e217296e1d8cd506c4fe86bd2b712fca5d3d2e2e28aa3365cfadf2fdb57",
+          "mainSideSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 16,
+          "originalEndLine": 26,
+          "betaSideSHA256": "941fc59d19a0802bcb584b69698a3cdd033dd982a90809759ba2b7829105635b",
+          "mainSideSHA256": "dc832195d47dfbee660ba3f77257a28822378337aecd9f435e40f9f0ce7185c0",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 3,
+          "originalStartLine": 41,
+          "originalEndLine": 45,
+          "betaSideSHA256": "4d605db7e3322ef24bcfb70c5fbec1a6888ab5493ba37c555cabe84675845850",
+          "mainSideSHA256": "e8bc3bc03c0e09276025e739b173db033af7c5ff1c1bf72c619c61d11bdd5693",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 4,
+          "originalStartLine": 57,
+          "originalEndLine": 61,
+          "betaSideSHA256": "534e22640d4c9cb890c73b2456e30c6edf3c456d9ef7e5be57c9e5bab53b15d3",
+          "mainSideSHA256": "fc73d21f9c562e8cc8b1cb66647a74fae7fc722897f53cb2feae5800adcb5f33",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 5,
+          "originalStartLine": 66,
+          "originalEndLine": 79,
+          "betaSideSHA256": "527ed11a1df2379fa093f5768a2f7fb08dd6c82850d3063d536c344231834cf0",
+          "mainSideSHA256": "38a15cd1791f6b96de1502ffd232c61c6ba68bd68245e9a3c8a4f96fe3c0c3d1",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 6,
+          "originalStartLine": 89,
+          "originalEndLine": 93,
+          "betaSideSHA256": "04b3afa42af7e812f62bb0d812af7ecbe8064e64bfa0e43b5077f406e4c33d55",
+          "mainSideSHA256": "868e2a9c61d8ccf2f468d13e93350b8795d9fc50601956cc882d6c0d1c93c6bb",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 7,
+          "originalStartLine": 111,
+          "originalEndLine": 115,
+          "betaSideSHA256": "4d605db7e3322ef24bcfb70c5fbec1a6888ab5493ba37c555cabe84675845850",
+          "mainSideSHA256": "e8bc3bc03c0e09276025e739b173db033af7c5ff1c1bf72c619c61d11bdd5693",
+          "resolution": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta FileOperationsService DI and read/write-limit assertions; same main owned-engine and no-write cases retained.",
+      "testReferences": [
+        "tests/unit/base/ElementFileOperations.frontmatterSecurity.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/cli/zipExtraction.test.ts",
+      "decision": "Keep all stronger beta archive tests and add exact main tests separately; do not discard link/private-root/sibling coverage.",
+      "stageSHA256": {
+        "2": "75bfe08e6c041462a7c3f8296d0e59b75be66a30fe51838a551f8f0f1a644ed6",
+        "3": "d07d38a4f47fe8628b49dded778da51afdb026cae682b1e32df77d376182945a"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 7,
+          "originalEndLine": 278,
+          "betaSideSHA256": "dbd4e9e8ee2401961a2a7f31b49095d9ef7eeb4c3d0590eae81222e34024588b",
+          "mainSideSHA256": "e0466e5fa20db7515e467fbff8b793b710889fa57069e567c678ea85e93a31be",
+          "resolution": "Keep all stronger beta archive tests and add exact main tests separately; do not discard link/private-root/sibling coverage.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 288,
+          "originalEndLine": 424,
+          "betaSideSHA256": "09145099adb2711e7ba65a1caa91284d06af375a3958a9fdcee928f5c9827979",
+          "mainSideSHA256": "016faf55e596bc6908c8a663f79c16c7dc4e16af4fbd1afa9d3eac1111a8a6a7",
+          "resolution": "Keep all stronger beta archive tests and add exact main tests separately; do not discard link/private-root/sibling coverage.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep all stronger beta archive tests and add exact main tests separately; do not discard link/private-root/sibling coverage.",
+      "testReferences": [
+        "tests/unit/cli/zipExtraction.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/elements/memories/Memory.api.test.ts",
+      "decision": "Keep beta copy-safe lookup by entryID rather than mutating stale returned object; main trust-selection assertion preserved.",
+      "stageSHA256": {
+        "1": "9f780be6b430047dfaa89da8431a4d36638671a7da1e693234bd4816e0cd8da3",
+        "2": "a96b0078e86f88b3ecf30cd93ccb5b7a7c945c52f0fd66369c4c5c9143706ae1",
+        "3": "c606277cee1f7f3e21ae02f4c8cfc23b8c4bcbe6b542fc4d9e165ea315c2e484"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 83,
+          "originalEndLine": 90,
+          "betaSideSHA256": "74fa72f633230c50f066d80c428e90527f9c82b901d83feec49fa69ad1b8234e",
+          "mainSideSHA256": "ca1991ace67009f9b993c2928fd21b7cb00eeb90b033ba18402c4d19a302bf0b",
+          "resolution": "Keep beta copy-safe lookup by entryID rather than mutating stale returned object; main trust-selection assertion preserved.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta copy-safe lookup by entryID rather than mutating stale returned object; main trust-selection assertion preserved.",
+      "testReferences": [
+        "tests/unit/elements/memories/Memory.api.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/elements/memories/Memory.test.ts",
+      "decision": "Keep beta explicit expiring/evicting case; main permanent-capacity rejection preserved in adapted dedicated capacity suite.",
+      "stageSHA256": {
+        "1": "24565b19a43b4232fbbd05c43fc5c2494bf0fc48aeedd96cbf7736ee55d438a8",
+        "2": "b8f77d154b6a496e4c560f038b2b16dd2b4ab2d03004e01ca2adc81cf03ddb8e",
+        "3": "8be2c55d2532260d0c4cadea96e816d78845576e22e14b96dc4643e6b7150141"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 101,
+          "originalEndLine": 111,
+          "betaSideSHA256": "ad884709bd44d573fdcc676d5b45b10dde353b4a954880b0825b432d8eb8c97e",
+          "mainSideSHA256": "4b22bcea85356ccf005bbcd54d35d00c8dcca0ec1758b6d35a6552b55e5befdc",
+          "resolution": "Keep beta explicit expiring/evicting case; main permanent-capacity rejection preserved in adapted dedicated capacity suite.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta explicit expiring/evicting case; main permanent-capacity rejection preserved in adapted dedicated capacity suite.",
+      "testReferences": [
+        "tests/unit/elements/memories/Memory.test.ts",
+        "tests/unit/elements/memories/Memory.capacity.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/elements/memories/Memory.timestamp.test.ts",
+      "decision": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+      "stageSHA256": {
+        "1": "8d121a1cdfc739f95d297af86f15934161bcd973c5282c409653c749913093e1",
+        "2": "7b6fb6e34d97e97f883c465dfa14604e98f3f659751f8574542aa11fd06074e9",
+        "3": "42920d6c5ad1b8a1ab80849e4e289cd1ff255a3c58779989f9000126e782bc69"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 25,
+          "originalEndLine": 29,
+          "betaSideSHA256": "cb74301433a1285898041772390318c51d1c40777b88d912e07d5d990f49961d",
+          "mainSideSHA256": "8cdcf4f4891755955e3141756a3dfda34e567f9bd4cf8ec4f5a50f926396b7a5",
+          "resolution": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 42,
+          "originalEndLine": 46,
+          "betaSideSHA256": "cb74301433a1285898041772390318c51d1c40777b88d912e07d5d990f49961d",
+          "mainSideSHA256": "8cdcf4f4891755955e3141756a3dfda34e567f9bd4cf8ec4f5a50f926396b7a5",
+          "resolution": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 3,
+          "originalStartLine": 78,
+          "originalEndLine": 82,
+          "betaSideSHA256": "cb74301433a1285898041772390318c51d1c40777b88d912e07d5d990f49961d",
+          "mainSideSHA256": "8cdcf4f4891755955e3141756a3dfda34e567f9bd4cf8ec4f5a50f926396b7a5",
+          "resolution": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 4,
+          "originalStartLine": 212,
+          "originalEndLine": 216,
+          "betaSideSHA256": "80b78fae8c67c68e60883eaa0d582e43c3892e8c7ca187f151b0a3016819a7b1",
+          "mainSideSHA256": "486e3e8f916780635cd163f73a9b79b1d62677c28ca0c2a97c7d70c4a1be6bed",
+          "resolution": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 5,
+          "originalStartLine": 221,
+          "originalEndLine": 235,
+          "betaSideSHA256": "8e764444fdfa074f134cb25cc93462f13352a831905266f75f305761d9d30abb",
+          "mainSideSHA256": "3bcaa554cc39ae46871b93f220b96a62506d41f14e513af6a3597bf93ec9da66",
+          "resolution": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 6,
+          "originalStartLine": 241,
+          "originalEndLine": 247,
+          "betaSideSHA256": "3240455429b07757d282c7ca3504b9aee442bbea7bc5acbf508b6f75e65e0438",
+          "mainSideSHA256": "b106e6ef648ba27db4a17c59a57d36c924a1b68016e48c059dbed12a86435835",
+          "resolution": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta typed Map and content-addressed timestamp mutations; no insertion-position assumption or assertion weakening.",
+      "testReferences": [
+        "tests/unit/elements/memories/Memory.timestamp.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/logging/sinks/FileLogSink.test.ts",
+      "decision": "Keep beta deterministic clock near midnight; same main retention filename behavior/assertions.",
+      "stageSHA256": {
+        "1": "1992d8e409285e20ed0be779f5f7fa463b1bc3c408f24daec2856567cc53537f",
+        "2": "a08d92a9977148d219da0e912610b551c232859b99dd6b04f819749aac9fa707",
+        "3": "5a4d8fcca30d24f2c3d43575fcf77636e66df5f869fc0f0050ee6b1563ac2767"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 152,
+          "originalEndLine": 159,
+          "betaSideSHA256": "48ef2196be0ce6acdde4a47bc3a243f789fb5422badb2a16d63dd9f042f9feef",
+          "mainSideSHA256": "5cf3feb4ea381722d61c486b06c47cf687f4994800e59bd648b4303b0a818d2c",
+          "resolution": "Keep beta deterministic clock near midnight; same main retention filename behavior/assertions.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta deterministic clock near midnight; same main retention filename behavior/assertions.",
+      "testReferences": [
+        "tests/unit/logging/sinks/FileLogSink.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/security/CommandValidator.test.ts",
+      "decision": "Keep beta mocked spawn/env/stdin/output boundary; no real checkout git-status scan or platform skip added.",
+      "stageSHA256": {
+        "1": "52809394d4d5c76dd5eb31cce0a1e1d509c3ffc1442623e887f414ff484fa516",
+        "2": "d326f8ded5df59336a18d01664f1a15950062fbbb49411e76285fb153b76aa2f",
+        "3": "2e52fe86a9a626437df1ef3465efe30ab1ba925e738cca4cf9c667bc1a49a5d4"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 91,
+          "originalEndLine": 120,
+          "betaSideSHA256": "c9f5db47a3734da27145881dd92db54c0e514cd45dda1128573035b7dd60e128",
+          "mainSideSHA256": "3631aab1285f4b83e434b7868f3a46969e94edc2489dcbc76110324bf6bc67cb",
+          "resolution": "Keep beta mocked spawn/env/stdin/output boundary; no real checkout git-status scan or platform skip added.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta mocked spawn/env/stdin/output boundary; no real checkout git-status scan or platform skip added.",
+      "testReferences": [
+        "tests/unit/security/CommandValidator.test.ts"
+      ]
+    },
+    {
+      "path": "tests/unit/services/SerializationService.frontmatterSafety.test.ts",
+      "decision": "Keep beta service-object DI/event/storage factory; same main frontmatter admission/body precedence assertions.",
+      "stageSHA256": {
+        "2": "0e3e3354a4a1249985b83583527e5f20c81dcda2d07e8b096721e84bf7e329f0",
+        "3": "3b040d277f65d3fd8e888d5590c623b31e57996e9d438bc4041dd6a1e5ef2455"
+      },
+      "hunks": [
+        {
+          "number": 1,
+          "originalStartLine": 4,
+          "originalEndLine": 8,
+          "betaSideSHA256": "22b896620c5f274104d969708fed4aa6dbb5df79ae3e4f6db08c3ab1567031ee",
+          "mainSideSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "resolution": "Keep beta service-object DI/event/storage factory; same main frontmatter admission/body precedence assertions.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        },
+        {
+          "number": 2,
+          "originalStartLine": 40,
+          "originalEndLine": 49,
+          "betaSideSHA256": "f8e4c1cd58507ed17bf4192f32e6087bdff6c33a0044248aae4e55a771f29c1f",
+          "mainSideSHA256": "80e0e399a3cdc0c59e77f6dd994ab0657d0ac5c1a4d4991233d346437c7a90e0",
+          "resolution": "Keep beta service-object DI/event/storage factory; same main frontmatter admission/body precedence assertions.",
+          "proofReference": "See this file mainBehaviorProof and testReferences; original side digests bind the exact decision operands."
+        }
+      ],
+      "mainBehaviorProof": "Keep beta service-object DI/event/storage factory; same main frontmatter admission/body precedence assertions.",
+      "testReferences": [
+        "tests/unit/services/SerializationService.frontmatterSafety.test.ts"
+      ]
+    }
+  ],
+  "additionalMainBehaviorPorts": [
+    "Refresh maxEntries from loaded metadata with the same constructor/default ceiling on same-instance deserialize.",
+    "Remove each old derived search-index ID before clearing the authoritative Map."
+  ]
+}
