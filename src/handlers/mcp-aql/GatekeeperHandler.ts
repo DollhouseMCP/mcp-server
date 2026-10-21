@@ -473,7 +473,30 @@ export class GatekeeperHandler {
       return staticResponse;
     }
 
-    const activeElements = await this.deps.getActiveElements();
+    let activeElements: ActiveElement[];
+    try {
+      activeElements = await this.deps.getActiveElements();
+    } catch (error) {
+      logger.warn('Failed to gather active elements for permission prompt', { error, toolName });
+      SecurityMonitor.logSecurityEvent({
+        type: 'PERMISSION_PROMPT_DENIED',
+        severity: 'MEDIUM',
+        source: 'MCPAQLHandler.dispatchGatekeeper.permissionPrompt',
+        details: `Permission denied for ${toolName}: policy_collection_failed`,
+        additionalData: { toolName, riskLevel: classification.riskLevel, agentIdentity,
+          reason: 'policy_collection_failed' },
+      });
+      return {
+        behavior: 'deny',
+        message: 'Unable to evaluate active element policies. Permission denied.',
+        ...(agentIdentity && { agent_identity: agentIdentity }),
+        classification: {
+          riskLevel: classification.riskLevel,
+          reason: 'Active element policy collection failed',
+          stage: 'element_policy',
+        },
+      };
+    }
     const elementDecision = evaluateCliToolPolicy(toolName, toolInput.input, activeElements);
     const policyResponse = await this.resolveElementPolicyDecision(toolName, toolInput.input, classification, elementDecision, activeElements, agentIdentity);
     if (policyResponse) {
