@@ -32,7 +32,7 @@
  */
 
 import * as yaml from 'js-yaml';
-import matter from 'gray-matter';
+import matter from '../security/frontmatter.js';
 import { assertSupportedFrontmatterLanguage } from '../security/frontmatterLanguage.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityMonitor, SecurityEvent } from '../security/securityMonitor.js';
@@ -655,12 +655,12 @@ export class SerializationService {
     }
   }
 
-  /** Keep gray-matter's body unwrapping without its executable/default engines. */
+  /** Retain body unwrapping while the service owns both safe parsing engines. */
   stringifySafeFrontmatter(content: string, metadata: any, options: YamlDumpOptions): string {
     if (options.schema === 'default') {
       throw new Error('Default YAML schema is not supported for frontmatter serialization');
     }
-    // Defaults retain executable engines; admission must precede gray-matter's body parse.
+    // Validate language declarations before parsing an existing frontmatter body.
     assertSupportedFrontmatterLanguage(content);
     const yamlEngine = {
       parse: (input: string) => {
@@ -685,7 +685,6 @@ export class SerializationService {
         return JSON.stringify(data, null, 2);
       }
     };
-    // Options also prevent gray-matter's unconfigured global parse cache from being used.
     return matter.stringify(content, metadata, { engines: { yaml: yamlEngine, json: jsonEngine } });
   }
 

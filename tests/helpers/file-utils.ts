@@ -4,7 +4,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import matter from 'gray-matter';
+import matter from '../../src/security/frontmatter.js';
 import { v4 as uuidv4 } from 'uuid';
 import { Persona } from '../../src/types/persona.js';
 import { createPersonaFileContent } from './test-fixtures.js';

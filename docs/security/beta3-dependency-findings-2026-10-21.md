@@ -1,3 +1,17 @@
+# Beta.3 dependency remediation — 2026-10-22 verification in progress
+
+The latest reviewed source and reconciled lock now audit clean: root and standalone Safety each have **0 critical, 0 high, 0 moderate** findings (both exit 0). The `gray-matter` and `install-mcp` dependencies are replaced by bounded, licensed source adapters; the vulnerable consumer chains are absent. The hosted font regression and permission fixture isolation are fixed. This remains a draft; no release or deployment is authorized by these results.
+
+The direct, user-authorized `npm install --package-lock-only ...` attempt was rejected by the local PreToolUse hook (`Dangerous command pattern: npm install *`). The staged files were restored immediately. A separately reviewed **declarative file reconciliation**, using existing package records and no dependency resolver, then repaired the lock. This is not npm regeneration. Root lock SHA-256 is `cc268f6a2c365a3fbd742a85ba1bd16ba110776199ee8b8c9487fd5e891c530c`; all retained package versions and integrity values are unchanged. A fresh script-disabled ci, strict actual/virtual raw/override/peer edge checks, npm ls, signatures and full build passed.
+
+Current validation: root signatures **880 / 109 attestations**; Safety **512 / 56**. The full unit wave finished in 587.52 seconds with **18,550 passed, zero assertion failures, 17 skipped**, but exits **1** because `tests/unit/cli/cliAuthStorage.test.ts` could not run after a Jest worker out-of-memory crash (801 passed suites, one failed, one skipped). That file will receive one isolated run with unchanged budgets after integration. Performance passed **10 suites / 120 tests**, exit 0. The full **199-file integration inventory is currently running against a newly created, owned PostgreSQL 17 cluster**, with required-PG flags and an explicit Ubuntu VM Docker context. No terminal integration totals are claimed yet.
+
+An override-free, local packed-artifact consumer installed successfully and audits **0**, with all **391 raw/peer edges** valid in both actual and virtual trees. It uses the actual local server and unpublished Safety1.0.6 tarballs, both MIT notices, and one explicitly reviewed aged parent `express-rate-limit@8.5.1` admitted by SDK's `^8.2.1` range. This is exact-artifact reproducibility, not a fresh registry resolution guarantee. Its `npm audit signatures` command exits 1 because npm tries to look up unpublished local Safety1.0.6 in the registry; the new registry parent's signature was verified directly against npm's official key, and all other registry records match the signature-verified root graph. This command limitation is retained, not reported as a pass.
+
+The final report and sanitized per-file integration evidence will replace this progress note after the active run and owned-service cleanup complete. The material below is the **superseded October21 snapshot**, retained temporarily to preserve the earlier failed/incomplete verification history; its uses of “current” refer to that historical candidate only.
+
+---
+
 # Beta.3 dependency remediation — 2026-10-21
 
 Status: **draft backup only; security remediation remains incomplete**. The root audit still has 37 high and 7 moderate affected package entries. Standalone Safety is clean. This branch is not release or deployment clearance.

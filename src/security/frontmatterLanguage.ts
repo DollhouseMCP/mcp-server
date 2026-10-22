@@ -1,7 +1,7 @@
-import matter from 'gray-matter';
+import matter, { type FrontmatterOptions } from './frontmatter.js';
 
-/** gray-matter also recognizes the legacy lang/delims option aliases at runtime. */
-type LanguageOptions = matter.GrayMatterOption<string, any> & {
+/** Preserve the legacy language/delimiter aliases accepted by the wrapper. */
+type LanguageOptions = FrontmatterOptions & {
   lang?: string;
   delims?: string | [string, string];
 };
@@ -13,7 +13,7 @@ function assertLanguage(language: string): void {
   }
 }
 
-/** Admit engine selection before gray-matter can parse a body, including custom delimiters. */
+/** Admit engine selection before parsing a body, including custom delimiters. */
 export function assertSupportedFrontmatterLanguage(input: string, options: LanguageOptions = {}): void {
   // defaults() normalizes option-selected languages, but not body declarations.
   assertLanguage((options.language || options.lang || 'yaml').toLowerCase());

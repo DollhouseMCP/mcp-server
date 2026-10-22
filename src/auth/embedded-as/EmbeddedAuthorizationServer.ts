@@ -23,6 +23,7 @@ import { offlineAccessConsentHandlers, offlineAccessParConsentHandlers } from '.
  */
 
 import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
+import path from 'node:path';
 import OidcProvider, { interactionPolicy } from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
@@ -173,7 +174,9 @@ function servePackagedAuthAsset(relativePath: string, contentType: string): Requ
       }
       res.setHeader('Cache-Control', 'public, max-age=3600');
       res.type(contentType);
-      res.sendFile(assetPath, (err) => {
+      // Scope sendFile's dotfile checks to the resource name. Installed package
+      // ancestors can legitimately be hidden (for example ~/.npm/_npx).
+      res.sendFile(path.basename(assetPath), { root: path.dirname(assetPath) }, (err) => {
         if (err) next(err);
       });
     } catch (err) {

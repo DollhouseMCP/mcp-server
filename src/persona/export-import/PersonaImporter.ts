@@ -11,7 +11,7 @@ import { validateFilename, validatePath, validateContentSize } from '../../secur
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { generateUniqueId } from '../../utils/filesystem.js';
 import { logger } from '../../utils/logger.js';
-import matter from 'gray-matter';
+import matter from '../../security/frontmatter.js';
 import { IFileOperationsService } from '../../services/FileOperationsService.js';
 
 // Map-like interface for existing personas lookup
