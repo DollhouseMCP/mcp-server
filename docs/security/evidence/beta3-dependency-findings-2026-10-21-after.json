@@ -1,0 +1,3760 @@
+{
+  "literalBefore": {
+    "root": {
+      "high": 38,
+      "moderate": 7
+    },
+    "safety": {
+      "high": 36,
+      "moderate": 5
+    }
+  },
+  "literalAfter": {
+    "root": {
+      "info": 0,
+      "low": 0,
+      "moderate": 7,
+      "high": 37,
+      "critical": 0,
+      "total": 44
+    },
+    "safety": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "underlyingAdvisories": [
+    {
+      "source": 1240992,
+      "name": "braces",
+      "dependency": "braces",
+      "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "severity": "high",
+      "cwe": [
+        "CWE-674"
+      ],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "range": "<=3.0.3"
+    },
+    {
+      "source": 1241202,
+      "name": "sprintf-js",
+      "dependency": "sprintf-js",
+      "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+      "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+      "severity": "moderate",
+      "cwe": [
+        "CWE-1284"
+      ],
+      "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      },
+      "range": "<=1.1.3"
+    }
+  ],
+  "affectedPackages": [
+    {
+      "package": "@istanbuljs/load-nyc-config",
+      "severity": "moderate",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@istanbuljs/load-nyc-config",
+          "version": "1.1.0",
+          "dependencies": {
+            "camelcase": "^5.3.1",
+            "find-up": "^4.1.0",
+            "get-package-type": "^0.1.0",
+            "js-yaml": "^3.13.1",
+            "resolve-from": "^5.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "js-yaml"
+      ],
+      "effects": [
+        "babel-plugin-istanbul"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/console",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@jest/console",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "chalk": "^4.0.0",
+            "jest-message-util": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-message-util"
+      ],
+      "effects": [
+        "@jest/core",
+        "@jest/reporters",
+        "@jest/test-result",
+        "jest-runner"
+      ],
+      "range": "25.4.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/core",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@jest/core",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/console": "30.3.0",
+            "@jest/pattern": "30.0.1",
+            "@jest/reporters": "30.3.0",
+            "@jest/test-result": "30.3.0",
+            "@jest/transform": "30.3.0",
+            "@jest/types": "30.3.0",
+            "@types/node": "*",
+            "ansi-escapes": "^4.3.2",
+            "chalk": "^4.1.2",
+            "ci-info": "^4.2.0",
+            "exit-x": "^0.2.2",
+            "graceful-fs": "^4.2.11",
+            "jest-changed-files": "30.3.0",
+            "jest-config": "30.3.0",
+            "jest-haste-map": "30.3.0",
+            "jest-message-util": "30.3.0",
+            "jest-regex-util": "30.0.1",
+            "jest-resolve": "30.3.0",
+            "jest-resolve-dependencies": "30.3.0",
+            "jest-runner": "30.3.0",
+            "jest-runtime": "30.3.0",
+            "jest-snapshot": "30.3.0",
+            "jest-util": "30.3.0",
+            "jest-validate": "30.3.0",
+            "jest-watcher": "30.3.0",
+            "pretty-format": "30.3.0",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/@jest/core",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/console": "^29.7.0",
+            "@jest/reporters": "^29.7.0",
+            "@jest/test-result": "^29.7.0",
+            "@jest/transform": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "ansi-escapes": "^4.2.1",
+            "chalk": "^4.0.0",
+            "ci-info": "^3.2.0",
+            "exit": "^0.1.2",
+            "graceful-fs": "^4.2.9",
+            "jest-changed-files": "^29.7.0",
+            "jest-config": "^29.7.0",
+            "jest-haste-map": "^29.7.0",
+            "jest-message-util": "^29.7.0",
+            "jest-regex-util": "^29.6.3",
+            "jest-resolve": "^29.7.0",
+            "jest-resolve-dependencies": "^29.7.0",
+            "jest-runner": "^29.7.0",
+            "jest-runtime": "^29.7.0",
+            "jest-snapshot": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "jest-validate": "^29.7.0",
+            "jest-watcher": "^29.7.0",
+            "micromatch": "^4.0.4",
+            "pretty-format": "^29.7.0",
+            "slash": "^3.0.0",
+            "strip-ansi": "^6.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/console",
+        "@jest/reporters",
+        "@jest/reporters",
+        "@jest/test-result",
+        "@jest/transform",
+        "@jest/transform",
+        "jest-config",
+        "jest-config",
+        "jest-haste-map",
+        "jest-message-util",
+        "jest-resolve",
+        "jest-resolve-dependencies",
+        "jest-resolve-dependencies",
+        "jest-runner",
+        "jest-runner",
+        "jest-runtime",
+        "jest-runtime",
+        "jest-snapshot",
+        "jest-snapshot",
+        "jest-watcher",
+        "micromatch"
+      ],
+      "effects": [
+        "jest",
+        "jest-cli"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/environment",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@jest/environment",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/fake-timers": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "jest-mock": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/fake-timers"
+      ],
+      "effects": [
+        "@jest/globals",
+        "jest-circus"
+      ],
+      "range": "<=30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/expect",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@jest/expect",
+          "version": "30.3.0",
+          "dependencies": {
+            "expect": "30.3.0",
+            "jest-snapshot": "30.3.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/@jest/expect",
+          "version": "29.7.0",
+          "dependencies": {
+            "expect": "^29.7.0",
+            "jest-snapshot": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "expect",
+        "jest-snapshot",
+        "jest-snapshot"
+      ],
+      "effects": [
+        "@jest/globals",
+        "jest-circus"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/fake-timers",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@jest/fake-timers",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/types": "^29.6.3",
+            "@sinonjs/fake-timers": "^10.0.2",
+            "@types/node": "*",
+            "jest-message-util": "^29.7.0",
+            "jest-mock": "^29.7.0",
+            "jest-util": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-message-util"
+      ],
+      "effects": [
+        "@jest/environment",
+        "jest-environment-node",
+        "jest-runtime"
+      ],
+      "range": "<=30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/globals",
+      "severity": "high",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "node_modules/@jest/globals",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/environment": "30.3.0",
+            "@jest/expect": "30.3.0",
+            "@jest/types": "30.3.0",
+            "jest-mock": "30.3.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/@jest/globals",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/environment": "^29.7.0",
+            "@jest/expect": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "jest-mock": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/environment",
+        "@jest/expect",
+        "@jest/expect"
+      ],
+      "effects": [
+        "jest-runtime"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/reporters",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@jest/reporters",
+          "version": "30.3.0",
+          "dependencies": {
+            "@bcoe/v8-coverage": "^0.2.3",
+            "@jest/console": "30.3.0",
+            "@jest/test-result": "30.3.0",
+            "@jest/transform": "30.3.0",
+            "@jest/types": "30.3.0",
+            "@jridgewell/trace-mapping": "^0.3.25",
+            "@types/node": "*",
+            "chalk": "^4.1.2",
+            "collect-v8-coverage": "^1.0.2",
+            "exit-x": "^0.2.2",
+            "glob": "^10.5.0",
+            "graceful-fs": "^4.2.11",
+            "istanbul-lib-coverage": "^3.0.0",
+            "istanbul-lib-instrument": "^6.0.0",
+            "istanbul-lib-report": "^3.0.0",
+            "istanbul-lib-source-maps": "^5.0.0",
+            "istanbul-reports": "^3.1.3",
+            "jest-message-util": "30.3.0",
+            "jest-util": "30.3.0",
+            "jest-worker": "30.3.0",
+            "slash": "^3.0.0",
+            "string-length": "^4.0.2",
+            "v8-to-istanbul": "^9.0.1"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/@jest/reporters",
+          "version": "29.7.0",
+          "dependencies": {
+            "@bcoe/v8-coverage": "^0.2.3",
+            "@jest/console": "^29.7.0",
+            "@jest/test-result": "^29.7.0",
+            "@jest/transform": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@jridgewell/trace-mapping": "^0.3.18",
+            "@types/node": "*",
+            "chalk": "^4.0.0",
+            "collect-v8-coverage": "^1.0.0",
+            "exit": "^0.1.2",
+            "glob": "^7.1.3",
+            "graceful-fs": "^4.2.9",
+            "istanbul-lib-coverage": "^3.0.0",
+            "istanbul-lib-instrument": "^6.0.0",
+            "istanbul-lib-report": "^3.0.0",
+            "istanbul-lib-source-maps": "^4.0.0",
+            "istanbul-reports": "^3.1.3",
+            "jest-message-util": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "jest-worker": "^29.7.0",
+            "slash": "^3.0.0",
+            "string-length": "^4.0.1",
+            "strip-ansi": "^6.0.0",
+            "v8-to-istanbul": "^9.0.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/console",
+        "@jest/test-result",
+        "@jest/transform",
+        "@jest/transform",
+        "jest-message-util"
+      ],
+      "effects": [],
+      "range": "*",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/test-result",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@jest/test-result",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/console": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/istanbul-lib-coverage": "^2.0.0",
+            "collect-v8-coverage": "^1.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/console"
+      ],
+      "effects": [
+        "@jest/test-sequencer",
+        "jest-circus",
+        "jest-cli",
+        "jest-runtime",
+        "jest-watcher"
+      ],
+      "range": "25.4.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/test-sequencer",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@jest/test-sequencer",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/test-result": "^29.7.0",
+            "graceful-fs": "^4.2.9",
+            "jest-haste-map": "^29.7.0",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/test-result",
+        "jest-haste-map"
+      ],
+      "effects": [
+        "jest-config"
+      ],
+      "range": "<=30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@jest/transform",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@jest/transform",
+          "version": "30.3.0",
+          "dependencies": {
+            "@babel/core": "^7.27.4",
+            "@jest/types": "30.3.0",
+            "@jridgewell/trace-mapping": "^0.3.25",
+            "babel-plugin-istanbul": "^7.0.1",
+            "chalk": "^4.1.2",
+            "convert-source-map": "^2.0.0",
+            "fast-json-stable-stringify": "^2.1.0",
+            "graceful-fs": "^4.2.11",
+            "jest-haste-map": "30.3.0",
+            "jest-regex-util": "30.0.1",
+            "jest-util": "30.3.0",
+            "pirates": "^4.0.7",
+            "slash": "^3.0.0",
+            "write-file-atomic": "^5.0.1"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/@jest/transform",
+          "version": "29.7.0",
+          "dependencies": {
+            "@babel/core": "^7.11.6",
+            "@jest/types": "^29.6.3",
+            "@jridgewell/trace-mapping": "^0.3.18",
+            "babel-plugin-istanbul": "^6.1.1",
+            "chalk": "^4.0.0",
+            "convert-source-map": "^2.0.0",
+            "fast-json-stable-stringify": "^2.1.0",
+            "graceful-fs": "^4.2.9",
+            "jest-haste-map": "^29.7.0",
+            "jest-regex-util": "^29.6.3",
+            "jest-util": "^29.7.0",
+            "micromatch": "^4.0.4",
+            "pirates": "^4.0.4",
+            "slash": "^3.0.0",
+            "write-file-atomic": "^4.0.2"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "babel-plugin-istanbul",
+        "jest-haste-map",
+        "micromatch"
+      ],
+      "effects": [
+        "@jest/core",
+        "@jest/reporters",
+        "babel-jest",
+        "jest-runner",
+        "jest-runtime",
+        "jest-snapshot",
+        "ts-jest"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@types/jest",
+      "severity": "high",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@types/jest",
+          "version": "29.5.14",
+          "dependencies": {
+            "expect": "^29.0.0",
+            "pretty-format": "^29.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "expect"
+      ],
+      "effects": [],
+      "range": "28.1.7 - 29.5.14",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@typescript-eslint/eslint-plugin",
+      "severity": "high",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@typescript-eslint/eslint-plugin",
+          "version": "7.18.0",
+          "dependencies": {
+            "@eslint-community/regexpp": "^4.10.0",
+            "@typescript-eslint/scope-manager": "7.18.0",
+            "@typescript-eslint/type-utils": "7.18.0",
+            "@typescript-eslint/utils": "7.18.0",
+            "@typescript-eslint/visitor-keys": "7.18.0",
+            "graphemer": "^1.4.0",
+            "ignore": "^5.3.1",
+            "natural-compare": "^1.4.0",
+            "ts-api-utils": "^1.3.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@typescript-eslint/parser",
+        "@typescript-eslint/type-utils",
+        "@typescript-eslint/utils"
+      ],
+      "effects": [],
+      "range": "4.0.1-alpha.0 - 8.2.1-alpha.25",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@typescript-eslint/parser",
+      "severity": "high",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@typescript-eslint/parser",
+          "version": "7.18.0",
+          "dependencies": {
+            "@typescript-eslint/scope-manager": "7.18.0",
+            "@typescript-eslint/types": "7.18.0",
+            "@typescript-eslint/typescript-estree": "7.18.0",
+            "@typescript-eslint/visitor-keys": "7.18.0",
+            "debug": "^4.3.4"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@typescript-eslint/typescript-estree"
+      ],
+      "effects": [
+        "@typescript-eslint/eslint-plugin"
+      ],
+      "range": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@typescript-eslint/type-utils",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@typescript-eslint/type-utils",
+          "version": "7.18.0",
+          "dependencies": {
+            "@typescript-eslint/typescript-estree": "7.18.0",
+            "@typescript-eslint/utils": "7.18.0",
+            "debug": "^4.3.4",
+            "ts-api-utils": "^1.3.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@typescript-eslint/typescript-estree",
+        "@typescript-eslint/utils"
+      ],
+      "effects": [
+        "@typescript-eslint/eslint-plugin"
+      ],
+      "range": "5.9.2-alpha.0 - 8.2.1-alpha.25",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@typescript-eslint/typescript-estree",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@typescript-eslint/typescript-estree",
+          "version": "7.18.0",
+          "dependencies": {
+            "@typescript-eslint/types": "7.18.0",
+            "@typescript-eslint/visitor-keys": "7.18.0",
+            "debug": "^4.3.4",
+            "globby": "^11.1.0",
+            "is-glob": "^4.0.3",
+            "minimatch": "^9.0.4",
+            "semver": "^7.6.0",
+            "ts-api-utils": "^1.3.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "globby"
+      ],
+      "effects": [
+        "@typescript-eslint/parser",
+        "@typescript-eslint/type-utils",
+        "@typescript-eslint/utils"
+      ],
+      "range": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "@typescript-eslint/utils",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/@typescript-eslint/utils",
+          "version": "7.18.0",
+          "dependencies": {
+            "@eslint-community/eslint-utils": "^4.4.0",
+            "@typescript-eslint/scope-manager": "7.18.0",
+            "@typescript-eslint/types": "7.18.0",
+            "@typescript-eslint/typescript-estree": "7.18.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@typescript-eslint/typescript-estree"
+      ],
+      "effects": [
+        "@typescript-eslint/eslint-plugin",
+        "@typescript-eslint/type-utils"
+      ],
+      "range": "<=8.2.1-alpha.25",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "argparse",
+      "severity": "moderate",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@istanbuljs/load-nyc-config/node_modules/argparse",
+          "version": "1.0.10",
+          "dependencies": {
+            "sprintf-js": "~1.0.2"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "node_modules/gray-matter/node_modules/argparse",
+          "version": "1.0.10",
+          "dependencies": {
+            "sprintf-js": "~1.0.2"
+          },
+          "inBundle": true
+        }
+      ],
+      "via": [
+        "sprintf-js"
+      ],
+      "effects": [
+        "js-yaml"
+      ],
+      "range": "1.0.0 - 1.0.10",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "babel-jest",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/babel-jest",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/transform": "30.3.0",
+            "@types/babel__core": "^7.20.5",
+            "babel-plugin-istanbul": "^7.0.1",
+            "babel-preset-jest": "30.3.0",
+            "chalk": "^4.1.2",
+            "graceful-fs": "^4.2.11",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/babel-jest",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/transform": "^29.7.0",
+            "@types/babel__core": "^7.1.14",
+            "babel-plugin-istanbul": "^6.1.1",
+            "babel-preset-jest": "^29.6.3",
+            "chalk": "^4.0.0",
+            "graceful-fs": "^4.2.9",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/transform",
+        "@jest/transform",
+        "babel-plugin-istanbul"
+      ],
+      "effects": [
+        "jest-config",
+        "ts-jest"
+      ],
+      "range": ">=24.2.0-alpha.0",
+      "npmSuggestedFix": {
+        "name": "ts-jest",
+        "version": "27.0.3",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "babel-plugin-istanbul",
+      "severity": "moderate",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/babel-plugin-istanbul",
+          "version": "7.0.1",
+          "dependencies": {
+            "@babel/helper-plugin-utils": "^7.0.0",
+            "@istanbuljs/load-nyc-config": "^1.0.0",
+            "@istanbuljs/schema": "^0.1.3",
+            "istanbul-lib-instrument": "^6.0.2",
+            "test-exclude": "^6.0.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/babel-plugin-istanbul",
+          "version": "6.1.1",
+          "dependencies": {
+            "@babel/helper-plugin-utils": "^7.0.0",
+            "@istanbuljs/load-nyc-config": "^1.0.0",
+            "@istanbuljs/schema": "^0.1.2",
+            "istanbul-lib-instrument": "^5.0.4",
+            "test-exclude": "^6.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@istanbuljs/load-nyc-config"
+      ],
+      "effects": [
+        "@jest/transform",
+        "babel-jest"
+      ],
+      "range": ">=6.0.0-beta.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "braces",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/braces",
+          "version": "3.0.3",
+          "dependencies": {
+            "fill-range": "^7.1.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        {
+          "source": 1240992,
+          "name": "braces",
+          "dependency": "braces",
+          "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+          "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+          "severity": "high",
+          "cwe": [
+            "CWE-674"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=3.0.3"
+        }
+      ],
+      "effects": [
+        "micromatch"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "create-jest",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/create-jest",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/types": "^29.6.3",
+            "chalk": "^4.0.0",
+            "exit": "^0.1.2",
+            "graceful-fs": "^4.2.9",
+            "jest-config": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "prompts": "^2.0.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-config"
+      ],
+      "effects": [
+        "jest-cli"
+      ],
+      "range": "29.7.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "expect",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/expect",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/expect-utils": "^29.7.0",
+            "jest-get-type": "^29.6.3",
+            "jest-matcher-utils": "^29.7.0",
+            "jest-message-util": "^29.7.0",
+            "jest-util": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-message-util"
+      ],
+      "effects": [
+        "@types/jest",
+        "jest-snapshot"
+      ],
+      "range": "21.0.0-beta.1 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "fast-glob",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/fast-glob",
+          "version": "3.3.3",
+          "dependencies": {
+            "@nodelib/fs.stat": "^2.0.2",
+            "@nodelib/fs.walk": "^1.2.3",
+            "glob-parent": "^5.1.2",
+            "merge2": "^1.3.0",
+            "micromatch": "^4.0.8"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "micromatch"
+      ],
+      "effects": [
+        "globby"
+      ],
+      "range": "*",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "globby",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/globby",
+          "version": "11.1.0",
+          "dependencies": {
+            "array-union": "^2.1.0",
+            "dir-glob": "^3.0.1",
+            "fast-glob": "^3.2.9",
+            "ignore": "^5.2.0",
+            "merge2": "^1.4.1",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "fast-glob"
+      ],
+      "effects": [
+        "@typescript-eslint/typescript-estree"
+      ],
+      "range": ">=8.0.0",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "gray-matter",
+      "severity": "moderate",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "node_modules/gray-matter",
+          "version": "4.0.3",
+          "dependencies": {
+            "js-yaml": "^3.13.1",
+            "kind-of": "^6.0.2",
+            "section-matter": "^1.0.0",
+            "strip-bom-string": "^1.0.0"
+          },
+          "inBundle": true
+        }
+      ],
+      "via": [
+        "js-yaml"
+      ],
+      "effects": [],
+      "range": ">=2.0.2",
+      "npmSuggestedFix": {
+        "name": "gray-matter",
+        "version": "2.0.1",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest",
+      "severity": "high",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "node_modules/jest",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/core": "30.3.0",
+            "@jest/types": "30.3.0",
+            "import-local": "^3.2.0",
+            "jest-cli": "30.3.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/core": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "import-local": "^3.0.2",
+            "jest-cli": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/core",
+        "@jest/core",
+        "jest-cli",
+        "jest-cli"
+      ],
+      "effects": [
+        "ts-jest"
+      ],
+      "range": ">=24.2.0-alpha.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-circus",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-circus",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/environment": "30.3.0",
+            "@jest/expect": "30.3.0",
+            "@jest/test-result": "30.3.0",
+            "@jest/types": "30.3.0",
+            "@types/node": "*",
+            "chalk": "^4.1.2",
+            "co": "^4.6.0",
+            "dedent": "^1.6.0",
+            "is-generator-fn": "^2.1.0",
+            "jest-each": "30.3.0",
+            "jest-matcher-utils": "30.3.0",
+            "jest-message-util": "30.3.0",
+            "jest-runtime": "30.3.0",
+            "jest-snapshot": "30.3.0",
+            "jest-util": "30.3.0",
+            "p-limit": "^3.1.0",
+            "pretty-format": "30.3.0",
+            "pure-rand": "^7.0.0",
+            "slash": "^3.0.0",
+            "stack-utils": "^2.0.6"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-circus",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/environment": "^29.7.0",
+            "@jest/expect": "^29.7.0",
+            "@jest/test-result": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "chalk": "^4.0.0",
+            "co": "^4.6.0",
+            "dedent": "^1.0.0",
+            "is-generator-fn": "^2.0.0",
+            "jest-each": "^29.7.0",
+            "jest-matcher-utils": "^29.7.0",
+            "jest-message-util": "^29.7.0",
+            "jest-runtime": "^29.7.0",
+            "jest-snapshot": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "p-limit": "^3.1.0",
+            "pretty-format": "^29.7.0",
+            "pure-rand": "^6.0.0",
+            "slash": "^3.0.0",
+            "stack-utils": "^2.0.3"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/environment",
+        "@jest/expect",
+        "@jest/expect",
+        "@jest/test-result",
+        "jest-message-util",
+        "jest-runtime",
+        "jest-runtime",
+        "jest-snapshot",
+        "jest-snapshot"
+      ],
+      "effects": [
+        "jest-config"
+      ],
+      "range": ">=20.1.0-alpha.1",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-cli",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-cli",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/core": "30.3.0",
+            "@jest/test-result": "30.3.0",
+            "@jest/types": "30.3.0",
+            "chalk": "^4.1.2",
+            "exit-x": "^0.2.2",
+            "import-local": "^3.2.0",
+            "jest-config": "30.3.0",
+            "jest-util": "30.3.0",
+            "jest-validate": "30.3.0",
+            "yargs": "^17.7.2"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-cli",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/core": "^29.7.0",
+            "@jest/test-result": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "chalk": "^4.0.0",
+            "create-jest": "^29.7.0",
+            "exit": "^0.1.2",
+            "import-local": "^3.0.2",
+            "jest-config": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "jest-validate": "^29.7.0",
+            "yargs": "^17.3.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/core",
+        "@jest/core",
+        "@jest/test-result",
+        "create-jest",
+        "jest-config",
+        "jest-config"
+      ],
+      "effects": [
+        "jest"
+      ],
+      "range": ">=23.5.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-config",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-config",
+          "version": "30.3.0",
+          "dependencies": {
+            "@babel/core": "^7.27.4",
+            "@jest/get-type": "30.1.0",
+            "@jest/pattern": "30.0.1",
+            "@jest/test-sequencer": "30.3.0",
+            "@jest/types": "30.3.0",
+            "babel-jest": "30.3.0",
+            "chalk": "^4.1.2",
+            "ci-info": "^4.2.0",
+            "deepmerge": "^4.3.1",
+            "glob": "^10.5.0",
+            "graceful-fs": "^4.2.11",
+            "jest-circus": "30.3.0",
+            "jest-docblock": "30.2.0",
+            "jest-environment-node": "30.3.0",
+            "jest-regex-util": "30.0.1",
+            "jest-resolve": "30.3.0",
+            "jest-runner": "30.3.0",
+            "jest-util": "30.3.0",
+            "jest-validate": "30.3.0",
+            "parse-json": "^5.2.0",
+            "pretty-format": "30.3.0",
+            "slash": "^3.0.0",
+            "strip-json-comments": "^3.1.1"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-config",
+          "version": "29.7.0",
+          "dependencies": {
+            "@babel/core": "^7.11.6",
+            "@jest/test-sequencer": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "babel-jest": "^29.7.0",
+            "chalk": "^4.0.0",
+            "ci-info": "^3.2.0",
+            "deepmerge": "^4.2.2",
+            "glob": "^7.1.3",
+            "graceful-fs": "^4.2.9",
+            "jest-circus": "^29.7.0",
+            "jest-environment-node": "^29.7.0",
+            "jest-get-type": "^29.6.3",
+            "jest-regex-util": "^29.6.3",
+            "jest-resolve": "^29.7.0",
+            "jest-runner": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "jest-validate": "^29.7.0",
+            "micromatch": "^4.0.4",
+            "parse-json": "^5.2.0",
+            "pretty-format": "^29.7.0",
+            "slash": "^3.0.0",
+            "strip-json-comments": "^3.1.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/test-sequencer",
+        "babel-jest",
+        "babel-jest",
+        "jest-circus",
+        "jest-circus",
+        "jest-environment-node",
+        "jest-resolve",
+        "jest-runner",
+        "jest-runner",
+        "micromatch"
+      ],
+      "effects": [
+        "create-jest",
+        "jest-cli"
+      ],
+      "range": "18.1.0 - 18.5.0-alpha.7da3df39 || >=23.5.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-environment-node",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/jest-environment-node",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/environment": "^29.7.0",
+            "@jest/fake-timers": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "jest-mock": "^29.7.0",
+            "jest-util": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/environment",
+        "@jest/fake-timers"
+      ],
+      "effects": [
+        "jest-runner"
+      ],
+      "range": "24.2.0-alpha.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-haste-map",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/ts-jest-resolver/node_modules/jest-haste-map",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/types": "^29.6.3",
+            "@types/graceful-fs": "^4.1.3",
+            "@types/node": "*",
+            "anymatch": "^3.0.3",
+            "fb-watchman": "^2.0.0",
+            "graceful-fs": "^4.2.9",
+            "jest-regex-util": "^29.6.3",
+            "jest-util": "^29.7.0",
+            "jest-worker": "^29.7.0",
+            "micromatch": "^4.0.4",
+            "walker": "^1.0.8"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-haste-map",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/types": "^29.6.3",
+            "@types/graceful-fs": "^4.1.3",
+            "@types/node": "*",
+            "anymatch": "^3.0.3",
+            "fb-watchman": "^2.0.0",
+            "graceful-fs": "^4.2.9",
+            "jest-regex-util": "^29.6.3",
+            "jest-util": "^29.7.0",
+            "jest-worker": "^29.7.0",
+            "micromatch": "^4.0.4",
+            "walker": "^1.0.8"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "micromatch"
+      ],
+      "effects": [
+        "@jest/test-sequencer",
+        "jest-resolve",
+        "jest-runner",
+        "jest-runtime"
+      ],
+      "range": "18.1.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "ts-jest-resolver",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-message-util",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/jest-message-util",
+          "version": "29.7.0",
+          "dependencies": {
+            "@babel/code-frame": "^7.12.13",
+            "@jest/types": "^29.6.3",
+            "@types/stack-utils": "^2.0.0",
+            "chalk": "^4.0.0",
+            "graceful-fs": "^4.2.9",
+            "micromatch": "^4.0.4",
+            "pretty-format": "^29.7.0",
+            "slash": "^3.0.0",
+            "stack-utils": "^2.0.3"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "micromatch"
+      ],
+      "effects": [
+        "@jest/console",
+        "@jest/fake-timers",
+        "@jest/reporters",
+        "expect",
+        "jest-circus",
+        "jest-runtime",
+        "jest-snapshot"
+      ],
+      "range": "18.5.0-alpha.7da3df39 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-resolve",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/ts-jest-resolver/node_modules/jest-resolve",
+          "version": "29.7.0",
+          "dependencies": {
+            "chalk": "^4.0.0",
+            "graceful-fs": "^4.2.9",
+            "jest-haste-map": "^29.7.0",
+            "jest-pnp-resolver": "^1.2.2",
+            "jest-util": "^29.7.0",
+            "jest-validate": "^29.7.0",
+            "resolve": "^1.20.0",
+            "resolve.exports": "^2.0.0",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-resolve",
+          "version": "29.7.0",
+          "dependencies": {
+            "chalk": "^4.0.0",
+            "graceful-fs": "^4.2.9",
+            "jest-haste-map": "^29.7.0",
+            "jest-pnp-resolver": "^1.2.2",
+            "jest-util": "^29.7.0",
+            "jest-validate": "^29.7.0",
+            "resolve": "^1.20.0",
+            "resolve.exports": "^2.0.0",
+            "slash": "^3.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-haste-map"
+      ],
+      "effects": [
+        "@jest/core",
+        "jest-config",
+        "jest-runner",
+        "jest-runtime",
+        "ts-jest-resolver"
+      ],
+      "range": "18.1.0 - 19.0.2 || 24.2.0-alpha.0 - 24.5.0 || 27.1.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "ts-jest-resolver",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-resolve-dependencies",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-resolve-dependencies",
+          "version": "30.3.0",
+          "dependencies": {
+            "jest-regex-util": "30.0.1",
+            "jest-snapshot": "30.3.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-resolve-dependencies",
+          "version": "29.7.0",
+          "dependencies": {
+            "jest-regex-util": "^29.6.3",
+            "jest-snapshot": "^29.7.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-snapshot",
+        "jest-snapshot"
+      ],
+      "effects": [],
+      "range": ">=27.0.0-next.0",
+      "npmSuggestedFix": true,
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-runner",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-runner",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/console": "30.3.0",
+            "@jest/environment": "30.3.0",
+            "@jest/test-result": "30.3.0",
+            "@jest/transform": "30.3.0",
+            "@jest/types": "30.3.0",
+            "@types/node": "*",
+            "chalk": "^4.1.2",
+            "emittery": "^0.13.1",
+            "exit-x": "^0.2.2",
+            "graceful-fs": "^4.2.11",
+            "jest-docblock": "30.2.0",
+            "jest-environment-node": "30.3.0",
+            "jest-haste-map": "30.3.0",
+            "jest-leak-detector": "30.3.0",
+            "jest-message-util": "30.3.0",
+            "jest-resolve": "30.3.0",
+            "jest-runtime": "30.3.0",
+            "jest-util": "30.3.0",
+            "jest-watcher": "30.3.0",
+            "jest-worker": "30.3.0",
+            "p-limit": "^3.1.0",
+            "source-map-support": "0.5.13"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-runner",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/console": "^29.7.0",
+            "@jest/environment": "^29.7.0",
+            "@jest/test-result": "^29.7.0",
+            "@jest/transform": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "chalk": "^4.0.0",
+            "emittery": "^0.13.1",
+            "graceful-fs": "^4.2.9",
+            "jest-docblock": "^29.7.0",
+            "jest-environment-node": "^29.7.0",
+            "jest-haste-map": "^29.7.0",
+            "jest-leak-detector": "^29.7.0",
+            "jest-message-util": "^29.7.0",
+            "jest-resolve": "^29.7.0",
+            "jest-runtime": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "jest-watcher": "^29.7.0",
+            "jest-worker": "^29.7.0",
+            "p-limit": "^3.1.0",
+            "source-map-support": "0.5.13"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/console",
+        "@jest/environment",
+        "@jest/test-result",
+        "@jest/transform",
+        "@jest/transform",
+        "jest-environment-node",
+        "jest-haste-map",
+        "jest-message-util",
+        "jest-resolve",
+        "jest-runtime",
+        "jest-runtime",
+        "jest-watcher"
+      ],
+      "effects": [
+        "jest-config"
+      ],
+      "range": ">=21.0.0-alpha.1",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-runtime",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-runtime",
+          "version": "30.3.0",
+          "dependencies": {
+            "@jest/environment": "30.3.0",
+            "@jest/fake-timers": "30.3.0",
+            "@jest/globals": "30.3.0",
+            "@jest/source-map": "30.0.1",
+            "@jest/test-result": "30.3.0",
+            "@jest/transform": "30.3.0",
+            "@jest/types": "30.3.0",
+            "@types/node": "*",
+            "chalk": "^4.1.2",
+            "cjs-module-lexer": "^2.1.0",
+            "collect-v8-coverage": "^1.0.2",
+            "glob": "^10.5.0",
+            "graceful-fs": "^4.2.11",
+            "jest-haste-map": "30.3.0",
+            "jest-message-util": "30.3.0",
+            "jest-mock": "30.3.0",
+            "jest-regex-util": "30.0.1",
+            "jest-resolve": "30.3.0",
+            "jest-snapshot": "30.3.0",
+            "jest-util": "30.3.0",
+            "slash": "^3.0.0",
+            "strip-bom": "^4.0.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-runtime",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/environment": "^29.7.0",
+            "@jest/fake-timers": "^29.7.0",
+            "@jest/globals": "^29.7.0",
+            "@jest/source-map": "^29.6.3",
+            "@jest/test-result": "^29.7.0",
+            "@jest/transform": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "chalk": "^4.0.0",
+            "cjs-module-lexer": "^1.0.0",
+            "collect-v8-coverage": "^1.0.0",
+            "glob": "^7.1.3",
+            "graceful-fs": "^4.2.9",
+            "jest-haste-map": "^29.7.0",
+            "jest-message-util": "^29.7.0",
+            "jest-mock": "^29.7.0",
+            "jest-regex-util": "^29.6.3",
+            "jest-resolve": "^29.7.0",
+            "jest-snapshot": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "slash": "^3.0.0",
+            "strip-bom": "^4.0.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/environment",
+        "@jest/fake-timers",
+        "@jest/globals",
+        "@jest/globals",
+        "@jest/test-result",
+        "@jest/transform",
+        "@jest/transform",
+        "jest-haste-map",
+        "jest-message-util",
+        "jest-resolve",
+        "jest-snapshot",
+        "jest-snapshot"
+      ],
+      "effects": [
+        "jest-circus",
+        "jest-runner"
+      ],
+      "range": ">=18.1.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-snapshot",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/jest-snapshot",
+          "version": "30.3.0",
+          "dependencies": {
+            "@babel/core": "^7.27.4",
+            "@babel/generator": "^7.27.5",
+            "@babel/plugin-syntax-jsx": "^7.27.1",
+            "@babel/plugin-syntax-typescript": "^7.27.1",
+            "@babel/types": "^7.27.3",
+            "@jest/expect-utils": "30.3.0",
+            "@jest/get-type": "30.1.0",
+            "@jest/snapshot-utils": "30.3.0",
+            "@jest/transform": "30.3.0",
+            "@jest/types": "30.3.0",
+            "babel-preset-current-node-syntax": "^1.2.0",
+            "chalk": "^4.1.2",
+            "expect": "30.3.0",
+            "graceful-fs": "^4.2.11",
+            "jest-diff": "30.3.0",
+            "jest-matcher-utils": "30.3.0",
+            "jest-message-util": "30.3.0",
+            "jest-util": "30.3.0",
+            "pretty-format": "30.3.0",
+            "semver": "^7.7.2",
+            "synckit": "^0.11.8"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "packages/safety/node_modules/jest-snapshot",
+          "version": "29.7.0",
+          "dependencies": {
+            "@babel/core": "^7.11.6",
+            "@babel/generator": "^7.7.2",
+            "@babel/plugin-syntax-jsx": "^7.7.2",
+            "@babel/plugin-syntax-typescript": "^7.7.2",
+            "@babel/types": "^7.3.3",
+            "@jest/expect-utils": "^29.7.0",
+            "@jest/transform": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "babel-preset-current-node-syntax": "^1.0.0",
+            "chalk": "^4.0.0",
+            "expect": "^29.7.0",
+            "graceful-fs": "^4.2.9",
+            "jest-diff": "^29.7.0",
+            "jest-get-type": "^29.6.3",
+            "jest-matcher-utils": "^29.7.0",
+            "jest-message-util": "^29.7.0",
+            "jest-util": "^29.7.0",
+            "natural-compare": "^1.4.0",
+            "pretty-format": "^29.7.0",
+            "semver": "^7.5.3"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/transform",
+        "@jest/transform",
+        "expect",
+        "jest-message-util"
+      ],
+      "effects": [
+        "@jest/core",
+        "@jest/expect",
+        "jest-circus",
+        "jest-resolve-dependencies",
+        "jest-runtime"
+      ],
+      "range": ">=23.3.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "jest-watcher",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "packages/safety/node_modules/jest-watcher",
+          "version": "29.7.0",
+          "dependencies": {
+            "@jest/test-result": "^29.7.0",
+            "@jest/types": "^29.6.3",
+            "@types/node": "*",
+            "ansi-escapes": "^4.2.1",
+            "chalk": "^4.0.0",
+            "emittery": "^0.13.1",
+            "jest-util": "^29.7.0",
+            "string-length": "^4.0.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/test-result"
+      ],
+      "effects": [
+        "jest-runner"
+      ],
+      "range": "25.4.0 - 30.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "js-yaml",
+      "severity": "moderate",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/@istanbuljs/load-nyc-config/node_modules/js-yaml",
+          "version": "3.15.2",
+          "dependencies": {
+            "argparse": "^1.0.7",
+            "esprima": "^4.0.0"
+          },
+          "inBundle": false
+        },
+        {
+          "path": "node_modules/gray-matter/node_modules/js-yaml",
+          "version": "3.15.2",
+          "dependencies": {
+            "argparse": "^1.0.7",
+            "esprima": "^4.0.0"
+          },
+          "inBundle": true
+        }
+      ],
+      "via": [
+        "argparse"
+      ],
+      "effects": [
+        "@istanbuljs/load-nyc-config",
+        "gray-matter"
+      ],
+      "range": "3.2.7 - 3.15.2",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "micromatch",
+      "severity": "high",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/micromatch",
+          "version": "4.0.8",
+          "dependencies": {
+            "braces": "^3.0.3",
+            "picomatch": "^2.3.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "braces"
+      ],
+      "effects": [
+        "@jest/core",
+        "@jest/transform",
+        "fast-glob",
+        "jest-config",
+        "jest-haste-map",
+        "jest-message-util"
+      ],
+      "range": ">=0.2.0",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "sprintf-js",
+      "severity": "moderate",
+      "direct": false,
+      "nodes": [
+        {
+          "path": "node_modules/sprintf-js",
+          "version": "1.0.3",
+          "dependencies": null,
+          "inBundle": true
+        }
+      ],
+      "via": [
+        {
+          "source": 1241202,
+          "name": "sprintf-js",
+          "dependency": "sprintf-js",
+          "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+          "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-1284"
+          ],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": "<=1.1.3"
+        }
+      ],
+      "effects": [
+        "argparse"
+      ],
+      "range": "*",
+      "npmSuggestedFix": {
+        "name": "jest",
+        "version": "24.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "ts-jest",
+      "severity": "moderate",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "node_modules/ts-jest",
+          "version": "29.4.9",
+          "dependencies": {
+            "bs-logger": "^0.2.6",
+            "fast-json-stable-stringify": "^2.1.0",
+            "handlebars": "^4.7.9",
+            "json5": "^2.2.3",
+            "lodash.memoize": "^4.1.2",
+            "make-error": "^1.3.6",
+            "semver": "^7.7.4",
+            "type-fest": "^4.41.0",
+            "yargs-parser": "^21.1.1"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "@jest/transform",
+        "babel-jest",
+        "jest"
+      ],
+      "effects": [],
+      "range": ">=25.10.0-alpha.1",
+      "npmSuggestedFix": {
+        "name": "ts-jest",
+        "version": "27.0.3",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-hp3w-g68c-fv3c",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-hp3w-g68c-fv3c": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required.",
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    },
+    {
+      "package": "ts-jest-resolver",
+      "severity": "high",
+      "direct": true,
+      "nodes": [
+        {
+          "path": "node_modules/ts-jest-resolver",
+          "version": "2.0.1",
+          "dependencies": {
+            "jest-resolve": "^29.5.0"
+          },
+          "inBundle": false
+        }
+      ],
+      "via": [
+        "jest-resolve"
+      ],
+      "effects": [],
+      "range": ">=2.0.0",
+      "npmSuggestedFix": {
+        "name": "ts-jest-resolver",
+        "version": "1.1.0",
+        "isSemVerMajor": true
+      },
+      "disposition": "UNRESOLVED: no suppression or waiver; explicit lock/API correction and fresh audit required",
+      "underlyingAdvisoryIDs": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "upstreamLeafFixedStatus": {
+        "GHSA-vfj7-8cjw-p6xm": "No patched leaf release: all currently published braces or sprintf-js versions affected; remove parent path or reviewed compatible dependency replacement required."
+      }
+    }
+  ],
+  "sdkNodes": [
+    {
+      "path": "node_modules/@modelcontextprotocol/sdk",
+      "version": "1.32.0"
+    }
+  ],
+  "exactRawReports": [
+    {
+      "path": "/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/root-audit.json",
+      "sha256": "0a2502c3bfa520393ea43f6d4088e02f8f104e752679e5c49b30b2d2fbf4df6f"
+    },
+    {
+      "path": "/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/safety-audit.json",
+      "sha256": "191701436cc33c03911de6f6f1ea8f1aa274109a714b39e8885a11be0a20e79a"
+    }
+  ],
+  "candidateStatus": "DRAFT_BACKUP_ONLY_SECURITY_BLOCKED: root 37 high / 7 moderate; standalone Safety clean; corrected resolver execution not corroborated by current files; downstream installer/giget/tar and gray-matter/js-yaml/argparse/sprintf-js production consumer chains remain unresolved.",
+  "currentRawAudits": {
+    "root": {
+      "auditReportVersion": 2,
+      "vulnerabilities": {
+        "@istanbuljs/load-nyc-config": {
+          "name": "@istanbuljs/load-nyc-config",
+          "severity": "moderate",
+          "isDirect": false,
+          "via": [
+            "js-yaml"
+          ],
+          "effects": [
+            "babel-plugin-istanbul"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/@istanbuljs/load-nyc-config"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/console": {
+          "name": "@jest/console",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "jest-message-util"
+          ],
+          "effects": [
+            "@jest/core",
+            "@jest/reporters",
+            "@jest/test-result",
+            "jest-runner"
+          ],
+          "range": "25.4.0 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/@jest/console"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/core": {
+          "name": "@jest/core",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/console",
+            "@jest/reporters",
+            "@jest/reporters",
+            "@jest/test-result",
+            "@jest/transform",
+            "@jest/transform",
+            "jest-config",
+            "jest-config",
+            "jest-haste-map",
+            "jest-message-util",
+            "jest-resolve",
+            "jest-resolve-dependencies",
+            "jest-resolve-dependencies",
+            "jest-runner",
+            "jest-runner",
+            "jest-runtime",
+            "jest-runtime",
+            "jest-snapshot",
+            "jest-snapshot",
+            "jest-watcher",
+            "micromatch"
+          ],
+          "effects": [
+            "jest",
+            "jest-cli"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/@jest/core",
+            "packages/safety/node_modules/@jest/core"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/environment": {
+          "name": "@jest/environment",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/fake-timers"
+          ],
+          "effects": [
+            "@jest/globals",
+            "jest-circus"
+          ],
+          "range": "<=30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/@jest/environment"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/expect": {
+          "name": "@jest/expect",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "expect",
+            "jest-snapshot",
+            "jest-snapshot"
+          ],
+          "effects": [
+            "@jest/globals",
+            "jest-circus"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/@jest/expect",
+            "packages/safety/node_modules/@jest/expect"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/fake-timers": {
+          "name": "@jest/fake-timers",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "jest-message-util"
+          ],
+          "effects": [
+            "@jest/environment",
+            "jest-environment-node",
+            "jest-runtime"
+          ],
+          "range": "<=30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/@jest/fake-timers"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/globals": {
+          "name": "@jest/globals",
+          "severity": "high",
+          "isDirect": true,
+          "via": [
+            "@jest/environment",
+            "@jest/expect",
+            "@jest/expect"
+          ],
+          "effects": [
+            "jest-runtime"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/@jest/globals",
+            "packages/safety/node_modules/@jest/globals"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/reporters": {
+          "name": "@jest/reporters",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/console",
+            "@jest/test-result",
+            "@jest/transform",
+            "@jest/transform",
+            "jest-message-util"
+          ],
+          "effects": [],
+          "range": "*",
+          "nodes": [
+            "node_modules/@jest/reporters",
+            "packages/safety/node_modules/@jest/reporters"
+          ],
+          "fixAvailable": true
+        },
+        "@jest/test-result": {
+          "name": "@jest/test-result",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/console"
+          ],
+          "effects": [
+            "@jest/test-sequencer",
+            "jest-circus",
+            "jest-cli",
+            "jest-runtime",
+            "jest-watcher"
+          ],
+          "range": "25.4.0 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/@jest/test-result"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/test-sequencer": {
+          "name": "@jest/test-sequencer",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/test-result",
+            "jest-haste-map"
+          ],
+          "effects": [
+            "jest-config"
+          ],
+          "range": "<=30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/@jest/test-sequencer"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@jest/transform": {
+          "name": "@jest/transform",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "babel-plugin-istanbul",
+            "jest-haste-map",
+            "micromatch"
+          ],
+          "effects": [
+            "@jest/core",
+            "@jest/reporters",
+            "babel-jest",
+            "jest-runner",
+            "jest-runtime",
+            "jest-snapshot",
+            "ts-jest"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/@jest/transform",
+            "packages/safety/node_modules/@jest/transform"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "@types/jest": {
+          "name": "@types/jest",
+          "severity": "high",
+          "isDirect": true,
+          "via": [
+            "expect"
+          ],
+          "effects": [],
+          "range": "28.1.7 - 29.5.14",
+          "nodes": [
+            "packages/safety/node_modules/@types/jest"
+          ],
+          "fixAvailable": true
+        },
+        "@typescript-eslint/eslint-plugin": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "severity": "high",
+          "isDirect": true,
+          "via": [
+            "@typescript-eslint/parser",
+            "@typescript-eslint/type-utils",
+            "@typescript-eslint/utils"
+          ],
+          "effects": [],
+          "range": "4.0.1-alpha.0 - 8.2.1-alpha.25",
+          "nodes": [
+            "packages/safety/node_modules/@typescript-eslint/eslint-plugin"
+          ],
+          "fixAvailable": true
+        },
+        "@typescript-eslint/parser": {
+          "name": "@typescript-eslint/parser",
+          "severity": "high",
+          "isDirect": true,
+          "via": [
+            "@typescript-eslint/typescript-estree"
+          ],
+          "effects": [
+            "@typescript-eslint/eslint-plugin"
+          ],
+          "range": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+          "nodes": [
+            "packages/safety/node_modules/@typescript-eslint/parser"
+          ],
+          "fixAvailable": true
+        },
+        "@typescript-eslint/type-utils": {
+          "name": "@typescript-eslint/type-utils",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@typescript-eslint/typescript-estree",
+            "@typescript-eslint/utils"
+          ],
+          "effects": [
+            "@typescript-eslint/eslint-plugin"
+          ],
+          "range": "5.9.2-alpha.0 - 8.2.1-alpha.25",
+          "nodes": [
+            "packages/safety/node_modules/@typescript-eslint/type-utils"
+          ],
+          "fixAvailable": true
+        },
+        "@typescript-eslint/typescript-estree": {
+          "name": "@typescript-eslint/typescript-estree",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "globby"
+          ],
+          "effects": [
+            "@typescript-eslint/parser",
+            "@typescript-eslint/type-utils",
+            "@typescript-eslint/utils"
+          ],
+          "range": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+          "nodes": [
+            "packages/safety/node_modules/@typescript-eslint/typescript-estree"
+          ],
+          "fixAvailable": true
+        },
+        "@typescript-eslint/utils": {
+          "name": "@typescript-eslint/utils",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@typescript-eslint/typescript-estree"
+          ],
+          "effects": [
+            "@typescript-eslint/eslint-plugin",
+            "@typescript-eslint/type-utils"
+          ],
+          "range": "<=8.2.1-alpha.25",
+          "nodes": [
+            "packages/safety/node_modules/@typescript-eslint/utils"
+          ],
+          "fixAvailable": true
+        },
+        "argparse": {
+          "name": "argparse",
+          "severity": "moderate",
+          "isDirect": false,
+          "via": [
+            "sprintf-js"
+          ],
+          "effects": [
+            "js-yaml"
+          ],
+          "range": "1.0.0 - 1.0.10",
+          "nodes": [
+            "node_modules/@istanbuljs/load-nyc-config/node_modules/argparse",
+            "node_modules/gray-matter/node_modules/argparse"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "babel-jest": {
+          "name": "babel-jest",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/transform",
+            "@jest/transform",
+            "babel-plugin-istanbul"
+          ],
+          "effects": [
+            "jest-config",
+            "ts-jest"
+          ],
+          "range": ">=24.2.0-alpha.0",
+          "nodes": [
+            "node_modules/babel-jest",
+            "packages/safety/node_modules/babel-jest"
+          ],
+          "fixAvailable": {
+            "name": "ts-jest",
+            "version": "27.0.3",
+            "isSemVerMajor": true
+          }
+        },
+        "babel-plugin-istanbul": {
+          "name": "babel-plugin-istanbul",
+          "severity": "moderate",
+          "isDirect": false,
+          "via": [
+            "@istanbuljs/load-nyc-config"
+          ],
+          "effects": [
+            "@jest/transform",
+            "babel-jest"
+          ],
+          "range": ">=6.0.0-beta.0",
+          "nodes": [
+            "node_modules/babel-plugin-istanbul",
+            "packages/safety/node_modules/babel-plugin-istanbul"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "braces": {
+          "name": "braces",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            {
+              "source": 1240992,
+              "name": "braces",
+              "dependency": "braces",
+              "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+              "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+              "severity": "high",
+              "cwe": [
+                "CWE-674"
+              ],
+              "cvss": {
+                "score": 7.5,
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+              },
+              "range": "<=3.0.3"
+            }
+          ],
+          "effects": [
+            "micromatch"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/braces"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "create-jest": {
+          "name": "create-jest",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "jest-config"
+          ],
+          "effects": [
+            "jest-cli"
+          ],
+          "range": "29.7.0 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/create-jest"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "expect": {
+          "name": "expect",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "jest-message-util"
+          ],
+          "effects": [
+            "@types/jest",
+            "jest-snapshot"
+          ],
+          "range": "21.0.0-beta.1 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/expect"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "fast-glob": {
+          "name": "fast-glob",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "micromatch"
+          ],
+          "effects": [
+            "globby"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/fast-glob"
+          ],
+          "fixAvailable": true
+        },
+        "globby": {
+          "name": "globby",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "fast-glob"
+          ],
+          "effects": [
+            "@typescript-eslint/typescript-estree"
+          ],
+          "range": ">=8.0.0",
+          "nodes": [
+            "packages/safety/node_modules/globby"
+          ],
+          "fixAvailable": true
+        },
+        "gray-matter": {
+          "name": "gray-matter",
+          "severity": "moderate",
+          "isDirect": true,
+          "via": [
+            "js-yaml"
+          ],
+          "effects": [],
+          "range": ">=2.0.2",
+          "nodes": [
+            "node_modules/gray-matter"
+          ],
+          "fixAvailable": {
+            "name": "gray-matter",
+            "version": "2.0.1",
+            "isSemVerMajor": true
+          }
+        },
+        "jest": {
+          "name": "jest",
+          "severity": "high",
+          "isDirect": true,
+          "via": [
+            "@jest/core",
+            "@jest/core",
+            "jest-cli",
+            "jest-cli"
+          ],
+          "effects": [
+            "ts-jest"
+          ],
+          "range": ">=23.5.0",
+          "nodes": [
+            "node_modules/jest",
+            "packages/safety/node_modules/jest"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-circus": {
+          "name": "jest-circus",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/environment",
+            "@jest/expect",
+            "@jest/expect",
+            "@jest/test-result",
+            "jest-message-util",
+            "jest-runtime",
+            "jest-runtime",
+            "jest-snapshot",
+            "jest-snapshot"
+          ],
+          "effects": [
+            "jest-config"
+          ],
+          "range": ">=20.1.0-alpha.1",
+          "nodes": [
+            "node_modules/jest-circus",
+            "packages/safety/node_modules/jest-circus"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-cli": {
+          "name": "jest-cli",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/core",
+            "@jest/core",
+            "@jest/test-result",
+            "create-jest",
+            "jest-config",
+            "jest-config"
+          ],
+          "effects": [
+            "jest"
+          ],
+          "range": ">=23.5.0",
+          "nodes": [
+            "node_modules/jest-cli",
+            "packages/safety/node_modules/jest-cli"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-config": {
+          "name": "jest-config",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/test-sequencer",
+            "babel-jest",
+            "babel-jest",
+            "jest-circus",
+            "jest-circus",
+            "jest-environment-node",
+            "jest-resolve",
+            "jest-runner",
+            "jest-runner",
+            "micromatch"
+          ],
+          "effects": [
+            "create-jest",
+            "jest-cli"
+          ],
+          "range": "18.1.0 - 18.5.0-alpha.7da3df39 || >=23.5.0",
+          "nodes": [
+            "node_modules/jest-config",
+            "packages/safety/node_modules/jest-config"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-environment-node": {
+          "name": "jest-environment-node",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/environment",
+            "@jest/fake-timers"
+          ],
+          "effects": [
+            "jest-runner"
+          ],
+          "range": "24.2.0-alpha.0 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/jest-environment-node"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-haste-map": {
+          "name": "jest-haste-map",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "micromatch"
+          ],
+          "effects": [
+            "@jest/test-sequencer",
+            "jest-resolve",
+            "jest-runner",
+            "jest-runtime"
+          ],
+          "range": "18.1.0 - 30.2.0",
+          "nodes": [
+            "node_modules/ts-jest-resolver/node_modules/jest-haste-map",
+            "packages/safety/node_modules/jest-haste-map"
+          ],
+          "fixAvailable": {
+            "name": "ts-jest-resolver",
+            "version": "1.1.0",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-message-util": {
+          "name": "jest-message-util",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "micromatch"
+          ],
+          "effects": [
+            "@jest/console",
+            "@jest/fake-timers",
+            "@jest/reporters",
+            "expect",
+            "jest-circus",
+            "jest-runtime",
+            "jest-snapshot"
+          ],
+          "range": "18.5.0-alpha.7da3df39 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/jest-message-util"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-resolve": {
+          "name": "jest-resolve",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "jest-haste-map"
+          ],
+          "effects": [
+            "@jest/core",
+            "jest-config",
+            "jest-runner",
+            "jest-runtime",
+            "ts-jest-resolver"
+          ],
+          "range": "18.1.0 - 19.0.2 || 24.2.0-alpha.0 - 24.5.0 || 27.1.0 - 30.2.0",
+          "nodes": [
+            "node_modules/ts-jest-resolver/node_modules/jest-resolve",
+            "packages/safety/node_modules/jest-resolve"
+          ],
+          "fixAvailable": {
+            "name": "ts-jest-resolver",
+            "version": "1.1.0",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-resolve-dependencies": {
+          "name": "jest-resolve-dependencies",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "jest-snapshot",
+            "jest-snapshot"
+          ],
+          "effects": [],
+          "range": ">=27.0.0-next.0",
+          "nodes": [
+            "node_modules/jest-resolve-dependencies",
+            "packages/safety/node_modules/jest-resolve-dependencies"
+          ],
+          "fixAvailable": true
+        },
+        "jest-runner": {
+          "name": "jest-runner",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/console",
+            "@jest/environment",
+            "@jest/test-result",
+            "@jest/transform",
+            "@jest/transform",
+            "jest-environment-node",
+            "jest-haste-map",
+            "jest-message-util",
+            "jest-resolve",
+            "jest-runtime",
+            "jest-runtime",
+            "jest-watcher"
+          ],
+          "effects": [
+            "@jest/core",
+            "jest-config"
+          ],
+          "range": ">=21.0.0-alpha.1",
+          "nodes": [
+            "node_modules/jest-runner",
+            "packages/safety/node_modules/jest-runner"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-runtime": {
+          "name": "jest-runtime",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/environment",
+            "@jest/fake-timers",
+            "@jest/globals",
+            "@jest/globals",
+            "@jest/test-result",
+            "@jest/transform",
+            "@jest/transform",
+            "jest-haste-map",
+            "jest-message-util",
+            "jest-resolve",
+            "jest-snapshot",
+            "jest-snapshot"
+          ],
+          "effects": [
+            "jest-circus",
+            "jest-runner"
+          ],
+          "range": ">=18.1.0",
+          "nodes": [
+            "node_modules/jest-runtime",
+            "packages/safety/node_modules/jest-runtime"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-snapshot": {
+          "name": "jest-snapshot",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/transform",
+            "@jest/transform",
+            "expect",
+            "jest-message-util"
+          ],
+          "effects": [
+            "@jest/expect",
+            "jest-circus",
+            "jest-resolve-dependencies",
+            "jest-runtime"
+          ],
+          "range": ">=23.3.0",
+          "nodes": [
+            "node_modules/jest-snapshot",
+            "packages/safety/node_modules/jest-snapshot"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "jest-watcher": {
+          "name": "jest-watcher",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "@jest/test-result"
+          ],
+          "effects": [
+            "jest-runner"
+          ],
+          "range": "25.4.0 - 30.2.0",
+          "nodes": [
+            "packages/safety/node_modules/jest-watcher"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "js-yaml": {
+          "name": "js-yaml",
+          "severity": "moderate",
+          "isDirect": false,
+          "via": [
+            "argparse"
+          ],
+          "effects": [
+            "@istanbuljs/load-nyc-config",
+            "gray-matter"
+          ],
+          "range": "3.2.7 - 3.15.2",
+          "nodes": [
+            "node_modules/@istanbuljs/load-nyc-config/node_modules/js-yaml",
+            "node_modules/gray-matter/node_modules/js-yaml"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "micromatch": {
+          "name": "micromatch",
+          "severity": "high",
+          "isDirect": false,
+          "via": [
+            "braces"
+          ],
+          "effects": [
+            "@jest/core",
+            "@jest/transform",
+            "fast-glob",
+            "jest-config",
+            "jest-haste-map",
+            "jest-message-util"
+          ],
+          "range": ">=0.2.0",
+          "nodes": [
+            "node_modules/micromatch"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "sprintf-js": {
+          "name": "sprintf-js",
+          "severity": "moderate",
+          "isDirect": false,
+          "via": [
+            {
+              "source": 1241202,
+              "name": "sprintf-js",
+              "dependency": "sprintf-js",
+              "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+              "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+              "severity": "moderate",
+              "cwe": [
+                "CWE-1284"
+              ],
+              "cvss": {
+                "score": 5.3,
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+              },
+              "range": "<=1.1.3"
+            }
+          ],
+          "effects": [
+            "argparse"
+          ],
+          "range": "*",
+          "nodes": [
+            "node_modules/sprintf-js"
+          ],
+          "fixAvailable": {
+            "name": "jest",
+            "version": "23.4.2",
+            "isSemVerMajor": true
+          }
+        },
+        "ts-jest": {
+          "name": "ts-jest",
+          "severity": "moderate",
+          "isDirect": true,
+          "via": [
+            "@jest/transform",
+            "babel-jest",
+            "jest"
+          ],
+          "effects": [],
+          "range": ">=25.10.0-alpha.1",
+          "nodes": [
+            "node_modules/ts-jest"
+          ],
+          "fixAvailable": {
+            "name": "ts-jest",
+            "version": "27.0.3",
+            "isSemVerMajor": true
+          }
+        },
+        "ts-jest-resolver": {
+          "name": "ts-jest-resolver",
+          "severity": "high",
+          "isDirect": true,
+          "via": [
+            "jest-resolve"
+          ],
+          "effects": [],
+          "range": ">=2.0.0",
+          "nodes": [
+            "node_modules/ts-jest-resolver"
+          ],
+          "fixAvailable": {
+            "name": "ts-jest-resolver",
+            "version": "1.1.0",
+            "isSemVerMajor": true
+          }
+        }
+      },
+      "metadata": {
+        "vulnerabilities": {
+          "info": 0,
+          "low": 0,
+          "moderate": 7,
+          "high": 37,
+          "critical": 0,
+          "total": 44
+        },
+        "dependencies": {
+          "prod": 280,
+          "dev": 844,
+          "optional": 107,
+          "peer": 0,
+          "peerOptional": 0,
+          "total": 1124
+        }
+      }
+    },
+    "standaloneSafety": {
+      "auditReportVersion": 2,
+      "vulnerabilities": {},
+      "metadata": {
+        "vulnerabilities": {
+          "info": 0,
+          "low": 0,
+          "moderate": 0,
+          "high": 0,
+          "critical": 0,
+          "total": 0
+        },
+        "dependencies": {
+          "prod": 1,
+          "dev": 542,
+          "optional": 31,
+          "peer": 0,
+          "peerOptional": 0,
+          "total": 542
+        }
+      }
+    }
+  },
+  "inputReceipt": {
+    "package.json": {
+      "sha256": "9c731b01ae36130d24da457a13115be5a64426601409ebf8f62b88628882d4d6",
+      "size": 16121,
+      "packageRecords": 0
+    },
+    "package-lock.json": {
+      "sha256": "f677d4d2405a19ef8c5b32c6826c983acc4e4a988272202dd111cc18ac4271fe",
+      "size": 459221,
+      "packageRecords": 1125
+    },
+    "packages/safety/package.json": {
+      "sha256": "e0dbac6d5de40ef7156e46cc9d3e3b306db1c6284b8d06d897e9641c69c89828",
+      "size": 1967,
+      "packageRecords": 0
+    },
+    "packages/safety/package-lock.json": {
+      "sha256": "73c2c4aae0ebd9a5c405bf8e0b715a29eb328ace1c483d3bb54d8c4ad5f50c5c",
+      "size": 283273,
+      "packageRecords": 543
+    },
+    "suspectNodes": {
+      "node_modules/@istanbuljs/load-nyc-config/node_modules/argparse": "1.0.10",
+      "node_modules/@modelcontextprotocol/sdk": "1.32.0",
+      "node_modules/argparse": "2.0.1",
+      "node_modules/braces": "3.0.3",
+      "node_modules/gray-matter/node_modules/argparse": "1.0.10",
+      "node_modules/sprintf-js": "1.0.3"
+    }
+  },
+  "executionIdentity": {
+    "expectedCommandSHA256": "ca3643136be3047391fdf4cd85d376dc3f7d88889152889b3a341f78b4e4c40f",
+    "expectedHelperSHA256": "9ccf2fb102ed4498884d9e142250613f494a240935395148a776b7a18b11fb67",
+    "observedRootLockSHA256": "f677d4d2405a19ef8c5b32c6826c983acc4e4a988272202dd111cc18ac4271fe",
+    "correctedCompositionReceiptPresent": false,
+    "pendingJournalPresent": false,
+    "conclusion": "The available current lock matches the pre-repair input and the saved older run2 receipt; a newer corrected execution cannot be corroborated. This is a local evidence observation, not a claim about what the user ran.",
+    "manifestLockDiscrepancy": {
+      "manifestBundleDependencies": null,
+      "rootLockBundleDependencies": [
+        "gray-matter",
+        "install-mcp"
+      ],
+      "rootLockInBundleFlags": 55,
+      "effect": "Fresh ci succeeds but retains stale nested vulnerable paths; manifest-only removal is not an effective lock repair."
+    }
+  },
+  "downstreamResiduals": [
+    {
+      "chain": [
+        "install-mcp@1.10.2",
+        "giget@1.2.5",
+        "tar@6.2.1"
+      ],
+      "scope": "Earlier isolated lock-only consumer audit retained; no fresh consumer install this run",
+      "currentParentFixAvailable": false,
+      "proposedFix": "Remove unused giget dependency upstream, refresh Bun lock and validate/release patch; consume that fixed published parent after provenance and age review."
+    },
+    {
+      "chain": [
+        "gray-matter@4.0.3",
+        "js-yaml@3.15.2",
+        "argparse@1.0.10",
+        "sprintf-js@1.0.3"
+      ],
+      "scope": "Official exact registry raw-range metadata inference; no fresh isolated consumer audit this run",
+      "advisory": "GHSA-hp3w-g68c-fv3c",
+      "proposedFix": "Compatible upstream parent release or separately reviewed replacement followed by isolated packed-artifact verification."
+    }
+  ],
+  "verification": {
+    "testEnvironment": {
+      "CI": "true",
+      "node": "v24.16.0",
+      "platform": "darwin-arm64"
+    },
+    "suiteDefinition": "All three repository test:all stages were launched independently so an earlier failure does not short-circuit later stages; root npm test includes packages/*/tests (Safety). Live-credential E2E and browser suites are separate repository commands.",
+    "tests": {
+      "unit": {
+        "numTotalTestSuites": 801,
+        "numPassedTestSuites": 798,
+        "numFailedTestSuites": 2,
+        "numPendingTestSuites": 1,
+        "numTotalTests": 18545,
+        "numPassedTests": 18526,
+        "numFailedTests": 2,
+        "numPendingTests": 17,
+        "numTodoTests": 0,
+        "success": false,
+        "status": "COMPLETE",
+        "exit": 1,
+        "seconds": 504.97,
+        "command": [
+          "npm",
+          "test",
+          "--",
+          "--json",
+          "--outputFile=/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/unit-jest.json"
+        ],
+        "failedTests": [
+          {
+            "file": "tests/unit/web/permissionRoutes.test.ts",
+            "name": "permissionRoutes decision tracking should isolate recent decisions between separate router instances"
+          },
+          {
+            "file": "tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts",
+            "name": "EmbeddedAuthorizationServer \u2014 hosted auth assets serves the first-party assets used by generated auth pages"
+          }
+        ],
+        "skippedTests": [
+          {
+            "file": "tests/unit/scripts/ownedFixtureProcess.test.ts",
+            "name": "owned fixture teardown settles same-stack cancellation before the spawn event without losing Linux identity",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/scripts/ownedFixtureProcess.test.ts",
+            "name": "owned fixture teardown retains resources and admission after missing Windows proof",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/scripts/ownedFixtureProcess.test.ts",
+            "name": "owned fixture teardown retains resources and admission after wrong-nonce Windows proof",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/scripts/ownedFixtureProcess.test.ts",
+            "name": "owned fixture teardown retains resources and admission after post-ack-failure Windows proof",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/scripts/ownedFixtureProcess.test.ts",
+            "name": "owned fixture teardown refuses a group signal and retains admission after unknown Linux identity",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/auth/GitHubAuthManager.test.ts",
+            "name": "GitHubAuthManager RFC 6749/8628 Compliance - Terminal Error Propagation should timeout after MAX_POLL_ATTEMPTS",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup.test.ts",
+            "name": "Container Startup - Error Scenarios Happy Path - All Parallel Checks Succeed should complete parallel checks successfully when no migration needed",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup.test.ts",
+            "name": "Container Startup - Error Scenarios Happy Path - All Parallel Checks Succeed should run checks in parallel for optimal performance",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup.test.ts",
+            "name": "Container Startup - Error Scenarios Error Scenario 4 - Timeout During Parallel Operations should measure actual parallel execution time",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup-timing.test.ts",
+            "name": "Container Startup - Timing (May Be Flaky) Relative Timing (More Stable) parallel execution should be faster than sequential baseline",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup-timing.test.ts",
+            "name": "Container Startup - Timing (May Be Flaky) Relative Timing (More Stable) should verify operations start together (not sequentially)",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup-timing.test.ts",
+            "name": "Container Startup - Timing (May Be Flaky) Statistical Assertions (Retry-Based) parallel checks should complete within threshold (2/3 passes)",
+            "status": "pending"
+          },
+          {
+            "file": "tests/unit/Container.startup-timing.test.ts",
+            "name": "Container Startup - Timing (May Be Flaky) Slow Operation Handling should handle slow migration check without hanging",
+            "status": "pending"
+          },
+          {
+            "file": "tests/security/docker-security.test.ts",
+            "name": "Docker Security Hardening Docker Build Validation should build the Docker image successfully",
+            "status": "pending"
+          },
+          {
+            "file": "tests/security/docker-security.test.ts",
+            "name": "Docker Security Hardening Docker Build Validation should not include development tools in production image",
+            "status": "pending"
+          },
+          {
+            "file": "tests/security/docker-security.test.ts",
+            "name": "Docker Security Hardening Docker Build Validation should run as non-root user",
+            "status": "pending"
+          },
+          {
+            "file": "tests/security/RateLimiterSecurity.test.ts",
+            "name": "RateLimiter Security Tests PersonaSharer Rate Limiting Integration should use appropriate rate limits for authenticated vs unauthenticated",
+            "status": "pending"
+          }
+        ]
+      },
+      "performance": {
+        "numTotalTestSuites": 10,
+        "numPassedTestSuites": 10,
+        "numFailedTestSuites": 0,
+        "numPendingTestSuites": 0,
+        "numTotalTests": 120,
+        "numPassedTests": 120,
+        "numFailedTests": 0,
+        "numPendingTests": 0,
+        "numTodoTests": 0,
+        "success": true,
+        "status": "COMPLETE",
+        "exit": 0,
+        "seconds": 8.63,
+        "command": [
+          "npm",
+          "run",
+          "test:performance",
+          "--",
+          "--json",
+          "--outputFile=/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/performance-jest.json"
+        ],
+        "failedTests": [],
+        "skippedTests": []
+      },
+      "integration": {
+        "status": "RUNNING",
+        "exit": null,
+        "terminalCounts": null,
+        "command": [
+          "npm",
+          "run",
+          "test:integration",
+          "--",
+          "--json",
+          "--outputFile=/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/integration-jest.json"
+        ],
+        "observedPrerequisiteGap": "PostgreSQL unavailable; setup reports graceful skipping, but some DB suites already fail with query AggregateError. Terminal totals pending."
+      }
+    },
+    "rawTestLogsCommitted": false,
+    "otherChecks": {
+      "root-npm-ci": {
+        "command": [
+          "npm",
+          "ci",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund"
+        ],
+        "exit": 0,
+        "seconds": 7.747071266174316
+      },
+      "build": {
+        "name": "build",
+        "command": [
+          "npm",
+          "run",
+          "build"
+        ],
+        "exit": 0,
+        "seconds": 13.49
+      },
+      "root-audit": {
+        "command": [
+          "npm",
+          "audit",
+          "--json"
+        ],
+        "exit": 1
+      },
+      "safety-audit": {
+        "name": "safety-audit",
+        "command": [
+          "npm",
+          "audit",
+          "--json",
+          "--workspaces=false"
+        ],
+        "exit": 0,
+        "seconds": 0.58
+      },
+      "root-signatures": {
+        "name": "root-signatures",
+        "command": [
+          "npm",
+          "audit",
+          "signatures"
+        ],
+        "exit": 0,
+        "seconds": 7.86
+      },
+      "safety-signatures": {
+        "name": "safety-signatures",
+        "command": [
+          "npm",
+          "audit",
+          "signatures",
+          "--workspaces=false"
+        ],
+        "exit": 0,
+        "seconds": 2.31
+      }
+    }
+  }
+}

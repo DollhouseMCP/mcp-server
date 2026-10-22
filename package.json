@@ -210,8 +210,8 @@
     "url": "https://github.com/sponsors/mickdarling"
   },
   "dependencies": {
-    "@dollhousemcp/safety": "^1.0.5",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@dollhousemcp/safety": "^1.0.6",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "argon2": "^0.44.0",
     "chalk": "^5.6.2",
     "commander": "^13.1.0",
@@ -258,14 +258,14 @@
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
     "@types/yauzl": "2.10.3",
-    "@typescript-eslint/eslint-plugin": "^8.46.2",
-    "@typescript-eslint/parser": "^8.48.1",
+    "@typescript-eslint/eslint-plugin": "8.48.1",
+    "@typescript-eslint/parser": "8.48.1",
     "archiver": "^7.0.1",
     "cross-env": "^10.1.0",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.38.0",
     "globals": "^17.4.0",
-    "jest": "^30.2.0",
+    "jest": "30.3.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9",
     "ts-jest-resolver": "^2.0.1",
@@ -281,12 +281,18 @@
   },
   "overrides": {
     "gray-matter": {
-      "js-yaml": "3.15.2"
+      "js-yaml": {
+        ".": "3.15.2",
+        "argparse": "2.0.1"
+      }
     },
     "@istanbuljs/load-nyc-config": {
-      "js-yaml": "3.15.2"
+      "js-yaml": {
+        ".": "3.15.2",
+        "argparse": "2.0.1"
+      }
     },
-    "hono": "4.13.7",
+    "hono": "4.13.11",
     "@hono/node-server": "1.19.15",
     "fast-uri": "3.1.8",
     "ip-address": "10.7.1",
@@ -320,6 +326,9 @@
     "@babel/helpers": "7.29.7",
     "@babel/traverse": "7.29.8",
     "update-browserslist-db": "1.2.3",
-    "body-parser": "2.3.0"
+    "body-parser": "2.3.0",
+    "ts-jest-resolver": {
+      "jest-resolve": "30.3.0"
+    }
   }
 }
