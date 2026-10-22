@@ -3678,9 +3678,12 @@
         "skippedTests": []
       },
       "integration": {
-        "status": "RUNNING",
-        "exit": null,
-        "terminalCounts": null,
+        "status": "INTERRUPTED_PREREQUISITE_BLOCKED",
+        "success": false,
+        "fullSuiteCompleted": false,
+        "wrapperExit": 0,
+        "wrapperExitMeaning": "Literal 0 followed our scoped SIGINT; not a passing or naturally completed test run.",
+        "seconds": 2000.07,
         "command": [
           "npm",
           "run",
@@ -3689,7 +3692,67 @@
           "--json",
           "--outputFile=/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/integration-jest.json"
         ],
-        "observedPrerequisiteGap": "PostgreSQL unavailable; setup reports graceful skipping, but some DB suites already fail with query AggregateError. Terminal totals pending."
+        "signal": "SIGINT",
+        "target": "Validated owned integration Jest PID only; shared group and host servers were not signaled.",
+        "terminalCounts": null,
+        "jestJsonReportProduced": false,
+        "observedCompletedFailedFileCount": 11,
+        "observedFailedFiles": [
+          "tests/integration/database/DatabaseStorageLayer.test.ts",
+          "tests/integration/database/DatabaseMemoryTagHeadRevision.test.ts",
+          "tests/integration/database/DatabaseMemoryInvalidationStructureVerifier.test.ts",
+          "tests/integration/database/DatabaseMemoryAdmissionGate.test.ts",
+          "tests/integration/database/DatabaseMemoryLegacyTagAuditor.test.ts",
+          "tests/integration/database/DatabaseMemoryMaintenanceCatalogVerifier.test.ts",
+          "tests/integration/database/portfolio-persistence.test.ts",
+          "tests/integration/database/DatabaseMemoryArchiveCleanup.test.ts",
+          "tests/integration/hooks/permission-hook-docker.test.ts",
+          "tests/integration/database/invitation-lifecycle-migration.test.ts",
+          "tests/integration/database/DatabaseMemoryInvalidationCatalogVerifier.test.ts"
+        ],
+        "prerequisiteGap": "PostgreSQL unavailable. Some suites skip; required-PG suites fail and continue SQL assertions/cleanup. Docker permission-hook suite also failed.",
+        "diagnosis": "No log progress across two bounded observations; current worker idle/stable. Latest transform inferred MemoryHeadInvalidationRuns.test.ts, which explicitly requires real PG with no skip/fallback and awaits SQL in tests/cleanup. Repeated blocked prerequisite queries/timeouts supported; JS deadlock not proven.",
+        "countsScope": "Partial observed failed files only; passed, skipped, total assertions and complete suite totals unavailable.",
+        "ownedFixtureCleanup": {
+          "ownedGroup": 85678,
+          "processes": [],
+          "signal": "SIGTERM only for remaining owned fixture processes",
+          "remainingPids": []
+        }
+      },
+      "focused": {
+        "numTotalTestSuites": 2,
+        "numPassedTestSuites": 1,
+        "numFailedTestSuites": 1,
+        "numPendingTestSuites": 0,
+        "numTotalTests": 25,
+        "numPassedTests": 24,
+        "numFailedTests": 1,
+        "numPendingTests": 0,
+        "numTodoTests": 0,
+        "success": false,
+        "status": "COMPLETE_FOCUSED_RERUN",
+        "exit": 1,
+        "seconds": 13.31,
+        "command": [
+          "npm",
+          "test",
+          "--",
+          "--runInBand",
+          "--runTestsByPath",
+          "tests/unit/web/permissionRoutes.test.ts",
+          "tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts",
+          "--json",
+          "--outputFile=/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021/focused-jest.json"
+        ],
+        "scope": "Single bounded two-file rerun; does not replace failed full-unit result",
+        "failedTests": [
+          {
+            "file": "tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts",
+            "name": "EmbeddedAuthorizationServer \u2014 hosted auth assets serves the first-party assets used by generated auth pages"
+          }
+        ],
+        "interpretation": "Quiet rerun passes permissionRoutes; hosted auth assets assertion still fails. Does not replace full-unit wave failure."
       }
     },
     "rawTestLogsCommitted": false,
@@ -3755,6 +3818,8 @@
         "exit": 0,
         "seconds": 2.31
       }
-    }
+    },
+    "fullSuiteCompleted": false,
+    "overallResult": "FAILED_UNIT_AND_INCOMPLETE_INTEGRATION: performance passes; blocked integration interrupted after 2000.07 seconds; wrapper 0 must not be interpreted as pass."
   }
 }

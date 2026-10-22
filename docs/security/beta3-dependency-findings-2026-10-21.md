@@ -62,18 +62,23 @@ The validation source was copied from all current tracked and untracked worktree
 
 Signature verification is registry provenance evidence, not vulnerability clearance. The root build runs standalone Safety setup, replacing its physical tooling with the clean Safety graph; this does not repair the root virtual lock's stale nodes.
 
-## Repository full-suite stages — integration still running
+## Repository full-suite stages — failed / incomplete
 
-The repository defines `test:all` as default unit/Safety, performance and integration stages. They were launched independently with `CI=true` and JSON result files so a failed earlier stage does not short-circuit the remaining suites. Repository assertions/timeouts are unchanged. Live-credential E2E and browser suites have separate commands and are not part of `test:all`.
+The repository defines `test:all` as default unit/Safety, performance and integration stages. Each stage was launched independently with `CI=true` and JSON result paths so an earlier failure did not short-circuit the remaining stages. Repository assertions/timeouts are unchanged. Live-credential E2E and browser suites have separate commands and are not part of `test:all`. **The complete full suite did not finish: required PostgreSQL coverage was unavailable.**
 
-| Stage | Exit / status | Suites | Tests |
+| Stage | Literal exit / disposition | Suites | Tests |
 | --- | --- | --- | --- |
-| `npm test` (includes Safety) | 1 | 798 passed, 2 failed, 1 skipped; 801 total | 18,526 passed, 2 failed, 17 skipped; 18,545 total |
-| `npm run test:performance` | 0 | 10 passed | 120 passed |
-| `npm run test:integration` | **RUNNING; terminal result pending** | Pending | Pending |
+| `npm test` (includes Safety) | 1; failed | 798 passed, 2 failed, 1 skipped; 801 total | 18,526 passed, 2 failed, 17 skipped; 18,545 total |
+| `npm run test:performance` | 0; passed | 10 passed | 120 passed |
+| `npm run test:integration` | Wrapper 0 **after scoped SIGINT; interrupted, not passed** | 11 completed failed files observed; full totals unavailable | Full assertion totals unavailable; no Jest JSON report |
+| One focused two-file rerun | 1; failed | 1 passed, 1 failed | 24 passed, 1 failed; 25 total |
 
-The full unit wave failed in two assertions: `tests/unit/web/permissionRoutes.test.ts:679` expected one decision but observed an additional live tool command reaching the advertised test permission server; `tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts:24` expected `/fonts.css` HTTP 200 and received 404, although both source and built asset files exist. These are observed failures; no unchanged-base comparison or dependency-causality conclusion is claimed. A bounded focused rerun will be reported separately and cannot replace the failed full-unit result.
+The full unit wave failed in two assertions: `tests/unit/web/permissionRoutes.test.ts:679` expected one decision but observed an additional live tool command reaching the advertised test permission server; `tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts:24` expected `/fonts.css` HTTP 200 and received 404, although both source and built asset files exist. No unchanged-base comparison or dependency-causality conclusion is claimed.
 
-Integration setup reported PostgreSQL unavailable. Some DB tests skip, but `DatabaseStorageLayer.test.ts` and `DatabaseMemoryTagHeadRevision.test.ts` have already emitted database query errors, so universal graceful skipping must not be claimed. Final integration totals are pending. No service provisioning, timeout changes or assertion weakening was used. Unit skips include existing platform/timing, Docker image, rate-limit and device-poll cases; their names are retained in the sanitized evidence JSON. Raw test logs and live permission command payloads remain outside the repository.
+The single quiet two-file rerun passed the permission router tests; the hosted auth `/fonts.css` 404 persisted. This focused result does not replace the failed full-unit wave. No further test wave, timeout adjustment or assertion weakening was used. Unit skips include existing platform/timing, Docker image, rate-limit and device-poll cases; their sanitized names are retained in the evidence JSON.
 
-The current commit/PR is an explicitly requested backup while verification continues. Zero high/moderate findings and a passing final-candidate test wave remain requirements before release consideration. Root lock reconstruction and both production consumer dependency fixes remain unresolved.
+Integration ran for **2,000.07 seconds (33m20s)** before a scoped graceful SIGINT to its verified owned Jest process. PostgreSQL setup was unavailable; some DB suites skipped, but other required-PG suites failed. At the 25- and 30-minute checks, the log/file progress stopped; the worker remained idle with stable memory. A bounded source/cache/socket/owned-process check supported repeated unavailable-prerequisite SQL assertions/cleanup timeouts. The latest transform inferred `MemoryHeadInvalidationRuns.test.ts`, whose source explicitly requires real PostgreSQL with no skip/fallback. This is not proof of a JavaScript deadlock. No host service was signaled or provisioned. Cleanup found no remaining owned fixture processes.
+
+The npm/Jest wrapper returned literal **0 following SIGINT**, and produced no integration JSON totals. This is **partial/interrupted verification**, not a successful test exit or completed coverage. Eleven failed file records were observed before interruption: ten database suites and `permission-hook-docker.test.ts`; their paths are preserved in the sanitized evidence. Passed/skipped/total integration counts must not be invented. Required service coverage must be rerun in a prepared environment before release consideration.
+
+[Draft backup PR #3129](https://github.com/DollhouseMCP/mcp-server/pull/3129) records these blockers. Raw test logs and live permission command payloads remain outside the repository. Root lock reconstruction, both production consumer dependency fixes, the persistent asset test failure and complete final-candidate verification remain unresolved.
