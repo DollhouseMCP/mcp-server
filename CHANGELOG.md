@@ -9,14 +9,14 @@ See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
 ### security
 
 - Upgrade the MCP SDK to 1.32.0 (GHSA-22jm-h49p-29qw, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq, GHSA-6prh-2h8m-c8cw) and Hono to 4.13.11 (GHSA-5r4p-p66f-jhc7), with regression coverage that stored OAuth credentials and refresh tokens stay bound to their issuer. (#3066, #3129)
-- Remove `gray-matter` and `install-mcp`, replacing them with bounded MIT-licensed source adaptations (front-matter parser, client config installer). The `gray-matter → js-yaml 3 → argparse 1 → sprintf-js` and `install-mcp → giget → tar 6` chains are gone for repository and downstream installs. The qualified root, standalone Safety and exact-artifact consumer audits report 0 critical / 0 high / 0 moderate; fresh registry resolution is not guaranteed. (#3129)
+- Remove `gray-matter` and `install-mcp`, replacing them with bounded MIT-licensed source adaptations (front-matter parser, client config installer). The `gray-matter → js-yaml 3 → argparse 1 → sprintf-js` and `install-mcp → giget → tar 6` chains are gone for repository and downstream installs. Historical #3129 root, standalone Safety and exact-artifact consumer audits reported 0 critical / 0 high / 0 moderate; the fresh 2026-10-22 root audit is 1 critical / 0 high / 3 moderate package entries and needs separate qualification (see release notes). Fresh registry resolution is not guaranteed. (#3129)
 - Update application, browser-sanitizer and build/test dependencies (DOMPurify 3.4.16, smol-toml 1.9.0, Jest 30.3.0, TypeScript-ESLint 8.48.1); require `@dollhousemcp/safety` ^1.0.6. (#3070, #3077, #3129)
 - Pin the Node 24 Trixie container base by digest with selected Debian security updates, keep Safety build dependencies out of production layers, patch global npm leaves in tooling images, and remove unused `infocmp`/`nsenter`. Not a claim that every image advisory is resolved. (#3059, #3067, #3068, #3081)
 - Retain beta’s restricted exported frontmatter helper, private ZIP extraction with symlink refusal, serialized DangerZone persistence and `proxy-addr`/`shell-quote` pins. #3128’s new legacy-memory reconciliation remains pending and is not included in this candidate.
 
 ### client setup
 
-- **Behavior change:** VS Code and Zed settings files containing comments are left untouched and the install refuses with an explanation. Unparseable configs for any client are refused rather than replaced; writes are atomic and preserve managed symlinks. (#3129)
+- Accept valid VS Code/Zed JSONC while preserving comments, unrelated settings and custom environment text. Generate noninteractive `npx -y` commands and recognize nested VS Code `mcp.servers` entries in setup status, NVM patching and startup repair. Unparseable configs are refused rather than replaced; writes are atomic and preserve managed symlinks. (#3129)
 
 ### hosted/HTTP
 
@@ -40,7 +40,7 @@ See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
 
 - Isolate PostgreSQL and Core shards, run storage and helper proofs in required serial lanes, and recycle integration workers. Track async fixtures and owned processes through teardown; add credential-comparison, Argon2, PID-publication, cache-counter and sanitized failure diagnostics. (#3039, #3045, #3048, #3076, #3083, #3084, #3086, #3089, #3093, #3096, #3098, #3099, #3101, #3102, #3112, #3115, #3119, #3125)
 
-Draft candidate includes #3129 head `ccb4d8c8`; #3129 and #3128 remain unmerged into beta. Safety 1.0.6 publication and three new installer reviews block release readiness. See the detailed notes. No publication, deployment or database-memory activation is announced.
+Candidate incorporates beta merge `c78b2590` (#3129), including all dependency and installer follow-ups at `13511f6f`. #3128 remains unmerged and excluded. Safety 1.0.6 publication and registry-consumer qualification remain publish prerequisites. Known Windows trace flake #3132 is tracked separately. See the detailed notes. No publication, deployment or database-memory activation is announced.
 
 ## [2.1.0-beta.2] - 2026-10-09
 

@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { CORE_SCHEMA, dump, load } from 'js-yaml';
+import { applyEdits, modify, parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 
 interface InstallEnvironment {
@@ -17,7 +18,7 @@ interface InstallEnvironment {
   env?: NodeJS.ProcessEnv;
 }
 type Config = Record<string, any>;
-type Target = { path: string; keys: string[]; format?: 'yaml' | 'toml' };
+type Target = { path: string; keys: string[]; format?: 'yaml' | 'toml' | 'jsonc' };
 
 function configBase(home: string, os: string, env: NodeJS.ProcessEnv): string {
   if (os === 'darwin') return join(home, 'Library', 'Application Support');
@@ -41,10 +42,10 @@ export function clientConfigTarget(client: string, environment: InstallEnvironme
     enconvo: json(join(home, '.config', 'enconvo', 'mcp_config.json')),
     cursor: json(join(home, '.cursor', 'mcp.json')),
     'gemini-cli': json(join(home, '.gemini', 'settings.json')),
-    vscode: json(join(code, 'settings.json'), ['mcp', 'servers']),
+    vscode: { ...json(join(code, 'settings.json'), ['mcp', 'servers']), format: 'jsonc' },
     'claude-code': json(join(home, '.claude.json')),
     goose: { path: join(home, '.config', 'goose', 'config.yaml'), keys: ['extensions'], format: 'yaml' },
-    zed: json(os === 'win32' ? join(base, 'Zed', 'settings.json') : join(home, '.config', 'zed', 'settings.json'), ['context_servers']),
+    zed: { ...json(os === 'win32' ? join(base, 'Zed', 'settings.json') : join(home, '.config', 'zed', 'settings.json'), ['context_servers']), format: 'jsonc' },
     codex: { path: join(env.CODEX_HOME || join(home, '.codex'), 'config.toml'), keys: ['mcp_servers'], format: 'toml' },
   };
   if (!Object.hasOwn(targets, client)) throw new Error(`Unsupported MCP client: ${client}`);
@@ -76,47 +77,32 @@ async function configDestination(path: string): Promise<string> {
   }
 }
 
-/** Detect JSONC comments without mistaking string values or escaped quotes for comments. */
-function hasJsonComments(source: string): boolean {
-  let inString = false;
-  for (let index = 0; index < source.length; index++) {
-    const character = source[index];
-    if (inString) {
-      if (character === '\\') index++;
-      else if (character === '"') inString = false;
-      continue;
-    }
-    if (character === '"') inString = true;
-    else if (character === '/' && (source[index + 1] === '/' || source[index + 1] === '*')) return true;
-  }
-  return false;
-}
-
-function parseConfig(source: string, target: Target, client: string): unknown {
+function parseConfig(source: string, target: Target): unknown {
   if (target.format === 'yaml') return load(source, { schema: CORE_SCHEMA }) ?? {};
   if (target.format === 'toml') return parseToml(source);
-  try {
-    return JSON.parse(source);
-  } catch (error) {
-    if ((client === 'vscode' || client === 'zed') && hasJsonComments(source)) {
-      throw new Error('Client config contains comments and cannot be updated automatically; file left untouched', { cause: error });
-    }
-    throw error;
+  if (target.format === 'jsonc') {
+    const errors: ParseError[] = [];
+    const config = parseJsonc(source, errors, { allowTrailingComma: true });
+    // jsonc-parser recovers from syntax errors; never write its partial result.
+    if (errors.length) throw new SyntaxError('Invalid client JSONC config; file left untouched');
+    return config;
   }
+  return JSON.parse(source);
 }
 
-async function readConfig(destination: string, target: Target, client: string): Promise<{ config: unknown; mode: number }> {
+async function readConfig(destination: string, target: Target): Promise<{ config: unknown; mode: number; source: string }> {
   let config: unknown = {};
   let mode = 0o600;
+  let source = '{}';
   try {
-    const source = await readFile(destination, 'utf8');
+    source = await readFile(destination, 'utf8');
     if (source.length > 2 * 1024 * 1024) throw new Error('Client config exceeds 2 MB');
-    config = parseConfig(source, target, client);
+    config = parseConfig(source, target);
     mode = (await stat(destination)).mode & 0o777;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  return { config, mode };
+  return { config, mode, source };
 }
 
 function validateConfig(config: unknown): asserts config is Config {
@@ -150,21 +136,34 @@ function clientEntry(client: string, previous: Config, server: Config): Config {
   return { ...previous, ...server };
 }
 
-function updateConfig(config: Config, target: Target, client: string, server: Config): void {
+function updateConfig(config: Config, target: Target, client: string, server: Config): { previous?: Config; entry: Config } {
   let servers = config;
   for (const key of target.keys) {
     if (!Object.hasOwn(servers, key)) Object.defineProperty(servers, key, { value: {}, enumerable: true, writable: true, configurable: true });
     if (!object(servers[key])) throw new Error(`Invalid client config section: ${key}`);
     servers = servers[key];
   }
-  const previous = Object.hasOwn(servers, 'dollhousemcp') && object(servers.dollhousemcp) ? servers.dollhousemcp : {};
-  const entry = clientEntry(client, previous, server);
+  const previous = Object.hasOwn(servers, 'dollhousemcp') && object(servers.dollhousemcp) ? servers.dollhousemcp : undefined;
+  const entry = clientEntry(client, previous ?? {}, server);
   Object.defineProperty(servers, 'dollhousemcp', { value: entry, enumerable: true, writable: true, configurable: true });
+  return { previous, entry };
 }
 
-function serializeConfig(config: Config, target: Target): string {
+function serializeConfig(config: Config, target: Target, source: string, update: { previous?: Config; entry: Config }): string {
   if (target.format === 'yaml') return dump(config, { schema: CORE_SCHEMA, noRefs: true, lineWidth: -1 });
   if (target.format === 'toml') return stringifyToml(config);
+  if (target.format === 'jsonc') {
+    const path = [...target.keys, 'dollhousemcp'];
+    const options = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' } };
+    if (!update.previous) return applyEdits(source, modify(source, path, update.entry, options));
+    // Edit only changed entry fields. Formatting an insertion can also reformat
+    // its preceding sibling, so keep existing comments and values byte-for-byte.
+    for (const [key, value] of Object.entries(update.entry)) {
+      if (JSON.stringify(update.previous[key]) === JSON.stringify(value)) continue;
+      source = applyEdits(source, modify(source, [...path, key], value, {}));
+    }
+    return source;
+  }
   return JSON.stringify(config, null, 2) + '\n';
 }
 
@@ -183,7 +182,7 @@ async function writeConfig(destination: string, content: string, mode: number): 
 /** Preserve unrelated config; reject malformed files instead of replacing them. */
 export async function installClientConfig(client: string, version = 'latest', environment: InstallEnvironment = {}): Promise<string> {
   if (!validVersion(version)) throw new Error('Invalid install version');
-  const server = { command: 'npx', args: [`@dollhousemcp/mcp-server@${version}`] };
+  const server = { command: 'npx', args: ['-y', `@dollhousemcp/mcp-server@${version}`] };
   if (client === 'warp') {
     return 'Warp requires manual installation through its UI. Copy this configuration:\n' + JSON.stringify({
       dollhousemcp: { ...server, env: {}, working_directory: null, start_on_launch: true },
@@ -191,9 +190,9 @@ export async function installClientConfig(client: string, version = 'latest', en
   }
   const target = clientConfigTarget(client, environment);
   const destination = await configDestination(target.path);
-  const { config, mode } = await readConfig(destination, target, client);
+  const { config, mode, source } = await readConfig(destination, target);
   validateConfig(config);
-  updateConfig(config, target, client, server);
-  await writeConfig(destination, serializeConfig(config, target), mode);
+  const update = updateConfig(config, target, client, server);
+  await writeConfig(destination, serializeConfig(config, target, source, update), mode);
   return `Config written to: ${target.path}`;
 }
