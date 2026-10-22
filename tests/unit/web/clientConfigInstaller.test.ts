@@ -39,9 +39,9 @@ describe('config-only installer', () => {
 
   it('retains platform, XDG, APPDATA and CODEX_HOME path contracts', () => {
     expect(clientConfigTarget('claude', { home, platform: 'darwin', env: {} }).path).toBe(join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'));
-    expect(clientConfigTarget('vscode', { home, platform: 'linux', env: { XDG_CONFIG_HOME: '/custom-xdg' } }).path).toBe('/custom-xdg/Code/User/settings.json');
-    expect(clientConfigTarget('zed', { home, platform: 'win32', env: { APPDATA: '/custom-appdata' } }).path).toBe('/custom-appdata/Zed/settings.json');
-    expect(clientConfigTarget('codex', { home, env: { CODEX_HOME: '/custom-codex' } }).path).toBe('/custom-codex/config.toml');
+    expect(clientConfigTarget('vscode', { home, platform: 'linux', env: { XDG_CONFIG_HOME: '/custom-xdg' } }).path).toBe(join('/custom-xdg', 'Code', 'User', 'settings.json'));
+    expect(clientConfigTarget('zed', { home, platform: 'win32', env: { APPDATA: '/custom-appdata' } }).path).toBe(join('/custom-appdata', 'Zed', 'settings.json'));
+    expect(clientConfigTarget('codex', { home, env: { CODEX_HOME: '/custom-codex' } }).path).toBe(join('/custom-codex', 'config.toml'));
   });
 
   it('produces Warp copyable config without writing a file', async () => {
