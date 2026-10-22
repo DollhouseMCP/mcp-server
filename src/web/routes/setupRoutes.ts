@@ -15,6 +15,7 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname, sep } from 'node:path';
 import { homedir, platform, tmpdir } from 'node:os';
 import { installClientConfig } from './clientConfigInstaller.js';
+import { parse as parseJsonc, modify, applyEdits, type ParseError } from 'jsonc-parser';
 
 // sep/tmpdir are used by the NVM launcher self-heal below.
 import { logger } from '../../utils/logger.js';
@@ -257,20 +258,69 @@ export function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
   return { installed: true, currentConfig: fallbackConfig, serverKey: 'mcp_servers' };
 }
 
-/** Parse a JSON config file for a DollhouseMCP server entry */
-function parseJsonConfig(raw: string): Omit<DetectResult, 'configPath'> {
-  const parsed = JSON.parse(raw);
-  for (const key of ['mcpServers', 'servers']) {
-    if (parsed[key]?.dollhousemcp) {
-      return { installed: true, currentConfig: parsed[key].dollhousemcp, serverKey: key };
+function isConfigObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Only VS Code settings accept comments and trailing commas. */
+function parseClientJson(raw: string, client: string): Record<string, unknown> {
+  const errors: ParseError[] = [];
+  const parsed: unknown = client === 'vscode'
+    ? parseJsonc(raw, errors, { allowTrailingComma: true })
+    : JSON.parse(raw);
+  if (errors.length || !isConfigObject(parsed)) throw new Error('Invalid client JSON config');
+  return parsed;
+}
+
+/** Prefer the VS Code settings path; retain the existing top-level layouts. */
+function findJsonServer(parsed: Record<string, unknown>, client: string): {
+  entry: Record<string, unknown>;
+  path: string[];
+} | undefined {
+  const paths = client === 'vscode'
+    ? [['mcp', 'servers'], ['mcpServers'], ['servers']]
+    : [['mcpServers'], ['servers']];
+  for (const path of paths) {
+    let section: unknown = parsed;
+    for (const key of path) section = isConfigObject(section) && Object.hasOwn(section, key) ? section[key] : undefined;
+    if (isConfigObject(section) && Object.hasOwn(section, 'dollhousemcp') && isConfigObject(section.dollhousemcp)) {
+      return { entry: section.dollhousemcp, path };
     }
   }
-  return { installed: false };
+  return undefined;
+}
+
+function editClientJson(raw: string, parsed: Record<string, unknown>, client: string, path: string[], value: unknown): string {
+  if (client === 'vscode') {
+    const indent = detectIndent(raw);
+    return applyEdits(raw, modify(raw, path, value, {
+      formattingOptions: {
+        insertSpaces: typeof indent === 'number',
+        tabSize: typeof indent === 'number' ? indent : 2,
+        eol: raw.includes('\r\n') ? '\r\n' : '\n',
+      },
+    }));
+  }
+  // Other clients retain their existing strict JSON serialization.
+  let section = parsed;
+  for (const key of path.slice(0, -1)) {
+    if (!isConfigObject(section[key])) section[key] = {};
+    section = section[key] as Record<string, unknown>;
+  }
+  section[path[path.length - 1]] = value;
+  return JSON.stringify(parsed, null, detectIndent(raw)) + '\n';
+}
+
+/** Parse the same named entry used by setup status and launcher repair. */
+export function parseJsonConfig(raw: string, client = ''): Omit<DetectResult, 'configPath'> {
+  const server = findJsonServer(parseClientJson(raw, client), client);
+  return server
+    ? { installed: true, currentConfig: server.entry, serverKey: server.path.join('.') }
+    : { installed: false };
 }
 
 /** Check a single client config file for an existing DollhouseMCP entry */
-async function detectClient(client: string): Promise<DetectResult | null> {
-  const configPath = getConfigPath(client);
+async function detectClient(client: string, configPath = getConfigPath(client)): Promise<DetectResult | null> {
   if (!configPath) return null;
 
   try {
@@ -281,7 +331,7 @@ async function detectClient(client: string): Promise<DetectResult | null> {
 
   try {
     const raw = await readFile(configPath, 'utf-8');
-    const result = configPath.endsWith('.toml') ? parseTomlConfig(raw) : parseJsonConfig(raw);
+    const result = configPath.endsWith('.toml') ? parseTomlConfig(raw) : parseJsonConfig(raw, client);
     return { configPath, ...result };
   } catch {
     return { installed: false, configPath };
@@ -595,6 +645,8 @@ export function createSetupRoutes(opts?: {
   _applyNvmLauncher?: (client: string) => Promise<NvmLauncherResult>;
   /** Enable automatic hook asset repair during detect. Defaults off in tests. */
   _autoRepairPermissionHooksOnDetect?: boolean;
+  /** Override client config lookup without accessing real user files in tests. */
+  _configPathResolver?: (client: string) => string | null;
   /** Skip the sliding-window rate limiter. For testing only. */
   _skipRateLimit?: boolean;
 }): {
@@ -631,7 +683,7 @@ export function createSetupRoutes(opts?: {
 
     const results: Record<string, unknown> = {};
     await Promise.all(clients.map(async ({ id, name }) => {
-      const detection = await detectClient(id);
+      const detection = await detectClient(id, opts?._configPathResolver ? opts._configPathResolver(id) : getConfigPath(id));
       if (detection) {
         const result: Record<string, unknown> = {
           name,
@@ -1262,28 +1314,16 @@ async function restoreNpxIfWrapperMissing(client: string, configPath: string): P
 
   let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed = parseClientJson(raw, client);
   } catch {
     return; // Malformed JSON — don't touch it
   }
 
-  let healed = false;
-  for (const key of ['mcpServers', 'servers']) {
-    const section = parsed[key] as Record<string, Record<string, unknown>> | undefined;
-    const entry = section?.dollhousemcp;
-    if (!entry) continue;
-    const command = entry.command;
-    if (typeof command === 'string' && command.endsWith('dollhousemcp-nvm.sh') && !existsSync(command)) {
-      entry.command = 'npx';
-      healed = true;
-    }
-    break; // dollhousemcp entry located (healed or already healthy) — stop scanning keys
-  }
+  const server = findJsonServer(parsed, client);
+  const command = server?.entry.command;
+  if (!server || typeof command !== 'string' || !command.endsWith('dollhousemcp-nvm.sh') || existsSync(command)) return;
 
-  if (!healed) return;
-
-  const indent = detectIndent(raw);
-  await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+  await writeFile(configPath, editClientJson(raw, parsed, client, [...server.path, 'dollhousemcp', 'command'], 'npx'), 'utf-8');
   logger.info(`[Setup] NVM self-heal: restored ${client} config to bare npx (dead wrapper path removed)`);
 }
 
@@ -1469,29 +1509,19 @@ export async function patchConfigForNvmLauncher(client: string, wrapperPath: str
 
   let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed = parseClientJson(raw, client);
   } catch {
     return; // Malformed JSON — don't touch it
   }
 
-  let patched = false;
-  for (const key of ['mcpServers', 'servers']) {
-    const section = parsed[key] as Record<string, Record<string, unknown>> | undefined;
-    if (section?.dollhousemcp) {
-      section.dollhousemcp.command = wrapperPath;
-      patched = true;
-      break;
-    }
-  }
-
-  if (!patched) {
+  const server = findJsonServer(parsed, client);
+  if (!server) {
     logger.debug(`[Setup] patchConfigForNvmLauncher: no dollhousemcp entry in ${client} config — nothing to patch`);
     return;
   }
+  if (server.entry.command === wrapperPath) return;
 
-  const indent = detectIndent(raw);
-  logger.debug(`[Setup] patchConfigForNvmLauncher: writing ${client} config (indent=${JSON.stringify(indent)})`);
-  await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+  await writeFile(configPath, editClientJson(raw, parsed, client, [...server.path, 'dollhousemcp', 'command'], wrapperPath), 'utf-8');
   logger.info(`[Setup] Patched ${client} config to use NVM-aware launcher: ${wrapperPath}`);
 }
 
@@ -1522,24 +1552,20 @@ export async function installJsonMcpClientConfig(
   let parsed: Record<string, unknown> = {};
   try {
     raw = await readFile(configPath, 'utf-8');
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed = parseClientJson(raw, client);
   } catch (error) {
     if (!isMissingPathError(error)) {
       throw new Error(`Could not parse existing config at ${configPath}`);
     }
   }
 
-  const rootKey = client === 'vscode' ? 'servers' : 'mcpServers';
-  const existingRoot = parsed[rootKey];
-  const root = existingRoot && typeof existingRoot === 'object' && !Array.isArray(existingRoot)
-    ? existingRoot as Record<string, unknown>
-    : {};
-
-  root.dollhousemcp = buildMcpServerEntry(version);
-  parsed[rootKey] = root;
-
-  const indent = raw ? detectIndent(raw) : 2;
-  await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+  const path = client === 'vscode' ? ['mcp', 'servers'] : ['mcpServers'];
+  let section: unknown = parsed;
+  for (const key of path) {
+    section = isConfigObject(section) && Object.hasOwn(section, key) ? section[key] : undefined;
+    if (section !== undefined && !isConfigObject(section)) throw new Error(`Invalid client config section: ${key}`);
+  }
+  await writeFile(configPath, editClientJson(raw || '{}\n', parsed, client, [...path, 'dollhousemcp'], buildMcpServerEntry(version)), 'utf-8');
 
   return `Installed MCP server "dollhousemcp" in ${client} (${configPath})`;
 }
