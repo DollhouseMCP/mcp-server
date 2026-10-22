@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import matter from 'gray-matter';
+import matter from '../../../src/security/frontmatter.js';
 import { jest } from '@jest/globals';
 
 import { TemplateManager } from '../../../src/elements/templates/TemplateManager.js';

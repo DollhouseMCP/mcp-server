@@ -1,0 +1,4047 @@
+{
+  "inventoryFiles": 199,
+  "fullWave": {
+    "exit": 1,
+    "seconds": 953.76,
+    "suitesPassed": 198,
+    "suitesFailed": 1,
+    "testsPassed": 4125,
+    "testsFailed": 8,
+    "testsPending": 24,
+    "testsTotal": 4157
+  },
+  "correctedFile": "tests/integration/hooks/permission-hook-docker.test.ts",
+  "fixtureSHA256": "f6204909900dff661e30eac7dd05db5c1315ab07a0769b6da0dbe58b8f136c47",
+  "focusedWave": {
+    "exit": 0,
+    "suitesPassed": 1,
+    "testsPassed": 8,
+    "testsFailed": 0
+  },
+  "interpretation": "Complete per-file coverage across recorded waves; original complete full-wave exit1 retained. No claim of a single full integration invocation exiting0.",
+  "allInventoryFilesHaveSuccessfulExecutedEvidence": true,
+  "effectiveTotals": {
+    "passed": 4133,
+    "failed": 0,
+    "pending": 24,
+    "todo": 0
+  },
+  "caseIdentityVerification": {
+    "method": "Compare SHA256 identities of actual Jest fullName, ancestorTitles, title and assertion index before replacing the corrected file; no failure messages or raw payloads committed",
+    "correctedFileOriginalCaseIdentities": [
+      "127a672d3fed8191471686883de9734c4518774114f6242030facf98ed70804d",
+      "e28768ce7a739ccd330902327537a68df2a15860576ba57bbb22874ff7caaec8",
+      "467a9bc898095a410c8bfa32a83dca5795d9408d8977042bbfdce5724c23f516",
+      "3f476fefe0d62bde2f12baf0ec0026669e4dbe1d2d854f457037650e7404e85a",
+      "355338c4ba6080a60f7ef65c175bcf725d0e9db0ea99f26f01e0cfe4c0620d08",
+      "6bcfdbf7f19e852f7d1d72b4efe52109c7d8f0e7582ca186b5abf01fa2f15535",
+      "3efe07e49eee99f8d873bd23b31d9e4c7a504a7d28d6a191d5c7b847cdc480f9",
+      "41d4d61a4eb99fd89b0393360a5a0290fed5a1e3a3427121d75fe34dcf358d80"
+    ],
+    "correctedFileFocusedCaseIdentities": [
+      "127a672d3fed8191471686883de9734c4518774114f6242030facf98ed70804d",
+      "e28768ce7a739ccd330902327537a68df2a15860576ba57bbb22874ff7caaec8",
+      "467a9bc898095a410c8bfa32a83dca5795d9408d8977042bbfdce5724c23f516",
+      "3f476fefe0d62bde2f12baf0ec0026669e4dbe1d2d854f457037650e7404e85a",
+      "355338c4ba6080a60f7ef65c175bcf725d0e9db0ea99f26f01e0cfe4c0620d08",
+      "6bcfdbf7f19e852f7d1d72b4efe52109c7d8f0e7582ca186b5abf01fa2f15535",
+      "3efe07e49eee99f8d873bd23b31d9e4c7a504a7d28d6a191d5c7b847cdc480f9",
+      "41d4d61a4eb99fd89b0393360a5a0290fed5a1e3a3427121d75fe34dcf358d80"
+    ],
+    "exactMatch": true,
+    "integrationTestSourceUnchanged": true,
+    "integrationTestSourceSHA256": "c3fb5a01005167af36962eeefdb629da20196dc4c4e40f6395a6cdbef31cf7fe"
+  },
+  "effectiveTotalsComputedFromActualAssertions": true,
+  "date": "2026-10-22",
+  "files": [
+    {
+      "file": "tests/integration/agents/AgentManager.dbState.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0f3bada270119d667fb371d7b347511bff61d269a5d7fda5705bdfafb63d98c9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0f3bada270119d667fb371d7b347511bff61d269a5d7fda5705bdfafb63d98c9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/agents/AgentManager.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c8c1d52623e089329c7c0b1f89b3997bf802a33fb6ac018702145819d4352110"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c8c1d52623e089329c7c0b1f89b3997bf802a33fb6ac018702145819d4352110"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.authorization-diagnostics.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "dfdf58c1e476a3c5dca08211d5777d7b6ce893ca245e01b8e509f326763e1f09"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "dfdf58c1e476a3c5dca08211d5777d7b6ce893ca245e01b8e509f326763e1f09"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.bootstrap-gate.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d65f2a91d3376260b8588104600ca4d4cca79a93dadf3b76869be8dd7a56533c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d65f2a91d3376260b8588104600ca4d4cca79a93dadf3b76869be8dd7a56533c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.cycle24-smoke-test-regressions.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "eb1eaf222a68a2a2e10213ad7ca4a089da00b7797066d9ef1f947e867ea1e067"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "eb1eaf222a68a2a2e10213ad7ca4a089da00b7797066d9ef1f947e867ea1e067"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.github.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4edd9a34d2819514df61041e11f23b2aa54f1dab7e8f44d68cb4ad62d5e1cc49"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4edd9a34d2819514df61041e11f23b2aa54f1dab7e8f44d68cb4ad62d5e1cc49"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.local-account.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "080e3f9cd6ca8befbf09e29bdcbc424f6c05fa64e7de531c4669e891e24284ad"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "080e3f9cd6ca8befbf09e29bdcbc424f6c05fa64e7de531c4669e891e24284ad"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.magic-link.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0c9314b44c2506114aebc79c7d1935e8b0e9dd2e4c0e135325dd32d8556dfd96"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0c9314b44c2506114aebc79c7d1935e8b0e9dd2e4c0e135325dd32d8556dfd96"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.multi-method.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "681c758f260cb1ffe7a5f7173762d16feb3ccbeef231f5721767f6dc342bfe44"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "681c758f260cb1ffe7a5f7173762d16feb3ccbeef231f5721767f6dc342bfe44"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.refresh-rotation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f052e221f63d61481270e5632c49043e355a0d5d7f18758d1efb718cbad3a3b8"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f052e221f63d61481270e5632c49043e355a0d5d7f18758d1efb718cbad3a3b8"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/oauth-flow.storage-restart.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1b3cb07e1c068f1c6e4f3e6e1cb7165baab93b2a198dd153f729f4d42e7171f9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1b3cb07e1c068f1c6e4f3e6e1cb7165baab93b2a198dd153f729f4d42e7171f9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/auth/storage-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 236,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b88d9a2afd98fa011dc2242d6887aa326df0811035b89bc7dbbe44bbdf3f3f87"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 236,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b88d9a2afd98fa011dc2242d6887aa326df0811035b89bc7dbbe44bbdf3f3f87"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/cache/CollectionCache.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 47,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "96a22d8da74924754bf99694a7fdb9f8bccaa0de670300309ee5d08544142127"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 47,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "96a22d8da74924754bf99694a7fdb9f8bccaa0de670300309ee5d08544142127"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/cache/baseline.counts.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 120,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9433bf41eee71ff9c4454df042af734f2b772c7fc053ffff1d1afabb978732c0"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 120,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9433bf41eee71ff9c4454df042af734f2b772c7fc053ffff1d1afabb978732c0"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/cache/extended-baseline.counts.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 532,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3ca5cc522b90df75f8bbf9477bd456a25f00a5dc4ef9cf09d3ba3e009cfd01d9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 532,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3ca5cc522b90df75f8bbf9477bd456a25f00a5dc4ef9cf09d3ba3e009cfd01d9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/ci/ci-environment.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5b42a503d92d45db7b43e3e128753d06026c95e7459151d5e67a116bccde0847"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5b42a503d92d45db7b43e3e128753d06026c95e7459151d5e67a116bccde0847"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/collection/collection-submission-mcp.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9ee9f8a587efb3f474c575f36ac585b741b683d75ba6201b3c902ff2ef9b4674"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9ee9f8a587efb3f474c575f36ac585b741b683d75ba6201b3c902ff2ef9b4674"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/console-lifecycle.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3eb939bee2b3ddde4b8f5ca507f0f97c070b6ac77933c67b2ee3a259e45c05bb"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3eb939bee2b3ddde4b8f5ca507f0f97c070b6ac77933c67b2ee3a259e45c05bb"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/crud/ElementCRUD.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 266,
+        "failed": 0,
+        "pending": 11,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "12c034fb8eb94115b846fcb5ae4f076d943b6f6b6cadc183e56223d0fd437ac2"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 266,
+        "failed": 0,
+        "pending": 11,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "12c034fb8eb94115b846fcb5ae4f076d943b6f6b6cadc183e56223d0fd437ac2"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/AuthenticatedMemoryCompiledRestart.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d8a6911848dd075b16dabe60339762d8dd294645ebaed0e2a6a519229cb91629"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d8a6911848dd075b16dabe60339762d8dd294645ebaed0e2a6a519229cb91629"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/AuthenticatedMemoryConsoleRuntime.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "703de3ca252003176bf4f49046188e35cd413496b887a40d1b7444f1c9f1f2f1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "703de3ca252003176bf4f49046188e35cd413496b887a40d1b7444f1c9f1f2f1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/ConfiguredSystemMemorySharedPool.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "256675067a1268e6739c7fd1f167f674c253211adebdc85f768c7f7f983b27d4"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "256675067a1268e6739c7fd1f167f674c253211adebdc85f768c7f7f983b27d4"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/ConsoleMemoryGuardedUpdate.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "64101d725b3308003be469516ffa9777f6fa6266b30f0fe4e6971bbd7ac5a7d7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "64101d725b3308003be469516ffa9777f6fa6266b30f0fe4e6971bbd7ac5a7d7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseActivationStateStore.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0a0796177705c066949c1ad8166d4395cc9941b52f44b08eda59dd416b015c3f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0a0796177705c066949c1ad8166d4395cc9941b52f44b08eda59dd416b015c3f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseAgentStateStore.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 14,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a0ff483767c8e6e2c02c1472e2c901be6356f253961b2bfa94226848751f660b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 14,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a0ff483767c8e6e2c02c1472e2c901be6356f253961b2bfa94226848751f660b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseChallengeStore.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "33f29df9a1358175ccf105ccbc743a6f0f5284271d1ebf0abd077c17f6fedc8b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "33f29df9a1358175ccf105ccbc743a6f0f5284271d1ebf0abd077c17f6fedc8b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseConfirmationStore.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c1bed255c0332e83f3523e5491c08c05fd050238537734ec94049463e8f94744"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c1bed255c0332e83f3523e5491c08c05fd050238537734ec94049463e8f94744"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryAccountDeletionBoundary.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "479026bc663822e089cd03cc0b40bb7e600b951e6f1a544ae4f4e2edee59ed28"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "479026bc663822e089cd03cc0b40bb7e600b951e6f1a544ae4f4e2edee59ed28"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryAdmissionGate.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5e987fe5486b06ccd0be38a43824875df661597388da731db499ac78d1ac1319"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5e987fe5486b06ccd0be38a43824875df661597388da731db499ac78d1ac1319"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryAdmittedWrite.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ab3767916f6498873f1a68595e42d3070f88be7059564aca8d3756c43548b63a"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ab3767916f6498873f1a68595e42d3070f88be7059564aca8d3756c43548b63a"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryArchiveCleanup.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "db6d3e1ce67599e474422a77ee2aa5a7823ca26160bd77e48f340e9ec581afa7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "db6d3e1ce67599e474422a77ee2aa5a7823ca26160bd77e48f340e9ec581afa7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryAtomicInvalidator.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2680da1b0854e26564bb34577e7ce135bcf0934a8638d360a16df3f5b27c794d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2680da1b0854e26564bb34577e7ce135bcf0934a8638d360a16df3f5b27c794d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryCandidateHandoff.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d3cd25efa9c0c73704414c3cb32642f32cf0fe878b38d0f4826d08d2b0e88fec"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d3cd25efa9c0c73704414c3cb32642f32cf0fe878b38d0f4826d08d2b0e88fec"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryEquivalentReconciler.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8ba6e245e819f34c8124ad35b3311c70063b889e056a779f4867a7f1a02bc9d2"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8ba6e245e819f34c8124ad35b3311c70063b889e056a779f4867a7f1a02bc9d2"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryForegroundComposition.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "84e3738d5c9bf3f1a95a1e52d4c1adfec80de87a1b4c18592de2d98f794728bf"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "84e3738d5c9bf3f1a95a1e52d4c1adfec80de87a1b4c18592de2d98f794728bf"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryHeadRevision.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 20,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e5b261a7b970d71ee2b090d726d4b8febf9cbab95772f6b0dd0c8c7fdd2d9285"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 20,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e5b261a7b970d71ee2b090d726d4b8febf9cbab95772f6b0dd0c8c7fdd2d9285"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryInvalidationCatalogVerifier.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c7b97e4e24e634dcbbd71794201422c4676866532721eed01adf205a93883b21"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c7b97e4e24e634dcbbd71794201422c4676866532721eed01adf205a93883b21"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryInvalidationStructureVerifier.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 37,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d0c1b14bb1dc700a6ab23f58193c8d8b9d011d8b43654fa6c673eefc6a1ed09d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 37,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d0c1b14bb1dc700a6ab23f58193c8d8b9d011d8b43654fa6c673eefc6a1ed09d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryLegacyMutationGuard.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "da7e1da1d6292b4c91026abcf06172b8eeb02ce42d001a559d1938404dc110f9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "da7e1da1d6292b4c91026abcf06172b8eeb02ce42d001a559d1938404dc110f9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryLegacyTagAuditor.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "46ef7f3f27f38a8ae190d6030431444f1cc4f43af0efdbb244f4b951f0eee5b9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "46ef7f3f27f38a8ae190d6030431444f1cc4f43af0efdbb244f4b951f0eee5b9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryMaintenanceCatalogVerifier.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 31,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b6e43aa39f8df43a04e2b761f60e1f602ca479efdd40b27ef96727c134ba4a02"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 31,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b6e43aa39f8df43a04e2b761f60e1f602ca479efdd40b27ef96727c134ba4a02"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryReconciliationInspector.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fa62db35ff05a7b850bfb22fd5d2a954dad80fd8ce4bf70ee6d556a7d176964e"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fa62db35ff05a7b850bfb22fd5d2a954dad80fd8ce4bf70ee6d556a7d176964e"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryStorageLayer.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5506c2dacda5dc9d23eaff5831fff9ccc88f2be12307559f5eda3cd0240ca8f2"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5506c2dacda5dc9d23eaff5831fff9ccc88f2be12307559f5eda3cd0240ca8f2"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryTagHeadRevision.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "85269d93d95d95753df52f772145dd6d7ea9826822481f8847efb2cb43f86995"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "85269d93d95d95753df52f772145dd6d7ea9826822481f8847efb2cb43f86995"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseMemoryTenantQualification.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "662399c7817708a42fda7524ae6c73bd8586f7e9c25a5a9bbafe0ffb0aba4278"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "662399c7817708a42fda7524ae6c73bd8586f7e9c25a5a9bbafe0ffb0aba4278"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseStorageLayer.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e8a993fe1ffdeb9ff99bb1013fe390e51d695a2eede5c6467bce76eb6777eabd"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e8a993fe1ffdeb9ff99bb1013fe390e51d695a2eede5c6467bce76eb6777eabd"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/DatabaseTenantMemoryRegistry.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "06ac495bced90522256a8cb0f8792e719b9ae70bf1e7d1ccdc3cbb46fa8f5d30"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "06ac495bced90522256a8cb0f8792e719b9ae70bf1e7d1ccdc3cbb46fa8f5d30"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/MemoryHeadInvalidationRuns.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 33,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "65784b942f245550d2f4905e3845923224ea9386ee42583a24ed31ce1b3fd3b5"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 33,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "65784b942f245550d2f4905e3845923224ea9386ee42583a24ed31ce1b3fd3b5"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/MemoryHeadUpdateAdapter.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "13e7365a02f58f4e35425f4c2c1d7573e3d3aefda4f2e573f3f3eb94546db134"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "13e7365a02f58f4e35425f4c2c1d7573e3d3aefda4f2e573f3f3eb94546db134"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/MemorySaveHandlerGuardedMutation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4c0a789ed89fa8c50e036a97fcce0a1c9f8b488ecfe68bcc7ab5f6d0b70eca68"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4c0a789ed89fa8c50e036a97fcce0a1c9f8b488ecfe68bcc7ab5f6d0b70eca68"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/MemoryUpgradeProcess.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "056a8dc5bb13d10ad28ac87c0409885bb9706bc35420a8b031a7b801185a6ac9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "056a8dc5bb13d10ad28ac87c0409885bb9706bc35420a8b031a7b801185a6ac9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/RelationshipExtractor.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "be1a6056c77048aeee46c4393b8b40e1374ac3d915f24df46e62538114f19f16"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "be1a6056c77048aeee46c4393b8b40e1374ac3d915f24df46e62538114f19f16"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/RuntimeSessionLease.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "caad19b2a95db06fa23f474c5101f9b2a267094e5eed8ff84bb2741c03d29d45"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "caad19b2a95db06fa23f474c5101f9b2a267094e5eed8ff84bb2741c03d29d45"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/TenantMemoryAqlCaller.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5d8647dee6fa33c7fad08db4e8a6ea6df6e545f8af6191a17faa2b52ec28b662"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5d8647dee6fa33c7fad08db4e8a6ea6df6e545f8af6191a17faa2b52ec28b662"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/TenantMemoryConsoleCaller.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "221c34c759ab78066ef9939a0093e5faeec0e2773bfbdfe8df00ab68e5e3e4a1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "221c34c759ab78066ef9939a0093e5faeec0e2773bfbdfe8df00ab68e5e3e4a1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/TenantMemoryIndexView.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cfcbc84ce457dd644456a290876a39cea08879e43ea9242def8572efcc8002fa"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cfcbc84ce457dd644456a290876a39cea08879e43ea9242def8572efcc8002fa"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/TenantMemoryOperationProvider.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0316ecd7b1cbe425d3543e289d7f323555a390220101dfbd660496c8e0c6e1a4"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0316ecd7b1cbe425d3543e289d7f323555a390220101dfbd660496c8e0c6e1a4"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/account-invitation-lookup.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "32092b2b377c70903c3569368f5dcc4bfe0317bd898ff789673e6854920d9f43"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "32092b2b377c70903c3569368f5dcc4bfe0317bd898ff789673e6854920d9f43"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/auth-identity-e2e.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "782b87dc906e991ee03f67b105d07aa112a7a91aaab5836341c1fb3efc08f698"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "782b87dc906e991ee03f67b105d07aa112a7a91aaab5836341c1fb3efc08f698"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/auth-mutation-preflight.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a29add57d4ea87707da5ced5b3b7d79bafe6f0f47c663e06d072e28bd723bbea"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a29add57d4ea87707da5ced5b3b7d79bafe6f0f47c663e06d072e28bd723bbea"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/auth-principal-try-lock.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8bfd30d87731a2c31a1e4e9f029902b339bb2b7087fd5363ad179cbd70d39a02"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8bfd30d87731a2c31a1e4e9f029902b339bb2b7087fd5363ad179cbd70d39a02"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/bootstrap.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c5844183394289dd75f7b1e9602a690da4d94e2eacac778e91532cf6995b99d9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c5844183394289dd75f7b1e9602a690da4d94e2eacac778e91532cf6995b99d9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/console-memory-exclusive-create.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0907f65d85860e1897cfa8b78069e1a9f05d66caf36e3ca916a4ac501605917c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0907f65d85860e1897cfa8b78069e1a9f05d66caf36e3ca916a4ac501605917c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/durable-invitation-admin.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "75bd89e3dd8c201139efdeb3933cbd79101f50eb762f133ce4d3ebeefe0d2cd2"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "75bd89e3dd8c201139efdeb3933cbd79101f50eb762f133ce4d3ebeefe0d2cd2"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/element-crud-roundtrip.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 33,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b964181641230acaafa9c631f6f1d4d6b1f1a7067e90fc0238c3603f46683402"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 33,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b964181641230acaafa9c631f6f1d4d6b1f1a7067e90fc0238c3603f46683402"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/github-enrollment-oauth-state.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "72ea8fa564bb225606e8d596b0479acb1e808b59f633962ddc4f5e43cad95d4b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "72ea8fa564bb225606e8d596b0479acb1e808b59f633962ddc4f5e43cad95d4b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/http-database-e2e.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5b80fe046abda8ef9218ed644d5bc9dd9566b5057830440192c1796247980338"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5b80fe046abda8ef9218ed644d5bc9dd9566b5057830440192c1796247980338"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/integration-credential-cleanup-terminal.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c4362652ca4ce596d0c3b920b6b1968daf272a799a8f102df4432262e2ac0f0e"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c4362652ca4ce596d0c3b920b6b1968daf272a799a8f102df4432262e2ac0f0e"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/integration-spec-strict-writes.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5f25d0c46d9149fbc1cbda77d31939a52f40c809171ce7c2166cbded48692191"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5f25d0c46d9149fbc1cbda77d31939a52f40c809171ce7c2166cbded48692191"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-account-deletion.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c74ac3daa8e279a524e634bbf0e74e5fa1967c3c2a7d42c15826a1f4c26dcc93"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c74ac3daa8e279a524e634bbf0e74e5fa1967c3c2a7d42c15826a1f4c26dcc93"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-activation-store.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 40,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9297eef183a18ab85e3ca9210e989192df0a77872bb454eeeba5829e08c334c7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 40,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9297eef183a18ab85e3ca9210e989192df0a77872bb454eeeba5829e08c334c7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-authentication-policy.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 20,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "14b847db8c2415ff89b298366cc5882eaca9fd5448ac30b540f2c9a742a6d61c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 20,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "14b847db8c2415ff89b298366cc5882eaca9fd5448ac30b540f2c9a742a6d61c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-claim-store.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 26,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8c56f2f2b64a07d747a6c9e53b64dde20cb6f8ba15c91d8f61182a77b1e89dd1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 26,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8c56f2f2b64a07d747a6c9e53b64dde20cb6f8ba15c91d8f61182a77b1e89dd1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-delivery-service.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "434181d5c7438fbd3cd2e160307a6434ceb458d436f7babba56b7e74a636033b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "434181d5c7438fbd3cd2e160307a6434ceb458d436f7babba56b7e74a636033b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-delivery-store.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 28,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e84b8abd590bdb39aeee1eeb5e4a4c763e70cb16651dabae0899ff5951ff8a23"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 28,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e84b8abd590bdb39aeee1eeb5e4a4c763e70cb16651dabae0899ff5951ff8a23"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-lifecycle-migration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "bcc13bdda5d6c38ca87ae62cc3e538eb1d4f807f486684bc70067d11f647c177"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "bcc13bdda5d6c38ca87ae62cc3e538eb1d4f807f486684bc70067d11f647c177"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-management-service.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1c37f2aefaac99179fdb479052f6d3f21ed6dd38814df7385af3a43ef2d617f1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1c37f2aefaac99179fdb479052f6d3f21ed6dd38814df7385af3a43ef2d617f1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-management-store.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 28,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d0ccb36081b7816c512ad35fa6aaad9531f6ce7d00ff4cd6e40103a1c7d1ce9e"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 28,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d0ccb36081b7816c512ad35fa6aaad9531f6ce7d00ff4cd6e40103a1c7d1ce9e"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-service-journey.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0d87db130da05c7ce92d1ecb643b08b0ef187c4ad38377b4311f69b1f9a8148f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0d87db130da05c7ce92d1ecb643b08b0ef187c4ad38377b4311f69b1f9a8148f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/invitation-writer-conflicts.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ad476d6a9e7ef8c919fc5ba1ec35db377ac87811e60e7b6d07f242339799e217"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ad476d6a9e7ef8c919fc5ba1ec35db377ac87811e60e7b6d07f242339799e217"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/mcp-database-e2e.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 51,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b4cd32b89ab2368e84dea3099aae60dfba48fec1e747afe6da3e7fc8ee4dc9c2"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 51,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b4cd32b89ab2368e84dea3099aae60dfba48fec1e747afe6da3e7fc8ee4dc9c2"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/memory-volumes.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 22,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3932e82d405cb2b91b190946f2fed53cb5eec983282ba0a4fbf366f69c573343"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 22,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3932e82d405cb2b91b190946f2fed53cb5eec983282ba0a4fbf366f69c573343"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/onboarding-composition.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b061cf60f7a96a1b20fe4f6a662a0701deac8191f6043a4452be277dadb5a341"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b061cf60f7a96a1b20fe4f6a662a0701deac8191f6043a4452be277dadb5a341"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/onboarding-http.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aacd77a16b809603b50e74b2f226e03155c4079ddcc9c1b971e9aca14fe7e819"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aacd77a16b809603b50e74b2f226e03155c4079ddcc9c1b971e9aca14fe7e819"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/onboarding-metadata.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1bc22b1bee015f2f6f273a9ab0c675f85acbe399941492707de1964b06c4bac1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1bc22b1bee015f2f6f273a9ab0c675f85acbe399941492707de1964b06c4bac1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/onboarding-ordinary-login.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d8d2c0960baaad2417e5e4f23e16fb56e67658048529f67a65ea1f4295ff741b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d8d2c0960baaad2417e5e4f23e16fb56e67658048529f67a65ea1f4295ff741b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/onboarding-schema-preflight.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b1378ea96f691106e240b44e962f86038b7bd2d6f7c7f834f3ee7e8d8c7391fb"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b1378ea96f691106e240b44e962f86038b7bd2d6f7c7f834f3ee7e8d8c7391fb"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/onboarding-store.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2d8fbd753cf45434148bb41bf6d90cfce19862dd546ce1500f7e6a5135afa12c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2d8fbd753cf45434148bb41bf6d90cfce19862dd546ce1500f7e6a5135afa12c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/pending-account-gates.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ace64ec5a2cff171ec50d700cdce2f39eb4d33d7eb11b85e921fbbf373f8dd73"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ace64ec5a2cff171ec50d700cdce2f39eb4d33d7eb11b85e921fbbf373f8dd73"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/portfolio-persistence.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9e9eb3bc1b64fd2c64bd0785c2355b3f36b9474e86f2a563901cd05c4f4592c9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9e9eb3bc1b64fd2c64bd0785c2355b3f36b9474e86f2a563901cd05c4f4592c9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/rls-isolation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "845838b68938a464e1d65885f705daef73c0461eda7c9d0b34f1d4e3352f2a88"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "845838b68938a464e1d65885f705daef73c0461eda7c9d0b34f1d4e3352f2a88"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/database/system-context-tripwire.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fb49c29ef2f62154398e3b3847ed76c0ce319108625f37e6d9fff5236ee57ff9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fb49c29ef2f62154398e3b3847ed76c0ce319108625f37e6d9fff5236ee57ff9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/element-installation-priority.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5e014dbcac775edfe9530c0d4c467d17293264e009c0dd6ddbc592443c629840"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5e014dbcac775edfe9530c0d4c467d17293264e009c0dd6ddbc592443c629840"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/ensembles/ConditionalActivation.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "16b9e46f34489f8209bbd53249a5584522c9fc5d8a03d8bdb8d46bccefee90f7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "16b9e46f34489f8209bbd53249a5584522c9fc5d8a03d8bdb8d46bccefee90f7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/ensembles/EnsembleActivation.integration.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 13,
+        "failed": 0,
+        "pending": 1,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3f3b0f8b39aff5566e6731488cc5926d98deef46aef835049f19d5a512df933f"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 13,
+        "failed": 0,
+        "pending": 1,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3f3b0f8b39aff5566e6731488cc5926d98deef46aef835049f19d5a512df933f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/ensembles/EnsembleCRUD.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 17,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4a3818a108425f84fafd46d218a38ddca16b37bdcfea65b19a41c3d590861fe6"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 17,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4a3818a108425f84fafd46d218a38ddca16b37bdcfea65b19a41c3d590861fe6"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/handlers/PortfolioPullHandler.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a186a434b3cbdbfb175e1fc5601d811596708118c45ab7d58a6a074c9fe10b22"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 19,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a186a434b3cbdbfb175e1fc5601d811596708118c45ab7d58a6a074c9fe10b22"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/hooks/permission-hook-docker.test.ts",
+      "original": {
+        "status": "failed",
+        "passed": 0,
+        "failed": 8,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "018d79dfbaeac9c585c0fa7d84da12083b3d0c28318659a33c9237696d62e29f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "018d79dfbaeac9c585c0fa7d84da12083b3d0c28318659a33c9237696d62e29f"
+      },
+      "verifiedBy": "focused-after-Dockerfile-fix",
+      "focusedAfterFixtureFix": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "018d79dfbaeac9c585c0fa7d84da12083b3d0c28318659a33c9237696d62e29f"
+      }
+    },
+    {
+      "file": "tests/integration/integrations/byo-authoring-wired.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fb02ac18340de3f7cf73ffabfa5a57bdc9819c243d02fc46e6ec4cbda7d87633"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fb02ac18340de3f7cf73ffabfa5a57bdc9819c243d02fc46e6ec4cbda7d87633"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/integrations/integration-agent-e2e.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ba672d56a0f9f08121c184c8624949f35cb53566cfa3c5b3c7f299966e5b958d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ba672d56a0f9f08121c184c8624949f35cb53566cfa3c5b3c7f299966e5b958d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/integrations/integration-request-wired.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3e28c33ce4f7520648fac80d194594de8581595bb233a5bee540a162ce156bbc"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "3e28c33ce4f7520648fac80d194594de8581595bb233a5bee540a162ce156bbc"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/activation-persistence.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 17,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "92f9d7966fbbcdaea45cfb6b81916f9475f1f9e0d1ef00b7d8055f3181c48ffe"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 17,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "92f9d7966fbbcdaea45cfb6b81916f9475f1f9e0d1ef00b7d8055f3181c48ffe"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/addentry-markdown.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e414df9cd5a8b21e1f3edc1d96b3d3688364dedff8982140327605adfb68c1d7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e414df9cd5a8b21e1f3edc1d96b3d3688364dedff8982140327605adfb68c1d7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/addentry-rapid-sequential.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a38b8c5a75e50616292cc1e90bef84c350d20cb07a34012e031f6a98bd200069"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a38b8c5a75e50616292cc1e90bef84c350d20cb07a34012e031f6a98bd200069"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/addentry-transport.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "bd44610e59db43ef297583fe6c28af8af1b62e7bf7e5b7e2469072c9fbc33d1e"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "bd44610e59db43ef297583fe6c28af8af1b62e7bf7e5b7e2469072c9fbc33d1e"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/agent-execution-edge-cases.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 22,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "817daae55e1c08e2bed01a23dd8b7b8343559e3c9725404ced0b6c540b8416ab"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 22,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "817daae55e1c08e2bed01a23dd8b7b8343559e3c9725404ced0b6c540b8416ab"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/agent-execution-lifecycle.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2049cbac4d72c0af4cfdfcff9f2158beae9af05b0cebfe3bf45da7239de8af34"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2049cbac4d72c0af4cfdfcff9f2158beae9af05b0cebfe3bf45da7239de8af34"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/agent-notifications.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ca28e31f5e7de306dd527334befe52de0dff94d1520ddfa3359e563ea047988c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ca28e31f5e7de306dd527334befe52de0dff94d1520ddfa3359e563ea047988c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/agent-policy-enforcement.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "58ef148af719b0df040b5806bdc0ed5dba4b3ef4d48d3e3db7457143df4433cd"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "58ef148af719b0df040b5806bdc0ed5dba4b3ef4d48d3e3db7457143df4433cd"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/agent-resilience.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "67035ed3bf1a3c99561b061ef0bb258c88e5008e2f205de3668a67e4f665b098"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "67035ed3bf1a3c99561b061ef0bb258c88e5008e2f205de3668a67e4f665b098"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/agent-v2-field-roundtrip.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "759a4f91bc601f139f7e606235cc0360437cd1d2bcee1eb916156a5662d4853a"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "759a4f91bc601f139f7e606235cc0360437cd1d2bcee1eb916156a5662d4853a"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/autonomy-verification.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "283d78e11a5b1e3497113797ffe6b0a94de26f8c4a415b2ee9e0b9ffd301f597"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "283d78e11a5b1e3497113797ffe6b0a94de26f8c4a415b2ee9e0b9ffd301f597"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/beetlejuice-trigger.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "dd3a24e54d561b7d5c26b5a5b4467add29685dc126433e59bf73b630f5078198"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "dd3a24e54d561b7d5c26b5a5b4467add29685dc126433e59bf73b630f5078198"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/create.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 30,
+        "failed": 0,
+        "pending": 2,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c61708621623d03ec11732234e0489b44197fd2d0f421c0684b9d4eef205805d"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 30,
+        "failed": 0,
+        "pending": 2,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c61708621623d03ec11732234e0489b44197fd2d0f421c0684b9d4eef205805d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/delete.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 17,
+        "failed": 0,
+        "pending": 1,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d44dd986ac7dbf1db37d81af5ec8c813921de63beccd6d3f4f380527551804ae"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 17,
+        "failed": 0,
+        "pending": 1,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d44dd986ac7dbf1db37d81af5ec8c813921de63beccd6d3f4f380527551804ae"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/ensemble-activation-registration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aba993c67e06d2140ef27fc2cf7a6b0760e1be6d3ba75bff8a53129c33eb718b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aba993c67e06d2140ef27fc2cf7a6b0760e1be6d3ba75bff8a53129c33eb718b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/errors.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 35,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "12e76307beef945c52f4b7285bcfb3201550d93f9063d1409a6c20d8e624a1a9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 35,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "12e76307beef945c52f4b7285bcfb3201550d93f9063d1409a6c20d8e624a1a9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/gatekeeper-confirm-flow.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4341e8c415d634ba553e6dfecb70ae4911851772f29993a555ada7fc9c45d640"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4341e8c415d634ba553e6dfecb70ae4911851772f29993a555ada7fc9c45d640"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/gatekeeper-element-policy-overrides.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1f266307b8586aaf2bbab8b99d68eab3697081cb034c1315577be52d0bfb0d27"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1f266307b8586aaf2bbab8b99d68eab3697081cb034c1315577be52d0bfb0d27"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/integration-read-registration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e19d587aed2b61726dc8e6704b29bb8512fa5d38286aeff263e510c13b2c9604"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e19d587aed2b61726dc8e6704b29bb8512fa5d38286aeff263e510c13b2c9604"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/memory-addentry-persistence.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fcba819d1fc35320bc9642642efa25514d48153e8f6fc57a287bc37f7d5882b4"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fcba819d1fc35320bc9642642efa25514d48153e8f6fc57a287bc37f7d5882b4"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/memory-crude.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 43,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6d66792650bbd0c90f804d28a435ad6eb594e87e5620bda43e3b7c2db7481a6c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 43,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6d66792650bbd0c90f804d28a435ad6eb594e87e5620bda43e3b7c2db7481a6c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/permission-flow-harness.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 27,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c51645b23b776361b5664614bd8d82f7f68ae8015b9e994852bf80363be3eb92"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 27,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c51645b23b776361b5664614bd8d82f7f68ae8015b9e994852bf80363be3eb92"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/permission-flow-matrix.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 287,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8952b4b41d2ae64809e3119f45f269a58ee22de9d7ca6ff265a2027473da32bd"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 287,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8952b4b41d2ae64809e3119f45f269a58ee22de9d7ca6ff265a2027473da32bd"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/permission-flow-platform-adapters.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 112,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6f1d5b54f2d8cf8c8e3507ffccd65e994b26c32aff93e4947b55f07463f51005"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 112,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6f1d5b54f2d8cf8c8e3507ffccd65e994b26c32aff93e4947b55f07463f51005"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/permission-prompt.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 53,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ff4a72dc88a714ac4a1acfe2068d8e078b971f99e77405576480b8cd778dcb47"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 53,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ff4a72dc88a714ac4a1acfe2068d8e078b971f99e77405576480b8cd778dcb47"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/permissions.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 38,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "eddb6afa7a86620495202cf13956246c0dd97b9b6203df84fcfe1727504b8b57"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 38,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "eddb6afa7a86620495202cf13956246c0dd97b9b6203df84fcfe1727504b8b57"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/persona-cold-cache.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ab62d1ae85938b7d5418eb35618b79252e42900ceed1420c951ef857a488207c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ab62d1ae85938b7d5418eb35618b79252e42900ceed1420c951ef857a488207c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/persona-db-cold-cache.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "41c4022c140703364672dc006b1f51db3604d42a868124a5b4c7ff37fceea8ac"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "41c4022c140703364672dc006b1f51db3604d42a868124a5b4c7ff37fceea8ac"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/persona-file-eviction.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fb4f13f6a896774b7fb64d053b4806fc94f9f26a1af3030d2a8b9fe41d5118f1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fb4f13f6a896774b7fb64d053b4806fc94f9f26a1af3030d2a8b9fe41d5118f1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/persona-gatekeeper-policy.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "59631e21f856b6873536712a28b521c2cc3a399dd91bde8d15a26347df188692"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "59631e21f856b6873536712a28b521c2cc3a399dd91bde8d15a26347df188692"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/query-logs.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a25067be109ee1433ce6f11c583104a1fce1969b451ec47d710768728777cd6d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a25067be109ee1433ce6f11c583104a1fce1969b451ec47d710768728777cd6d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/read.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 73,
+        "failed": 0,
+        "pending": 1,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "17507e09d8316a864723b5e4397c6d3d507558b8ab2b5f05959fedaf444236f4"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 73,
+        "failed": 0,
+        "pending": 1,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "17507e09d8316a864723b5e4397c6d3d507558b8ab2b5f05959fedaf444236f4"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/search-query-filter-pipeline.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 37,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1c274b21596aa7543b12db89789e9d70453d785f99d5bef9db7d9f1ddf8d2f14"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 37,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "1c274b21596aa7543b12db89789e9d70453d785f99d5bef9db7d9f1ddf8d2f14"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/update.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 27,
+        "failed": 0,
+        "pending": 6,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "28ff0a439e91acb7520d01241d98fdc576ae3f4e6104a9330eb8358aef6792d0"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 27,
+        "failed": 0,
+        "pending": 6,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "28ff0a439e91acb7520d01241d98fdc576ae3f4e6104a9330eb8358aef6792d0"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-aql/verification-flow.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "998ff96c9ac34cb364c74a4542ee8ce7c4df4692d35b21c39dbe899c9d9be9f5"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "998ff96c9ac34cb364c74a4542ee8ce7c4df4692d35b21c39dbe899c9d9be9f5"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/mcp-protocol-compliance.test.ts",
+      "original": {
+        "status": "focused",
+        "passed": 2,
+        "failed": 0,
+        "pending": 2,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "26b4583b807fc7b581a2536d175a801636762a69d84ed875e18adb73057e55c9"
+      },
+      "latestVerified": {
+        "status": "focused",
+        "passed": 2,
+        "failed": 0,
+        "pending": 2,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "26b4583b807fc7b581a2536d175a801636762a69d84ed875e18adb73057e55c9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/memories/MemoryManager.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5311fc4e550225f0ef0eb19294fbcd56eefed873358f601924efba39fed1ff06"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5311fc4e550225f0ef0eb19294fbcd56eefed873358f601924efba39fed1ff06"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/memories/memory-enhanced-index.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5b6efc95c6e4ff2a53103c65ee934f22a0818e921096243b845da9c475f759c9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5b6efc95c6e4ff2a53103c65ee934f22a0818e921096243b845da9c475f759c9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/memories/memory-portfolio-index.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6850a5ddb037264094620ad2c7d5781c66884a6c69459385ad32a78d4a7d4347"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6850a5ddb037264094620ad2c7d5781c66884a6c69459385ad32a78d4a7d4347"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/metadata-test-detection.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "06028bdfa1c430d423bbd5d9c494018448174cf46caa53d735c91d3e76b9d77b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "06028bdfa1c430d423bbd5d9c494018448174cf46caa53d735c91d3e76b9d77b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/persona/persona-copy-on-write.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 22,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "faed0850bac2a6f3302de7b541a09848b02923f3a1b140c18897f9d41f6cb947"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 22,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "faed0850bac2a6f3302de7b541a09848b02923f3a1b140c18897f9d41f6cb947"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/persona/persona-lifecycle.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a774d045d302d099673308606900d7a20557103a1ee17b6d341f054ed66a0682"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a774d045d302d099673308606900d7a20557103a1ee17b6d341f054ed66a0682"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/persona/persona-lookup-scope.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e31fbad8d74722bf05d4947ba73077e1e32df5ef5c5320b7cf3c344aa37b96f3"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e31fbad8d74722bf05d4947ba73077e1e32df5ef5c5320b7cf3c344aa37b96f3"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/portfolio/EnhancedIndexManager.triggerMetrics.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "54b6a3f0ddb7a342eaa44888761853cbe272e275a869f1549242d356282f0742"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 9,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "54b6a3f0ddb7a342eaa44888761853cbe272e275a869f1549242d356282f0742"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/portfolio/PortfolioSyncManager.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5ccf597dbe5abc90f7f59f5a911437a2be1d85ff99f6e717076f72d2cd3d4258"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5ccf597dbe5abc90f7f59f5a911437a2be1d85ff99f6e717076f72d2cd3d4258"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/portfolio/fuzzy-matching.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "eb7eec1ff9a5cb9f4f9a59d18c4effc7dcaa36047aa625ddc991399ee02334ff"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "eb7eec1ff9a5cb9f4f9a59d18c4effc7dcaa36047aa625ddc991399ee02334ff"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/portfolio/portfolio-filtering.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a5e904f2d8b8d33057b5c0c794fdea016bd6b59064c86d9f447fe5714c810e9c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 8,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a5e904f2d8b8d33057b5c0c794fdea016bd6b59064c86d9f447fe5714c810e9c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/security-audit-batch-a.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fbf4b920c957db12c0d3d67769d0bbe9445e3bbf626f047d78c66dec3eff488c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 25,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "fbf4b920c957db12c0d3d67769d0bbe9445e3bbf626f047d78c66dec3eff488c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/server-startup-autoload.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 31,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cdd8d7a54d8ac9ae144f7f71fb8b16ebcb3ba175ced76efda0261b01799d73bd"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 31,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cdd8d7a54d8ac9ae144f7f71fb8b16ebcb3ba175ced76efda0261b01799d73bd"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/server/basic.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "047b876a2d66e594016dff5448fc876bc7b69962edff28da4b43ff4d6b77d5a6"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "047b876a2d66e594016dff5448fc876bc7b69962edff28da4b43ff4d6b77d5a6"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/server/integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8837c483a85106e51fc8f08ee9e3dff67cba3020e4a70df6fac0def026887b1c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8837c483a85106e51fc8f08ee9e3dff67cba3020e4a70df6fac0def026887b1c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/server/prescriptiveDigest.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "91931fa0d34ad7b74daa29f644b8f1caec9c1b74b536e3a3063695103c54ee27"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "91931fa0d34ad7b74daa29f644b8f1caec9c1b74b536e3a3063695103c54ee27"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/server/workflow-validation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "07f4a7a81d5010ec121f85fefdb05522e4469a42ad38ef4124dffab43eed4e90"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 11,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "07f4a7a81d5010ec121f85fefdb05522e4469a42ad38ef4124dffab43eed4e90"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/services/ElementQueryService.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 18,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aaf11c350c79d82f6ee62e31e894f7c5a9ba3f31d73fa9772358806e6bf65a2f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 18,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aaf11c350c79d82f6ee62e31e894f7c5a9ba3f31d73fa9772358806e6bf65a2f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/skills/SkillManager.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8d6fe21aa0f5b5059355c48b4963bd978c94ab253249dcc8c593b83ebafec6af"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "8d6fe21aa0f5b5059355c48b4963bd978c94ab253249dcc8c593b83ebafec6af"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/skills/skill-enhanced-index.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "59932bd60b87ea66e848324e14a09e3cd13db9185ccd6183d8c32e2610ae5c26"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "59932bd60b87ea66e848324e14a09e3cd13db9185ccd6183d8c32e2610ae5c26"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/source-priority.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b7247de67281f98f9ec4ea7804ac6c2f8a33f792be6df61568270bfd49511fc4"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b7247de67281f98f9ec4ea7804ac6c2f8a33f792be6df61568270bfd49511fc4"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/startup/startup-readiness.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ab872dfa67b6469d54d89f8de6f4b6139e9288eadc994f486c65c95a03e68698"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ab872dfa67b6469d54d89f8de6f4b6139e9288eadc994f486c65c95a03e68698"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/storage/config-migration-from-file.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d2b3abc28c26858d4ebd4ebdec2e5246bfac91303242a03e7aab752000ddca27"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 16,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d2b3abc28c26858d4ebd4ebdec2e5246bfac91303242a03e7aab752000ddca27"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/storage/operator-config-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 33,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aee3fe816b127dc88ebe6f36327520973b834e57ea8f3f41cf96b034ce5488ae"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 33,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aee3fe816b127dc88ebe6f36327520973b834e57ea8f3f41cf96b034ce5488ae"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/storage/shared-cache-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 55,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "004748d00765f278c3df29ca164bcc2657d5d95d8716451fb9ff51210da06f4f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 55,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "004748d00765f278c3df29ca164bcc2657d5d95d8716451fb9ff51210da06f4f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/storage/signing-keys-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 62,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "7fda3c8e7ad339682fb094e116a4f98a786276d9cda9408ec24ddaf6df4748a7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 62,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "7fda3c8e7ad339682fb094e116a4f98a786276d9cda9408ec24ddaf6df4748a7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/storage/token-store-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f347981eb8b7a5e8fe0519f3fe3b9b7eba45b42d440e6c7e1bee40f049cfc48e"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f347981eb8b7a5e8fe0519f3fe3b9b7eba45b42d440e6c7e1bee40f049cfc48e"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/storage/user-config-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 35,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "784253c978675305084d254c4218abdce351f63c43952d7dcd49d05eb237b7e4"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 35,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "784253c978675305084d254c4218abdce351f63c43952d7dcd49d05eb237b7e4"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/telemetry.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "521907b1a0470fe83e36572e5101f0b1a2f811d58ff8479247be0f63c9ea3cf9"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "521907b1a0470fe83e36572e5101f0b1a2f811d58ff8479247be0f63c9ea3cf9"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/templates/TemplateManager.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "70ab4ff220fa4659fd2bab44a2dd28b5035c91718f6d85752c1f2e3d57b2844d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "70ab4ff220fa4659fd2bab44a2dd28b5035c91718f6d85752c1f2e3d57b2844d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/templates/template-rendering-proof.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "49be08b8bd62150799a94c240c01645ad6c82c4e517fb26d8af8c1a6ea515851"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "49be08b8bd62150799a94c240c01645ad6c82c4e517fb26d8af8c1a6ea515851"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/tools/DeleteElementTool.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b75f58a83b1db1acf3335719392dd804eedf3201a155c806b3d80f6864da8aaf"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "b75f58a83b1db1acf3335719392dd804eedf3201a155c806b3d80f6864da8aaf"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/tools/GenericElementTools.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "272b3f0b71d4710cbd8604670441daf2408385fcced51880ada3f2a16f5f358f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "272b3f0b71d4710cbd8604670441daf2408385fcced51880ada3f2a16f5f358f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/tools/PluralElementTypes.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 31,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aad2a366aba134bc1fc5ce7eb996ca1c44ff83bbbc3c7e27221af0163ffd6558"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 31,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aad2a366aba134bc1fc5ce7eb996ca1c44ff83bbbc3c7e27221af0163ffd6558"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-active-post.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ceeeb9751d72805ad5db971b69c29e522c698fab9ae68f72e8add1c2048484ec"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "ceeeb9751d72805ad5db971b69c29e522c698fab9ae68f72e8add1c2048484ec"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-keepalive-drain.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e0a3ad092da3caa8f1e2d0d744735627836981dab0a3c4882eca08d3faddec6a"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "e0a3ad092da3caa8f1e2d0d744735627836981dab0a3c4882eca08d3faddec6a"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-pool-shutdown.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "06d70a3fc3cb7c7e1450640bc20e6febca5934a854c95a52e45884c9fd13369b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "06d70a3fc3cb7c7e1450640bc20e6febca5934a854c95a52e45884c9fd13369b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-presence-admission.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9d0c1574143f87b2ddcfe00c4cb9450e8345d04d4884e9d1931a819edf6a95d1"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9d0c1574143f87b2ddcfe00c4cb9450e8345d04d4884e9d1931a819edf6a95d1"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-presence-recovery.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cfc26895db3f1e330611d74113925f674c5cbd235d75a0e5a0d6e2eff9bf4304"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cfc26895db3f1e330611d74113925f674c5cbd235d75a0e5a0d6e2eff9bf4304"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-stream-keepalive.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 24,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aae746b44d41e46467d54fd14fd3b87f45886de0f05cc6caa0d7f5ebe6209410"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 24,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "aae746b44d41e46467d54fd14fd3b87f45886de0f05cc6caa0d7f5ebe6209410"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-transport-parity.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 29,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2cb70648aaae1a603ec6379aa0eeab628935cb676cef6b4cadd57ded07c83451"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 29,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "2cb70648aaae1a603ec6379aa0eeab628935cb676cef6b4cadd57ded07c83451"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/http-transport-smoke.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 52,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4c6a7c238aba5ec4782d759912ff55bb7aced9d65e2083c8f298af1a6843695f"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 52,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "4c6a7c238aba5ec4782d759912ff55bb7aced9d65e2083c8f298af1a6843695f"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/challengestore-cross-user-leak.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f3481f5255398ee0f6a078bfa5ae78f96cce7308ad3284fef52cd2a3eee45b01"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 6,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f3481f5255398ee0f6a078bfa5ae78f96cce7308ad3284fef52cd2a3eee45b01"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/element-cache-singleton-leak.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "070e4534a9e0397ef56e244f06fd2c50e0d3f8150b39924d981f901c41228550"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "070e4534a9e0397ef56e244f06fd2c50e0d3f8150b39924d981f901c41228550"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/enhanced-index-singleton-leak.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a94421dafedbeac8f662ebabe1c1cddcda9d53ed181ff11ab65eed46e5a8fb5d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "a94421dafedbeac8f662ebabe1c1cddcda9d53ed181ff11ab65eed46e5a8fb5d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/github-portfolio-indexer-leak.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "bbf57ad49ef415f599da41a2c63f19dc0e8c6acd89f236dc094d63be9e5ca336"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "bbf57ad49ef415f599da41a2c63f19dc0e8c6acd89f236dc094d63be9e5ca336"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/github-userinfo-cache-leak.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d10f76e692a08837a07dc6937b21eb783a48fa4520f537f4a7ae0ce22647476b"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d10f76e692a08837a07dc6937b21eb783a48fa4520f537f4a7ae0ce22647476b"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/portfolio-repo-token-impersonation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "236605f2b5ac2ab89a775e55d4e2fbc231f2e9a4f39f0e0ee45c541dd58d842a"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "236605f2b5ac2ab89a775e55d4e2fbc231f2e9a4f39f0e0ee45c541dd58d842a"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/leak-proofs/token-storage-bundle-leak.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9f4fa6feb6bdc2c0c1da52f4972c7e00b2e2bb92e2a0602277c2a2b949b1e865"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "9f4fa6feb6bdc2c0c1da52f4972c7e00b2e2bb92e2a0602277c2a2b949b1e865"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/oauth-http-auth.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6b0f914aa34c7e5eec6252b87b03e5a54ceafd19c96581d5a190867de51f8bf3"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 4,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "6b0f914aa34c7e5eec6252b87b03e5a54ceafd19c96581d5a190867de51f8bf3"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/per-user-filesystem-isolation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0f71ec81c24b63d11ce6558989c736aec23e40c2578b97a3f020f4f183ae413c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "0f71ec81c24b63d11ce6558989c736aec23e40c2578b97a3f020f4f183ae413c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/session-backup-dangerzone-scope.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "868dff4a725f1923aa4906c237a4f765a632b20e4def7d3feead0bc3c0f72cab"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "868dff4a725f1923aa4906c237a4f765a632b20e4def7d3feead0bc3c0f72cab"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/session-event-dispatcher-scope.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c272a9bc878df693c833fc7f741e31d2f180217689c95072ea8508030f44abd7"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c272a9bc878df693c833fc7f741e31d2f180217689c95072ea8508030f44abd7"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/session-handler-scope.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c5a5b10493f7d55c3a8223a7d24b7fe74e0e1bef3333ce6eea528b07748835cc"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 2,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c5a5b10493f7d55c3a8223a7d24b7fe74e0e1bef3333ce6eea528b07748835cc"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/session-isolation.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d487de5ea76d531af67a9ad616d72bc8c697227d2e67f05a13f1878673cbcf9c"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 21,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "d487de5ea76d531af67a9ad616d72bc8c697227d2e67f05a13f1878673cbcf9c"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/session-ownership.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5c71bbe6b3636cb5ebf56d8b3cab91ecafd3eebc330629212377f19798a35b64"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 5,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "5c71bbe6b3636cb5ebf56d8b3cab91ecafd3eebc330629212377f19798a35b64"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/tls-bind.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f96f57f322bfc07286bec394e726a6a633601f0999eca970eaf24f0e1d1c7a16"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 7,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "f96f57f322bfc07286bec394e726a6a633601f0999eca970eaf24f0e1d1c7a16"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/transport/write-sandbox-enforcement.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "252e445621cbce00ea03f9343dccc9d4b41444f79bae25ea76960ae92172d8d0"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "252e445621cbce00ea03f9343dccc9d4b41444f79bae25ea76960ae92172d8d0"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/utils/InstallationDetector.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c214ea15143bb97194b40830385d8af288828eb38d727a174d700d321dd63f5d"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 10,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c214ea15143bb97194b40830385d8af288828eb38d727a174d700d321dd63f5d"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/utils/yaml-parser-selection.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cda75d3c4062f4c0fed787f5c1ae9bc37b9b10fb134c7ac3a18b29ac16cdf870"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 12,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "cda75d3c4062f4c0fed787f5c1ae9bc37b9b10fb134c7ac3a18b29ac16cdf870"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/web-standalone-mode.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c2ee1e126dad8bcfa92c08232cb9d1ffbb44b098073d2ebc5e4a3164470ea0c0"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 13,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "c2ee1e126dad8bcfa92c08232cb9d1ffbb44b098073d2ebc5e4a3164470ea0c0"
+      },
+      "verifiedBy": "full-integration-wave"
+    },
+    {
+      "file": "tests/integration/web/nvm-launcher.integration.test.ts",
+      "original": {
+        "status": "passed",
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "722d292ec52112a11a5e234713e0c0323d1dbcd00fbaae6ba065338231ac44b3"
+      },
+      "latestVerified": {
+        "status": "passed",
+        "passed": 15,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "caseIdentityDigestSHA256": "722d292ec52112a11a5e234713e0c0323d1dbcd00fbaae6ba065338231ac44b3"
+      },
+      "verifiedBy": "full-integration-wave"
+    }
+  ]
+}

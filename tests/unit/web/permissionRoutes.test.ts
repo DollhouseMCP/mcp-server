@@ -8,7 +8,7 @@ import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { createServer } from 'node:http';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
@@ -45,9 +45,23 @@ function createApp(handler: any, options?: { homeDir?: string }) {
 }
 
 describe('permissionRoutes', () => {
-  const runDir = join(homedir(), '.dollhouse', 'run');
-  const latestPortFile = join(runDir, 'permission-server.port');
+  let runDir: string;
+  let latestPortFile: string;
+  let previousRunDir: string | undefined;
   let tempHome: string;
+
+  beforeAll(async () => {
+    previousRunDir = process.env.DOLLHOUSE_RUN_DIR;
+    runDir = await mkdtemp(join(tmpdir(), 'permission-routes-run-'));
+    latestPortFile = join(runDir, 'permission-server.port');
+    process.env.DOLLHOUSE_RUN_DIR = runDir;
+  });
+
+  afterAll(async () => {
+    if (previousRunDir === undefined) delete process.env.DOLLHOUSE_RUN_DIR;
+    else process.env.DOLLHOUSE_RUN_DIR = previousRunDir;
+    await rm(runDir, { recursive: true, force: true });
+  });
 
   beforeEach(async () => {
     tempHome = await mkdtemp(join(tmpdir(), 'permission-routes-home-'));

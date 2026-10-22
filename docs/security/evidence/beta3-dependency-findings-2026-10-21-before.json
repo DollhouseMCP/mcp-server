@@ -1,0 +1,5852 @@
+{
+  "root": {
+    "base": "d0278ad58d962a3386be34379475c40600c141a1",
+    "command": [
+      "npm",
+      "audit",
+      "--json"
+    ],
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 7,
+      "high": 38,
+      "critical": 0,
+      "total": 45
+    },
+    "uniqueDirectAdvisories": {
+      "https://github.com/advisories/GHSA-22jm-h49p-29qw": {
+        "source": 1242628,
+        "name": "@modelcontextprotocol/sdk",
+        "dependency": "@modelcontextprotocol/sdk",
+        "title": "MCP TypeScript SDK: Experimental tasks were not tied to the session that created them",
+        "url": "https://github.com/advisories/GHSA-22jm-h49p-29qw",
+        "severity": "high",
+        "cwe": [
+          "CWE-639",
+          "CWE-862"
+        ],
+        "cvss": {
+          "score": 8.6,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L"
+        },
+        "range": ">=1.24.0 <1.32.0"
+      },
+      "https://github.com/advisories/GHSA-6prh-2h8m-c8cw": {
+        "source": 1242630,
+        "name": "@modelcontextprotocol/sdk",
+        "dependency": "@modelcontextprotocol/sdk",
+        "title": "MCP TypeScript client SDK: HTTP client transports and OAuth requests followed cross-origin redirects and re-sent custom headers and request bodies",
+        "url": "https://github.com/advisories/GHSA-6prh-2h8m-c8cw",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-200"
+        ],
+        "cvss": {
+          "score": 6.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:N"
+        },
+        "range": "<1.32.0"
+      },
+      "https://github.com/advisories/GHSA-46jr-4wx8-v453": {
+        "source": 1242649,
+        "name": "@modelcontextprotocol/sdk",
+        "dependency": "@modelcontextprotocol/sdk",
+        "title": "MCP TypeScript SDK: One HTTP request within the default size limit could exhaust server memory during validation",
+        "url": "https://github.com/advisories/GHSA-46jr-4wx8-v453",
+        "severity": "high",
+        "cwe": [
+          "CWE-770"
+        ],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "range": ">=1.3.0 <1.32.0"
+      },
+      "https://github.com/advisories/GHSA-rvq5-wwqv-78pq": {
+        "source": 1242667,
+        "name": "@modelcontextprotocol/sdk",
+        "dependency": "@modelcontextprotocol/sdk",
+        "title": "MCP TypeScript SDK: Server bearer authentication accepted tokens issued for another service",
+        "url": "https://github.com/advisories/GHSA-rvq5-wwqv-78pq",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-863"
+        ],
+        "cvss": {
+          "score": 6.8,
+          "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+        },
+        "range": ">=1.6.0 <1.32.0"
+      },
+      "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm": {
+        "source": 1240992,
+        "name": "braces",
+        "dependency": "braces",
+        "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+        "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "severity": "high",
+        "cwe": [
+          "CWE-674"
+        ],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "range": "<=3.0.3"
+      },
+      "https://github.com/advisories/GHSA-5r4p-p66f-jhc7": {
+        "source": 1242595,
+        "name": "hono",
+        "dependency": "hono",
+        "title": "Hono: `serveStatic` decodes the request path a second time, leading to bypass of middleware on static paths",
+        "url": "https://github.com/advisories/GHSA-5r4p-p66f-jhc7",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-174"
+        ],
+        "cvss": {
+          "score": 5.3,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+        },
+        "range": ">=4.12.4 <4.13.11"
+      },
+      "https://github.com/advisories/GHSA-hp3w-g68c-fv3c": {
+        "source": 1241202,
+        "name": "sprintf-js",
+        "dependency": "sprintf-js",
+        "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+        "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-1284"
+        ],
+        "cvss": {
+          "score": 5.3,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "range": "<=1.1.3"
+      }
+    },
+    "rows": [
+      {
+        "package": "@istanbuljs/load-nyc-config",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@istanbuljs/load-nyc-config",
+            "version": "1.1.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0"
+              ],
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0",
+                "@jest/transform@30.3.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/console",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "25.4.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/console",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/console@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/console@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/console@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/console",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/console@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/core",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/core",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/core",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/environment",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/environment",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runner@30.2.0",
+                "@jest/environment@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runner@30.2.0",
+                "@jest/environment@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runner@30.2.0",
+                "@jest/environment@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/environment",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runner@29.7.0",
+                "@jest/environment@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/expect",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/expect",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-circus@30.2.0",
+                "@jest/expect@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-circus@30.2.0",
+                "@jest/expect@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-circus@30.2.0",
+                "@jest/expect@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/@jest/globals/node_modules/@jest/expect",
+            "version": "30.3.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/expect",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-circus@29.7.0",
+                "@jest/expect@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/fake-timers",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/fake-timers",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0",
+                "@jest/fake-timers@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0",
+                "@jest/fake-timers@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0",
+                "@jest/fake-timers@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/fake-timers",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0",
+                "@jest/fake-timers@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/globals",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/globals",
+            "version": "30.3.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@jest/globals@30.3.0"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/jest-runtime/node_modules/@jest/globals",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0",
+                "@jest/globals@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0",
+                "@jest/globals@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0",
+                "@jest/globals@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/globals",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0",
+                "@jest/globals@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/reporters",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/reporters",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/reporters@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/reporters@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/reporters@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/reporters",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/reporters@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/test-result",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "25.4.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/test-result",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/test-result@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/test-result@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/test-result@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/test-result",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/test-result@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/test-sequencer",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/test-sequencer",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "@jest/test-sequencer@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "@jest/test-sequencer@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "@jest/test-sequencer@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/test-sequencer",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "@jest/test-sequencer@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/transform",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/globals/node_modules/@jest/transform",
+            "version": "30.3.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0",
+                "@jest/transform@30.3.0"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/@jest/transform",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/transform@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@jest/transform",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@modelcontextprotocol/sdk",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "<=1.31.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1242628,
+            "name": "@modelcontextprotocol/sdk",
+            "dependency": "@modelcontextprotocol/sdk",
+            "title": "MCP TypeScript SDK: Experimental tasks were not tied to the session that created them",
+            "url": "https://github.com/advisories/GHSA-22jm-h49p-29qw",
+            "severity": "high",
+            "cwe": [
+              "CWE-639",
+              "CWE-862"
+            ],
+            "cvss": {
+              "score": 8.6,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L"
+            },
+            "range": ">=1.24.0 <1.32.0"
+          },
+          {
+            "source": 1242630,
+            "name": "@modelcontextprotocol/sdk",
+            "dependency": "@modelcontextprotocol/sdk",
+            "title": "MCP TypeScript client SDK: HTTP client transports and OAuth requests followed cross-origin redirects and re-sent custom headers and request bodies",
+            "url": "https://github.com/advisories/GHSA-6prh-2h8m-c8cw",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-200"
+            ],
+            "cvss": {
+              "score": 6.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:N"
+            },
+            "range": "<1.32.0"
+          },
+          {
+            "source": 1242649,
+            "name": "@modelcontextprotocol/sdk",
+            "dependency": "@modelcontextprotocol/sdk",
+            "title": "MCP TypeScript SDK: One HTTP request within the default size limit could exhaust server memory during validation",
+            "url": "https://github.com/advisories/GHSA-46jr-4wx8-v453",
+            "severity": "high",
+            "cwe": [
+              "CWE-770"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": ">=1.3.0 <1.32.0"
+          },
+          {
+            "source": 1242667,
+            "name": "@modelcontextprotocol/sdk",
+            "dependency": "@modelcontextprotocol/sdk",
+            "title": "MCP TypeScript SDK: Server bearer authentication accepted tokens issued for another service",
+            "url": "https://github.com/advisories/GHSA-rvq5-wwqv-78pq",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-863"
+            ],
+            "cvss": {
+              "score": 6.8,
+              "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+            },
+            "range": ">=1.6.0 <1.32.0"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@modelcontextprotocol/sdk",
+          "version": "1.32.1",
+          "isSemVerMajor": false
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@modelcontextprotocol/sdk",
+            "version": "1.31.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@modelcontextprotocol/sdk@1.31.0"
+              ],
+              [
+                "@modelcontextprotocol/inspector@0.21.1",
+                "@modelcontextprotocol/sdk@1.31.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@types/jest",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "28.1.7 - 29.5.14",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@types/jest",
+          "version": "30.0.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "packages/safety/node_modules/@types/jest",
+            "version": "29.5.14",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@types/jest@29.5.14"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/eslint-plugin",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "4.0.1-alpha.0 - 8.47.1-alpha.9",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/eslint-plugin",
+            "version": "8.46.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@typescript-eslint/eslint-plugin",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/eslint-plugin@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/parser",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "packages/safety/node_modules/@typescript-eslint/parser",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/parser@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/type-utils",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "5.9.2-alpha.0 - 8.47.1-alpha.9",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/type-utils",
+            "version": "8.46.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3",
+                "@typescript-eslint/type-utils@8.46.3"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@typescript-eslint/type-utils",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/typescript-estree",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "3.10.2-alpha.0 - 8.47.1-alpha.9",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/typescript-estree",
+            "version": "8.46.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3",
+                "@typescript-eslint/type-utils@8.46.3",
+                "@typescript-eslint/typescript-estree@8.46.3"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@typescript-eslint/typescript-estree",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/utils",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=8.47.1-alpha.9",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/utils",
+            "version": "8.46.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3",
+                "@typescript-eslint/utils@8.46.3"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/@typescript-eslint/utils",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/utils@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "argparse",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "1.0.0 - 1.0.10",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@istanbuljs/load-nyc-config/node_modules/argparse",
+            "version": "1.0.10",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ],
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0",
+                "@jest/transform@30.3.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/gray-matter/node_modules/argparse",
+            "version": "1.0.10",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "gray-matter@4.0.3",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "babel-jest",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=24.2.0-alpha.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/babel-jest",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "babel-jest@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "babel-jest@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "babel-jest@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/babel-jest",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "babel-jest@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "babel-plugin-istanbul",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": ">=6.0.0-beta.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/babel-plugin-istanbul",
+            "version": "7.0.1",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1"
+              ],
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0",
+                "@jest/transform@30.3.0",
+                "babel-plugin-istanbul@7.0.1"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/babel-plugin-istanbul",
+            "version": "6.1.1",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "braces",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/braces",
+            "version": "3.0.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "@types/jest@30.0.0",
+                "expect@30.2.0",
+                "jest-message-util@30.2.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3",
+                "@typescript-eslint/type-utils@8.46.3",
+                "@typescript-eslint/typescript-estree@8.46.3",
+                "fast-glob@3.3.3",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "ts-jest-resolver@2.0.1",
+                "jest-resolve@29.7.0",
+                "jest-haste-map@29.7.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "create-jest",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "29.7.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "packages/safety/node_modules/create-jest",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "jest-cli@29.7.0",
+                "create-jest@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "expect",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "21.0.0-beta.1 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/expect",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-snapshot@30.2.0",
+                "expect@30.2.0"
+              ],
+              [
+                "@types/jest@30.0.0",
+                "expect@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-snapshot@30.2.0",
+                "expect@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-snapshot@30.2.0",
+                "expect@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/expect",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@types/jest@29.5.14",
+                "expect@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "fast-glob",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/fast-glob",
+            "version": "3.3.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3"
+              ],
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3",
+                "@typescript-eslint/type-utils@8.46.3",
+                "@typescript-eslint/typescript-estree@8.46.3",
+                "fast-glob@3.3.3"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "globby",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=8.0.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "packages/safety/node_modules/globby",
+            "version": "11.1.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "gray-matter",
+        "severity": "moderate",
+        "direct": true,
+        "affectedRange": ">=2.0.2",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "gray-matter",
+          "version": "2.0.1",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/gray-matter",
+            "version": "4.0.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "gray-matter@4.0.3"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "hono",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "4.12.4 - 4.13.10",
+        "underlyingAdvisories": [
+          {
+            "source": 1242595,
+            "name": "hono",
+            "dependency": "hono",
+            "title": "Hono: `serveStatic` decodes the request path a second time, leading to bypass of middleware on static paths",
+            "url": "https://github.com/advisories/GHSA-5r4p-p66f-jhc7",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-174"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+            },
+            "range": ">=4.12.4 <4.13.11"
+          }
+        ],
+        "npmSuggestedRemediation": true,
+        "installedNodes": [
+          {
+            "path": "node_modules/hono",
+            "version": "4.13.7",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@modelcontextprotocol/sdk@1.31.0",
+                "hono@4.13.7"
+              ],
+              [
+                "@modelcontextprotocol/inspector@0.21.1",
+                "@modelcontextprotocol/sdk@1.31.0",
+                "hono@4.13.7"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "23.5.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0"
+              ],
+              [
+                "jest@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-circus",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "20.1.0-alpha.1 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-circus",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-circus@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-circus@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-circus@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-circus",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-circus@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-cli",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "23.5.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-cli",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "jest-cli@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "jest-cli@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "jest-cli@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-cli",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "jest-cli@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-config",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 18.5.0-alpha.7da3df39 || 23.5.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-config",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-config",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-environment-node",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "24.2.0-alpha.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-environment-node",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-environment-node@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-environment-node@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-config@30.2.0",
+                "jest-environment-node@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-environment-node",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-environment-node@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-haste-map",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-haste-map",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "jest-haste-map@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-haste-map@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "jest-haste-map@30.2.0"
+              ],
+              [
+                "ts-jest-resolver@2.0.1",
+                "jest-resolve@29.7.0",
+                "jest-pnp-resolver@1.2.3",
+                "jest-resolve@30.2.0",
+                "jest-haste-map@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/ts-jest-resolver/node_modules/jest-haste-map",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "ts-jest-resolver@2.0.1",
+                "jest-resolve@29.7.0",
+                "jest-haste-map@29.7.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-haste-map",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-haste-map@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-message-util",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.5.0-alpha.7da3df39 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-message-util",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-message-util@30.2.0"
+              ],
+              [
+                "@types/jest@30.0.0",
+                "expect@30.2.0",
+                "jest-message-util@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-message-util@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-message-util@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-message-util",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "@types/jest@29.5.14",
+                "expect@29.7.0",
+                "jest-message-util@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-resolve",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 19.0.2 || 24.2.0-alpha.0 - 24.5.0 || 27.1.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-resolve",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-resolve@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-resolve@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-resolve@30.2.0"
+              ],
+              [
+                "ts-jest-resolver@2.0.1",
+                "jest-resolve@29.7.0",
+                "jest-pnp-resolver@1.2.3",
+                "jest-resolve@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/ts-jest-resolver/node_modules/jest-resolve",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "ts-jest-resolver@2.0.1",
+                "jest-resolve@29.7.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-resolve",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-resolve@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-resolve-dependencies",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "23.3.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": true,
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-resolve-dependencies",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-resolve-dependencies@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-resolve-dependencies@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-resolve-dependencies@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-resolve-dependencies",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-resolve-dependencies@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-runner",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "21.0.0-alpha.1 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-runner",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runner@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runner@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runner@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-runner",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runner@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-runtime",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-runtime",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-runtime@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-runtime",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-snapshot",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=23.3.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/globals/node_modules/jest-snapshot",
+            "version": "30.3.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/jest-snapshot",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-snapshot@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-snapshot@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-snapshot@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-snapshot",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-snapshot@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-watcher",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "25.4.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-watcher",
+            "version": "30.2.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-watcher@30.2.0"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-watcher@30.2.0"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "jest-watcher@30.2.0"
+              ]
+            ]
+          },
+          {
+            "path": "packages/safety/node_modules/jest-watcher",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-watcher@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "js-yaml",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "3.2.7 - 3.15.2",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/@istanbuljs/load-nyc-config/node_modules/js-yaml",
+            "version": "3.15.2",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2"
+              ],
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0",
+                "@jest/transform@30.3.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2"
+              ]
+            ]
+          },
+          {
+            "path": "node_modules/gray-matter/node_modules/js-yaml",
+            "version": "3.15.2",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "gray-matter@4.0.3",
+                "js-yaml@3.15.2"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "micromatch",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=0.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/micromatch",
+            "version": "4.0.8",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "micromatch@4.0.8"
+              ],
+              [
+                "@types/jest@30.0.0",
+                "expect@30.2.0",
+                "jest-message-util@30.2.0",
+                "micromatch@4.0.8"
+              ],
+              [
+                "@typescript-eslint/eslint-plugin@8.46.3",
+                "@typescript-eslint/type-utils@8.46.3",
+                "@typescript-eslint/typescript-estree@8.46.3",
+                "fast-glob@3.3.3",
+                "micromatch@4.0.8"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "micromatch@4.0.8"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "micromatch@4.0.8"
+              ],
+              [
+                "ts-jest-resolver@2.0.1",
+                "jest-resolve@29.7.0",
+                "jest-haste-map@29.7.0",
+                "micromatch@4.0.8"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "sprintf-js",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": false,
+        "installedNodes": [
+          {
+            "path": "node_modules/sprintf-js",
+            "version": "1.0.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@dollhousemcp/safety@1.0.5",
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ],
+              [
+                "gray-matter@4.0.3",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ],
+              [
+                "@jest/globals@30.3.0",
+                "@jest/expect@30.3.0",
+                "jest-snapshot@30.3.0",
+                "@jest/transform@30.3.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ],
+              [
+                "jest@30.2.0",
+                "@jest/core@30.2.0",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ],
+              [
+                "ts-jest@29.4.9",
+                "@jest/transform@30.2.0",
+                "babel-plugin-istanbul@7.0.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "ts-jest-resolver",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": ">=2.0.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "ts-jest-resolver",
+          "version": "1.1.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/ts-jest-resolver",
+            "version": "2.0.1",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "ts-jest-resolver@2.0.1"
+              ]
+            ]
+          }
+        ]
+      }
+    ],
+    "pathSemantics": "Complete audit node/version list; each direct dependency has its shortest resolved representative path; peer edges included. This is not every possible cyclic path."
+  },
+  "safety": {
+    "base": "d0278ad58d962a3386be34379475c40600c141a1",
+    "command": [
+      "npm",
+      "audit",
+      "--json",
+      "--workspaces=false"
+    ],
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 5,
+      "high": 36,
+      "critical": 0,
+      "total": 41
+    },
+    "uniqueDirectAdvisories": {
+      "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm": {
+        "source": 1240992,
+        "name": "braces",
+        "dependency": "braces",
+        "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+        "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "severity": "high",
+        "cwe": [
+          "CWE-674"
+        ],
+        "cvss": {
+          "score": 7.5,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+        },
+        "range": "<=3.0.3"
+      },
+      "https://github.com/advisories/GHSA-hp3w-g68c-fv3c": {
+        "source": 1241202,
+        "name": "sprintf-js",
+        "dependency": "sprintf-js",
+        "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+        "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+        "severity": "moderate",
+        "cwe": [
+          "CWE-1284"
+        ],
+        "cvss": {
+          "score": 5.3,
+          "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+        },
+        "range": "<=1.1.3"
+      }
+    },
+    "rows": [
+      {
+        "package": "@istanbuljs/load-nyc-config",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@istanbuljs/load-nyc-config",
+            "version": "1.1.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/console",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "25.4.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/console",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/console@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/console@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/core",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/core",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/environment",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/environment",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runner@29.7.0",
+                "@jest/environment@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runner@29.7.0",
+                "@jest/environment@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/expect",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/expect",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-circus@29.7.0",
+                "@jest/expect@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-circus@29.7.0",
+                "@jest/expect@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/fake-timers",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/fake-timers",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0",
+                "@jest/fake-timers@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0",
+                "@jest/fake-timers@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/globals",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/globals",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0",
+                "@jest/globals@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0",
+                "@jest/globals@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/reporters",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": true,
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/reporters",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/reporters@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/reporters@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/test-result",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "25.4.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/test-result",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/test-result@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/test-result@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/test-sequencer",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/test-sequencer",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "@jest/test-sequencer@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "@jest/test-sequencer@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@jest/transform",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@jest/transform",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@types/jest",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "28.1.7 - 29.5.14",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@types/jest",
+          "version": "30.0.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@types/jest",
+            "version": "29.5.14",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@types/jest@29.5.14"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/eslint-plugin",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "4.0.1-alpha.0 - 8.2.1-alpha.25",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/eslint-plugin",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/parser",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/parser",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/parser@7.18.0"
+              ],
+              [
+                "@typescript-eslint/parser@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/type-utils",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "5.9.2-alpha.0 - 8.2.1-alpha.25",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/type-utils",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/typescript-estree",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "3.10.2-alpha.0 - 8.2.1-alpha.25",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/typescript-estree",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0"
+              ],
+              [
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "@typescript-eslint/utils",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "<=8.2.1-alpha.25",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/eslint-plugin",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@typescript-eslint/utils",
+            "version": "7.18.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/utils@7.18.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "argparse",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "1.0.0 - 1.0.10",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@istanbuljs/load-nyc-config/node_modules/argparse",
+            "version": "1.0.10",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "babel-jest",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=24.2.0-alpha.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/babel-jest",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "babel-jest@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "babel-jest@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "babel-plugin-istanbul",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": ">=6.0.0-beta.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/babel-plugin-istanbul",
+            "version": "6.1.1",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "braces",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/braces",
+            "version": "3.0.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@types/jest@29.5.14",
+                "expect@29.7.0",
+                "jest-message-util@29.7.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "micromatch@4.0.8",
+                "braces@3.0.3"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "create-jest",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "29.7.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/create-jest",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "jest-cli@29.7.0",
+                "create-jest@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "jest-cli@29.7.0",
+                "create-jest@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "expect",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "21.0.0-beta.1 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/expect",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@types/jest@29.5.14",
+                "expect@29.7.0"
+              ],
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-snapshot@29.7.0",
+                "expect@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-snapshot@29.7.0",
+                "expect@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "fast-glob",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/fast-glob",
+            "version": "3.3.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3"
+              ],
+              [
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "globby",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=8.0.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "@typescript-eslint/parser",
+          "version": "8.72.0",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/globby",
+            "version": "11.1.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0"
+              ],
+              [
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest",
+        "severity": "high",
+        "direct": true,
+        "affectedRange": "24.2.0-alpha.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-circus",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "20.1.0-alpha.1 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-circus",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-circus@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-circus@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-cli",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "23.5.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-cli",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "jest-cli@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "jest-cli@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-config",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 18.5.0-alpha.7da3df39 || 23.5.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-config",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-environment-node",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "24.2.0-alpha.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-environment-node",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-environment-node@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-config@29.7.0",
+                "jest-environment-node@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-haste-map",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-haste-map",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-haste-map@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "jest-haste-map@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-message-util",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.5.0-alpha.7da3df39 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-message-util",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@types/jest@29.5.14",
+                "expect@29.7.0",
+                "jest-message-util@29.7.0"
+              ],
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-message-util@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-message-util@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-resolve",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 19.0.2 || 24.2.0-alpha.0 - 24.5.0 || 27.1.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-resolve",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-resolve@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-resolve@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-resolve-dependencies",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "27.0.0-next.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": true,
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-resolve-dependencies",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-resolve-dependencies@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-resolve-dependencies@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-runner",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "21.0.0-alpha.1 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-runner",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runner@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runner@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-runtime",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "18.1.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          },
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-runtime",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-runtime@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-snapshot",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "23.3.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          },
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-snapshot",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-snapshot@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-snapshot@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "jest-watcher",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": "25.4.0 - 30.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/jest-watcher",
+            "version": "29.7.0",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-watcher@29.7.0"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "jest-watcher@29.7.0"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "js-yaml",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "3.2.7 - 3.15.2",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/@istanbuljs/load-nyc-config/node_modules/js-yaml",
+            "version": "3.15.2",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "micromatch",
+        "severity": "high",
+        "direct": false,
+        "affectedRange": ">=0.2.0",
+        "underlyingAdvisories": [
+          {
+            "source": 1240992,
+            "name": "braces",
+            "dependency": "braces",
+            "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+            "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            "severity": "high",
+            "cwe": [
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=3.0.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/micromatch",
+            "version": "4.0.8",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "@types/jest@29.5.14",
+                "expect@29.7.0",
+                "jest-message-util@29.7.0",
+                "micromatch@4.0.8"
+              ],
+              [
+                "@typescript-eslint/eslint-plugin@7.18.0",
+                "@typescript-eslint/type-utils@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3",
+                "micromatch@4.0.8"
+              ],
+              [
+                "@typescript-eslint/parser@7.18.0",
+                "@typescript-eslint/typescript-estree@7.18.0",
+                "globby@11.1.0",
+                "fast-glob@3.3.3",
+                "micromatch@4.0.8"
+              ],
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "micromatch@4.0.8"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "micromatch@4.0.8"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "package": "sprintf-js",
+        "severity": "moderate",
+        "direct": false,
+        "affectedRange": "*",
+        "underlyingAdvisories": [
+          {
+            "source": 1241202,
+            "name": "sprintf-js",
+            "dependency": "sprintf-js",
+            "title": "sprintf-js vulnerable to denial of service through unbounded precision specifiers",
+            "url": "https://github.com/advisories/GHSA-hp3w-g68c-fv3c",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-1284"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=1.1.3"
+          }
+        ],
+        "npmSuggestedRemediation": {
+          "name": "jest",
+          "version": "30.5.2",
+          "isSemVerMajor": true
+        },
+        "installedNodes": [
+          {
+            "path": "node_modules/sprintf-js",
+            "version": "1.0.3",
+            "representativeShortestChainsPerDirectDependency": [
+              [
+                "jest@29.7.0",
+                "@jest/core@29.7.0",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ],
+              [
+                "ts-jest@29.4.12",
+                "@jest/transform@29.7.0",
+                "babel-plugin-istanbul@6.1.1",
+                "@istanbuljs/load-nyc-config@1.1.0",
+                "js-yaml@3.15.2",
+                "argparse@1.0.10",
+                "sprintf-js@1.0.3"
+              ]
+            ]
+          }
+        ]
+      }
+    ],
+    "pathSemantics": "Complete audit node/version list; each direct dependency has its shortest resolved representative path; peer edges included. This is not every possible cyclic path."
+  },
+  "consumerInstallMcpResolution": {
+    "command": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --save-exact install-mcp@1.10.2; npm audit --json",
+    "scope": "isolated consumer dependency resolution only; not full application installed/packaged regression",
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 2,
+      "critical": 1,
+      "total": 3
+    },
+    "nodes": {
+      "node_modules/giget": {
+        "version": "1.2.5",
+        "dependencies": {
+          "citty": "^0.1.6",
+          "consola": "^3.4.0",
+          "defu": "^6.1.4",
+          "node-fetch-native": "^1.6.6",
+          "nypm": "^0.5.4",
+          "pathe": "^2.0.3",
+          "tar": "^6.2.1"
+        }
+      },
+      "node_modules/install-mcp": {
+        "version": "1.10.2",
+        "dependencies": {
+          "@iarna/toml": "^2.2.5",
+          "consola": "^3.4.2",
+          "dotenv": "^16.6.1",
+          "giget": "^1.2.5",
+          "js-yaml": "^4.1.0",
+          "jsonc-parser": "^3.3.1",
+          "picocolors": "^1.1.1",
+          "yargs": "^17.7.2"
+        }
+      },
+      "node_modules/tar": {
+        "version": "6.2.1",
+        "dependencies": {
+          "chownr": "^2.0.0",
+          "fs-minipass": "^2.0.0",
+          "minipass": "^5.0.0",
+          "minizlib": "^2.1.1",
+          "mkdirp": "^1.0.3",
+          "yallist": "^4.0.0"
+        }
+      }
+    },
+    "vulnerabilities": {
+      "giget": {
+        "name": "giget",
+        "severity": "high",
+        "isDirect": false,
+        "via": [
+          "tar"
+        ],
+        "effects": [
+          "install-mcp"
+        ],
+        "range": "0.0.1 - 1.2.5",
+        "nodes": [
+          "node_modules/giget"
+        ],
+        "fixAvailable": false
+      },
+      "install-mcp": {
+        "name": "install-mcp",
+        "severity": "high",
+        "isDirect": true,
+        "via": [
+          "giget"
+        ],
+        "effects": [],
+        "range": "*",
+        "nodes": [
+          "node_modules/install-mcp"
+        ],
+        "fixAvailable": false
+      },
+      "tar": {
+        "name": "tar",
+        "severity": "critical",
+        "isDirect": false,
+        "via": [
+          {
+            "source": 1112659,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink Path Traversal",
+            "url": "https://github.com/advisories/GHSA-34x7-hfp2-rc4v",
+            "severity": "high",
+            "cwe": [
+              "CWE-22",
+              "CWE-59"
+            ],
+            "cvss": {
+              "score": 8.2,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N"
+            },
+            "range": "<7.5.7"
+          },
+          {
+            "source": 1113300,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar is Vulnerable to Arbitrary File Overwrite and Symlink Poisoning via Insufficient Path Sanitization",
+            "url": "https://github.com/advisories/GHSA-8qq5-rm4j-mr97",
+            "severity": "high",
+            "cwe": [
+              "CWE-22"
+            ],
+            "cvss": {
+              "score": 0,
+              "vectorString": null
+            },
+            "range": "<=7.5.2"
+          },
+          {
+            "source": 1113375,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "Arbitrary File Read/Write via Hardlink Target Escape Through Symlink Chain in node-tar Extraction",
+            "url": "https://github.com/advisories/GHSA-83g3-92jg-28cx",
+            "severity": "high",
+            "cwe": [
+              "CWE-22"
+            ],
+            "cvss": {
+              "score": 7.1,
+              "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+            },
+            "range": "<7.5.8"
+          },
+          {
+            "source": 1114200,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "tar has Hardlink Path Traversal via Drive-Relative Linkpath",
+            "url": "https://github.com/advisories/GHSA-qffp-2rhf-9h96",
+            "severity": "high",
+            "cwe": [
+              "CWE-22",
+              "CWE-59"
+            ],
+            "cvss": {
+              "score": 0,
+              "vectorString": null
+            },
+            "range": "<=7.5.9"
+          },
+          {
+            "source": 1114302,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar Symlink Path Traversal via Drive-Relative Linkpath",
+            "url": "https://github.com/advisories/GHSA-9ppj-qmqm-q256",
+            "severity": "high",
+            "cwe": [
+              "CWE-22"
+            ],
+            "cvss": {
+              "score": 0,
+              "vectorString": null
+            },
+            "range": "<=7.5.10"
+          },
+          {
+            "source": 1114680,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "Race Condition in node-tar Path Reservations via Unicode Ligature Collisions on macOS APFS",
+            "url": "https://github.com/advisories/GHSA-r6q2-hw4h-h46w",
+            "severity": "high",
+            "cwe": [
+              "CWE-176",
+              "CWE-367"
+            ],
+            "cvss": {
+              "score": 8.8,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:H/A:L"
+            },
+            "range": "<=7.5.3"
+          },
+          {
+            "source": 1120782,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar applies PAX size override to intermediary GNU long-name/long-link headers, causing tar parser interpretation differential (file smuggling)",
+            "url": "https://github.com/advisories/GHSA-vmf3-w455-68vh",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-436"
+            ],
+            "cvss": {
+              "score": 0,
+              "vectorString": null
+            },
+            "range": "<=7.5.15"
+          },
+          {
+            "source": 1123939,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar: Process crash via PAX numeric path type confusion",
+            "url": "https://github.com/advisories/GHSA-w8wr-v893-vjvp",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-704"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=7.5.17"
+          },
+          {
+            "source": 1123940,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar: Decompression/parse DoS via unlimited input",
+            "url": "https://github.com/advisories/GHSA-23hp-3jrh-7fpw",
+            "severity": "critical",
+            "cwe": [
+              "CWE-770"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=7.5.18"
+          },
+          {
+            "source": 1123941,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar: Negative tar entry size causes infinite loop in archive replace",
+            "url": "https://github.com/advisories/GHSA-8x88-c5mf-7j5w",
+            "severity": "high",
+            "cwe": [
+              "CWE-835"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=7.5.17"
+          },
+          {
+            "source": 1123942,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records",
+            "url": "https://github.com/advisories/GHSA-gvwx-54wh-qm9j",
+            "severity": "moderate",
+            "cwe": [
+              "CWE-248"
+            ],
+            "cvss": {
+              "score": 5.3,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+            },
+            "range": "<=7.5.16"
+          },
+          {
+            "source": 1145647,
+            "name": "tar",
+            "dependency": "tar",
+            "title": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection",
+            "url": "https://github.com/advisories/GHSA-r292-9mhp-454m",
+            "severity": "high",
+            "cwe": [
+              "CWE-400",
+              "CWE-674"
+            ],
+            "cvss": {
+              "score": 7.5,
+              "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+            },
+            "range": "<=7.5.20"
+          }
+        ],
+        "effects": [
+          "giget"
+        ],
+        "range": "<=7.5.20",
+        "nodes": [
+          "node_modules/tar"
+        ],
+        "fixAvailable": false
+      }
+    },
+    "consumerRootOverrides": false,
+    "reviewedRepositoryTarPin": "7.5.22; root override does not propagate to consumers"
+  }
+}

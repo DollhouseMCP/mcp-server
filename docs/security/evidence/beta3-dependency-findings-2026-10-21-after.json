@@ -1,0 +1,419 @@
+{
+  "schemaVersion": 2,
+  "date": "2026-10-22",
+  "status": "AUDIT_CLEAN_FINAL_UNIT_PASS_COMPLETE_INTEGRATION_FILE_COVERAGE_DRAFT",
+  "sourceProof": {
+    "currentSourceHead": "2fcffb3ca93bf87795a72b4a1c16b882c95d1c61",
+    "sourceFilesCompared": 2583,
+    "allNonGeneratedSourceAndValidationCopyBytesIdentical": true,
+    "generatedBuildMetadataDifferences": [
+      {
+        "file": "src/generated/version.ts",
+        "onlyDifferingField": "BUILD_TIMESTAMP",
+        "mainSHA256": "5b7401bc2bb74677cbe6b38a73b924a3d261c7d91bc37650990136ae583449e6",
+        "builtSHA256": "5d377c0178432278bc31506570875926a3254d48f1b7a7e847b20f5d1b9c118e"
+      }
+    ],
+    "onlyMainChangesAfterInitialValidationFreeze": [
+      "tests/docker/permission-hooks/Dockerfile",
+      "tests/unit/cli/cliAuthStorage.test.ts"
+    ],
+    "productionLogicAndDependencyInputsUnchangedSinceCiAuditBuildSignatures": true,
+    "inputHashes": {
+      "package.json": "0e1669ef06826137c14b6bab57ba3241bf481a3e7cb7495d32507866cb0d5557",
+      "package-lock.json": "cc268f6a2c365a3fbd742a85ba1bd16ba110776199ee8b8c9487fd5e891c530c",
+      "packages/safety/package.json": "e0dbac6d5de40ef7156e46cc9d3e3b306db1c6284b8d06d897e9641c69c89828",
+      "packages/safety/package-lock.json": "73c2c4aae0ebd9a5c405bf8e0b715a29eb328ace1c483d3bb54d8c4ad5f50c5c"
+    }
+  },
+  "audits": {
+    "root": {
+      "command": "npm audit --json",
+      "exit": 0,
+      "before": {
+        "high": 38,
+        "moderate": 7,
+        "totalAffectedPackageEntries": 45
+      },
+      "current": {
+        "auditReportVersion": 2,
+        "vulnerabilities": {},
+        "metadata": {
+          "vulnerabilities": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "dependencies": {
+            "prod": 234,
+            "dev": 746,
+            "optional": 107,
+            "peer": 0,
+            "peerOptional": 0,
+            "total": 980
+          }
+        }
+      }
+    },
+    "standaloneSafety": {
+      "command": "npm audit --json --workspaces=false",
+      "exit": 0,
+      "before": {
+        "high": 36,
+        "moderate": 5,
+        "totalAffectedPackageEntries": 41
+      },
+      "current": {
+        "auditReportVersion": 2,
+        "vulnerabilities": {},
+        "metadata": {
+          "vulnerabilities": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "dependencies": {
+            "prod": 1,
+            "dev": 542,
+            "optional": 31,
+            "peer": 0,
+            "peerOptional": 0,
+            "total": 542
+          }
+        }
+      }
+    },
+    "localArtifactConsumer": {
+      "command": "npm audit --json",
+      "exit": 0,
+      "current": {
+        "auditReportVersion": 2,
+        "vulnerabilities": {},
+        "metadata": {
+          "vulnerabilities": {
+            "info": 0,
+            "low": 0,
+            "moderate": 0,
+            "high": 0,
+            "critical": 0,
+            "total": 0
+          },
+          "dependencies": {
+            "prod": 234,
+            "dev": 0,
+            "optional": 1,
+            "peer": 0,
+            "peerOptional": 0,
+            "total": 234
+          }
+        }
+      },
+      "interpretation": "Override-free exact local artifact closure; not fresh registry resolution guarantee"
+    },
+    "rejectedRawConsumerCounterexample": {
+      "ipAddress": "10.1.0",
+      "expressRateLimit": "8.3.1",
+      "exit": 1,
+      "counts": {
+        "info": 0,
+        "low": 0,
+        "moderate": 1,
+        "high": 1,
+        "critical": 0,
+        "total": 2
+      },
+      "advisories": [
+        "https://github.com/advisories/GHSA-v2v4-37r5-5v8g",
+        "https://github.com/advisories/GHSA-mwp4-54f8-5fhr",
+        "https://github.com/advisories/GHSA-rpw4-54j3-4h4q",
+        "https://github.com/advisories/GHSA-j6r3-76f7-8jcv",
+        "https://github.com/advisories/GHSA-h3mg-xc3c-68pw"
+      ]
+    }
+  },
+  "lockReconciliation": {
+    "directNpmCommand": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --save-dev --save-exact --prefer-dedupe --workspaces --include-workspace-root --before=2026-09-30T00:00:00Z jest@30.3.0 @typescript-eslint/parser@8.48.1 @typescript-eslint/eslint-plugin@8.48.1",
+    "directNpmOutcome": "AUTOMATIC_REJECTION_NO_RESOLVER_EXECUTED",
+    "literalHookReason": "Dangerous command pattern: npm install *",
+    "stagingRestoredImmediately": true,
+    "method": "Independent-reviewed declarative file reconciliation; no package resolver, reify, installer or network used by transformation; not npm regeneration",
+    "inputRootLockSHA256": "f677d4d2405a19ef8c5b32c6826c983acc4e4a988272202dd111cc18ac4271fe",
+    "outputRootLockSHA256": "cc268f6a2c365a3fbd742a85ba1bd16ba110776199ee8b8c9487fd5e891c530c",
+    "retainedRegistryVersionsURLsAndSRIsUnchanged": true,
+    "packageRecordsBefore": 1125,
+    "packageRecordsAfter": 981,
+    "removedPaths": 144,
+    "survivingInBundleFlagsRemoved": 25,
+    "originalInBundleFlagsTotal": 55,
+    "restoredOriginalSafetyEslint8Types20ClosureRecords": 30,
+    "scriptSHA256": "4122d46978a2cd3f833852316c9d88b12f4e5007e6c0ccfd65edc432049d3a6e",
+    "workspaceMetadataMatchesFinalManifests": true
+  },
+  "graphVerification": {
+    "root": {
+      "virtual": {
+        "nodes": 981,
+        "edges": 2067,
+        "invalid": [],
+        "different": [],
+        "removed": []
+      },
+      "actual": {
+        "nodes": 883,
+        "edges": 2058,
+        "invalid": [],
+        "different": [],
+        "removed": []
+      }
+    },
+    "consumer": {
+      "virtual": {
+        "nodes": 235,
+        "edges": 391,
+        "invalid": [],
+        "different": [],
+        "removed": []
+      },
+      "actual": {
+        "nodes": 235,
+        "edges": 391,
+        "invalid": [],
+        "different": [],
+        "removed": []
+      }
+    },
+    "rootNpmLsExit": 0,
+    "consumerNpmLsExit": 0,
+    "removedPackages": [
+      "gray-matter",
+      "install-mcp",
+      "giget",
+      "braces",
+      "sprintf-js"
+    ]
+  },
+  "registryProvenance": {
+    "root": {
+      "command": "npm audit signatures",
+      "exit": 0,
+      "verifiedSignatures": 880,
+      "verifiedAttestations": 109
+    },
+    "standaloneSafety": {
+      "command": "npm audit signatures --workspaces=false",
+      "exit": 0,
+      "verifiedSignatures": 512,
+      "verifiedAttestations": 56
+    },
+    "consumer": {
+      "package": "express-rate-limit@8.5.1",
+      "officialKeyEndpoint": "https://registry.npmjs.org/-/npm/v1/keys",
+      "signatures": [
+        {
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+          "verified": true,
+          "message": "express-rate-limit@8.5.1:sha512-5O6KYmyJEpuPJV5hNTXKbAHWRqrzyu+OI3vUnSd2kXFubIVpG7ezpgxQy76Zo5GQZtrQBg86hF+CM/NX+cioiQ=="
+        }
+      ],
+      "archiveSHA512MatchesOfficialIntegrity": true,
+      "rootAndSafetyTarballsVerifiedBySHA512": true,
+      "consumerAuditSignaturesExit": 1,
+      "consumerAuditSignaturesLimitation": "ETARGET registry lookup of unpublished local Safety1.0.6; not a passed npm audit signatures invocation",
+      "inheritedRegistryProof": "All other registry package versions and declared SRIs match the signature-verified fresh root graph; peer independent comparison confirmed"
+    }
+  },
+  "packagedConsumer": {
+    "method": "Exact local artifact reproducibility; existing reviewed production versions only; no dependency resolver/network; not a fresh registry resolution guarantee",
+    "rootArtifact": "dollhousemcp-mcp-server-2.1.0-beta.2.tgz",
+    "rootArtifactIntegrity": "sha512-ViNpYV6gSpcn3Tgmv7ednz+0FBJXbj9NTs4+Bb9z11bUqoQplnLPi2mZNqc3QIF8jz4CoZVAjS+G+WBDRru4mw==",
+    "safetyArtifact": "dollhousemcp-safety-1.0.6.tgz",
+    "safetyArtifactIntegrity": "sha512-WzUAyRhp1a1EoBvE3QLpjlEsormMN6b4N+8u1589kNm9pkW1TPZE36Ka3sM2erbuj0f0TEJzi3cQZ8Fd8hTF8w==",
+    "rootLockSHA256": "cc268f6a2c365a3fbd742a85ba1bd16ba110776199ee8b8c9487fd5e891c530c",
+    "consumerLockSHA256": "8071f260d082840dd00cd7c220008947af3db4cf669c4fc68fc121cc48167b1e",
+    "registryVersionsUnchanged": false,
+    "onlyRegistryVersionChange": "consumer-only express-rate-limit8.3.1 ->8.5.1, published2026-05-06T14:23:28.935Z, SDK raw^8.2.1 admits; ip-address10.7.1 unchanged; no project override",
+    "raw10_1Counterexample": "Earlier exact upstream ip10.1.0 audit1high1moderate, not accepted",
+    "consumerOverrides": false,
+    "packageCount": 235,
+    "edgesChecked": 391,
+    "invalid": [],
+    "forbidden": [],
+    "noticesPackaged": true
+  },
+  "packageVerification": {
+    "rootFreshCi": {
+      "exit": 0,
+      "packagesAdded": 881,
+      "lifecycleScriptsDisabled": true
+    },
+    "fullBuildExit": 0,
+    "runtimeAssetVerifierExit": 0,
+    "consumerFreshCi": {
+      "exit": 0,
+      "packagesAdded": 234,
+      "lifecycleScriptsDisabled": true
+    },
+    "bothMitNoticesInTarball": true,
+    "compiledAdapterAndFourteenClientSmoke": {
+      "success": true,
+      "checks": [
+        "compiled frontmatter YAML parse/stringify",
+        "claude",
+        "cline",
+        "roo-cline",
+        "windsurf",
+        "witsy",
+        "enconvo",
+        "cursor",
+        "gemini-cli",
+        "vscode",
+        "claude-code",
+        "goose",
+        "zed",
+        "codex",
+        "warp manual configuration"
+      ],
+      "temporaryHomeRemovedAfterRun": true
+    }
+  },
+  "tests": {
+    "unitInitial": {
+      "exit": 1,
+      "seconds": 587.52,
+      "totals": {
+        "success": false,
+        "numTotalTestSuites": 803,
+        "numPassedTestSuites": 801,
+        "numFailedTestSuites": 1,
+        "numPendingTestSuites": 1,
+        "numTotalTests": 18567,
+        "numPassedTests": 18550,
+        "numFailedTests": 0,
+        "numPendingTests": 17,
+        "numTodoTests": 0
+      },
+      "failedFile": "tests/unit/cli/cliAuthStorage.test.ts",
+      "failure": "Worker V8 heap OOM before any assertions in that file; retained original failed wave"
+    },
+    "cliOriginalIsolated": {
+      "exit": 1,
+      "seconds": 156.22,
+      "testsExecuted": 0,
+      "failure": "Same worker heap OOM"
+    },
+    "cliFixtureCause": {
+      "negativeFixturePreconditionSatisfied": false,
+      "processDatabaseURLAbsent": true,
+      "parsedAdminURLStillPresent": true,
+      "parsedAppURLStillPresent": true,
+      "actualResult": "resolved storage handle, not expected rejection",
+      "databaseHandlePresent": true
+    },
+    "cliAfterReviewedFixtureCorrection": {
+      "exit": 0,
+      "suitesPassed": 1,
+      "testsPassed": 8,
+      "seconds": 0.55,
+      "assertionUnchanged": true,
+      "heapConcurrencyAndTimeoutsUnchanged": true
+    },
+    "unitFinal": {
+      "exit": 0,
+      "seconds": 552.95,
+      "totals": {
+        "success": true,
+        "numTotalTestSuites": 803,
+        "numPassedTestSuites": 802,
+        "numFailedTestSuites": 0,
+        "numPendingTestSuites": 1,
+        "numTotalTests": 18575,
+        "numPassedTests": 18558,
+        "numFailedTests": 0,
+        "numPendingTests": 17,
+        "numTodoTests": 0
+      }
+    },
+    "performance": {
+      "exit": 0,
+      "seconds": 7.68,
+      "totals": {
+        "success": true,
+        "numTotalTestSuites": 10,
+        "numPassedTestSuites": 10,
+        "numFailedTestSuites": 0,
+        "numPendingTestSuites": 0,
+        "numTotalTests": 120,
+        "numPassedTests": 120,
+        "numFailedTests": 0,
+        "numPendingTests": 0,
+        "numTodoTests": 0
+      }
+    },
+    "integration": {
+      "fullWave": {
+        "exit": 1,
+        "seconds": 953.76,
+        "suitesPassed": 198,
+        "suitesFailed": 1,
+        "testsPassed": 4125,
+        "testsFailed": 8,
+        "testsPending": 24,
+        "testsTotal": 4157
+      },
+      "focusedWave": {
+        "exit": 0,
+        "suitesPassed": 1,
+        "testsPassed": 8,
+        "testsFailed": 0
+      },
+      "completeInventoryFiles": 199,
+      "caseIdentityMatch": true,
+      "actualAssertionUnion": {
+        "passed": 4133,
+        "failed": 0,
+        "pending": 24,
+        "todo": 0
+      },
+      "perFileArtifact": "beta3-dependency-findings-2026-10-22-integration.json",
+      "interpretation": "Complete per-file coverage across recorded waves; original complete full-wave exit1 retained. No claim of a single full integration invocation exiting0."
+    }
+  },
+  "cleanup": {
+    "ownedContainerRemoved": true,
+    "ownedLabeledInspectionContainersAbsent": true,
+    "ownedSSHForwardProcessAbsent": true,
+    "loopback5432ListenerAbsent": true,
+    "testDatabaseAbsentBeforeContainerRemoval": true,
+    "testDirectoryAbsent": true,
+    "ownedPreflightAndFixtureImageTagsAbsent": true,
+    "ownedFixtureTagCount": 3,
+    "noSharedDaemonConfigurationOrGlobalPrune": true,
+    "temporaryCredentialFilesCreated": false,
+    "fixedRepositoryTestCredentialsUsedOnlyInOwnedClusterAndChildEnvironment": true
+  },
+  "dependencyAge": {
+    "cutoff": "2026-09-30T00:00:00Z",
+    "sdkExactVersion": "1.32.0",
+    "sdkPublished": "2026-10-02T17:32:51.427Z",
+    "soleAgeExceptionApproval": "https://github.com/DollhouseMCP/mcp-server/issues/2452#issuecomment-6327546083",
+    "consumerOnlyReviewedParent": "express-rate-limit@8.5.1",
+    "consumerParentPublished": "2026-05-06T14:23:28.935Z",
+    "noNewRegistryVersionInMainLockReconciliation": true
+  },
+  "historicalSnapshot": {
+    "commit": "085d3a07182bcf3c1d4c322d82cce3f9a2b7853d",
+    "meaning": "Prior 37high7moderate root audit and interrupted integration are historical, superseded by current evidence; preserved in Git history"
+  },
+  "boundaries": [
+    "Draft PR3129 targets beta; no merge/publication/tag/release/deployment",
+    "Safety1.0.6 is unpublished; local tarball used only for qualification",
+    "Consumer npm audit signatures invocation exits1 ETARGET for unpublished local Safety; explicit cryptographic fallback retained",
+    "Original full integration invocation exits1; complete per-file evidence combines unchanged198 successful files with the corrected same8-case Docker file"
+  ]
+}
