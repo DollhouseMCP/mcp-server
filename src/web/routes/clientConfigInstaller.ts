@@ -57,8 +57,8 @@ function object(value: unknown): value is Config {
 
 function validVersion(version: string): boolean {
   if (/^(latest|beta|rc)$/.test(version)) return true;
-  const numeric = /^(\d+\.\d+\.\d+)([\s\S]*)$/.exec(version);
-  return numeric !== null && /^(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(numeric[2]);
+  const numeric = /^\d+\.\d+\.\d+/.exec(version);
+  return numeric !== null && /^(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(version.slice(numeric[0].length));
 }
 
 async function configDestination(path: string): Promise<string> {
