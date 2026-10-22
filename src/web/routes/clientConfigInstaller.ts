@@ -156,11 +156,11 @@ function serializeConfig(config: Config, target: Target, source: string, update:
     const path = [...target.keys, 'dollhousemcp'];
     const options = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' } };
     if (!update.previous) return applyEdits(source, modify(source, path, update.entry, options));
-    // Edit only changed entry fields, retaining comments inside unrelated values
-    // (including existing env settings) and everywhere else in the document.
+    // Edit only changed entry fields. Formatting an insertion can also reformat
+    // its preceding sibling, so keep existing comments and values byte-for-byte.
     for (const [key, value] of Object.entries(update.entry)) {
       if (JSON.stringify(update.previous[key]) === JSON.stringify(value)) continue;
-      source = applyEdits(source, modify(source, [...path, key], value, options));
+      source = applyEdits(source, modify(source, [...path, key], value, {}));
     }
     return source;
   }
