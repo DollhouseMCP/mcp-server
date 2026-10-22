@@ -307,7 +307,9 @@ function editClientJson(raw: string, parsed: Record<string, unknown>, client: st
     if (!isConfigObject(section[key])) section[key] = {};
     section = section[key] as Record<string, unknown>;
   }
-  section[path[path.length - 1]] = value;
+  const key = path.at(-1);
+  if (key === undefined) throw new Error('Client config path must not be empty');
+  section[key] = value;
   return JSON.stringify(parsed, null, detectIndent(raw)) + '\n';
 }
 
