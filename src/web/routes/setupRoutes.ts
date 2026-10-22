@@ -1,8 +1,8 @@
 /**
  * Setup Routes — Auto-install DollhouseMCP to MCP clients
  *
- * Uses `install-mcp` (https://github.com/supermemoryai/install-mcp)
- * to inject server configuration into supported MCP client config files.
+ * Uses a config-only adapter derived from MIT-licensed install-mcp
+ * to write server configuration into supported MCP client config files.
  *
  * Security: localhost-only binding (enforced by server.ts), rate-limited,
  * and command arguments are hardcoded — no user-supplied shell input.
@@ -10,16 +10,13 @@
 
 import type { Request, Response } from 'express';
 import { execFile } from 'node:child_process';
-import { accessSync, existsSync, constants as fsConstants } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname, sep } from 'node:path';
 import { homedir, platform, tmpdir } from 'node:os';
-import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
+import { installClientConfig } from './clientConfigInstaller.js';
 
-// Integration resolves the package root via PackageResourceLocator rather than
-// import.meta.url/__dirname (#2339 must not reintroduce cwd/module-URL path
-// assumptions). sep/tmpdir are used by the NVM launcher self-heal below.
-const _locator = new PackageResourceLocator();
+// sep/tmpdir are used by the NVM launcher self-heal below.
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
@@ -1551,46 +1548,7 @@ async function installLmStudioConfig(version?: string): Promise<string> {
   return installJsonMcpClientConfig('lmstudio', version);
 }
 
-/**
- * Resolve the install-mcp binary path.
- * Uses the local dependency (node_modules/.bin/install-mcp) first,
- * falls back to npx if not found.
- */
-function resolveInstallMcpBin(): { cmd: string; prefixArgs: string[] } {
-  const localBin = join(_locator.getPackageRoot(), 'node_modules', '.bin', 'install-mcp');
-  try {
-    accessSync(localBin, fsConstants.X_OK);
-    return { cmd: localBin, prefixArgs: [] };
-  } catch {
-    return { cmd: 'npx', prefixArgs: ['install-mcp'] };
-  }
-}
-
-/**
- * Run install-mcp to configure a specific MCP client.
- *
- * Uses the bundled install-mcp dependency (MIT, https://github.com/supermemoryai/install-mcp).
- * Command arguments are fully hardcoded — no user input reaches the shell.
- * execFile is used (not exec) to prevent shell injection.
- */
+/** Configure the named global stdio server without invoking an installer CLI. */
 function runInstallMcp(client: string, version?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const { cmd, prefixArgs } = resolveInstallMcpBin();
-    const tag = version ? `@${version}` : '@latest';
-    const args = [
-      ...prefixArgs,
-      `@dollhousemcp/mcp-server${tag}`,
-      '--client', client,
-      '--name', 'dollhousemcp',
-      '--yes',
-    ];
-
-    execFile(cmd, args, { timeout: 30_000 }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(stderr || err.message));
-        return;
-      }
-      resolve(stdout || 'Installation completed.');
-    });
-  });
+  return installClientConfig(client, version);
 }

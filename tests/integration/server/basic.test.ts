@@ -27,7 +27,7 @@ describe('Basic Functionality Tests', () => {
       const packageJson = JSON.parse(packageContent);
       
       expect(packageJson.dependencies['@modelcontextprotocol/sdk']).toBeDefined();
-      expect(packageJson.dependencies['gray-matter']).toBeDefined();
+      expect(packageJson.dependencies['js-yaml']).toBeDefined();
       expect(packageJson.devDependencies['typescript']).toBeDefined();
       expect(packageJson.devDependencies['jest']).toBeDefined();
     });

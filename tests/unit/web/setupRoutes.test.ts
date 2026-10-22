@@ -2219,9 +2219,9 @@ describe('Setup Tab — Dependencies', () => {
     packageJson = JSON.parse(raw);
   });
 
-  it('install-mcp is a runtime dependency', () => {
+  it('does not ship the unused install-mcp dependency graph', () => {
     const deps = packageJson.dependencies as Record<string, string>;
-    expect(deps['install-mcp']).toBeDefined();
+    expect(deps['install-mcp']).toBeUndefined();
   });
 
   it('install-mcp is not a devDependency', () => {

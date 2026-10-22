@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [2.1.0-beta.3] - Unreleased
+
+See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
+
+### security
+
+- Upgrade the MCP SDK to 1.32.0 (GHSA-22jm-h49p-29qw, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq, GHSA-6prh-2h8m-c8cw) and Hono to 4.13.11 (GHSA-5r4p-p66f-jhc7), with regression coverage that stored OAuth credentials and refresh tokens stay bound to their issuer. (#3066, #3129)
+- Remove `gray-matter` and `install-mcp`, replacing them with bounded MIT-licensed source adaptations (front-matter parser, client config installer). The `gray-matter → js-yaml 3 → argparse 1 → sprintf-js` and `install-mcp → giget → tar 6` chains are gone for repository and downstream installs. The qualified root, standalone Safety and exact-artifact consumer audits report 0 critical / 0 high / 0 moderate; fresh registry resolution is not guaranteed. (#3129)
+- Update application, browser-sanitizer and build/test dependencies (DOMPurify 3.4.16, smol-toml 1.9.0, Jest 30.3.0, TypeScript-ESLint 8.48.1); require `@dollhousemcp/safety` ^1.0.6. (#3070, #3077, #3129)
+- Pin the Node 24 Trixie container base by digest with selected Debian security updates, keep Safety build dependencies out of production layers, patch global npm leaves in tooling images, and remove unused `infocmp`/`nsenter`. Not a claim that every image advisory is resolved. (#3059, #3067, #3068, #3081)
+- Retain beta’s restricted exported frontmatter helper, private ZIP extraction with symlink refusal, serialized DangerZone persistence and `proxy-addr`/`shell-quote` pins. #3128’s new legacy-memory reconciliation remains pending and is not included in this candidate.
+
+### client setup
+
+- **Behavior change:** VS Code and Zed settings files containing comments are left untouched and the install refuses with an explanation. Unparseable configs for any client are refused rather than replaced; writes are atomic and preserve managed symlinks. (#3129)
+
+### hosted/HTTP
+
+- Keep quiet SSE sessions and runtime presence alive with configurable keepalive, stream lifetime and credential-expiry grace. Stop payload delivery on expired-credential streams; renew only matching credential bindings. (#3061)
+- Add memory-aware graceful replacement that retains admitted work and refuses replacement when drain or closure is unknown. (#3050, #3109)
+
+### OAuth
+
+- Preserve eligible offline-access consent. Serialize helper PID publication and cleanup by generation; standalone helpers now require a flow ID with matching prepared state. (#3061, #3116)
+
+### Gatekeeper
+
+- Classify infrastructure operations before active-policy collection; return an audited denial when policy collection fails. (#3126)
+
+### personas/memory
+
+- Resolve active personas by storage identity after cache eviction. (#3121)
+- Add authenticated, tenant-bound database-memory composition with fail-closed mutation and read-fidelity guards. Dormant: not enabled by this release. (#3012, #3014, #3015, #3016, #3017, #3018, #3020, #3023, #3029, #3032, #3034, #3035, #3037, #3038, #3042, #3043)
+
+### CI/test
+
+- Isolate PostgreSQL and Core shards, run storage and helper proofs in required serial lanes, and recycle integration workers. Track async fixtures and owned processes through teardown; add credential-comparison, Argon2, PID-publication, cache-counter and sanitized failure diagnostics. (#3039, #3045, #3048, #3076, #3083, #3084, #3086, #3089, #3093, #3096, #3098, #3099, #3101, #3102, #3112, #3115, #3119, #3125)
+
+Draft candidate includes #3129 head `ccb4d8c8`; #3129 and #3128 remain unmerged into beta. Safety 1.0.6 publication and three new installer reviews block release readiness. See the detailed notes. No publication, deployment or database-memory activation is announced.
+
+## [2.1.0-beta.2] - 2026-10-09
+
+Published [2026-10-09](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.1.0-beta.2); the prior 2026-09-04 heading predated publication. The following preparation bullets were already present in the beta.2 tag.
+
 - Prepare `@dollhousemcp/safety` 1.0.4 and require `^1.0.4` for the beta npm package so the reviewed UUID challenge producer is delivered through the registry dependency. Preserve exact legacy challenge acceptance during migration; publication and consumer qualification remain separate release gates. (#3000, #2656)
 
 - Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
@@ -10,38 +54,6 @@
 - Add a hosted-console Connect guide for Claude Code, Codex, Claude web/Desktop, and Cursor, with deployment-owned endpoint discovery and current-user connection status. (#2803)
 - Incorporate the 2.0.42 macOS verification dialog security fix and prepare safety package 1.0.3, retaining beta’s timing-safe challenge comparison. (#2686)
 - Publish the safety package before the server and retain beta channel protection during version-safe release dry runs. (#2686)
-
-## [2.1.0-beta.3] - 2026-10-21
-
-See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
-
-### security
-
-- Update issuer-bound MCP SDK credentials, application/browser sanitizers, Safety ^1.0.5 and build dependencies; harden container dependency layers and remove unused runtime diagnostics. (#3066, #3070, #3077, #3059, #3067, #3068, #3081)
-
-### hosted/HTTP
-
-- Keep quiet SSE sessions and runtime presence alive, gate expired-stream payloads, and renew only matching credential bindings. Add configurable stream lifetime/expiry grace and memory-aware graceful replacement that refuses unknown drain or closure outcomes. (#3061, #3050, #3109)
-
-### OAuth
-
-- Preserve eligible offline-access consent and serialize helper PID publication/cleanup by generation. Standalone helpers now require a flow ID with matching prepared state; use the existing coordinated controller lifecycle. (#3061, #3116)
-
-### Gatekeeper
-
-- Keep infrastructure enforcement reachable before active-policy collection; return audited permission denial when policy collection fails. (#3126)
-
-### personas/memory
-
-- Resolve active personas by durable identity after cache eviction. Add authenticated tenant-bound database-memory composition, conditional updates and fail-closed mutation/read-fidelity guards. Guarded cohort activation remains separately qualified; unsupported mutations remain refused. (#3121, #3012, #3014, #3015, #3016, #3017, #3018, #3020, #3023, #3029, #3032, #3034, #3035, #3037, #3038, #3042, #3043)
-
-### CI/test
-
-- Isolate PostgreSQL/Core shards and required serial proofs, recycle integration workers, and retain asynchronous fixture/process ownership through cleanup. Add native authentication, causal PID-publication, cache-counter and sanitized failure diagnostics. (#3048, #3083, #3084, #3086, #3089, #3093, #3096, #3098, #3099, #3101, #3102, #3112, #3115, #3119, #3125)
-
-These notes describe merged code, not deployment, activation, an image audit waiver or a general timing guarantee.
-
-## [2.1.0-beta.2] - 2026-09-04
 
 - Deployment candidate following the main-to-beta reconciliation in PR #2653.
 - Includes the current hosted HTTP, PostgreSQL, OAuth, console, and agent-runtime updates.

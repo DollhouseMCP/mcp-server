@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
-import type matter from 'gray-matter';
+import type { FrontmatterOptions } from '../../src/security/frontmatter.js';
 import { SecureYamlParser } from '../../src/security/secureYamlParser.js';
 
-type Options = matter.GrayMatterOption<string, any> & { lang?: string; delims?: string | [string, string]; parsers?: Record<string, (input: string) => object> };
+type Options = FrontmatterOptions & { lang?: string; delims?: string | [string, string]; parsers?: Record<string, (input: string) => object> };
 const marker = '__dollhouseMatterReadNonexecutionTest';
 const state = globalThis as typeof globalThis & { [marker]?: boolean };
 const expression = `(globalThis.${marker} = true, { name: 'Ordinary' })`;
