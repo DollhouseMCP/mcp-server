@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prepare `@dollhousemcp/safety` 1.0.6 using the manifest and standalone lock already reviewed in #3129. Update the Safety test/lint toolchain and patched YAML development closure without changing Safety runtime source; align the server floor to `^1.0.6` for the existing guarded Safety-only publisher. Root lock regeneration is blocked by the local command hook and must pass before merge/publication; see [release instructions](docs/releases/safety-1.0.6.md).
+
 - Prepare `@dollhousemcp/safety` 1.0.4 with UUIDv4 verification challenge IDs, preserving public declarations, display codes and one-time store behavior. Align the server dependency floor with the safety workspace for the existing safety-first publisher; publication/provenance and beta consumer qualification remain separate release gates. (#3000, #2656)
 
 ## [2.0.43] - Unreleased
