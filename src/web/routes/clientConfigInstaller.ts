@@ -19,13 +19,17 @@ interface InstallEnvironment {
 type Config = Record<string, any>;
 type Target = { path: string; keys: string[]; format?: 'yaml' | 'toml' };
 
+function configBase(home: string, os: string, env: NodeJS.ProcessEnv): string {
+  if (os === 'darwin') return join(home, 'Library', 'Application Support');
+  if (os === 'win32') return env.APPDATA || join(home, 'AppData', 'Roaming');
+  return env.XDG_CONFIG_HOME || join(home, '.config');
+}
+
 export function clientConfigTarget(client: string, environment: InstallEnvironment = {}): Target {
   const home = environment.home ?? homedir();
   const os = environment.platform ?? platform();
   const env = environment.env ?? process.env;
-  const base = os === 'darwin' ? join(home, 'Library', 'Application Support')
-    : os === 'win32' ? env.APPDATA || join(home, 'AppData', 'Roaming')
-      : env.XDG_CONFIG_HOME || join(home, '.config');
+  const base = configBase(home, os, env);
   const code = join(base, 'Code', 'User');
   const json = (path: string, keys = ['mcpServers']): Target => ({ path, keys });
   const targets: Record<string, Target> = {
@@ -51,39 +55,71 @@ function object(value: unknown): value is Config {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Preserve unrelated config; reject malformed files instead of replacing them. */
-export async function installClientConfig(client: string, version = 'latest', environment: InstallEnvironment = {}): Promise<string> {
-  if (!/^(latest|beta|rc|\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)$/.test(version)) throw new Error('Invalid install version');
-  const server = { command: 'npx', args: [`@dollhousemcp/mcp-server@${version}`] };
-  if (client === 'warp') {
-    return 'Warp requires manual installation through its UI. Copy this configuration:\n' + JSON.stringify({
-      dollhousemcp: { ...server, env: {}, working_directory: null, start_on_launch: true },
-    }, null, 2);
-  }
-  const target = clientConfigTarget(client, environment);
-  let destination = target.path;
+function validVersion(version: string): boolean {
+  if (/^(latest|beta|rc)$/.test(version)) return true;
+  const numeric = /^(\d+\.\d+\.\d+)([\s\S]*)$/.exec(version);
+  return numeric !== null && /^(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(numeric[2]);
+}
+
+async function configDestination(path: string): Promise<string> {
   try {
     // Keep dotfile-manager symlinks intact. A dangling link is an error, since
     // replacing it would silently disconnect the user's managed configuration.
-    const entry = await lstat(target.path);
-    destination = await realpath(target.path).catch(error => {
+    const entry = await lstat(path);
+    return await realpath(path).catch(error => {
       if (entry.isSymbolicLink()) throw new Error('Client config symlink target is unavailable', { cause: error });
       throw error;
     });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return path;
   }
+}
+
+/** Detect JSONC comments without mistaking string values or escaped quotes for comments. */
+function hasJsonComments(source: string): boolean {
+  let inString = false;
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index];
+    if (inString) {
+      if (character === '\\') index++;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '/' && (source[index + 1] === '/' || source[index + 1] === '*')) return true;
+  }
+  return false;
+}
+
+function parseConfig(source: string, target: Target, client: string): unknown {
+  if (target.format === 'yaml') return load(source, { schema: CORE_SCHEMA }) ?? {};
+  if (target.format === 'toml') return parseToml(source);
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    if ((client === 'vscode' || client === 'zed') && hasJsonComments(source)) {
+      throw new Error('Client config contains comments and cannot be updated automatically; file left untouched', { cause: error });
+    }
+    throw error;
+  }
+}
+
+async function readConfig(destination: string, target: Target, client: string): Promise<{ config: unknown; mode: number }> {
   let config: unknown = {};
   let mode = 0o600;
   try {
     const source = await readFile(destination, 'utf8');
     if (source.length > 2 * 1024 * 1024) throw new Error('Client config exceeds 2 MB');
-    config = target.format === 'yaml' ? load(source, { schema: CORE_SCHEMA }) ?? {}
-      : target.format === 'toml' ? parseToml(source) : JSON.parse(source);
+    config = parseConfig(source, target, client);
     mode = (await stat(destination)).mode & 0o777;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  return { config, mode };
+}
+
+function validateConfig(config: unknown): asserts config is Config {
   if (!object(config)) throw new Error('Client config must contain an object');
   // Bound expansion and reject cyclic aliases before serialization (noRefs).
   const ancestors = new WeakSet<object>();
@@ -104,6 +140,17 @@ export async function installClientConfig(client: string, version = 'latest', en
     ancestors.delete(value);
   };
   validate(config);
+}
+
+function clientEntry(client: string, previous: Config, server: Config): Config {
+  if (client === 'goose') {
+    return { ...previous, name: 'dollhousemcp', cmd: server.command, ...server, enabled: true, envs: previous.envs ?? {}, type: 'stdio', timeout: 300 };
+  }
+  if (client === 'zed') return { ...previous, source: 'custom', env: previous.env ?? {}, ...server };
+  return { ...previous, ...server };
+}
+
+function updateConfig(config: Config, target: Target, client: string, server: Config): void {
   let servers = config;
   for (const key of target.keys) {
     if (!Object.hasOwn(servers, key)) Object.defineProperty(servers, key, { value: {}, enumerable: true, writable: true, configurable: true });
@@ -111,12 +158,17 @@ export async function installClientConfig(client: string, version = 'latest', en
     servers = servers[key];
   }
   const previous = Object.hasOwn(servers, 'dollhousemcp') && object(servers.dollhousemcp) ? servers.dollhousemcp : {};
-  const entry = client === 'goose'
-    ? { ...previous, name: 'dollhousemcp', cmd: server.command, ...server, enabled: true, envs: previous.envs ?? {}, type: 'stdio', timeout: 300 }
-    : client === 'zed' ? { ...previous, source: 'custom', env: previous.env ?? {}, ...server } : { ...previous, ...server };
+  const entry = clientEntry(client, previous, server);
   Object.defineProperty(servers, 'dollhousemcp', { value: entry, enumerable: true, writable: true, configurable: true });
-  const content = target.format === 'yaml' ? dump(config, { schema: CORE_SCHEMA, noRefs: true, lineWidth: -1 })
-    : target.format === 'toml' ? stringifyToml(config) : JSON.stringify(config, null, 2) + '\n';
+}
+
+function serializeConfig(config: Config, target: Target): string {
+  if (target.format === 'yaml') return dump(config, { schema: CORE_SCHEMA, noRefs: true, lineWidth: -1 });
+  if (target.format === 'toml') return stringifyToml(config);
+  return JSON.stringify(config, null, 2) + '\n';
+}
+
+async function writeConfig(destination: string, content: string, mode: number): Promise<void> {
   await mkdir(dirname(destination), { recursive: true });
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try {
@@ -126,5 +178,22 @@ export async function installClientConfig(client: string, version = 'latest', en
   } finally {
     await unlink(temporary).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; });
   }
+}
+
+/** Preserve unrelated config; reject malformed files instead of replacing them. */
+export async function installClientConfig(client: string, version = 'latest', environment: InstallEnvironment = {}): Promise<string> {
+  if (!validVersion(version)) throw new Error('Invalid install version');
+  const server = { command: 'npx', args: [`@dollhousemcp/mcp-server@${version}`] };
+  if (client === 'warp') {
+    return 'Warp requires manual installation through its UI. Copy this configuration:\n' + JSON.stringify({
+      dollhousemcp: { ...server, env: {}, working_directory: null, start_on_launch: true },
+    }, null, 2);
+  }
+  const target = clientConfigTarget(client, environment);
+  const destination = await configDestination(target.path);
+  const { config, mode } = await readConfig(destination, target, client);
+  validateConfig(config);
+  updateConfig(config, target, client, server);
+  await writeConfig(destination, serializeConfig(config, target), mode);
   return `Config written to: ${target.path}`;
 }

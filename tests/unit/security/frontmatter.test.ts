@@ -24,6 +24,37 @@ describe('frontmatter supported subset', () => {
     expect(parsed.excerpt).toBe('Lead\n');
   });
 
+  it('detects language declarations using the configured opening delimiter', () => {
+    expect(matter.language('~~~json\n{}', { delimiters: '~~~' })).toEqual({ raw: 'json', name: 'json' });
+    expect(matter.language('<!--YML\r\nname: Test', { delims: ['<!--', '-->'] }))
+      .toEqual({ raw: 'YML', name: 'YML' });
+    expect(matter.language('---yaml\nname: Test', { delimiters: '~~~' }))
+      .toEqual({ raw: '---yaml', name: '---yaml' });
+    expect(matter.language('---json\n{}')).toEqual({ raw: 'json', name: 'json' });
+    expect(matter.language('~~~json', { delimiters: '~~~' })).toEqual({ raw: 'jso', name: 'jso' });
+  });
+
+  it.each([
+    ['\n# comment\n', true],
+    ['\r\n  # comment\r\n\r\n', true],
+    ['\n# comment\rname: still comment\r\n', true],
+    ['\n#\n', false],
+    ['\n#\r\n', true],
+    ['\n# \n', true],
+    ['\n  \t\r\n', true],
+    ['\n# comment\nname: Test\n', false],
+  ])('preserves empty/comment classification for %j', (source, isEmpty) => {
+    const parsed = matter(`---${source}---\nBody`);
+    expect(parsed.isEmpty).toBe(isEmpty);
+    expect(parsed.empty).toBe(isEmpty ? `---${source}---\nBody` : undefined);
+  });
+
+  it('handles a long whitespace-only frontmatter line', () => {
+    const parsed = matter(`---\n${' '.repeat(100_000)}\n---\nBody`);
+    expect(parsed.isEmpty).toBe(true);
+    expect(parsed.content).toBe('Body');
+  });
+
   it('rejects malformed YAML and executable language declarations', () => {
     expect(() => matter('---\nname: [broken\n---\nBody')).toThrow();
     expect(() => matter('---javascript\nprocess.exit()\n---\nBody')).toThrow('Unsupported frontmatter language');

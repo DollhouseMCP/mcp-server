@@ -47,7 +47,7 @@ function supportedLanguage(name: string): string {
 function language(input: string, options: FrontmatterOptions = {}): { name: string; raw: string } {
   // Preserve gray-matter's declaration slicing (including missing-newline input).
   const opening = delimiters(options)[0];
-  if (input.startsWith('---')) input = input.slice(opening.length);
+  if (input.startsWith(opening)) input = input.slice(opening.length);
   const raw = input.slice(0, input.search(/\r?\n/));
   return { raw, name: raw.trim() };
 }
@@ -61,36 +61,38 @@ function engine(name: string, options: FrontmatterOptions): Exclude<Engine, (inp
     : { parse: source => load(source, { schema: DEFAULT_SCHEMA }), stringify: data => dump(data, { schema: DEFAULT_SCHEMA, noRefs: true }) };
 }
 
-function parse(input: string, options: FrontmatterOptions = {}): FrontmatterFile {
-  const [open, close] = delimiters(options);
-  supportedLanguage((options.language || options.lang || 'yaml').toLowerCase());
-  if (input === '') return { data: {}, content: '', excerpt: '', orig: '', language: '', matter: '' };
-  const file: FrontmatterFile = {
-    data: {}, content: input.replace(/^\ufeff/, ''), excerpt: '', orig: Buffer.from(input),
-    language: (options.language || options.lang || 'yaml').toLowerCase(), matter: '', isEmpty: false,
-  };
-  let source = file.content;
-  if (source.startsWith(open) && source[open.length] !== open.slice(-1)) {
-    source = source.slice(open.length);
-    const originalLength = source.length;
-    const declaration = language(source, options);
-    if (declaration.name) {
-      supportedLanguage(declaration.name);
-      file.language = declaration.name;
-      source = source.slice(declaration.raw.length);
-    }
-    const closing = '\n' + close;
-    const found = source.indexOf(closing);
-    const end = found === -1 ? originalLength : found;
-    file.matter = source.slice(0, end);
-    if (file.matter.replace(/^\s*#[^\n]+/gm, '').trim() === '') {
-      file.isEmpty = true;
-      file.empty = file.content;
-    } else {
-      file.data = engine(file.language, options).parse(file.matter) ?? {};
-    }
-    file.content = found === -1 ? '' : source.slice(end + closing.length).replace(/^\r/, '').replace(/^\n/, '');
+function isEmptyMatter(source: string): boolean {
+  return source.split('\n').every(line => {
+    const trimmed = line.trimStart();
+    // Keep the original comment rule: a bare '#' is not an empty comment,
+    // and only LF ends a comment (CR remains part of its text).
+    return trimmed === '' || (trimmed.startsWith('#') && trimmed.length > 1);
+  });
+}
+
+function parseMatter(file: FrontmatterFile, options: FrontmatterOptions, open: string, close: string): void {
+  let source = file.content.slice(open.length);
+  const originalLength = source.length;
+  const declaration = language(source, options);
+  if (declaration.name) {
+    supportedLanguage(declaration.name);
+    file.language = declaration.name;
+    source = source.slice(declaration.raw.length);
   }
+  const closing = '\n' + close;
+  const found = source.indexOf(closing);
+  const end = found === -1 ? originalLength : found;
+  file.matter = source.slice(0, end);
+  if (isEmptyMatter(file.matter)) {
+    file.isEmpty = true;
+    file.empty = file.content;
+  } else {
+    file.data = engine(file.language, options).parse(file.matter) ?? {};
+  }
+  file.content = found === -1 ? '' : source.slice(end + closing.length).replace(/^\r/, '').replace(/^\n/, '');
+}
+
+function excerpt(file: FrontmatterFile, options: FrontmatterOptions, open: string): void {
   if (typeof options.excerpt === 'function') options.excerpt(file, options);
   else {
     const separator = file.data?.excerpt_separator || options.excerpt_separator;
@@ -100,6 +102,20 @@ function parse(input: string, options: FrontmatterOptions = {}): FrontmatterFile
       if (end !== -1) file.excerpt = file.content.slice(0, end);
     }
   }
+}
+
+function parse(input: string, options: FrontmatterOptions = {}): FrontmatterFile {
+  const [open, close] = delimiters(options);
+  supportedLanguage((options.language || options.lang || 'yaml').toLowerCase());
+  if (input === '') return { data: {}, content: '', excerpt: '', orig: '', language: '', matter: '' };
+  const file: FrontmatterFile = {
+    data: {}, content: input.replace(/^\ufeff/, ''), excerpt: '', orig: Buffer.from(input),
+    language: (options.language || options.lang || 'yaml').toLowerCase(), matter: '', isEmpty: false,
+  };
+  if (file.content.startsWith(open) && file.content[open.length] !== open.slice(-1)) {
+    parseMatter(file, options, open, close);
+  }
+  excerpt(file, options, open);
   return file;
 }
 

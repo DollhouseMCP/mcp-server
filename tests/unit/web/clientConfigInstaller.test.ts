@@ -76,6 +76,50 @@ describe('config-only installer', () => {
     expect(await readFile(target.path, 'utf8')).toBe(source);
   });
 
+  it.each(['vscode', 'zed'])('explains unsupported comments and leaves %s JSONC settings untouched', async client => {
+    const environment = { home, platform: 'linux', env: {} };
+    const target = clientConfigTarget(client, environment);
+    await mkdir(dirname(target.path), { recursive: true });
+    const sources = [
+      '{\n  "docs": "https://example.com",\n  // Keep this comment\n  "theme": "dark"\n}\n',
+      '{\n  /* Keep this block comment */\n  "theme": "dark"\n}\n',
+      `{ "note": ${JSON.stringify('Escaped quote: " // still a string')}, /* Real comment */ "theme": "dark" }`,
+      `{ "note": ${JSON.stringify('Trailing backslash: \\')}, // Real comment\n "theme": "dark" }`,
+    ];
+    for (const source of sources) {
+      await writeFile(target.path, source);
+      await expect(installClientConfig(client, 'latest', environment)).rejects.toThrow(/contains comments.*file left untouched/);
+      expect(await readFile(target.path, 'utf8')).toBe(source);
+      expect(await readdir(dirname(target.path))).toEqual(['settings.json']);
+    }
+  });
+
+  it.each(['vscode', 'zed'])('preserves URLs and comment markers inside %s JSON strings', async client => {
+    const environment = { home, platform: 'linux', env: {} };
+    const target = clientConfigTarget(client, environment);
+    const existing = {
+      url: 'https://example.com/settings',
+      pattern: '/* literal block markers */',
+      escapedQuote: 'Escaped quote: " // still a string',
+      trailingBackslash: 'Trailing backslash: \\',
+    };
+    await mkdir(dirname(target.path), { recursive: true });
+    await writeFile(target.path, JSON.stringify(existing));
+    await installClientConfig(client, 'latest', environment);
+    expect(JSON.parse(await readFile(target.path, 'utf8'))).toMatchObject(existing);
+  });
+
+  it.each(['vscode', 'zed'])('keeps clear parse errors for malformed %s JSON containing comment-like strings', async client => {
+    const environment = { home, platform: 'linux', env: {} };
+    const target = clientConfigTarget(client, environment);
+    await mkdir(dirname(target.path), { recursive: true });
+    const source = `{ "url": "https://example.com", "note": ${JSON.stringify('Escaped quote: " /* literal */ // literal')}, }`;
+    await writeFile(target.path, source);
+    await expect(installClientConfig(client, 'latest', environment)).rejects.toThrow(SyntaxError);
+    expect(await readFile(target.path, 'utf8')).toBe(source);
+    expect(await readdir(dirname(target.path))).toEqual(['settings.json']);
+  });
+
   it('refuses malformed/invalid structures without overwriting and cannot select prototype keys', async () => {
     const environment = { home, env: {} };
     const target = clientConfigTarget('cursor', environment);
