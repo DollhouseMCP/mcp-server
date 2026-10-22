@@ -1,98 +1,78 @@
-# Beta.3 dependency remediation — 2026-10-22 verification in progress
+# Beta.3 dependency remediation — 2026-10-22
 
-The latest reviewed source and reconciled lock now audit clean: root and standalone Safety each have **0 critical, 0 high, 0 moderate** findings (both exit 0). The `gray-matter` and `install-mcp` dependencies are replaced by bounded, licensed source adapters; the vulnerable consumer chains are absent. The hosted font regression and permission fixture isolation are fixed. This remains a draft; no release or deployment is authorized by these results.
+Root, standalone Safety and the override-free local artifact consumer now audit **0 critical, 0 high, 0 moderate** findings. The final full unit run passes. All 199 integration files have successful executed evidence across the original run and one corrected Docker-file rerun. **The PR remains a draft into beta; these results do not publish or deploy anything.**
 
-The direct, user-authorized `npm install --package-lock-only ...` attempt was rejected by the local PreToolUse hook (`Dangerous command pattern: npm install *`). The staged files were restored immediately. A separately reviewed **declarative file reconciliation**, using existing package records and no dependency resolver, then repaired the lock. This is not npm regeneration. Root lock SHA-256 is `cc268f6a2c365a3fbd742a85ba1bd16ba110776199ee8b8c9487fd5e891c530c`; all retained package versions and integrity values are unchanged. A fresh script-disabled ci, strict actual/virtual raw/override/peer edge checks, npm ls, signatures and full build passed.
+## Audit results
 
-Current validation: root signatures **880 / 109 attestations**; Safety **512 / 56**. The full unit wave finished in 587.52 seconds with **18,550 passed, zero assertion failures, 17 skipped**, but exits **1** because `tests/unit/cli/cliAuthStorage.test.ts` could not run after a Jest worker out-of-memory crash (801 passed suites, one failed, one skipped). That file will receive one isolated run with unchanged budgets after integration. Performance passed **10 suites / 120 tests**, exit 0. The full **199-file integration inventory is currently running against a newly created, owned PostgreSQL 17 cluster**, with required-PG flags and an explicit Ubuntu VM Docker context. No terminal integration totals are claimed yet.
+| Graph | Before high | Before moderate | Current critical / high / moderate | Current exit |
+| --- | ---: | ---: | --- | ---: |
+| Root workspace | 38 | 7 | 0 / 0 / 0 | 0 |
+| Standalone Safety | 36 | 5 | 0 / 0 / 0 | 0 |
+| Exact local artifact consumer | Different historical graph; see note | — | 0 / 0 / 0 | 0 |
 
-An override-free, local packed-artifact consumer installed successfully and audits **0**, with all **391 raw/peer edges** valid in both actual and virtual trees. It uses the actual local server and unpublished Safety1.0.6 tarballs, both MIT notices, and one explicitly reviewed aged parent `express-rate-limit@8.5.1` admitted by SDK's `^8.2.1` range. This is exact-artifact reproducibility, not a fresh registry resolution guarantee. Its `npm audit signatures` command exits 1 because npm tries to look up unpublished local Safety1.0.6 in the registry; the new registry parent's signature was verified directly against npm's official key, and all other registry records match the signature-verified root graph. This command limitation is retained, not reported as a pass.
+The earlier isolated install-mcp consumer reproduction had 2 high and 1 critical affected package entries. It is a different graph, not an invented before-count for the complete server artifact. Counts are affected package entries, not independent advisories. [Complete original inventory](evidence/beta3-dependency-findings-2026-10-21-before.json), [current audits and verification evidence](evidence/beta3-dependency-findings-2026-10-21-after.json), and [all 199 integration file results](evidence/beta3-dependency-findings-2026-10-22-integration.json) are committed. No findings are suppressed, allowlisted or waived.
 
-The final report and sanitized per-file integration evidence will replace this progress note after the active run and owned-service cleanup complete. The material below is the **superseded October21 snapshot**, retained temporarily to preserve the earlier failed/incomplete verification history; its uses of “current” refer to that historical candidate only.
+## Dependency and consumer corrections
 
----
+- Root and Safety tooling use Jest 30.3.0 and TypeScript-ESLint 8.48.1; Safety Jest types use 30.0.0. Safety is prepared as 1.0.6 with root floor ^1.0.6; it remains unpublished.
+- Hono 4.13.11 and exact SDK 1.32.0 remain selected. The sole age exception is SDK 1.32.0 under [#2452](https://github.com/DollhouseMCP/mcp-server/issues/2452#issuecomment-6327546083). The aged cutoff is 2026-09-30T00:00:00Z; SDK was published2026-10-02T17:32:51.427Z, reaching21 days on October 23 at that UTC time. Optional SDK budget/audience controls remain off by default.
+- Removed gray-matter and install-mcp, plus their obsolete overrides. Bounded source adapters use the existing direct js-yaml/smol-toml dependencies. Frontmatter retains the used parsing/stringifying contract and secure wrapper engines. Installation preserves supported client paths/schemas, unrelated settings, managed symlinks and atomic writes; invalid configs fail without replacement. Both source packages' official tarball integrity and MIT notices were independently reviewed; the notices ship in the package.
+- Gray-matter→js-yaml 3→argparse 1→sprintf-js and install-mcp→giget→tar 6 are absent. No third-party package manifest was patched, and no bundled dependency workaround remains. Stale Safety tooling and ts-jest-resolver's Jest 29 closure are removed; current overrides are effective.
 
-# Beta.3 dependency remediation — 2026-10-21
+## Direct npm rejection and reviewed lock reconciliation
 
-Status: **draft backup only; security remediation remains incomplete**. The root audit still has 37 high and 7 moderate affected package entries. Standalone Safety is clean. This branch is not release or deployment clearance.
+The user-authorized direct command was attempted visibly:
 
-Base and PR target: `beta` at `d0278ad58d962a3386be34379475c40600c141a1`. Backup branch: `fix/beta3-dependency-findings`. No main-only commits were merged or cherry-picked; [the separate inventory](beta3-main-only-commits-2026-10-21.md) lists all 20. The separate release branch is unchanged. No publication, tag, release, SSH or deployment was performed.
+```sh
+npm install --package-lock-only --ignore-scripts --no-audit --no-fund --save-dev --save-exact --prefer-dedupe --workspaces --include-workspace-root --before=2026-09-30T00:00:00Z jest@30.3.0 @typescript-eslint/parser@8.48.1 @typescript-eslint/eslint-plugin@8.48.1
+```
 
-## Literal audit before and after
+The local PreToolUse hook rejected it: **`Dangerous command pattern: npm install *`**. The staged SDK/lock files were restored immediately; standalone Safety files were verified unchanged. No alternate installer, hidden resolver or hook disable was used.
 
-| Graph / exact command | Before high | Before moderate | Current high | Current moderate | Current critical | Affected package entries, before → current | Current exit |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Root workspace: `npm audit --json` | 38 | 7 | 37 | 7 | 0 | 45 → 44 | 1 |
-| Standalone Safety: `npm audit --json --workspaces=false` from `packages/safety` | 36 | 5 | 0 | 0 | 0 | 41 → 0 | 0 |
+A separately authorized and independently reviewed **declarative file reconciliation** then repaired the lock; this is not npm regeneration. All retained package versions, URLs and integrity values are unchanged. The transformation reconciled root metadata, removed 144 obsolete paths, cleared the 25 surviving bundle flags (55 existed before deleted records), and restored 30 original Safety ESLint 8/Node20-types closure records that the historical broad staging packet had over-removed. It retained 981 package records. Read-only Arborist validation checked all ordinary, override and peer edges; fresh ci and npm ls independently confirmed the installed graph. Root lock SHA-256 is `cc268f6a2c365a3fbd742a85ba1bd16ba110776199ee8b8c9487fd5e891c530c`; standalone Safety remains `73c2c4aae0ebd9a5c405bf8e0b715a29eb328ace1c483d3bb54d8c4ad5f50c5c`.
 
-The preserved earlier isolated `install-mcp@1.10.2` lock-only consumer reproduction reported 2 high, 0 moderate and 1 critical affected package entries (3 total), exit 1. It was not rerun or represented as a fresh consumer installation. Root and Safety were freshly audited during this verification. Counts include propagated package findings, not independent vulnerabilities: the root residuals represent two advisory IDs; the earlier installer consumer graph contains 12 underlying tar advisories. The original “Safety findings” were emitted by `cd packages/safety && npm ci --ignore-scripts --workspaces=false && npm run build`; they were npm findings, not a separate scanner.
-
-[Complete before inventory](evidence/beta3-dependency-findings-2026-10-21-before.json) and [complete current inventory and raw audits](evidence/beta3-dependency-findings-2026-10-21-after.json) retain affected package versions/nodes, advisory objects, dependency routes, npm-suggested fixes and current input hashes. Findings are not suppressed, allowlisted or waived.
-
-## Changes prepared
-
-- Root and Safety Jest are pinned to `30.3.0`; TypeScript-ESLint parser/plugin to `8.48.1`; Safety Jest types to `30.0.0`. The standalone Safety lock resolves these parent upgrades and eliminates its affected paths. The root lock still contains stale nested Safety tooling.
-- Safety source is prepared as `1.0.6`, with the root dependency floor `^1.0.6`, to avoid reusing published `1.0.5` for changed metadata. Safety 1.0.6 has not been published.
-- Hono is overridden to aged `4.13.11`, the smallest patched release for GHSA-5r4p-p66f-jhc7. The root SDK is exactly `1.32.0`. SDK/Hono advisory rows are absent from the fresh audit.
-- Existing js-yaml 3.15.2 consumers receive a scoped intended `argparse@2.0.1` override; forcing js-yaml 4 would break gray-matter's `safeLoad` API. There is no patched published sprintf-js leaf release. The current root lock has not realized the argparse replacement.
-- `ts-jest-resolver@2.0.1` receives an intended child override to aged `jest-resolve@30.3.0`; its unused runtime/type-only dependency otherwise retains a Jest 29 braces path. This override is prepared in the manifest but unresolved in the current root lock.
-- The failed bundling experiment is removed from the manifest. The pre-repair root lock still records root `bundleDependencies: ["gray-matter", "install-mcp"]` and 55 derived `inBundle` flags; this manifest/lock discrepancy is part of the blocked draft. Bundling is not a downstream fix: npm validates bundled children using upstream raw ranges, which request argparse 1 and tar 6. No third-party metadata is patched or vendored.
-
-## Current lock identity and remaining root findings
-
-The available root lock is SHA-256 `f677d4d2405a19ef8c5b32c6826c983acc4e4a988272202dd111cc18ac4271fe`; standalone Safety is `73c2c4aae0ebd9a5c405bf8e0b715a29eb328ace1c483d3bb54d8c4ad5f50c5c`. This root hash equals the corrected helper's recorded **pre-repair input**, and the preserved older `/tmp/beta3-lock-run2.log` receipt. The corrected command file is SHA-256 `ca3643136be3047391fdf4cd85d376dc3f7d88889152889b3a341f78b4e4c40f`; helper `9ccf2fb102ed4498884d9e142250613f494a240935395148a776b7a18b11fb67`. No corrected composition receipt or pending recovery journal exists locally. Therefore the reported newer successful execution cannot be corroborated by the current files. This describes available local evidence, not what the user did elsewhere.
-
-The fresh root audit still reports:
-
-- **GHSA-vfj7-8cjw-p6xm**, braces, high: stale nested Safety Jest 29/TypeScript-ESLint 7 graph and `ts-jest-resolver -> jest-resolve@29.7.0` retain affected braces/micromatch parent routes.
-- **GHSA-hp3w-g68c-fv3c**, sprintf-js, moderate: gray-matter and `@istanbuljs/load-nyc-config` retain nested `argparse@1.0.10 -> sprintf-js@1.0.3`. A fresh physical root installation confirms both argparse 1 copies and sprintf 1 remain.
-
-The already prepared targeted resolver reconstruction is intended to remove these paths; its output remains unverified. Merely declaring the overrides has not fixed the checked-in graph. There is no patched braces or sprintf-js leaf release to bump directly in the reviewed registry snapshot. The corrected Jarvis-only helper preserves exactly 133 stale input records in evidence, clears 55 introduced bundle flags and asks npm to rebuild exact existing Jest/parser/plugin dependencies under the age cutoff. It preserves the completed standalone Safety lock and composes only the approved SDK record. A successful real resolver output, independent lock review, fresh installation/audits and final-candidate tests are still required. The existing helper is bound to HEAD `d0278ad`; after the requested backup commit it is historical and will reject the changed HEAD. A future run needs a fresh reviewed recipe bound to that backup commit, with effective-graph postconditions; do not run the old command as a current handoff. Codex has not executed `npm install`, an equivalent resolver, or a hook bypass.
-
-## Dependency age and provenance
-
-The aged lane cutoff is `2026-09-30T00:00:00Z`. Exact SDK `1.32.0`, published `2026-10-02T17:32:51.427Z`, is the sole approved exception under [#2452](https://github.com/DollhouseMCP/mcp-server/issues/2452#issuecomment-6327546083); its 21-day date is October 23 at the same UTC time. Mick approved that exact version through Jarvis's voice relay. The exact current lock hashes match the prior reviewed candidate. Its official registry publication-time/integrity review covered 401 affected after-records / 204 unique package-version pairs; it is not a new full-lock age proof or successful resolution claim. There is exactly one SDK node at 1.32.0, composed with unchanged dependency/peer/engine declarations and exact registry artifact integrity. The exception does not waive other young versions, vulnerabilities or checks. Optional SDK element-budget/audience controls remain off by default.
-
-## Downstream consumer blockers and concrete fix
-
-Root overrides do not propagate to consumers. Two production dependency chains remain blocked:
-
-1. **#2668:** `install-mcp@1.10.2 -> giget@1.2.5 -> tar@6.2.1`. Official registry latest install-mcp is still 1.10.2; no direct dependency bump is currently available. Investigation of the published entry and upstream source found no giget import/use. The smallest concrete upstream patch is deleting the unused `"giget": "^1.2.5"` dependency, refreshing its Bun lock through an authorized resolver, validating build/tests/client behavior, and publishing a patch. This project can then bump to that fixed release after provenance/age review and verify a clean isolated packaged consumer. No upstream PR or publication was performed. Replacing the dependency locally would require preserving 14 clients' paths and JSON/YAML/TOML schemas, so it is not a small safe rewrite in this dependency task. Absence of an observed runtime call does not waive the vulnerable installed graph.
-2. `gray-matter@4.0.3 -> js-yaml@3.15.2 -> argparse@1.0.10 -> sprintf-js@1.0.3`, affected by GHSA-hp3w-g68c-fv3c. Official package metadata confirms these raw ranges. The repository's scoped argparse 2 override cannot fix a packaged consumer. A compatible upstream parent release or a separately reviewed replacement is required, followed by isolated packed-artifact verification. This consumer chain has not received a fresh standalone audit in this run; the parent/leaf metadata and vulnerability are recorded independently.
-
-No root audit result can establish downstream consumer clearance. There is no current consumer override, bundle, vendor patch or risk acceptance being claimed.
-
-## Fresh verification of the available candidate
-
-The validation source was copied from all current tracked and untracked worktree files, including the modified manifests/locks, and initialized with the same base objects. It is not an old HEAD-only checkout. The evidence directory is `/Users/mick/.codex/evidence/beta3-dependency-findings-phase2-20261021/final-candidate-20261021`; command logs, exit-result JSON, source hashes and independent review receipts are preserved there. Build-generated files remain in that isolated source copy.
+## Fresh installation, provenance and package proof
 
 | Check | Literal result |
 | --- | --- |
-| Fresh root `npm ci --ignore-scripts --no-audit --no-fund` | Exit 0; 1,009 packages added |
-| `npm run build` | Exit 0; Safety TypeScript, root TypeScript and runtime assets pass |
-| Original standalone Safety ci/build inside prebuild | Exit 0; 515 packages added, 516 audited, zero vulnerabilities |
-| Root `npm audit signatures` before standalone build replaces workspace node_modules | Exit 0; 1,008 verified signatures, 113 verified attestations |
-| Safety `npm audit signatures --workspaces=false` | Exit 0; 512 verified signatures, 56 verified attestations |
+| Fresh root ci, lifecycle scripts disabled | Exit 0; 881 packages added |
+| Root virtual / actual graph | 981 nodes/2067 edges and 883 nodes/2058 edges; 0 invalid required edges, 0 version/path mismatches |
+| Root npm ls / root and Safety audits | Exit 0 |
+| Full Safety/server TypeScript build and runtime assets | Exit 0 |
+| Root registry signatures | Exit 0; 880 verified signatures  / 109 attestations |
+| Standalone Safety registry signatures | Exit 0; 512  / 56 |
+| Package runtime-asset verifier | Exit 0; complete UI/assets |
+| Override-free local artifact consumer ci / audit / npm ls | Exit 0; 234 packages added; 0 findings |
+| Consumer virtual and actual graphs | Each235 nodes/391raw+peer edges; 0 invalid required edges or version/path mismatches |
+| Compiled packed adapters | YAML roundtrip and all 14 adapted client configurations pass; both MIT notices included |
 
-Signature verification is registry provenance evidence, not vulnerability clearance. The root build runs standalone Safety setup, replacing its physical tooling with the clean Safety graph; this does not repair the root virtual lock's stale nodes.
+The consumer fixture installs the actual local server and Safety 1.0.6 tarballs. A raw consumer check first rejected express-rate-limit 8.3.1→exact ip-address 10.1.0: that legitimate raw leaf has1high/1moderate affected entries and five underlying advisories. The separately reviewed aged parent8.5.1 (publishedMay 6) is admitted by SDK's raw ^8.2.1 range and permits the existing patched ip-address 10.7.1. This is the fixture's only new registry version; main lock versions are unchanged. The fixture has no overrides and proves a clean, raw-range-compatible closure for these exact artifacts, **not a fresh registry resolution guarantee**.
 
-## Repository full-suite stages — failed / incomplete
+Consumer `npm audit signatures` literally exits1 (`ETARGET`) because npm looks up unpublished local Safety 1.0.6 in the registry. It is not reported as a pass. Both local tarball SHA-512 values match the pack receipts; every other registry version/SRI matches the signature-verified root graph. The sole consumer-only parent's official registry signature was additionally verified cryptographically against npm's official key, and its downloaded archive matches registry SHA-512/SHA-1.
 
-The repository defines `test:all` as default unit/Safety, performance and integration stages. Each stage was launched independently with `CI=true` and JSON result paths so an earlier failure did not short-circuit the remaining stages. Repository assertions/timeouts are unchanged. Live-credential E2E and browser suites have separate commands and are not part of `test:all`. **The complete full suite did not finish: required PostgreSQL coverage was unavailable.**
+## Final tests and retained failure history
 
-| Stage | Literal exit / disposition | Suites | Tests |
-| --- | --- | --- | --- |
-| `npm test` (includes Safety) | 1; failed | 798 passed, 2 failed, 1 skipped; 801 total | 18,526 passed, 2 failed, 17 skipped; 18,545 total |
-| `npm run test:performance` | 0; passed | 10 passed | 120 passed |
-| `npm run test:integration` | Wrapper 0 **after scoped SIGINT; interrupted, not passed** | 11 completed failed files observed; full totals unavailable | Full assertion totals unavailable; no Jest JSON report |
-| One focused two-file rerun | 1; failed | 1 passed, 1 failed | 24 passed, 1 failed; 25 total |
+Repository assertions, heap limits, concurrency and timeouts are unchanged. Full stages ran independently with CI=true; integration required real PostgreSQL and used an explicit Ubuntu VM Docker context.
 
-The full unit wave failed in two assertions: `tests/unit/web/permissionRoutes.test.ts:679` expected one decision but observed an additional live tool command reaching the advertised test permission server; `tests/unit/auth/embedded-as/EmbeddedAuthorizationServer.assets.test.ts:24` expected `/fonts.css` HTTP 200 and received 404, although both source and built asset files exist. No unchanged-base comparison or dependency-causality conclusion is claimed.
+| Run | Exit | Suites | Tests |
+| --- | ---: | --- | --- |
+| Initial full unit | 1 | 801 passed, 1 OOM failed, 1 skipped; 803 total | 18,550 passed, 0 assertion failures, 17 skipped; 18,567 discovered |
+| Original CLI-file diagnostic | 1 | 1 OOM failed | 0 executed |
+| CLI after fixture correction | 0 | 1 passed | 8 passed |
+| **Final full unit confirmation** | **0** | **802 passed, 1 skipped; 803 total** | **18,558 passed, 0 failed, 17 skipped; 18,575 total** |
+| Performance | 0 | 10 passed | 120 passed |
+| Complete original integration | 1 | 198 passed, 1Docker-fixture failed; 199 total | 4,125 passed, 8 failed, 24 skipped; 4,157 total |
+| Corrected Docker integration file | 0 | 1 passed | The same 8 cases passed |
+| Integration case union across recorded runs | Not a single new full invocation | 199 files with successful executed evidence | 4,133 passed, 0 failed, 24 skipped |
 
-The single quiet two-file rerun passed the permission router tests; the hosted auth `/fonts.css` 404 persisted. This focused result does not replace the failed full-unit wave. No further test wave, timeout adjustment or assertion weakening was used. Unit skips include existing platform/timing, Docker image, rate-limit and device-poll cases; their sanitized names are retained in the evidence JSON.
+The initial full unit run took 587.52 seconds. Its CLI file and one156.22-second isolated diagnostic exhausted the 4 GB V8 heap before reporting assertions. A boolean-only reproduction proved the negative test inherited cached parsed database URLs: deleting only process.env's app URL still resolved a large Drizzle handle rather than rejecting. The reviewed fixture now clears and restores both parsed and process URL fields, preserving the exact error assertion. Its8 tests passed in 0.55 seconds; the unchanged full unit command then passed in 552.95 seconds. No speculative memory tuning was used. Fonts and permission-router tests also pass in the full run.
 
-Integration ran for **2,000.07 seconds (33m20s)** before a scoped graceful SIGINT to its verified owned Jest process. PostgreSQL setup was unavailable; some DB suites skipped, but other required-PG suites failed. At the 25- and 30-minute checks, the log/file progress stopped; the worker remained idle with stable memory. A bounded source/cache/socket/owned-process check supported repeated unavailable-prerequisite SQL assertions/cleanup timeouts. The latest transform inferred `MemoryHeadInvalidationRuns.test.ts`, whose source explicitly requires real PostgreSQL with no skip/fallback. This is not proof of a JavaScript deadlock. No host service was signaled or provisioned. Cleanup found no remaining owned fixture processes.
+The full integration invocation completed in 953.76 seconds with all 199 file results. Every PostgreSQL suite passed. Docker's cached setup layer lacked curl/jq and the hookrunner account because an initial `|| true` had swallowed setup failure. Removing that misplaced fallback preserves mandatory package/user setup and the final nonroot ownership step. A fresh build succeeded and runtime uid/gid 1001 was verified; the one focused file then passed8 / 8 with unchanged budgets. The [per-file ledger](evidence/beta3-dependency-findings-2026-10-22-integration.json) preserves the failed original wave, matches actual Docker case identities before replacement, and derives the union from actual assertion records. **The original full integration exit 1 is not relabeled exit 0.**
 
-The npm/Jest wrapper returned literal **0 following SIGINT**, and produced no integration JSON totals. This is **partial/interrupted verification**, not a successful test exit or completed coverage. Eleven failed file records were observed before interruption: ten database suites and `permission-hook-docker.test.ts`; their paths are preserved in the sanitized evidence. Passed/skipped/total integration counts must not be invented. Required service coverage must be rerun in a prepared environment before release consideration.
+## Isolation, source identity and cleanup
 
-[Draft backup PR #3129](https://github.com/DollhouseMCP/mcp-server/pull/3129) records these blockers. Raw test logs and live permission command payloads remain outside the repository. Root lock reconstruction, both production consumer dependency fixes, the persistent asset test failure and complete final-candidate verification remain unresolved.
+Verification used a fresh copy of current source with isolated installs. After ci/build/audits/signatures, only the two reviewed test-fixture files changed; 2,583 source/test/script/package paths were compared with the final source. Non-generated bytes match. The build's generated version file differs only in BUILD_TIMESTAMP; production logic and all four dependency input hashes are unchanged.
+
+PostgreSQL 17 used a new owned tmpfs cluster reached only through an owned loopback SSH forward to the development VM. Global teardown removed the dedicated test database and test directory. Cluster/container/forward identities were checked before cleanup; the owned container, inspection containers, forward process, listener and temporary fixture/preflight image tags are verified absent. No shared database, daemon configuration, global cache prune or host SSH server was changed. Raw logs and tool ingress payloads remain outside the repository; committed evidence contains sanitized aggregates and proof hashes.
+
+[Draft PR #3129](https://github.com/DollhouseMCP/mcp-server/pull/3129) targets beta at `d0278ad58d962a3386be34379475c40600c141a1`. [Main-only commit inventory](beta3-main-only-commits-2026-10-21.md) is unchanged; none was merged. The October 21 failed/incomplete snapshot remains in Git history at `085d3a07182bcf3c1d4c322d82cce3f9a2b7853d`. Safety publication and release approval remain separate prerequisites. No publication, tag, release, merge or deployment occurred.

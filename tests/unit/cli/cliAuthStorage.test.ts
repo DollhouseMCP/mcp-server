@@ -29,6 +29,7 @@
  */
 
 import { describe, it, expect, afterEach } from '@jest/globals';
+import { env } from '../../../src/config/env.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
@@ -115,10 +116,32 @@ describe('openCliAuthStorage', () => {
     // Cycle 19 / B2: same env-routing pattern. Test the explicit
     // backend selection; the env-driven path is covered by integration
     // tests where the env is set in the test runner.
-    delete process.env.DOLLHOUSE_DATABASE_URL;
-    await expect(openCliAuthStorage({ backend: 'postgres', methods: ['github'] })).rejects.toThrow(
-      /DOLLHOUSE_DATABASE_ADMIN_URL.*DOLLHOUSE_DATABASE_URL/u,
-    );
+    // URL fallback reads the parsed config, not later process.env mutations.
+    // Clear both sources so a configured runner cannot turn this negative
+    // case into a resolved Drizzle handle that Jest attempts to pretty-print.
+    const keys = ['DOLLHOUSE_DATABASE_ADMIN_URL', 'DOLLHOUSE_DATABASE_URL'] as const;
+    const saved = keys.map(key => ({
+      key,
+      processValue: process.env[key],
+      parsedValue: env[key],
+      parsedPresent: Object.hasOwn(env, key),
+    }));
+    try {
+      for (const key of keys) {
+        delete process.env[key];
+        env[key] = undefined;
+      }
+      await expect(openCliAuthStorage({ backend: 'postgres', methods: ['github'] })).rejects.toThrow(
+        /DOLLHOUSE_DATABASE_ADMIN_URL.*DOLLHOUSE_DATABASE_URL/u,
+      );
+    } finally {
+      for (const { key, processValue, parsedValue, parsedPresent } of saved) {
+        if (processValue === undefined) delete process.env[key];
+        else process.env[key] = processValue;
+        if (parsedPresent) env[key] = parsedValue;
+        else delete env[key];
+      }
+    }
   });
 
   it('explicit `backend` option overrides env detection', async () => {
