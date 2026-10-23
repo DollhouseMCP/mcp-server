@@ -1710,6 +1710,11 @@ function resolveRateLimitStore(container: DiContainerFacade): IRateLimitStore | 
   );
 }
 
+const ACTIVATION_MANAGER_NAMES = {
+  personas: 'PersonaManager', skills: 'SkillManager', agents: 'AgentManager',
+  memories: 'MemoryManager', ensembles: 'EnsembleManager',
+} as const;
+
 function resolveSessionActivationStateAdapter(
   container: DiContainerFacade,
   database: DatabaseInstance | undefined,
@@ -1729,6 +1734,11 @@ function resolveSessionActivationStateAdapter(
   if (container.hasRegistration('SessionActivationRegistry')) {
     return new RegistrySessionActivationStateAdapter(
       container.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      type => {
+        const managerName = ACTIVATION_MANAGER_NAMES[type];
+        return container.hasRegistration(managerName)
+          ? container.resolve<BaseElementManager<IElement>>(managerName) : undefined;
+      },
     );
   }
   return new InMemorySessionActivationStateAdapter();

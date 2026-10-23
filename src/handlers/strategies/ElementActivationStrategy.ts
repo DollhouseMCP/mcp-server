@@ -6,6 +6,7 @@
  * implements this interface to provide custom activation logic.
  */
 
+import type { ResolvedActivationTarget } from '../../state/PendingActivationDeletions.js';
 import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 
 /**
@@ -16,6 +17,8 @@ export interface MCPResponse {
     type: string;
     text: string;
   }>;
+  /** Exact element resolved by activation; internal deletion coordination only. */
+  activationTarget?: ResolvedActivationTarget;
   /** Internal persistence metadata; not rendered into the MCP response body. */
   activationRecord?: {
     name: string;

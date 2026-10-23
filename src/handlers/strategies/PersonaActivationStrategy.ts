@@ -53,6 +53,9 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
       text += `\n\n**Reference:**\n${referenceContent}`;
     }
 
+    const notices = result.notices?.join("\n");
+    if (notices) text += `\n\n${notices}`;
+
     // Issue #642: Fail-safe warning for CLI restrictions
     const restrictionWarning = this.formatRestrictionWarning(persona.metadata as unknown as Record<string, unknown>);
     if (restrictionWarning) {
@@ -69,6 +72,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
         type: "text",
         text
       }],
+      activationTarget: persona,
       activationRecord: {
         name: persona.metadata.name,
         filename: persona.filename,
@@ -92,12 +96,10 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
 
     // Issue #275: Verify the named persona exists before deactivating
     const persona = await this.personaManager.findPersonaAsync(name);
-    if (!persona) {
+    const result = this.personaManager.deactivatePersona(name);
+    if (!persona && !result.success) {
       throw new ElementNotFoundError('Persona', name);
     }
-
-    // Issue #281: Pass the name to deactivate the specific persona
-    const result = this.personaManager.deactivatePersona(name);
     const indicator = this.getPersonaIndicator();
 
     if (!result.success) {
@@ -115,8 +117,8 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
         text: `${indicator}✅ ${result.message}`
       }],
       activationRecord: {
-        name: persona.metadata.name,
-        filename: persona.filename,
+        name: persona?.metadata.name ?? name,
+        filename: result.storedReference ?? persona?.filename ?? name,
       },
     };
   }

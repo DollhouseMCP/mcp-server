@@ -1,3 +1,6 @@
+import { visitSequentially } from '../utils/visitSequentially.js';
+import type { ActivationMetricsTracker } from '../metrics/ActivationMetricsTracker.js';
+import { ActivationMetricsCollector } from '../metrics/collectors/ActivationMetricsCollector.js';
 import { PACKAGE_VERSION } from "../generated/version.js";
 import * as path from "node:path";
 import { SecurityMonitor } from "../security/securityMonitor.js";
@@ -28,7 +31,7 @@ import type { EnsembleManager } from "../elements/ensembles/EnsembleManager.js";
 import { PersonaExporter, PersonaImporter } from "../persona/export-import/index.js";
 import type { PersonaManager } from "../persona/PersonaManager.js";
 import { PersonaHandler } from "../handlers/PersonaHandler.js";
-import { ElementCRUDHandler } from "../handlers/ElementCRUDHandler.js";
+import { ElementCRUDHandler, type ElementCRUDHandlerOptions } from "../handlers/ElementCRUDHandler.js";
 import { CollectionHandler } from "../handlers/CollectionHandler.js";
 import { PortfolioHandler } from "../handlers/PortfolioHandler.js";
 import { GitHubAuthHandler } from "../handlers/GitHubAuthHandler.js";
@@ -981,7 +984,7 @@ export class DollhouseContainer {
    * Called during preparePortfolio() after auto-load memories.
    *
    * Issue #598: Each element type is restored independently.
-   * Results with success: false retain existing pruning behavior.
+   * Refused activations retain their records for a later retry or explicit deactivation.
    * Exceptions skip further stale-record removal and defer restoration.
    * Auto-loaded memories are deduplicated (not activated twice).
    */
@@ -1003,18 +1006,11 @@ export class DollhouseContainer {
       activateFn: (activation: PersistedActivation) => Promise<{ success: boolean }>,
       skip?: Set<string>,
     ): Promise<void> => {
-      const prune = (activation: PersistedActivation): void => {
-        if (activation.filename || activation.identity) {
-          store.removeStaleActivation(elementType, activation.name, activation.filename, activation.identity);
-        } else {
-          store.removeStaleActivation(elementType, activation.name);
-        }
-      };
-      for (const activation of store.getActivations(elementType)) {
+      await visitSequentially(store.getActivations(elementType).values(), async activation => {
         operation?.assertCurrent();
         if (skip?.has(activation.name)) {
           logger.debug(`[Container] ${elementType} '${activation.name}' already active (auto-loaded), skipping`);
-          continue;
+          return;
         }
         try {
           const result = await activateFn(activation);
@@ -1022,8 +1018,9 @@ export class DollhouseContainer {
           if (result.success) {
             restoredCount++;
           } else {
-            logger.debug(`[Container] Pruning missing ${elementType} '${activation.name}'`);
-            prune(activation);
+            this.resolve<ActivationMetricsTracker>('ActivationMetricsTracker').retain(
+              elementType, activation.filename || activation.name,
+            );
             skippedCount++;
           }
         } catch (cause) {
@@ -1032,10 +1029,12 @@ export class DollhouseContainer {
           }
           // A restore/persistence exception is not proof of authoritative absence.
           // Do not request another stale-record removal after a failed callback.
-          logger.debug(`[Container] Deferring failed ${elementType} '${activation.name}'; skipping further stale-record removal`);
+          this.resolve<ActivationMetricsTracker>('ActivationMetricsTracker').retain(
+            elementType, activation.filename || activation.name,
+          );
           skippedCount++;
         }
-      }
+      });
     };
 
     // Personas use filename if available (Issue #843)
@@ -1086,11 +1085,10 @@ export class DollhouseContainer {
     }
   }
 
-  private resolveCrudCallerOptions(memoryProvider?: TenantMemoryOperationProvider): ConstructorParameters<typeof ElementCRUDHandler>[18] {
+  private resolveCrudCallerOptions(memoryProvider?: TenantMemoryOperationProvider): Pick<ElementCRUDHandlerOptions, 'memoryProvider' | 'forkOnEditStrategy'> {
     const forkOnEditStrategy = this.hasRegistration('ForkOnEditStrategy')
       ? this.resolve<import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy>('ForkOnEditStrategy') : undefined;
-    if (memoryProvider) return { memoryProvider, forkOnEditStrategy };
-    return forkOnEditStrategy;
+    return { ...(memoryProvider ? { memoryProvider } : {}), forkOnEditStrategy };
   }
 
   /**
@@ -1158,12 +1156,15 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       this.resolve('ElementQueryService'),
       this.resolve('ValidationRegistry'),
-      this.resolve<IActivationStateStore>('ActivationStore'),
-      this.resolve('BackupService'),
-      this.resolve('PolicyExportService'),
-      this.resolve('SessionActivationRegistry'),
-      this.resolve('ContextTracker'),
-      this.resolveCrudCallerOptions(memoryProvider),
+      this.resolve('ActivationMetricsTracker'),
+      {
+        activationStore: this.resolve<IActivationStateStore>('ActivationStore'),
+        backupService: this.resolve('BackupService'),
+        policyExportService: this.resolve('PolicyExportService'),
+        activationRegistry: this.resolve('SessionActivationRegistry'),
+        contextTracker: this.resolve('ContextTracker'),
+        ...this.resolveCrudCallerOptions(memoryProvider)
+      },
     );
     // Register for lazy resolution by PolicyExportService
     this.register('ElementCRUDHandler', () => elementCrudHandler);
@@ -1767,12 +1768,15 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       this.resolve('ElementQueryService'),
       this.resolve('ValidationRegistry'),
-      child.resolve<IActivationStateStore>('ActivationStore'),
-      child.resolve('BackupService'),
-      this.resolve('PolicyExportService'),
-      this.resolve('SessionActivationRegistry'),
-      this.resolve('ContextTracker'),
-      this.resolveCrudCallerOptions(memoryProvider),
+      this.resolve('ActivationMetricsTracker'),
+      {
+        activationStore: child.resolve<IActivationStateStore>('ActivationStore'),
+        backupService: child.resolve('BackupService'),
+        policyExportService: this.resolve('PolicyExportService'),
+        activationRegistry: this.resolve('SessionActivationRegistry'),
+        contextTracker: this.resolve('ContextTracker'),
+        ...this.resolveCrudCallerOptions(memoryProvider)
+      },
     );
 
     const collectionHandler = new CollectionHandler(
@@ -2279,6 +2283,7 @@ export class DollhouseContainer {
    * Mirrors wireLogHooks() — keeps collector registration out of the constructor.
    */
   private wireMetricsCollectors(metricsManager: MetricsManager): void {
+    metricsManager.registerCollector(new ActivationMetricsCollector(this.resolve<ActivationMetricsTracker>('ActivationMetricsTracker')));
     // PerformanceMonitor (instance)
     try {
       const monitor = this.resolve<PerformanceMonitor>('PerformanceMonitor');

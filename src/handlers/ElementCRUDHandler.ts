@@ -17,6 +17,7 @@
  * @security-audit-suppress DMCP-SEC-006
  */
 
+import { atDeletionCommit, currentDeletedActivations, recordedActivation, type DeletionCleanup, captureDeletedActivations, findStoredActivation, type DeletionTarget } from './element-crud/deletionActivation.js';
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,7 +42,7 @@ import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { PersonaManager } from '../persona/PersonaManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { ELEMENT_TYPE_MAP } from '../utils/elementTypeNormalization.js';
+import { ELEMENT_TYPE_MAP, toSingularLabel } from '../utils/elementTypeNormalization.js';
 import type { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { ElementActivationStrategy, MCPResponse } from './strategies/index.js';
 import {
@@ -59,6 +60,7 @@ import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { ActivationMetricsTracker } from '../metrics/ActivationMetricsTracker.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { formatValidationFailedError } from './element-crud/responseFormatter.js';
 import {
@@ -110,6 +112,16 @@ async function mapPolicyLookups<TInput, TOutput>(
   return resolved;
 }
 
+export interface ElementCRUDHandlerOptions {
+  readonly activationStore?: IActivationStateStore;
+  readonly backupService?: BackupService;
+  readonly policyExportService?: PolicyExportService;
+  readonly activationRegistry?: SessionActivationRegistry;
+  readonly contextTracker?: ContextTracker;
+  readonly memoryProvider?: TenantMemoryOperationProvider;
+  readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
+}
+
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
   private activePolicySnapshots = new Map<string, Promise<PolicyElement[]>>();
@@ -117,6 +129,11 @@ export class ElementCRUDHandler {
   private readonly memoryProvider?: TenantMemoryOperationProvider;
   private readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
   private operationCheck?: () => void;
+  private readonly activationStore?: IActivationStateStore;
+  private readonly backupService?: BackupService;
+  private readonly policyExportService?: PolicyExportService;
+  private readonly activationRegistry?: SessionActivationRegistry;
+  private readonly contextTracker?: ContextTracker;
 
   private get memoryManager(): MemoryManager {
     this.operationCheck?.();
@@ -138,24 +155,22 @@ export class ElementCRUDHandler {
     private readonly fileOperations: IFileOperationsService,
     private readonly elementQueryService: ElementQueryService,
     private readonly validationRegistry: ValidationRegistry,
-    private readonly activationStore?: IActivationStateStore,
-    private readonly backupService?: BackupService,
-    private readonly policyExportService?: PolicyExportService,
-    private readonly activationRegistry?: SessionActivationRegistry,
-    private readonly contextTracker?: ContextTracker,
-    callerOptions?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy | {
-      readonly memoryProvider: TenantMemoryOperationProvider;
-      readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
-    },
+    private readonly activationMetricsTracker: ActivationMetricsTracker,
+    options: ElementCRUDHandlerOptions = {},
   ) {
-    if (callerOptions && 'memoryProvider' in callerOptions) {
-      if (!(callerOptions.memoryProvider instanceof TenantMemoryOperationProvider)) {
+    this.activationStore = options.activationStore;
+    this.backupService = options.backupService;
+    this.policyExportService = options.policyExportService;
+    this.activationRegistry = options.activationRegistry;
+    this.contextTracker = options.contextTracker;
+    this.forkOnEditStrategy = options.forkOnEditStrategy;
+    if ('memoryProvider' in options) {
+      if (!(options.memoryProvider instanceof TenantMemoryOperationProvider)) {
         throw new TypeError('Actual trusted memory provider required');
       }
-      callerOptions.memoryProvider.assertContextTracker(contextTracker);
-      this.memoryProvider = callerOptions.memoryProvider;
-      this.forkOnEditStrategy = callerOptions.forkOnEditStrategy;
-    } else this.forkOnEditStrategy = callerOptions;
+      options.memoryProvider.assertContextTracker(options.contextTracker);
+      this.memoryProvider = options.memoryProvider;
+    }
     if (!fixedMemoryManager && !this.memoryProvider) throw new Error('Memory manager or trusted provider required');
     // Composed handlers never construct memory strategies from a cached root manager.
     // Bound per-invocation handlers install them using the selected actual manager.
@@ -199,8 +214,14 @@ export class ElementCRUDHandler {
     const bound = new ElementCRUDHandler(this.skillManager, this.templateManager, this.templateRenderer,
       this.agentManager, operation.manager, this.ensembleManager, this.personaManager,
       this.portfolioManager, this.initService, this.indicatorService, this.fileOperations,
-      this.elementQueryService, this.validationRegistry, this.activationStore, this.backupService,
-      this.policyExportService, this.activationRegistry, this.contextTracker, this.forkOnEditStrategy);
+      this.elementQueryService, this.validationRegistry, this.activationMetricsTracker, {
+        activationStore: this.activationStore,
+        backupService: this.backupService,
+        policyExportService: this.policyExportService,
+        activationRegistry: this.activationRegistry,
+        contextTracker: this.contextTracker,
+        forkOnEditStrategy: this.forkOnEditStrategy
+      });
     bound.operationCheck = operation.assertCurrent;
     bound.agentMemoryBinding = Object.freeze({provider,operation});
     let snapshots = this.tenantPolicySnapshots.get(operation.manager);
@@ -241,6 +262,7 @@ export class ElementCRUDHandler {
     this.operationCheck?.();
     return {
       ensureInitialized: () => this.ensureInitialized(),
+      prepareElementDeletion: (type, name, filename, target) => this.prepareDeletedActivation(type, name, filename, target),
       getPersonaIndicator: () => this.getPersonaIndicator(),
       skillManager: this.skillManager,
       templateManager: this.templateManager,
@@ -539,6 +561,13 @@ export class ElementCRUDHandler {
           result.activationRecord.name,
           result.activationRecord.filename,
           result.activationRecord.identity,
+        );
+      }
+
+      if (result.activationTarget) {
+        this.getManagerForType(normalizedType)?.recordPendingActivation?.(
+          result.activationTarget,
+          result.activationRecord && recordedActivation(sessionStore?.getActivations(normalizedType) ?? [], result.activationRecord),
         );
       }
 
@@ -1269,7 +1298,7 @@ export class ElementCRUDHandler {
         };
       }
 
-      const result = await strategy.deactivate(name);
+      const result = await this.deactivateOrClearStoredReference(strategy, name, normalizedType);
       this.invalidateActivePolicySnapshot();
 
       // Issue #598, #1946: Persist deactivation state for session restore (per-session)
@@ -1280,6 +1309,9 @@ export class ElementCRUDHandler {
           result.activationRecord?.name ?? name,
           result.activationRecord?.filename,
           result.activationRecord?.identity,
+        );
+        this.activationMetricsTracker.forget(
+          toSingularLabel(ELEMENT_TYPE_MAP[normalizedType]), result.activationRecord?.filename ?? result.activationRecord?.name ?? name,
         );
       }
 
@@ -1307,6 +1339,86 @@ export class ElementCRUDHandler {
           type: "text",
           text: `❌ Failed to deactivate ${type} '${name}': ${error instanceof Error ? error.message : 'Unknown error'}`
         }]
+      };
+    }
+  }
+
+  private async deactivateStoredKey(strategy: ElementActivationStrategy, key: string): Promise<void> {
+    try {
+      await strategy.deactivate(key);
+    } catch (error) {
+      if (!(error instanceof ElementNotFoundError)) throw error;
+    }
+  }
+
+  private async prepareDeletedActivation(type: string, name: string, filename: string, target: DeletionTarget): Promise<DeletionCleanup> {
+    this.operationCheck?.();
+    const manager = this.getManagerForType(type);
+    const store = this.getSessionActivationStore();
+    const pending = manager?.beginActivationDeletion?.(filename);
+    try {
+      const prepared = await captureDeletedActivations(store?.getActivations(type) ?? [], target, filename,
+        reference => type === ElementType.PERSONA
+          ? this.personaManager.findPersonaAsync(reference)
+          : manager?.findByName(reference) ?? Promise.resolve(undefined), type);
+      this.operationCheck?.();
+      const cleanup = atDeletionCommit(() => {
+        pending?.settle();
+        const clearLive = [manager?.prepareDeletedActivation?.(filename, name),
+          ...pending?.captureLive() ?? []].filter(clear => clear !== undefined);
+        const current = store?.getActivations(type) ?? [];
+        const enrolled = new Set([...pending?.activations.values() ?? []].flatMap(records => [...records]));
+        const records = [...new Set([...currentDeletedActivations(current, prepared, filename),
+          ...current.filter(record => enrolled.has(record))])];
+        return () => this.completeDeletedActivation(type, name, filename, clearLive, records, store);
+      });
+      cleanup.settle = () => pending?.settle();
+      return cleanup;
+    } catch (error) {
+      pending?.settle();
+      throw error;
+    }
+  }
+
+  private async completeDeletedActivation(
+    type: string, name: string, filename: string, clearLive: Array<() => boolean>,
+    records: PersistedActivation[], store: IActivationStateStore | undefined,
+  ): Promise<void> {
+    this.operationCheck?.();
+    if (clearLive.length > 0) {
+      if (clearLive.map(clear => clear()).includes(false)) return;
+    } else {
+      const strategy = this.strategies.get(type);
+      if (strategy) await this.deactivateStoredKey(strategy, name);
+    }
+    for (const record of records) {
+      store?.recordDeactivation(type, record.name, record.filename, record.identity, record);
+      this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), record.filename ?? record.name);
+    }
+    this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), name);
+    this.activationMetricsTracker.forget(toSingularLabel(ELEMENT_TYPE_MAP[type]), filename);
+    this.invalidateActivePolicySnapshot();
+    this.policyExportService?.exportPolicies().catch(error => {
+      logger.warn('Failed to export policies after element deletion', { error });
+    });
+  }
+
+  private async deactivateOrClearStoredReference(
+    strategy: ElementActivationStrategy, name: string, type: string,
+  ): Promise<MCPResponse> {
+    try {
+      return await strategy.deactivate(name);
+    } catch (error) {
+      if (!(error instanceof ElementNotFoundError)) throw error;
+      const record = findStoredActivation(this.getSessionActivationStore()?.getActivations(type) ?? [], name);
+      if (!record) throw error;
+      // Retry with the exact stored live key (personas use filenames, agents use identities).
+      // A not-found here means no live exact key remains; persisted-only records are valid.
+      await this.deactivateStoredKey(strategy, record.identity?.value ?? record.filename ?? record.name);
+      // Use the persisted identity, never a guessed alias, for the normal removal path.
+      return {
+        content: [{ type: 'text', text: `✅ Cleared stored ${type} reference ${JSON.stringify(name)}` }],
+        activationRecord: record,
       };
     }
   }

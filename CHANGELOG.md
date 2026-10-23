@@ -4,15 +4,15 @@
 
 ## [2.1.0-beta.3] - Unreleased
 
-See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
+Includes the main 2.0.43 hotfix merge (#3137), including the #3128 legacy-memory reconciliation, and beta activation fixes (#3135).
 
 ### security
 
 - Upgrade the MCP SDK to 1.32.0 (GHSA-22jm-h49p-29qw, GHSA-46jr-4wx8-v453, GHSA-rvq5-wwqv-78pq, GHSA-6prh-2h8m-c8cw) and Hono to 4.13.11 (GHSA-5r4p-p66f-jhc7), with regression coverage that stored OAuth credentials and refresh tokens stay bound to their issuer. (#3066, #3129)
-- Remove `gray-matter` and `install-mcp`, replacing them with bounded MIT-licensed source adaptations (front-matter parser, client config installer). The `gray-matter → js-yaml 3 → argparse 1 → sprintf-js` and `install-mcp → giget → tar 6` chains are gone for repository and downstream installs. Historical #3129 root, standalone Safety and exact-artifact consumer audits reported 0 critical / 0 high / 0 moderate; the fresh 2026-10-22 root audit is 1 critical / 0 high / 3 moderate package entries and needs separate qualification (see release notes). Fresh registry resolution is not guaranteed. (#3129)
+- Remove `gray-matter` and `install-mcp`, replacing them with bounded MIT-licensed source adaptations (front-matter parser, client config installer). The `gray-matter → js-yaml 3 → argparse 1 → sprintf-js` and `install-mcp → giget → tar 6` chains are gone for repository and downstream installs. Historical #3129 root, standalone Safety and exact-artifact consumer audits reported 0 critical / 0 high / 0 moderate; the fresh 2026-10-22 root audit is 1 critical / 0 high / 3 moderate package entries and needs separate qualification. Fresh registry resolution is not guaranteed. (#3129)
 - Update application, browser-sanitizer and build/test dependencies (DOMPurify 3.4.16, smol-toml 1.9.0, Jest 30.3.0, TypeScript-ESLint 8.48.1); require `@dollhousemcp/safety` ^1.0.6. (#3070, #3077, #3129)
 - Pin the Node 24 Trixie container base by digest with selected Debian security updates, keep Safety build dependencies out of production layers, patch global npm leaves in tooling images, and remove unused `infocmp`/`nsenter`. Not a claim that every image advisory is resolved. (#3059, #3067, #3068, #3081)
-- Retain beta’s restricted exported frontmatter helper, private ZIP extraction with symlink refusal, serialized DangerZone persistence and `proxy-addr`/`shell-quote` pins. #3128’s new legacy-memory reconciliation remains pending and is not included in this candidate.
+- Incorporate the main 2.0.43 hotfix merge (#3137): retain restricted exported frontmatter handling, private ZIP extraction with symlink refusal, serialized DangerZone persistence and `proxy-addr`/`shell-quote` pins; include #3128’s legacy-memory reconciliation and regression coverage.
 
 ### client setup
 
@@ -33,14 +33,14 @@ See [detailed release notes](docs/releases/v2.1.0-beta.3.md).
 
 ### personas/memory
 
-- Resolve active personas by storage identity after cache eviction. (#3121)
+- Resolve active personas by storage identity after cache eviction; preserve activations when restoration fails or persona caches miss. (#3121, #3135)
 - Add authenticated, tenant-bound database-memory composition with fail-closed mutation and read-fidelity guards. Dormant: not enabled by this release. (#3012, #3014, #3015, #3016, #3017, #3018, #3020, #3023, #3029, #3032, #3034, #3035, #3037, #3038, #3042, #3043)
 
 ### CI/test
 
 - Isolate PostgreSQL and Core shards, run storage and helper proofs in required serial lanes, and recycle integration workers. Track async fixtures and owned processes through teardown; add credential-comparison, Argon2, PID-publication, cache-counter and sanitized failure diagnostics. (#3039, #3045, #3048, #3076, #3083, #3084, #3086, #3089, #3093, #3096, #3098, #3099, #3101, #3102, #3112, #3115, #3119, #3125)
 
-Candidate incorporates beta merge `c78b2590` (#3129), including all dependency and installer follow-ups at `13511f6f`. #3128 remains unmerged and excluded. Safety 1.0.6 publication and registry-consumer qualification remain publish prerequisites. Known Windows trace flake #3132 is tracked separately. See the detailed notes. No publication, deployment or database-memory activation is announced.
+Candidate incorporates beta through `0482f931` (#3137), including #3129 dependency and installer follow-ups, #3135 activation fixes and the main 2.0.43 hotfixes. Safety 1.0.6 is published on npm with the latest dist-tag; registry-consumer qualification remains separate. Known Windows trace flake #3132 is tracked separately. No server publication, deployment or database-memory activation is announced.
 
 ## [2.1.0-beta.2] - 2026-10-09
 
@@ -72,6 +72,19 @@ First versioned build of the 2.1 beta line. Not published to npm; deployed to th
 ## [2.1.0-beta] - 2026-06-25
 
 Start beta line for 2.1 hosted HTTP and expanded description limits.
+
+## [2.0.43] - Unreleased
+
+- Harden the shipped element file helper with the same nonexecuting frontmatter admission and restricted YAML/JSON serialization used by element managers. Preserve ordinary Markdown/body handling; reject unsupported metadata values before writing.
+- Extract converted ZIP input into a private temporary directory, refuse archive symlinks before extraction, and clean only the owned directory after conversion completes.
+- Serialize overlapping DangerZone persistence operations so an older snapshot cannot overwrite newer retained blocks.
+- Pin the transitive `proxy-addr` override to 2.0.8 and `shell-quote` to 1.11.0. Other dependency audit findings remain subject to the documented release profile assessment.
+- Pin the direct YAML parser to 4.3.2 to bound merge work and collection depth while retaining the supported DEFAULT-schema timestamp, merge and ordered-map types. Documents exceeding those parser budgets are refused. (#3031)
+
+- Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
+
+- **Behavior change:** permanent memories now default to `onFull: error`. Adding an entry at the 1,000-entry default capacity rejects with an actionable error and preserves existing entries. Set `onFull: evict_oldest` explicitly to retain cache-style eviction; memories with an expiring `retentionDays` policy retain their eviction default. (#2859, #2999)
+- Preserve all valid entries when loading legacy memories above the entry count limit. Recover older YAML/frontmatter memory files up to 2 × 1024 × 1024 JavaScript string units with an oversized-memory warning; additions to files above the ordinary limit are rejected until split. The ordinary 256 × 1024 string-unit save/import limit remains unchanged. This release does not add rollover or cross-session/process conditional memory persistence. (#2864, #2999)
 
 ## [2.0.42] - 2026-09-04
 

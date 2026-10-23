@@ -85,6 +85,8 @@ export interface IActivationStateStore {
 
   /**
    * Record an element deactivation. Fires async persist.
+   * When expectedRecord is supplied, remove only that captured in-process record
+   * lifetime (from getActivations), never a later activation with the same key.
    * @param elementType - Singular element type
    * @param name - Normalized element name
    */
@@ -93,6 +95,7 @@ export interface IActivationStateStore {
     name: string,
     filename?: string,
     identity?: PersistedActivationIdentity,
+    expectedRecord?: PersistedActivation,
   ): void;
 
   /**
@@ -110,7 +113,8 @@ export interface IActivationStateStore {
   /**
    * Get all persisted activations for a given element type.
    * @param elementType - Singular element type
-   * @returns Shallow copy of activation records
+   * @returns A new array of current record lifetimes. Callers must not mutate records;
+   * recordActivation replaces the affected record even when its values are unchanged.
    */
   getActivations(elementType: string): PersistedActivation[];
 

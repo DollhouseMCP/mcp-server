@@ -76,6 +76,7 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
         type: "text",
         text: parts.join('\n')
       }],
+      activationTarget: memory,
       activationRecord: { name, filename: undefined, identity: undefined },
     };
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import type {
   IActivationStateStore,
@@ -337,6 +337,94 @@ describe('ActivationModule', () => {
 });
 
 describe('RegistrySessionActivationStateAdapter', () => {
+  it('does no enrollment lookups without a pending deletion', async () => {
+    const registry = new SessionActivationRegistry('default');
+    const manager = {
+      hasPendingActivationDeletions: () => false,
+      findByStorageIdentity: jest.fn(async () => undefined),
+      find: jest.fn(async () => undefined),
+      findMany: jest.fn(async () => []),
+      recordPendingActivation: jest.fn(),
+    };
+    const adapter = new RegistrySessionActivationStateAdapter(registry, () => manager);
+    await expect(adapter.activate(SESSION_ID, SKILL_TYPE, SKILL_CANONICAL_NAME)).resolves.toMatchObject({ changed: true });
+    expect(manager.findByStorageIdentity).not.toHaveBeenCalled();
+    expect(manager.find).not.toHaveBeenCalled();
+    expect(manager.findMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves successful activation when pending-deletion lookup throws', async () => {
+    const registry = new SessionActivationRegistry('default');
+    const store = new FixtureActivationStateStore(SESSION_ID);
+    registry.getOrCreate(SESSION_ID).activationStore = store;
+    const manager = {
+      hasPendingActivationDeletions: () => true,
+      findByStorageIdentity: async () => { throw new Error('unreadable definition'); },
+      find: async () => undefined,
+      findMany: async () => [],
+      recordPendingActivation: jest.fn(),
+    };
+    const adapter = new RegistrySessionActivationStateAdapter(registry, () => manager);
+    await expect(adapter.activate(SESSION_ID, SKILL_TYPE, SKILL_CANONICAL_NAME)).resolves.toMatchObject({ changed: true });
+    expect(registry.get(SESSION_ID)?.skills.has(SKILL_CANONICAL_NAME)).toBe(true);
+    expect(store.getActivations(SKILL_TYPE)).toHaveLength(1);
+    expect(manager.recordPendingActivation).not.toHaveBeenCalled();
+  });
+
+  it('enrolls the resolved target and exact persisted object in the explicit target session', async () => {
+    const registry = new SessionActivationRegistry('different-default');
+    const state = registry.getOrCreate(SESSION_ID);
+    const store = new FixtureActivationStateStore(SESSION_ID);
+    state.activationStore = store;
+    const target = { metadata: { name: SKILL_CANONICAL_NAME }, filename: 'skill.md' };
+    const enroll = jest.fn();
+    const adapter = new RegistrySessionActivationStateAdapter(registry, () => ({
+      findByStorageIdentity: async () => undefined,
+      hasPendingActivationDeletions: () => true,
+      findMany: async predicate => predicate(target) ? [target] : [],
+      recordPendingActivation: enroll,
+    }));
+    await adapter.activate(SESSION_ID, SKILL_TYPE, SKILL_CANONICAL_NAME);
+    expect(enroll).toHaveBeenCalledWith(target, store.getActivations(SKILL_TYPE)[0],
+      { sessionId: SESSION_ID, liveKey: SKILL_CANONICAL_NAME });
+    expect(enroll.mock.calls[0][1]).toBe(store.getActivations(SKILL_TYPE)[0]);
+    expect(registry.get('different-default')).toBeUndefined();
+  });
+
+  it('uses the stored durable target instead of another element with the same name', async () => {
+    const registry = new SessionActivationRegistry('default-session');
+    const store = new FixtureActivationStateStore(SESSION_ID);
+    registry.getOrCreate(SESSION_ID).activationStore = store;
+    store.recordActivation('personas', 'Helper', 'selected.md');
+    const selected = { metadata: { name: 'Helper' }, filename: 'selected.md' };
+    const other = { metadata: { name: 'Helper' }, filename: 'other.md' };
+    const enroll = jest.fn();
+    const adapter = new RegistrySessionActivationStateAdapter(registry, () => ({
+      findByStorageIdentity: async key => key === selected.filename ? selected : undefined,
+      hasPendingActivationDeletions: () => true,
+      findMany: async () => [other],
+      recordPendingActivation: enroll,
+    }));
+    await adapter.activate(SESSION_ID, 'personas', 'Helper');
+    expect(enroll.mock.calls[0][0]).toBe(selected);
+    expect(enroll.mock.calls[0][1]).toBe(store.getActivations('personas')[0]);
+  });
+
+  it('skips ambiguous canonical matches without changing activation success', async () => {
+    const registry = new SessionActivationRegistry('default');
+    const candidates = [{ metadata: { name: 'My Skill' }, filename: 'one.md' },
+      { metadata: { name: 'my skill.md' }, filename: 'two.md' }];
+    const enroll = jest.fn();
+    const adapter = new RegistrySessionActivationStateAdapter(registry, () => ({
+      hasPendingActivationDeletions: () => true,
+      findByStorageIdentity: async () => undefined,
+      findMany: async predicate => candidates.filter(predicate),
+      recordPendingActivation: enroll,
+    }));
+    await expect(adapter.activate(SESSION_ID, 'skills', 'my skill')).resolves.toMatchObject({ changed: true });
+    expect(enroll).not.toHaveBeenCalled();
+  });
+
   it('lists from an enabled activation store instead of fabricating set timestamps', async () => {
     const registry = new SessionActivationRegistry('default-session');
     const state = registry.getOrCreate(SESSION_ID);

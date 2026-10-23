@@ -281,7 +281,7 @@ describe('AgentManager', () => {
       await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'second.md' });
       await agentManager.deactivateAgent('first.md');
 
-      expect((agentManager as any).getActivationSet()).toEqual(new Set(['second.md']));
+      expect([...(agentManager as any).getActivationSet()]).toEqual(['second.md']);
       expect(await agentManager.getActiveAgents()).toEqual([second]);
     });
 
@@ -299,7 +299,7 @@ describe('AgentManager', () => {
       jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
 
       await agentManager.activateAgent('Session Agent');
-      expect(registry.getOrCreate('session-a').agents).toEqual(new Set(['session-agent.md']));
+      expect([...registry.getOrCreate('session-a').agents]).toEqual(['session-agent.md']);
 
       sessionId = 'session-b';
       expect(await agentManager.getActiveAgents()).toEqual([]);

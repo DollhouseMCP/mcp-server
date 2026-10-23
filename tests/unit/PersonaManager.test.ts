@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../src/metrics/ActivationMetricsTracker.js';
 import * as os from 'os';
 import * as path from 'path';
 import { PersonaManager } from '../../src/persona/PersonaManager.js';
@@ -85,6 +86,7 @@ describe('PersonaManager', () => {
 
     // Create PersonaManager instance
     personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
       indicatorConfig: DEFAULT_INDICATOR_CONFIG,
       fileLockManager: mockFileLockManager,
@@ -604,6 +606,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
 
         // Create a fresh PersonaManager with the clean metadata service
         const freshPersonaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
           portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
           indicatorConfig: DEFAULT_INDICATOR_CONFIG,
           fileLockManager: mockFileLockManager,
@@ -656,7 +659,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(active).toBeNull();
     });
 
-    it('should get all personas as readonly map', () => {
+    it('should get all personas as readonly map', async () => {
       const testPersona: Persona = {
         metadata: { name: 'Test', description: 'Test', unique_id: 'test' },
         instructions: 'Content',
@@ -667,7 +670,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
 
       seedPersonaCache([['test.md', testPersona]]);
 
-      const personas = personaManager.getPersonas();
+      const personas = await personaManager.getAllPersonas();
 
       expect(personas).toBeInstanceOf(Map);
       expect(personas.size).toBe(1);

@@ -5,6 +5,7 @@
  * where the bug was originally discovered (TypeScript-Pro going 1.0 -> 1.2)
  */
 
+import { ActivationMetricsTracker } from '../../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { editElement } from '../../../../src/handlers/element-crud/editElement.js';
 import { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
@@ -83,6 +84,7 @@ describe('autoIncrementVersion for PersonaManager', () => {
 
     // Initialize PersonaManager
     personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager,
       indicatorConfig: DEFAULT_INDICATOR_CONFIG,
       fileLockManager,

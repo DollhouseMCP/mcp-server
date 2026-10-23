@@ -1,4 +1,6 @@
-import * as path from 'path';
+import type { DeletionCleanup } from './deletionActivation.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import * as path from 'node:path';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import type { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { ElementCrudContext } from './types.js';
@@ -16,7 +18,7 @@ import type { IFileOperationsService } from '../../services/FileOperationsServic
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 
 type ElementManagerWithDelete<T> = ElementManagerOperations<T> & {
-  delete(filePath: string): Promise<void>;
+  delete(filePath: string, onCommitted?: () => void): Promise<void>;
 };
 
 interface DeleteElementArgs {
@@ -70,7 +72,7 @@ async function deleteStandardElement(
     return unsupportedType(type);
   }
 
-  const element = await resolveElementByName(manager, type, name);
+  const element = await resolveDeletionElement(context, manager, type, name);
 
   if (!element) {
     // FIX: Issue #275 - Throw error instead of returning content for missing elements
@@ -91,7 +93,7 @@ async function deleteStandardElement(
   // re-validate that the element still exists. State may have changed between
   // the initial prompt and the user's confirmation response.
   if (deleteData !== undefined) {
-    const recheck = await resolveElementByName(manager, type, name);
+    const recheck = await resolveDeletionElement(context, manager, type, name);
     if (!recheck) {
       const label = getElementTypeLabel(type);
       throw new ElementNotFoundError(label, name);
@@ -103,18 +105,29 @@ async function deleteStandardElement(
     ? filePathCandidate
     : getElementFilename(type, elementName);
 
-  await manager.delete(filename);
+  const cleanup = await context.prepareElementDeletion?.(type, elementName, filename, element);
+  const warning = await deleteAndFinish(manager, filename, cleanup, type, elementName);
 
   if (deleteData && dataFiles.length > 0) {
     const results = await removeDataFiles(context.portfolioManager, dataFiles, fileOps);
-    return successWithDataFiles(type, name, results);
+    return withWarning(successWithDataFiles(type, name, results), warning);
   }
 
   if (deleteData === false && dataFiles.length > 0) {
-    return successPreserveData(type, name, dataFiles);
+    return withWarning(successPreserveData(type, name, dataFiles), warning);
   }
 
-  return success(type, elementName);
+  return withWarning(success(type, elementName), warning);
+}
+
+async function resolveDeletionElement(
+  context: ElementCrudContext, manager: ElementManagerWithDelete<any>, type: ElementType, name: string,
+) {
+  // Persona filenames disambiguate identical display names and must remain exact.
+  if (type === ElementType.PERSONA && context.personaManager.findPersonaAsync) {
+    return context.personaManager.findPersonaAsync(name);
+  }
+  return resolveElementByName(manager, type, name);
 }
 
 // FIX: Issue #281 - deletePersona removed, PERSONA now uses standard deleteStandardElement flow
@@ -133,7 +146,7 @@ async function deleteMemory(
   }
 
   // Deactivate if currently active
-  if (memory.getStatus && memory.getStatus() === 'active' && memory.deactivate) {
+  if (memory.getStatus?.() === 'active' && memory.deactivate) {
     await memory.deactivate();
   }
 
@@ -141,7 +154,8 @@ async function deleteMemory(
 
   // Delegate to manager — handles file mode, DB mode, path resolution, file lock, events
   const filePath = memory.getFilePath() || memoryName;
-  await context.memoryManager.delete(filePath);
+  const cleanup = await context.prepareElementDeletion?.(ElementType.MEMORY, memoryName, filePath, memory);
+  const warning = await deleteAndFinish(context.memoryManager, filePath, cleanup, ElementType.MEMORY, memoryName);
   context.memoryManager.clearCache();
 
   // Clean up storage data if requested (handler-level concern, not manager's)
@@ -154,9 +168,51 @@ async function deleteMemory(
   return {
     content: [{
       type: "text",
-      text: `✅ Successfully deleted memory '${memoryName}'${deleteData ? ' and its storage data' : ''}`
+      text: `✅ Successfully deleted memory '${memoryName}'${deleteData ? ' and its storage data' : ''}${warning}`
     }]
   };
+}
+
+async function deleteAndFinish(
+  manager: { delete(path: string, onCommitted?: () => void): Promise<void> },
+  filename: string, cleanup: DeletionCleanup | undefined, type: string, name: string,
+): Promise<string> {
+  try {
+    if (cleanup?.onCommitted) {
+      let committed = false;
+      const notifyCommitted = () => {
+        committed = true;
+        cleanup.onCommitted?.();
+      };
+      try {
+        await manager.delete(filename, notifyCommitted);
+      } catch (error) {
+        if (committed) await finishDeletion(cleanup, type, name);
+        throw error;
+      }
+      if (!committed) notifyCommitted();
+    } else {
+      await manager.delete(filename);
+    }
+    return await finishDeletion(cleanup, type, name);
+  } finally {
+    cleanup?.settle?.();
+  }
+}
+
+async function finishDeletion(cleanup: (() => Promise<void>) | undefined, type: string, name: string): Promise<string> {
+  try {
+    await cleanup?.();
+    return '';
+  } catch (error) {
+    logger.warn('Post-delete activation cleanup failed', { type, name, error });
+    return '\n⚠️ Cleanup warning: activation state could not be fully cleared.';
+  }
+}
+
+function withWarning<T extends { content: Array<{ text: string }> }>(result: T, warning: string): T {
+  result.content[0].text += warning;
+  return result;
 }
 
 // buildMemoryPathCandidates removed — path resolution now handled by MemoryManager.delete()
@@ -287,7 +343,7 @@ async function removeDataFiles(
   const results: string[] = [];
   const agentDir = portfolio.getElementDir(ElementType.AGENT);
 
-  for (const entry of files) {
+  await visitSequentially(files[Symbol.iterator](), async (entry) => {
     const relativePath = entry.replace(/^-\s*/, '').split(' ')[0];
     const fullPath = path.join(agentDir, relativePath);
 
@@ -298,7 +354,7 @@ async function removeDataFiles(
       logger.warn(`Failed to delete associated data file ${relativePath}: ${error}`);
       results.push(`${entry} ⚠️ deletion failed`);
     }
-  }
+  });
 
   return results;
 }

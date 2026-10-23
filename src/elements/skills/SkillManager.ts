@@ -4,6 +4,7 @@
  * and creation workflows while eliminating duplicated file handling code.
  */
 
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
 import type { ElementManagerDeps } from '../base/BaseElementManager.js';
 import { Skill } from './Skill.js';
@@ -33,8 +34,6 @@ export class SkillManager extends BaseElementManager<Skill> {
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  // Fallback for tests/callers that don't inject the registry
-  private readonly _localActiveSkillNames: Set<string> = new Set();
 
   constructor(deps: ElementManagerDeps) {
     super(
@@ -64,7 +63,7 @@ export class SkillManager extends BaseElementManager<Skill> {
 
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('skills', this._localActiveSkillNames);
+    return this.resolveActivationSet('skills');
   }
 
   protected override getElementLabel(): string {
@@ -330,12 +329,12 @@ export class SkillManager extends BaseElementManager<Skill> {
     const skills = await super.list(options);
 
     // Apply active status to skills that are in the active set (by name)
-    for (const skill of skills) {
+    await visitSequentially(skills[Symbol.iterator](), async (skill) => {
       if (this.getActivationSet().has(skill.metadata.name)) {
         // Access the protected _status field and set to ACTIVE (value 2)
         await skill.activate();
       }
-    }
+    });
 
     return skills;
   }
@@ -365,6 +364,7 @@ export class SkillManager extends BaseElementManager<Skill> {
 
     // Add to active set (by name, which is stable across reloads)
     this.getActivationSet().add(skill.metadata.name);
+    this.recordPendingActivation(skill);
 
     // Update skill status in memory
     await skill.activate();
@@ -397,6 +397,9 @@ export class SkillManager extends BaseElementManager<Skill> {
     const skill = await this.findByName(identifier);
 
     if (!skill) {
+      if (this.getActivationSet().delete(identifier)) {
+        return { success: true, message: ElementMessages.deactivated(ElementType.SKILL, identifier) };
+      }
       return {
         success: false,
         // CONSISTENCY FIX: Use standardized error message format
@@ -424,10 +427,10 @@ export class SkillManager extends BaseElementManager<Skill> {
    */
   async getActiveSkills(): Promise<Skill[]> {
     const results: Skill[] = [];
-    for (const name of this.getActivationSet()) {
+    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (name) => {
       const skill = await this.findByName(name);
       if (skill) results.push(skill);
-    }
+    });
     return results;
   }
 

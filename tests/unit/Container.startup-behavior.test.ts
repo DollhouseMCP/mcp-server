@@ -195,15 +195,15 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
   });
 
   // ============================================
-  // STALE ACTIVATION PRUNING
+  // STALE ACTIVATION RETENTION
   // Regression tests for the 37x skill loading bug (Fix 3)
   // ============================================
 
-  describe('Stale Activation Pruning', () => {
+  describe('Stale Activation Retention', () => {
     // Issue #706: Activation restore logic moved to completeDeferredSetup()
     // These tests now call both preparePortfolio() + completeDeferredSetup()
 
-    it('should prune stale skill activations when activateSkill returns failure', async () => {
+    it('should retain stale skill activations when activateSkill returns failure', async () => {
       // Resolve managers and activation store
       const skillManager = container.resolve<any>('SkillManager');
       const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
@@ -235,14 +235,11 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.preparePortfolio();
       await container.completeDeferredSetup();
 
-      // Verify stale entries were pruned
-      expect(removeStaleSpy).toHaveBeenCalledWith('skill', 'stale-test-artifact');
-      expect(removeStaleSpy).toHaveBeenCalledWith('skill', 'another-stale');
-      // Real skill should NOT be pruned
-      expect(removeStaleSpy).not.toHaveBeenCalledWith('skill', 'real-skill');
+      expect(removeStaleSpy).not.toHaveBeenCalled();
+      expect(activationStore.getActivations('skill')).toEqual(mockActivations);
     });
 
-    it('should prune filename-backed stale agent activations by stable identity', async () => {
+    it('should retain filename-backed stale agent activations by stable identity', async () => {
       const agentManager = container.resolve<any>('AgentManager');
       const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
@@ -273,12 +270,8 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
         { kind: 'file', value: 'missing-agent.md' },
         'Colliding Agent',
       );
-      expect(removeStaleSpy).toHaveBeenCalledWith(
-        'agent',
-        'Colliding Agent',
-        'missing-agent.md',
-        undefined,
-      );
+      expect(removeStaleSpy).not.toHaveBeenCalled();
+      expect(activationStore.getActivations('agent')).toHaveLength(1);
     });
 
     it('should restore renamed agents by stable filename', async () => {
@@ -339,7 +332,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       expect(recordSpy).toHaveBeenCalledWith('agent', 'Current Agent', undefined, identity);
     });
 
-    it('should prune stale persona activations when activatePersona returns failure', async () => {
+    it('should retain stale persona activations when activatePersona returns failure', async () => {
       const personaManager = container.resolve<any>('PersonaManager');
       const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
@@ -360,7 +353,8 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.preparePortfolio();
       await container.completeDeferredSetup();
 
-      expect(removeStaleSpy).toHaveBeenCalledWith('persona', 'deleted-persona');
+      expect(removeStaleSpy).not.toHaveBeenCalled();
+      expect(activationStore.getActivations('persona')).toHaveLength(1);
     });
 
     it('should preserve persisted activations on thrown restore exceptions', async () => {

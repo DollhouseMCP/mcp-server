@@ -1,3 +1,4 @@
+import type { DeletionTarget, DeletionCleanup } from './deletionActivation.js';
 import { SkillManager } from '../../elements/skills/index.js';
 import { TemplateManager } from '../../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../../utils/TemplateRenderer.js';
@@ -13,6 +14,8 @@ import type { BackupService } from '../../services/BackupService.js';
 
 export interface ElementCrudContext {
   ensureInitialized(): Promise<void>;
+  /** Capture references before deletion; invoke the returned cleanup only after commit. */
+  prepareElementDeletion?(type: string, name: string, filename: string, target: DeletionTarget): Promise<DeletionCleanup>;
   getPersonaIndicator(): string;
   skillManager: SkillManager;
   templateManager: TemplateManager;

@@ -64,6 +64,7 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
         type: "text",
         text: parts.join('\n')
       }],
+      activationTarget: skill,
       activationRecord: { name, filename: undefined, identity: undefined },
     };
   }

@@ -7,8 +7,8 @@
  * Usage: npx tsx scripts/benchmark-persona-reload.ts [numFiles]
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { PersonaManager } from '../src/persona/PersonaManager.js';
 import { PortfolioManager, ElementType } from '../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../src/security/fileLockManager.js';
@@ -22,8 +22,9 @@ import { TriggerValidationService } from '../src/services/TriggerValidationServi
 import { MetadataService } from '../src/services/MetadataService.js';
 import { ElementEventDispatcher } from '../src/events/ElementEventDispatcher.js';
 import { SerializationService } from '../src/services/SerializationService.js';
+import { ActivationMetricsTracker } from '../src/metrics/ActivationMetricsTracker.js';
 
-const NUM_FILES = parseInt(process.argv[2]) || 100;
+const NUM_FILES = Number.parseInt(process.argv[2], 10) || 100;
 const TEST_DIR = path.join(process.cwd(), 'test-tmp', `persona-benchmark-${Date.now()}`);
 
 const indicatorConfig: IndicatorConfig = {
@@ -95,6 +96,7 @@ async function main() {
     eventDispatcher: new ElementEventDispatcher(),
     personaImporter,
     notifier,
+    activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
     storageLayerFactory: new (await import('../src/storage/FileStorageLayerFactory.js')).FileStorageLayerFactory(
       fileOperations,
       { indexDebounceMs: 200, fileFilter: (f: string) => !f.includes('.backup-') },
@@ -105,9 +107,7 @@ async function main() {
     // Step 1: Create all files
     console.log(`Creating ${NUM_FILES} persona files...`);
     const createStart = performance.now();
-    for (let i = 0; i < NUM_FILES; i++) {
-      await createPersonaFile(personasDir, `persona${i}.md`);
-    }
+    await Promise.all(Array.from({ length: NUM_FILES }, (_, i) => createPersonaFile(personasDir, `persona${i}.md`)));
     const createTime = performance.now() - createStart;
     console.log(`  ✓ Created ${NUM_FILES} files in ${createTime.toFixed(2)}ms\n`);
 
@@ -140,9 +140,7 @@ async function main() {
     await waitForFileSystemSync();
     const tenPercent = Math.floor(NUM_FILES * 0.1);
     console.log(`Reload with ${tenPercent} changed files (10% change rate):`);
-    for (let i = 0; i < tenPercent; i++) {
-      await modifyPersonaFile(personasDir, `persona${i}.md`);
-    }
+    await Promise.all(Array.from({ length: tenPercent }, (_, i) => modifyPersonaFile(personasDir, `persona${i}.md`)));
     const tenPercentStart = performance.now();
     await personaManager.reload();
     const tenPercentTime = performance.now() - tenPercentStart;
@@ -153,9 +151,7 @@ async function main() {
     await waitForFileSystemSync();
     const fiftyPercent = Math.floor(NUM_FILES * 0.5);
     console.log(`Reload with ${fiftyPercent} changed files (50% change rate):`);
-    for (let i = 0; i < fiftyPercent; i++) {
-      await modifyPersonaFile(personasDir, `persona${i}.md`);
-    }
+    await Promise.all(Array.from({ length: fiftyPercent }, (_, i) => modifyPersonaFile(personasDir, `persona${i}.md`)));
     const fiftyPercentStart = performance.now();
     await personaManager.reload();
     const fiftyPercentTime = performance.now() - fiftyPercentStart;
@@ -190,7 +186,9 @@ async function main() {
   }
 }
 
-main().catch(error => {
+try {
+  await main();
+} catch (error) {
   console.error('Benchmark failed:', error);
   process.exit(1);
-});
+}
