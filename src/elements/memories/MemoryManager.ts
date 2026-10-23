@@ -144,7 +144,6 @@ export class MemoryManager extends BaseElementManager<Memory> {
   /** Issue #1948: Retention policy service ref, passed to Memory instances at construction. */
   private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
-  private readonly _localActiveMemoryNames: Set<string> = new Set();
   private readonly upgradeSaveOperations = new Set<Promise<void>>();
   private readonly upgradeLoadedSnapshots = new WeakMap<Memory, { path: string; sha256: string; owner: string; root: string }>();
   private readonly loadedMarkdownBodyIds = new WeakMap<Memory, string>();
@@ -195,7 +194,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('memories', this._localActiveMemoryNames);
+    return this.resolveActivationSet('memories');
   }
 
   // createStorageLayer() override REMOVED — the injected IStorageLayerFactory
@@ -1576,6 +1575,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Add to active set (by name, which is stable across reloads)
     this.getActivationSet().add(memory.metadata.name);
+    this.recordPendingActivation(memory);
 
     // Update memory status in memory
     await memory.activate();
@@ -2210,7 +2210,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Delete a memory file
    * SECURITY: Validates path and logs deletion
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     if (this.guardedUpdateAdapter) throw new Error('Dormant memory adapter supports UPDATE only');
     try {
       // Resolve to a relative path that super.delete() can handle.
@@ -2231,7 +2231,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
       // afterDelete() runs inside that transaction and emits MEMORY_DELETED.
-      await super.delete(resolvedRelative);
+      await super.delete(resolvedRelative, onCommitted);
 
       // Memory-specific cleanup: content hash index.
       // Use the same key shape that afterSave used (UUID in DB mode, absolute path in file mode).
@@ -2825,6 +2825,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
           // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
           assertCurrent?.();
           this.getActivationSet().add(memoryName);
+          this.recordPendingActivation(memory);
           await memory.activate();
           assertCurrent?.();
           counts.loaded++;

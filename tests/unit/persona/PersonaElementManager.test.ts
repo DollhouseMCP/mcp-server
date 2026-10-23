@@ -9,6 +9,7 @@
  * all required abstract methods while maintaining security guarantees.
  */
 
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import * as os from 'os';
 import * as path from 'path';
@@ -94,6 +95,7 @@ describe('PersonaElementManager Integration', () => {
 
     // Create PersonaManager instance
     personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
       indicatorConfig: DEFAULT_INDICATOR_CONFIG,
       fileLockManager: mockFileLockManager,

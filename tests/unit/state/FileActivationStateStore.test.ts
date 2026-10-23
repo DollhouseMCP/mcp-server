@@ -475,6 +475,18 @@ describe('FileActivationStateStore', () => {
 
   // ── recordDeactivation ──────────────────────────────────────────────
 
+  it('conditional deletion preserves later activations and removes only a captured lifetime', async () => {
+    await store.initialize();
+    store.recordActivation('persona', 'P', 'p.md');
+    const captured = store.getActivations('persona')[0];
+    store.recordActivation('persona', 'P', 'p.md');
+    store.recordDeactivation('persona', 'P', 'p.md', undefined, captured);
+    expect(store.getActivations('persona')).toHaveLength(1);
+    const current = store.getActivations('persona')[0];
+    store.recordDeactivation('persona', 'P', 'p.md', undefined, current);
+    expect(store.getActivations('persona')).toEqual([]);
+  });
+
   describe('recordDeactivation()', () => {
     it('should remove a previously activated element', () => {
       store.recordActivation('skill', 'code-reviewer');

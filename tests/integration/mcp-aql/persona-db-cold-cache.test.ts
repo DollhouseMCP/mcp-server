@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import type { AgentManager } from '../../../src/elements/agents/AgentManager.js';
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import type { IStorageLayerFactory } from '../../../src/storage/IStorageLayerFactory.js';
 import { DatabaseActivationStateStore } from '../../../src/state/DatabaseActivationStateStore.js';
@@ -39,7 +41,7 @@ databaseSuite('Database persona policy recovery after refresh', () => {
     const fallback = container.resolve<IStorageLayerFactory>('StorageLayerFactory');
     container.register('UserIdResolver', () => () => userId);
     container.replace<IStorageLayerFactory>('StorageLayerFactory', () => ({
-      createForElement: (type, options) => type === ElementType.PERSONA
+      createForElement: (type, options) => type === ElementType.PERSONA || type === ElementType.AGENT
         ? new DatabaseStorageLayer(getTestDb(), () => userId, type)
         : fallback.createForElement(type, options),
     }));
@@ -52,7 +54,9 @@ databaseSuite('Database persona policy recovery after refresh', () => {
       container.resolve('EnsembleManager'), manager, env.portfolioManager,
       container.resolve('InitializationService'), container.resolve('PersonaIndicatorService'),
       container.resolve('FileOperationsService'), container.resolve('ElementQueryService'),
-      container.resolve('ValidationRegistry'), store);
+      container.resolve('ValidationRegistry'), new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: store
+      });
     aql = new MCPAQLHandler({ elementCRUD: handler, memoryManager: container.resolve('MemoryManager'),
       gatekeeper: new Gatekeeper(undefined, { enableAuditLogging: false }) } as HandlerRegistry);
   });
@@ -83,6 +87,23 @@ databaseSuite('Database persona policy recovery after refresh', () => {
     return names;
   }
 
+
+  it('deletes an active database agent by its durable UUID', async () => {
+    const name = 'delete-database-agent';
+    const agentWriter = new DatabaseStorageLayer(getTestDb(), () => userId, ElementType.AGENT);
+    const id = await agentWriter.writeContent(ElementType.AGENT, name,
+      `---\nname: ${name}\ndescription: Deletion fixture\nversion: 1.0.0\n---\nFollow instructions.\n`,
+      { author: 'test', version: '1.0.0', tags: [], description: 'Deletion fixture' });
+    expect(id).toMatch(/^[\da-f-]{36}$/u);
+    expect((await handler.activateElement(name, 'agent')).content[0].text).not.toContain('❌');
+    expect(store.getActivations('agent')[0].identity).toEqual({ kind: 'database', value: id });
+    const result = await handler.deleteElement({ name, type: 'agent' });
+    expect(result.content[0].text).toContain('✅');
+    expect(result.content[0].text).not.toContain('warning');
+    expect(store.getActivations('agent')).toEqual([]);
+    expect(env.container.resolve<AgentManager>('AgentManager')['getActivationSet']().size).toBe(0);
+    await expect(agentWriter.readContent(id)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   it('refuses an unknown persona name without persisting an activation', async () => {
     const result = await aql.handleRead({ operation: 'activate_element',

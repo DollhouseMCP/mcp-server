@@ -76,23 +76,8 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
   // ============================================================================
 
   describe('Case-Insensitive Matching', () => {
-    it('should find persona by lowercase name', () => {
-      const found = personaManager.findPersona('creative writer');
-
-      expect(found).toBeDefined();
-      expect(found?.metadata.name).toBe('Creative Writer');
-    });
-
-    it('should find persona by uppercase name', () => {
-      const found = personaManager.findPersona('CREATIVE WRITER');
-
-      expect(found).toBeDefined();
-      expect(found?.metadata.name).toBe('Creative Writer');
-    });
-
-    it('should find persona by mixed case name', () => {
-      const found = personaManager.findPersona('CrEaTiVe WrItEr');
-
+    it.each(['creative writer', 'CREATIVE WRITER', 'CrEaTiVe WrItEr'])('finds persona by case-insensitive name %s', identifier => {
+      const found = personaManager.findPersona(identifier);
       expect(found).toBeDefined();
       expect(found?.metadata.name).toBe('Creative Writer');
     });
@@ -162,25 +147,10 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       expect(found).toBeUndefined();
     });
 
-    it('should find persona with special characters in name', () => {
-      const found = personaManager.findPersona('Test & Test');
-
+    it.each(['Test & Test', 'Tëst Përsoñä', 'Test 😀 Persona'])('finds persona with non-ASCII or special name %s', name => {
+      const found = personaManager.findPersona(name);
       expect(found).toBeDefined();
-      expect(found?.metadata.name).toBe('Test & Test');
-    });
-
-    it('should find persona with Unicode characters in name', () => {
-      const found = personaManager.findPersona('Tëst Përsoñä');
-
-      expect(found).toBeDefined();
-      expect(found?.metadata.name).toBe('Tëst Përsoñä');
-    });
-
-    it('should find persona with emoji in name', () => {
-      const found = personaManager.findPersona('Test 😀 Persona');
-
-      expect(found).toBeDefined();
-      expect(found?.metadata.name).toBe('Test 😀 Persona');
+      expect(found?.metadata.name).toBe(name);
     });
   });
 
@@ -191,7 +161,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
   describe('Bounded scale lookup', () => {
     beforeEach(() => {
       // Clear existing test personas
-      (personaManager as any).elements.clear();
+      personaManager.clearCache();
     });
 
     it.each([10, 100, 1000])('finds the exact persona among %i cached personas within one scan', count => {

@@ -1,4 +1,3 @@
-import type { IStorageLayerFactory } from '../../src/storage/IStorageLayerFactory.js';
 /**
  * Dependency Injection Mock Utilities
  *
@@ -15,6 +14,8 @@ import type { IStorageLayerFactory } from '../../src/storage/IStorageLayerFactor
  * ```
  */
 
+import { ActivationMetricsTracker } from '../../src/metrics/ActivationMetricsTracker.js';
+import type { IStorageLayerFactory } from '../../src/storage/IStorageLayerFactory.js';
 // This file intentionally uses the `?? new Service()` pattern for test factories.
 // Test helpers need to create default instances when no override is provided.
 // This is the correct pattern for test builders, not production DI code.
@@ -736,6 +737,7 @@ export function createRealPersonaManager(
   };
 
   return new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
     portfolioManager,
     indicatorConfig,
     fileLockManager,

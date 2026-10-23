@@ -148,6 +148,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     name: string,
     filename?: string,
     identity?: PersistedActivationIdentity,
+    expectedRecord?: PersistedActivation,
   ): void {
     const type = normalizeActivationType(elementType);
     if (!type) return;
@@ -157,7 +158,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     const activations = this.activations[type];
     if (!activations) return;
 
-    const removal = removeActivationRecords(activations, input);
+    const removal = removeActivationRecords(activations, input, expectedRecord);
     this.activations[type] = removal.records;
 
     if (removal.removed) {

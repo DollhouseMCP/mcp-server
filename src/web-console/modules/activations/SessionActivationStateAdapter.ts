@@ -1,3 +1,7 @@
+import { logger } from '../../../utils/logger.js';
+import { canonicalizePortfolioName } from '../../../utils/portfolioName.js';
+import { recordedActivation } from '../../../state/activation-record-utils.js';
+import type { ResolvedActivationTarget } from '../../../state/PendingActivationDeletions.js';
 import type { IActivationStateStore, PersistedActivation } from '../../../state/IActivationStateStore.js';
 import type { SessionActivationRegistry, SessionActivationState } from '../../../state/SessionActivationState.js';
 import { CONSOLE_ACTIVATABLE_ELEMENT_TYPES } from './ActivationTypes.js';
@@ -20,10 +24,22 @@ export interface ISessionActivationStateAdapter {
   deactivate(sessionId: string, type: ConsoleActivatableElementType, name: string): Promise<boolean>;
 }
 
+/** Managers own deletion enrollment; the adapter supplies the actual target session and live key. */
+export interface ConsoleActivationManager {
+  findByStorageIdentity(identity: string): Promise<ResolvedActivationTarget | undefined>;
+  hasPendingActivationDeletions(sessionId: string): boolean;
+  findMany(predicate: (element: ResolvedActivationTarget) => boolean): Promise<ResolvedActivationTarget[]>;
+  recordPendingActivation(target: ResolvedActivationTarget, record?: PersistedActivation,
+    scope?: { sessionId?: string; liveKey?: string }): void;
+}
+
 export class RegistrySessionActivationStateAdapter implements ISessionActivationStateAdapter {
   private readonly fallbackRecords = new Map<string, SessionActivationRecord>();
 
-  constructor(private readonly registry: SessionActivationRegistry) {}
+  constructor(
+    private readonly registry: SessionActivationRegistry,
+    private readonly resolveManager?: (type: ConsoleActivatableElementType) => ConsoleActivationManager | undefined,
+  ) {}
 
   list(sessionId: string): Promise<readonly SessionActivationRecord[]> {
     const state = this.registry.get(sessionId);
@@ -33,11 +49,12 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
     return Promise.resolve(mergeRecords(recordsFromStateSets(state), fallbackRecords));
   }
 
-  activate(
+  async activate(
     sessionId: string,
     type: ConsoleActivatableElementType,
     name: string,
   ): Promise<SessionActivationChangeResult> {
+    const manager = this.resolveManager?.(type);
     const state = this.registry.getOrCreate(sessionId);
     const agentEntry = type === 'agents'
       ? Array.from(state.agentNamesByIdentity.entries()).find(([identity, alias]) =>
@@ -50,6 +67,9 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
         (record.identity?.value === name || record.identity?.value === agentEntry?.[0])
       )
     );
+    const storedKey = storeRecord?.identity?.value ?? storeRecord?.filename ?? agentEntry?.[0];
+    const target = manager?.hasPendingActivationDeletions(sessionId)
+      ? await this.resolvePendingTarget(manager, type, name, storedKey) : undefined;
     const fallbackRecord = this.fallbackRecords.get(recordKey(sessionId, type, name));
     const activationKey = type === 'agents'
       ? storeRecord?.identity?.value ?? agentEntry?.[0] ?? name
@@ -77,6 +97,10 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
     const persistedRecord = state.activationStore?.getActivations(type).find(record =>
       record.name === displayName || record.identity?.value === activationKey
     );
+    if (target) manager?.recordPendingActivation(target, recordedActivation(
+      state.activationStore?.getActivations(type) ?? [],
+      { name: displayName, filename: storeRecord?.filename, identity: storeRecord?.identity },
+    ), { sessionId, liveKey: activationKey });
     const record = {
       type,
       name: displayName,
@@ -84,7 +108,7 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
         ? parseActivationDate(persistedRecord.activatedAt)
         : this.fallbackRecords.get(recordKey(sessionId, type, name))?.activatedAt ?? new Date(),
     };
-    return Promise.resolve({ record: cloneActivationRecord(record), changed });
+    return { record: cloneActivationRecord(record), changed };
   }
 
   deactivate(sessionId: string, type: ConsoleActivatableElementType, name: string): Promise<boolean> {
@@ -107,6 +131,27 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
       state.activationStore.recordDeactivation(type, name, storeRecord?.filename, storeRecord?.identity);
     }
     return Promise.resolve(changed);
+  }
+
+  private async resolvePendingTarget(
+    manager: ConsoleActivationManager,
+    type: ConsoleActivatableElementType, name: string, storedKey?: string,
+  ): Promise<ResolvedActivationTarget | undefined> {
+    try {
+      if (storedKey) return await manager.findByStorageIdentity(storedKey);
+      const exact = await manager.findByStorageIdentity(name);
+      if (exact) return exact;
+      const canonicalName = canonicalizePortfolioName(name);
+      const matches = await manager.findMany(element =>
+        canonicalizePortfolioName(element.metadata.name) === canonicalName);
+      // A discovery spelling is not storage authority: never select an ambiguous target.
+      return matches.length === 1 ? matches[0] : undefined;
+    } catch (error) {
+      logger.warn('[Activation] Pending-deletion enrollment lookup failed', {
+        type, name, error: error instanceof Error ? error.name : typeof error,
+      });
+      return undefined;
+    }
   }
 
   private listFallbackRecords(sessionId: string): readonly SessionActivationRecord[] {

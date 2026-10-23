@@ -60,6 +60,21 @@ describe('DatabaseActivationStateStore', () => {
     expect(personas[0].filename).toBe('test-persona.md');
   });
 
+  it('conditional deletion preserves later activations and removes only a captured lifetime', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const store = new DatabaseActivationStateStore(getTestDb(), userId, TEST_SESSION_ID);
+    await store.initialize();
+    store.recordActivation('persona', 'P', 'p.md');
+    const captured = store.getActivations('persona')[0];
+    store.recordActivation('persona', 'P', 'p.md');
+    store.recordDeactivation('persona', 'P', 'p.md', undefined, captured);
+    expect(store.getActivations('persona')).toHaveLength(1);
+    const current = store.getActivations('persona')[0];
+    store.recordDeactivation('persona', 'P', 'p.md', undefined, current);
+    expect(store.getActivations('persona')).toEqual([]);
+  });
+
   it('should deduplicate activations', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();

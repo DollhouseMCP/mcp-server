@@ -1174,6 +1174,15 @@ Misconfiguring this collapses per-IP rate limiting to the proxy's egress IP, whi
 
 In `DOLLHOUSE_STORAGE_BACKEND=database` mode, restarts preserve sessions because JWKS keys, cookie secrets, and grants all live in Postgres. If you're seeing all users re-auth on restart, you accidentally have `DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem` with the auth keyfiles on `tmpfs`. Switch to `postgres` (matching the storage backend).
 
+### "Retained stale activation reference" warning in the logs
+
+An element a user had active could not be loaded when the server checked it: after a cache miss, or when restoring activations at startup. The server keeps the activation instead of dropping it, because a failed load does not prove the element was deleted. The log entry names the user, element type and reference in its `userId`, `elementType` and `reference` fields. Each reference is warned about once per server process.
+
+- If the element still exists, no action is needed. It loads again once it can be read.
+- If it was deleted outside the server, deactivate that exact reference to clear it. Deleting an element through the server clears it automatically.
+
+The `activation.stale_reference_retained` metric counts these warnings for the whole process, with no per-user labels. A steady rise means definitions are failing to load, so check storage health.
+
 ### Updates introduce migrations that take too long
 
 Run migrations during a low-traffic window. `/readyz` returns 503 with `migrations_pending` during the window, so any load balancer correctly skips the instance. If migration time is consistently a problem, pre-stage the migration:
