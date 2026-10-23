@@ -31,6 +31,19 @@ First versioned build of the 2.1 beta line. Not published to npm; deployed to th
 
 Start beta line for 2.1 hosted HTTP and expanded description limits.
 
+## [2.0.43] - Unreleased
+
+- Harden the shipped element file helper with the same nonexecuting frontmatter admission and restricted YAML/JSON serialization used by element managers. Preserve ordinary Markdown/body handling; reject unsupported metadata values before writing.
+- Extract converted ZIP input into a private temporary directory, refuse archive symlinks before extraction, and clean only the owned directory after conversion completes.
+- Serialize overlapping DangerZone persistence operations so an older snapshot cannot overwrite newer retained blocks.
+- Pin the transitive `proxy-addr` override to 2.0.8 and `shell-quote` to 1.11.0. Other dependency audit findings remain subject to the documented release profile assessment.
+- Pin the direct YAML parser to 4.3.2 to bound merge work and collection depth while retaining the supported DEFAULT-schema timestamp, merge and ordered-map types. Documents exceeding those parser budgets are refused. (#3031)
+
+- Refuse unsupported frontmatter languages before element loading/import and Skill serialization, including configured languages and custom delimiters. Preserve ordinary Markdown and YAML/JSON body handling with restricted parsers; bound frontmatter graph traversal before cleaning or expansion. Derived index caches reject default-only YAML tags and rebuild safely.
+
+- **Behavior change:** permanent memories now default to `onFull: error`. Adding an entry at the 1,000-entry default capacity rejects with an actionable error and preserves existing entries. Set `onFull: evict_oldest` explicitly to retain cache-style eviction; memories with an expiring `retentionDays` policy retain their eviction default. (#2859, #2999)
+- Preserve all valid entries when loading legacy memories above the entry count limit. Recover older YAML/frontmatter memory files up to 2 × 1024 × 1024 JavaScript string units with an oversized-memory warning; additions to files above the ordinary limit are rejected until split. The ordinary 256 × 1024 string-unit save/import limit remains unchanged. This release does not add rollover or cross-session/process conditional memory persistence. (#2864, #2999)
+
 ## [2.0.42] - 2026-09-04
 
 - Harden macOS verification dialogs by keeping dynamic display values out of AppleScript source and passing them as direct process arguments.
