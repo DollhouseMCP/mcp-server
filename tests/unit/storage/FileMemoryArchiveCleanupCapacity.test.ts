@@ -11,6 +11,11 @@ import { FileMemoryOwnerSnapshots, type OwnedFileMemoryToken, type UnownedFileMe
 import { FileMemoryVolumeStore, type ArchiveCleanupPhase } from '../../../src/storage/FileMemoryVolumeStore.js';
 import { cleanupDirectoryReadObservers, observeDirectoryReads as observeReads } from './fixtures/aggregateDirectoryReadObserver.js';
 
+// Populated setup, interrupted cleanup, retry and retained-file verification all
+// share this budget. macOS CI can exceed 10s even after the retry has completed;
+// keep the directory-read bounds and every preservation assertion below intact.
+jest.setTimeout(30_000);
+
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 const USER = '11111111-1111-4111-8111-111111111111';
 const RAW = 'entries: []\n';

@@ -409,7 +409,9 @@ jobs:
   serial-storage-tests:
     name: Core serial storage (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Leave room for checkout retries plus every required serial suite. A macOS
+    # fetch retry consumed nearly 12 minutes before testing on PR #3141.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: *core-platforms

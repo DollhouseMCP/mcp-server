@@ -101,7 +101,7 @@ function boundedCommandCategories(contents: string): string[] {
   return categories;
 }
 
-async function run(mode: string) {
+async function run(mode: string, seconds = 1) {
   return ownedFixtures.run(async owner => {
   let stderr = '', discardedBytes = 0;
   let terminalEventObserved = false;
@@ -131,7 +131,7 @@ if a[0]=='inspect':
  print(json.dumps({'id':'b'*64 if mode=='changed' else '${target}','running':not stopped,'exitCode':1 if mode=='unclean' else 0,'oomKilled':False,'startedAt':'second' if changed_boot else 'first','restartCount':1 if changed_boot else 0,'restarting':False,'readonly':mode=='readonly','mounts':[{'Destination':'/app'}] if mode=='mounted' else [],'enabled':enabled,'capability':'v1' if mode=='unsupported' else 'v2'})); sys.exit(0)
 if a[0]=='exec':
  assert a[:8]==['exec','--user','1001:1001','--workdir','/app','${target}','node','/app/dist/lifecycle/requestMemoryDrain.js']
- assert a[8]=='${target}' and len(a[9])==64 and 0<int(a[10])<=1000
+ assert a[8]=='${target}' and len(a[9])==64 and 0<int(a[10])<=${seconds * 1000}
  if mode=='drain-timeout': time.sleep(30)
  if mode in ['held','lost-ack','unknown']: sys.exit(1)
  ack={'protocol':2,'phase':'drained','containerId':'${target}','nonce':a[9],'bootId':'b'*64,'generation':'c'*64,'sourceBootId':'d'*64 if mode=='successor' else 'b'*64,'mode':'drained-successor' if mode=='successor' else 'same-boot','admitted':0,'writes':0,'failedWrites':0,'retainedOwners':0}
@@ -203,7 +203,7 @@ def execute_fixture(args,**kwargs):
  except BaseException:
   emit('command-error'); raise
  finally: emit('command-end')
-sys.argv=[helper,target,'1']
+sys.argv=[helper,target,'${seconds}']
 try:
  shutil.which=resolve_docker
  subprocess.run=execute_fixture
@@ -269,8 +269,10 @@ finally:
 }
 
 describe('non-force hosted graceful stop', () => {
+  // Successful paths launch five CLI fixtures; allow cold Windows Python startup.
+  // Timeout/refusal cases keep their one-second deadline and elapsed bounds.
   it('permits replacement only after known clean closure', async () => {
-    const outcome = await run('success'); expect(outcome.result).toBe(0);
+    const outcome = await run('success', 5); expect(outcome.result).toBe(0);
     expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(1);
     expect(outcome.commands.findIndex(args => args[0] === 'exec')).toBeLessThan(outcome.commands.findIndex(args => args[0] === 'kill'));
   });
@@ -301,7 +303,7 @@ describe('non-force hosted graceful stop', () => {
     expect(outcome.commands.some(args => args[0] === 'kill')).toBe(false);
   });
   it('allows only a bound known-drained successor to commit the single final TERM', async () => {
-    const outcome = await run('successor'); expect(outcome.result).toBe(0);
+    const outcome = await run('successor', 5); expect(outcome.result).toBe(0);
     expect(outcome.commands.filter(args => args[0] === 'kill')).toHaveLength(1);
   });
 });
