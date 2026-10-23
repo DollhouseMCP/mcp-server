@@ -103,7 +103,7 @@ describe('Memory Element', () => {
       await expect(smallMemory.addEntry('Entry 4')).resolves.toBeDefined();
 
       const stats = smallMemory.getStats();
-      expect(stats.totalEntries).toBeLessThanOrEqual(3);
+      expect(stats.totalEntries).toBe(3);
     });
 
     describe('onFull policy (Issue #2859)', () => {

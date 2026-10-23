@@ -332,6 +332,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * This is the INPUT counterpart to serializeElement() (OUTPUT).
    */
   protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
+    if (content.length > MEMORY_CONSTANTS.LEGACY_MAX_YAML_SIZE) {
+      throw new Error('Memory exceeds the bounded legacy recovery read limit');
+    }
     if (!content.trim()) return { data: {}, content: '' };
 
     // Issue #2864: read with the legacy recovery limit, not the write limit.
@@ -792,6 +795,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   protected override captureLoadedContent(memory: Memory, content: string, filePath: string): void {
+    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) memory.markOversizedLegacyReadOnly();
     if (!this.memoryUpgrade || this.guardedUpdateAdapter) return;
     this.upgradeLoadedSnapshots.set(memory, { path: filePath,
       sha256: crypto.createHash('sha256').update(content).digest('hex'),
@@ -1330,9 +1334,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * and gatekeeper policy validation.
    */
   private validateSerializedMemoryYaml(yamlContent: string): void {
-    // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
-    // limit parseContent() enforces on load. The previous 2MB cap allowed writing
-    // files the loader would then reject.
+    // Ordinary writes retain the 256KB limit; legacy recovery reads are separate.
     if (yamlContent.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,

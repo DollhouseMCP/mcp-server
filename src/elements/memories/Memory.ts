@@ -264,6 +264,7 @@ export class Memory extends BaseElement implements IElement {
   // Issue #2859: running count of entries removed by policy (expiry or
   // eviction), so callers can report removals instead of inferring them.
   private policyRemovedCount = 0;
+  private oversizedLegacyReadOnly = false;
 
   // Search index for performance (Issue #984)
   private searchIndex: MemorySearchIndex;
@@ -425,6 +426,9 @@ export class Memory extends BaseElement implements IElement {
     metadata?: Record<string, any>,
     source: string = 'unknown'
   ): Promise<MemoryEntry> {
+    if (this.oversizedLegacyReadOnly) {
+      throw new Error('Oversized legacy memory is read-only; split it into smaller memories before adding entries.');
+    }
     // SECURITY: Sanitize source parameter before use
     const sanitizedSource = sanitizeInput(source, 50);
 
@@ -550,6 +554,7 @@ export class Memory extends BaseElement implements IElement {
         extensions: this.extensions,
         instructions: this.instructions,
         policyRemovedCount: this.policyRemovedCount,
+        oversizedLegacyReadOnly: this.oversizedLegacyReadOnly,
         maxEntries: this.maxEntries,
         retentionDays: this.retentionDays,
         privacyLevel: this.privacyLevel,
@@ -583,6 +588,7 @@ export class Memory extends BaseElement implements IElement {
     candidate.storageBackend = this.storageBackend;
     candidate.searchable = this.searchable;
     candidate.policyRemovedCount = this.policyRemovedCount;
+    candidate.oversizedLegacyReadOnly = this.oversizedLegacyReadOnly;
     return candidate;
   }
 
@@ -650,6 +656,7 @@ export class Memory extends BaseElement implements IElement {
     copy.storageBackend = this.storageBackend;
     copy.searchable = this.searchable;
     copy.policyRemovedCount = this.policyRemovedCount;
+    copy.oversizedLegacyReadOnly = this.oversizedLegacyReadOnly;
     return copy;
   }
 
@@ -793,6 +800,10 @@ export class Memory extends BaseElement implements IElement {
       source,
       details: `Evicted ${count} oldest entries from memory '${this.metadata.name}' to stay within ${this.maxEntries} entries (onFull: evict_oldest)`
     });
+  }
+
+  public markOversizedLegacyReadOnly(): void {
+    this.oversizedLegacyReadOnly = true;
   }
 
   /**
@@ -1073,6 +1084,10 @@ export class Memory extends BaseElement implements IElement {
    * SECURITY: Ensures memory doesn't grow unbounded
    */
   public async enforceRetentionPolicy(): Promise<number> {
+    return this.enforceRetentionPolicySync();
+  }
+
+  private enforceRetentionPolicySync(): number {
     const now = new Date();
     let deletedCount = 0;
 
@@ -1080,6 +1095,7 @@ export class Memory extends BaseElement implements IElement {
     for (const [id, entry] of this.entries.entries()) {
       if (entry.expiresAt && entry.expiresAt < now) {
         this.entries.delete(id);
+        this.searchIndex.removeEntry(id);
         deletedCount++;
       }
     }
@@ -1378,8 +1394,11 @@ export class Memory extends BaseElement implements IElement {
         }
       }
       this.extensions = parsed.extensions || {};
+      this.maxEntries = Math.min((this.metadata as MemoryMetadata).maxEntries || MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT,
+        MEMORY_CONSTANTS.MAX_ENTRIES_DEFAULT);
 
       // Clear and reload entries
+      for (const id of this.entries.keys()) this.searchIndex.removeEntry(id);
       this.entries.clear();
       let quarantinedCount = 0;
 
@@ -1418,36 +1437,33 @@ export class Memory extends BaseElement implements IElement {
     }
   }
   
-  /** Preserve legacy optional load policy without consulting it for guarded hydration. */
+  /** Keep guarded hydration policy-free; propagate actual synchronous enforcement failures. */
   private applyLoadRetentionPolicy(options?: { suppressLoadPolicy?: boolean }): void {
-  // Issue #51: Check if retention enforcement should happen on load
-  // IMPORTANT: Retention enforcement is now opt-in, not automatic
-  // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
-  try {
-    const retentionService = options?.suppressLoadPolicy ? undefined : this.getRetentionPolicyService();
-    if (retentionService?.shouldEnforceOnLoad()) {
-      // User has explicitly enabled on-load enforcement
-      this.enforceRetentionPolicy();
+    if (options?.suppressLoadPolicy) return;
+    let onLoad = false;
+    let enabled = false;
+    try {
+      const policy = this.getRetentionPolicyService();
+      onLoad = policy?.shouldEnforceOnLoad() ?? false;
+      enabled = !onLoad && (policy?.isEnabled() ?? false);
+    } catch {
+      // An unavailable optional policy service cannot authorize deletion.
+      return;
+    }
+    if (onLoad) {
+      // deserialize is synchronous: enforcement failures must reach its error
+      // boundary instead of escaping an ignored Promise after a successful load.
+      this.enforceRetentionPolicySync();
       logger.debug(`[Memory] Retention policy enforced on load for "${this.metadata.name}"`, {
         enforcementMode: 'on_load'
       });
-    } else if (retentionService?.isEnabled()) {
-      // Retention is enabled but not set to on_load mode - log for visibility
+    } else if (enabled) {
       logger.debug(`[Memory] Retention is enabled but not enforced on load for "${this.metadata.name}"`, {
         note: 'Use explicit enforcement command to cleanup expired entries'
       });
     }
-    // If retentionService is not configured or disabled, no enforcement happens
-    // This is the safe default - nothing is deleted without explicit consent
-  } catch {
-    // Silently ignore retention policy errors during deserialization
-    // This can happen in test environments where ConfigManager is not initialized,
-    // or when a stale resolver references a disposed service instance
-    // It's safe to skip retention enforcement in these cases - the default is no deletion
-  }
   }
 
-  // Private helper methods
   
   private calculateExpiryDate(): Date {
     const expiry = new Date();
