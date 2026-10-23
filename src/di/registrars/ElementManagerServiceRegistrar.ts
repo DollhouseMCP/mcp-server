@@ -203,6 +203,7 @@ export class ElementManagerServiceRegistrar {
 
     // ELEMENT MANAGERS
     container.register('SkillManager', () => new SkillManager({
+      activationMetricsTracker: container.resolve('ActivationMetricsTracker'),
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),
@@ -317,6 +318,7 @@ export class ElementManagerServiceRegistrar {
     });
 
     container.register('EnsembleManager', () => new EnsembleManager({
+      activationMetricsTracker: container.resolve('ActivationMetricsTracker'),
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),

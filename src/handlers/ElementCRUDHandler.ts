@@ -17,6 +17,7 @@
  * @security-audit-suppress DMCP-SEC-006
  */
 
+import { ActivationLookupError } from './strategies/ActivationLookupError.js';
 import { atDeletionCommit, currentDeletedActivations, recordedActivation, type DeletionCleanup, captureDeletedActivations, findStoredActivation, type DeletionTarget } from './element-crud/deletionActivation.js';
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
 import os from 'node:os';
@@ -1151,22 +1152,29 @@ export class ElementCRUDHandler {
     };
   }
 
+  private async collectForDeadlockRelief<T>(type: ElementType, collect: () => T[] | Promise<T[]>): Promise<T[]> {
+    try { return await collect(); } catch (error) {
+      logger.warn('Deadlock relief skipped unavailable element type', { type, error: error instanceof Error ? error.name : typeof error });
+      return [];
+    }
+  }
+
   private async collectActiveElementsForDeadlockRelief(): Promise<DeadlockReliefElement[]> {
     const activeElements: DeadlockReliefElement[] = [];
 
-    const activePersonas = this.personaManager.getActivePersonas();
+    const activePersonas = await this.collectForDeadlockRelief(ElementType.PERSONA, () => this.personaManager.getActivePersonas());
     activeElements.push(...activePersonas.map((persona) => ({
       type: ElementType.PERSONA,
       name: persona.metadata.name,
     })));
 
-    const activeSkills = await this.skillManager.getActiveSkills();
+    const activeSkills = await this.collectForDeadlockRelief(ElementType.SKILL, () => this.skillManager.getActiveSkills());
     activeElements.push(...activeSkills.map((skill) => ({
       type: ElementType.SKILL,
       name: skill.metadata.name,
     })));
 
-    const activeAgents = await this.agentManager.getActiveAgents();
+    const activeAgents = await this.collectForDeadlockRelief(ElementType.AGENT, () => this.agentManager.getActiveAgents());
     activeElements.push(...activeAgents.map((agent) => {
       const activationIdentifier = this.agentManager.getActivationIdentity(agent)?.value;
       return {
@@ -1176,13 +1184,13 @@ export class ElementCRUDHandler {
       };
     }));
 
-    const activeMemories = await this.memoryManager.getActiveMemories();
+    const activeMemories = await this.collectForDeadlockRelief(ElementType.MEMORY, () => this.memoryManager.getActiveMemories());
     activeElements.push(...activeMemories.map((memory) => ({
       type: ElementType.MEMORY,
       name: memory.metadata.name,
     })));
 
-    const activeEnsembles = await this.ensembleManager.getActiveEnsembles();
+    const activeEnsembles = await this.collectForDeadlockRelief(ElementType.ENSEMBLE, () => this.ensembleManager.getActiveEnsembles());
     activeElements.push(...activeEnsembles.map((ensemble) => ({
       type: ElementType.ENSEMBLE,
       name: ensemble.metadata.name,
@@ -1347,7 +1355,7 @@ export class ElementCRUDHandler {
     try {
       await strategy.deactivate(key);
     } catch (error) {
-      if (!(error instanceof ElementNotFoundError)) throw error;
+      if (!(error instanceof ElementNotFoundError) && !(error instanceof ActivationLookupError)) throw error;
     }
   }
 
@@ -1409,11 +1417,11 @@ export class ElementCRUDHandler {
     try {
       return await strategy.deactivate(name);
     } catch (error) {
-      if (!(error instanceof ElementNotFoundError)) throw error;
+      if (!(error instanceof ElementNotFoundError) && !(error instanceof ActivationLookupError)) throw error;
       const record = findStoredActivation(this.getSessionActivationStore()?.getActivations(type) ?? [], name);
       if (!record) throw error;
       // Retry with the exact stored live key (personas use filenames, agents use identities).
-      // A not-found here means no live exact key remains; persisted-only records are valid.
+      // Missing or unreadable definitions do not prevent clearing an exact saved record.
       await this.deactivateStoredKey(strategy, record.identity?.value ?? record.filename ?? record.name);
       // Use the persisted identity, never a guessed alias, for the normal removal path.
       return {

@@ -3,6 +3,7 @@
  * Verifies CRUD operations and security features
  */
 
+import { ActivationMetricsTracker } from '../../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest, beforeAll, afterAll } from '@jest/globals';
 import { promises as fs, realpathSync } from 'fs';
 import * as path from 'path';
@@ -56,6 +57,7 @@ describe('SkillManager', () => {
 
     // Create SkillManager with all required dependencies
     skillManager = new SkillManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager,
       fileLockManager,
       fileOperationsService: fileOperations,
