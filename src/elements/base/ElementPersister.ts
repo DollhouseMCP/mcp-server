@@ -55,7 +55,7 @@ export interface ElementPersisterHost<T extends IElement> {
   canDelete?(element: T): Promise<{ allowed: boolean; reason?: string }>;
   onSaveError?(element: T, filePath: string, error: unknown): void;
   createBackupBeforeSave(absolutePath: string): Promise<void>;
-  createBackupBeforeDelete(absolutePath: string): Promise<boolean>;
+  createBackupBeforeDelete(absolutePath: string, onCommitted?: () => void): Promise<boolean>;
   getElementLabel(): string;
   getElementLabelCapitalized(): string;
   getElementFilename(name: string): string;
@@ -271,7 +271,7 @@ export class ElementPersister<T extends IElement> {
    * Delete an element from file or database.
    * Identical to the former BaseElementManager.delete() body.
    */
-  async delete(filePath: string): Promise<void> {
+  async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -290,6 +290,13 @@ export class ElementPersister<T extends IElement> {
         this.events.createEventPayload({ correlationId, filePath: relativePath }),
       );
 
+      const notifyCommitted = () => {
+        try {
+          onCommitted?.();
+        } catch (error) {
+          logger.warn('Post-delete commit observer failed', { type: this.host.elementType, name: relativePath, error });
+        }
+      };
       const isDbMode = isWritableStorageLayer(this.storageLayer);
       let deletedStorageIdentity: string | undefined;
 
@@ -316,17 +323,18 @@ export class ElementPersister<T extends IElement> {
 
       await transaction.run(async () => {
         if (isDbMode) {
-          deletedStorageIdentity = await this.deleteFromDatabase(relativePath);
+          deletedStorageIdentity = await this.deleteFromDatabase(relativePath, notifyCommitted);
         } else {
           if (this.host.canDelete) {
             const elementForValidation = await this.loader.loadElementSnapshot(absolutePath, relativePath);
             await this.assertDeleteAllowed(elementForValidation);
           }
-          const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath);
+          const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath, notifyCommitted);
           if (!movedToBackup) {
             await this.fileOperations.deleteFile(absolutePath, this.host.elementType, {
               source: `${this.host.constructor.name}.delete`,
             });
+            notifyCommitted();
           }
         }
 
@@ -339,7 +347,7 @@ export class ElementPersister<T extends IElement> {
     });
   }
 
-  private async deleteFromDatabase(relativePath: string): Promise<string> {
+  private async deleteFromDatabase(relativePath: string, onCommitted?: () => void): Promise<string> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       throw new Error('Database deletion requires a writable storage layer');
     }
@@ -364,6 +372,7 @@ export class ElementPersister<T extends IElement> {
       dbIdentifier,
       resolvedIdentity,
     );
+    onCommitted?.();
     return deleted.id;
   }
 

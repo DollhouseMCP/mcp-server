@@ -133,6 +133,7 @@ export class ElementManagerServiceRegistrar {
     const backupServiceProvider = () => resolveActiveOrRoot<BackupService>('BackupService');
 
     container.register('PersonaManager', () => new PersonaManager({
+      activationMetricsTracker: container.resolve('ActivationMetricsTracker'),
       portfolioManager: container.resolve('PortfolioManager'),
       indicatorConfig: container.resolve('IndicatorConfig'),
       fileLockManager: container.resolve('FileLockManager'),

@@ -21,6 +21,10 @@
  * @module di/registrars/ObservabilityServiceRegistrar
  */
 
+import { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
+import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
+import type { UserIdResolver } from '../../database/UserContext.js';
+import { createStdioSession } from '../../context/StdioSession.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
 import { env } from '../../config/env.js';
 import { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
@@ -127,6 +131,13 @@ export class ObservabilityServiceRegistrar {
 
     container.register('OperationMetricsTracker', () => new OperationMetricsTracker());
     container.register('GatekeeperMetricsTracker', () => new GatekeeperMetricsTracker());
+    container.register('ActivationMetricsTracker', () => new ActivationMetricsTracker(() => {
+      const session = container.resolve<ContextTracker>('ContextTracker').getSessionContext();
+      // Unscoped startup/tests have no tenant; hosted requests always carry a session.
+      if (!session) return createStdioSession().userId;
+      return container.hasRegistration('UserIdResolver')
+        ? container.resolve<UserIdResolver>('UserIdResolver')() : session.userId;
+    }));
 
     // Resilience: DI-managed instances (moved from module-level singletons)
     container.register('CircuitBreakerState', () => new CircuitBreakerState());

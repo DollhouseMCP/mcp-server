@@ -22,6 +22,9 @@
  * 4. MEDIUM: Input validation and sanitization throughout
  */
 
+import { PendingActivationDeletions, resolvedActivationLocator, type ResolvedActivationTarget, type PendingActivationDeletion } from '../../state/PendingActivationDeletions.js';
+import type { PersistedActivation } from '../../state/IActivationStateStore.js';
+import { ActivationSet } from '../../state/ActivationSet.js';
 import type { IElementManager } from '../../types/elements/IElementManager.js';
 import type { IElement, ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
@@ -204,14 +207,6 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   /** Specialized validator for this element type. */
   protected validator: ElementValidator;
 
-  /**
-   * Expose the primary element LRU cache so subclasses can read it if needed.
-   * Delegates to ElementCache.elements.
-   */
-  protected get elements(): LRUCache<T> {
-    return this._cache.elements;
-  }
-
   protected readonly elementType: ElementType;
   protected readonly backupService?: BackupService;
   private readonly backupServiceProvider?: BackupServiceProvider;
@@ -276,6 +271,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected onSaveError?(element: T, filePath: string, error: unknown): void;
 
   private _activationFallbackWarned = false;
+  private readonly pendingActivationDeletions = new PendingActivationDeletions();
+  private readonly localActivationSets = new Map<string, ActivationSet>();
 
   constructor(
     elementType: ElementType,
@@ -396,7 +393,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       canDelete: (el: T) => this.canDelete ? this.canDelete(el) : Promise.resolve({ allowed: true }),
       onSaveError: (el: T, fp: string, err: unknown) => this.onSaveError?.(el, fp, err),
       createBackupBeforeSave: (ap: string) => this.createBackupBeforeSave(ap),
-      createBackupBeforeDelete: (ap: string) => this.createBackupBeforeDelete(ap),
+      createBackupBeforeDelete: (ap: string, onCommitted?: () => void) => this.createBackupBeforeDelete(ap, onCommitted),
       getElementLabel: () => this.getElementLabel(),
       getElementLabelCapitalized: () => this.getElementLabelCapitalized(),
       getElementFilename: (name: string) => this.getElementFilename(name),
@@ -510,8 +507,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     }
   }
 
-  async delete(filePath: string): Promise<void> {
-    return this._persister.delete(filePath);
+  async delete(filePath: string, onCommitted?: () => void): Promise<void> {
+    return this._persister.delete(filePath, onCommitted);
   }
 
   async exists(filePath: string): Promise<boolean> {
@@ -769,10 +766,10 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Returns true if the original file was moved (caller should skip deleteFile).
    * Subclasses can override to no-op (e.g. MemoryManager has its own backup system).
    */
-  protected async createBackupBeforeDelete(absolutePath: string): Promise<boolean> {
+  protected async createBackupBeforeDelete(absolutePath: string, onCommitted?: () => void): Promise<boolean> {
     const backupService = this.resolveBackupService();
     if (!backupService) return false;
-    const result = await backupService.backupBeforeDelete(absolutePath, this.elementType);
+    const result = await backupService.backupBeforeDelete(absolutePath, this.elementType, onCommitted);
     return !!result.movedOriginal;
   }
 
@@ -808,12 +805,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   /**
    * Resolve the current session's activation Set for the given element type key.
    * Returns the Set from SessionActivationRegistry if available, or the provided
-   * fallback Set when the registry is not injected (tests, backward compat).
+   * manager-owned fallback Set when the registry is not injected.
    */
   protected resolveActivationSet(
     setKey: 'personas' | 'skills' | 'agents' | 'memories' | 'ensembles',
-    fallback: Set<string>,
-  ): Set<string> {
+  ): ActivationSet {
     if (!this.activationRegistry) {
       if (!this._activationFallbackWarned && process.env.NODE_ENV !== 'test') {
         this._activationFallbackWarned = true;
@@ -822,11 +818,62 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
           `This indicates a DI configuration issue. Activation state will not be session-scoped.`
         );
       }
-      return fallback;
+      let active = this.localActivationSets.get(setKey);
+      if (!active) {
+        active = new ActivationSet();
+        this.localActivationSets.set(setKey, active);
+      }
+      return active;
     }
     const sessionId = this.contextTracker?.getSessionContext()?.sessionId
       ?? this.activationRegistry.getDefaultSessionId();
     return this.activationRegistry.getOrCreate(sessionId)[setKey];
+  }
+
+  /** Activation-set key for this manager's type; templates are never activated. */
+  private get activationSetKey(): Exclude<ElementType, ElementType.TEMPLATE> | undefined {
+    const type = this.elementType;
+    return type === ElementType.TEMPLATE ? undefined : type;
+  }
+
+  beginActivationDeletion(locator: string): PendingActivationDeletion | undefined {
+    const setKey = this.activationSetKey;
+    if (!setKey) return undefined;
+    return this.pendingActivationDeletions.begin(this.resolveActivationSet(setKey), locator);
+  }
+
+  hasPendingActivationDeletions(sessionId: string): boolean {
+    const setKey = this.activationSetKey;
+    if (!setKey) return false;
+    const active = this.activationRegistry?.get(sessionId)?.[setKey];
+    return active !== undefined && this.pendingActivationDeletions.hasPendingDeletions(active);
+  }
+
+  recordPendingActivation(
+    target: ResolvedActivationTarget, record?: PersistedActivation,
+    scope?: { sessionId?: string; liveKey?: string },
+  ): void {
+    const setKey = this.activationSetKey;
+    if (!setKey) return;
+    const locator = resolvedActivationLocator(target);
+    const active = scope?.sessionId === undefined
+      ? this.resolveActivationSet(setKey)
+      : this.activationRegistry?.get(scope.sessionId)?.[setKey];
+    if (locator && active) this.pendingActivationDeletions.register(
+      active, locator, scope?.liveKey ?? this.deletedActivationKey(locator, target.metadata.name), record,
+    );
+  }
+
+  protected deletedActivationKey(_locator: string, name: string): string {
+    return name;
+  }
+
+  /** Capture the caller's live entry at commit; clear only that lifetime. */
+  prepareDeletedActivation(locator: string, name: string): (() => boolean) | undefined {
+    const setKey = this.activationSetKey;
+    if (!setKey) return undefined;
+    const active = this.resolveActivationSet(setKey);
+    return active.captureDeletion(this.deletedActivationKey(locator, name));
   }
 
   // ============================================

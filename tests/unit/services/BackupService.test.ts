@@ -137,6 +137,27 @@ describe('BackupService', () => {
     });
   });
 
+  it('signals the committed move before pruning', async () => {
+    fileOps.exists.mockResolvedValue(true);
+    const onMoved = jest.fn();
+    const prune = jest.spyOn(service, 'pruneBackups').mockImplementation(async () => {
+      expect(onMoved).toHaveBeenCalledTimes(1);
+    });
+    const result = await service.backupBeforeDelete('/portfolio/skills/p.md', 'skills', onMoved);
+    expect(result.movedOriginal).toBe(true);
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect(fileOps.copyFile).not.toHaveBeenCalled();
+  });
+
+  it('does not signal deletion when a failed move only copies the source', async () => {
+    fileOps.exists.mockResolvedValue(true);
+    fileOps.renameFile.mockRejectedValue(new Error('cross device'));
+    const onMoved = jest.fn();
+    const result = await service.backupBeforeDelete('/portfolio/skills/p.md', 'skills', onMoved);
+    expect(result.movedOriginal).toBe(false);
+    expect(onMoved).not.toHaveBeenCalled();
+  });
+
   describe('pruneBackups', () => {
     it('keeps only maxBackupsPerElement newest backups', async () => {
       fileOps.listDirectory.mockResolvedValue([

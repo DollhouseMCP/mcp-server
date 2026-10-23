@@ -6,6 +6,7 @@
  * MetadataService/process.env for default stdio sessions.
  */
 
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
@@ -55,6 +56,7 @@ beforeAll(async () => {
 
 function createPersonaManager(contextTracker?: ContextTracker) {
   return new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
     portfolioManager: createMockPortfolioManager(),
     indicatorConfig: mockIndicatorConfig,
     fileLockManager: mockFileLockManager,

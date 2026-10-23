@@ -14,6 +14,7 @@
  * Uses real filesystem operations and actual managers (not mocked)
  */
 
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { jest } from '@jest/globals';
@@ -93,6 +94,7 @@ describe('Ensemble Activation Integration Tests', () => {
       storageLayerFactory: createTestStorageFactory(fileOperationsService),
     });
     personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: env.portfolioManager,
       indicatorConfig: {
         enabled: true,
@@ -244,8 +246,8 @@ describe('Ensemble Activation Integration Tests', () => {
 
       // Verify activation succeeded
       expect(result.success).toBe(true);
-      expect(result.activatedElements.length).toBe(3);
-      expect(result.failedElements.length).toBe(0);
+      expect(result.activatedElements).toHaveLength(3);
+      expect(result.failedElements).toHaveLength(0);
 
       // Verify activation order respects dependencies
       // Base Skill should come before Advanced Skill and Support Persona
@@ -345,7 +347,7 @@ describe('Ensemble Activation Integration Tests', () => {
 
       // Verify activation succeeded
       expect(result.success).toBe(true);
-      expect(result.activatedElements.length).toBe(3);
+      expect(result.activatedElements).toHaveLength(3);
 
       // Verify activation order: High (90) -> Medium (60) -> Low (30)
       expect(result.activatedElements[0]).toBe('High-Priority');
@@ -422,7 +424,7 @@ describe('Ensemble Activation Integration Tests', () => {
         const result = await ensemble.activateEnsemble(env.portfolioManager, managers);
 
         expect(result.success).toBe(true);
-        expect(result.activatedElements.length).toBe(2);
+        expect(result.activatedElements).toHaveLength(2);
 
         // Test context setting and retrieval
         ensemble.setContextValue('test-key', 'test-value', 'Skill-One');
@@ -779,7 +781,7 @@ describe('Ensemble Activation Integration Tests', () => {
       // Load from file
       const loaded = await ensembleManager.load('lifecycle-ensemble.md');
       expect(loaded.metadata.name).toBe('Lifecycle Ensemble');
-      expect(loaded.getElements().length).toBe(2);
+      expect(loaded.getElements()).toHaveLength(2);
 
       // Activate with real managers
       const managers = {
@@ -791,7 +793,7 @@ describe('Ensemble Activation Integration Tests', () => {
 
       // Verify all elements active
       expect(result.success).toBe(true);
-      expect(result.activatedElements.length).toBe(2);
+      expect(result.activatedElements).toHaveLength(2);
       expect(loaded.status).toBe(ElementStatus.ACTIVE);
 
       // Deactivate
@@ -854,8 +856,8 @@ describe('Ensemble Activation Integration Tests', () => {
 
       // Verify detailed error messages
       expect(result.success).toBe(false);
-      expect(result.activatedElements.length).toBe(1);
-      expect(result.failedElements.length).toBe(1);
+      expect(result.activatedElements).toHaveLength(1);
+      expect(result.failedElements).toHaveLength(1);
       expect(result.activatedElements).toContain('Existing-Skill');
       expect(result.failedElements).toContain('Non-Existent-Skill');
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -89,8 +90,11 @@ function indexAql(f:Awaited<ReturnType<typeof fixture>>,enhanced:EnhancedIndexHa
   const elementCRUD=new ElementCRUDHandler(c.resolve('SkillManager'),c.resolve('TemplateManager'),c.resolve('TemplateRenderer'),
     c.resolve('AgentManager'),undefined,c.resolve('EnsembleManager'),c.resolve('PersonaManager'),f.deps.portfolioManager,
     c.resolve('InitializationService'),c.resolve('PersonaIndicatorService'),c.resolve('FileOperationsService'),
-    c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),undefined,undefined,undefined,c.resolve('SessionActivationRegistry'),f.tracker,
-    {memoryProvider:f.provider});
+    c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),new ActivationMetricsTracker(() => 'local-user'), {
+        activationRegistry: c.resolve('SessionActivationRegistry'),
+        contextTracker: f.tracker,
+        memoryProvider: f.provider
+      });
   const handlers:Omit<HandlerRegistry,'memoryManager'>={elementCRUD,agentManager:c.resolve('AgentManager'),
     templateRenderer:c.resolve('TemplateRenderer'),elementQueryService:c.resolve('ElementQueryService'),
     portfolioManager:f.deps.portfolioManager,gatekeeper,enhancedIndexHandler:enhanced};

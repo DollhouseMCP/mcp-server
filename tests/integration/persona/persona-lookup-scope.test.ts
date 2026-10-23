@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -80,6 +81,7 @@ describe.each(['filesystem', 'database'] as const)('Persona lookup scope (%s)', 
     }
     const metadataService = new MetadataService();
     manager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager, fileLockManager, fileOperationsService, metadataService,
       serializationService: new SerializationService(),
       validationRegistry: new ValidationRegistry(new ValidationService(), new TriggerValidationService(), metadataService),

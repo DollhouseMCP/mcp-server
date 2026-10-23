@@ -2,6 +2,7 @@
  * Core persona management operations
  */
 
+import type { ActivationMetricsTracker } from '../metrics/ActivationMetricsTracker.js';
 import { randomUUID } from 'node:crypto';
 import type { Persona, PersonaMetadata } from '../types/persona.js';
 import type { PersonaElementMetadata } from './PersonaElement.js';
@@ -33,7 +34,7 @@ import type { TriggerValidationService } from '../services/validation/TriggerVal
 import type { ValidationService } from '../services/validation/ValidationService.js';
 import type { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
-import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
+import { getActiveElementLimitConfig } from '../config/active-element-limits.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 // STDIO_DEFAULT_USER_ID guard removed in Phase 3 (Issue #1946) — SessionContext is now the identity authority
 import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
@@ -54,6 +55,7 @@ interface ValidatedPersonaInputs {
 
 
 export interface PersonaManagerDeps extends ElementManagerDeps {
+  activationMetricsTracker: ActivationMetricsTracker;
   indicatorConfig: IndicatorConfig;
   personaImporter?: PersonaImporter;
   notifier?: StateChangeNotifier;
@@ -202,10 +204,9 @@ function validateEmail(email: string): void {
 }
 
 export class PersonaManager extends BaseElementManager<PersonaElement> {
-  // Fallback for tests/callers that don't inject the registry
-  private readonly _localActivePersonas: Set<string> = new Set();
   // Fallback identity for when no registry is injected (tests)
   private _localUserIdentity?: SessionUserIdentity;
+  private readonly activationMetricsTracker: ActivationMetricsTracker;
   private indicatorConfig: IndicatorConfig;
   protected override readonly portfolioManager: PortfolioManager;
   protected override readonly fileLockManager: FileLockManager;
@@ -240,6 +241,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     this.portfolioManager = deps.portfolioManager;
     this.fileLockManager = deps.fileLockManager;
 
+    this.activationMetricsTracker = deps.activationMetricsTracker;
     this.indicatorConfig = deps.indicatorConfig;
     this.personaImporter = deps.personaImporter;
     this.notifier = deps.notifier;
@@ -251,9 +253,16 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     this.initializePathValidator();
   }
 
+  // Weak session-set keys avoid retaining disconnected sessions; entries exist only during deletion.
+  private readonly pendingDeletes = new WeakMap<Set<string>, Map<string, { count: number; restore: boolean }>>();
+
+  protected override deletedActivationKey(locator: string, _name: string): string {
+    return locator;
+  }
+
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('personas', this._localActivePersonas);
+    return this.resolveActivationSet('personas');
   }
 
   /**
@@ -447,17 +456,6 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   /**
-   * Get personas from cache as a Map (synchronous, for DI consumers)
-   */
-  getPersonas(): Map<string, Persona> {
-    const map = new Map<string, Persona>();
-    for (const persona of this.getCachedElementsForCurrentNamespace()) {
-      map.set(persona.filename, persona);
-    }
-    return map;
-  }
-
-  /**
    * List all personas as an array
    * Ensures all personas have filenames set
    */
@@ -621,7 +619,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: Now supports multiple active personas (adds to set instead of replacing)
    * Issue #843: Now async — uses findPersonaAsync() to recover from cache eviction
    */
-  async activatePersona(identifier: string): Promise<{ success: boolean; message: string; persona?: Persona }> {
+  async activatePersona(identifier: string): Promise<{ success: boolean; message: string; persona?: Persona; notices?: string[] }> {
     const persona = await this.findPersonaAsync(identifier);
 
     if (!persona) {
@@ -634,6 +632,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Issue #281: Add to set instead of replacing
     const wasAlreadyActive = this.getActivationSet().has(persona.filename);
     if (wasAlreadyActive) {
+      this.getActivationSet().add(persona.filename);
+      this.recordPendingActivation(persona);
       return {
         success: true,
         message: `Persona '${persona.metadata.name}' is already active`,
@@ -642,9 +642,11 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #83: Check if cleanup is needed before adding
-    this.checkAndCleanupActiveSet();
+    const notices = this.reportActiveSetPressure();
 
     this.getActivationSet().add(persona.filename);
+
+    this.recordPendingActivation(persona);
     this.notifyPersonaChange('persona-activated', null, persona.filename);
 
     // SECURITY: Phase 4.4 - Log persona activation event
@@ -671,7 +673,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     return {
       success: true,
-      message: `Activated persona: ${persona.metadata.name}`,
+      message: [`Activated persona: ${persona.metadata.name}`, ...notices].join("\n"),
+      notices,
       persona
     };
   }
@@ -680,7 +683,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Deactivate a specific persona by name
    * Issue #281: Now requires a name parameter to deactivate specific persona from the set
    */
-  deactivatePersona(identifier?: string): { success: boolean; message: string } {
+  deactivatePersona(identifier?: string): { success: boolean; message: string; storedReference?: string } {
     // If no identifier provided, return error (breaking change from single-active)
     if (!identifier) {
       if (this.getActivationSet().size === 0) {
@@ -696,22 +699,30 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     const persona = this.findPersona(identifier);
+    const pending = this.pendingDeletes.get(this.getActivationSet());
+    const rollback = pending?.get(persona?.filename ?? identifier);
+    if (rollback) rollback.restore = false;
     if (!persona) {
-      return {
-        success: false,
-        message: `Persona not found: "${identifier}"`
-      };
+      if (!this.getActivationSet().delete(identifier)) {
+        return { success: false, message: `Persona not found: "${identifier}"` };
+      }
+      this.activationMetricsTracker.forget('persona', identifier);
+      this.notifyPersonaChange('persona-deactivated', identifier, null);
+      return { success: true, message: `Deactivated persona reference: ${JSON.stringify(identifier)}`, storedReference: identifier };
     }
+    this.activationMetricsTracker.forget('persona', persona.filename);
+    this.activationMetricsTracker.forget('persona', identifier);
 
+    const reference = this.getActivationSet().has(persona.filename) ? persona.filename : identifier;
     // Issue #281: Return success=true for idempotent behavior (persona already inactive)
-    if (!this.getActivationSet().has(persona.filename)) {
+    if (!this.getActivationSet().has(reference)) {
       return {
         success: true,
         message: `Persona '${persona.metadata.name}' is already inactive`
       };
     }
 
-    const deleted = this.getActivationSet().delete(persona.filename);
+    const deleted = this.getActivationSet().delete(reference);
     logger.debug(`[PersonaManager.deactivatePersona] deleted: ${deleted}, new size: ${this.getActivationSet().size}`);
     this.notifyPersonaChange('persona-deactivated', persona.filename, null);
 
@@ -727,7 +738,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     return {
       success: true,
-      message: `Deactivated persona: ${persona.metadata.name}`
+      message: `Deactivated persona: ${persona.metadata.name}`,
+      storedReference: reference
     };
   }
 
@@ -1474,86 +1486,33 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     super.dispose();
   }
 
-  /**
-   * Check if active set cleanup is needed and perform cleanup if necessary
-   * Issue #83: Active element limit enforcement for personas
-   * @private
-   */
-  private checkAndCleanupActiveSet(): void {
+  /** Report capacity pressure and retain references missing from the disposable cache. */
+  private reportActiveSetPressure(): string[] {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('personas');
-
-    // Below threshold — no action needed
-    if (this.getActivationSet().size < cleanupThreshold) {
-      return;
-    }
-
-    // At or above max — warn before cleanup
+    if (this.getActivationSet().size < cleanupThreshold) return [];
+    const notices: string[] = [];
     if (this.getActivationSet().size >= max) {
-      logger.warn(
-        `Active personas limit reached (${max}). ` +
-        `Consider deactivating unused personas or setting DOLLHOUSE_MAX_ACTIVE_PERSONAS to a higher value.`
-      );
-
+      const notice = `Active personas limit reached (${max}). ` +
+        'Consider deactivating unused personas or setting DOLLHOUSE_MAX_ACTIVE_PERSONAS to a higher value.';
+      notices.push(notice);
+      logger.warn(notice);
       SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
-        severity: 'MEDIUM',
-        source: 'PersonaManager.checkAndCleanupActiveSet',
-        details: `Active personas limit reached: ${this.getActivationSet().size}/${max}`
+        type: 'ELEMENT_CREATED', severity: 'MEDIUM',
+        source: 'PersonaManager.reportActiveSetPressure',
+        details: `Active personas limit reached: ${this.getActivationSet().size}/${max}`,
       });
     }
-
-    // At or above threshold — proactively clean stale entries
-    this.cleanupStaleActivePersonas();
+    return [...notices, ...this.collectRetainedReferenceNotices()];
   }
 
-  /**
-   * Clean up stale entries from active personas set
-   * Issue #83: Validates that all active personas still exist and removes orphaned references
-   * @private
-   */
-  private cleanupStaleActivePersonas(): void {
-    try {
-      const startSize = this.getActivationSet().size;
-      const staleFilenames: string[] = [];
-
-      for (const activeFilename of this.getActivationSet()) {
-        if (!this.findPersona(activeFilename)) {
-          this.getActivationSet().delete(activeFilename);
-          staleFilenames.push(activeFilename);
-        }
+  private collectRetainedReferenceNotices(): string[] {
+    const notices: string[] = [];
+    for (const reference of this.getActivationSet()) {
+      if (!this.findPersona(reference)) {
+        notices.push(this.activationMetricsTracker.retain('persona', reference));
       }
-
-      const endSize = this.getActivationSet().size;
-      const removed = startSize - endSize;
-
-      if (removed > 0) {
-        logger.info(
-          `Cleaned up ${removed} stale active persona reference(s). ` +
-          `Active personas: ${endSize}/${getMaxActiveLimit('personas')}`
-        );
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'ELEMENT_DELETED',
-          severity: 'LOW',
-          source: 'PersonaManager.cleanupStaleActivePersonas',
-          details: `Removed ${removed} stale active persona references`,
-          additionalData: {
-            removedCount: removed,
-            activeCount: endSize,
-            staleFilenames: staleFilenames.join(', ')
-          }
-        });
-      }
-    } catch (error) {
-      logger.error('Failed to cleanup stale active personas:', error);
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_DELETED',
-        severity: 'LOW',
-        source: 'PersonaManager.cleanupStaleActivePersonas',
-        details: `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-      });
     }
+    return notices;
   }
 
   private notifyPersonaChange(
@@ -1591,15 +1550,36 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    *
    * @param filePath - The filename of the persona to delete
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     // Issue #281: Auto-deactivate before deletion
     // This allows deleting active personas without requiring explicit deactivation
-    const wasActive = this.getActivationSet().has(filePath);
-    if (wasActive) {
-      this.getActivationSet().delete(filePath);
+    const active = this.getActivationSet();
+    const wasActive = active.delete(filePath);
+    let pending = this.pendingDeletes.get(active);
+    if (!pending) {
+      pending = new Map();
+      this.pendingDeletes.set(active, pending);
     }
+    const obligation = pending.get(filePath) ?? { count: 0, restore: false };
+    obligation.count++;
+    obligation.restore ||= wasActive;
+    pending.set(filePath, obligation);
 
-    await super.delete(filePath);
+    try {
+      await super.delete(filePath, () => {
+        // Clear every pre-commit activation before asynchronous post-delete work.
+        obligation.restore = false;
+        active.delete(filePath);
+        onCommitted?.();
+      });
+    } finally {
+      obligation.count--;
+      if (obligation.count === 0) {
+        if (obligation.restore) active.add(filePath);
+        pending.delete(filePath);
+      }
+    }
+    this.activationMetricsTracker.forget('persona', filePath);
     await this.reload();
 
     // SECURITY: Log persona deletion event (BaseElementManager also logs, but with different details)

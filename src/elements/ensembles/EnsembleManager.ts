@@ -1,4 +1,3 @@
-import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * EnsembleManager - Implementation of IElementManager for Ensemble elements
  *
@@ -18,6 +17,8 @@ import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
  * - SecureYamlParser for safe YAML parsing
  */
 
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 import type { EnsembleMetadata, EnsembleElement } from './Ensemble.js';
 import { Ensemble } from './Ensemble.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
@@ -76,7 +77,6 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  private readonly _localActiveEnsembleNames: Set<string> = new Set();
   private readonly legacyElementFieldWarnings: Set<string> = new Set();
 
   constructor(deps: ElementManagerDeps) {
@@ -107,7 +107,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('ensembles', this._localActiveEnsembleNames);
+    return this.resolveActivationSet('ensembles');
   }
 
   protected override getElementLabel(): string {
@@ -192,7 +192,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
     const elementType = this.getElementType();
     const files = await this.portfolioManager.listElements(elementType);
-    for (const file of files) {
+    await visitSequentially(files[Symbol.iterator](), async (file) => {
       result.scanned++;
       try {
         const absolutePath = this.resolveAbsolutePath(file);
@@ -202,7 +202,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         const parsed = SecureYamlParser.safeMatter(raw);
 
         if (!this.hasLegacyElementFields(parsed.data.elements)) {
-          continue;
+          return;
         }
 
         const ensemble = await this.load(file);
@@ -217,7 +217,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         result.errors++;
         logger.error(`[EnsembleManager] Failed to repair legacy element fields in '${file}':`, error);
       }
-    }
+    });
 
     return result;
   }
@@ -856,7 +856,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   /**
    * Override delete to add ensemble-specific logging
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     SecurityMonitor.logSecurityEvent({
       type: ENSEMBLE_SECURITY_EVENTS.DELETED,
       severity: 'MEDIUM',
@@ -864,7 +864,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       details: `Deleting ensemble: ${filePath}`
     });
 
-    await super.delete(filePath);
+    await super.delete(filePath, onCommitted);
 
     SecurityMonitor.logSecurityEvent({
       type: ENSEMBLE_SECURITY_EVENTS.DELETED,
@@ -881,12 +881,12 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const ensembles = await super.list(options);
 
     // Apply ACTIVE status to ensembles in the per-session activation set
-    for (const ensemble of ensembles) {
+    await visitSequentially(ensembles[Symbol.iterator](), async (ensemble) => {
       if (this.getActivationSet().has(ensemble.metadata.name)) {
         // Call activate() to set status to ACTIVE
         await ensemble.activate();
       }
-    }
+    });
 
     return ensembles;
   }
@@ -922,6 +922,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     this.checkAndCleanupActiveSet();
 
     this.getActivationSet().add(ensemble.metadata.name);
+
+    this.recordPendingActivation(ensemble);
 
     // Set ensemble status to active
     await ensemble.activate();
@@ -962,6 +964,9 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const ensemble = await this.findByName(identifier);
 
     if (!ensemble) {
+      if (this.getActivationSet().delete(identifier)) {
+        return { success: true, message: ElementMessages.deactivated(ElementType.ENSEMBLE, identifier) };
+      }
       return {
         success: false,
         // CONSISTENCY FIX: Use standardized error message format
@@ -996,10 +1001,10 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   async getActiveEnsembles(): Promise<Ensemble[]> {
     const results: Ensemble[] = [];
-    for (const name of this.getActivationSet()) {
+    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (name) => {
       const ensemble = await this.findByName(name);
       if (ensemble) results.push(ensemble);
-    }
+    });
     return results;
   }
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 
 import { ElementCRUDHandler } from '../../../src/handlers/ElementCRUDHandler.js';
 import { ElementType } from '../../../src/portfolio/PortfolioManager.js';
@@ -15,8 +16,13 @@ import type { PersonaIndicatorService } from '../../../src/services/PersonaIndic
 import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
 import type { ActivationStore } from '../../../src/services/ActivationStore.js';
 
+import { createElementQueryService } from '../../../src/services/query/ElementQueryService.js';
+import { createMockValidationRegistry } from '../../helpers/di-mocks.js';
+
 describe('ElementCRUDHandler (DI)', () => {
   let handler: ElementCRUDHandler;
+  const elementQueryService = createElementQueryService();
+  const validationRegistry = createMockValidationRegistry();
   let skillManager: jest.Mocked<SkillManager>;
   let templateManager: jest.Mocked<TemplateManager>;
   let templateRenderer: jest.Mocked<TemplateRenderer>;
@@ -124,8 +130,20 @@ describe('ElementCRUDHandler (DI)', () => {
       portfolioManager,
       initService,
       indicatorService,
-      fileOperations
+      fileOperations, elementQueryService, validationRegistry, new ActivationMetricsTracker(() => 'local-user')
     );
+  });
+
+  it('persists the strategy-selected persona record despite an earlier duplicate display name', async () => {
+    const recordDeactivation = jest.fn();
+    const getActivations = jest.fn().mockReturnValue([
+      { name: 'Duplicate', filename: 'wrong.md' }, { name: 'Duplicate', filename: 'selected.md' },
+    ]);
+    (handler as any).activationStore = { recordDeactivation, getActivations, getSessionId: () => 'test-session' };
+    personaHandler.findPersonaAsync.mockResolvedValue({ metadata: { name: 'Duplicate' }, filename: 'selected.md' } as any);
+    await handler.deactivateElement('Duplicate', 'persona');
+    expect(recordDeactivation).toHaveBeenCalledWith(ElementType.PERSONA, 'Duplicate', 'selected.md', undefined);
+    expect(getActivations).not.toHaveBeenCalled();
   });
 
   describe.each([ElementType.SKILL, ElementType.TEMPLATE, ElementType.MEMORY, ElementType.ENSEMBLE])(
@@ -517,13 +535,11 @@ describe('ElementCRUDHandler (DI)', () => {
         initService,
         indicatorService,
         fileOperations,
-        undefined as any,
-        undefined as any,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        contextTracker as any,
+        elementQueryService,
+        validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), {
+        contextTracker: contextTracker as any
+      },
       );
       let releaseEnsembles!: () => void;
       const ensemblesBlocked = new Promise<void>((resolve) => {
@@ -615,9 +631,11 @@ describe('ElementCRUDHandler (DI)', () => {
         initService,
         indicatorService,
         fileOperations,
-        undefined as any,
-        undefined as any,
-        activationStore,
+        elementQueryService,
+        validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const result = await reportHandler.getPolicyElementsForReport('session-other');
@@ -672,9 +690,11 @@ describe('ElementCRUDHandler (DI)', () => {
         initService,
         indicatorService,
         fileOperations,
-        undefined as any,
-        undefined as any,
-        activationStore,
+        elementQueryService,
+        validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const result = await reportHandler.getPolicyElementsForReport();
@@ -737,7 +757,9 @@ describe('ElementCRUDHandler (DI)', () => {
       const reportHandler = new ElementCRUDHandler(
         skillManager, templateManager, templateRenderer, agentManager, memoryManager,
         ensembleManager, personaHandler, portfolioManager, initService, indicatorService,
-        fileOperations, undefined as any, undefined as any, activationStore,
+        fileOperations, elementQueryService, validationRegistry, new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const result = await reportHandler.getPolicyElementsForReport('session-other');
@@ -785,7 +807,9 @@ describe('ElementCRUDHandler (DI)', () => {
       const reportHandler = new ElementCRUDHandler(
         skillManager, templateManager, templateRenderer, agentManager, memoryManager,
         ensembleManager, personaHandler, portfolioManager, initService, indicatorService,
-        fileOperations, undefined as any, undefined as any, activationStore,
+        fileOperations, elementQueryService, validationRegistry, new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const result = await reportHandler.getPolicyElementsForReport();
@@ -851,9 +875,11 @@ describe('ElementCRUDHandler (DI)', () => {
         initService,
         indicatorService,
         fileOperations,
-        undefined as any,
-        undefined as any,
-        activationStore,
+        elementQueryService,
+        validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const report = reportHandler.getPolicyElementsForReport('session-other');
@@ -936,9 +962,11 @@ describe('ElementCRUDHandler (DI)', () => {
         initService,
         indicatorService,
         fileOperations,
-        undefined as any,
-        undefined as any,
-        activationStore,
+        elementQueryService,
+        validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const result = await reportHandler.getPolicyElementsForReport('session-other');
@@ -992,9 +1020,11 @@ describe('ElementCRUDHandler (DI)', () => {
         initService,
         indicatorService,
         fileOperations,
-        undefined as any,
-        undefined as any,
-        activationStore,
+        elementQueryService,
+        validationRegistry,
+        new ActivationMetricsTracker(() => 'local-user'), {
+        activationStore: activationStore
+      },
       );
 
       const result = await handlerWithPersistence.releaseDeadlock();

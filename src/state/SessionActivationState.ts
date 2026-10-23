@@ -13,6 +13,7 @@
  * @since v2.1.0 — Issue #1946
  */
 
+import { ActivationSet } from './ActivationSet.js';
 import { logger } from '../utils/logger.js';
 import type { IActivationStateStore } from './IActivationStateStore.js';
 
@@ -38,13 +39,13 @@ export interface SessionUserIdentity {
  */
 export interface SessionActivationState {
   readonly sessionId: string;
-  readonly personas: Set<string>;
-  readonly skills: Set<string>;
-  readonly agents: Set<string>;
+  readonly personas: ActivationSet;
+  readonly skills: ActivationSet;
+  readonly agents: ActivationSet;
   /** Display-name alias captured when each durable agent identity was activated. */
   readonly agentNamesByIdentity: Map<string, string>;
-  readonly memories: Set<string>;
-  readonly ensembles: Set<string>;
+  readonly memories: ActivationSet;
+  readonly ensembles: ActivationSet;
 
   /** Per-session identity override from set_user_identity. */
   userIdentity?: SessionUserIdentity;
@@ -67,12 +68,12 @@ export interface SessionActivationState {
 export function createSessionActivationState(sessionId: string): SessionActivationState {
   return {
     sessionId,
-    personas: new Set(),
-    skills: new Set(),
-    agents: new Set(),
+    personas: new ActivationSet(),
+    skills: new ActivationSet(),
+    agents: new ActivationSet(),
     agentNamesByIdentity: new Map(),
-    memories: new Set(),
-    ensembles: new Set(),
+    memories: new ActivationSet(),
+    ensembles: new ActivationSet(),
     userIdentity: undefined,
   };
 }
