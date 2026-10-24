@@ -161,3 +161,72 @@ describe('DatabaseStorageLayer identity delete retries', () => {
     expect(internals.indexStates.has('00000000-0000-4000-8000-000000000000')).toBe(false);
   });
 });
+
+describe('DatabaseStorageLayer indexed reads', () => {
+  function fixture() {
+    const rows = [
+      { id: 'exact-id', name: 'Agent_Name', updatedAt: new Date() },
+      { id: 'sibling-id', name: 'agent-name', updatedAt: new Date() },
+      { id: 'canonical-id', name: 'Meeting Notes', updatedAt: new Date() },
+    ];
+    const where = jest.fn<() => Promise<typeof rows>>().mockResolvedValue(rows);
+    const select = jest.fn(() => ({ from: jest.fn(() => ({ where })) }));
+    const execute = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const tx = { select, execute };
+    const transaction = jest.fn(async (work: (value: typeof tx) => Promise<unknown>) => work(tx));
+    const layer = new DatabaseStorageLayer({ transaction } as never,
+      () => '11111111-1111-4111-8111-111111111111', 'skills');
+    return { layer, transaction, select, execute };
+  }
+
+  it.each(['readIndexedPath', 'findIndexedPath'] as const)('%s respects preferred names and stops at the first hit', async method => {
+    const { layer } = fixture();
+    await layer.scan();
+    // A getter on an unused candidate detects traversal after a successful lookup.
+    const names = ['missing', 'Meeting Notes'];
+    Object.defineProperty(names, 2, { get: () => { throw new Error('Unexpected fallback lookup'); } });
+    const result = await layer[method](names);
+    expect(typeof result === 'object' ? result.path : result).toBe('canonical-id');
+    const reversed = await layer[method](['agent-name', 'Meeting Notes']);
+    expect(typeof reversed === 'object' ? reversed.path : reversed).toBe('sibling-id');
+  });
+
+  it.each([
+    ['Agent_Name', 'exact-id'], ['agent-name', 'sibling-id'],
+    ['AGENT NAME', undefined], ['meeting_notes', 'canonical-id'], ['missing', undefined],
+  ] as const)('preserves exact and canonical matching for %s', async (name, expected) => {
+    const { layer } = fixture();
+    await layer.scan();
+    expect(layer.getPathByName(name)).toBe(expected);
+    expect(await layer.findIndexedPath([name])).toBe(expected);
+    expect((await layer.readIndexedPath([name])).path).toBe(expected);
+  });
+
+  it('reports scan completion without scanning or querying during indexed reads', async () => {
+    const { layer, transaction, select, execute } = fixture();
+    const scan = jest.spyOn(layer, 'scan');
+    expect(await layer.readIndexedPath(['Meeting Notes'])).toEqual({
+      path: undefined, indexComplete: false, authoritative: false,
+    });
+    expect(await layer.findIndexedPath(['Meeting Notes'])).toBeUndefined();
+    expect(scan).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+
+    await layer.scan();
+    scan.mockClear();
+    transaction.mockClear();
+    select.mockClear();
+    execute.mockClear();
+    expect(await layer.readIndexedPath(['Meeting Notes'])).toEqual({
+      path: 'canonical-id', indexComplete: true, authoritative: true,
+    });
+    expect(await layer.findIndexedPath(['Meeting Notes'])).toBe('canonical-id');
+    expect(await layer.findIndexedPath(['missing'])).toBeUndefined();
+    expect(scan).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+});

@@ -423,7 +423,8 @@ describe('LRUCache Size Estimation', () => {
       expect(evictEvents.length).toBeGreaterThanOrEqual(1);
       expect(evictEvents[0].level).toBe('debug');
       expect(evictEvents[0].data?.cacheName).toBe('test-eviction');
-      expect(evictEvents[0].data?.key).toBe('a');
+      expect(evictEvents[0].data).not.toHaveProperty('key');
+      expect(cache.has('a')).toBe(false);
     });
 
     it('should include cache name in clear events', () => {
@@ -508,7 +509,7 @@ describe('LRUCache Size Estimation', () => {
       cache.clear();
 
       // No new events after unsubscribe
-      expect(logCalls.length).toBe(beforeCount);
+      expect(logCalls).toHaveLength(beforeCount);
     });
 
     it('should default name to "unnamed" when not provided', () => {
