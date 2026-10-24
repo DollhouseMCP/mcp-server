@@ -2,6 +2,8 @@
  * Unit tests for MemoryManager
  */
 
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+import { MEMORY_SECURITY_EVENTS } from '../../../../src/elements/memories/constants.js';
 import { jest } from '@jest/globals';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
 import { Memory } from '../../../../src/elements/memories/Memory.js';
@@ -94,6 +96,31 @@ describe('MemoryManager', () => {
 
     // Clear manager caches to avoid stale data between tests
     manager.clearCache();
+  });
+
+  it('emits a memory-list failure once for each caller sharing a path', async () => {
+    await fs.writeFile(path.join(memoriesDir, 'broken.yaml'), 'metadata: [unfinished');
+    let namespace = 'alice';
+    const scope = jest.spyOn(manager as any, 'getCacheNamespace').mockImplementation(() => namespace);
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+    const failures = () => audit.mock.calls.filter(([event]) =>
+      event.type === MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED);
+    try {
+      await manager.list();
+      // Per-user suppression prevents another event for this caller's repeated failure.
+      await manager.list();
+      expect(failures()).toHaveLength(1);
+      namespace = 'bob';
+      await manager.list();
+      await manager.list();
+      expect(failures()).toHaveLength(2);
+      namespace = 'alice';
+      await manager.list();
+      expect(failures()).toHaveLength(2);
+    } finally {
+      scope.mockRestore();
+      audit.mockRestore();
+    }
   });
 
   describe('save and load', () => {
