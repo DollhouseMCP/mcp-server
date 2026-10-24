@@ -65,7 +65,7 @@ import type { SerializationService } from '../../services/SerializationService.j
 import type { MetadataService } from '../../services/MetadataService.js';
 
 // Composed services
-import { ElementCache } from './ElementCache.js';
+import { type CachePublicationLease, ElementCache } from './ElementCache.js';
 import { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import { ElementLoader } from './ElementLoader.js';
 import { ElementPersister } from './ElementPersister.js';
@@ -473,6 +473,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       elementDir: this.elementDir,
       fileExtension: this.getFileExtension(),
       scanCooldownMs: getValidatedScanCooldown(),
+      retainDirectoryState: dir => this._cache?.hasDirectoryEntries(dir) ?? false,
     });
   }
 
@@ -650,8 +651,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // CACHE HELPERS (protected surface for subclasses)
   // ============================================
 
-  protected cacheElement(element: T, filePath: string): void {
-    this._cache.cacheElement(element, filePath);
+  protected withCachePublication<R>(operation: (lease: CachePublicationLease) => R): R {
+    return this._cache.withDirectoryPin(operation);
+  }
+
+  protected assertPublicationLease(lease: CachePublicationLease): void {
+    this._cache.assertPublicationLease(lease);
+  }
+
+  protected cacheElement(element: T, filePath: string, lease: CachePublicationLease): void {
+    this._cache.cacheElement(element, filePath, lease);
   }
 
   protected uncacheByPath(filePath: string): void {

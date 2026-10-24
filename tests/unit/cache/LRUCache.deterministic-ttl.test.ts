@@ -5,6 +5,7 @@
  * nextExpiryTimestamp rather than probabilistically (old 10% random check).
  */
 
+import { jest } from '@jest/globals';
 import { LRUCache } from '../../../src/cache/LRUCache.js';
 
 describe('LRUCache Deterministic TTL', () => {
@@ -22,6 +23,31 @@ describe('LRUCache Deterministic TTL', () => {
       // cleanup() returns 0 when TTL is disabled
       expect(cache.cleanup()).toBe(0);
       expect(cache.size).toBe(2);
+    });
+  });
+
+  describe('cleanup before the next expiry', () => {
+    it('returns without walking entries until the earliest entry is due', () => {
+      const originalNow = Date.now;
+      let currentTime = 1000000;
+      Date.now = () => currentTime;
+
+      try {
+        const cache = new LRUCache<string>({ maxSize: 10, ttlMs: 100 });
+        cache.set('a', 'value-a');
+        cache.set('b', 'value-b');
+        const walk = jest.spyOn(cache['cache'], Symbol.iterator);
+
+        currentTime += 99;
+        expect(cache.cleanup()).toBe(0);
+        expect(walk).not.toHaveBeenCalled();
+
+        currentTime += 1;
+        expect(cache.cleanup()).toBe(2);
+        expect(walk).toHaveBeenCalledTimes(1);
+      } finally {
+        Date.now = originalNow;
+      }
     });
   });
 

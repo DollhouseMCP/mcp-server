@@ -5,17 +5,19 @@
  * Secondary map: normalizedName → relativePath (case-insensitive name lookup)
  */
 
+import { flattenIndexEntry } from './flattenIndexEntry.js';
 import type { ElementIndexEntry } from './types.js';
 
 export class MetadataIndex {
-  private byPath = new Map<string, ElementIndexEntry>();
-  private nameToPath = new Map<string, string>();
+  private readonly byPath = new Map<string, ElementIndexEntry>();
+  private readonly nameToPath = new Map<string, string>();
 
   /**
    * Add or update an entry in the index.
    * Updates both primary and secondary maps.
    */
   set(entry: ElementIndexEntry): void {
+    entry = flattenIndexEntry(entry);
     // If this path already existed, clean up old name mapping
     const existing = this.byPath.get(entry.filePath);
     if (existing) {

@@ -211,6 +211,40 @@ describe('BaseElementManager - Requirements & Contract', () => {
     expect([...active]).toEqual(['Q']);
   });
 
+  it('rejects a foreign publication lease before creating or writing a file', async () => {
+    const foreign = createManager();
+    const create = jest.spyOn(fileOperationsService, 'createDirectory');
+    const write = jest.spyOn(fileOperationsService, 'writeFile');
+    const pin = jest.spyOn(manager['_cache'], 'withDirectoryPin')
+      .mockImplementation(operation => foreign['_cache'].withDirectoryPin(operation));
+    try {
+      await expect(manager.save(new TestElement({ name: 'Foreign' }, 'content'), 'foreign.md'))
+        .rejects.toThrow('active lease');
+      expect(create).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      await expect(fs.stat(path.join(elementsDir, 'foreign.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      pin.mockRestore();
+      create.mockRestore();
+      write.mockRestore();
+    }
+  });
+
+  it('notifies storage of a committed save even when cache publication fails', async () => {
+    const notify = jest.spyOn(manager['storageLayer'], 'notifySaved');
+    const publication = jest.spyOn(manager['_cache'], 'cacheElement').mockImplementation(() => {
+      throw new Error('Publication unavailable');
+    });
+    try {
+      await manager.save(new TestElement({ name: 'Committed' }, 'persisted content'), 'committed.md');
+      expect(await fs.readFile(path.join(elementsDir, 'committed.md'), 'utf8')).toContain('persisted content');
+      expect(notify).toHaveBeenCalledWith('committed.md', path.join(elementsDir, 'committed.md'));
+    } finally {
+      publication.mockRestore();
+      notify.mockRestore();
+    }
+  });
+
   describe('Security Requirements', () => {
     it('prevents path traversal with ../ sequences', async () => {
       const maliciousPath = '../../../etc/passwd';
@@ -963,7 +997,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       // Spy on list() to count calls
       const listSpy = jest.spyOn(manager, 'list');
 
-      // First findByName() for non-existent: triggers one list() (full scan)
+      // A cold missing-name lookup hydrates the list once, preserving flexible matching.
       const result1 = await manager.findByName('ghost-element');
       expect(result1).toBeUndefined();
       expect(listSpy).toHaveBeenCalledTimes(1);
@@ -971,12 +1005,12 @@ describe('BaseElementManager - Requirements & Contract', () => {
       // Second findByName() for another non-existent: should NOT trigger list() again
       const result2 = await manager.findByName('another-ghost');
       expect(result2).toBeUndefined();
-      expect(listSpy).toHaveBeenCalledTimes(1); // Still 1, not 2
+      expect(listSpy).toHaveBeenCalledTimes(1);
 
-      // Third findByName() for existing element: should hit cache
+      // An existing element now resolves from the populated cache.
       const result3 = await manager.findByName('only-one');
       expect(result3).toBeDefined();
-      expect(listSpy).toHaveBeenCalledTimes(1); // Still 1
+      expect(listSpy).toHaveBeenCalledTimes(1);
 
       listSpy.mockRestore();
     });

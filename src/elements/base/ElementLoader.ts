@@ -19,7 +19,7 @@ import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { InvalidElementRecord } from './BaseElementManager.js';
-import type { ElementCache } from './ElementCache.js';
+import type { ElementCache, CachePublicationLease } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 
 /** Partial type alias for the static ELEMENT_TYPE_TO_CONTEXT map passed in from the base class. */
@@ -125,6 +125,10 @@ export class ElementLoader<T extends IElement> {
    * Identical to the former BaseElementManager.load() body.
    */
   async load(filePath: string): Promise<T> {
+    return this.cache.withDirectoryPin(lease => this.loadAndCache(filePath, lease));
+  }
+
+  private async loadAndCache(filePath: string, lease: CachePublicationLease): Promise<T> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
     const correlationId = randomUUID();
 
@@ -145,7 +149,7 @@ export class ElementLoader<T extends IElement> {
         await this.host.afterLoad(element, relativePath, parsed);
       }
 
-      this.cache.cacheElement(element, relativePath);
+      this.cache.cacheElement(element, relativePath, lease);
 
       this.clearInvalidRecord(relativePath);
 
@@ -255,7 +259,7 @@ export class ElementLoader<T extends IElement> {
 
   /**
    * Load an element snapshot from file for validation (e.g., canDelete guard).
-   * Uses a direct file read rather than going through the full load() pipeline.
+   * Newly read validation snapshots are not published into the shared cache.
    */
   async loadElementSnapshot(absolutePath: string, relativePath: string): Promise<T> {
     const cached = this.cache.getCachedByAbsolutePath(absolutePath);
@@ -269,7 +273,6 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content);
-    this.cache.cacheElement(element, relativePath);
     return element;
   }
 
@@ -285,7 +288,6 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content);
-    this.cache.cacheElement(element, relativePath);
     return element;
   }
 }
