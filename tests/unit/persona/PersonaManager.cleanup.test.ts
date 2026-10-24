@@ -1,24 +1,67 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { createPersonaFindingFixture } from '../../helpers/persona-finding-fixture.js';
+import { createPersonaFindingFixture as createFixture } from '../../helpers/persona-finding-fixture.js';
 import { BaseElementManager } from '../../../src/elements/base/BaseElementManager.js';
 import { logger } from '../../../src/utils/logger.js';
 import { getActiveElementLimitConfig } from '../../../src/config/active-element-limits.js';
 import { PersonaActivationStrategy } from '../../../src/handlers/strategies/PersonaActivationStrategy.js';
 import type { PersonaIndicatorService } from '../../../src/services/PersonaIndicatorService.js';
 
+function createPersonaFindingFixture() {
+  const fixture = createFixture();
+  fixture.mockFileOperationsService.readElementFile.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  return fixture;
+}
+
 describe('Persona activation references', () => {
   afterEach(() => jest.restoreAllMocks());
+
+  it('emits one activation event when concurrent pressure checks finish', async () => {
+    const { personaManager } = createPersonaFindingFixture();
+    const notify = jest.spyOn(personaManager as unknown as { notifyPersonaChange(...args: unknown[]): void }, 'notifyPersonaChange');
+    let release!: () => void;
+    const blocked = new Promise<string[]>(resolve => { release = () => resolve([]); });
+    const pressure = jest.spyOn(personaManager as unknown as { reportActiveSetPressure(): Promise<string[]> }, 'reportActiveSetPressure').mockReturnValue(blocked);
+    const first = personaManager.activatePersona('Creative Writer');
+    const second = personaManager.activatePersona('Creative Writer');
+    release();
+    expect((await Promise.all([first, second])).every(result => result.success)).toBe(true);
+    expect(pressure).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
 
   it('retains an active reference after cache eviction and repeated cleanup', async () => {
     const { personaManager } = createPersonaFindingFixture();
     await personaManager.activatePersona('Creative Writer');
     personaManager.clearCache();
     const warn = jest.spyOn(logger, 'warn');
-    personaManager['collectRetainedReferenceNotices']();
-    personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
     expect(personaManager['getActivationSet']().has('Creative-Writer.md')).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(personaManager['activationMetricsTracker'].getMetrics()).toBe(1);
+  });
+
+  it('does not warn for an evicted persona that can still be read from storage', async () => {
+    const { personaManager, mockFileOperationsService } = createPersonaFindingFixture();
+    await personaManager.activatePersona('Creative Writer');
+    personaManager.clearCache();
+    mockFileOperationsService.readElementFile.mockResolvedValue('---\nname: Creative Writer\ndescription: Writer\n---\nWrite creatively.');
+    expect(await personaManager['collectRetainedReferenceNotices']()).toEqual([]);
+    expect(personaManager['activationMetricsTracker'].getMetrics()).toBe(0);
+  });
+
+  it('does not report a reference explicitly deactivated during its lookup', async () => {
+    const { personaManager } = createPersonaFindingFixture();
+    personaManager['getActivationSet']().add('missing.md');
+    let release!: () => void;
+    const pending = new Promise<undefined>(resolve => { release = () => resolve(undefined); });
+    const lookup = jest.spyOn(personaManager, 'findPersonaAsync').mockReturnValue(pending);
+    const notices = personaManager['collectRetainedReferenceNotices']();
+    expect(lookup).toHaveBeenCalledWith('missing.md');
+    expect(personaManager.deactivatePersona('missing.md').success).toBe(true);
+    release();
+    expect(await notices).toEqual([]);
+    expect(personaManager['activationMetricsTracker'].getMetrics()).toBe(0);
   });
 
   it('clears warning suppression after explicit deactivation', async () => {
@@ -26,10 +69,10 @@ describe('Persona activation references', () => {
     await personaManager.activatePersona('Creative Writer');
     personaManager.clearCache();
     const warn = jest.spyOn(logger, 'warn');
-    personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
     personaManager.deactivatePersona('Creative-Writer.md');
     personaManager['getActivationSet']().add('Creative-Writer.md');
-    personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
@@ -38,12 +81,12 @@ describe('Persona activation references', () => {
     await personaManager.activatePersona('Creative Writer');
     personaManager.clearCache();
     const warn = jest.spyOn(logger, 'warn');
-    personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
     const failure = new Error(reason);
     jest.spyOn(BaseElementManager.prototype, 'delete').mockRejectedValueOnce(failure);
     await expect(personaManager.delete('Creative-Writer.md')).rejects.toBe(failure);
     expect(personaManager['getActivationSet']().has('Creative-Writer.md')).toBe(true);
-    personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
@@ -94,7 +137,7 @@ describe('Persona activation references', () => {
       { getPersonaIndicator: () => '' } as PersonaIndicatorService);
     const response = await strategy.activate('Creative Writer');
     expect(response.content[0].text).toContain('Active personas limit reached');
-    expect(response.content[0].text).toContain('Retained stale persona reference "missing-0.md"');
+    expect(response.content[0].text).toContain('Active persona reference "missing-0.md"');
     expect(personaManager.getActivePersonaIds()).toHaveLength(max + 1);
   });
 
@@ -107,12 +150,12 @@ describe('Persona activation references', () => {
     expect((await strategy.deactivate('Creative Writer')).content[0].text).toContain('already inactive');
   });
 
-  it('allows a retained name-bound reference to bind to a recreated definition', () => {
+  it('allows a retained name-bound reference to bind to a recreated definition', async () => {
     const { personaManager, seedPersona } = createPersonaFindingFixture();
     const original = personaManager.findPersona('Creative Writer')!;
     personaManager['getActivationSet']().add('Creative Writer');
     personaManager.clearCache();
-    personaManager['collectRetainedReferenceNotices']();
+    await personaManager['collectRetainedReferenceNotices']();
     // Until durable identities land, retaining a name widens the re-binding window.
     const replacement = { ...original, unique_id: 'replacement', metadata: { ...original.metadata, unique_id: 'replacement' } };
     seedPersona(replacement);

@@ -38,6 +38,7 @@ import { EnsembleManager } from '../../../src/elements/ensembles/EnsembleManager
 import { AgentManager } from '../../../src/elements/agents/AgentManager.js';
 import { RegistrySessionActivationStateAdapter } from '../../../src/web-console/modules/activations/SessionActivationStateAdapter.js';
 import { SessionActivationRegistry } from '../../../src/state/SessionActivationState.js';
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { BaseElementManager } from '../../../src/elements/base/BaseElementManager.js';
 
 import type { ConsoleRequest } from '../../../src/web-console/platform/ConsolePlatformTypes.js';
@@ -89,15 +90,16 @@ describe('Activation Persistence Integration (Issue #598)', () => {
     }
   });
 
-  async function createActive(type: 'persona' | 'skill' | 'ensemble' | 'agent', name: string) {
+  async function createActive(type: 'persona' | 'skill' | 'ensemble' | 'agent', name: string, alias = name) {
     const create = await mcpAqlHandler.handleCreate({
       operation: 'create_element', element_type: type,
       params: { element_name: name, description: 'Activation lifecycle regression',
         instructions: 'Follow the test instructions.', content: 'Test instructions.', },
     }) as OperationResult;
     expect(create.success).toBe(true);
+    expect(create.data).not.toHaveProperty('isError', true);
     const handler = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
-    expect((await handler.activateElement(name, type)).content[0].text).not.toContain('❌');
+    expect((await handler.activateElement(alias, type)).content[0].text).not.toContain('❌');
     const manager = type === 'persona' ? container.resolve<PersonaManager>('PersonaManager')
       : type === 'skill' ? container.resolve<SkillManager>('SkillManager')
         : type === 'ensemble' ? container.resolve<EnsembleManager>('EnsembleManager')
@@ -106,6 +108,266 @@ describe('Activation Persistence Integration (Issue #598)', () => {
     expect(manager['getActivationSet']().size).toBe(1);
     return { handler, manager };
   }
+
+  it.each(['skill', 'ensemble', 'persona'] as const)('does not activate a %s deleted during pressure reporting', async type => {
+    const { handler, manager } = await createActive(type, 'race-target');
+    await handler.deactivateElement('race-target', type);
+    await createActive(type, 'retained');
+    manager.clearCache();
+    const limitKey = `DOLLHOUSE_MAX_ACTIVE_${type.toUpperCase()}S`;
+    const oldLimit = process.env[limitKey];
+    process.env[limitKey] = '5';
+    for (let index = 0; index < 4; index++) manager['getActivationSet']().add(`retained-${index}`);
+    let release!: () => void, entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    jest.spyOn(manager as unknown as { collectRetainedReferenceNotices(): Promise<string[]> }, 'collectRetainedReferenceNotices')
+      .mockImplementation(() => manager['retainedReferenceNotices'](type, async () => {
+        entered(); await blocked; return true;
+      }, container.resolve<ActivationMetricsTracker>('ActivationMetricsTracker')));
+    try {
+      const activating = type === 'persona' ? (manager as PersonaManager).activatePersona('race-target')
+        : type === 'skill' ? (manager as SkillManager).activateSkill('race-target')
+          : (manager as EnsembleManager).activateEnsemble('race-target');
+      await started;
+      await manager.delete('race-target.md');
+      release();
+      expect((await activating).success).toBe(false);
+      expect([...manager['getActivationSet']()].some(key => key.startsWith('race-target'))).toBe(false);
+      expect(activationStore.getActivations(type).some(record => record.name === 'race-target')).toBe(false);
+    } finally {
+      release();
+      if (oldLimit === undefined) delete process.env[limitKey]; else process.env[limitKey] = oldLimit;
+    }
+  });
+
+  it.each(['skill', 'ensemble'] as const)('relieves a persona despite a kept malformed %s', async type => {
+    const { handler, manager } = await createActive(type, 'broken-reference');
+    const created = await mcpAqlHandler.handleCreate({ operation: 'create_element', element_type: 'persona',
+      params: { element_name: 'locked-persona', description: 'Deadlock relief persona', instructions: 'Follow these persona instructions.' } }) as OperationResult;
+    expect(created.data).not.toHaveProperty('isError', true);
+    await handler.activateElement('locked-persona', 'persona');
+    await fs.writeFile(path.join(env.testDir, `${type}s`, 'broken-reference.md'), '---\nname: [invalid\n---');
+    manager.clearCache();
+    const limitKey = `DOLLHOUSE_MAX_ACTIVE_${type.toUpperCase()}S`;
+    const oldLimit = process.env[limitKey];
+    process.env[limitKey] = '5';
+    for (let index = 0; index < 4; index++) manager['getActivationSet']().add(`retained-${index}`);
+    try {
+      await manager['reportActiveSetPressure']();
+      expect(manager['getActivationSet']().has('broken-reference')).toBe(true);
+      const warn = jest.spyOn(logger, 'warn');
+      const result = await handler.releaseDeadlock();
+      expect(result.deactivated).toContainEqual({ type: 'personas', name: 'locked-persona' });
+      expect(container.resolve<PersonaManager>('PersonaManager').getActivePersonaIds()).toEqual([]);
+      expect(warn).toHaveBeenCalledWith('Deadlock relief skipped unavailable element type',
+        { type: `${type}s`, error: 'SecurityError' });
+    } finally {
+      if (oldLimit === undefined) delete process.env[limitKey]; else process.env[limitKey] = oldLimit;
+    }
+  });
+
+  it.each(['skill', 'ensemble'] as const)('clears a saved-only %s after a failed restore', async type => {
+    const name = 'saved-only';
+    const { handler, manager } = await createActive(type, name);
+    manager['getActivationSet']().clear();
+    manager.clearCache();
+    await fs.writeFile(path.join(env.testDir, `${type}s`, `${name}.md`), '---\nname: [invalid\n---');
+    await container['restoreActivations'](activationStore);
+    expect(manager['getActivationSet']().size).toBe(0);
+    expect(activationStore.getActivations(type).map(record => record.name)).toEqual([name]);
+    expect((await handler.deactivateElement(name, type)).content[0].text).toContain('Cleared stored');
+    expect(activationStore.getActivations(type)).toEqual([]);
+    const lookup = jest.spyOn(manager, 'findByName');
+    await container['restoreActivations'](activationStore);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(manager['getActivationSet']().size).toBe(0);
+    lookup.mockRejectedValue(new Error('storage unavailable'));
+    expect((await handler.deactivateElement(name, type)).content[0].text).toContain('could not be loaded (storage or definition error)');
+    activationStore.recordActivation(type, name);
+    expect((await handler.deactivateElement(name, type)).content[0].text).toContain('Cleared stored');
+    expect(activationStore.getActivations(type)).toEqual([]);
+  });
+
+  it.each(['skill', 'ensemble'] as const)('clears an unreadable saved %s alias without retrying it on restore', async type => {
+    const name = 'Aliased Element';
+    const alias = 'aliased-element';
+    const { handler, manager } = await createActive(type, name, alias);
+    expect(activationStore.getActivations(type).map(record => record.name)).toEqual([alias]);
+    await fs.writeFile(path.join(env.testDir, `${type}s`, 'aliased-element.md'), '---\nname: [invalid\n---');
+    manager.clearCache();
+    expect((await handler.deactivateElement(alias, type)).content[0].text).toContain('Cleared stored');
+    expect(activationStore.getActivations(type)).toEqual([]);
+    // Simulate a new session; the unreadable canonical live reference cannot be inferred from the alias.
+    manager['getActivationSet']().clear();
+    manager.clearCache();
+    const lookup = jest.spyOn(manager, 'findByName');
+    await container['restoreActivations'](activationStore);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(manager['getActivationSet']().size).toBe(0);
+  });
+
+  it.each(['skill', 'ensemble'] as const)('clears unreadable accepted %s dot names before restore', async type => {
+    activationStore = new FileActivationStateStore(container.resolve('FileOperationsService'), path.join(env.testDir, 'alias-state'), 'alias-session');
+    await activationStore.initialize();
+    const consumer = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
+    jest.spyOn(consumer as unknown as { getSessionActivationStore(): IActivationStateStore }, 'getSessionActivationStore').mockReturnValue(activationStore);
+    for (const name of ['.', '..']) {
+      const { handler, manager } = await createActive(type, name);
+      expect(activationStore.getActivations(type).map(record => record.name)).toEqual([name]);
+      const file = path.join(env.testDir, `${type}s`, manager['getElementFilename'](name));
+      const original = await fs.readFile(file, 'utf8');
+      await fs.writeFile(file, '---\nname: [invalid\n---');
+      manager.clearCache();
+      activationStore.recordActivation(type, 'unrelated-element');
+      expect((await handler.deactivateElement(name, type)).content[0].text).not.toContain('❌');
+      expect(manager['getActivationSet']().size).toBe(0);
+      expect(activationStore.getActivations(type).map(record => record.name)).toEqual(['unrelated-element']);
+      await fs.writeFile(file, original);
+      const saved = activationStore as FileActivationStateStore;
+      await saved['persist']();
+      const restarted = new FileActivationStateStore(container.resolve('FileOperationsService'), saved['stateDir'], saved.getSessionId());
+      await restarted.initialize();
+      expect(restarted.getActivations(type).map(record => record.name)).toEqual(['unrelated-element']);
+      await container['restoreActivations'](restarted);
+      expect(manager['getActivationSet']().size).toBe(0);
+      activationStore.recordDeactivation(type, 'unrelated-element');
+      await fs.unlink(file);
+    }
+  });
+
+  it.each(['skill', 'ensemble', 'persona'] as const)('clears unreadable %s references and restores policy collection', async type => {
+    const limitKey = `DOLLHOUSE_MAX_ACTIVE_${type.toUpperCase()}S`;
+    const oldLimit = process.env[limitKey];
+    process.env[limitKey] = '5';
+    try {
+      for (const failure of ['removed', 'malformed', 'storage']) {
+        const name = `${type}-${failure}`;
+        const healthyName = (index: number) => `${failure}-healthy-${index}`;
+        const { handler, manager } = await createActive(type, name);
+        for (let i = 0; i < 4; i++) {
+          const created = await mcpAqlHandler.handleCreate({ operation: 'create_element', element_type: type,
+            params: { element_name: healthyName(i), description: 'Healthy', instructions: 'Apply the healthy policy.', content: 'Healthy policy reference.' } }) as OperationResult;
+          expect(created).toMatchObject({ success: true });
+          expect(created.data).not.toHaveProperty('isError', true);
+          await handler.activateElement(healthyName(i), type);
+        }
+        const file = path.join(env.testDir, `${type}s`, `${name}.md`);
+        if (failure === 'removed') await fs.unlink(file);
+        if (failure === 'malformed') await fs.writeFile(file, '---\nname: [invalid\n---');
+        const read = manager['fileOperations'].readElementFile.bind(manager['fileOperations']);
+        const spy = jest.spyOn(manager['fileOperations'], 'readElementFile').mockImplementation((filePath, ...args) => {
+          if (failure === 'storage' && filePath === file) return Promise.reject(new Error('storage unavailable'));
+          return read(filePath, ...args);
+        });
+        await handler.deactivateElement(healthyName(0), type);
+        manager.clearCache();
+        const response = await handler.activateElement(healthyName(0), type);
+        expect(response.content[0].text).toContain('could not be loaded and is kept');
+        expect(response.content[0].text.includes('While it fails to load, no active')).toBe(type !== 'persona' && failure !== 'removed');
+        const before = await handler.getActiveElementsForPolicy({ allowCoalescing: false });
+        expect(before.filter(item => item.type === type)).toHaveLength(type === 'persona' || failure === 'removed' ? 4 : 0);
+        const key = type === 'persona' ? `${name}.md` : name;
+        const result = await mcpAqlHandler.handleRead({ operation: 'deactivate_element', params: { element_name: key, element_type: type } }) as OperationResult;
+        expect(result.success).toBe(true);
+        expect(manager['getActivationSet']().has(key)).toBe(false);
+        expect(activationStore.getActivations(type).some(record => record.name === name)).toBe(false);
+        expect((await handler.getActiveElementsForPolicy({ allowCoalescing: false })).filter(item => item.type === type)).toHaveLength(4);
+        spy.mockRestore();
+        for (let i = 0; i < 4; i++) await handler.deactivateElement(healthyName(i), type);
+      }
+    } finally {
+      if (oldLimit === undefined) delete process.env[limitKey]; else process.env[limitKey] = oldLimit;
+    }
+  });
+
+  it.each(['skill', 'ensemble'] as const)('warns again after parent deactivates a retained %s member', async type => {
+    const limitKey = `DOLLHOUSE_MAX_ACTIVE_${type.toUpperCase()}S`;
+    const oldLimit = process.env[limitKey];
+    process.env[limitKey] = '5';
+    try {
+      const name = 'retained-member';
+      const { handler, manager } = await createActive(type, name);
+      for (let index = 0; index < 4; index++) {
+        const healthy = `healthy-member-${index}`;
+        const created = await mcpAqlHandler.handleCreate({ operation: 'create_element', element_type: type,
+          params: { element_name: healthy, description: 'Healthy activation fixture', content: 'Healthy member instructions.' } }) as OperationResult;
+        expect(created).toMatchObject({ success: true });
+        expect(created.data).not.toHaveProperty('isError', true);
+        expect((await handler.activateElement(healthy, type)).content[0].text).not.toContain('❌');
+      }
+      const parent = await mcpAqlHandler.handleCreate({ operation: 'create_element', element_type: 'ensemble',
+        params: { element_name: 'parent-group', description: 'Member warning lifecycle', metadata: { allowNested: true },
+          elements: [{ element_name: name, element_type: type, role: 'primary', priority: 50, activation: 'always' }] } }) as OperationResult;
+      expect(parent).toMatchObject({ success: true });
+      expect(parent.data).not.toEqual(expect.objectContaining({ isError: true }));
+      expect((await handler.activateElement('parent-group', 'ensemble')).content[0].text).not.toContain('❌');
+      const file = path.join(env.testDir, `${type}s`, `${name}.md`);
+      const original = await fs.readFile(file, 'utf8');
+      const tracker = container.resolve<ActivationMetricsTracker>('ActivationMetricsTracker');
+      const before = tracker.getMetrics();
+      const warn = jest.spyOn(logger, 'warn');
+      const reportUnreadableMember = async () => {
+        await fs.writeFile(file, '---\nname: [invalid\n---');
+        manager.clearCache();
+        const response = await handler.activateElement('healthy-member-0', type);
+        expect(response.content[0].text).toContain(`Active ${type} reference "${name}" could not be loaded and is kept`);
+      };
+      await reportUnreadableMember();
+      expect(tracker.getMetrics()).toBe(before + 1);
+      expect((await handler.deactivateElement('parent-group', 'ensemble')).content[0].text).not.toContain('❌');
+      expect(manager['getActivationSet']().has(name)).toBe(false);
+      // Reactivate through the real parent orchestration, then make its member unreadable again.
+      await fs.writeFile(file, original);
+      manager.clearCache();
+      expect((await handler.activateElement('parent-group', 'ensemble')).content[0].text).not.toContain('❌');
+      expect(manager['getActivationSet']().has(name)).toBe(true);
+      await reportUnreadableMember();
+      expect(tracker.getMetrics()).toBe(before + 2);
+      expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation] Retained'))).toHaveLength(2);
+    } finally {
+      if (oldLimit === undefined) delete process.env[limitKey]; else process.env[limitKey] = oldLimit;
+    }
+  });
+
+  it.each([[false, false], [true, false], [false, true], [true, true]])(
+    'warns that ensemble members remain active (cached: %s, missing: %s)', async (cached, missing) => {
+    const { handler, manager: skill } = await createActive('skill', 'member-skill');
+    const ensemble = container.resolve<EnsembleManager>('EnsembleManager');
+    const created = await mcpAqlHandler.handleCreate({ operation: 'create_element', element_type: 'ensemble',
+      params: { element_name: 'member-group', description: 'Member deactivation test',
+        elements: [{ element_name: 'member-skill', element_type: 'skill', role: 'primary', priority: 50, activation: 'always' }] } }) as OperationResult;
+    expect(created.data).not.toHaveProperty('isError', true);
+    await handler.activateElement('member-group', 'ensemble');
+    expect(ensemble['getActivationSet']().has('member-group')).toBe(true);
+    if (!cached) ensemble.clearCache();
+    // Keep cached metadata available, but force the authoritative definition read to fail.
+    jest.spyOn(ensemble, 'findByName').mockImplementation(name => ensemble.load(`${name}.md`));
+    const read = jest.spyOn(ensemble['fileOperations'], 'readElementFile').mockRejectedValue(new Error('storage unavailable'));
+    if (missing) jest.spyOn(ensemble, 'findByName').mockResolvedValue(undefined);
+    const response = await handler.deactivateElement('member-group', 'ensemble');
+    if (!missing) expect(read).toHaveBeenCalled();
+    expect(ensemble['getActivationSet']().has('member-group')).toBe(false);
+    expect(activationStore.getActivations('ensemble')).toHaveLength(0);
+    expect(skill['getActivationSet']().has('member-skill')).toBe(true);
+    expect(response.content[0].text).toContain('members were NOT deactivated');
+    expect(response.content[0].text).toContain(cached ? 'Known members: skill "member-skill"' : 'Deactivate any you no longer need individually');
+  });
+
+  it.each(['removed', 'outside symlink'])('MCP-AQL deactivation clears live and saved skill state after file is %s', async state => {
+    const name = 'externally-removed-skill';
+    const { manager } = await createActive('skill', name);
+    const file = path.join(env.testDir, 'skills', `${name}.md`);
+    await fs.unlink(file);
+    if (state === 'outside symlink') await fs.symlink(path.join(env.testDir, 'personas'), file);
+    manager.clearCache();
+    await manager.scanAndEvict({ freshAfterInFlight: true });
+    const result = await mcpAqlHandler.handleRead({ operation: 'deactivate_element',
+      params: { element_name: name, element_type: 'skill' } }) as OperationResult;
+    expect(result.success).toBe(true);
+    expect(manager['getActivationSet']().size).toBe(0);
+    expect(activationStore.getActivations('skill')).toEqual([]);
+  });
 
   it.each([
     { type: 'persona' as const, byFilename: false },

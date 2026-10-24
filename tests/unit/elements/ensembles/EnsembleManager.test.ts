@@ -2,6 +2,7 @@
  * Unit tests for EnsembleManager implementation
  */
 
+import { ActivationMetricsTracker } from '../../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { promises as fs, realpathSync } from 'fs';
 import * as path from 'path';
@@ -72,6 +73,7 @@ describe('EnsembleManager', () => {
       metadataService
     );
     ensembleManager = new EnsembleManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as any,
       fileLockManager,
       fileOperationsService,
