@@ -108,12 +108,12 @@ describe('server and active browser sanitizer copies', () => {
     expect(bytes.equals(installed)).toBe(true);
     const manifest = JSON.parse(readFileSync(source('src/web-console/ui/vendor/manifest.json'), 'utf8'));
     const asset = manifest.assets.find((item: { package: string }) => item.package === 'dompurify');
-    expect(asset.packageVersion).toBe('3.4.16');
+    expect(asset.packageVersion).toBe('3.4.17');
     expect(asset.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
     const document = new JSDOM(readFileSync(html, 'utf8'));
     try {
       const tag = document.window.document.querySelector('script[src*="/dompurify@"]');
-      expect(tag?.getAttribute('src')).toBe('https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js');
+      expect(tag?.getAttribute('src')).toBe('https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js');
       expect(tag?.getAttribute('integrity')).toBe(`sha384-${createHash('sha384').update(bytes).digest('base64')}`);
     } finally { document.window.close(); }
   });
