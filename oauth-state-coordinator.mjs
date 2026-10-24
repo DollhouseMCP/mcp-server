@@ -130,14 +130,14 @@ function windowsWmicIdentity(pid, executable, deadline, remainingProviders) {
 function windowsManagementIdentity(pid, lockDeadline) {
   const executables = windowsSystemExecutables();
   if (!executables) return undefined;
-  // Reserve half the remaining lock time for another ticket scan. The owner
-  // may publish .done while a management shell is blocked; spending the entire
-  // deadline probing would time out without observing that release. An
-  // inconclusive probe still retains the owner, and retries share the original
-  // lock deadline rather than extending it.
+  // Reserve a short final ticket scan without starving a slow successful
+  // identity probe. The owner may publish .done while a management shell is
+  // blocked; an inconclusive probe retains the owner, and retries still share
+  // the original lock deadline rather than extending it.
+  const scanReserveMs = 100;
   const deadline = {
-    ...lockDeadline,
-    monotonic: lockDeadline.monotonic - Math.max(0, remainingLockTime(lockDeadline)) / 2
+    monotonic: lockDeadline.monotonic - scanReserveMs,
+    systemUptime: lockDeadline.systemUptime - scanReserveMs
   };
   // WMIC is substantially lighter than starting a PowerShell runtime. On
   // systems where it has been removed, ENOENT returns immediately and leaves

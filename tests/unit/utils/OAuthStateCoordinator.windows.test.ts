@@ -84,10 +84,30 @@ describe('OAuth state lock Windows probe budget', () => {
     expect(entered).toBe(true);
     expect(execFileSync.mock.calls.map(([command]) => path.win32.basename(command)))
       .toEqual(['WMIC.exe', 'pwsh.exe', 'powershell.exe']);
-    expect(execFileSync.mock.calls[2][2].timeout).toBe(1_553);
-    expect(now).toBe(2_510); // 2.5 s total probe budget + one 10 ms retry.
+    expect(execFileSync.mock.calls[2][2].timeout).toBe(3_953);
+    expect(now).toBe(4_910); // 4.9 s total probe budget + one 10 ms retry.
     expect(now).toBeLessThan(5_000);
     expect(fs.existsSync(`${stateFile}.lock/2.done`)).toBe(true);
+  });
+
+  it('reclaims a reused PID when the built-in PowerShell probe needs more than half the deadline', () => {
+    execFileSync.mockImplementation((command, _args, { timeout }) => {
+      if (command.endsWith('WMIC.exe') || command.endsWith('pwsh.exe')) {
+        throw Object.assign(new Error('provider unavailable'), { code: 'ENOENT' });
+      }
+      expect(command).toMatch(/\\powershell\.exe$/);
+      const probeDuration = 3_500;
+      now += Math.min(probeDuration, timeout);
+      if (timeout < probeDuration) throw Object.assign(new Error('probe timed out'), { code: 'ETIMEDOUT' });
+      return '20000'; // The live replacement differs from the recorded win32:10000 owner.
+    });
+
+    withOAuthStateLockSync(stateFile, () => { entered = true; });
+
+    expect(entered).toBe(true);
+    expect(now).toBe(3_500);
+    expect(fs.existsSync(ownerDone)).toBe(true);
+    expect(execFileSync).toHaveBeenCalledTimes(3);
   });
 
   it('keeps a live owner with unavailable identity and expires without extending the deadline', () => {
