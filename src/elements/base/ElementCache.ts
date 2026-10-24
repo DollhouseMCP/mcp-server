@@ -23,6 +23,7 @@ export interface ElementCacheHost {
   resolveAbsolutePath(filePath: string): string;
   readonly elementDir: string;
   getCacheNamespace(): string;
+  onClear?(): void;
 }
 
 export class ElementCache<T extends IElement> {
@@ -93,12 +94,21 @@ export class ElementCache<T extends IElement> {
     }
   }
 
-  private key(rawKey: string): string {
-    return `${this.host.getCacheNamespace()}:${rawKey}`;
+  /** Prefix the key with the ambient namespace; see getNamespace for context requirements. */
+  key(rawKey: string): string {
+    return `${this.getNamespace()}:${rawKey}`;
+  }
+
+  /**
+   * Resolve inside the request context (otherwise the default is system).
+   * Snapshot once per operation when subsequent bookkeeping must share the caller.
+   */
+  getNamespace(): string {
+    return this.host.getCacheNamespace();
   }
 
   private keyPrefix(): string {
-    return `${this.host.getCacheNamespace()}:`;
+    return `${this.getNamespace()}:`;
   }
 
   private elementKey(elementId: string, absolutePath: string): string {
@@ -326,6 +336,7 @@ export class ElementCache<T extends IElement> {
     this.elementIdToKeys.clear();
     this.elementKeyToId.clear();
     this.elementGenerations.clear();
+    this.host.onClear?.();
   }
 
   /**

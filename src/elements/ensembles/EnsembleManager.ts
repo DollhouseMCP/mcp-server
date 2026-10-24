@@ -17,6 +17,7 @@
  * - SecureYamlParser for safe YAML parsing
  */
 
+import { BoundedDiagnosticMap } from '../base/BoundedDiagnosticMap.js';
 import type { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
 import { visitSequentially } from '../../utils/visitSequentially.js';
 import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
@@ -65,6 +66,9 @@ export interface EnsembleManagerDeps extends ElementManagerDeps {
   activationMetricsTracker: ActivationMetricsTracker;
 }
 
+// Eviction only permits another migration warning on the caller's next load.
+export const MAX_LEGACY_FIELD_WARNINGS = 1024;
+
 /**
  * EnsembleManager - Manages ensemble element lifecycle
  *
@@ -78,7 +82,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  private readonly legacyElementFieldWarnings: Set<string> = new Set();
+  private readonly legacyElementFieldWarnings: BoundedDiagnosticMap<boolean> = new BoundedDiagnosticMap(MAX_LEGACY_FIELD_WARNINGS);
   private readonly activationMetricsTracker: ActivationMetricsTracker;
 
   constructor(deps: EnsembleManagerDeps) {
@@ -126,8 +130,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     this.legacyElementFieldWarnings.clear();
   }
 
-  override dispose(): void {
-    super.dispose();
+  protected override clearCacheBookkeeping(): void {
+    super.clearCacheBookkeeping();
     this.clearLegacyElementWarningHistory();
   }
 
@@ -148,12 +152,12 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     field: LegacyElementField,
   ): void {
     const replacement = LEGACY_ELEMENT_FIELD_REPLACEMENTS[field];
-    const fingerprint = `${ensembleName}:${index}:${field}`;
-    if (this.legacyElementFieldWarnings.has(fingerprint)) {
+    const fingerprint = this.getScopedCacheKey(`${ensembleName}:${index}:${field}`);
+    if (this.legacyElementFieldWarnings.get(fingerprint)) {
       return;
     }
 
-    this.legacyElementFieldWarnings.add(fingerprint);
+    this.legacyElementFieldWarnings.set(fingerprint, true);
     logger.warn(
       `Ensemble '${ensembleName}' element at index ${index} uses deprecated '${field}' field. Use '${replacement}' instead.`,
     );

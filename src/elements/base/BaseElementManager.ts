@@ -331,6 +331,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
       get elementDir() { return self.elementDir; },
       getCacheNamespace: () => this.getCacheNamespace(),
+      onClear: () => this.clearCacheBookkeeping(),
     };
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this; // NOSONAR — needed for object literal getters where `this` rebinds
@@ -693,6 +694,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._cache.getCacheStats();
   }
 
+  /** Resolve inside the caller request; outside it the default namespace is system. */
+  protected getScopedCacheKey(key: string): string {
+    return this._cache.key(key);
+  }
+
   protected getCacheNamespace(): string {
     if (this.contextTracker) {
       const session = this.contextTracker.getSessionContext();
@@ -708,6 +714,10 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       }
     }
     return 'system';
+  }
+
+  protected clearCacheBookkeeping(): void {
+    this._loader.clear();
   }
 
   clearCache(): void {
