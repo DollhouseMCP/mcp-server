@@ -535,6 +535,17 @@ describe('PathsServiceRegistrar', () => {
       await expect(fs.lstat(marker())).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
+    it('does not announce recovery when the portfolio root is inside the legacy root', async () => {
+      const portfolioRoot = path.join(legacy(), 'nested');
+      const skill = path.join(portfolioRoot, 'users', 'u-1', 'portfolio', 'skills', 'user.md');
+      await fs.mkdir(path.dirname(skill), { recursive: true });
+      await fs.writeFile(skill, 'User content');
+      const info = jest.spyOn(logger, 'info').mockImplementation(() => {});
+      await expect(LegacyDetectingPathResolver.detect({ legacyRoot: legacy(), portfolioRoot }))
+        .rejects.toThrow('Cannot record a fresh or recovered layout inside the legacy root');
+      expect(info).not.toHaveBeenCalledWith(expect.stringContaining('Recovered the per-user layout'));
+    });
+
     it.each(['', 'nested'])('refuses fresh/recovered roots inside legacy but preserves flat installs (%s)', async suffix => {
       const portfolioRoot = path.join(legacy(), suffix);
       const opts = { legacyRoot: legacy(), portfolioRoot };

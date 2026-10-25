@@ -151,6 +151,7 @@ export class LegacyDetectingPathResolver implements IUserPathResolver {
 
     if (await recoverPortfolioRoot(legacyRoot, portfolioRoot, bundled, probe)) {
       assertIndependentRoot(legacyRoot, portfolioRoot);
+      logger.info(`Recovered the per-user layout at ${portfolioRoot}; ${legacyRoot} has no legacy element content.`);
       return new LegacyDetectingPathResolver(new PerUserPathResolver(portfolioRoot), portfolioRoot, 'per-user', true);
     }
 
@@ -280,7 +281,6 @@ async function recoverPortfolioRoot(legacyRoot: string, portfolioRoot: string, b
     logger.warn(`Element content exists at both ${legacyPortfolio} and ${portfolioRoot}; keeping the legacy flat layout. No files were moved or merged.`);
     return false;
   }
-  logger.info(`Recovered the per-user layout at ${portfolioRoot}; ${legacyRoot} has no legacy element content.`);
   return true;
 }
 
