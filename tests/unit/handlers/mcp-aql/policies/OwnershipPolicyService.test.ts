@@ -134,6 +134,23 @@ describe('OwnershipPolicyService', () => {
       expect(resolveOwnerLogin).toHaveBeenCalledTimes(1);
     });
 
+    it('de-duplicates concurrent owner lookups onto a single gh call', async () => {
+      let release: (login: string) => void = () => undefined;
+      const resolveOwnerLogin = jest.fn(() => new Promise<string | undefined>((resolve) => { release = resolve; }));
+      const lookup = jest.fn(async (): Promise<OwnershipLookupResult> => resolved('mickdarling'));
+      const service = new OwnershipPolicyService({ config: { mode: 'deny', teammates: [] }, resolver: { lookup, resolveOwnerLogin }, cache: new OwnershipCache() });
+      const pending = Promise.all([
+        service.evaluate('Bash', { command: 'gh pr merge 1' }),
+        service.evaluate('Bash', { command: 'gh pr merge 2' }),
+        service.evaluate('Bash', { command: 'gh pr close 3' }),
+      ]);
+      await Promise.resolve();
+      release('mickdarling');
+      const decisions = await pending;
+      expect(decisions.map(d => d?.behavior)).toEqual(['allow', 'allow', 'allow']);
+      expect(resolveOwnerLogin).toHaveBeenCalledTimes(1);
+    });
+
     it('does not call gh for the owner when one is configured', async () => {
       const { resolver, resolveOwnerLogin } = fakeResolver({ '1': resolved('mickdarling') });
       await new OwnershipPolicyService({ config: CONFIG, resolver, cache: new OwnershipCache() }).evaluate('Bash', { command: 'gh pr merge 1' });
