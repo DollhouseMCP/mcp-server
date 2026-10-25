@@ -3,9 +3,13 @@
  * inspecting disk state at startup.
  *
  * Detection rules:
+ *   - Portfolio-root sentinel present → per-user on that root, even if
+ *     legacy content later appears. A recorded anchor takes precedence.
  *   - Legacy root missing → per-user on the new portfolio root
  *     (fresh install).
- *   - Legacy root present, migration marker file absent → flat on
+ *   - Without either marker, regular per-user content and no legacy
+ *     element content → recover per-user on the portfolio root.
+ *   - Otherwise, legacy root present, migration marker file absent → flat on
  *     legacy root (single-user install, never migrated).
  *   - Legacy root present, migration marker file present → per-user
  *     on legacy root (migrated install; base stays at `~/.dollhouse/`
@@ -35,7 +39,9 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { BundledElementProbe } from './BundledElementProbe.js';
 import { ElementType } from '../portfolio/types.js';
+import { logger } from '../utils/logger.js';
 import { FlatPathResolver } from './FlatPathResolver.js';
 import { IUserPathResolver } from './IUserPathResolver.js';
 import { PerUserPathResolver } from './PerUserPathResolver.js';
@@ -49,6 +55,9 @@ export type Layout = 'flat' | 'per-user';
  * on the legacy root.
  */
 export const MIGRATION_MARKER_FILENAME = '.dollhouse-per-user-migrated';
+
+/** Fresh-install decision, anchored here rather than on the legacy migration root. */
+export const PORTFOLIO_LAYOUT_MARKER_FILENAME = '.dollhouse-per-user-layout';
 
 export interface DetectOptions {
   /** Path to the legacy `~/.dollhouse/` directory. */
@@ -65,14 +74,17 @@ export interface DetectOptions {
    * or `'missing'`. Non-ENOENT errors rethrow so startup fails loudly
    * on permission-denied or filesystem errors.
    */
-  probe?: (p: string) => Promise<'dir' | 'file' | 'missing'>;
+  probe?: (p: string) => Promise<'dir' | 'file' | 'other' | 'missing'>;
 }
+
+type Probe = NonNullable<DetectOptions['probe']>;
 
 export class LegacyDetectingPathResolver implements IUserPathResolver {
   private constructor(
     private readonly delegate: IUserPathResolver,
     private readonly _anchorRoot: string,
     private readonly _layout: Layout,
+    private readonly recordDecision = false,
   ) {}
 
   /**
@@ -81,23 +93,46 @@ export class LegacyDetectingPathResolver implements IUserPathResolver {
    *
    * Uses `lstat` rather than `access` so a pre-planted symlink at the
    * marker-file path cannot flip a fresh install into per-user-on-
-   * legacy mode. The marker must be a regular file; symlinks and other
-   * entry types are ignored (treated as "not present").
+   * legacy mode. A non-regular portfolio record refuses startup.
    */
   static async detect(opts: DetectOptions): Promise<LegacyDetectingPathResolver> {
     const probe = opts.probe ?? defaultProbe;
+    const bundled = new BundledElementProbe();
     const legacyRoot = path.resolve(opts.legacyRoot);
     const portfolioRoot = path.resolve(opts.portfolioRoot);
 
+    // Reconcile before every unrecorded return: deciding servers publish before
+    // creating legacy directories (PathsServiceRegistrar awaits persistence).
+    // Older binaries/scripts creating legacy roots and recovery beside a running
+    // old flat server remain outside this startup protocol.
+    const recorded = async () => {
+      const marker = path.join(portfolioRoot, PORTFOLIO_LAYOUT_MARKER_FILENAME);
+      const kind = await probe(marker);
+      if (kind === 'missing') return undefined;
+      if (kind !== 'file') throw new Error(`Portfolio layout record must be a regular file: ${marker}`);
+      if (portfolioRoot !== legacyRoot) await warnAboutLegacyContent(legacyRoot, bundled, probe);
+      return new LegacyDetectingPathResolver(new PerUserPathResolver(portfolioRoot), portfolioRoot, 'per-user');
+    };
+    const existing = await recorded();
+    if (existing) return existing;
+
     const legacyKind = await probe(legacyRoot);
 
-    if (legacyKind !== 'dir') {
-      // Fresh install (or legacy root is a symlink/file, which we do
-      // not follow). Use new portfolio root with per-user layout.
+    if (legacyKind !== 'dir' && legacyKind !== 'missing') {
+      assertIndependentRoot(legacyRoot, portfolioRoot);
+      if (await hasPerUserContent(portfolioRoot, bundled, probe)) {
+        logger.info(`Recovered the per-user layout at ${portfolioRoot}; legacy root ${legacyRoot} was not followed.`);
+        return new LegacyDetectingPathResolver(new PerUserPathResolver(portfolioRoot), portfolioRoot, 'per-user', true);
+      }
+    }
+    assertLegacyKind(legacyKind, legacyRoot);
+    if (legacyKind === 'missing') {
+      assertIndependentRoot(legacyRoot, portfolioRoot);
       return new LegacyDetectingPathResolver(
         new PerUserPathResolver(portfolioRoot),
         portfolioRoot,
         'per-user',
+        true,
       );
     }
 
@@ -106,19 +141,42 @@ export class LegacyDetectingPathResolver implements IUserPathResolver {
       // Legacy root exists AND the migration completed — use per-user
       // semantics anchored on the legacy root. A symlinked or missing
       // marker intentionally does not trigger this branch.
-      return new LegacyDetectingPathResolver(
+      return await recorded() ?? new LegacyDetectingPathResolver(
         new PerUserPathResolver(legacyRoot),
         legacyRoot,
         'per-user',
       );
     }
 
-    // Legacy root, no migration marker — flat single-user layout.
-    return new LegacyDetectingPathResolver(
+    if (await recoverPortfolioRoot(legacyRoot, portfolioRoot, bundled, probe)) {
+      assertIndependentRoot(legacyRoot, portfolioRoot);
+      return new LegacyDetectingPathResolver(new PerUserPathResolver(portfolioRoot), portfolioRoot, 'per-user', true);
+    }
+
+    // Legacy root with no recorded or recoverable portfolio decision — stay flat.
+    return await recorded() ?? new LegacyDetectingPathResolver(
       new FlatPathResolver(legacyRoot),
       legacyRoot,
       'flat',
     );
+  }
+
+  /** Commit a fresh or recovered decision before startup creates incidental legacy directories. */
+  async persistLayoutDecision(): Promise<void> {
+    if (!this.recordDecision) return;
+    await fs.mkdir(this._anchorRoot, { recursive: true });
+    const marker = path.join(this._anchorRoot, PORTFOLIO_LAYOUT_MARKER_FILENAME);
+    try {
+      // The empty regular file IS the decision: exclusive creation publishes it
+      // atomically, with no partially written payload or replacement of existing entries.
+      const handle = await fs.open(marker, 'wx', 0o600);
+      await handle.close();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST' && await defaultProbe(marker) === 'file') return;
+      // Refuse an unpersisted startup (including a symlink collision) rather than
+      // serving one layout now and silently switching on the next launch.
+      throw error;
+    }
   }
 
   /**
@@ -166,22 +224,83 @@ export class LegacyDetectingPathResolver implements IUserPathResolver {
 /**
  * Default probe. Uses `lstat` (does NOT follow symlinks) so pre-planted
  * symlinks cannot influence layout detection. Distinguishes `dir`,
- * `file`, and `missing`; rethrows on permission-denied or other I/O
+ * `file`, `other`, and `missing`; rethrows on permission-denied or other I/O
  * errors so startup fails loudly rather than silently mis-classifying.
  */
-async function defaultProbe(p: string): Promise<'dir' | 'file' | 'missing'> {
+async function defaultProbe(p: string): Promise<'dir' | 'file' | 'other' | 'missing'> {
   try {
     const stats = await fs.lstat(p);
     if (stats.isDirectory()) return 'dir';
     if (stats.isFile()) return 'file';
-    // Symlinks, sockets, devices, etc. — treat as missing; we do not
-    // follow them.
-    return 'missing';
+    // Distinguish existing links/devices from absence without following them.
+    return 'other';
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
       return 'missing';
     }
     throw err;
+  }
+}
+
+/** Only element directories count; logs, run files and activation state are incidental. */
+async function hasPortfolioContent(portfolio: string, bundled: BundledElementProbe, probe: Probe): Promise<boolean> {
+  if (await probe(portfolio) !== 'dir') return false;
+  for (const type of Object.values(ElementType)) {
+    if (await containsElementFiles(path.join(portfolio, type), type, bundled, probe)) return true;
+  }
+  return false;
+}
+
+async function warnAboutLegacyContent(legacyRoot: string, bundled: BundledElementProbe, probe: Probe): Promise<void> {
+  const portfolio = path.join(legacyRoot, 'portfolio');
+  try {
+    if (await probe(legacyRoot) === 'dir' && await hasPortfolioContent(portfolio, bundled, probe)) {
+      logger.warn(`Ignoring legacy portfolio at ${portfolio}; the recorded per-user portfolio root takes precedence. Legacy files were not moved or merged.`);
+    }
+  } catch {
+    logger.warn(`Could not inspect legacy portfolio at ${portfolio}; continuing with the recorded per-user layout.`);
+  }
+}
+
+async function hasPerUserContent(portfolioRoot: string, bundled: BundledElementProbe, probe: Probe): Promise<boolean> {
+  const users = path.join(portfolioRoot, 'users');
+  if (await probe(portfolioRoot) !== 'dir' || await probe(users) !== 'dir') return false;
+  for (const entry of await fs.readdir(users, { withFileTypes: true })) {
+    if (!entry.name.startsWith('.') && entry.isDirectory() && await hasPortfolioContent(path.join(users, entry.name, 'portfolio'), bundled, probe)) return true;
+  }
+  return false;
+}
+
+async function recoverPortfolioRoot(legacyRoot: string, portfolioRoot: string, bundled: BundledElementProbe, probe: Probe): Promise<boolean> {
+  if (!await hasPerUserContent(portfolioRoot, bundled, probe)) return false;
+  const legacyPortfolio = path.join(legacyRoot, 'portfolio');
+  if (await hasPortfolioContent(legacyPortfolio, bundled, probe)) {
+    logger.warn(`Element content exists at both ${legacyPortfolio} and ${portfolioRoot}; keeping the legacy flat layout. No files were moved or merged.`);
+    return false;
+  }
+  logger.info(`Recovered the per-user layout at ${portfolioRoot}; ${legacyRoot} has no legacy element content.`);
+  return true;
+}
+
+async function containsElementFiles(directory: string, elementType: string, bundled: BundledElementProbe, probe: Probe, elementRoot = directory): Promise<boolean> {
+  if (await probe(directory) !== 'dir') return false;
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const file = path.join(directory, entry.name);
+    if (entry.isFile() && /\.(?:md|ya?ml)$/i.test(entry.name) && !await bundled.isBundled(file, elementType, path.relative(elementRoot, file))) return true;
+    if (entry.isDirectory() && await containsElementFiles(file, elementType, bundled, probe, elementRoot)) return true;
+  }
+  return false;
+}
+
+function assertLegacyKind(kind: Awaited<ReturnType<Probe>>, root: string): void {
+  if (kind !== 'dir' && kind !== 'missing') throw new Error(`Legacy root must be a directory, not a link or file: ${root}`);
+}
+
+function assertIndependentRoot(legacyRoot: string, portfolioRoot: string): void {
+  const relative = path.relative(legacyRoot, portfolioRoot);
+  if (!relative || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))) {
+    throw new Error(`Cannot record a fresh or recovered layout inside the legacy root: ${portfolioRoot}`);
   }
 }

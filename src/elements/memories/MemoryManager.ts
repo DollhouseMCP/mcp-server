@@ -40,7 +40,7 @@ import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, SEED_MEMORY_FILENAME } from './constants.js';
 import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
 import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
@@ -2074,7 +2074,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     try {
       if (this.guardedUpdateAdapter) throw new Error('Seed installation is unavailable for guarded memory updates; no seeds were changed.');
       // Define the seed file
-      const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
+      const seedFileName = SEED_MEMORY_FILENAME;
       logger.debug(`[MemoryManager] Step 1: Target seed file: ${seedFileName}`);
 
       const locator = _packageLocator;
