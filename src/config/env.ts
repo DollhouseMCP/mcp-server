@@ -762,6 +762,28 @@ const envSchema = z.object({
    * Set to false to disable policy file export entirely.
    */
   DOLLHOUSE_POLICY_EXPORT_ENABLED: envBool(true),
+  /**
+   * Issue #3153: Authorship-aware GitHub ownership policy.
+   * Agents may comment on or review PRs and issues authored by others, but
+   * mutations (merge, update-branch, edit, close, ready, pushes to a PR head
+   * branch, issue edit/close) are gated on who authored the target.
+   * - off: policy inactive
+   * - confirm (default): ask the human before modifying someone else's PR/issue
+   * - deny: block outright
+   * This is an operator setting — the LLM cannot bypass it.
+   */
+  DOLLHOUSE_GITHUB_OWNERSHIP_POLICY: z.string().default('confirm'),
+  /**
+   * Issue #3153: GitHub login of the human who owns this session. When unset,
+   * the policy resolves it from the authenticated `gh` user; if that fails the
+   * policy fails closed (asks) for every GitHub mutation.
+   */
+  DOLLHOUSE_GITHUB_OWNER_LOGIN: z.string().optional(),
+  /**
+   * Issue #3153: Comma-separated GitHub logins whose PRs and issues the agent
+   * may also modify (teammate allow-list). Default: none.
+   */
+  DOLLHOUSE_GITHUB_TEAMMATES: z.string().optional(),
 
   // ============================================================================
   // Storage Layer Configuration
