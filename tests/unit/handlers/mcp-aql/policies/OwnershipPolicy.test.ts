@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from '@jest/globals';
 import {
+  MAX_TEAMMATES,
   decideOwnership,
   detectGitHubMutations,
   isTrustedAuthor,
@@ -59,6 +60,19 @@ describe('OwnershipPolicy', () => {
     it('de-duplicates teammates case-insensitively', () => {
       expect(parseTeammateList('Alice,alice,ALICE').teammates).toEqual(['Alice']);
     });
+
+    it('caps the teammate list at MAX_TEAMMATES and reports the truncation', () => {
+      const exactly = Array.from({ length: MAX_TEAMMATES }, (_, i) => `user${i}`).join(',');
+      expect(parseTeammateList(exactly)).toMatchObject({ truncated: 0 });
+      expect(parseTeammateList(exactly).teammates).toHaveLength(MAX_TEAMMATES);
+
+      const overflow = `${exactly},extra1,extra2`;
+      const parsed = parseTeammateList(overflow);
+      expect(parsed.teammates).toHaveLength(MAX_TEAMMATES);
+      expect(parsed.truncated).toBe(2);
+      const { warnings } = parseOwnershipPolicyConfig({ teammates: overflow });
+      expect(warnings).toEqual([expect.stringMatching(/exceeds 100 entries; ignoring the last 2/)]);
+    });
   });
 
   describe('isTrustedAuthor', () => {
@@ -79,6 +93,11 @@ describe('OwnershipPolicy', () => {
       expect(splitShellSegments('git status && gh pr merge 5; echo "a;b" | cat')).toEqual([
         'git status', 'gh pr merge 5', 'echo "a;b"', 'cat',
       ]);
+    });
+
+    it('keeps an unclosed quote as a segment rather than dropping it', () => {
+      expect(splitShellSegments('gh pr merge 5 --body "unterminated; git push')).toEqual(['gh pr merge 5 --body "unterminated; git push']);
+      expect(bash('gh pr merge 5 --body "unterminated; git push')).toHaveLength(1);
     });
 
     it('exposes sub-shell contents as their own segments', () => {
@@ -120,6 +139,7 @@ describe('OwnershipPolicy', () => {
     it('does not mistake a flag value for the selector', () => {
       expect(bash('gh pr edit --title "Rename" --body "body text"')[0]).toMatchObject({ selector: undefined });
       expect(bash('gh pr edit --add-label bug 42')[0]).toMatchObject({ selector: '42' });
+      expect(bash('gh pr edit --add-label bug')[0]).toMatchObject({ kind: 'pull_request', selector: undefined });
     });
 
     it.each(['gh pr view 1', 'gh pr diff 1', 'gh pr checks 1', 'gh pr comment 1 --body hi', 'gh pr review 1 --approve', 'gh pr create --fill', 'gh pr list', 'gh pr checkout 1'])(
@@ -154,6 +174,10 @@ describe('OwnershipPolicy', () => {
       expect(bash('gh api -X DELETE /repos/o/r/issues/6/lock')[0]).toMatchObject({ kind: 'issue' });
     });
 
+    it('treats --input without an explicit method as a POST', () => {
+      expect(bash('gh api --input body.json repos/o/r/pulls/5')[0]).toMatchObject({ kind: 'pull_request', selector: '5', action: 'gh api POST pulls/5' });
+    });
+
     it('allows GET requests and comment/review sub-resources', () => {
       expect(bash('gh api repos/o/r/pulls/5')).toEqual([]);
       expect(bash('gh api repos/o/r/issues/6/comments -f body=hi')).toEqual([]);
@@ -182,6 +206,8 @@ describe('OwnershipPolicy', () => {
 
     it('reports branch deletion and skips tag pushes', () => {
       expect(bash('git push origin --delete feature/x')[0]).toMatchObject({ action: 'git push --delete', branch: 'feature/x' });
+      expect(bash('git push origin :feature/old')[0]).toMatchObject({ action: 'git push --delete', branch: 'feature/old' });
+      expect(bash('git push origin :refs/heads/feature/old')[0]).toMatchObject({ action: 'git push --delete', branch: 'feature/old' });
       expect(bash('git push origin --tags')).toEqual([]);
       expect(bash('git push origin refs/tags/v1.0.0')).toEqual([]);
     });
