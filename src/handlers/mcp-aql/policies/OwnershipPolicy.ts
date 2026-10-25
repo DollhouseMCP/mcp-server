@@ -20,6 +20,10 @@
  * Fail-closed rule: when the lookup errored, or the owner identity could not
  * be established, the decision is `confirm` (ask the human), never `allow`.
  *
+ * Detection prefers over-reporting to under-reporting: an unclosed quote, a
+ * sub-shell or a `--input` read idiom may produce an extra intent, which at
+ * worst costs one confirmation prompt — never a silent allow.
+ *
  * @module
  */
 
@@ -108,7 +112,7 @@ export interface OwnershipDecision {
 
 /** GitHub login: 1–39 alphanumerics or hyphens, optional `[bot]` suffix. */
 const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$/;
-const MAX_TEAMMATES = 100;
+export const MAX_TEAMMATES = 100;
 
 export const DEFAULT_OWNERSHIP_POLICY_MODE: OwnershipPolicyMode = 'confirm';
 
@@ -120,19 +124,27 @@ function normalizeLogin(login: string): string {
   return login.trim().replace(/^@/, '');
 }
 
-function parseMode(raw: string | undefined): OwnershipPolicyMode {
-  const candidate = raw?.trim().toLowerCase();
-  return OWNERSHIP_POLICY_MODES.find(mode => mode === candidate) ?? DEFAULT_OWNERSHIP_POLICY_MODE;
+function isOwnershipPolicyMode(value: string): value is OwnershipPolicyMode {
+  return (OWNERSHIP_POLICY_MODES as readonly string[]).includes(value);
+}
+
+export interface ParsedTeammateList {
+  teammates: string[];
+  /** Entries dropped because they are not valid GitHub logins. */
+  rejected: string[];
+  /** Valid entries dropped because the list exceeded MAX_TEAMMATES. */
+  truncated: number;
 }
 
 /**
  * Parse teammates from a delimited list. Invalid logins are dropped and
  * returned separately so the caller can log them without failing startup.
  */
-export function parseTeammateList(raw: string | undefined): { teammates: string[]; rejected: string[] } {
+export function parseTeammateList(raw: string | undefined): ParsedTeammateList {
   const teammates: string[] = [];
   const rejected: string[] = [];
-  if (!raw) return { teammates, rejected };
+  let truncated = 0;
+  if (!raw) return { teammates, rejected, truncated };
 
   const seen = new Set<string>();
   for (const entry of raw.split(/[\s,;]+/)) {
@@ -143,11 +155,15 @@ export function parseTeammateList(raw: string | undefined): { teammates: string[
       continue;
     }
     const key = login.toLowerCase();
-    if (seen.has(key) || teammates.length >= MAX_TEAMMATES) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
+    if (teammates.length >= MAX_TEAMMATES) {
+      truncated++;
+      continue;
+    }
     teammates.push(login);
   }
-  return { teammates, rejected };
+  return { teammates, rejected, truncated };
 }
 
 /**
@@ -159,8 +175,12 @@ export function parseOwnershipPolicyConfig(
   raw: RawOwnershipPolicyConfig,
 ): { config: OwnershipPolicyConfig; warnings: string[] } {
   const warnings: string[] = [];
-  const mode = parseMode(raw.mode);
-  if (raw.mode && raw.mode.trim() !== '' && !OWNERSHIP_POLICY_MODES.includes(raw.mode.trim().toLowerCase() as OwnershipPolicyMode)) {
+
+  const rawMode = raw.mode?.trim().toLowerCase() ?? '';
+  let mode: OwnershipPolicyMode = DEFAULT_OWNERSHIP_POLICY_MODE;
+  if (isOwnershipPolicyMode(rawMode)) {
+    mode = rawMode;
+  } else if (rawMode !== '') {
     warnings.push(`Unknown ownership policy mode '${raw.mode}', using '${mode}'`);
   }
 
@@ -174,9 +194,12 @@ export function parseOwnershipPolicyConfig(
     }
   }
 
-  const { teammates, rejected } = parseTeammateList(raw.teammates);
+  const { teammates, rejected, truncated } = parseTeammateList(raw.teammates);
   for (const login of rejected) {
     warnings.push(`Ignoring invalid teammate login '${login}'`);
+  }
+  if (truncated > 0) {
+    warnings.push(`Teammate list exceeds ${MAX_TEAMMATES} entries; ignoring the last ${truncated}`);
   }
 
   return { config: { mode, ownerLogin, teammates }, warnings };
@@ -222,8 +245,8 @@ function restrictedDecision(intent: GitHubMutationIntent, authorLogin: string, c
  * Decide whether a GitHub mutation may proceed.
  *
  * Precedence:
- * 1. mode `off` → allow
- * 2. lookup error, unknown owner identity, or unresolvable target → confirm (fail closed)
+ * 1. mode `off` → allow (short-circuits everything below, including unresolvable targets)
+ * 2. unresolvable target, unknown owner identity, or lookup error → confirm (fail closed)
  * 3. nothing found to protect → allow
  * 4. author trusted → allow; otherwise mode (`confirm` | `deny`)
  */
@@ -277,6 +300,81 @@ export function decideOwnership(
 // ── Detection: shell tokenizing ────────────────────────────────────
 
 const MAX_COMMAND_LENGTH = 4000;
+type QuoteChar = '"' | '\'';
+
+/** Characters that end a simple command outside quotes (sub-shell openers included). */
+const SEGMENT_SEPARATORS = new Set([';', '\n', '|', '&', '(', ')', '`']);
+
+/**
+ * Character-by-character scanner shared by the segmenter and the word
+ * tokenizer: tracks quote state and backslash escapes so each consumer only
+ * has to say what to do with a plain, unquoted character.
+ */
+interface ShellScanHandlers {
+  /** Keep quote marks and escaping backslashes in the output (segmenter) or drop them (tokenizer). */
+  keepQuotes: boolean;
+  /** Receives literal characters: quoted content, escaped characters and (when kept) the quote marks. */
+  onLiteral: (ch: string) => void;
+  /** Receives an unquoted, unescaped character; returns extra characters consumed (1 for `$(`). */
+  onPlain: (ch: string, index: number) => number;
+  /** Called when a quote opens or an escape is seen, so the tokenizer can start an (possibly empty) token. */
+  onQuoteBoundary?: () => void;
+}
+
+class ShellScanner {
+  private quote: QuoteChar | null = null;
+  constructor(private readonly text: string) {}
+
+  /**
+   * Visit every character, routing it to the handlers. An unclosed quote
+   * simply ends at EOF: whatever was accumulated is kept (over-detection is
+   * preferred to dropping a possible mutation).
+   */
+  scan(handlers: ShellScanHandlers): void {
+    for (let i = 0; i < this.text.length; i++) {
+      const ch = this.text[i];
+      if (this.quote) {
+        i += this.consumeQuoted(ch, i, handlers);
+        continue;
+      }
+      const special = this.consumeSpecial(ch, i, handlers);
+      i += special ?? handlers.onPlain(ch, i);
+    }
+  }
+
+  /** Quote openers and escapes outside quotes. Returns extra characters consumed, or null when `ch` is plain. */
+  private consumeSpecial(ch: string, index: number, handlers: ShellScanHandlers): number | null {
+    if (ch === '"' || ch === '\'') {
+      this.quote = ch;
+      handlers.onQuoteBoundary?.();
+      if (handlers.keepQuotes) handlers.onLiteral(ch);
+      return 0;
+    }
+    if (ch === '\\' && index + 1 < this.text.length) {
+      if (handlers.keepQuotes) handlers.onLiteral(ch);
+      handlers.onLiteral(this.text[index + 1]);
+      handlers.onQuoteBoundary?.();
+      return 1;
+    }
+    return null;
+  }
+
+  /** Handle one character inside quotes. Returns extra characters consumed. */
+  private consumeQuoted(ch: string, index: number, handlers: ShellScanHandlers): number {
+    if (ch === this.quote) {
+      this.quote = null;
+      if (handlers.keepQuotes) handlers.onLiteral(ch);
+      return 0;
+    }
+    if (ch === '\\' && this.quote === '"' && index + 1 < this.text.length) {
+      if (handlers.keepQuotes) handlers.onLiteral(ch);
+      handlers.onLiteral(this.text[index + 1]);
+      return 1;
+    }
+    handlers.onLiteral(ch);
+    return 0;
+  }
+}
 
 /**
  * Split a shell command line into simple-command segments, honouring quotes.
@@ -285,47 +383,33 @@ const MAX_COMMAND_LENGTH = 4000;
  * `gh pr merge 1` segment — over-splitting can only add intents, never hide one.
  */
 export function splitShellSegments(command: string): string[] {
+  const text = command.slice(0, MAX_COMMAND_LENGTH);
   const segments: string[] = [];
   let current = '';
-  let quote: '"' | '\'' | null = null;
-  const text = command.slice(0, MAX_COMMAND_LENGTH);
-
   const flush = (): void => {
     if (current.trim()) segments.push(current.trim());
     current = '';
   };
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quote) {
-      if (ch === '\\' && quote === '"' && i + 1 < text.length) {
-        current += ch + text[++i];
-        continue;
-      }
-      if (ch === quote) quote = null;
-      current += ch;
-      continue;
-    }
-    if (ch === '"' || ch === '\'') {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === '\\' && i + 1 < text.length) {
-      current += ch + text[++i];
-      continue;
-    }
-    if (ch === '$' && text[i + 1] === '(') {
-      flush();
-      i++;
-      continue;
-    }
-    if (';\n|&()`'.includes(ch)) {
-      flush();
-      continue;
-    }
+  const append = (ch: string): void => {
     current += ch;
-  }
+  };
+
+  new ShellScanner(text).scan({
+    keepQuotes: true,
+    onLiteral: append,
+    onPlain: (ch, i) => {
+      if (ch === '$' && text[i + 1] === '(') {
+        flush();
+        return 1;
+      }
+      if (SEGMENT_SEPARATORS.has(ch)) {
+        flush();
+        return 0;
+      }
+      current += ch;
+      return 0;
+    },
+  });
   flush();
   return segments;
 }
@@ -335,52 +419,41 @@ export function tokenizeShellWords(segment: string): string[] {
   const tokens: string[] = [];
   let current = '';
   let inToken = false;
-  let quote: '"' | '\'' | null = null;
+  const append = (ch: string): void => {
+    current += ch;
+    inToken = true;
+  };
+  const markToken = (): void => {
+    inToken = true;
+  };
 
-  for (let i = 0; i < segment.length; i++) {
-    const ch = segment[i];
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else if (ch === '\\' && quote === '"' && i + 1 < segment.length) {
-        current += segment[++i];
+  new ShellScanner(segment).scan({
+    keepQuotes: false,
+    onLiteral: append,
+    onQuoteBoundary: markToken,
+    onPlain: (ch) => {
+      if (/\s/.test(ch)) {
+        if (inToken) tokens.push(current);
+        current = '';
+        inToken = false;
       } else {
-        current += ch;
+        append(ch);
       }
-      continue;
-    }
-    if (ch === '"' || ch === '\'') {
-      quote = ch;
-      inToken = true;
-    } else if (ch === '\\' && i + 1 < segment.length) {
-      current += segment[++i];
-      inToken = true;
-    } else if (/\s/.test(ch)) {
-      if (inToken) tokens.push(current);
-      current = '';
-      inToken = false;
-    } else {
-      current += ch;
-      inToken = true;
-    }
-  }
+      return 0;
+    },
+  });
   if (inToken) tokens.push(current);
   return tokens;
 }
 
 const COMMAND_WRAPPERS = new Set(['command', 'env', 'nohup', 'time', 'builtin', 'exec']);
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const ENV_ASSIGNMENT = /^[A-Za-z_]\w*=/;
 
 /** Drop leading `VAR=value` assignments and transparent wrappers such as `env` or `nohup`. */
 function stripLeadingWrappers(tokens: string[]): string[] {
   let index = 0;
-  while (index < tokens.length) {
-    const token = tokens[index];
-    if (ENV_ASSIGNMENT.test(token) || COMMAND_WRAPPERS.has(token)) {
-      index++;
-      continue;
-    }
-    break;
+  while (index < tokens.length && (ENV_ASSIGNMENT.test(tokens[index]) || COMMAND_WRAPPERS.has(tokens[index]))) {
+    index++;
   }
   return tokens.slice(index);
 }
@@ -405,6 +478,12 @@ const GH_VALUE_FLAGS = new Set([
   '--head', '-r', '--reason', '-c', '--comment', '--undo', '-H', '--hostname', '-q', '--jq', '--template',
 ]);
 
+/** `gh api` flags that consume the following token. */
+const GH_API_VALUE_FLAGS = new Set([
+  '-X', '--method', '-f', '--raw-field', '-F', '--field', '-H', '--header', '--input', '-q', '--jq',
+  '-t', '--template', '-p', '--preview', '--hostname', '--cache',
+]);
+
 function parseRepoRef(value: string | undefined): GitHubRepoRef | undefined {
   if (!value) return undefined;
   const cleaned = value.replace(/^https?:\/\/[^/]+\//, '').replace(/\.git$/, '');
@@ -415,17 +494,20 @@ function parseRepoRef(value: string | undefined): GitHubRepoRef | undefined {
   return { owner, name };
 }
 
-/** `gh api` flags that consume the following token. */
-const GH_API_VALUE_FLAGS = new Set([
-  '-X', '--method', '-f', '--raw-field', '-F', '--field', '-H', '--header', '--input', '-q', '--jq',
-  '-t', '--template', '-p', '--preview', '--hostname', '--cache',
-]);
-
 interface GhArgs {
   repo?: GitHubRepoRef;
   positionals: string[];
   /** Flag → every value it was given (empty array for boolean flags). */
   flags: Map<string, string[]>;
+}
+
+/** Split `--flag=value` / `--flag value` into its parts, consuming the next token when needed. */
+function readFlag(args: string[], index: number, valueFlags: ReadonlySet<string>): { flag: string; value?: string; consumed: number } {
+  const arg = args[index];
+  const eq = arg.indexOf('=');
+  if (eq !== -1) return { flag: arg.slice(0, eq), value: arg.slice(eq + 1), consumed: 0 };
+  if (valueFlags.has(arg) && index + 1 < args.length) return { flag: arg, value: args[index + 1], consumed: 1 };
+  return { flag: arg, consumed: 0 };
 }
 
 /** Separate flags from positionals for a `gh <group> <sub> ...` argument list. */
@@ -444,12 +526,8 @@ function parseGhArgs(args: string[], valueFlags: ReadonlySet<string> = GH_VALUE_
       positionals.push(arg);
       continue;
     }
-    const eq = arg.indexOf('=');
-    const flag = eq === -1 ? arg : arg.slice(0, eq);
-    let value = eq === -1 ? undefined : arg.slice(eq + 1);
-    if (value === undefined && valueFlags.has(flag) && i + 1 < args.length) {
-      value = args[++i];
-    }
+    const { flag, value, consumed } = readFlag(args, i, valueFlags);
+    i += consumed;
     const values = flags.get(flag) ?? [];
     if (value !== undefined) values.push(value);
     flags.set(flag, values);
@@ -472,10 +550,10 @@ function detectGhPrOrIssue(group: 'pr' | 'issue', rest: string[], source: string
 
   const { repo, positionals } = parseGhArgs(rest.slice(1));
   const kind: GitHubTargetKind = group === 'pr' ? 'pull_request' : 'issue';
-  // `gh issue edit 1 2 3` can take several selectors; report each one.
+  // A PR mutation without a selector targets the current branch's PR; an issue
+  // mutation always needs a selector, so nothing can be protected without one.
   const selector = positionals[0];
   if (group === 'issue' && !selector) {
-    // gh issue mutations always need a selector; nothing to protect without one.
     return undefined;
   }
   return { kind, action: `gh ${group} ${sub}`, repo, selector, source };
@@ -485,6 +563,20 @@ const GH_API_MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 /** REST sub-resources that are comment/review surfaces and therefore allowed. */
 const GH_API_ALLOWED_SUBRESOURCES = new Set(['comments', 'reviews']);
 const GH_API_TARGET_PATH = /^(?:https?:\/\/api\.github\.com\/)?\/?repos\/([^/]+)\/([^/]+)\/(pulls|issues)\/(\d+)(?:\/([^/?]+))?/;
+/** Flags that make `gh api` default to POST when no `-X` is given. `--input` can also carry a read body; over-detection is accepted. */
+const GH_API_BODY_FLAGS = ['-f', '-F', '--field', '--raw-field', '--input'];
+
+/** Build a pull_request / issue intent from a REST path such as `repos/o/r/pulls/5/merge`. */
+function intentFromRestPath(path: string, action: string, source: string): GitHubMutationIntent | undefined {
+  const match = GH_API_TARGET_PATH.exec(path);
+  if (!match) return undefined;
+  const [, owner, name, resource, number, subresource] = match;
+  if (subresource && GH_API_ALLOWED_SUBRESOURCES.has(subresource)) return undefined;
+  const repo = parseRepoRef(`${owner}/${name}`);
+  const kind: GitHubTargetKind = resource === 'pulls' ? 'pull_request' : 'issue';
+  const suffix = subresource ? `/${subresource}` : '';
+  return { kind, action: `${action} ${resource}/${number}${suffix}`, repo, selector: number, source };
+}
 
 function detectGhApi(rest: string[], source: string): GitHubMutationIntent | undefined {
   const { positionals, flags } = parseGhArgs(rest, GH_API_VALUE_FLAGS);
@@ -492,7 +584,7 @@ function detectGhApi(rest: string[], source: string): GitHubMutationIntent | und
   if (!endpoint) return undefined;
 
   const explicitMethod = flagValues(flags, '-X', '--method').at(-1)?.toUpperCase();
-  const impliesPost = ['-f', '-F', '--field', '--raw-field', '--input'].some(flag => flags.has(flag));
+  const impliesPost = GH_API_BODY_FLAGS.some(flag => flags.has(flag));
   const method = explicitMethod ?? (impliesPost ? 'POST' : 'GET');
   if (!GH_API_MUTATING_METHODS.has(method)) return undefined;
 
@@ -503,14 +595,7 @@ function detectGhApi(rest: string[], source: string): GitHubMutationIntent | und
     }
     return undefined;
   }
-
-  const match = GH_API_TARGET_PATH.exec(endpoint);
-  if (!match) return undefined;
-  const [, owner, name, resource, number, subresource] = match;
-  if (subresource && GH_API_ALLOWED_SUBRESOURCES.has(subresource)) return undefined;
-  const repo = parseRepoRef(`${owner}/${name}`);
-  const kind: GitHubTargetKind = resource === 'pulls' ? 'pull_request' : 'issue';
-  return { kind, action: `gh api ${method} ${resource}/${number}${subresource ? `/${subresource}` : ''}`, repo, selector: number, source };
+  return intentFromRestPath(endpoint, `gh api ${method}`, source);
 }
 
 function detectGh(tokens: string[], source: string): GitHubMutationIntent | undefined {
@@ -537,19 +622,14 @@ function findGitSubcommandIndex(tokens: string[]): number {
   return -1;
 }
 
-function refspecDestination(refspec: string): string | undefined {
-  const spec = refspec.replace(/^\+/, '');
-  const colon = spec.indexOf(':');
-  const destination = colon === -1 ? spec : spec.slice(colon + 1);
-  if (destination === '' || destination.startsWith('refs/tags/')) return undefined;
-  if (destination === 'HEAD') return undefined; // current branch — resolved at lookup time
-  return destination.replace(/^refs\/heads\//, '');
+interface PushArgs {
+  /** Remote and refspecs, in order. */
+  positionals: string[];
+  deleting: boolean;
+  tagsOnly: boolean;
 }
 
-function detectGitPush(tokens: string[], source: string): GitHubMutationIntent[] {
-  const pushIndex = findGitSubcommandIndex(tokens);
-  if (pushIndex === -1 || tokens[pushIndex] !== 'push') return [];
-
+function parsePushArgs(tokens: string[], pushIndex: number): PushArgs {
   const positionals: string[] = [];
   let deleting = false;
   let tagsOnly = false;
@@ -567,26 +647,54 @@ function detectGitPush(tokens: string[], source: string): GitHubMutationIntent[]
     if (token === '--tags') tagsOnly = true;
     if (GIT_PUSH_VALUE_FLAGS.has(token) && i + 1 < tokens.length) i++;
   }
+  return { positionals, deleting, tagsOnly };
+}
 
+interface RefspecTarget {
+  /** Destination branch, or undefined for the current branch (`HEAD`). */
+  branch?: string;
+  deleting: boolean;
+}
+
+/**
+ * Resolve what a refspec pushes to. Returns null when the refspec is not a
+ * branch (tags) and therefore cannot be a PR head.
+ */
+function refspecTarget(refspec: string, deleting: boolean): RefspecTarget | null {
+  const stripBranchPrefix = (ref: string): string => ref.replace(/^refs\/heads\//, '');
+  if (deleting) return { branch: stripBranchPrefix(refspec), deleting: true };
+
+  const spec = refspec.replace(/^\+/, '');
+  const colon = spec.indexOf(':');
+  const source = colon === -1 ? spec : spec.slice(0, colon);
+  const destination = colon === -1 ? spec : spec.slice(colon + 1);
+  if (destination === '' || destination.startsWith('refs/tags/')) return null;
+  // `:branch` (empty source) is the legacy spelling of `--delete branch`.
+  if (colon !== -1 && source === '') return { branch: stripBranchPrefix(destination), deleting: true };
+  if (destination === 'HEAD') return { branch: undefined, deleting: false };
+  return { branch: stripBranchPrefix(destination), deleting: false };
+}
+
+function detectGitPush(tokens: string[], source: string): GitHubMutationIntent[] {
+  const pushIndex = findGitSubcommandIndex(tokens);
+  if (pushIndex === -1 || tokens[pushIndex] !== 'push') return [];
+
+  const { positionals, deleting, tagsOnly } = parsePushArgs(tokens, pushIndex);
   const refspecs = positionals.slice(1);
-  if (tagsOnly && refspecs.length === 0) return [];
-  const action = deleting ? 'git push --delete' : 'git push';
   if (refspecs.length === 0) {
     // Bare `git push` / `git push origin`: pushes the current branch.
-    return [{ kind: 'branch', action, branch: undefined, source }];
+    return tagsOnly ? [] : [{ kind: 'branch', action: 'git push', branch: undefined, source }];
   }
 
   const intents: GitHubMutationIntent[] = [];
   const seen = new Set<string>();
   for (const refspec of refspecs) {
-    const branch = deleting ? refspec.replace(/^refs\/heads\//, '') : refspecDestination(refspec);
-    if (!deleting && refspec === 'HEAD') {
-      intents.push({ kind: 'branch', action, branch: undefined, source });
-      continue;
-    }
-    if (!branch || seen.has(branch)) continue;
-    seen.add(branch);
-    intents.push({ kind: 'branch', action, branch, source });
+    const target = refspecTarget(refspec, deleting);
+    if (!target) continue;
+    const key = target.branch ?? '@current';
+    if (seen.has(key)) continue;
+    seen.add(key);
+    intents.push({ kind: 'branch', action: target.deleting ? 'git push --delete' : 'git push', branch: target.branch, source });
   }
   return intents;
 }
@@ -664,33 +772,29 @@ function detectMcpMutation(toolName: string, input: Record<string, unknown>): Gi
 
 // ── Detection: Dollhouse integration_request (MCP-AQL adapter) ─────
 
+/** Unwrap `integration_request` params from a direct call or an `mcp_aql_execute` envelope. */
+function integrationRequestOf(toolName: string, toolInput: Record<string, unknown>): Record<string, unknown> | null {
+  const normalizedName = normalizeMcpToolName(toolName);
+  if (normalizedName === 'integration_request') return toolInput;
+  if (['mcp_aql_execute', 'mcp_aql'].includes(normalizedName) && isIntegrationRequestEnvelope(toolInput)) {
+    return integrationRequestParams(toolInput);
+  }
+  return null;
+}
+
 /**
  * Detect mutations issued through Dollhouse's own GitHub integration adapter
- * (`integration_request` with `{ provider, method, path }`), whether called
- * directly or wrapped in an `mcp_aql_execute` envelope.
+ * (`integration_request` with `{ provider, method, path }`).
  */
 function detectIntegrationRequest(toolName: string, toolInput: Record<string, unknown>): GitHubMutationIntent | undefined {
-  const normalizedName = normalizeMcpToolName(toolName);
-  let params: Record<string, unknown> | null = null;
-  if (normalizedName === 'integration_request') {
-    params = toolInput;
-  } else if (['mcp_aql_execute', 'mcp_aql'].includes(normalizedName) && isIntegrationRequestEnvelope(toolInput)) {
-    params = integrationRequestParams(toolInput);
-  }
+  const params = integrationRequestOf(toolName, toolInput);
   if (!params) return undefined;
 
   const provider = typeof params.provider === 'string' ? params.provider.toLowerCase() : '';
   const method = typeof params.method === 'string' ? params.method.toUpperCase() : '';
   const path = typeof params.path === 'string' ? params.path : '';
   if (!provider.includes('github') || !GH_API_MUTATING_METHODS.has(method) || !path) return undefined;
-
-  const match = GH_API_TARGET_PATH.exec(path);
-  if (!match) return undefined;
-  const [, owner, name, resource, number, subresource] = match;
-  if (subresource && GH_API_ALLOWED_SUBRESOURCES.has(subresource)) return undefined;
-  const repo = parseRepoRef(`${owner}/${name}`);
-  const kind: GitHubTargetKind = resource === 'pulls' ? 'pull_request' : 'issue';
-  return { kind, action: `integration_request ${method} ${resource}/${number}`, repo, selector: number, source: toolName };
+  return intentFromRestPath(path, `integration_request ${method}`, toolName);
 }
 
 // ── Public detection entry point ───────────────────────────────────
