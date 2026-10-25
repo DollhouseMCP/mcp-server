@@ -209,7 +209,7 @@ export function parseOwnershipPolicyConfig(
 export function isTrustedAuthor(login: string, config: OwnershipPolicyConfig): boolean {
   const needle = login.trim().toLowerCase();
   if (!needle) return false;
-  if (config.ownerLogin && config.ownerLogin.toLowerCase() === needle) return true;
+  if (config.ownerLogin?.toLowerCase() === needle) return true;
   return config.teammates.some(teammate => teammate.toLowerCase() === needle);
 }
 
