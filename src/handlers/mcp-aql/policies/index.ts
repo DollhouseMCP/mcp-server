@@ -58,3 +58,15 @@ export {
   type OwnershipPolicyMode,
   type RawOwnershipPolicyConfig,
 } from './OwnershipPolicy.js';
+
+// Ownership lookup, cache and service (Issue #3153)
+export {
+  GhOwnershipResolver,
+  OwnershipCache,
+  ownershipCacheKey,
+  type GhCommandResult,
+  type GhRunner,
+  type OwnershipLookupContext,
+  type OwnershipResolver,
+} from './OwnershipLookup.js';
+export { OwnershipPolicyService, type OwnershipEvaluationContext, type OwnershipPolicyServiceOptions } from './OwnershipPolicyService.js';
