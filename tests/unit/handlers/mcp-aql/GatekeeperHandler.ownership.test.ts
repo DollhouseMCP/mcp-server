@@ -101,6 +101,24 @@ describe('GatekeeperHandler permission_prompt ownership policy', () => {
     expect(f.createApproval).toHaveBeenCalledWith(expect.objectContaining({ policySource: 'ownership_policy' }));
   });
 
+  it('enforces the policy in the evaluate_permission (hook) path too', async () => {
+    const f = fixture({ behavior: 'deny', reason: 'authored by stranger', policySource: 'ownership_policy' });
+    await expect(f.handler.dispatch('evaluatePermission', {
+      tool_name: 'Bash', input: { command: 'gh pr merge 42' }, platform: 'claude_code', session_id: 'sess-9', cwd: '/work/repo',
+    })).resolves.toEqual({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'authored by stranger' },
+    });
+    expect(f.evaluate).toHaveBeenCalledWith('Bash', { command: 'gh pr merge 42' }, { sessionId: 'sess-9', cwd: '/work/repo' });
+    expect(f.collect).not.toHaveBeenCalled();
+  });
+
+  it('asks in the hook path when the policy requires confirmation', async () => {
+    const f = fixture({ behavior: 'confirm', reason: 'lookup failed', policySource: 'ownership_policy' });
+    await expect(f.handler.dispatch('evaluatePermission', {
+      tool_name: 'Bash', input: { command: 'git push' }, platform: 'claude_code', cwd: '/work/repo',
+    })).resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'ask', permissionDecisionReason: 'lookup failed' } });
+  });
+
   it('is skipped for statically classified tools', async () => {
     const f = fixture({ behavior: 'deny', reason: 'x', policySource: 'ownership_policy' });
     await expect(f.handler.dispatch('permissionPrompt', { tool_name: 'Bash', input: { command: 'gh pr view 42' } }))

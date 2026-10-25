@@ -213,45 +213,51 @@ export async function evaluatePermission(
   }
   deps.permissionPromptLimiter.consumeToken();
 
-  // Stage 1: Static classification
+  const outcome = await decidePermission(toolName, input, { sessionId, cwd }, deps);
+  return formatPermissionResponse(outcome.decision, platform, input, outcome.reason);
+}
+
+interface PermissionOutcome {
+  decision: 'allow' | 'deny' | 'ask';
+  reason?: string;
+}
+
+/**
+ * Stages 2–4 of the pipeline, platform-agnostic:
+ * static classification → ownership policy → element policies.
+ * An ownership deny is final; an ownership confirm is held until element
+ * policies have had the chance to deny outright.
+ */
+async function decidePermission(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: OwnershipEvaluationInput,
+  deps: EvaluatePermissionDeps,
+): Promise<PermissionOutcome> {
   const classification = deps.classifyTool(toolName, input);
-  if (classification.behavior === 'allow') {
-    return formatPermissionResponse('allow', platform, input);
-  }
-  if (classification.behavior === 'deny') {
-    return formatPermissionResponse('deny', platform, input, classification.reason);
-  }
+  if (classification.behavior === 'allow') return { decision: 'allow' };
+  if (classification.behavior === 'deny') return { decision: 'deny', reason: classification.reason };
 
-  // Stage 2: Ownership policy (Issue #3153). A deny is final; a confirm is
-  // held until element policies have had the chance to deny outright.
-  const ownership = await evaluateOwnershipStage(deps.ownershipPolicy, toolName, input, { sessionId, cwd });
-  if (ownership?.behavior === 'deny') {
-    return formatPermissionResponse('deny', platform, input, ownership.reason);
-  }
+  const ownership = await evaluateOwnershipStage(deps.ownershipPolicy, toolName, input, context);
+  if (ownership?.behavior === 'deny') return { decision: 'deny', reason: ownership.reason };
 
-  // Stage 3: Element policy evaluation
-  let elements: ActiveElement[];
+  const elements = await fetchActiveElements(deps, toolName, context.sessionId);
+  const decision = deps.evaluateCliToolPolicy(toolName, input, elements);
+  if (decision.behavior === 'deny') return { decision: 'deny', reason: decision.message };
+  if (ownership?.behavior === 'confirm') return { decision: 'ask', reason: ownership.reason };
+  if (decision.behavior === 'confirm') {
+    return { decision: 'ask', reason: decision.message || 'Requires confirmation per element policy' };
+  }
+  return { decision: 'allow' };
+}
+
+async function fetchActiveElements(deps: EvaluatePermissionDeps, toolName: string, sessionId?: string): Promise<ActiveElement[]> {
   try {
-    elements = await deps.getActiveElements(sessionId);
+    return await deps.getActiveElements(sessionId);
   } catch (err) {
     throw new PermissionEvaluationError(
       `Failed to fetch active elements for policy evaluation: ${err instanceof Error ? err.message : String(err)}`,
       'element_fetch', toolName, err,
     );
   }
-  const decision = deps.evaluateCliToolPolicy(toolName, input, elements);
-
-  if (decision.behavior === 'deny') {
-    return formatPermissionResponse('deny', platform, input, decision.message);
-  }
-  if (ownership?.behavior === 'confirm') {
-    return formatPermissionResponse('ask', platform, input, ownership.reason);
-  }
-  if (decision.behavior === 'confirm') {
-    return formatPermissionResponse('ask', platform, input,
-      decision.message || 'Requires confirmation per element policy');
-  }
-
-  // Default: allow
-  return formatPermissionResponse('allow', platform, input);
 }

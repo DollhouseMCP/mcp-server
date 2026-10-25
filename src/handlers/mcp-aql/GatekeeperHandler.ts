@@ -811,6 +811,7 @@ export class GatekeeperHandler {
       classifyTool,
       evaluateCliToolPolicy,
       getActiveElements: (sessionId?: string) => this.deps.getActiveElements(sessionId),
+      ownershipPolicy: this.deps.ownershipPolicy,
     });
   }
 
