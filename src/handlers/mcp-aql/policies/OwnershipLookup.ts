@@ -20,7 +20,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { accessSync, constants as fsConstants, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import {
@@ -55,6 +55,28 @@ const GH_CANDIDATE_PATHS = [
 ];
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
+
+/**
+ * `gh` shells out to `git` inside `cwd`, and git honours per-repository config
+ * that can execute commands (`core.fsmonitor`, `core.hooksPath`). The hook
+ * supplies `cwd`, so neutralise those keys for every child git process.
+ * GIT_CONFIG_PARAMETERS entries are space-separated, single-quoted key=value.
+ */
+const GIT_CONFIG_HARDENING = ["'core.fsmonitor=false'", "'core.hooksPath=/dev/null'"].join(' ');
+
+function hardenedGitConfigParameters(existing: string | undefined): string {
+  return existing && existing.trim() !== '' ? `${existing} ${GIT_CONFIG_HARDENING}` : GIT_CONFIG_HARDENING;
+}
+
+/** Accept `cwd` only when it is an existing absolute directory; anything else is dropped (gh then runs without a repo). */
+export function sanitizeWorkingDirectory(cwd: string | undefined): string | undefined {
+  if (!cwd || !isAbsolute(cwd)) return undefined;
+  try {
+    return statSync(cwd).isDirectory() ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function isExecutable(path: string): boolean {
   try {
@@ -114,7 +136,13 @@ export const defaultGhRunner: GhRunner = (args, options) => {
         cwd: options.cwd,
         timeout: options.timeoutMs,
         maxBuffer: MAX_OUTPUT_BYTES,
-        env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1' },
+        env: {
+          ...process.env,
+          GH_PROMPT_DISABLED: '1',
+          GH_NO_UPDATE_NOTIFIER: '1',
+          NO_COLOR: '1',
+          GIT_CONFIG_PARAMETERS: hardenedGitConfigParameters(process.env.GIT_CONFIG_PARAMETERS),
+        },
         windowsHide: true,
       },
       (error, stdout, stderr) => {
@@ -215,8 +243,12 @@ export class GhOwnershipResolver implements OwnershipResolver {
     private readonly timeoutMs: number = DEFAULT_GH_TIMEOUT_MS,
   ) {}
 
+  private runOptions(context: OwnershipLookupContext): GhRunOptions {
+    return { cwd: sanitizeWorkingDirectory(context.cwd), timeoutMs: this.timeoutMs };
+  }
+
   async resolveOwnerLogin(context: OwnershipLookupContext = {}): Promise<string | undefined> {
-    const result = await this.run(['api', 'user', '--jq', '.login'], { cwd: context.cwd, timeoutMs: this.timeoutMs });
+    const result = await this.run(['api', 'user', '--jq', '.login'], this.runOptions(context));
     if (result.exitCode !== 0) {
       logger.warn('[OwnershipLookup] Could not resolve the authenticated gh user', { stderr: result.stderr.slice(0, 200) });
       return undefined;
@@ -257,7 +289,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
     }
     const result = await this.run(
       ['pr', 'view', ...selectorArgs, '--json', 'author,number', ...repoArg(repo)],
-      { cwd: context.cwd, timeoutMs: this.timeoutMs },
+      this.runOptions(context),
     );
     if (result.exitCode !== 0) return classifyFailure(result, 'gh pr view', PR_NOT_FOUND_PATTERN);
     const author = extractAuthor((parseJson(result.stdout) ?? {}) as GhAuthorPayload);
@@ -279,7 +311,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
     const repoPath = repo ? `${repo.owner}/${repo.name}` : '{owner}/{repo}';
     const result = await this.run(
       ['api', `repos/${repoPath}/issues/${number}`, '--jq', '{number: .number, user: {login: .user.login}}'],
-      { cwd: context.cwd, timeoutMs: this.timeoutMs },
+      this.runOptions(context),
     );
     if (result.exitCode !== 0) return classifyFailure(result, 'gh api issues', ISSUE_NOT_FOUND_PATTERN);
     const author = extractAuthor((parseJson(result.stdout) ?? {}) as GhAuthorPayload);
@@ -298,7 +330,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
     }
     const result = await this.run(
       ['pr', 'list', '--head', intent.branch, '--state', 'open', '--json', 'author,number', '--limit', '5', ...repoArg(intent.repo)],
-      { cwd: context.cwd, timeoutMs: this.timeoutMs },
+      this.runOptions(context),
     );
     if (result.exitCode !== 0) return classifyFailure(result, 'gh pr list', PR_NOT_FOUND_PATTERN);
     const payload = parseJson(result.stdout);
