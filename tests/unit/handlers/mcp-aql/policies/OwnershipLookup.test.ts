@@ -113,6 +113,10 @@ describe('GhOwnershipResolver', () => {
       expect(calls[1][0][1]).toBe('repos/o/r/issues/5');
     });
 
+    it('does not treat a "no pull requests found" message as a missing issue', async () => {
+      expect(await new GhOwnershipResolver(runner(fail('no pull requests found')).run).lookup(ISSUE)).toMatchObject({ status: 'error' });
+    });
+
     it('maps HTTP 404 to not_found and rejects non-numeric selectors', async () => {
       expect(await new GhOwnershipResolver(runner(fail('gh: Not Found (HTTP 404)')).run).lookup(ISSUE)).toEqual({ status: 'not_found' });
       expect(await new GhOwnershipResolver(runner(ok('{}')).run).lookup({ ...ISSUE, selector: 'abc' })).toMatchObject({ status: 'error' });
@@ -129,6 +133,22 @@ describe('GhOwnershipResolver', () => {
 
     it('reports not_found when no open PR uses the branch', async () => {
       expect(await new GhOwnershipResolver(runner(ok('[]')).run).lookup(BRANCH)).toEqual({ status: 'not_found' });
+    });
+
+    it('resolves when several open PRs on the branch share one author', async () => {
+      const payload = '[{"author":{"login":"Teammate"},"number":1},{"author":{"login":"teammate"},"number":2}]';
+      expect(await new GhOwnershipResolver(runner(ok(payload)).run).lookup(BRANCH)).toEqual({ status: 'resolved', authorLogin: 'Teammate', number: 1 });
+    });
+
+    it('fails closed when several open PRs on the branch have different authors', async () => {
+      const payload = '[{"author":{"login":"owner"},"number":1},{"author":{"login":"stranger"},"number":2}]';
+      const result = await new GhOwnershipResolver(runner(ok(payload)).run).lookup(BRANCH);
+      expect(result).toMatchObject({ status: 'error', message: expect.stringContaining('different authors') });
+    });
+
+    it('fails closed when any listed PR lacks an author', async () => {
+      const payload = '[{"author":{"login":"owner"},"number":1},{"number":2}]';
+      expect(await new GhOwnershipResolver(runner(ok(payload)).run).lookup(BRANCH)).toMatchObject({ status: 'error' });
     });
 
     it('falls back to the current-branch PR for a bare push', async () => {

@@ -137,20 +137,24 @@ export class OwnershipPolicyService {
     return login ? { ...this.config, ownerLogin: login } : this.config;
   }
 
+  /**
+   * Resolve the owner login, de-duplicating concurrent callers onto one `gh`
+   * call. A successful result is memoised for `ownerLoginTtlMs`; a failed one
+   * is not, so the next (non-concurrent) call retries — a burst of calls that
+   * all arrive while a failing lookup is in flight share that single failure.
+   */
   private async resolveOwnerLogin(context: OwnershipEvaluationContext): Promise<string | undefined> {
     if (this.resolvedOwner && this.resolvedOwner.expiresAt > this.now()) {
       return this.resolvedOwner.login;
     }
-    if (!this.ownerLookupInFlight) {
-      this.ownerLookupInFlight = this.resolver.resolveOwnerLogin({ cwd: context.cwd })
-        .catch((error: unknown) => {
-          logger.warn('[OwnershipPolicy] Owner identity lookup threw', { message: error instanceof Error ? error.message : String(error) });
-          return undefined;
-        })
-        .finally(() => {
-          this.ownerLookupInFlight = undefined;
-        });
-    }
+    this.ownerLookupInFlight ??= this.resolver.resolveOwnerLogin({ cwd: context.cwd })
+      .catch((error: unknown) => {
+        logger.warn('[OwnershipPolicy] Owner identity lookup threw', { message: error instanceof Error ? error.message : String(error) });
+        return undefined;
+      })
+      .finally(() => {
+        this.ownerLookupInFlight = undefined;
+      });
     const login = await this.ownerLookupInFlight;
     if (login) {
       this.resolvedOwner = { login, expiresAt: this.now() + this.ownerLoginTtlMs };

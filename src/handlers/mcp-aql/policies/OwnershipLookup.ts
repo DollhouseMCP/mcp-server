@@ -84,14 +84,25 @@ export function resolveGhBinary(env: NodeJS.ProcessEnv = process.env): string | 
   return undefined;
 }
 
-let cachedGhBinary: string | undefined | null = null;
+/**
+ * Process-wide memo of the `gh` binary resolution. `undefined` = not resolved
+ * yet; `{ path: undefined }` = resolved and not found (a missing binary is not
+ * re-probed on every call; `_resetGhBinaryCacheForTests()` clears it).
+ */
+let ghBinaryResolution: { path: string | undefined } | undefined;
+
+function resolvedGhBinary(): string | undefined {
+  if (!ghBinaryResolution) {
+    const path = resolveGhBinary();
+    ghBinaryResolution = { path };
+    logger.debug('[OwnershipLookup] gh binary resolved', { path: path ?? null, fromOverride: Boolean(process.env.DOLLHOUSE_GH_PATH) });
+  }
+  return ghBinaryResolution.path;
+}
 
 /** Default runner: spawns the resolved `gh` binary without a shell. */
 export const defaultGhRunner: GhRunner = (args, options) => {
-  if (cachedGhBinary === null) {
-    cachedGhBinary = resolveGhBinary();
-  }
-  const binary = cachedGhBinary;
+  const binary = resolvedGhBinary();
   if (!binary) {
     return Promise.resolve({ stdout: '', stderr: 'gh CLI not found', exitCode: 127 });
   }
@@ -122,7 +133,7 @@ export const defaultGhRunner: GhRunner = (args, options) => {
 
 /** Test hook: forget the resolved binary path. */
 export function _resetGhBinaryCacheForTests(): void {
-  cachedGhBinary = null;
+  ghBinaryResolution = undefined;
 }
 
 // ── Selector validation ────────────────────────────────────────────
@@ -131,7 +142,7 @@ const PR_URL_PATTERN = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:
 const ISSUE_URL_PATTERN = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)(?:[/?#].*)?$/;
 const NUMBER_PATTERN = /^#?(\d{1,9})$/;
 /** Git branch names: no leading dash (would be parsed as a flag), no control/space chars. */
-const BRANCH_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._/+-]{0,254}$/;
+const BRANCH_PATTERN = /^\w[\w./+-]{0,254}$/;
 
 function repoArg(repo: GitHubRepoRef | undefined): string[] {
   return repo ? ['--repo', `${repo.owner}/${repo.name}`] : [];
@@ -165,12 +176,18 @@ function parseJson(text: string): unknown {
   }
 }
 
-/** gh messages that mean "no such PR/issue", as opposed to auth, network or binary failures. */
-const NOT_FOUND_PATTERN = /no pull requests found|HTTP 404|Could not resolve to a/i;
+/**
+ * gh messages that mean "no such PR", as opposed to auth, network or binary
+ * failures. Scoped to the `gh pr view` / `gh pr list` commands we issue, whose
+ * only 404 is the PR or repository itself.
+ */
+const PR_NOT_FOUND_PATTERN = /no pull requests found|Could not resolve to a|HTTP 404/i;
+/** `gh api repos/{o}/{r}/issues/N`: the only resource on that path is the issue, so a 404 means it does not exist. */
+const ISSUE_NOT_FOUND_PATTERN = /HTTP 404|Could not resolve to a/i;
 
-function classifyFailure(result: GhCommandResult, context: string): OwnershipLookupResult {
+function classifyFailure(result: GhCommandResult, context: string, notFound: RegExp): OwnershipLookupResult {
   const detail = result.stderr.trim().split('\n')[0] || `gh exited with code ${result.exitCode}`;
-  if (NOT_FOUND_PATTERN.test(result.stderr)) {
+  if (notFound.test(result.stderr)) {
     return { status: 'not_found' };
   }
   return { status: 'error', message: `${context}: ${detail.slice(0, 200)}` };
@@ -242,7 +259,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
       ['pr', 'view', ...selectorArgs, '--json', 'author,number', ...repoArg(repo)],
       { cwd: context.cwd, timeoutMs: this.timeoutMs },
     );
-    if (result.exitCode !== 0) return classifyFailure(result, 'gh pr view');
+    if (result.exitCode !== 0) return classifyFailure(result, 'gh pr view', PR_NOT_FOUND_PATTERN);
     const author = extractAuthor((parseJson(result.stdout) ?? {}) as GhAuthorPayload);
     return author
       ? { status: 'resolved', authorLogin: author.login, number: author.number }
@@ -264,7 +281,7 @@ export class GhOwnershipResolver implements OwnershipResolver {
       ['api', `repos/${repoPath}/issues/${number}`, '--jq', '{number: .number, user: {login: .user.login}}'],
       { cwd: context.cwd, timeoutMs: this.timeoutMs },
     );
-    if (result.exitCode !== 0) return classifyFailure(result, 'gh api issues');
+    if (result.exitCode !== 0) return classifyFailure(result, 'gh api issues', ISSUE_NOT_FOUND_PATTERN);
     const author = extractAuthor((parseJson(result.stdout) ?? {}) as GhAuthorPayload);
     return author
       ? { status: 'resolved', authorLogin: author.login, number: author.number ?? number }
@@ -283,14 +300,23 @@ export class GhOwnershipResolver implements OwnershipResolver {
       ['pr', 'list', '--head', intent.branch, '--state', 'open', '--json', 'author,number', '--limit', '5', ...repoArg(intent.repo)],
       { cwd: context.cwd, timeoutMs: this.timeoutMs },
     );
-    if (result.exitCode !== 0) return classifyFailure(result, 'gh pr list');
+    if (result.exitCode !== 0) return classifyFailure(result, 'gh pr list', PR_NOT_FOUND_PATTERN);
     const payload = parseJson(result.stdout);
     if (!Array.isArray(payload)) return { status: 'error', message: 'gh pr list returned unexpected output' };
     if (payload.length === 0) return { status: 'not_found' };
-    const author = extractAuthor(payload[0] as GhAuthorPayload);
-    return author
-      ? { status: 'resolved', authorLogin: author.login, number: author.number }
-      : { status: 'error', message: 'gh pr list returned no author' };
+    const authors = payload
+      .map(entry => extractAuthor(entry as GhAuthorPayload))
+      .filter((author): author is { login: string; number?: number } => author !== undefined);
+    if (authors.length !== payload.length) {
+      return { status: 'error', message: 'gh pr list returned no author' };
+    }
+    const distinct = new Set(authors.map(author => author.login.toLowerCase()));
+    if (distinct.size > 1) {
+      // Several open PRs (e.g. from forks) share this head branch with different
+      // authors; one author cannot represent them all, so fail closed.
+      return { status: 'error', message: `branch '${intent.branch}' heads ${authors.length} open pull requests by different authors` };
+    }
+    return { status: 'resolved', authorLogin: authors[0].login, number: authors[0].number };
   }
 }
 
