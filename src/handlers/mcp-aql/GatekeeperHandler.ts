@@ -31,6 +31,8 @@ import {
 } from './policies/ToolClassification.js';
 import type { CRUDEndpoint } from './OperationRouter.js';
 import type { CorrelationIdProvider, HandlerRegistry } from './MCPAQLHandler.js';
+import { evaluateOwnershipStage, type OwnershipPolicyEvaluator } from './evaluatePermission.js';
+import type { OwnershipDecision } from './policies/OwnershipPolicy.js';
 import { normalizeMCPAQLElementType } from './types.js';
 import {
   type ExecutingAgentEntry,
@@ -73,6 +75,8 @@ export interface GatekeeperHandlerDeps {
   resolveVerificationRateLimiter(): VerificationLimiter;
   resolvePermissionPromptLimiter(): RateLimiter;
   resolveCliApprovalLimiter(): RateLimiter;
+  /** Authorship-aware GitHub ownership policy (Issue #3153). Optional: absent = stage skipped. */
+  ownershipPolicy?: OwnershipPolicyEvaluator;
   buildRateLimitDeny(
     limiterName: string,
     toolName: string,
@@ -473,6 +477,16 @@ export class GatekeeperHandler {
       return staticResponse;
     }
 
+    // Issue #3153: ownership policy. A deny is final; a confirm is held until
+    // element policies have had the chance to deny outright.
+    const ownership = await evaluateOwnershipStage(this.deps.ownershipPolicy, toolName, toolInput.input, {
+      sessionId: typeof params.session_id === 'string' ? params.session_id : undefined,
+      cwd: typeof params.cwd === 'string' ? params.cwd : undefined,
+    });
+    if (ownership?.behavior === 'deny') {
+      return this.buildOwnershipDeny(toolName, classification, ownership, agentIdentity);
+    }
+
     let activeElements: ActiveElement[];
     try {
       activeElements = await this.deps.getActiveElements();
@@ -498,6 +512,9 @@ export class GatekeeperHandler {
       };
     }
     const elementDecision = evaluateCliToolPolicy(toolName, toolInput.input, activeElements);
+    if (elementDecision.behavior !== 'deny' && ownership?.behavior === 'confirm') {
+      return this.resolveOwnershipConfirmation(toolName, toolInput.input, classification, activeElements, ownership, elementDecision.policyContext);
+    }
     const policyResponse = await this.resolveElementPolicyDecision(toolName, toolInput.input, classification, elementDecision, activeElements, agentIdentity);
     if (policyResponse) {
       return policyResponse;
@@ -642,6 +659,65 @@ export class GatekeeperHandler {
       denyReason: `Tool '${toolName}' classified as ${classification.riskLevel}: ${classification.reason}`,
       policySource,
       policyContext: elementDecision.policyContext,
+    });
+  }
+
+  private buildOwnershipDeny(
+    toolName: string,
+    classification: ReturnType<typeof classifyTool>,
+    ownership: OwnershipDecision,
+    agentIdentity: string | undefined
+  ): Record<string, unknown> {
+    SecurityMonitor.logSecurityEvent({
+      type: 'PERMISSION_PROMPT_DENIED',
+      severity: 'MEDIUM',
+      source: 'MCPAQLHandler.dispatchGatekeeper.permissionPrompt',
+      details: `Permission denied by ownership policy for ${toolName}`,
+      additionalData: { toolName, message: ownership.reason, policySource: ownership.policySource, agentIdentity },
+    });
+    return {
+      behavior: 'deny',
+      message: ownership.reason,
+      ...(agentIdentity && { agent_identity: agentIdentity }),
+      classification: {
+        riskLevel: classification.riskLevel,
+        reason: ownership.reason,
+        stage: 'ownership_policy',
+      },
+    };
+  }
+
+  /** Ownership confirm: honour an approval already granted for the retry, otherwise request one. */
+  private async resolveOwnershipConfirmation(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    classification: ReturnType<typeof classifyTool>,
+    activeElements: ActiveElement[],
+    ownership: OwnershipDecision,
+    policyContext: unknown
+  ): Promise<Record<string, unknown>> {
+    const existingApproval = this.deps.gatekeeper.checkCliApproval(toolName, toolInput);
+    if (existingApproval) {
+      return {
+        behavior: 'allow',
+        updatedInput: toolInput,
+        classification: {
+          riskLevel: classification.riskLevel,
+          reason: ownership.reason,
+          stage: 'cli_approval',
+        },
+        approvalContext: {
+          requestId: existingApproval.requestId,
+          scope: existingApproval.scope,
+        },
+        policyContext,
+      };
+    }
+    return this.createApprovalRequest(toolName, toolInput, classification, activeElements, {
+      reason: ownership.reason,
+      denyReason: ownership.reason,
+      policySource: ownership.policySource,
+      policyContext,
     });
   }
 

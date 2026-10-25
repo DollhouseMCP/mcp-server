@@ -31,6 +31,7 @@ import type { AuthorizedIntegrationGateway, AuthorizedIntegrationOperationCatalo
 import { type CRUDEndpoint } from './OperationRouter.js';
 import type { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, canOperationBeElevated } from './policies/index.js';
+import { createOwnershipPolicyServiceFromEnv } from './policies/OwnershipPolicyService.js';
 import { isGatekeeperInfraOperation, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
 import { PermissionLevel, GatekeeperErrorCode, type GatekeeperDecision } from './GatekeeperTypes.js';
 import { IntrospectionResolver } from './IntrospectionResolver.js';
@@ -617,6 +618,7 @@ export class MCPAQLHandler {
       resolveVerificationRateLimiter: () => this.resolveVerificationRateLimiter(),
       resolvePermissionPromptLimiter: () => this.resolvePermissionPromptLimiter(),
       resolveCliApprovalLimiter: () => this.resolveCliApprovalLimiter(),
+      ownershipPolicy: createOwnershipPolicyServiceFromEnv(),
       buildRateLimitDeny: (limiterName, toolName, status, riskLevel, reason) =>
         this.buildRateLimitDeny(limiterName, toolName, status, riskLevel, reason),
     });
