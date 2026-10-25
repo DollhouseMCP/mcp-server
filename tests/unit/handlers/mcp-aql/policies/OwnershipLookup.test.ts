@@ -5,11 +5,14 @@
  */
 
 import { describe, it, expect, jest } from '@jest/globals';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   GhOwnershipResolver,
   OwnershipCache,
   ownershipCacheKey,
   resolveGhBinary,
+  sanitizeWorkingDirectory,
   type GhCommandResult,
   type GhRunner,
 } from '../../../../../src/handlers/mcp-aql/policies/OwnershipLookup.js';
@@ -37,9 +40,9 @@ describe('GhOwnershipResolver', () => {
     it('resolves the author of an explicit PR number', async () => {
       const { run, calls } = runner(ok('{"author":{"login":"insomnolence"},"number":12}'));
       const resolver = new GhOwnershipResolver(run);
-      await expect(resolver.lookup(PR, { cwd: '/repo' })).resolves.toEqual({ status: 'resolved', authorLogin: 'insomnolence', number: 12 });
+      await expect(resolver.lookup(PR, { cwd: tmpdir() })).resolves.toEqual({ status: 'resolved', authorLogin: 'insomnolence', number: 12 });
       expect(calls[0][0]).toEqual(['pr', 'view', '12', '--json', 'author,number']);
-      expect(calls[0][1]).toMatchObject({ cwd: '/repo' });
+      expect(calls[0][1]).toMatchObject({ cwd: tmpdir() });
     });
 
     it('resolves the current-branch PR when no selector is given', async () => {
@@ -185,6 +188,18 @@ describe('GhOwnershipResolver', () => {
     const { run, calls } = runner(ok(''));
     expect(await new GhOwnershipResolver(run).lookup({ kind: 'unresolvable', action: 'x', source: 'x' })).toMatchObject({ status: 'error' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('working directory sanitising', () => {
+  it('passes an existing absolute directory through and drops anything else', async () => {
+    const { run, calls } = runner(ok('{"author":{"login":"a"},"number":1}'));
+    const resolver = new GhOwnershipResolver(run);
+    await resolver.lookup(PR, { cwd: tmpdir() });
+    await resolver.lookup(PR, { cwd: 'relative/dir' });
+    await resolver.lookup(PR, { cwd: join(tmpdir(), 'does-not-exist-ownership-test') });
+    expect(calls.map(call => (call[1] as { cwd?: string }).cwd)).toEqual([tmpdir(), undefined, undefined]);
+    expect(sanitizeWorkingDirectory(undefined)).toBeUndefined();
   });
 });
 
