@@ -198,6 +198,24 @@ describe('PathsServiceRegistrar', () => {
       .toBe(path.join(legacy, 'state'));
   });
 
+  it('preserves marker bytes, mode and modification time when persisting twice', async () => {
+    const root = path.join(tmpHome, 'DollhouseMCP');
+    const resolver = await LegacyDetectingPathResolver.detect({
+      legacyRoot: path.join(tmpHome, '.dollhouse'), portfolioRoot: root,
+    });
+    await resolver.persistLayoutDecision();
+    const marker = path.join(root, PORTFOLIO_LAYOUT_MARKER_FILENAME);
+    const oldTime = new Date('2020-01-01T00:00:00Z');
+    await fs.utimes(marker, oldTime, oldTime);
+    const bytes = await fs.readFile(marker);
+    const before = await fs.stat(marker, { bigint: true });
+    await expect(resolver.persistLayoutDecision()).resolves.toBeUndefined();
+    expect(await fs.readFile(marker)).toEqual(bytes);
+    const after = await fs.stat(marker, { bigint: true });
+    expect({ mode: after.mode, mtime: after.mtimeNs })
+      .toEqual({ mode: before.mode, mtime: before.mtimeNs });
+  });
+
   it('records the portfolio decision once and keeps it ahead of later legacy content', async () => {
     const start = async () => {
       const container = new FakeContainer();

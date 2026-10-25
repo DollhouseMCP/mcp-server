@@ -141,6 +141,7 @@ export class LegacyDetectingPathResolver implements IUserPathResolver {
       // Legacy root exists AND the migration completed — use per-user
       // semantics anchored on the legacy root. A symlinked or missing
       // marker intentionally does not trigger this branch.
+      // This layout belongs to legacyRoot; a record under portfolioRoot would anchor it incorrectly.
       return await recorded() ?? new LegacyDetectingPathResolver(
         new PerUserPathResolver(legacyRoot),
         legacyRoot,
@@ -289,6 +290,7 @@ async function containsElementFiles(directory: string, elementType: string, bund
     if (entry.name.startsWith('.')) continue;
     const file = path.join(directory, entry.name);
     if (entry.isFile() && /\.(?:md|ya?ml)$/i.test(entry.name) && !await bundled.isBundled(file, elementType, path.relative(elementRoot, file))) return true;
+    // Dirent.isDirectory() excludes symlinks, so linked subdirectories are not traversed.
     if (entry.isDirectory() && await containsElementFiles(file, elementType, bundled, probe, elementRoot)) return true;
   }
   return false;

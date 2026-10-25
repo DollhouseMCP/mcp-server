@@ -686,7 +686,7 @@ These variables configure the runtime identity and filesystem paths used by the 
 |----------|---------|-------------|
 | `DOLLHOUSE_USER` | _(auto-detected)_ | Override the current user identity. Used for element authorship metadata. Falls back to OS username. |
 | `DOLLHOUSE_EMAIL` | _(none)_ | User email, typically set by PersonaManager when a persona specifies an email. |
-| `DOLLHOUSE_PORTFOLIO_DIR` | `~/.dollhouse/portfolio/` | Override the local portfolio directory path. |
+| `DOLLHOUSE_PORTFOLIO_DIR` | `~/.dollhouse/portfolio/` | Override the local portfolio directory path. Fresh or recovered installations refuse a path at or inside `~/.dollhouse`; choose a directory outside it. Existing flat installations using that path continue to work. |
 | `DOLLHOUSE_PORTFOLIO_URL` | _(none)_ | Override the GitHub portfolio repository URL. |
 | `DOLLHOUSE_HOME_DIR` | `~` (os.homedir) | Override the home directory for telemetry and auth file storage. |
 | `DOLLHOUSE_CACHE_DIR` | _(auto)_ | Override the collection cache directory path. |
