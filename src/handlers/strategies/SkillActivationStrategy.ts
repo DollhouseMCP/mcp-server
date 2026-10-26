@@ -4,6 +4,7 @@
  * Handles activation, deactivation, and status tracking for skill elements.
  */
 
+import { ActivationLookupError } from './ActivationLookupError.js';
 import { SkillManager } from '../../elements/skills/index.js';
 import { BaseActivationStrategy } from './BaseActivationStrategy.js';
 import { ElementActivationStrategy, MCPResponse } from './ElementActivationStrategy.js';
@@ -59,6 +60,8 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
       parts.push(gatekeeperWarning);
     }
 
+    if (result.notices?.length) parts.push('', ...result.notices);
+
     return {
       content: [{
         type: "text",
@@ -80,6 +83,7 @@ export class SkillActivationStrategy extends BaseActivationStrategy implements E
     const result = await this.skillManager.deactivateSkill(name);
 
     if (!result.success) {
+      if (result.lookupFailed) throw new ActivationLookupError(result.message);
       this.throwNotFoundError(name, 'Skill');
     }
 

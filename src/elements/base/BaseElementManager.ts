@@ -22,6 +22,11 @@
  * 4. MEDIUM: Input validation and sanitization throughout
  */
 
+import { ACTIVE_LIMIT_ENV_VARS, getActiveElementLimitConfig, type ActiveLimitElementType } from '../../config/active-element-limits.js';
+import { ValidationError } from '../../security/errors.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import type { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
 import { PendingActivationDeletions, resolvedActivationLocator, type ResolvedActivationTarget, type PendingActivationDeletion } from '../../state/PendingActivationDeletions.js';
 import type { PersistedActivation } from '../../state/IActivationStateStore.js';
 import { ActivationSet } from '../../state/ActivationSet.js';
@@ -60,12 +65,14 @@ import type { SerializationService } from '../../services/SerializationService.j
 import type { MetadataService } from '../../services/MetadataService.js';
 
 // Composed services
-import { ElementCache } from './ElementCache.js';
+import { type CachePublicationLease, ElementCache } from './ElementCache.js';
 import { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import { ElementLoader } from './ElementLoader.js';
 import { ElementPersister } from './ElementPersister.js';
 import { ElementListOperations } from './ElementListOperations.js';
 import { ElementResolver } from './ElementResolver.js';
+
+export const MAX_RETAINED_NOTICE_LINES = 5;
 
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
@@ -324,6 +331,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
       get elementDir() { return self.elementDir; },
       getCacheNamespace: () => this.getCacheNamespace(),
+      onClear: () => this.clearCacheBookkeeping(),
     };
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this; // NOSONAR — needed for object literal getters where `this` rebinds
@@ -465,6 +473,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       elementDir: this.elementDir,
       fileExtension: this.getFileExtension(),
       scanCooldownMs: getValidatedScanCooldown(),
+      retainDirectoryState: dir => this._cache?.hasDirectoryEntries(dir) ?? false,
     });
   }
 
@@ -642,8 +651,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // CACHE HELPERS (protected surface for subclasses)
   // ============================================
 
-  protected cacheElement(element: T, filePath: string): void {
-    this._cache.cacheElement(element, filePath);
+  protected withCachePublication<R>(operation: (lease: CachePublicationLease) => R): R {
+    return this._cache.withDirectoryPin(operation);
+  }
+
+  protected assertPublicationLease(lease: CachePublicationLease): void {
+    this._cache.assertPublicationLease(lease);
+  }
+
+  protected cacheElement(element: T, filePath: string, lease: CachePublicationLease): void {
+    this._cache.cacheElement(element, filePath, lease);
   }
 
   protected uncacheByPath(filePath: string): void {
@@ -686,6 +703,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._cache.getCacheStats();
   }
 
+  /** Resolve inside the caller request; outside it the default namespace is system. */
+  protected getScopedCacheKey(key: string): string {
+    return this._cache.key(key);
+  }
+
   protected getCacheNamespace(): string {
     if (this.contextTracker) {
       const session = this.contextTracker.getSessionContext();
@@ -701,6 +723,10 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       }
     }
     return 'system';
+  }
+
+  protected clearCacheBookkeeping(): void {
+    this._loader.clear();
   }
 
   clearCache(): void {
@@ -828,6 +854,68 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     const sessionId = this.contextTracker?.getSessionContext()?.sessionId
       ?? this.activationRegistry.getDefaultSessionId();
     return this.activationRegistry.getOrCreate(sessionId)[setKey];
+  }
+
+  /** Failed reads must not prevent explicit deactivation of an exact live reference. */
+  protected async findForDeactivation(identifier: string): Promise<{ element?: T; lookupFailed: boolean }> {
+    const candidate = identifier.trim();
+    if (!this.resolveActivationSet(this.activationSetKey!).has(identifier) &&
+        (!candidate || candidate === '.' || identifier.includes('\0') || path.isAbsolute(candidate) ||
+        path.win32.isAbsolute(candidate) || candidate.split(/[\\/]/).includes('..'))) {
+      throw new ValidationError('Invalid deactivation identifier');
+    }
+    try { return { element: await this.findByName(identifier), lookupFailed: false }; } catch (error) {
+      logger.warn('[Activation] Deactivation lookup failed', { error: error instanceof Error ? error.name : typeof error });
+      return { lookupFailed: true };
+    }
+  }
+
+  /** Report pressure before collecting notices, preserving each manager's event source. */
+  protected async reportActivationPressure(
+    type: ActiveLimitElementType, source: string, collectNotices: () => Promise<string[]>, alreadyScanned = false,
+  ): Promise<string[]> {
+    const { max, cleanupThreshold } = getActiveElementLimitConfig(type);
+    const active = this.resolveActivationSet(type);
+    if (active.size < cleanupThreshold) return [];
+    if (!alreadyScanned) await this.scanAndEvict();
+    const notices: string[] = [];
+    if (active.size >= max) {
+      const notice = `Active ${type} limit reached (${max}). ` +
+        `Consider deactivating unused ${type} or setting ${ACTIVE_LIMIT_ENV_VARS[type]} to a higher value.`;
+      notices.push(notice);
+      logger.warn(notice);
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_CREATED', severity: 'MEDIUM', source,
+        details: `Active ${type} limit reached: ${active.size}/${max}`,
+      });
+    }
+    return [...notices, ...await collectNotices()];
+  }
+
+  /** Bound response text while tracking every retained reference in the current session. */
+  protected async retainedReferenceNotices(
+    label: string, exists: (key: string) => Promise<boolean>, tracker: ActivationMetricsTracker, consequence?: string,
+  ): Promise<string[]> {
+    const setKey = this.activationSetKey;
+    if (!setKey) return [];
+    const notices: string[] = [];
+    let retained = 0;
+    const active = this.resolveActivationSet(setKey);
+    await visitSequentially(active[Symbol.iterator](), async reference => {
+      let lookupFailed = false;
+      try {
+        if (await exists(reference)) return;
+      } catch (error) {
+        lookupFailed = true;
+        logger.debug('[Activation] Reference lookup failed', { label, error: error instanceof Error ? error.name : typeof error });
+      }
+      if (!active.has(reference)) return;
+      const notice = tracker.retain(label, reference, lookupFailed ? consequence : undefined);
+      retained++;
+      if (notices.length < MAX_RETAINED_NOTICE_LINES) notices.push(notice);
+    });
+    if (retained > notices.length) notices.push(`…and ${retained - notices.length} more retained ${label} references`);
+    return notices;
   }
 
   /** Activation-set key for this manager's type; templates are never activated. */

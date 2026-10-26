@@ -1,3 +1,4 @@
+import { publishCachedElement } from '../helpers/cache-publication.js';
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import { ActivationMetricsTracker } from '../../src/metrics/ActivationMetricsTracker.js';
 import * as os from 'os';
@@ -115,7 +116,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
     personaWithIdentity.id = personaWithIdentity.id || persona.unique_id || persona.metadata.unique_id || cachePath;
     personaWithIdentity.filename = cachePath;
     personaWithIdentity.filePath = cachePath;
-    (personaManager as any).cacheElement(personaWithIdentity, cachePath);
+    publishCachedElement(personaManager, personaWithIdentity, cachePath);
     filenames.add(cachePath);
 
     // Create mock file content for this persona
@@ -719,7 +720,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       const persona = (personaManager as any).createElement(metadata, content);
 
       // Add the persona to cache so findPersona can retrieve it
-      (personaManager as any).cacheElement(persona, 'test-persona.md');
+      publishCachedElement(personaManager, persona, 'test-persona.md');
 
       // Now validate the persona
       const result = await personaManager.validatePersona('test-persona.md');

@@ -23,6 +23,8 @@ import type { IStorageLayer } from './IStorageLayer.js';
 
 export interface FileStorageOptions {
   elementDir: string;
+  /** Keep a directory manifest while cached objects or loads depend on it. */
+  retainDirectoryState?: (dir: string) => boolean;
   fileExtension: string;
   scanCooldownMs: number;
 }

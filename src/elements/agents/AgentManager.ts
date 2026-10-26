@@ -1071,7 +1071,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     const existing = await this.load(sanitizedPath).catch(() => null);
     const name = this.stripExtension(sanitizedPath);
     const stateKey = existing
-      ? this.getAgentStateKey(existing, name)
+      ? await this.getAgentStateKey(existing, name)
       : { name, agentElementId: sanitizedPath };
     await super.delete(sanitizedPath, onCommitted);
 
@@ -2672,7 +2672,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       throw new Error('Agent state is required when saving state for an agent instance');
     }
     const key = agent
-      ? this.getAgentStateKey(agent, name)
+      ? await this.getAgentStateKey(agent, name)
       : { name, agentElementId: name };
     return this.stateStore.save(
       key,
@@ -2684,7 +2684,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async saveAgentStateForRecovery(agent: Agent, name: string): Promise<number> {
     const state = agent.getState();
     return this.stateStore.save(
-      this.getAgentStateKey(agent, name),
+      await this.getAgentStateKey(agent, name),
       state,
       state.stateVersion ?? 0,
       { requireExisting: true, allowOversizedReduction: true },
@@ -2701,7 +2701,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.stateStore.load(this.getAgentStateKey(agent, name));
+    const state = await this.stateStore.load(await this.getAgentStateKey(agent, name));
     if (!state) {
       if (isWritableStorageLayer(this.storageLayer)) {
         agent[COMMIT_PERSISTED_VERSION](0);
@@ -2730,7 +2730,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<Agent> {
     this.bindAgentStorageIdentity(agent, storageIdentity);
     const state = await this.stateStore.load(
-      this.getAgentStateKey(agent, name),
+      await this.getAgentStateKey(agent, name),
       { strict: true, allowOversizedRecovery: true },
     );
     if (requireDurableState && !state) {
@@ -2890,7 +2890,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }
 
-  private getAgentElementId(agent: Agent, name: string): string {
+  private async getAgentElementId(agent: Agent, name: string): Promise<string> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       return agent.id;
     }
@@ -2898,8 +2898,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (attachedIdentity) {
       return attachedIdentity;
     }
-    const resolvedIdentity = this.storageLayer.getPathByName(agent.metadata.name)
-      ?? this.storageLayer.getPathByName(name);
+    const resolvedIdentity = await this.storageLayer.findIndexedPath([agent.metadata.name, name]);
     if (!resolvedIdentity) {
       throw new Error(`Cannot resolve durable database identity for agent "${name}"`);
     }
@@ -2912,17 +2911,17 @@ export class AgentManager extends BaseElementManager<Agent> {
    * File state follows the definition's actual storage path, while database
    * state is keyed by the authoritative element UUID.
    */
-  private getAgentStateKey(agent: Agent, requestedName: string): {
+  private async getAgentStateKey(agent: Agent, requestedName: string): Promise<{
     name: string;
     agentElementId: string;
-  } {
+  }> {
     const storageIdentity = this.getAttachedAgentStorageIdentity(agent);
     const name = !isWritableStorageLayer(this.storageLayer) && storageIdentity
       ? this.stripExtension(storageIdentity)
       : requestedName;
     return {
       name,
-      agentElementId: this.getAgentElementId(agent, requestedName),
+      agentElementId: await this.getAgentElementId(agent, requestedName),
     };
   }
 
@@ -4127,7 +4126,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const generation = this.observeExecutionGeneration(identity);
       try {
         const state = await this.stateStore.reclaimOrphaned(
-          this.getAgentStateKey(agent, params.agentName),
+          await this.getAgentStateKey(agent, params.agentName),
           {
             excludedGoalIds: params.excludedGoalIds,
           },

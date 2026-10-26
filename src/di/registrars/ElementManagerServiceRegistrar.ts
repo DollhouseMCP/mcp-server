@@ -30,6 +30,7 @@ import { PersonaImporter } from '../../persona/export-import/index.js';
 import { InitializationService } from '../../services/InitializationService.js';
 import { PersonaIndicatorService } from '../../services/PersonaIndicatorService.js';
 import { BackupService } from '../../services/BackupService.js';
+import { createActivePolicyCollector } from '../../services/policy/ActivePolicyCollector.js';
 import { PolicyExportService } from '../../services/PolicyExportService.js';
 import { SkillManager } from '../../elements/skills/index.js';
 import { TemplateManager } from '../../elements/templates/TemplateManager.js';
@@ -188,6 +189,8 @@ export class ElementManagerServiceRegistrar {
       }
     ));
 
+    container.register('ActivePolicyCollectorFactory', () => createActivePolicyCollector);
+
     // POLICY EXPORT SERVICE (Issue #762: Export policies to bridge)
     container.register('PolicyExportService', () => new PolicyExportService({
       getActiveElementsForPolicy: async () => {
@@ -203,6 +206,7 @@ export class ElementManagerServiceRegistrar {
 
     // ELEMENT MANAGERS
     container.register('SkillManager', () => new SkillManager({
+      activationMetricsTracker: container.resolve('ActivationMetricsTracker'),
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),
@@ -317,6 +321,7 @@ export class ElementManagerServiceRegistrar {
     });
 
     container.register('EnsembleManager', () => new EnsembleManager({
+      activationMetricsTracker: container.resolve('ActivationMetricsTracker'),
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
       fileOperationsService: container.resolve('FileOperationsService'),

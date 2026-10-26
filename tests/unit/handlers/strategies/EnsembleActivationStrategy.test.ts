@@ -56,6 +56,20 @@ describe('EnsembleActivationStrategy', () => {
   });
 
   describe('activate', () => {
+    it('includes manager notices in the activation response', async () => {
+      const ensemble = {
+        metadata: { name: 'notice-ensemble', activationStrategy: 'sequential' },
+        activateEnsemble: jest.fn().mockResolvedValue({
+          success: true, activatedElements: [], failedElements: [], elementResults: [], totalDuration: 0,
+        }),
+      };
+      mockEnsembleManager.activateEnsemble.mockResolvedValue({
+        success: true, message: 'Activated', ensemble, notices: ['N1'],
+      });
+      const response = await strategy.activate('notice-ensemble');
+      expect(response.content[0].text).toContain('N1');
+    });
+
     it('should activate ensemble successfully with all elements', async () => {
       const mockEnsemble = {
         metadata: {
