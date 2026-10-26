@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import type { IActivationStateStore } from '../../../src/state/IActivationStateStore.js';
+import { logger } from '../../../src/utils/logger.js';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -78,5 +82,68 @@ describe('Persona lookup after cache eviction (Issue #2800)', () => {
     const result = await handler.activateElement(name, 'personas');
     expect(result.content[0].text).toBe('Activated');
     expect(recordActivation).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'evicted', 'unloadable'])('explicitly deactivates a %s reference and removes its persisted record', async state => {
+    const handler = container.resolve<ElementCRUDHandler>('ElementCRUDHandler');
+    const store = container.resolve<IActivationStateStore>('ActivationStore');
+    await handler.activateElement(name, 'personas');
+    expect(store.getActivations('persona')).toHaveLength(1);
+    const filename = `${name}.md`;
+    if (state === 'missing') await unlink(path.join(env.testDir, 'personas', filename));
+    if (state === 'unloadable') await writeFile(path.join(env.testDir, 'personas', filename), '---\nname: [invalid\n---');
+    manager.clearCache();
+    const result = await handler.deactivateElement(filename, 'personas');
+    expect(result.content[0].text).toContain('✅');
+    expect(manager['getActivationSet']().has(filename)).toBe(false);
+    expect(store.getActivations('persona')).toEqual([]);
+  });
+
+  async function retainTemporarilyUnreadableReference(): Promise<void> {
+    const file = path.join(env.testDir, 'personas', `${name}.md`);
+    const content = await readFile(file, 'utf8');
+    await writeFile(file, '---\nname: [invalid\n---');
+    manager.clearCache();
+    try {
+      expect(await manager['collectRetainedReferenceNotices']()).toHaveLength(1);
+    } finally {
+      await writeFile(file, content);
+      manager.clearCache();
+    }
+  }
+
+  it('restores activation and preserves warning suppression after a real delete veto', async () => {
+    const filename = `${name}.md`;
+    await manager.activatePersona(name);
+    manager.clearCache();
+    const warn = jest.spyOn(logger, 'warn');
+    expect(await manager['collectRetainedReferenceNotices']()).toEqual([]);
+    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(0);
+    await retainTemporarilyUnreadableReference();
+    const authorization = manager as unknown as {
+      canDelete(): Promise<{ allowed: boolean; reason?: string }>;
+    };
+    const veto = jest.spyOn(authorization, 'canDelete').mockResolvedValue({ allowed: false, reason: 'test refusal' });
+    await expect(manager.delete(filename)).rejects.toThrow('test refusal');
+    expect(veto).toHaveBeenCalledTimes(1);
+    expect(manager['getActivationSet']().has(filename)).toBe(true);
+    manager.clearCache();
+    expect(await manager['collectRetainedReferenceNotices']()).toEqual([]);
+    await retainTemporarilyUnreadableReference();
+    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(1);
+  });
+
+  it('still deactivates synchronously on an authorized successful delete', async () => {
+    await manager.activatePersona(name);
+    manager.clearCache();
+    const warn = jest.spyOn(logger, 'warn');
+    expect(await manager['collectRetainedReferenceNotices']()).toEqual([]);
+    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(0);
+    await retainTemporarilyUnreadableReference();
+    await manager.delete(`${name}.md`);
+    expect(manager['getActivationSet']().has(`${name}.md`)).toBe(false);
+    manager['getActivationSet']().add(`${name}.md`);
+    await manager['collectRetainedReferenceNotices']();
+    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(2);
   });
 });

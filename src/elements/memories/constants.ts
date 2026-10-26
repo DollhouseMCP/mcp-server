@@ -19,8 +19,12 @@
 // security-audit-ignore: DMCP-SEC-004
 // Reason: Constants file - no user input processing
 
+/** Filename installed into the system memory directory. */
+export const SEED_MEMORY_FILENAME = 'dollhousemcp-baseline-knowledge.yaml';
+
 // Memory size limits
 export const MEMORY_CONSTANTS = {
+  // String size limits use JavaScript UTF-16 code units, not encoded bytes.
   // Size limits
   MAX_MEMORY_SIZE: 1024 * 1024,        // 1MB total memory size
   MAX_ENTRY_SIZE: 100 * 1024,          // 100KB per entry

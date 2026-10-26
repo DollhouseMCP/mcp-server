@@ -12,9 +12,12 @@
  * logic: multi-directory enumeration + _index.json cold-start persistence.
  */
 
-import * as path from 'path';
+import { findFileIndexedPath, readFileIndex } from './FileIndexReader.js';
+import { visitSequentially } from '../utils/visitSequentially.js';
+import { DirectoryStateCache } from './DirectoryStateCache.js';
+import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
-import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
+import { type IndexedPathResult, type IStorageLayer, type StorageScanOptions } from './IStorageLayer.js';
 import type { IStorageBackend } from './IStorageBackend.js';
 import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
@@ -32,6 +35,7 @@ export interface MemoryStorageLayerOptions {
   scanCooldownMs?: number;
   /** Override the storage backend (useful for testing) */
   storageBackend?: IStorageBackend;
+  retainDirectoryState?: (dir: string) => boolean;
   /** Debounce interval for _index.json writes (default: 2000) */
   indexDebounceMs?: number;
   /** File filter predicate (e.g., exclude backup files) */
@@ -58,23 +62,30 @@ interface MemoryDirScanState {
   indexFile: MemoryIndexFile;
   lastScanTimestamp: number;
   scanInProgress: Promise<ManifestDiffResult> | null;
+  hasScanned: boolean;
+  /** Cold start has begun; hasScanned tracks completion for index publication. */
   coldStartDone: boolean;
 }
 
 export class MemoryStorageLayer implements IStorageLayer {
   private readonly backend: IStorageBackend;
+  private readonly retainDirectoryState?: (dir: string) => boolean;
   private readonly staticMemoriesDir: string;
   private readonly memoriesDirResolver?: () => string;
   private readonly scanCooldownMs: number;
   private readonly indexDebounceMs: number;
   private readonly fileFilter?: (filename: string) => boolean;
 
-  private readonly dirStates = new Map<string, MemoryDirScanState>();
+  private readonly dirStates = new DirectoryStateCache<MemoryDirScanState>(
+    (state, dir) => !state.indexFile.hasPendingWrite() && !this.retainDirectoryState?.(dir),
+    state => state.indexFile.dispose(),
+  );
 
   constructor(
     private readonly fileOps: FileOperationsService,
     options: MemoryStorageLayerOptions
   ) {
+    this.retainDirectoryState = options.retainDirectoryState;
     this.staticMemoriesDir = options.memoriesDir;
     this.memoriesDirResolver = options.memoriesDirResolver;
     this.scanCooldownMs = options.scanCooldownMs ?? 1000;
@@ -101,9 +112,10 @@ export class MemoryStorageLayer implements IStorageLayer {
       state = {
         manifest: new StorageManifest(),
         index: new MetadataIndex(),
-        indexFile: new MemoryIndexFile(indexPath, this.fileOps, { debounceMs: this.indexDebounceMs }),
+        indexFile: new MemoryIndexFile(indexPath, this.fileOps, { debounceMs: this.indexDebounceMs, onIdle: () => this.dirStates.trim() }),
         lastScanTimestamp: 0,
         scanInProgress: null,
+        hasScanned: false,
         coldStartDone: false,
       };
       this.dirStates.set(dir, state);
@@ -121,6 +133,10 @@ export class MemoryStorageLayer implements IStorageLayer {
     const dir = this.memoriesDir;
     const state = this.getState(dir);
 
+    return this.dirStates.use(state, () => this.scanState(dir, state, options));
+  }
+
+  private async scanState(dir: string, state: MemoryDirScanState, options: StorageScanOptions): Promise<ManifestDiffResult> {
     const existingScan = state.scanInProgress;
     if (existingScan) {
       if (!options.freshAfterInFlight) return existingScan;
@@ -157,23 +173,20 @@ export class MemoryStorageLayer implements IStorageLayer {
     state: MemoryDirScanState,
     coldStart: boolean,
   ): Promise<ManifestDiffResult> {
-    const scanPromise = coldStart
+    const diff = await this.dirStates.runScan(state, () => coldStart
       ? this.coldStartForDir(dir, state)
-      : this.performScanForDir(dir, state);
-    state.scanInProgress = scanPromise;
-    try {
-      return await scanPromise;
-    } finally {
-      if (state.scanInProgress === scanPromise) state.scanInProgress = null;
-    }
+      : this.performScanForDir(dir, state));
+    state.hasScanned = true;
+    return diff;
   }
 
   async listSummaries(options?: { includePublic?: boolean; preserveDuplicates?: boolean; freshMetadata?: boolean }): Promise<ElementIndexEntry[]> {
     if (options?.freshMetadata) return this.readFreshSummariesAtDirectory(this.memoriesDir, options.preserveDuplicates === true);
     // File-mode memories are single-user per installation; includePublic is a
     // no-op here until Step 4.5 delivers the per-user layout + shared/ dir.
+    const state = this.getState();
     await this.scan();
-    const entries = this.getState().index.getAll();
+    const entries = state.index.getAll();
     return options?.preserveDuplicates ? entries : this.deduplicateByName(entries);
   }
 
@@ -183,7 +196,7 @@ export class MemoryStorageLayer implements IStorageLayer {
     const paths = await this.enumerateYamlFiles(dir, subdirs, true);
     const entries: ElementIndexEntry[] = [];
     // Keep each read/stat pair ordered and fail fast before starting later locator I/O.
-    for (const filePath of paths) {
+    await visitSequentially(paths.values(), async filePath => {
       const absolutePath = path.join(dir, filePath);
       const content = await this.backend.readFile(absolutePath);
       const meta = await this.backend.stat(absolutePath);
@@ -192,13 +205,14 @@ export class MemoryStorageLayer implements IStorageLayer {
         description: extracted.description ?? '', version: extracted.version ?? '1.0.0',
         author: extracted.author ?? '', tags: extracted.tags ?? [],
         mtimeMs: meta.mtimeMs, sizeBytes: meta.sizeBytes });
-    }
+    });
     return preserveDuplicates ? entries : this.deduplicateByName(entries);
   }
 
   async getIndexedPaths(): Promise<string[]> {
+    const state = this.getState();
     await this.scan();
-    const deduplicated = this.deduplicateByName(this.getState().index.getAll());
+    const deduplicated = this.deduplicateByName(state.index.getAll());
     return deduplicated.map(entry => entry.filePath);
   }
 
@@ -222,19 +236,35 @@ export class MemoryStorageLayer implements IStorageLayer {
     return [...byName.values()];
   }
 
+  findIndexedPath(names: readonly string[]): Promise<string | undefined> {
+    const dir = this.memoriesDir;
+    const state = this.getState(dir);
+    // Cold bootstrap has no completed live manifest to invalidate; persisted index hydration is discovery.
+    // Warm reads must leave modified/removed diffs for scanAndEvict, even after invalidate().
+    return findFileIndexedPath(this.dirStates, state, names, () => this.scanState(dir, state, {}));
+  }
+
+  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult> {
+    return readFileIndex(this.dirStates, this.getState(), names);
+  }
+
   getPathByName(name: string): string | undefined {
     const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
     return this.getState().index.getPathByName(normalizedName);
   }
 
   hasCompletedScan(): boolean {
-    return this.getState().lastScanTimestamp > 0;
+    return this.dirStates.hasCompletedScan(this.memoriesDir);
   }
 
   async notifySaved(relativePath: string, absolutePath: string): Promise<void> {
     // Pin state before any await — prevents ContextTracker-driven resolver
     // from returning a different user's state if the async context shifts.
     const state = this.getState();
+    return this.dirStates.use(state, () => this.indexSavedFile(state, relativePath, absolutePath));
+  }
+
+  private async indexSavedFile(state: MemoryDirScanState, relativePath: string, absolutePath: string): Promise<void> {
     try {
       const content = await this.backend.readFile(absolutePath);
       const meta = await this.backend.stat(absolutePath);
@@ -257,20 +287,26 @@ export class MemoryStorageLayer implements IStorageLayer {
 
       state.index.set(entry);
       state.manifest.set(relativePath, meta.mtimeMs);
-      state.indexFile.scheduleWrite(state.index.getAll());
+      this.scheduleCompleteIndex(state);
     } catch (error) {
       logger.debug('MemoryStorageLayer.notifySaved failed, invalidating', {
         relativePath,
         error: error instanceof Error ? error.message : String(error),
       });
-      this.invalidate();
+      state.lastScanTimestamp = 0;
     }
   }
 
+  /** Cold notifications update metadata in memory without truncating the persisted index. */
+  private scheduleCompleteIndex(state: MemoryDirScanState): void {
+    if (state.hasScanned) state.indexFile.scheduleWrite(state.index.getAll());
+  }
+
   notifyDeleted(relativePath: string): void {
-    this.getState().index.remove(relativePath);
-    this.getState().manifest.remove(relativePath);
-    this.getState().indexFile.scheduleWrite(this.getState().index.getAll());
+    const state = this.getState();
+    state.index.remove(relativePath);
+    state.manifest.remove(relativePath);
+    this.scheduleCompleteIndex(state);
   }
 
   invalidate(): void {
@@ -285,6 +321,7 @@ export class MemoryStorageLayer implements IStorageLayer {
       state.index.clear();
       state.manifest.clear();
       state.lastScanTimestamp = 0;
+      state.hasScanned = false;
     }
   }
 
@@ -295,7 +332,19 @@ export class MemoryStorageLayer implements IStorageLayer {
    * Pure in-memory — does NOT trigger a scan.
    */
   getAutoLoadEntries(): ElementIndexEntry[] {
-    return this.getState().index.getAll()
+    return this.autoLoadEntriesOf(this.getState());
+  }
+
+  /** Scan, then read auto-load entries from the same state while it is still in use. */
+  async scanAutoLoadEntries(): Promise<ElementIndexEntry[]> {
+    const dir = this.memoriesDir;
+    const state = this.getState(dir);
+    return this.dirStates.scanAndRead(state, () => this.scanState(dir, state, {}),
+      () => this.autoLoadEntriesOf(state));
+  }
+
+  private autoLoadEntriesOf(state: MemoryDirScanState): ElementIndexEntry[] {
+    return state.index.getAll()
       .filter(entry => entry.autoLoad === true)
       .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
   }
@@ -306,37 +355,26 @@ export class MemoryStorageLayer implements IStorageLayer {
   async rebuildIndex(): Promise<void> {
     const dir = this.memoriesDir;
     const state = this.getState();
-    logger.info('MemoryStorageLayer: rebuilding index from disk...');
-    state.index.clear();
-    state.manifest.clear();
+    return this.dirStates.use(state, async () => {
+      logger.info('MemoryStorageLayer: rebuilding index from disk...');
+      state.index.clear();
+      state.manifest.clear();
 
-    await this.performScanForDir(dir, state);
-    await state.indexFile.write(state.index.getAll());
+      await this.performScanForDir(dir, state);
+      await state.indexFile.write(state.index.getAll());
 
-    logger.info(`MemoryStorageLayer: rebuild complete — ${state.index.size} entries indexed`);
+      logger.info(`MemoryStorageLayer: rebuild complete — ${state.index.size} entries indexed`);
+    });
   }
 
   /**
    * Flush pending _index.json write and release resources.
    */
   async dispose(): Promise<void> {
-    for (const state of this.dirStates.values()) {
+    await visitSequentially(this.dirStates.values(), async state => {
       await state.indexFile.flush();
       state.indexFile.dispose();
-    }
-  }
-
-  /**
-   * Remove cached scan state for a specific directory. Disposes the
-   * MemoryIndexFile (cancels debounce timer) to prevent resource leaks.
-   * Called during session cleanup.
-   */
-  purgeDirState(dir: string): void {
-    const state = this.dirStates.get(dir);
-    if (state) {
-      state.indexFile.dispose();
-      this.dirStates.delete(dir);
-    }
+    });
   }
 
   // ---- Private ----
@@ -513,9 +551,8 @@ export class MemoryStorageLayer implements IStorageLayer {
   private async enumerateYamlFiles(dir: string, subdirs: string[], strict = false): Promise<string[]> {
     const allRelativePaths: string[] = [];
     // Collection order and first-error behavior also serve the legacy inventory path.
-    for (const subdir of subdirs) {
-      await this.collectYamlFilesFromSubdir(dir, subdir, allRelativePaths, strict);
-    }
+    await visitSequentially(subdirs.values(), subdir =>
+      this.collectYamlFilesFromSubdir(dir, subdir, allRelativePaths, strict));
     return allRelativePaths;
   }
 

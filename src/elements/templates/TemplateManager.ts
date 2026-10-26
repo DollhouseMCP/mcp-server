@@ -21,6 +21,8 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
+type TemplateFormat = 'json' | 'yaml' | 'markdown';
+
 export class TemplateManager extends BaseElementManager<Template> {
   private readonly triggerValidationService: TriggerValidationService;
   private readonly validationService: ValidationService;
@@ -92,8 +94,8 @@ export class TemplateManager extends BaseElementManager<Template> {
     logger.info(`Template saved: ${template.metadata.name}`);
   }
 
-  override async delete(filePath: string): Promise<void> {
-    await super.delete(filePath);
+  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
+    await super.delete(filePath, onCommitted);
 
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_DELETED',
@@ -177,7 +179,11 @@ export class TemplateManager extends BaseElementManager<Template> {
     return template;
   }
 
-  async importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<Template> {
+  importElement(data: string, format: TemplateFormat = 'markdown'): Promise<Template> {
+    return Promise.resolve().then(() => this.importElementSync(data, format));
+  }
+
+  private importElementSync(data: string, format: TemplateFormat): Template {
     try {
       let metadata: Partial<TemplateMetadata>;
       let content = '';
@@ -187,7 +193,7 @@ export class TemplateManager extends BaseElementManager<Template> {
           const jsonData = this.serializationService.parseJson(data, {
             source: 'TemplateManager.importElement'
           });
-          metadata = await this.sanitizeMetadata(jsonData.metadata || {});
+          metadata = this.sanitizeMetadata(jsonData.metadata || {});
           content = jsonData.content || '';
           break;
         }
@@ -199,7 +205,7 @@ export class TemplateManager extends BaseElementManager<Template> {
             source: 'TemplateManager.importElement'
           });
 
-          metadata = await this.sanitizeMetadata(parsed.data.metadata || parsed.data);
+          metadata = this.sanitizeMetadata(parsed.data.metadata || parsed.data);
           content = parsed.content || '';
           break;
         }
@@ -210,7 +216,7 @@ export class TemplateManager extends BaseElementManager<Template> {
             validateContent: true,
             source: 'TemplateManager.importElement'
           });
-          metadata = await this.sanitizeMetadata(mdParsed.data);
+          metadata = this.sanitizeMetadata(mdParsed.data);
           content = mdParsed.content;
           break;
         }
@@ -232,7 +238,11 @@ export class TemplateManager extends BaseElementManager<Template> {
     }
   }
 
-  async exportElement(template: Template, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<string> {
+  exportElement(template: Template, format: TemplateFormat = 'markdown'): Promise<string> {
+    return Promise.resolve().then(() => this.exportElementSync(template, format));
+  }
+
+  private exportElementSync(template: Template, format: TemplateFormat): string {
     try {
       switch (format) {
         case 'json':
@@ -306,8 +316,12 @@ export class TemplateManager extends BaseElementManager<Template> {
     return '.md';
   }
 
-  protected override async parseMetadata(data: any): Promise<TemplateMetadata> {
-    const sanitized = await this.sanitizeMetadata(data);
+  protected override parseMetadata(data: any): Promise<TemplateMetadata> {
+    return Promise.resolve().then(() => this.parseMetadataSync(data));
+  }
+
+  private parseMetadataSync(data: any): TemplateMetadata {
+    const sanitized = this.sanitizeMetadata(data);
     // Use Template constructor to ensure required fields are populated
     const tempTemplate = new Template(sanitized, '', this.metadataService);
     return tempTemplate.metadata;
@@ -341,7 +355,11 @@ export class TemplateManager extends BaseElementManager<Template> {
     return lines.join('\n');
   }
 
-  protected override async serializeElement(template: Template): Promise<string> {
+  protected override serializeElement(template: Template): Promise<string> {
+    return Promise.resolve().then(() => this.serializeElementSync(template));
+  }
+
+  private serializeElementSync(template: Template): string {
     // v2.0 format: add instructions to YAML frontmatter if present
     const metadata: Record<string, any> = { ...template.metadata };
     // Issue #755: Serialize type as singular and persist unique_id
@@ -373,7 +391,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     return result.isValid && result.sanitizedValue ? result.sanitizedValue : undefined;
   }
 
-  private async sanitizeMetadata(data: any): Promise<Partial<TemplateMetadata>> {
+  private sanitizeMetadata(data: any): Partial<TemplateMetadata> {
     const metadata: Partial<TemplateMetadata> = {};
 
     if (data.name) {

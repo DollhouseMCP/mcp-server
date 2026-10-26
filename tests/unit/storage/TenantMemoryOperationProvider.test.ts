@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
@@ -299,8 +300,11 @@ function crud(f: Awaited<ReturnType<typeof fixture>>, provider: TenantMemoryOper
   return new ElementCRUDHandler(c.resolve('SkillManager'),c.resolve('TemplateManager'),c.resolve('TemplateRenderer'),
     agent ?? c.resolve('AgentManager'),fixed,c.resolve('EnsembleManager'),c.resolve('PersonaManager'),c.resolve('PortfolioManager'),
     c.resolve('InitializationService'),c.resolve('PersonaIndicatorService'),c.resolve('FileOperationsService'),
-    c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),undefined,undefined,undefined,c.resolve('SessionActivationRegistry'),tracker,
-    {memoryProvider:provider});
+    c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),new ActivationMetricsTracker(() => 'local-user'), {
+        activationRegistry: c.resolve('SessionActivationRegistry'),
+        contextTracker: tracker,
+        memoryProvider: provider
+      });
 }
 describe('actual CRUD and activation caller plumbing (transport reads controlled)', () => {
   it('refuses missing/structural configured providers and a different tracker rather than using a fixed manager', async () => {

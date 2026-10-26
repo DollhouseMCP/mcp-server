@@ -4,6 +4,8 @@
  * and creation workflows while eliminating duplicated file handling code.
  */
 
+import type { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
 import type { ElementManagerDeps } from '../base/BaseElementManager.js';
 import { Skill } from './Skill.js';
@@ -26,17 +28,18 @@ const MAX_TRIGGER_LENGTH = 50;
 // Allows alphanumeric, hyphens, underscores, @ (mentions/emails), . (domains)
 const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_@.]+$/;
 
-// Issue #83: Centralized active element limits (configurable via env vars)
-import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
+export interface SkillManagerDeps extends ElementManagerDeps {
+  activationMetricsTracker: ActivationMetricsTracker;
+}
+
 export class SkillManager extends BaseElementManager<Skill> {
   private readonly triggerValidationService: TriggerValidationService;
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  // Fallback for tests/callers that don't inject the registry
-  private readonly _localActiveSkillNames: Set<string> = new Set();
+  private readonly activationMetricsTracker: ActivationMetricsTracker;
 
-  constructor(deps: ElementManagerDeps) {
+  constructor(deps: SkillManagerDeps) {
     super(
       ElementType.SKILL,
       deps.portfolioManager,
@@ -56,6 +59,7 @@ export class SkillManager extends BaseElementManager<Skill> {
       deps.fileOperationsService,
       deps.validationRegistry,
     );
+    this.activationMetricsTracker = deps.activationMetricsTracker;
     this.metadataService = deps.metadataService;
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
@@ -64,7 +68,7 @@ export class SkillManager extends BaseElementManager<Skill> {
 
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('skills', this._localActiveSkillNames);
+    return this.resolveActivationSet('skills');
   }
 
   protected override getElementLabel(): string {
@@ -330,12 +334,12 @@ export class SkillManager extends BaseElementManager<Skill> {
     const skills = await super.list(options);
 
     // Apply active status to skills that are in the active set (by name)
-    for (const skill of skills) {
+    await visitSequentially(skills[Symbol.iterator](), async (skill) => {
       if (this.getActivationSet().has(skill.metadata.name)) {
         // Access the protected _status field and set to ACTIVE (value 2)
         await skill.activate();
       }
-    }
+    });
 
     return skills;
   }
@@ -345,11 +349,12 @@ export class SkillManager extends BaseElementManager<Skill> {
    *
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
-   * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
+   * Issue #24 (LOW PRIORITY): Report pressure and retained references at the activation threshold
    */
-  async activateSkill(identifier: string): Promise<{ success: boolean; message: string; skill?: Skill }> {
+  async activateSkill(identifier: string): Promise<{ success: boolean; message: string; skill?: Skill; notices?: string[] }> {
     // PERFORMANCE FIX: Use findByName() instead of list() to avoid loading all skills
     // This provides O(1) or O(log n) lookup instead of O(n) for large portfolios
+    const notices = await this.reportActiveSetPressure();
     const skill = await this.findByName(identifier);
 
     if (!skill) {
@@ -360,11 +365,9 @@ export class SkillManager extends BaseElementManager<Skill> {
       };
     }
 
-    // MEMORY LEAK FIX: Check if cleanup is needed before adding
-    this.checkAndCleanupActiveSet();
-
     // Add to active set (by name, which is stable across reloads)
     this.getActivationSet().add(skill.metadata.name);
+    this.recordPendingActivation(skill);
 
     // Update skill status in memory
     await skill.activate();
@@ -381,7 +384,8 @@ export class SkillManager extends BaseElementManager<Skill> {
     return {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
-      message: ElementMessages.activated(ElementType.SKILL, skill.metadata.name),
+      message: [ElementMessages.activated(ElementType.SKILL, skill.metadata.name), ...notices].join("\n"),
+      notices,
       skill
     };
   }
@@ -392,20 +396,28 @@ export class SkillManager extends BaseElementManager<Skill> {
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    */
-  async deactivateSkill(identifier: string): Promise<{ success: boolean; message: string }> {
+  async deactivateSkill(identifier: string): Promise<{ success: boolean; message: string; lookupFailed?: boolean }> {
     // PERFORMANCE FIX: Use findByName() instead of list()
-    const skill = await this.findByName(identifier);
+    const { element: skill, lookupFailed } = await this.findForDeactivation(identifier);
 
     if (!skill) {
+      if (this.getActivationSet().delete(identifier)) {
+        this.activationMetricsTracker.forget('skill', identifier);
+        return { success: true, message: ElementMessages.deactivated(ElementType.SKILL, identifier) };
+      }
       return {
-        success: false,
+        success: false, lookupFailed,
         // CONSISTENCY FIX: Use standardized error message format
-        message: ElementMessages.notFound(ElementType.SKILL, identifier)
+        message: lookupFailed ? `${JSON.stringify(identifier)} could not be loaded (storage or definition error)`
+          : ElementMessages.notFound(ElementType.SKILL, identifier)
       };
     }
 
     // Remove from active set
-    this.getActivationSet().delete(skill.metadata.name);
+    if (this.getActivationSet().delete(skill.metadata.name)) {
+      this.activationMetricsTracker.forget('skill', skill.metadata.name);
+      if (identifier !== skill.metadata.name) this.activationMetricsTracker.forget('skill', identifier);
+    }
 
     // Update skill status in memory
     await skill.deactivate();
@@ -424,115 +436,22 @@ export class SkillManager extends BaseElementManager<Skill> {
    */
   async getActiveSkills(): Promise<Skill[]> {
     const results: Skill[] = [];
-    for (const name of this.getActivationSet()) {
+    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (name) => {
       const skill = await this.findByName(name);
       if (skill) results.push(skill);
-    }
+    });
     return results;
   }
 
-  /**
-   * Check if active set cleanup is needed and perform cleanup if necessary
-   *
-   * Issue #24 (LOW PRIORITY): Memory leak prevention
-   *
-   * CLEANUP STRATEGY:
-   * - Triggers when set reaches 90% of maximum capacity
-   * - Validates that all active skills still exist in portfolio
-   * - Removes stale references (skills that were deleted)
-   * - Logs cleanup operations for monitoring
-   *
-   * PERFORMANCE NOTES:
-   * - Only runs when threshold is reached (not on every activation)
-   * - Uses efficient Set operations
-   * - Minimal impact on activation performance
-   *
-   * @private
-   */
-  private checkAndCleanupActiveSet(): void {
-    const { max, cleanupThreshold } = getActiveElementLimitConfig('skills');
-
-    // Below threshold — no action needed
-    if (this.getActivationSet().size < cleanupThreshold) {
-      return;
-    }
-
-    // At or above max — warn before cleanup
-    if (this.getActivationSet().size >= max) {
-      logger.warn(
-        `Active skills limit reached (${max}). ` +
-        `Consider deactivating unused skills or setting DOLLHOUSE_MAX_ACTIVE_SKILLS to a higher value.`
-      );
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
-        severity: 'MEDIUM',
-        source: 'SkillManager.checkAndCleanupActiveSet',
-        details: `Active skills limit reached: ${this.getActivationSet().size}/${max}`
-      });
-    }
-
-    // At or above threshold — proactively clean stale entries
-    void this.cleanupStaleActiveSkills();
+  /** Report pressure and await retained-reference notices only at the cleanup threshold. */
+  private reportActiveSetPressure(): Promise<string[]> {
+    return this.reportActivationPressure('skills', 'SkillManager.reportActiveSetPressure', () => this.collectRetainedReferenceNotices());
   }
 
-  /**
-   * Clean up stale entries from active skills set
-   *
-   * Issue #24 (LOW PRIORITY): Memory leak prevention
-   *
-   * Validates that all active skills still exist and removes orphaned references.
-   * This prevents memory leaks from deleted skills that weren't properly deactivated.
-   *
-   * @private
-   */
-  private async cleanupStaleActiveSkills(): Promise<void> {
-    try {
-      const startSize = this.getActivationSet().size;
-      const skills = await this.list();
-      const existingSkillNames = new Set(skills.map(s => s.metadata.name));
-
-      // Remove any active skill names that no longer exist in portfolio
-      const staleNames: string[] = [];
-      for (const activeName of this.getActivationSet()) {
-        if (!existingSkillNames.has(activeName)) {
-          this.getActivationSet().delete(activeName);
-          staleNames.push(activeName);
-        }
-      }
-
-      const endSize = this.getActivationSet().size;
-      const removed = startSize - endSize;
-
-      if (removed > 0) {
-        logger.info(
-          `Cleaned up ${removed} stale active skill reference(s). ` +
-          `Active skills: ${endSize}/${getMaxActiveLimit('skills')}`
-        );
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'ELEMENT_DELETED',
-          severity: 'LOW',
-          source: 'SkillManager.cleanupStaleActiveSkills',
-          details: `Removed ${removed} stale active skill references`,
-          additionalData: {
-            removedCount: removed,
-            activeCount: endSize,
-            staleNames: staleNames.join(', ')
-          }
-        });
-      }
-    } catch (error) {
-      // Log error but don't throw - cleanup failures shouldn't break activation
-      logger.error('Failed to cleanup stale active skills:', error);
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_DELETED',
-        severity: 'LOW',
-        source: 'SkillManager.cleanupStaleActiveSkills',
-        details: `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
+  /** A failed or empty lookup is uncertainty, never authority to deactivate a reference. */
+  private collectRetainedReferenceNotices(): Promise<string[]> {
+    return this.retainedReferenceNotices('skill', async key => !!await this.findByName(key), this.activationMetricsTracker,
+      'While it fails to load, no active skill policies are applied.');
   }
 
   /**

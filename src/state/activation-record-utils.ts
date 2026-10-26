@@ -121,6 +121,10 @@ export function upsertActivationRecord(
     return 'inserted';
   }
 
+  // Replace even an unchanged activation: a repeated activation owns a new lifetime.
+  const recordIndex = records.indexOf(activeRecord);
+  activeRecord = { ...activeRecord };
+  records[recordIndex] = activeRecord;
   let changed = false;
   if (activeRecord.name !== name) {
     activeRecord.name = name;
@@ -144,23 +148,44 @@ export function upsertActivationRecord(
   return changed ? 'updated' : 'unchanged';
 }
 
+/** Compare durable keys without treating a conflicting legacy filename as a name alias. */
+function matchesRemovalKey(record: PersistedActivation, input: NormalizedActivationInput): boolean {
+  if (!input.identity) return record.filename === input.filename;
+  if (record.identity) {
+    return record.identity.kind === input.identity.kind && record.identity.value === input.identity.value;
+  }
+  const filename = input.filename ?? (input.identity.kind === 'file' ? input.identity.value : undefined);
+  return filename !== undefined && record.filename === filename;
+}
+
 export function removeActivationRecords(
   records: PersistedActivation[],
   input: NormalizedActivationInput,
+  expectedRecord?: PersistedActivation,
 ): { records: PersistedActivation[]; removed: boolean } {
-  const remaining = records.filter((record) => {
-    if (input.identity) {
-      const identityMatches = record.identity?.kind === input.identity.kind &&
-        record.identity.value === input.identity.value;
-      const legacyNameMatches = !record.identity && record.name === input.name;
-      return !identityMatches && !legacyNameMatches;
+  if (expectedRecord) {
+    return {
+      records: records.filter(record => record !== expectedRecord),
+      removed: records.includes(expectedRecord),
+    };
+  }
+  const named = records.filter(record => record.name === input.name);
+  let matches = named;
+  if (input.identity || input.filename) {
+    matches = records.filter(record => matchesRemovalKey(record, input));
+    // Preserve migration from a single name-only record, never broaden an exact match.
+    if (matches.length === 0 && named.length === 1 && !named[0].identity && !named[0].filename) {
+      matches = named;
     }
-    if (input.filename) {
-      const filenameMatches = record.filename === input.filename;
-      const legacyNameMatches = !record.filename && record.name === input.name;
-      return !filenameMatches && !legacyNameMatches;
-    }
-    return record.name !== input.name;
-  });
-  return { records: remaining, removed: remaining.length !== records.length };
+  }
+  const selected = new Set(matches);
+  return { records: records.filter(record => !selected.has(record)), removed: selected.size > 0 };
+}
+
+/** Find the exact record just inserted by the activation store, without alias inference. */
+export function recordedActivation(records: PersistedActivation[], input: Omit<PersistedActivation, 'activatedAt'>): PersistedActivation | undefined {
+  const normalized = normalizeActivationInput(input.name, input.filename, input.identity);
+  return normalized && records.find(record => record.name === normalized.name
+    && record.filename === normalized.filename && record.identity?.kind === normalized.identity?.kind
+    && record.identity?.value === normalized.identity?.value);
 }

@@ -11,7 +11,11 @@ export interface IElementManager<T extends IElement> {
   // CRUD operations
   load(path: string): Promise<T>;
   save(element: T, path: string): Promise<void>;
-  delete(path: string): Promise<void>;
+  /**
+   * onCommitted runs synchronously after storage deletion, before post-delete hooks.
+   * Observer errors are logged and contained; they cannot fail an already committed delete.
+   */
+  delete(path: string, onCommitted?: () => void): Promise<void>;
   exists(path: string): Promise<boolean>;
   
   // Collection operations

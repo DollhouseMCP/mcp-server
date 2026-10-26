@@ -200,6 +200,51 @@ describe('BaseElementManager - Requirements & Contract', () => {
   // SECURITY REQUIREMENTS
   // ============================================
 
+  it('fences manager-owned cleanup in the local fallback without changing other keys', () => {
+    const active = manager['resolveActivationSet']('skills').add('P').add('Q');
+    const clear = manager.prepareDeletedActivation('p.md', 'P')!;
+    active.add('P');
+    expect(clear()).toBe(false);
+    expect([...active]).toEqual(['P', 'Q']);
+    expect(manager['resolveActivationSet']('skills')).toBe(active);
+    expect(manager.prepareDeletedActivation('p.md', 'P')!()).toBe(true);
+    expect([...active]).toEqual(['Q']);
+  });
+
+  it('rejects a foreign publication lease before creating or writing a file', async () => {
+    const foreign = createManager();
+    const create = jest.spyOn(fileOperationsService, 'createDirectory');
+    const write = jest.spyOn(fileOperationsService, 'writeFile');
+    const pin = jest.spyOn(manager['_cache'], 'withDirectoryPin')
+      .mockImplementation(operation => foreign['_cache'].withDirectoryPin(operation));
+    try {
+      await expect(manager.save(new TestElement({ name: 'Foreign' }, 'content'), 'foreign.md'))
+        .rejects.toThrow('active lease');
+      expect(create).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      await expect(fs.stat(path.join(elementsDir, 'foreign.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      pin.mockRestore();
+      create.mockRestore();
+      write.mockRestore();
+    }
+  });
+
+  it('notifies storage of a committed save even when cache publication fails', async () => {
+    const notify = jest.spyOn(manager['storageLayer'], 'notifySaved');
+    const publication = jest.spyOn(manager['_cache'], 'cacheElement').mockImplementation(() => {
+      throw new Error('Publication unavailable');
+    });
+    try {
+      await manager.save(new TestElement({ name: 'Committed' }, 'persisted content'), 'committed.md');
+      expect(await fs.readFile(path.join(elementsDir, 'committed.md'), 'utf8')).toContain('persisted content');
+      expect(notify).toHaveBeenCalledWith('committed.md', path.join(elementsDir, 'committed.md'));
+    } finally {
+      publication.mockRestore();
+      notify.mockRestore();
+    }
+  });
+
   describe('Security Requirements', () => {
     it('prevents path traversal with ../ sequences', async () => {
       const maliciousPath = '../../../etc/passwd';
@@ -323,7 +368,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       });
 
       await expect(manager.save(element, 'txn-fail.md')).rejects.toThrow(/pre-save failure/);
-      expect((manager as any).elements.get(element.id)).toBeUndefined();
+      expect(manager['getCachedElementByStorageIdentity']('txn-fail.md')).toBeUndefined();
     });
 
     it('respects canDelete veto without removing files', async () => {
@@ -443,6 +488,60 @@ describe('BaseElementManager - Requirements & Contract', () => {
 
       const fileExists = await fs.access(filePath).then(() => true).catch(() => false);
       expect(fileExists).toBe(false);
+    });
+
+    it.each(['file', 'backup', 'database'])('contains a throwing delete observer for %s and completes commit actions', async backend => {
+      const filename = 'observer.md';
+      const file = path.join(elementsDir, filename);
+      await fs.writeFile(file, '---\nname: Observer\n---\nContent');
+      const element = await manager.load(filename);
+      const storage = manager['storageLayer'];
+      const notify = jest.spyOn(storage, 'notifyDeleted');
+      const uncache = jest.spyOn(manager['_cache'], 'uncacheByPath');
+      const events = jest.spyOn(manager['_events'].eventDispatcher, 'emitAsync');
+      const afterDelete = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      manager['afterDelete'] = afterDelete;
+      if (backend === 'database') {
+        Object.assign(storage, {
+          writeContent: jest.fn(),
+          resolveContentIdentity: jest.fn<() => Promise<{ id: string }>>().mockResolvedValue({ id: 'db-id' }),
+          deleteContentByIdentity: jest.fn<() => Promise<{ id: string }>>().mockResolvedValue({ id: 'db-id' }),
+        });
+        jest.spyOn(manager['_loader'], 'loadElementSnapshotFromDb').mockResolvedValue(element);
+      } else if (backend === 'backup') {
+        manager['createBackupBeforeDelete'] = async (source, notifyCommit) => {
+          await fs.rename(source, `${source}.backup`);
+          notifyCommit?.();
+          return true;
+        };
+      }
+      const observer = jest.fn(() => { throw new Error('observer failed'); });
+      await expect(manager.delete(filename, observer)).resolves.toBeUndefined();
+      expect(observer).toHaveBeenCalledTimes(1);
+      expect(afterDelete).toHaveBeenCalledTimes(1);
+      expect(uncache).toHaveBeenCalledWith(backend === 'database' ? 'db-id' : filename);
+      expect(events).toHaveBeenCalledWith('element:delete:success', expect.anything());
+      expect(events).not.toHaveBeenCalledWith('element:delete:error', expect.anything());
+      if (backend !== 'database') {
+        expect(notify).toHaveBeenCalledWith(filename);
+        await expect(fs.access(file)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    });
+
+    it('signals commit before asynchronous post-delete hooks and never on refusal', async () => {
+      const filename = 'commit-boundary.md';
+      const file = path.join(elementsDir, filename);
+      await fs.writeFile(file, '---\nname: Boundary\n---\nContent');
+      const onCommitted = jest.fn();
+      manager['afterDelete'] = async () => {
+        expect(onCommitted).toHaveBeenCalledTimes(1);
+        await expect(fs.access(file)).rejects.toMatchObject({ code: 'ENOENT' });
+      };
+      await manager.delete(filename, onCommitted);
+      await fs.writeFile(file, '---\nname: Boundary\n---\nContent');
+      manager['canDelete'] = async () => ({ allowed: false, reason: 'refused' });
+      await expect(manager.delete(filename, onCommitted)).rejects.toThrow('refused');
+      expect(onCommitted).toHaveBeenCalledTimes(1);
     });
 
     it('exists() returns true for existing files', async () => {
@@ -626,7 +725,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.load(testPath);
 
       // Check internal cache was populated
-      expect((manager as any).elements.getStats().size).toBeGreaterThan(0);
+      expect(manager['getCacheStats']().elementCount).toBeGreaterThan(0);
     });
 
     it('updates the cache when saving', async () => {
@@ -646,13 +745,12 @@ describe('BaseElementManager - Requirements & Contract', () => {
         `---\nname: CacheDelete\n---\n\nContent`
       );
 
-      const element = await manager.load(testPath);
-      const elementId = element.id;
+      await manager.load(testPath);
 
       await manager.delete(testPath);
 
       // Cache should no longer contain the element
-      expect((manager as any).elements.has(elementId)).toBe(false);
+      expect(Boolean(manager['getCachedElementByStorageIdentity'](testPath))).toBe(false);
     });
 
     it('clearCache() empties the cache', async () => {
@@ -665,7 +763,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
 
       manager.clearCache();
 
-      expect((manager as any).elements.getStats().size).toBe(0);
+      expect(manager['getCacheStats']().elementCount).toBe(0);
     });
   });
 
@@ -899,7 +997,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       // Spy on list() to count calls
       const listSpy = jest.spyOn(manager, 'list');
 
-      // First findByName() for non-existent: triggers one list() (full scan)
+      // A cold missing-name lookup hydrates the list once, preserving flexible matching.
       const result1 = await manager.findByName('ghost-element');
       expect(result1).toBeUndefined();
       expect(listSpy).toHaveBeenCalledTimes(1);
@@ -907,12 +1005,12 @@ describe('BaseElementManager - Requirements & Contract', () => {
       // Second findByName() for another non-existent: should NOT trigger list() again
       const result2 = await manager.findByName('another-ghost');
       expect(result2).toBeUndefined();
-      expect(listSpy).toHaveBeenCalledTimes(1); // Still 1, not 2
+      expect(listSpy).toHaveBeenCalledTimes(1);
 
-      // Third findByName() for existing element: should hit cache
+      // An existing element now resolves from the populated cache.
       const result3 = await manager.findByName('only-one');
       expect(result3).toBeDefined();
-      expect(listSpy).toHaveBeenCalledTimes(1); // Still 1
+      expect(listSpy).toHaveBeenCalledTimes(1);
 
       listSpy.mockRestore();
     });

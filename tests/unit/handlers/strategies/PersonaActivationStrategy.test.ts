@@ -226,6 +226,7 @@ describe('PersonaActivationStrategy', () => {
 
     // Issue #275: Now throws error instead of returning error content
     it('should throw ElementNotFoundError when persona not found', async () => {
+      mockPersonaManager.deactivatePersona.mockReturnValue({ success: false, message: 'Persona not found' });
       mockPersonaManager.findPersonaAsync.mockResolvedValue(null);
 
       await expect(strategy.deactivate('missing-persona'))

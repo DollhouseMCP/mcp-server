@@ -9,6 +9,9 @@
  * all required abstract methods while maintaining security guarantees.
  */
 
+import { publishCachedElement } from '../../helpers/cache-publication.js';
+
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import * as os from 'os';
 import * as path from 'path';
@@ -94,6 +97,7 @@ describe('PersonaElementManager Integration', () => {
 
     // Create PersonaManager instance
     personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
       indicatorConfig: DEFAULT_INDICATOR_CONFIG,
       fileLockManager: mockFileLockManager,
@@ -270,7 +274,7 @@ describe('PersonaElementManager Integration', () => {
       const persona = (personaManager as any).createElement(metadata, content);
 
       // Cache the element using protected method
-      (personaManager as any).cacheElement(persona, 'cached-persona.md');
+      publishCachedElement(personaManager, persona, 'cached-persona.md');
 
       const cacheStats = (personaManager as any).getCacheStats();
       expect(cacheStats.elementCount).toBe(1);
@@ -294,7 +298,7 @@ describe('PersonaElementManager Integration', () => {
       const content = 'Clearable content';
       const persona = (personaManager as any).createElement(metadata, content);
 
-      (personaManager as any).cacheElement(persona, 'clearable-persona.md');
+      publishCachedElement(personaManager, persona, 'clearable-persona.md');
 
       // Verify cache has entry
       let cacheStats = (personaManager as any).getCacheStats();
@@ -322,7 +326,7 @@ describe('PersonaElementManager Integration', () => {
         const content = `Content for persona ${i}`;
         const persona = (personaManager as any).createElement(metadata, content);
         personas.push(persona);
-        (personaManager as any).cacheElement(persona, `persona-${i}.md`);
+        publishCachedElement(personaManager, persona, `persona-${i}.md`);
       }
 
       // Verify cache is managing entries (should have all 25 since limit is 1000)
@@ -624,7 +628,7 @@ Content`;
         author: 'testuser'
       };
       const persona = (personaManager as any).createElement(metadata, 'Content');
-      (personaManager as any).cacheElement(persona, 'disposable.md');
+      publishCachedElement(personaManager, persona, 'disposable.md');
 
       // Verify cache has entries
       let cacheStats = (personaManager as any).getCacheStats();

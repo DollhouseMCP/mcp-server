@@ -214,6 +214,7 @@ export class FileActivationStateStore implements IActivationStateStore {
     name: string,
     filename?: string,
     identity?: PersistedActivationIdentity,
+    expectedRecord?: PersistedActivation,
   ): void {
     if (!this.enabled) return;
 
@@ -225,7 +226,7 @@ export class FileActivationStateStore implements IActivationStateStore {
     const activations = this.state.activations[type];
     if (!activations) return;
 
-    const removal = removeActivationRecords(activations, input);
+    const removal = removeActivationRecords(activations, input, expectedRecord);
     this.state.activations[type] = removal.records;
 
     if (removal.removed) {

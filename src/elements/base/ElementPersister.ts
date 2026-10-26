@@ -30,7 +30,7 @@ import {
   isWritableStorageLayer,
 } from '../../storage/IStorageLayer.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
-import type { ElementCache } from './ElementCache.js';
+import type { ElementCache, CachePublicationLease } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import type { ElementLoader, ElementTypeToContext } from './ElementLoader.js';
 
@@ -55,7 +55,7 @@ export interface ElementPersisterHost<T extends IElement> {
   canDelete?(element: T): Promise<{ allowed: boolean; reason?: string }>;
   onSaveError?(element: T, filePath: string, error: unknown): void;
   createBackupBeforeSave(absolutePath: string): Promise<void>;
-  createBackupBeforeDelete(absolutePath: string): Promise<boolean>;
+  createBackupBeforeDelete(absolutePath: string, onCommitted?: () => void): Promise<boolean>;
   getElementLabel(): string;
   getElementLabelCapitalized(): string;
   getElementFilename(name: string): string;
@@ -114,7 +114,7 @@ export class ElementPersister<T extends IElement> {
       } };
     }
     await this.host.scanAndEvict();
-    const target = this.storageLayer.getPathByName(name) ?? this.host.getElementFilename(name);
+    const target = (await this.storageLayer.findIndexedPath([name])) ?? this.host.getElementFilename(name);
     const { absolutePath } = await this.host.normalizeAndValidatePath(target);
     return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
       try {
@@ -139,6 +139,11 @@ export class ElementPersister<T extends IElement> {
    * Identical to the former BaseElementManager.save() body.
    */
   async save(element: T, filePath: string, options?: ElementSaveOptions): Promise<void> {
+    return this.cache.withDirectoryPin(lease => this.saveAndCache(element, filePath, lease, options));
+  }
+
+  private async saveAndCache(element: T, filePath: string, lease: CachePublicationLease, options?: ElementSaveOptions): Promise<void> {
+    this.cache.assertPublicationLease(lease);
     if (options?.updateOnly && options.exclusive) {
       throw new Error('An update-only save cannot also create exclusively');
     }
@@ -170,10 +175,10 @@ export class ElementPersister<T extends IElement> {
       let savedRelativePath = relativePath;
 
       transaction.addCommit(async () => {
-        this.cache.cacheElement(element, savedRelativePath);
         if (!isDbMode) {
           await this.storageLayer.notifySaved(savedRelativePath, absolutePath);
         }
+        this.cache.cacheElement(element, savedRelativePath, lease);
         this.events.eventDispatcher.emitAsync(
           'element:save:success',
           this.events.createEventPayload({ correlationId, filePath: savedRelativePath, element }),
@@ -202,6 +207,7 @@ export class ElementPersister<T extends IElement> {
         const content = await this.host.serializeElement(element);
         // Dispatch through the host so subclass overrides (e.g. MemoryManager) are called.
         this.host.validateSerializedContent(content);
+        this.cache.assertPublicationLease(lease);
 
         if (isDbMode) {
           const elementId = await this.storageLayer.writeContent(
@@ -271,7 +277,7 @@ export class ElementPersister<T extends IElement> {
    * Delete an element from file or database.
    * Identical to the former BaseElementManager.delete() body.
    */
-  async delete(filePath: string): Promise<void> {
+  async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -290,6 +296,13 @@ export class ElementPersister<T extends IElement> {
         this.events.createEventPayload({ correlationId, filePath: relativePath }),
       );
 
+      const notifyCommitted = () => {
+        try {
+          onCommitted?.();
+        } catch (error) {
+          logger.warn('Post-delete commit observer failed', { type: this.host.elementType, name: relativePath, error });
+        }
+      };
       const isDbMode = isWritableStorageLayer(this.storageLayer);
       let deletedStorageIdentity: string | undefined;
 
@@ -316,17 +329,18 @@ export class ElementPersister<T extends IElement> {
 
       await transaction.run(async () => {
         if (isDbMode) {
-          deletedStorageIdentity = await this.deleteFromDatabase(relativePath);
+          deletedStorageIdentity = await this.deleteFromDatabase(relativePath, notifyCommitted);
         } else {
           if (this.host.canDelete) {
             const elementForValidation = await this.loader.loadElementSnapshot(absolutePath, relativePath);
             await this.assertDeleteAllowed(elementForValidation);
           }
-          const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath);
+          const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath, notifyCommitted);
           if (!movedToBackup) {
             await this.fileOperations.deleteFile(absolutePath, this.host.elementType, {
               source: `${this.host.constructor.name}.delete`,
             });
+            notifyCommitted();
           }
         }
 
@@ -339,7 +353,7 @@ export class ElementPersister<T extends IElement> {
     });
   }
 
-  private async deleteFromDatabase(relativePath: string): Promise<string> {
+  private async deleteFromDatabase(relativePath: string, onCommitted?: () => void): Promise<string> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       throw new Error('Database deletion requires a writable storage layer');
     }
@@ -364,6 +378,7 @@ export class ElementPersister<T extends IElement> {
       dbIdentifier,
       resolvedIdentity,
     );
+    onCommitted?.();
     return deleted.id;
   }
 
@@ -388,8 +403,7 @@ export class ElementPersister<T extends IElement> {
     try {
       if (isWritableStorageLayer(this.storageLayer)) {
         const name = this.host.extractNameFromPath(filePath);
-        return this.storageLayer.getPathByName(name) !== undefined
-          || this.storageLayer.getPathByName(filePath) !== undefined;
+        return (await this.storageLayer.findIndexedPath([name, filePath])) !== undefined;
       }
       const { absolutePath } = await this.host.normalizeAndValidatePath(filePath);
       return await this.fileOperations.exists(absolutePath);

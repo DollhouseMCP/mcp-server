@@ -1,3 +1,4 @@
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { writeFile, unlink, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
@@ -89,13 +90,20 @@ async function buildCacheFixture(mode: Backend, dbOptions?: { url: string; userI
     const agents = env.container.resolve<AgentManager>('AgentManager');
     const templates = env.container.resolve<TemplateManager>('TemplateManager');
     const memories = env.container.resolve<MemoryManager>('MemoryManager');
-    const managers = { [ElementType.AGENT]: agents, [ElementType.TEMPLATE]: templates, [ElementType.MEMORY]: memories, [ElementType.PERSONA]: personas, [ElementType.SKILL]: skills, [ElementType.ENSEMBLE]: ensembles };
+    const managers = {
+      [ElementType.AGENT]: agents,
+      [ElementType.TEMPLATE]: templates,
+      [ElementType.MEMORY]: memories,
+      [ElementType.PERSONA]: personas,
+      [ElementType.SKILL]: skills,
+      [ElementType.ENSEMBLE]: ensembles,
+    };
     // The original fixture retains its three DB types; extended cases opt into all six.
     const handler = new ElementCRUDHandler(skills, env.container.resolve('TemplateManager'),
       env.container.resolve('TemplateRenderer'), env.container.resolve('AgentManager'),
       env.container.resolve('MemoryManager'), ensembles, personas, env.portfolioManager,
       env.container.resolve('InitializationService'), env.container.resolve('PersonaIndicatorService'),
-      files, env.container.resolve('ElementQueryService'), env.container.resolve('ValidationRegistry'));
+      files, env.container.resolve('ElementQueryService'), env.container.resolve('ValidationRegistry'), new ActivationMetricsTracker(() => 'local-user'));
     const locations = new Map<string, string>();
     const key = (type: AllCountedType, index: number) => `${type}-${index.toString().padStart(2, '0')}`;
     const put = async (type: AllCountedType, index: number, edited = false) => {
@@ -141,6 +149,9 @@ async function buildCacheFixture(mode: Backend, dbOptions?: { url: string; userI
           await Promise.all(Array.from({ length: count }, (_, index) => put(type, index)));
           return;
         }
+        // MemoryManager.create() lists for duplicates before its queued save.
+        // Finish each create before the next scan: file scans and save notifications
+        // update the same index/manifest, so overlap makes fixture setup order-dependent.
         const next = async (index: number): Promise<void> => {
           if (index >= count) return;
           await put(type, index);

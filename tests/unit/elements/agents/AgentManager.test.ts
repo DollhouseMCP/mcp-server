@@ -2,6 +2,8 @@
  * Unit tests for AgentManager implementation
  */
 
+import { publishCachedElement } from '../../../helpers/cache-publication.js';
+
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
 import * as os from 'node:os';
@@ -227,7 +229,7 @@ describe('AgentManager', () => {
         name: 'Cached Agent',
         description: 'Cached active agent',
       }, metadataService);
-      (agentManager as any).cacheElement(cachedAgent, 'cached-agent.md');
+      publishCachedElement(agentManager, cachedAgent, 'cached-agent.md');
       jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
       fileOperationsService.readFile.mockClear();
 
@@ -281,7 +283,7 @@ describe('AgentManager', () => {
       await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'second.md' });
       await agentManager.deactivateAgent('first.md');
 
-      expect((agentManager as any).getActivationSet()).toEqual(new Set(['second.md']));
+      expect([...(agentManager as any).getActivationSet()]).toEqual(['second.md']);
       expect(await agentManager.getActiveAgents()).toEqual([second]);
     });
 
@@ -299,7 +301,7 @@ describe('AgentManager', () => {
       jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
 
       await agentManager.activateAgent('Session Agent');
-      expect(registry.getOrCreate('session-a').agents).toEqual(new Set(['session-agent.md']));
+      expect([...registry.getOrCreate('session-a').agents]).toEqual(['session-agent.md']);
 
       sessionId = 'session-b';
       expect(await agentManager.getActiveAgents()).toEqual([]);

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { atDeletionCommit } from '../../../../src/handlers/element-crud/deletionActivation.js';
 import * as path from 'path';
 
 const { deleteElement } = await import('../../../../src/handlers/element-crud/deleteElement.js');
@@ -71,6 +72,78 @@ describe('deleteElement helper', () => {
       ensureInitialized: jest.fn().mockResolvedValue(undefined),
       fileOperations: mockFileOperations,
     } as any;
+  });
+
+  it.each(['skills', 'memories'])('finishes %s cleanup when a successful manager omits the commit observer', async type => {
+    const finish = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const capture = jest.fn(() => finish);
+    mockContext.prepareElementDeletion = async () => atDeletionCommit(capture);
+    const result = await deleteElement(mockContext, {
+      name: type === 'skills' ? 'test-skill' : 'test-memory', type, deleteData: true,
+    });
+    expect(result.content[0].text).toContain('✅ Successfully deleted');
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(finish).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['committed', 'refused', 'cleanup failure'])('settles deletion tracking after %s without recapturing', async outcome => {
+    const finish = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    if (outcome === 'cleanup failure') finish.mockRejectedValue(new Error('cleanup failed'));
+    const capture = jest.fn(() => finish);
+    const cleanup = atDeletionCommit(capture);
+    const settle = jest.fn();
+    cleanup.settle = settle;
+    mockContext.prepareElementDeletion = async () => cleanup;
+    jest.mocked(mockContext.skillManager.delete).mockImplementation(async (_path, onCommitted) => {
+      if (outcome === 'refused') throw new Error('refused');
+      onCommitted?.();
+    });
+    const result = await deleteElement(mockContext, { name: 'test-skill', type: 'skills' });
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledTimes(outcome === 'refused' ? 0 : 1);
+    expect(finish).toHaveBeenCalledTimes(outcome === 'refused' ? 0 : 1);
+    if (outcome === 'cleanup failure') expect(result.content[0].text).toContain('warning');
+  });
+
+  it.each(['skills', 'memories'])('keeps a committed %s delete successful when lifecycle cleanup fails', async type => {
+    const cleanup = jest.fn<() => Promise<void>>().mockRejectedValue(new Error('cleanup unavailable'));
+    mockContext.prepareElementDeletion = jest.fn<NonNullable<ElementCrudContext['prepareElementDeletion']>>()
+      .mockResolvedValue(cleanup);
+    const name = type === 'skills' ? 'test-skill' : 'test-memory';
+    const result = await deleteElement(mockContext, { name, type, deleteData: true });
+    expect(cleanup).toHaveBeenCalled();
+    expect(result.content[0].text).toContain('✅ Successfully deleted');
+    expect(result.content[0].text).toContain('warning');
+    if (type === 'memories') {
+      expect(mockContext.memoryManager.clearCache).toHaveBeenCalled();
+      expect(mockFileOperations.deleteFile).toHaveBeenCalled();
+    }
+  });
+
+  it.each(['prompt', 'recheck', 'delete failure'])('does not run lifecycle cleanup on %s', async outcome => {
+    const cleanup = jest.fn<() => Promise<void>>();
+    const prepare = jest.fn<NonNullable<ElementCrudContext['prepareElementDeletion']>>().mockResolvedValue(cleanup);
+    mockContext.prepareElementDeletion = prepare;
+    if (outcome === 'prompt') mockFileOperations.stat.mockResolvedValueOnce({ size: 1024 } as any);
+    if (outcome === 'recheck') jest.mocked(mockContext.agentManager.list).mockResolvedValueOnce([
+      { metadata: { name: 'test-agent' } } as any,
+    ]).mockResolvedValue([]);
+    if (outcome === 'delete failure') jest.mocked(mockContext.agentManager.delete).mockRejectedValueOnce(new Error('refused'));
+    const result = deleteElement(mockContext, { name: 'test-agent', type: 'agents',
+      ...(outcome === 'prompt' ? {} : { deleteData: true }) });
+    if (outcome === 'recheck') await expect(result).rejects.toBeInstanceOf(ElementNotFoundError);
+    else await result;
+    expect(cleanup).not.toHaveBeenCalled();
+    if (outcome !== 'delete failure') expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('continues associated data cleanup after a lifecycle callback failure', async () => {
+    mockFileOperations.stat.mockResolvedValueOnce({ size: 1024 } as any);
+    mockContext.prepareElementDeletion = async () => async () => { throw new Error('cleanup unavailable'); };
+    const result = await deleteElement(mockContext, { name: 'test-agent', type: 'agents', deleteData: true });
+    expect(result.content[0].text).toContain('✅ Successfully deleted');
+    expect(result.content[0].text).toContain('warning');
+    expect(mockFileOperations.deleteFile).toHaveBeenCalled();
   });
 
   describe('type validation', () => {

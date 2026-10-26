@@ -15,7 +15,7 @@ describe('Persona lookup absolute benchmarks', () => {
   describe('Performance Benchmarks', () => {
     beforeEach(() => {
       // Clear existing test personas
-      (personaManager as any).elements.clear();
+      personaManager.clearCache();
     });
 
     it('should find in 10 personas < 1ms', () => {

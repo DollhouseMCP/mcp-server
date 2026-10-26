@@ -15,7 +15,8 @@
  * @module BackupService
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
+import { visitSequentially } from '../utils/visitSequentially.js';
 import type { IFileOperationsService } from './FileOperationsService.js';
 import { logger } from '../utils/logger.js';
 
@@ -79,7 +80,7 @@ export class BackupService {
    * Falls back to copy if rename fails (cross-device).
    * Non-fatal: catches all errors and returns a result instead of throwing.
    */
-  async backupBeforeDelete(absolutePath: string, elementType: string): Promise<BackupResult> {
+  async backupBeforeDelete(absolutePath: string, elementType: string, onMoved?: () => void): Promise<BackupResult> {
     if (!this.config.enabled) {
       return { success: false, error: 'backups disabled' };
     }
@@ -99,7 +100,8 @@ export class BackupService {
 
       try {
         await this.fileOperations.renameFile(absolutePath, backupPath);
-        // Rename succeeded — original is gone, safe to prune old backups
+        // The move commits deletion; observers run before asynchronous pruning.
+        onMoved?.();
         await this.pruneBackups(backupDir, originalBasename);
         return { success: true, backupPath, movedOriginal: true };
       } catch {
@@ -142,13 +144,13 @@ export class BackupService {
 
       // Delete oldest (sorted ascending, so oldest first)
       const toDelete = matching.slice(0, matching.length - this.config.maxBackupsPerElement);
-      for (const filename of toDelete) {
+      await visitSequentially(toDelete.values(), async filename => {
         try {
           await this.fileOperations.deleteFile(path.join(backupDir, filename));
         } catch (err) {
           logger.debug(`[BackupService] Failed to prune backup ${filename}: ${err}`);
         }
-      }
+      });
     } catch (error) {
       logger.debug(`[BackupService] pruneBackups failed: ${error}`);
     }
@@ -170,7 +172,7 @@ export class BackupService {
   private generateBackupFilename(originalBasename: string): string {
     const ext = path.extname(originalBasename);
     const baseName = this.stripExtension(originalBasename);
-    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const timestamp = new Date().toISOString().replaceAll(':', '-');
     return `${baseName}.backup-${timestamp}${ext}`;
   }
 

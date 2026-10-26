@@ -1,4 +1,6 @@
 /** Owned DB AQL binding proof, not production auth/boot qualification. */
+
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -51,8 +53,11 @@ required('actual AQL selected DB manager and admission transaction', () => {
       const crud=new ElementCRUDHandler(c.resolve('SkillManager'),c.resolve('TemplateManager'),c.resolve('TemplateRenderer'),
         c.resolve('AgentManager'),undefined,c.resolve('EnsembleManager'),c.resolve('PersonaManager'),c.resolve('PortfolioManager'),
         c.resolve('InitializationService'),c.resolve('PersonaIndicatorService'),c.resolve('FileOperationsService'),
-        c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),undefined,undefined,undefined,
-        c.resolve('SessionActivationRegistry'),tracker,{memoryProvider:provider});
+        c.resolve('ElementQueryService'),c.resolve('ValidationRegistry'),new ActivationMetricsTracker(() => 'local-user'), {
+        activationRegistry: c.resolve('SessionActivationRegistry'),
+        contextTracker: tracker,
+        memoryProvider: provider
+      });
       const gate=new Gatekeeper(undefined,{enableAuditLogging:false});const originalGate=gate.enforce.bind(gate);
       const gateSpy=jest.spyOn(gate,'enforce').mockImplementation((input,operations)=>{
         const result=originalGate(input,operations);

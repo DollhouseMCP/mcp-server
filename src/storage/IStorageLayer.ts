@@ -25,6 +25,24 @@ export interface StorageScanOptions {
   freshAfterInFlight?: boolean;
 }
 
+/** First matching name, preserving caller preference and short-circuit behavior. */
+export function firstIndexedPath(names: readonly string[], lookup: (name: string) => string | undefined): string | undefined {
+  for (const name of names) {
+    const found = lookup(name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/** Lookup and completion evidence from the same captured index state. */
+export interface IndexedPathResult {
+  path: string | undefined;
+  /** A scan has completed historically; warm file lookups must not consume new diffs. */
+  indexComplete: boolean;
+  /** The completed index has not been invalidated; a miss can skip the list fallback. */
+  authoritative: boolean;
+}
+
 export interface IStorageLayer {
   /**
    * Scan the filesystem for changes relative to the last snapshot.
@@ -56,6 +74,16 @@ export interface IStorageLayer {
    * O(1) name-to-path lookup from the index. Does not trigger a scan.
    */
   getPathByName(name: string): string | undefined;
+
+  /**
+   * Resolve preferred names through one readable index. File layers scan only cold states
+   * and pin that state through the lookup; database layers retain their existing
+   * index-only behavior. A result never comes from a newly evicted file index.
+   */
+  findIndexedPath(names: readonly string[]): Promise<string | undefined>;
+
+  /** Read without scanning; preserve cold resolver fallbacks and pending invalidations. */
+  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult>;
 
   /**
    * Returns true if at least one scan has completed, meaning the index

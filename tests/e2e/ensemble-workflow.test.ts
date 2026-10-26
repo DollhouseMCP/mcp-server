@@ -14,6 +14,7 @@
  * not direct service methods. This ensures we test the complete user-facing workflow.
  */
 
+import { ActivationMetricsTracker } from '../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from '@jest/globals';
 import { createIntegrationContainer, IntegrationContainer } from '../helpers/integration-container.js';
 import { ElementCRUDHandler } from '../../src/handlers/ElementCRUDHandler.js';
@@ -87,7 +88,7 @@ describe('Ensemble Workflow E2E Tests', () => {
       indicatorService,
       fileOperations,
       elementQueryService,
-      validationRegistry
+      validationRegistry, new ActivationMetricsTracker(() => 'local-user')
     );
 
     // Ensure portfolio directories exist

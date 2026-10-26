@@ -1,4 +1,6 @@
+import { publishCachedElement } from './cache-publication.js';
 import { jest } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../src/metrics/ActivationMetricsTracker.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { PersonaManager } from '../../src/persona/PersonaManager.js';
@@ -92,7 +94,7 @@ export function createPersonaFindingFixture() {
   ];
 
   const seedPersona = (persona: Persona): void => {
-    (personaManager as any).cacheElement(persona, persona.filename);
+    publishCachedElement(personaManager, persona, persona.filename);
   };
 
   const mockPortfolioManager = createMockPortfolioManager({
@@ -129,6 +131,7 @@ export function createPersonaFindingFixture() {
   );
 
   const personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
     portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
     indicatorConfig: DEFAULT_INDICATOR_CONFIG,
     fileLockManager: mockFileLockManager,

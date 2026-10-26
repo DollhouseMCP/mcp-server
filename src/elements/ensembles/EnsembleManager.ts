@@ -1,4 +1,3 @@
-import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 /**
  * EnsembleManager - Implementation of IElementManager for Ensemble elements
  *
@@ -18,6 +17,10 @@ import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
  * - SecureYamlParser for safe YAML parsing
  */
 
+import { BoundedDiagnosticMap } from '../base/BoundedDiagnosticMap.js';
+import type { ActivationMetricsTracker } from '../../metrics/ActivationMetricsTracker.js';
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import type { ElementSaveOptions } from '../../storage/IStorageLayer.js';
 import type { EnsembleMetadata, EnsembleElement } from './Ensemble.js';
 import { Ensemble } from './Ensemble.js';
 import type { ElementValidationResult } from '../../types/elements/IElement.js';
@@ -46,9 +49,6 @@ import { VALIDATION_PATTERNS, SECURITY_LIMITS } from '../../security/constants.j
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 
-// Issue #83: Centralized active element limits (configurable via env vars)
-import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
-
 // Issue #466: Shared element type resolver — re-exported for backward compatibility
 export { resolveElementTypes, type ElementManagersForResolution } from '../../utils/elementTypeResolver.js';
 
@@ -62,6 +62,13 @@ const LEGACY_ELEMENT_FIELD_REPLACEMENTS = {
 
 type LegacyElementField = keyof typeof LEGACY_ELEMENT_FIELD_REPLACEMENTS;
 
+export interface EnsembleManagerDeps extends ElementManagerDeps {
+  activationMetricsTracker: ActivationMetricsTracker;
+}
+
+// Eviction only permits another migration warning on the caller's next load.
+export const MAX_LEGACY_FIELD_WARNINGS = 1024;
+
 /**
  * EnsembleManager - Manages ensemble element lifecycle
  *
@@ -72,14 +79,13 @@ type LegacyElementField = keyof typeof LEGACY_ELEMENT_FIELD_REPLACEMENTS;
  * - Import/export in multiple formats
  */
 export class EnsembleManager extends BaseElementManager<Ensemble> {
-  private readonly ensemblesDir: string;
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  private readonly _localActiveEnsembleNames: Set<string> = new Set();
-  private readonly legacyElementFieldWarnings: Set<string> = new Set();
+  private readonly legacyElementFieldWarnings: BoundedDiagnosticMap<boolean> = new BoundedDiagnosticMap(MAX_LEGACY_FIELD_WARNINGS);
+  private readonly activationMetricsTracker: ActivationMetricsTracker;
 
-  constructor(deps: ElementManagerDeps) {
+  constructor(deps: EnsembleManagerDeps) {
     super(
       ElementType.ENSEMBLE,
       deps.portfolioManager,
@@ -99,7 +105,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       deps.fileOperationsService,
       deps.validationRegistry,
     );
-    this.ensemblesDir = this.elementDir;
+    this.activationMetricsTracker = deps.activationMetricsTracker;
     this.metadataService = deps.metadataService;
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
@@ -107,7 +113,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('ensembles', this._localActiveEnsembleNames);
+    return this.resolveActivationSet('ensembles');
   }
 
   protected override getElementLabel(): string {
@@ -124,8 +130,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     this.legacyElementFieldWarnings.clear();
   }
 
-  override dispose(): void {
-    super.dispose();
+  protected override clearCacheBookkeeping(): void {
+    super.clearCacheBookkeeping();
     this.clearLegacyElementWarningHistory();
   }
 
@@ -146,12 +152,12 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     field: LegacyElementField,
   ): void {
     const replacement = LEGACY_ELEMENT_FIELD_REPLACEMENTS[field];
-    const fingerprint = `${ensembleName}:${index}:${field}`;
-    if (this.legacyElementFieldWarnings.has(fingerprint)) {
+    const fingerprint = this.getScopedCacheKey(`${ensembleName}:${index}:${field}`);
+    if (this.legacyElementFieldWarnings.get(fingerprint)) {
       return;
     }
 
-    this.legacyElementFieldWarnings.add(fingerprint);
+    this.legacyElementFieldWarnings.set(fingerprint, true);
     logger.warn(
       `Ensemble '${ensembleName}' element at index ${index} uses deprecated '${field}' field. Use '${replacement}' instead.`,
     );
@@ -192,7 +198,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
     const elementType = this.getElementType();
     const files = await this.portfolioManager.listElements(elementType);
-    for (const file of files) {
+    await visitSequentially(files[Symbol.iterator](), async (file) => {
       result.scanned++;
       try {
         const absolutePath = this.resolveAbsolutePath(file);
@@ -202,7 +208,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         const parsed = SecureYamlParser.safeMatter(raw);
 
         if (!this.hasLegacyElementFields(parsed.data.elements)) {
-          continue;
+          return;
         }
 
         const ensemble = await this.load(file);
@@ -217,7 +223,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         result.errors++;
         logger.error(`[EnsembleManager] Failed to repair legacy element fields in '${file}':`, error);
       }
-    }
+    });
 
     return result;
   }
@@ -856,7 +862,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   /**
    * Override delete to add ensemble-specific logging
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     SecurityMonitor.logSecurityEvent({
       type: ENSEMBLE_SECURITY_EVENTS.DELETED,
       severity: 'MEDIUM',
@@ -864,7 +870,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       details: `Deleting ensemble: ${filePath}`
     });
 
-    await super.delete(filePath);
+    await super.delete(filePath, onCommitted);
 
     SecurityMonitor.logSecurityEvent({
       type: ENSEMBLE_SECURITY_EVENTS.DELETED,
@@ -881,12 +887,12 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const ensembles = await super.list(options);
 
     // Apply ACTIVE status to ensembles in the per-session activation set
-    for (const ensemble of ensembles) {
+    await visitSequentially(ensembles[Symbol.iterator](), async (ensemble) => {
       if (this.getActivationSet().has(ensemble.metadata.name)) {
         // Call activate() to set status to ACTIVE
         await ensemble.activate();
       }
-    }
+    });
 
     return ensembles;
   }
@@ -896,18 +902,19 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    *
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
-   * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
+   * Issue #24 (LOW PRIORITY): Report pressure and retained references at the activation threshold
    *
    * @param identifier - Ensemble name or identifier
    * @returns Activation result with success status and message
    */
-  async activateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
+  async activateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble; notices?: string[] }> {
     // Evict stale cache before lookup so external file edits are picked up (#1895).
     // findByName() hits the LRU cache first and never calls list(), so without this
     // the scan cooldown prevents mtime-based eviction from running.
     await this.scanAndEvict();
 
     // PERFORMANCE FIX: Use findByName() instead of list()
+    const notices = await this.reportActiveSetPressure();
     const ensemble = await this.findByName(identifier);
 
     if (!ensemble) {
@@ -918,10 +925,9 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       };
     }
 
-    // MEMORY LEAK FIX: Check if cleanup is needed before adding
-    this.checkAndCleanupActiveSet();
-
     this.getActivationSet().add(ensemble.metadata.name);
+
+    this.recordPendingActivation(ensemble);
 
     // Set ensemble status to active
     await ensemble.activate();
@@ -936,7 +942,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     return {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
-      message: ElementMessages.activated(ElementType.ENSEMBLE, ensemble.metadata.name),
+      message: [ElementMessages.activated(ElementType.ENSEMBLE, ensemble.metadata.name), ...notices].join("\n"),
+      notices,
       ensemble
     };
   }
@@ -950,7 +957,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @param identifier - Ensemble name or identifier
    * @returns Deactivation result with success status and message
    */
-  async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
+  async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string; lookupFailed?: boolean; ensemble?: Ensemble }> {
     // No scanAndEvict() here — intentional. Deactivation only needs the ensemble's
     // name (to remove from the per-session activation set) and calls deactivate() which sets
     // a status flag. It does not consume the elements list, so stale cached element
@@ -959,17 +966,31 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // therefore see the latest on-disk definition. (#1895)
 
     // PERFORMANCE FIX: Use findByName() instead of list()
-    const ensemble = await this.findByName(identifier);
+    const { element: ensemble, lookupFailed } = await this.findForDeactivation(identifier);
 
     if (!ensemble) {
+      // Clear only the exact live key when the definition is unavailable.
+      if (this.getActivationSet().delete(identifier)) {
+        this.activationMetricsTracker.forget('ensemble', identifier);
+        const members = this.getCachedElementsForCurrentNamespace().find(item => item.metadata.name === identifier)?.metadata.elements;
+        const memberNames = members?.map(member => `${member.element_type} ${JSON.stringify(member.element_name)}`).join(', ');
+        const memberAdvice = memberNames ? ` Known members: ${memberNames}.` : '';
+        const message = `Ensemble ${JSON.stringify(identifier)} reference cleared, but its definition could not be loaded or no longer exists; ` +
+          `its members were NOT deactivated. Deactivate any you no longer need individually.${memberAdvice}`;
+        return { success: true, message };
+      }
       return {
-        success: false,
+        success: false, lookupFailed,
         // CONSISTENCY FIX: Use standardized error message format
-        message: ElementMessages.notFound(ElementType.ENSEMBLE, identifier)
+        message: lookupFailed ? `${JSON.stringify(identifier)} could not be loaded (storage or definition error)`
+          : ElementMessages.notFound(ElementType.ENSEMBLE, identifier)
       };
     }
 
-    this.getActivationSet().delete(ensemble.metadata.name);
+    if (this.getActivationSet().delete(ensemble.metadata.name)) {
+      this.activationMetricsTracker.forget('ensemble', ensemble.metadata.name);
+      if (identifier !== ensemble.metadata.name) this.activationMetricsTracker.forget('ensemble', identifier);
+    }
 
     // Set ensemble status to inactive
     await ensemble.deactivate();
@@ -996,94 +1017,21 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   async getActiveEnsembles(): Promise<Ensemble[]> {
     const results: Ensemble[] = [];
-    for (const name of this.getActivationSet()) {
+    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (name) => {
       const ensemble = await this.findByName(name);
       if (ensemble) results.push(ensemble);
-    }
+    });
     return results;
   }
 
-  /**
-   * Check if active set cleanup is needed and perform cleanup if necessary
-   * Issue #24 (LOW PRIORITY): Memory leak prevention
-   * @private
-   */
-  private checkAndCleanupActiveSet(): void {
-    const { max, cleanupThreshold } = getActiveElementLimitConfig('ensembles');
-
-    // Below threshold — no action needed
-    if (this.getActivationSet().size < cleanupThreshold) {
-      return;
-    }
-
-    // At or above max — warn before cleanup
-    if (this.getActivationSet().size >= max) {
-      logger.warn(
-        `Active ensembles limit reached (${max}). ` +
-        `Consider deactivating unused ensembles or setting DOLLHOUSE_MAX_ACTIVE_ENSEMBLES to a higher value.`
-      );
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED',
-        severity: 'MEDIUM',
-        source: 'EnsembleManager.checkAndCleanupActiveSet',
-        details: `Active ensembles limit reached: ${this.getActivationSet().size}/${max}`
-      });
-    }
-
-    // At or above threshold — proactively clean stale entries
-    void this.cleanupStaleActiveEnsembles();
+  /** Report pressure and await retained-reference notices only at the cleanup threshold. */
+  private reportActiveSetPressure(): Promise<string[]> {
+    return this.reportActivationPressure('ensembles', 'EnsembleManager.reportActiveSetPressure', () => this.collectRetainedReferenceNotices(), true);
   }
 
-  /**
-   * Clean up stale entries from active ensembles set
-   * Issue #24 (LOW PRIORITY): Memory leak prevention
-   * @private
-   */
-  private async cleanupStaleActiveEnsembles(): Promise<void> {
-    try {
-      const startSize = this.getActivationSet().size;
-      const ensembles = await this.list();
-      const existingEnsembleNames = new Set(ensembles.map(e => e.metadata.name));
-
-      const staleNames: string[] = [];
-      for (const activeName of this.getActivationSet()) {
-        if (!existingEnsembleNames.has(activeName)) {
-          this.getActivationSet().delete(activeName);
-          staleNames.push(activeName);
-        }
-      }
-
-      const endSize = this.getActivationSet().size;
-      const removed = startSize - endSize;
-
-      if (removed > 0) {
-        logger.info(
-          `Cleaned up ${removed} stale active ensemble reference(s). ` +
-          `Active ensembles: ${endSize}/${getMaxActiveLimit('ensembles')}`
-        );
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'ELEMENT_DELETED',
-          severity: 'LOW',
-          source: 'EnsembleManager.cleanupStaleActiveEnsembles',
-          details: `Removed ${removed} stale active ensemble references`,
-          additionalData: {
-            removedCount: removed,
-            activeCount: endSize,
-            staleNames: staleNames.join(', ')
-          }
-        });
-      }
-    } catch (error) {
-      logger.error('Failed to cleanup stale active ensembles:', error);
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_DELETED',
-        severity: 'LOW',
-        source: 'EnsembleManager.cleanupStaleActiveEnsembles',
-        details: `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
+  /** A failed or empty lookup is uncertainty, never authority to deactivate a reference. */
+  private collectRetainedReferenceNotices(): Promise<string[]> {
+    return this.retainedReferenceNotices('ensemble', async key => !!await this.findByName(key), this.activationMetricsTracker,
+      'While it fails to load, no active ensemble policies, including their members\' policies, are applied.');
   }
 }

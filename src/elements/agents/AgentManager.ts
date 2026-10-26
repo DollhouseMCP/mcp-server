@@ -1,9 +1,10 @@
-import type { Memory } from '../memories/Memory.js';
 /**
  * AgentManager - Refactored to extend BaseElementManager
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
  */
 
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import type { Memory } from '../memories/Memory.js';
 import * as path from 'node:path';
 
 import { Agent } from './Agent.js';
@@ -215,7 +216,6 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
   // Fallback for tests/callers that don't inject the registry
-  private readonly _localActiveAgentNames: Set<string> = new Set();
   private readonly _localAgentNamesByIdentity = new Map<string, string>();
 
   // Issue #1948: Instance-injected dependencies (replaces static resolvers)
@@ -308,7 +308,21 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
-    return this.resolveActivationSet('agents', this._localActiveAgentNames);
+    return this.resolveActivationSet('agents');
+  }
+
+  protected override deletedActivationKey(locator: string, _name: string): string {
+    return locator;
+  }
+
+  override prepareDeletedActivation(locator: string, name: string): () => boolean {
+    const clear = super.prepareDeletedActivation(locator, name)!;
+    const aliases = this.getActivationNameMap();
+    return () => {
+      if (!clear()) return false;
+      aliases.delete(locator);
+      return true;
+    };
   }
 
   private getActivationNameMap(): Map<string, string> {
@@ -1039,7 +1053,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * FIX: Uses normalizeFilename() to ensure state file deletion matches
    * the normalized filename used for state file creation/loading.
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, onCommitted?: () => void): Promise<void> {
     // DB mode: filePath is a UUID, don't force `.md` extension.
     const isDb = isWritableStorageLayer(this.storageLayer);
     const sanitizedPath = isDb
@@ -1050,16 +1064,16 @@ export class AgentManager extends BaseElementManager<Agent> {
       // identity before validation/deletion. agent_states has an ON DELETE
       // CASCADE foreign key, so a second state deletion here would create a
       // dangerous partial-success path if definition deletion affected no row.
-      await super.delete(sanitizedPath);
+      await super.delete(sanitizedPath, onCommitted);
       return;
     }
 
     const existing = await this.load(sanitizedPath).catch(() => null);
     const name = this.stripExtension(sanitizedPath);
     const stateKey = existing
-      ? this.getAgentStateKey(existing, name)
+      ? await this.getAgentStateKey(existing, name)
       : { name, agentElementId: sanitizedPath };
-    await super.delete(sanitizedPath);
+    await super.delete(sanitizedPath, onCommitted);
 
     await this.stateStore.delete(stateKey);
   }
@@ -1100,7 +1114,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   override async list(options?: { includePublic?: boolean }): Promise<Agent[]> {
     const agents = await super.list(options);
 
-    for (const agent of agents) {
+    await visitSequentially(agents[Symbol.iterator](), async (agent) => {
       const identity = this.getActivationIdentity(agent);
       const shouldBeActive =
         (identity && this.getActivationSet().has(identity.value)) ||
@@ -1111,7 +1125,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       ) {
         await agent.activate();
       }
-    }
+    });
 
     return agents;
   }
@@ -1165,6 +1179,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     } else {
       this.getActivationSet().add(agent.metadata.name);
     }
+
+    this.recordPendingActivation(agent, undefined, { liveKey: identity?.value ?? agent.metadata.name });
 
     // Update agent status in memory
     await agent.activate();
@@ -1411,13 +1427,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
     agent ??= await this.findByName(identifier);
 
-    if (!agent) {
-      return {
-        success: false,
-        // CONSISTENCY FIX: Use standardized error message format
-        message: ElementMessages.notFound(ElementType.AGENT, identifier)
-      };
-    }
+    if (!agent) return this.deactivateMissingAgent(identifier);
 
     const identity = this.getActivationIdentity(agent);
     const key = activeKey ?? identity?.value ?? agent.metadata.name;
@@ -1451,22 +1461,38 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }
 
+  private deactivateMissingAgent(identifier: string): AgentActivationResult {
+    // Missing definitions may only clear an exact live key, never a guessed alias.
+    if (this.getActivationSet().delete(identifier)) {
+      const identity: PersistedActivationIdentity | undefined = this.getActivationNameMap().has(identifier)
+        ? { kind: isWritableStorageLayer(this.storageLayer) ? 'database' : 'file', value: identifier }
+        : undefined;
+      this.getActivationNameMap().delete(identifier);
+      return { success: true, message: ElementMessages.deactivated(ElementType.AGENT, identifier), identity };
+    }
+    return {
+      success: false,
+      // CONSISTENCY FIX: Use standardized error message format
+      message: ElementMessages.notFound(ElementType.AGENT, identifier)
+    };
+  }
+
   /**
    * Get all active agents
    */
   async getActiveAgents(options: StorageScanOptions = {}): Promise<Agent[]> {
     await this.scanAndEvict(options);
     const agents: Agent[] = [];
-    for (const key of this.getActivationSet()) {
+    await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (key) => {
       const agent = this.getActivationNameMap().has(key)
         ? await this.findByStorageIdentity(key)
         : await this.findByName(key);
-      if (!agent) continue;
+      if (!agent) return;
       if (typeof agent.getStatus === 'function' && agent.getStatus() !== ElementStatus.ACTIVE) {
         await agent.activate();
       }
       agents.push(agent);
-    }
+    });
     return agents;
   }
 
@@ -1805,13 +1831,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     const activeElements: ActivationResult['activeElements'] = {};
     const activationWarnings: ActivationResult['activationWarnings'] = [];
 
-    for (const [elementType, elementNames] of Object.entries(metadata.activates)) {
-      if (!elementNames || elementNames.length === 0) continue;
+    await visitSequentially(Object.entries(metadata.activates)[Symbol.iterator](), async ([elementType, elementNames]) => {
+      if (!elementNames || elementNames.length === 0) return;
       const group = await this.activateElementGroup(agentName, elementType, elementNames, executionContext, memoryScope);
       memoryScope?.assertCurrent();
       activeElements[elementType] = group.items;
       activationWarnings.push(...group.warnings);
-    }
+    });
     return { activeElements, activationWarnings };
   }
 
@@ -1825,12 +1851,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     const items: ActivationResult['activeElements'][string] = [];
     const warnings: ActivationResult['activationWarnings'] = [];
 
-    for (const elementName of elementNames) {
+    await visitSequentially(elementNames[Symbol.iterator](), async (elementName) => {
       const outcome = await this.activateSingleElement(agentName, elementType, elementName, executionContext, memoryScope);
       memoryScope?.assertCurrent();
       if (outcome.item) items.push(outcome.item);
       if (outcome.warning) warnings.push(outcome.warning);
-    }
+    });
     return { items, warnings };
   }
 
@@ -2570,7 +2596,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     try {
       const startSize = this.getActivationSet().size;
       const staleNames: string[] = [];
-      for (const activeKey of this.getActivationSet()) {
+      await visitSequentially(this.getActivationSet()[Symbol.iterator](), async (activeKey) => {
         const alias = this.getActivationNameMap().get(activeKey);
         const agent = alias === undefined
           ? await this.findByName(activeKey)
@@ -2580,7 +2606,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           this.getActivationNameMap().delete(activeKey);
           staleNames.push(alias ?? activeKey);
         }
-      }
+      });
 
       const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
@@ -2646,7 +2672,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       throw new Error('Agent state is required when saving state for an agent instance');
     }
     const key = agent
-      ? this.getAgentStateKey(agent, name)
+      ? await this.getAgentStateKey(agent, name)
       : { name, agentElementId: name };
     return this.stateStore.save(
       key,
@@ -2658,7 +2684,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async saveAgentStateForRecovery(agent: Agent, name: string): Promise<number> {
     const state = agent.getState();
     return this.stateStore.save(
-      this.getAgentStateKey(agent, name),
+      await this.getAgentStateKey(agent, name),
       state,
       state.stateVersion ?? 0,
       { requireExisting: true, allowOversizedReduction: true },
@@ -2675,7 +2701,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.stateStore.load(this.getAgentStateKey(agent, name));
+    const state = await this.stateStore.load(await this.getAgentStateKey(agent, name));
     if (!state) {
       if (isWritableStorageLayer(this.storageLayer)) {
         agent[COMMIT_PERSISTED_VERSION](0);
@@ -2704,7 +2730,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<Agent> {
     this.bindAgentStorageIdentity(agent, storageIdentity);
     const state = await this.stateStore.load(
-      this.getAgentStateKey(agent, name),
+      await this.getAgentStateKey(agent, name),
       { strict: true, allowOversizedRecovery: true },
     );
     if (requireDurableState && !state) {
@@ -2864,7 +2890,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }
 
-  private getAgentElementId(agent: Agent, name: string): string {
+  private async getAgentElementId(agent: Agent, name: string): Promise<string> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       return agent.id;
     }
@@ -2872,8 +2898,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (attachedIdentity) {
       return attachedIdentity;
     }
-    const resolvedIdentity = this.storageLayer.getPathByName(agent.metadata.name)
-      ?? this.storageLayer.getPathByName(name);
+    const resolvedIdentity = await this.storageLayer.findIndexedPath([agent.metadata.name, name]);
     if (!resolvedIdentity) {
       throw new Error(`Cannot resolve durable database identity for agent "${name}"`);
     }
@@ -2886,17 +2911,17 @@ export class AgentManager extends BaseElementManager<Agent> {
    * File state follows the definition's actual storage path, while database
    * state is keyed by the authoritative element UUID.
    */
-  private getAgentStateKey(agent: Agent, requestedName: string): {
+  private async getAgentStateKey(agent: Agent, requestedName: string): Promise<{
     name: string;
     agentElementId: string;
-  } {
+  }> {
     const storageIdentity = this.getAttachedAgentStorageIdentity(agent);
     const name = !isWritableStorageLayer(this.storageLayer) && storageIdentity
       ? this.stripExtension(storageIdentity)
       : requestedName;
     return {
       name,
-      agentElementId: this.getAgentElementId(agent, requestedName),
+      agentElementId: await this.getAgentElementId(agent, requestedName),
     };
   }
 
@@ -4017,27 +4042,26 @@ export class AgentManager extends BaseElementManager<Agent> {
     archivedGoalIds: string[],
     archivedGoalSnapshots: AgentGoal[],
   ): Promise<number> {
-    for (;;) {
-      try {
-        return await this.saveAgentStateForRecovery(agent, sanitizedName);
-      } catch (error) {
-        if (!(error instanceof AgentStateReductionRequiredError)) {
-          throw error;
-        }
-        const stateBeforeEviction = agent.getState();
-        const additionalGoalId = agent[EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL]();
-        if (!additionalGoalId) {
-          throw error;
-        }
-        archivedGoalIds.push(additionalGoalId);
-        this.captureArchivedGoalSnapshot(
-          agent,
-          additionalGoalId,
-          archivedGoalSnapshots,
-          stateBeforeEviction.goals,
-        );
+    try {
+      return await this.saveAgentStateForRecovery(agent, sanitizedName);
+    } catch (error) {
+      if (!(error instanceof AgentStateReductionRequiredError)) {
+        throw error;
       }
+      const stateBeforeEviction = agent.getState();
+      const additionalGoalId = agent[EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL]();
+      if (!additionalGoalId) {
+        throw error;
+      }
+      archivedGoalIds.push(additionalGoalId);
+      this.captureArchivedGoalSnapshot(
+        agent,
+        additionalGoalId,
+        archivedGoalSnapshots,
+        stateBeforeEviction.goals,
+      );
     }
+    return this.persistCompactedRecoveryState(agent, sanitizedName, archivedGoalIds, archivedGoalSnapshots);
   }
 
   private captureArchivedGoalSnapshot(
@@ -4102,7 +4126,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const generation = this.observeExecutionGeneration(identity);
       try {
         const state = await this.stateStore.reclaimOrphaned(
-          this.getAgentStateKey(agent, params.agentName),
+          await this.getAgentStateKey(agent, params.agentName),
           {
             excludedGoalIds: params.excludedGoalIds,
           },

@@ -76,19 +76,12 @@ export class CoreInfraServiceRegistrar {
       );
       return service;
     });
-    // Phase 4.5 follow-up: wire `FileStorageLayerFactory`'s
-    // `elementDirResolverFactory` slot so per-element-type storage layers
-    // get dynamic per-user dirs in HTTP multi-user mode. The factory is
-    // only consulted when PathService is registered (PathsServiceRegistrar
-    // runs before this one in Container.preparePortfolio), and in flat
-    // layout `FlatPathResolver` returns the shared baseDir — byte-identical
-    // to legacy behavior. When omitted, ElementStorageLayer / MemoryStorageLayer
-    // keep using the static elementDir captured at construction.
-    const elementDirResolverFactory = container.hasRegistration('PathService')
-      ? (elementType: string) => () =>
-          container.resolve<import('../../paths/PathService.js').PathService>('PathService')
-            .getUserElementDir(elementType as import('../../portfolio/types.js').ElementType)
-      : undefined;
+    // Resolve lazily through the same directory authority as manager reads/writes.
+    // getElementDir uses ContextTracker's current session, PathService's layout,
+    // and the existing portfolio-override/startup rules; PortfolioManager is root-scoped.
+    const elementDirResolverFactory = (elementType: string) => () =>
+      container.resolve<import('../../portfolio/PortfolioManager.js').PortfolioManager>('PortfolioManager')
+        .getElementDir(elementType as import('../../portfolio/types.js').ElementType);
     container.register<IStorageLayerFactory>('StorageLayerFactory', () => new FileStorageLayerFactory(
       container.resolve('FileOperationsService'),
       { indexDebounceMs: getValidatedIndexDebounce(), fileFilter: defaultMemoryFileFilter },

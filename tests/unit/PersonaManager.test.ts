@@ -1,4 +1,6 @@
+import { publishCachedElement } from '../helpers/cache-publication.js';
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
+import { ActivationMetricsTracker } from '../../src/metrics/ActivationMetricsTracker.js';
 import * as os from 'os';
 import * as path from 'path';
 import { PersonaManager } from '../../src/persona/PersonaManager.js';
@@ -85,6 +87,7 @@ describe('PersonaManager', () => {
 
     // Create PersonaManager instance
     personaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
       indicatorConfig: DEFAULT_INDICATOR_CONFIG,
       fileLockManager: mockFileLockManager,
@@ -113,7 +116,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
     personaWithIdentity.id = personaWithIdentity.id || persona.unique_id || persona.metadata.unique_id || cachePath;
     personaWithIdentity.filename = cachePath;
     personaWithIdentity.filePath = cachePath;
-    (personaManager as any).cacheElement(personaWithIdentity, cachePath);
+    publishCachedElement(personaManager, personaWithIdentity, cachePath);
     filenames.add(cachePath);
 
     // Create mock file content for this persona
@@ -604,6 +607,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
 
         // Create a fresh PersonaManager with the clean metadata service
         const freshPersonaManager = new PersonaManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
           portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
           indicatorConfig: DEFAULT_INDICATOR_CONFIG,
           fileLockManager: mockFileLockManager,
@@ -656,7 +660,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       expect(active).toBeNull();
     });
 
-    it('should get all personas as readonly map', () => {
+    it('should get all personas as readonly map', async () => {
       const testPersona: Persona = {
         metadata: { name: 'Test', description: 'Test', unique_id: 'test' },
         instructions: 'Content',
@@ -667,7 +671,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
 
       seedPersonaCache([['test.md', testPersona]]);
 
-      const personas = personaManager.getPersonas();
+      const personas = await personaManager.getAllPersonas();
 
       expect(personas).toBeInstanceOf(Map);
       expect(personas.size).toBe(1);
@@ -716,7 +720,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
       const persona = (personaManager as any).createElement(metadata, content);
 
       // Add the persona to cache so findPersona can retrieve it
-      (personaManager as any).cacheElement(persona, 'test-persona.md');
+      publishCachedElement(personaManager, persona, 'test-persona.md');
 
       // Now validate the persona
       const result = await personaManager.validatePersona('test-persona.md');
