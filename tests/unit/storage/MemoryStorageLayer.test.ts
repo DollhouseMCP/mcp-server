@@ -5,6 +5,8 @@
 import { MAX_CACHED_DIRECTORY_STATES } from '../../../src/storage/DirectoryStateCache.js';
 import path from 'path';
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
+import { ElementStorageLayer } from '../../../src/storage/ElementStorageLayer.js';
+import { logger } from '../../../src/utils/logger.js';
 import { MemoryStorageLayer } from '../../../src/storage/MemoryStorageLayer.js';
 import { MemoryMetadataExtractor } from '../../../src/storage/MemoryMetadataExtractor.js';
 import type { IStorageBackend } from '../../../src/storage/IStorageBackend.js';
@@ -135,6 +137,74 @@ describe('MemoryStorageLayer', () => {
   afterEach(() => {
     // Prevent timers from leaking
     layer.dispose();
+  });
+
+  it('schedules an index write only when a scan updates the index', async () => {
+    await layer.scan();
+    const schedule = jest.spyOn(layer['getState']().indexFile, 'scheduleWrite');
+    try {
+      layer.invalidate();
+      await layer.scan();
+      expect(schedule).not.toHaveBeenCalled();
+
+      jest.mocked(backend.statMany).mockResolvedValue(new Map([
+        ['system/baseline.yaml', makeMeta('system/baseline.yaml', 2000)],
+      ]));
+      layer.invalidate();
+      await layer.scan();
+      expect(schedule).toHaveBeenCalledTimes(1);
+      expect(schedule).toHaveBeenCalledWith(layer['getState']().index.getAll());
+    } finally {
+      schedule.mockRestore();
+    }
+  });
+
+  it('preserves exact element and memory scan logs and silent memory cooldown', async () => {
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(5000);
+    const debug = jest.spyOn(logger, 'debug').mockImplementation(() => {});
+    const elementBackend = createMockBackend({
+      listFiles: jest.fn<IStorageBackend['listFiles']>().mockResolvedValue(['sample.md']),
+      statMany: jest.fn<IStorageBackend['statMany']>().mockResolvedValue(new Map([
+        ['sample.md', makeMeta('sample.md', 1000)],
+      ])),
+      readFile: jest.fn<IStorageBackend['readFile']>().mockResolvedValue('---\nname: Sample\n---\nContent'),
+    });
+    const element = new ElementStorageLayer(fileOps, {
+      elementDir: '/data/skills', fileExtension: '.md', scanCooldownMs: 100, storageBackend: elementBackend,
+    });
+    try {
+      await element.scan();
+      expect(debug).toHaveBeenCalledWith('ElementStorageLayer.scan: DISK SCAN for skills — 1 files, 1 added, 0 modified, 0 removed');
+      debug.mockClear();
+      await element.scan();
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(debug).toHaveBeenCalledWith('ElementStorageLayer.scan: COOLDOWN ACTIVE for skills — skipping disk I/O (100ms remaining)');
+
+      debug.mockClear();
+      await layer.scan();
+      expect(debug).toHaveBeenCalledWith('MemoryStorageLayer.scan: DISK SCAN — 2 files, 1 added, 0 modified, 0 removed');
+      debug.mockClear();
+      await layer.scan();
+      expect(debug).not.toHaveBeenCalled();
+    } finally {
+      debug.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
+  it('disposes the index file on clear without resetting cold-start completion', async () => {
+    await layer.scan();
+    const state = layer['getState']();
+    expect(state.coldStartDone).toBe(true);
+    const dispose = jest.spyOn(state.indexFile, 'dispose');
+    try {
+      layer.clear();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(state.coldStartDone).toBe(true);
+      expect(state.hasScanned).toBe(false);
+    } finally {
+      dispose.mockRestore();
+    }
   });
 
   it('reads cold index status without scanning', async () => {
