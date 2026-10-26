@@ -50,7 +50,7 @@ async function owned(body: (manager: MemoryManager, lifecycle: MemoryUpgradeLife
       } finally { jest.useRealTimers(); }
     } else {
       await lifecycle.quiesceAndDrain();
-      manager.dispose();
+      await manager.dispose();
     }
     await rm(directory, { recursive: true, force: true });
   }
@@ -279,7 +279,7 @@ describe('Memory manager upgrade obligations', () => {
     expect(memory.getEntriesByTrustLevel(TRUST_LEVELS.VALIDATED)).toHaveLength(1);
     expect(validator.hasRetainedMemoryWork()).toBe(true);
     await expect(validator.dispose()).rejects.toThrow('Owned prewrite interruption');
-    expect(() => manager.dispose()).toThrow('retain');
+    await expect(manager.dispose()).rejects.toThrow('retain');
     known.saveMemoryKnown = original;
     await lifecycle.quiesceAndDrain();
     expect(lifecycle.getSummary()).toMatchObject({ failedWrites: 0, retainedOwners: 0 });
@@ -301,7 +301,7 @@ describe('Memory manager upgrade obligations', () => {
       expect(memory.metadata.name).toBe('Upgrade repaired memory');
       const repairedCandidate = memory.serialize();
       expect(lifecycle.getSummary()).toMatchObject({ writes: 0, failedWrites: 1, retainedOwners: 1 });
-      expect(() => manager.dispose()).toThrow('retain');
+      await expect(manager.dispose()).rejects.toThrow('retain');
       await manager.save(memory);
       expect(memory.serialize()).toBe(repairedCandidate);
       expect(lifecycle.getSummary()).toMatchObject({ writes: 0, failedWrites: 0, retainedOwners: 0 });
@@ -369,7 +369,7 @@ describe('Memory manager upgrade obligations', () => {
     known.saveMemoryKnown = async () => { throw new Error('Owned persistence fault'); };
     await expect(manager.save(memory)).rejects.toThrow('Owned persistence fault');
     expect(manager.hasRetainedMemoryWork()).toBe(true);
-    expect(() => manager.dispose()).toThrow('retain');
+    await expect(manager.dispose()).rejects.toThrow('retain');
     known.saveMemoryKnown = original;
     await manager.save(memory);
     expect(manager.hasRetainedMemoryWork()).toBe(false);

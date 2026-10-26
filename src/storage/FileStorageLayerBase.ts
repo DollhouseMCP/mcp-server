@@ -1,88 +1,100 @@
-/** Shared file scan lifecycle; concrete layers retain enumeration and metadata policy. */
+/** Shared file I/O lifecycle; FileStateTable owns every record and publication rule. */
+import { sanitizeStorageError } from './StorageScanError.js';
+import { mapStorageItems } from './mapStorageItems.js';
 import * as path from 'node:path';
+import { isAbsentPathError } from '../services/FileOperationsService.js';
 import { logger } from '../utils/logger.js';
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { findFileIndexedPath, readFileIndex } from './FileIndexReader.js';
 import { DirectoryStateCache } from './DirectoryStateCache.js';
+import { FileStateTable, type ScanOutcome, type ScanPublication, type ScanToken } from './FileStateTable.js';
+import type { IndexPersistence } from './MemoryIndexPersistence.js';
 import type { IStorageBackend } from './IStorageBackend.js';
-import type { IndexedPathResult, IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
+import type { IndexedPathResult, IStorageLayer, StorageScanOptions, UnindexedEntry } from './IStorageLayer.js';
 import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
-import { StorageManifest } from './StorageManifest.js';
-import { MetadataIndex } from './MetadataIndex.js';
-
-export const EMPTY_DIFF: ManifestDiffResult = { added: [], modified: [], removed: [], unchanged: [] };
-
-/** Independent metadata and in-flight scan state for one resolved directory. */
+export const EMPTY_DIFF = (): ManifestDiffResult => ({ added: [], modified: [], removed: [], unchanged: [] });
 export interface DirScanState {
-  manifest: StorageManifest;
-  index: MetadataIndex;
-  lastScanTimestamp: number;
-  hasScanned: boolean;
+  table: FileStateTable;
+  lastScanAt: number;
+  scanError?: unknown;
   scanInProgress: Promise<ManifestDiffResult> | null;
+  persistence?: IndexPersistence;
+  hydrationStarted: boolean;
 }
-
+function failureOf(error: unknown, root: string, relativePath: string): UnindexedEntry {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  const safe = sanitizeStorageError(error, root, path.join(root, relativePath));
+  return { reason: safe instanceof Error ? safe.message : String(safe),
+    name: error instanceof Error ? error.name : typeof error,
+    ...(code === undefined ? {} : { code }) };
+}
 export abstract class FileStorageLayerBase<S extends DirScanState = DirScanState> implements IStorageLayer {
-  protected constructor(
-    protected readonly backend: IStorageBackend,
-    private readonly scanCooldownMs = 1000,
-    protected readonly dirStates: DirectoryStateCache<S>,
-  ) {}
-
-  /** Subclass-initialized; never read during the base constructor or run hooks during super(). */
+  protected disposed = false;
+  dispose(): Promise<void> { this.disposed = true; return Promise.resolve(); }
+  protected assertActive(): void {
+    if (this.disposed) throw new Error('Storage layer disposed');
+  }
+  protected constructor(protected readonly backend: IStorageBackend, protected readonly dirStates: DirectoryStateCache<S>,
+    private readonly scanCooldownMs = 1000) {}
   protected abstract get directory(): string;
-  /** Add layer-specific fields to freshly initialized shared directory state. */
   protected abstract extendState(dir: string, base: DirScanState): S;
-
-  private createState(dir: string): S {
-    return this.extendState(dir, {
-      manifest: new StorageManifest(),
-      index: new MetadataIndex(),
-      lastScanTimestamp: 0,
-      hasScanned: false,
-      scanInProgress: null,
-    });
-  }
-  /** Subclass-initialized diagnostic prefix; never read during the base constructor or run hooks during super(). */
   protected abstract readonly scanLabel: string;
-  /** Enumerate the concrete layer's supported relative file paths. */
   protected abstract enumerate(dir: string): Promise<string[]>;
-  /** Extract metadata after the shared read, preserving read-before-stat lookup ordering. */
+  /** Extract metadata from content using the already observed file stat. */
   protected abstract readIndexEntry(content: string, relPath: string, stats: Map<string, { mtimeMs: number; sizeBytes: number }>): ElementIndexEntry;
-  /** Publish concrete-layer persistence only after manifest and timestamp updates. */
-  protected afterScan(_state: S, _indexUpdated: boolean): void {
-    // Layers without a persisted index have no post-scan work.
-  }
-  /** Preserve the concrete layer's cooldown message or silence. */
   protected abstract logCooldown(dir: string, remainingMs: number): void;
-  /** Preserve the concrete layer's disk-scan message. */
   protected abstract logDiskScan(dir: string, fileCount: number, diff: ManifestDiffResult): void;
-  /** Select optional bootstrap work; the base registers it before yielding. */
-  protected beforeScan(_dir: string, _state: S, _options: StorageScanOptions): (() => Promise<ManifestDiffResult>) | undefined {
-    return undefined;
-  }
-
   protected getState(dir = this.directory): S {
+    this.assertActive();
     let state = this.dirStates.get(dir);
     if (!state) {
-      state = this.createState(dir);
+      state = this.extendState(dir, { table: new FileStateTable(), lastScanAt: 0, scanInProgress: null, hydrationStarted: false });
       this.dirStates.set(dir, state);
     }
     return state;
   }
-
   abstract listSummaries(options?: { includePublic?: boolean; preserveDuplicates?: boolean; freshMetadata?: boolean }): Promise<ElementIndexEntry[]>;
   abstract getIndexedPaths(): Promise<string[]>;
-  abstract notifySaved(relativePath: string, absolutePath: string): Promise<void>;
-  abstract notifyDeleted(relativePath: string): void;
-
-  async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
-    const currentDir = this.directory;
-    const state = this.getState(currentDir);
-
-    return this.dirStates.use(state, () => this.scanState(currentDir, state, options));
+  async notifySaved(relativePath: string, absolutePath: string): Promise<void> {
+    if (this.disposed) return;
+    const state = this.getState();
+    return this.dirStates.use(state, async () => {
+      let observedMtime: number | undefined;
+      try {
+        const meta = await this.backend.stat(absolutePath);
+        observedMtime = meta.mtimeMs;
+        const content = await this.backend.readFile(absolutePath);
+        if (this.disposed) return;
+        state.table.applySaved(relativePath, meta.mtimeMs, this.readIndexEntry(content, relativePath, new Map([[relativePath, meta]])));
+      } catch (error) {
+        if (this.disposed) return;
+        if (isAbsentPathError(error)) state.table.applyAbsent(relativePath);
+        else {
+          const failure = failureOf(error, this.directory, relativePath);
+          this.logFailure(relativePath, failure, state.table.applyFailure(relativePath, failure, observedMtime));
+        }
+      }
+      this.requestPersistence(state);
+    });
   }
-
+  notifyDeleted(relativePath: string): void {
+    if (this.disposed) return;
+    const state = this.getState();
+    state.table.applyDeleted(relativePath);
+    this.requestPersistence(state);
+  }
+  protected requestPersistence(state: S): void {
+    if (this.disposed) return;
+    if ((state.table.hasUnsavedChanges() || state.table.needsInitialWrite()) && state.table.everSucceeded) {
+      state.persistence?.request(() => state.table.persistableSnapshot(), generation => state.table.markPersisted(generation));
+    }
+  }
+  async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
+    const dir = this.directory;
+    const state = this.getState(dir);
+    return this.dirStates.use(state, () => this.scanState(dir, state, options));
+  }
   protected async scanState(currentDir: string, state: S, options: StorageScanOptions): Promise<ManifestDiffResult> {
+    this.assertActive();
     const existingScan = state.scanInProgress;
     if (existingScan) {
       if (!options.freshAfterInFlight) return existingScan;
@@ -101,132 +113,121 @@ export abstract class FileStorageLayerBase<S extends DirScanState = DirScanState
       return initialDiff ? mergeManifestDiffResults(initialDiff, trailingDiff) : trailingDiff;
     }
 
-    const preliminary = this.beforeScan(currentDir, state, options);
-    if (preliminary !== undefined) return this.startScan(currentDir, state, preliminary);
-
-    const now = Date.now();
-    if (now - state.lastScanTimestamp < this.scanCooldownMs) {
-      this.logCooldown(currentDir, this.scanCooldownMs - (now - state.lastScanTimestamp));
-      return EMPTY_DIFF;
+    const elapsed = Date.now() - state.lastScanAt;
+    if (elapsed < this.scanCooldownMs && !state.table.needsScan()) {
+      if (state.table.lastScan === 'failed') throw state.scanError;
+      this.logCooldown(currentDir, this.scanCooldownMs - elapsed);
+      return EMPTY_DIFF();
     }
-
     return this.startScan(currentDir, state);
   }
-
-  protected async startScan(currentDir: string, state: S, operation = () => this.performScanForDir(currentDir, state)): Promise<ManifestDiffResult> {
-    const diff = await this.dirStates.runScan(state, operation);
-    state.hasScanned = true;
-    return diff;
+  protected startScan(dir: string, state: S): Promise<ManifestDiffResult> {
+    return this.dirStates.runScan(state, () => this.performScanForDir(dir, state));
   }
-
   findIndexedPath(names: readonly string[]): Promise<string | undefined> {
     const dir = this.directory;
     const state = this.getState(dir);
-    // Cold bootstrap has no completed live manifest to invalidate; persisted index hydration is discovery.
-    // Warm reads must leave modified/removed diffs for scanAndEvict, even after invalidate().
     return findFileIndexedPath(this.dirStates, state, names, () => this.scanState(dir, state, {}));
   }
-
-  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult> {
-    return readFileIndex(this.dirStates, this.getState(), names);
-  }
-
-  getPathByName(name: string): string | undefined {
-    const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
-    return this.getState().index.getPathByName(normalizedName);
-  }
-
+  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult> { return readFileIndex(this.dirStates, this.getState(), names); }
+  getPathByName(name: string): string | undefined { return this.getState().table.getPathByName(name); }
   hasCompletedScan(): boolean {
-    return this.dirStates.hasCompletedScan(this.directory);
+    const table = this.getState().table;
+    return table.everSucceeded && !table.pendingInvalidation;
   }
-
-  invalidate(): void {
-    // Only invalidate the CURRENT dir's state — a save/parse failure for
-    // one user should not force a re-scan for every other user.
-    this.getState().lastScanTimestamp = 0;
-  }
-
+  invalidate(): void { this.getState().table.invalidate(); }
   clear(): void {
+    if (this.disposed) return;
     for (const state of this.dirStates.values()) {
-      state.index.clear();
-      state.manifest.clear();
-      state.lastScanTimestamp = 0;
-      state.hasScanned = false;
+      const snapshot = state.table.hasUnsavedChanges() ? state.table.persistableSnapshot() : null;
+      if (snapshot) state.persistence?.request(() => snapshot, () => {});
+      state.table.clear(); state.lastScanAt = 0; state.scanError = undefined;
     }
   }
-
-  private async indexChangedFiles(
-    dir: string,
-    toIndex: string[],
-    removed: string[],
-    stats: Map<string, { mtimeMs: number; sizeBytes: number }>,
-    state: S,
-  ): Promise<boolean> {
-    let indexUpdated = false;
-
-    await Promise.all(
-      toIndex.map(async (relPath) => {
-        try {
-          const absPath = path.join(dir, relPath);
-          const content = await this.backend.readFile(absPath);
-          state.index.set(this.readIndexEntry(content, relPath, stats));
-          indexUpdated = true;
-        } catch (error) {
-          logger.debug(`${this.scanLabel}: failed to index ${relPath}`, {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      })
-    );
-
-    for (const relPath of removed) {
-      state.index.remove(relPath);
-      indexUpdated = true;
-    }
-
-    return indexUpdated;
+  private hydrate(state: S, token: ScanToken): Promise<void> | undefined {
+    if (!state.persistence || state.hydrationStarted) return undefined;
+    state.hydrationStarted = true;
+    return state.persistence.read().then(entries => {
+      if (!this.disposed && entries && state.table.isCurrent(token)) state.table.hydrate(entries.entries, entries.blocked);
+    }).catch((error: unknown) => {
+      logger.debug(`${this.scanLabel}: cannot read persisted index; rebuilding from disk`, {
+        error: error instanceof Error ? error.name : typeof error,
+      });
+    });
   }
-
   protected async performScanForDir(dir: string, state: S): Promise<ManifestDiffResult> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      this.assertActive();
+      const result = await this.scanCurrentEpoch(dir, state);
+      this.assertActive();
+      if (result) return result;
+    }
+    throw new Error('Storage scan repeatedly invalidated by cache clearing');
+  }
+  private async scanCurrentEpoch(dir: string, state: S): Promise<ManifestDiffResult | undefined> {
+    const token = state.table.beginScan();
     try {
-      const exists = await this.backend.directoryExists(dir);
-      if (!exists) {
-        return this.handleMissingDirectory(state);
+      const hydration = this.hydrate(state, token);
+      if (hydration) await hydration;
+      if (!await this.backend.directoryExists(dir)) {
+        this.assertActive();
+        if (!state.table.isCurrent(token)) return undefined;
+        const result = state.table.publishMissingDirectory(token);
+        state.persistence?.cancelPending();
+        return this.finishScan(dir, state, result, 0);
       }
-      return await this.scanExistingDirectory(dir, state);
+      const paths = await this.enumerate(dir);
+      const { stats, failures } = await this.backend.statMany(dir, paths);
+      const outcomes = new Map<string, ScanOutcome>(paths.map(relativePath => [relativePath, { status: 'absent' }]));
+      for (const [relativePath, error] of failures) outcomes.set(relativePath, { status: 'statFailed', failure: failureOf(error, dir, relativePath) });
+      await mapStorageItems([...stats], async ([relativePath, meta]) => {
+        if (state.table.canReuseUnchanged(relativePath, meta.mtimeMs, meta.sizeBytes)) {
+          outcomes.set(relativePath, { status: 'unchanged', mtimeMs: meta.mtimeMs, sizeBytes: meta.sizeBytes });
+          return;
+        }
+        try {
+          const content = await this.backend.readFile(path.join(dir, relativePath));
+          outcomes.set(relativePath, { status: 'indexed', mtimeMs: meta.mtimeMs, entry: this.readIndexEntry(content, relativePath, stats) });
+        } catch (error) {
+          const outcome: ScanOutcome = isAbsentPathError(error) ? { status: 'absent' }
+            : { status: 'failed', mtimeMs: meta.mtimeMs, sizeBytes: meta.sizeBytes, failure: failureOf(error, dir, relativePath) };
+          outcomes.set(relativePath, outcome);
+        }
+      });
+      this.assertActive();
+      if (!state.table.isCurrent(token)) return undefined;
+      const result = state.table.publishScan(token, outcomes);
+      return this.finishScan(dir, state, result, paths.length);
     } catch (error) {
-      logger.error(`${this.scanLabel}.performScan failed`, error);
-      state.lastScanTimestamp = Date.now();
-      return EMPTY_DIFF;
+      this.assertActive();
+      if (!state.table.isCurrent(token)) return undefined;
+      state.table.failScan(token);
+      const failure = sanitizeStorageError(error, dir);
+      state.lastScanAt = Date.now(); state.scanError = failure;
+      throw failure;
     }
   }
-
-  private handleMissingDirectory(state: S): ManifestDiffResult {
-    const removedPaths = state.index.getPaths();
-    state.index.clear();
-    state.manifest.clear();
-    state.lastScanTimestamp = Date.now();
-    return { added: [], modified: [], removed: removedPaths, unchanged: [] };
-  }
-
-  private async scanExistingDirectory(dir: string, state: S): Promise<ManifestDiffResult> {
-    const allRelativePaths = await this.enumerate(dir);
-    const stats = await this.backend.statMany(dir, allRelativePaths);
-    const diff = state.manifest.diff(stats);
-
-    const hasChanges = diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
-    if (hasChanges) {
-      this.logDiskScan(dir, allRelativePaths.length, diff);
+  private finishScan(dir: string, state: S, result: ScanPublication, count: number): ManifestDiffResult {
+    this.assertActive();
+    for (const change of result.ownershipChanges) {
+      logger.warn(`${this.scanLabel}: duplicate name ${JSON.stringify(change.name)}; using ${JSON.stringify(change.winner)} over ${change.losers.map(loser => JSON.stringify(loser)).join(', ')}`);
     }
-
-    const toIndex = [...diff.added, ...diff.modified];
-    const indexUpdated = await this.indexChangedFiles(dir, toIndex, diff.removed, stats, state);
-
-    state.manifest.update(stats);
-    state.lastScanTimestamp = Date.now();
-
-    this.afterScan(state, indexUpdated);
-
-    return diff;
+    const unindexed = state.table.unindexed();
+    const changedFailures = new Set(result.changedFailures);
+    for (const [relativePath, failure] of unindexed) {
+      this.logFailure(relativePath, failure, !changedFailures.has(relativePath));
+    }
+    const changes = [...result.diff.added, ...result.diff.modified];
+    if (result.diff.removed.length || changes.some(relativePath => !unindexed.has(relativePath) || changedFailures.has(relativePath))) {
+      this.logDiskScan(dir, count, result.diff);
+    }
+    state.lastScanAt = Date.now(); state.scanError = undefined;
+    this.requestPersistence(state);
+    return result.diff;
+  }
+  private logFailure(relativePath: string, failure: UnindexedEntry, repeated: boolean): void {
+    logger[repeated ? 'debug' : 'warn'](`${this.scanLabel}: failed to index ${relativePath}`, {
+      error: failure.name, ...(failure.code === undefined ? {} : { code: failure.code }),
+    });
   }
 }

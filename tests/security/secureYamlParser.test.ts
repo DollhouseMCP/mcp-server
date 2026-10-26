@@ -15,6 +15,20 @@ describe('SecureYamlParser', () => {
   });
 
   describe('parse', () => {
+    it.each([new Error('listener failed'), new RangeError('listener exhausted'), Object.assign(new Error('sink unavailable'), { code: 'EIO' })])(
+      'propagates non-YAML warning callback exceptions unchanged: %s', failure => {
+        const remove = SecurityMonitor.addLogListener(event => {
+          if (event.type === 'YAML_PARSING_WARNING') throw failure;
+        });
+        try {
+          let caught: unknown;
+          try { SecureYamlParser.parse('---\nname: Valid Warning\nextra:\n  array: [\na, b]\n---'); }
+          catch (error) { caught = error; }
+          expect(caught).toBe(failure);
+        } finally { remove(); }
+      },
+    );
+
     it('should parse valid YAML frontmatter', () => {
       const content = `---
 name: Test Persona

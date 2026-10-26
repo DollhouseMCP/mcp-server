@@ -25,6 +25,7 @@ function createMockFileOperationsService(): jest.Mocked<IFileOperationsService> 
     listDirectoryWithTypes: jest.fn<IFileOperationsService['listDirectoryWithTypes']>().mockResolvedValue([]),
     renameFile: jest.fn<IFileOperationsService['renameFile']>().mockResolvedValue(undefined),
     exists: jest.fn<IFileOperationsService['exists']>().mockResolvedValue(false),
+    directoryExists: jest.fn<IFileOperationsService['directoryExists']>().mockResolvedValue(false),
     stat: jest.fn<IFileOperationsService['stat']>().mockResolvedValue({} as any),
     resolvePath: jest.fn<IFileOperationsService['resolvePath']>().mockReturnValue(''),
     validatePath: jest.fn<IFileOperationsService['validatePath']>().mockReturnValue(true),
@@ -51,6 +52,20 @@ describe('SecureDownloader', () => {
   });
 
   describe('downloadToFile', () => {
+    it('refuses a denied overwrite probe before downloading or writing', async () => {
+      const files = createMockFileOperationsService();
+      const denied = Object.assign(new Error('access denied'), { code: 'EACCES' });
+      files.exists.mockRejectedValue(denied);
+      const locks = { atomicWriteFile: jest.fn() } as unknown as typeof import('../../../src/security/fileLockManager.js').FileLockManager;
+      const downloader = new SecureDownloader({ fileOperations: files, fileLockManager: locks });
+      const target = path.join(os.tmpdir(), 'denied-download.md');
+      jest.spyOn(PathValidator, 'validatePersonaPath').mockResolvedValue(target);
+      const download = jest.spyOn(downloader, 'downloadToMemory');
+      await expect(downloader.downloadToFile('https://example.com/persona', target)).rejects.toBe(denied);
+      expect(download).not.toHaveBeenCalled();
+      expect(locks.atomicWriteFile).not.toHaveBeenCalled();
+    });
+
     it('writes validated content atomically and logs success', async () => {
       const tempDir = mkdtempSync(path.join(os.tmpdir(), 'secure-dl-'));
       const targetPath = path.join(tempDir, 'secure-output.md');

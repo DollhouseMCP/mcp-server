@@ -47,10 +47,10 @@ export class ElementStorageLayer extends FileStorageLayerBase<DirScanState> {
     fileOperationsService: FileOperationsService,
     options: ElementStorageLayerOptions
   ) {
-    super(options.storageBackend ?? new FileStorageBackend(fileOperationsService), options.scanCooldownMs,
+    super(options.storageBackend ?? new FileStorageBackend(fileOperationsService),
       new DirectoryStateCache<DirScanState>(
         (_state, dir) => !this.retainDirectoryState?.(dir),
-      ));
+      ), options.scanCooldownMs);
     this.retainDirectoryState = options.retainDirectoryState;
     this.staticElementDir = options.elementDir;
     this.elementDirResolver = options.elementDirResolver;
@@ -73,50 +73,13 @@ export class ElementStorageLayer extends FileStorageLayerBase<DirScanState> {
   async listSummaries(_options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
     const state = this.getState();
     await this.scan();
-    return state.index.getAll();
+    return state.table.entries();
   }
 
   async getIndexedPaths(): Promise<string[]> {
     const state = this.getState();
     await this.scan();
-    return state.index.getPaths();
-  }
-
-  async notifySaved(relativePath: string, absolutePath: string): Promise<void> {
-    const state = this.getState();
-    return this.dirStates.use(state, () => this.indexSavedFile(state, relativePath, absolutePath));
-  }
-
-  private async indexSavedFile(state: DirScanState, relativePath: string, absolutePath: string): Promise<void> {
-    try {
-      const meta = await this.backend.stat(absolutePath);
-      const content = await this.backend.readFile(absolutePath);
-      const fm = FrontmatterParser.extractMetadata(content);
-
-      state.index.set({
-        filePath: relativePath,
-        name: fm.name,
-        description: fm.description,
-        version: fm.version,
-        author: fm.author,
-        tags: fm.tags,
-        mtimeMs: meta.mtimeMs,
-        sizeBytes: meta.sizeBytes,
-      });
-      state.manifest.set(relativePath, meta.mtimeMs);
-    } catch (error) {
-      logger.debug('ElementStorageLayer.notifySaved failed, invalidating', {
-        relativePath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      state.lastScanTimestamp = 0;
-    }
-  }
-
-  notifyDeleted(relativePath: string): void {
-    const state = this.getState();
-    state.index.remove(relativePath);
-    state.manifest.remove(relativePath);
+    return state.table.entries().map(entry => entry.filePath);
   }
 
   // ---- scan hooks (FileStorageLayerBase) ----

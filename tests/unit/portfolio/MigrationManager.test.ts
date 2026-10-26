@@ -73,6 +73,28 @@ describe('MigrationManager', () => {
   });
   
   describe('needsMigration', () => {
+    it('does not probe unreadable legacy personas when the portfolio exists', async () => {
+      await fs.mkdir(portfolioDir, { recursive: true });
+      const denied = Object.assign(new Error('legacy directory denied'), { code: 'EACCES' });
+      const legacy = jest.spyOn(portfolioManager, 'hasLegacyPersonas').mockRejectedValue(denied);
+      await expect(migrationManager.needsMigration()).resolves.toBe(false);
+      expect(legacy).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unreadable legacy directory when the portfolio is absent', async () => {
+      const denied = Object.assign(new Error('legacy directory denied'), { code: 'EACCES' });
+      jest.spyOn(portfolioManager, 'hasLegacyPersonas').mockRejectedValue(denied);
+      await expect(migrationManager.needsMigration()).rejects.toBe(denied);
+    });
+
+    it('keeps portfolio probes fail-closed before probing legacy personas', async () => {
+      const denied = Object.assign(new Error('portfolio denied'), { code: 'EACCES' });
+      jest.spyOn(portfolioManager, 'exists').mockRejectedValue(denied);
+      const legacy = jest.spyOn(portfolioManager, 'hasLegacyPersonas');
+      await expect(migrationManager.needsMigration()).rejects.toBe(denied);
+      expect(legacy).not.toHaveBeenCalled();
+    });
+
     it('should return false when no legacy personas exist', async () => {
       expect(await migrationManager.needsMigration()).toBe(false);
     });

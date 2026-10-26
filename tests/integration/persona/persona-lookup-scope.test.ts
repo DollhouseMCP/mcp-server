@@ -99,7 +99,7 @@ describe.each(['filesystem', 'database'] as const)('Persona lookup scope (%s)', 
 
   afterEach(async () => {
     jest.restoreAllMocks();
-    manager?.dispose();
+    await manager?.dispose();
     if (mode === 'database' && dbAvailable) await cleanupAllTestData();
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     if (originalPortfolioDir === undefined) delete process.env.DOLLHOUSE_PORTFOLIO_DIR;

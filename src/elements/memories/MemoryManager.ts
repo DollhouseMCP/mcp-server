@@ -25,7 +25,7 @@ import { BaseElementManager } from '../base/BaseElementManager.js';
 import {
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
-import { isWritableStorageLayer, type ElementSaveOptions } from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer, type ElementSaveOptions, type UnindexedEntry } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
@@ -33,6 +33,7 @@ const _packageLocator = new PackageResourceLocator();
 // DatabaseMemoryStorageLayer is loaded dynamically via the DI-injected
 // createDatabaseStorageLayer factory. Type reference retained for the
 // override's return-type annotation if needed in future.
+import { isAbsentPathError } from '../../services/FileOperationsService.js';
 import { MemoryMetadataExtractor } from '../../storage/MemoryMetadataExtractor.js';
 import { LRUCache } from '../../cache/LRUCache.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -40,7 +41,7 @@ import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, SEED_MEMORY_FILENAME } from './constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, SEED_MEMORY_FILENAME, DEFAULT_MEMORY_NAME } from './constants.js';
 import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
 import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
@@ -228,12 +229,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Override dispose to flush MemoryStorageLayer _index.json and clear caches.
    * Prevents resource leaks and "Jest did not exit" warnings in tests.
    */
-  override dispose(): void {
+  override async dispose(): Promise<void> {
     if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
     this.memoryUpgrade?.releaseOwner(this);
-    // storageLayer.clear() cancels pending _index.json debounced writes,
-    // preventing ENOTEMPTY errors when tests delete temp directories.
-    super.dispose();  // Calls BaseElementManager.dispose() — runs storageLayer.clear() + watcher cleanup
+    // Shared shutdown preserves pending index writes before releasing storage resources.
+    await super.dispose();
     this.contentHashIndex.clear();
     this.contentHashByPath.clear();
   }
@@ -392,7 +392,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       data.type = 'memory';
     }
     if (!data.name) {
-      data.name = 'Unnamed Memory';
+      data.name = DEFAULT_MEMORY_NAME;
     }
     if (!data.version) {
       data.version = '1.0.0';
@@ -633,7 +633,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         .sort((a, b) => a.localeCompare(b))
         .reverse(); // Most recent first
     } catch (error) {
-      if ((error as any).code === 'ENOENT') {
+      if (isAbsentPathError(error)) {
         return [];
       }
       throw error;
@@ -1521,22 +1521,32 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // only does flat directory listing which misses the subdirectory structure.
     try {
       await this.fileOperations.createDirectory(this.memoriesDir);
-      const indexedPaths = await this.storageLayer.getIndexedPaths();
-      const memories = await this.loadMemoriesFromPaths(indexedPaths);
+      const snapshot = await (this.storageLayer as MemoryStorageLayer).scanMemorySnapshot();
+      const memories = await this.loadMemoriesFromPaths(snapshot.entries.map(entry => entry.filePath), snapshot.unindexed);
       const resultMemories = this.deduplicateMemoriesByPath(memories);
       await this.applyActivationStatus(resultMemories);
       return resultMemories;
     } catch (error) {
-      if ((error as any).code === 'ENOENT') {
+      if (isAbsentPathError(error)) {
         return [];
       }
       throw error;
     }
   }
 
-  private async loadMemoriesFromPaths(indexedPaths: string[]): Promise<Memory[]> {
+  private recordUnindexedMemories(unindexed: ReadonlyMap<string, UnindexedEntry>, failedLoads: Array<{ file: string; error: string }>): void {
+    for (const [relativePath, entry] of unindexed) {
+      const error = Object.assign(new Error(entry.reason), { name: entry.name },
+        entry.code === undefined ? {} : { code: entry.code });
+      this.recordUnreadableElement(relativePath, error);
+      this.handleLoadFailure(relativePath, error, failedLoads);
+    }
+  }
+
+  private async loadMemoriesFromPaths(indexedPaths: string[], unindexed: ReadonlyMap<string, UnindexedEntry>): Promise<Memory[]> {
     const failedLoads: Array<{ file: string; error: string }> = [];
     const memories: Memory[] = [];
+    this.recordUnindexedMemories(unindexed, failedLoads);
 
     await visitSequentially(indexedPaths.values(), async (relativePath) => {
       try {
@@ -2028,7 +2038,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
       }
       // Phase 2: scan, then query the index for autoLoad entries — does NOT load all files
       const memStorageLayer = this.storageLayer as MemoryStorageLayer;
-      const autoLoadEntries = await memStorageLayer.scanAutoLoadEntries();
+      const { entries: autoLoadEntries, unindexed } = await memStorageLayer.scanMemorySnapshot(true);
+      this.recordUnindexedMemories(unindexed, []);
 
       logger.info(`[MemoryManager] getAutoLoadMemories: Found ${autoLoadEntries.length} auto-load entries in index`);
 
@@ -2044,7 +2055,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         }
       });
 
-      // Sort by priority (already sorted from getAutoLoadEntries, but ensure consistency)
+      // Sort by priority.
       autoLoadMemories.sort((a, b) => {
         const pa = (a.metadata as MemoryMetadata).priority ?? 999;
         const pb = (b.metadata as MemoryMetadata).priority ?? 999;
@@ -2717,7 +2728,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Extract metadata with validation
     // SECURITY FIX: Validate BEFORE sanitization to prevent bypass attacks
-    const nameInput = metadataSource.name || 'Unnamed Memory';
+    const nameInput = metadataSource.name || DEFAULT_MEMORY_NAME;
     const sanitizedName = this.normalizeMemoryName(nameInput);
 
     // FIX: Must specify fieldType: 'description' to allow punctuation like colons, semicolons, etc.

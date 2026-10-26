@@ -49,7 +49,7 @@ describe('frontmatter serialization safety', () => {
       expect(state[marker]).toBeUndefined();
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toMatch(/Unsupported frontmatter language/);
-    } finally { manager.dispose(); }
+    } finally { await manager.dispose(); }
   });
 
   it('preserves ordinary Markdown and default scalar metadata', () => {

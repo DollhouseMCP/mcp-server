@@ -24,10 +24,10 @@ const secretEncryption = new AeadSecretEncryptionService({
   key: Buffer.alloc(32, 7),
 });
 
-const realSuites: { directory: string; managers: { dispose(): void }[] }[] = [];
-afterEach(() => {
+const realSuites: { directory: string; managers: { dispose(): Promise<void> }[] }[] = [];
+afterEach(async () => {
   for (const suite of realSuites.splice(0)) {
-    for (const manager of suite.managers) manager.dispose();
+    for (const manager of suite.managers) await manager.dispose();
     fs.rmSync(suite.directory, { recursive: true, force: true });
   }
 });

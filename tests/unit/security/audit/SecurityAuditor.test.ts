@@ -50,6 +50,7 @@ function createMockFileOperationsService(): jest.Mocked<IFileOperationsService> 
     listDirectoryWithTypes: jest.fn().mockResolvedValue([]),
     renameFile: jest.fn().mockResolvedValue(),
     exists: jest.fn().mockResolvedValue(false),
+    directoryExists: jest.fn().mockResolvedValue(false),
     stat: jest.fn().mockResolvedValue({} as Stats),
     resolvePath: jest.fn().mockImplementation((relativePath: string, baseDirectory: string) =>
       path.resolve(baseDirectory, relativePath)

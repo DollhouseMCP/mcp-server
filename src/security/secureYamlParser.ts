@@ -67,6 +67,17 @@ export interface ParsedContent {
   excerpt?: string;
 }
 
+/** Decide whether a document follows the frontmatter route, even if its frame is incomplete. */
+export function hasFrontmatterFraming(raw: string): boolean {
+  return raw.trim().startsWith('---');
+}
+
+/** Match the parser's strict frontmatter fences without trimming the input. */
+export function matchFrontmatterFrame(raw: string): { frontmatter: string; body: string } | null {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
+  return match ? { frontmatter: match[1], body: raw.substring(match[0].length) } : null;
+}
+
 export class SecureYamlParser {
   private static readonly RAW_YAML_MAX_DEPTH = 64;
   private static readonly RAW_YAML_MAX_EXPANDED_NODES = 100_000;
@@ -156,7 +167,7 @@ export class SecureYamlParser {
 
     // 2. Extract frontmatter boundaries
     // FIX: Support both Unix (\n) and Windows (\r\n) line endings
-    const frontmatterMatch = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
+    const frontmatterMatch = matchFrontmatterFrame(input);
     if (!frontmatterMatch) {
       // No frontmatter, return empty data
       return {
@@ -165,8 +176,8 @@ export class SecureYamlParser {
       };
     }
 
-    const yamlContent = frontmatterMatch[1];
-    const markdownContent = input.substring(frontmatterMatch[0].length);
+    const yamlContent = frontmatterMatch.frontmatter;
+    const markdownContent = frontmatterMatch.body;
 
     // 3. Validate YAML size
     if (yamlContent.length > maxYamlSize) {
@@ -238,8 +249,9 @@ export class SecureYamlParser {
         }
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new SecurityError(`YAML parsing failed: ${message}`, 'high');
+      // Callback and infrastructure failures are not evidence of invalid YAML.
+      if (!(error instanceof yaml.YAMLException)) throw error;
+      throw new SecurityError(`YAML parsing failed: ${error.message}`, 'high');
     }
   }
 

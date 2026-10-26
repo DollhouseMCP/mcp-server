@@ -45,12 +45,12 @@ export interface StartupOptions {
 }
 
 export class ServerStartup {
-  private portfolioManager: PortfolioManager;
-  private migrationManager: MigrationManager;
-  private fileLockManager: FileLockManager;
-  private memoryManager: MemoryManager;
-  private configManager: ConfigManager;
-  private operationalTelemetry: OperationalTelemetry;
+  private readonly portfolioManager: PortfolioManager;
+  private readonly migrationManager: MigrationManager;
+  private readonly fileLockManager: FileLockManager;
+  private readonly memoryManager: MemoryManager;
+  private readonly configManager: ConfigManager;
+  private readonly operationalTelemetry: OperationalTelemetry;
 
   constructor(
     portfolioManager: PortfolioManager,
@@ -473,7 +473,7 @@ export class ServerStartup {
    */
   async dispose(): Promise<void> {
     // Dispose MemoryManager (cleans up file watchers)
-    this.memoryManager.dispose();
+    await this.memoryManager.dispose();
 
     // Shutdown telemetry (flushes PostHog events)
     await this.operationalTelemetry.shutdown();

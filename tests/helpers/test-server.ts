@@ -6,7 +6,7 @@
  * - Improved API documentation with clear method purposes
  */
 
-import path from 'path';
+import path from 'node:path';
 import { GitHubClient } from '../../src/collection/GitHubClient.js';
 import { APICache } from '../../src/cache/APICache.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
@@ -22,14 +22,14 @@ export interface TestServerOptions {
 }
 
 export class TestServer {
-  public personaManager: PersonaManager;
-  public githubClient: GitHubClient;
-  public apiCache: APICache;
-  public rateLimitTracker: Map<string, number[]>;
-  public portfolioManager: PortfolioManager;
-  private portfolioDir: string;
+  public readonly personaManager: PersonaManager;
+  public readonly githubClient: GitHubClient;
+  public readonly apiCache: APICache;
+  public readonly rateLimitTracker: Map<string, number[]>;
+  public readonly portfolioManager: PortfolioManager;
+  private readonly portfolioDir: string;
   private isStarted: boolean = false;
-  private elementVersions: Map<string, string> = new Map();
+  private readonly elementVersions: Map<string, string> = new Map();
   
   constructor(options: TestServerOptions = {}) {
     const baseDir = options.portfolioDir ||
@@ -76,9 +76,12 @@ export class TestServer {
    * NOTE: This is a simplified mock implementation for E2E tests.
    * In a full implementation, this would delegate to actual MCP tool handlers.
    */
-  async handleTool(toolName: string, args: any): Promise<{ success: boolean; data?: any; error?: any }> {
-    // Mock implementation for E2E tests
-    // TODO: Implement proper tool handling for comprehensive E2E testing
+  handleTool(toolName: string, args: any): Promise<{ success: boolean; data?: any; error?: any }> {
+    try { return Promise.resolve(this.mockToolResult(toolName, args)); }
+    catch (error) { return Promise.reject(error); }
+  }
+
+  private mockToolResult(toolName: string, args: any): { success: boolean; data?: any; error?: any } {
 
     switch (toolName) {
       case 'browse_collection':
@@ -103,20 +106,7 @@ export class TestServer {
         };
 
       case 'install_collection_content':
-        // Handle error case for invalid paths
-        if (args.path && args.path.includes('invalid')) {
-          return {
-            success: false,
-            error: { message: `Invalid collection path: ${args.path}` }
-          };
-        }
-        return {
-          success: true,
-          data: {
-            installed: true,
-            elementName: args.path ? args.path.split('/').pop()?.replace('.md', '') : 'test-element'
-          }
-        };
+        return this.installContent(args);
 
       case 'list_elements':
         return {
@@ -169,44 +159,10 @@ export class TestServer {
         };
 
       case 'portfolio_config':
-        // Actually set the environment variable like the real handler does
-        if (args.auto_submit !== undefined) {
-          if (args.auto_submit) {
-            process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
-          } else {
-            delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
-          }
-        }
-        return {
-          success: true,
-          data: {
-            config: {
-              autoSubmit: args.auto_submit !== undefined ? args.auto_submit : false,
-              autoSync: args.auto_sync !== undefined ? args.auto_sync : true
-            }
-          }
-        };
+        return this.configurePortfolio(args);
 
-      case 'submit_collection_content': {
-        // Handle error case for non-existent content
-        if (args.content === 'non-existent-skill') {
-          return {
-            success: false,
-            error: { message: 'Content "non-existent-skill" not found in portfolio' }
-          };
-        }
-        // Check if auto-submit is enabled via environment variable
-        const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
-        return {
-          success: true,
-          data: {
-            portfolioSubmitted: true,
-            collectionIssueCreated: autoSubmitEnabled,
-            ...(autoSubmitEnabled && { issueUrl: 'https://github.com/DollhouseMCP/collection/issues/123' }),
-            ...(!autoSubmitEnabled && { manualSubmissionUrl: 'https://github.com/test/repo/issues/new' })
-          }
-        };
-      }
+      case 'submit_collection_content':
+        return this.submitContent(args);
 
       case 'get_collection_cache_health':
         return {
@@ -228,6 +184,64 @@ export class TestServer {
     }
   }
   
+  private installContent(args: any): { success: boolean; data?: any; error?: any } {
+    // Handle error case for invalid paths
+    if (args.path?.includes('invalid')) {
+      return {
+        success: false,
+        error: { message: `Invalid collection path: ${args.path}` }
+      };
+    }
+    return {
+      success: true,
+      data: {
+        installed: true,
+        elementName: args.path ? args.path.split('/').pop()?.replace('.md', '') : 'test-element'
+      }
+    };
+  }
+
+  private configurePortfolio(args: any): { success: boolean; data?: any; error?: any } {
+    // Actually set the environment variable like the real handler does
+    if (args.auto_submit !== undefined) {
+      if (args.auto_submit) {
+        process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
+      } else {
+        delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
+      }
+    }
+    return {
+      success: true,
+      data: {
+        config: {
+          autoSubmit: args.auto_submit !== undefined ? args.auto_submit : false,
+          autoSync: args.auto_sync !== undefined ? args.auto_sync : true
+        }
+      }
+    };
+  }
+
+  private submitContent(args: any): { success: boolean; data?: any; error?: any } {
+    // Handle error case for non-existent content
+    if (args.content === 'non-existent-skill') {
+      return {
+        success: false,
+        error: { message: 'Content "non-existent-skill" not found in portfolio' }
+      };
+    }
+    // Check if auto-submit is enabled via environment variable
+    const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+    return {
+      success: true,
+      data: {
+        portfolioSubmitted: true,
+        collectionIssueCreated: autoSubmitEnabled,
+        ...(autoSubmitEnabled && { issueUrl: 'https://github.com/DollhouseMCP/collection/issues/123' }),
+        ...(!autoSubmitEnabled && { manualSubmissionUrl: 'https://github.com/test/repo/issues/new' })
+      }
+    };
+  }
+
   /**
    * Initialize the server and load personas
    */
@@ -241,7 +255,7 @@ export class TestServer {
    */
   async cleanup(): Promise<void> {
     // Dispose PersonaManager to stop file watchers and prevent open handles
-    this.personaManager.dispose();
+    await this.personaManager.dispose();
 
     // Clear caches and trackers
     this.apiCache.clear();
