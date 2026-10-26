@@ -2,6 +2,8 @@
  * Unit tests for AgentManager implementation
  */
 
+import { publishCachedElement } from '../../../helpers/cache-publication.js';
+
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
 import * as os from 'node:os';
@@ -227,7 +229,7 @@ describe('AgentManager', () => {
         name: 'Cached Agent',
         description: 'Cached active agent',
       }, metadataService);
-      (agentManager as any).cacheElement(cachedAgent, 'cached-agent.md');
+      publishCachedElement(agentManager, cachedAgent, 'cached-agent.md');
       jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue();
       fileOperationsService.readFile.mockClear();
 

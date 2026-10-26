@@ -1,3 +1,4 @@
+import { fileMetadataProof } from './helpers/fileProof.js';
 import { afterEach, describe, expect, it } from '@jest/globals';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -80,8 +81,7 @@ async function residualProof(setup: Awaited<ReturnType<typeof interrupted>>) {
     for (const name of (await fs.readdir(directory)).sort()) {
       const file = path.join(directory, name);
       const stat = await fs.lstat(file, { bigint: true });
-      proof.push({ name, directory, device: stat.dev, inode: stat.ino, mode: stat.mode, links: stat.nlink,
-        size: stat.size, mtime: stat.mtimeNs, ctime: stat.ctimeNs,
+      proof.push({ name, directory, ...fileMetadataProof(stat),
         bytes: stat.isSymbolicLink() ? await fs.readlink(file) : await fs.readFile(file) });
     }
   }
@@ -290,14 +290,14 @@ describe('dormant already-renamed PREPARED forward completion', () => {
       if (kind === 'registry-alias') await fs.rename(registry, registry.replace('.json', '.JSON'));
       const watched = [kind === 'registry-alias' ? registry.replace('.json', '.JSON') : registry, sidecar, setup.journalPath];
       const before = await Promise.all(watched.map(async file => ({ bytes: await fs.readFile(file),
-        stat: await fs.stat(file, { bigint: true }) })));
+        stat: fileMetadataProof(await fs.stat(file, { bigint: true })) })));
       const residual = await residualProof(setup);
       expect((await setup.store.inspectInterruptedOwnedHead(setup.locator)).kind).not.toBe('clean-consistent');
       await expect(setup.store.forwardPreparedRenamedOwnedUpdate(setup.request)).rejects.toBeDefined();
       expect(await residualProof(setup)).toEqual(residual);
       for (const [index, file] of watched.entries()) {
         expect(await fs.readFile(file)).toEqual(before[index].bytes);
-        expect(await fs.stat(file, { bigint: true })).toEqual(before[index].stat);
+        expect(fileMetadataProof(await fs.stat(file, { bigint: true }))).toEqual(before[index].stat);
       }
     });
 
@@ -487,11 +487,11 @@ describe('dormant already-renamed PREPARED forward completion', () => {
       const diagnostic = await setup.store.inspectInterruptedOwnedHead(setup.locator);
       if (phase.includes('partial-write')) {
         const bytes = await fs.readFile(stagePath);
-        const stat = await fs.stat(stagePath, { bigint: true });
+        const stat = fileMetadataProof(await fs.stat(stagePath, { bigint: true }));
         expect(diagnostic.kind).toBe('unknown-manual-review');
         await expect(setup.store.forwardPreparedRenamedOwnedUpdate(setup.request)).rejects.toMatchObject({ code: 'EOWNERRECOVERY' });
         expect(await fs.readFile(stagePath)).toEqual(bytes);
-        expect(await fs.stat(stagePath, { bigint: true })).toEqual(stat);
+        expect(fileMetadataProof(await fs.stat(stagePath, { bigint: true }))).toEqual(stat);
       } else {
         if (phase.includes('verified-before-rename')) expect(diagnostic.kind).toBe('unknown-manual-review');
         const result = await setup.store.forwardPreparedRenamedOwnedUpdate(setup.request);

@@ -2,6 +2,7 @@
  * Unit tests for EnsembleManager implementation
  */
 
+import { ActivationMetricsTracker } from '../../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { promises as fs, realpathSync } from 'fs';
 import * as path from 'path';
@@ -13,7 +14,7 @@ jest.mock('../../../../src/security/securityMonitor.js');
 jest.mock('../../../../src/utils/logger.js');
 
 // Import after mocking
-import { EnsembleManager } from '../../../../src/elements/ensembles/EnsembleManager.js';
+import { EnsembleManager, MAX_LEGACY_FIELD_WARNINGS } from '../../../../src/elements/ensembles/EnsembleManager.js';
 import { resolveElementTypes } from '../../../../src/utils/elementTypeResolver.js';
 import { Ensemble } from '../../../../src/elements/ensembles/Ensemble.js';
 import type { EnsembleMetadata } from '../../../../src/elements/ensembles/types.js';
@@ -72,6 +73,7 @@ describe('EnsembleManager', () => {
       metadataService
     );
     ensembleManager = new EnsembleManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as any,
       fileLockManager,
       fileOperationsService,
@@ -174,7 +176,9 @@ describe('EnsembleManager', () => {
       expect(ensemble.metadata.elements[0].element_type).toBe('skill');
     });
 
-    it('should warn once for repeated legacy field parsing on the same ensemble', async () => {
+    it('warns once for repeated legacy fields in each namespace', async () => {
+      let namespace = 'alice';
+      const namespaceSpy = jest.spyOn(ensembleManager as any, 'getCacheNamespace').mockImplementation(() => namespace);
       const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
       const legacyMetadata = {
         name: 'Legacy Parse Ensemble',
@@ -192,6 +196,7 @@ describe('EnsembleManager', () => {
       await (ensembleManager as any).parseMetadata(legacyMetadata);
       await (ensembleManager as any).parseMetadata(legacyMetadata);
 
+      // Alice emits one warning for each of the two legacy fields, then suppresses repeats.
       expect(warnSpy).toHaveBeenCalledTimes(2);
       expect(warnSpy).toHaveBeenNthCalledWith(
         1,
@@ -201,7 +206,62 @@ describe('EnsembleManager', () => {
         2,
         "Ensemble 'Legacy Parse Ensemble' element at index 0 uses deprecated 'type' field. Use 'element_type' instead."
       );
+      namespace = 'bob';
+      await (ensembleManager as any).parseMetadata(legacyMetadata);
+      await (ensembleManager as any).parseMetadata(legacyMetadata);
+      // Bob adds two warnings; Alice returning below adds none.
+      expect(warnSpy).toHaveBeenCalledTimes(4);
+      namespace = 'alice';
+      await (ensembleManager as any).parseMetadata(legacyMetadata);
+      expect(warnSpy).toHaveBeenCalledTimes(4);
+      namespaceSpy.mockRestore();
       warnSpy.mockRestore();
+    });
+
+    it('resets legacy warning suppression for every namespace on clearCache', async () => {
+      let namespace = 'alice';
+      const scope = jest.spyOn(ensembleManager as any, 'getCacheNamespace').mockImplementation(() => namespace);
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const metadata = { name: 'Legacy Reset Ensemble', elements: [{ name: LEGACY_SKILL_NAME, type: 'skill' }] };
+      try {
+        await ensembleManager['parseMetadata'](metadata);
+        namespace = 'bob';
+        await ensembleManager['parseMetadata'](metadata);
+        // Both callers have emitted two warnings before the reset.
+        expect(warn).toHaveBeenCalledTimes(4);
+        ensembleManager.clearCache();
+        namespace = 'alice';
+        await ensembleManager['parseMetadata'](metadata);
+        // Alice adds two fresh warnings after reset.
+        expect(warn).toHaveBeenCalledTimes(6);
+        namespace = 'bob';
+        await ensembleManager['parseMetadata'](metadata);
+        // Bob also adds two fresh warnings after reset.
+        expect(warn).toHaveBeenCalledTimes(8);
+      } finally {
+        scope.mockRestore();
+        warn.mockRestore();
+      }
+    });
+
+    it('bounds legacy warning history and warns again after eviction', () => {
+      let namespace = 'first';
+      const scope = jest.spyOn(ensembleManager as any, 'getCacheNamespace').mockImplementation(() => namespace);
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        ensembleManager['warnOnceForLegacyElementField']('Legacy', 0, 'name');
+        for (let index = 0; index < MAX_LEGACY_FIELD_WARNINGS; index++) {
+          namespace = `user-${index}`;
+          ensembleManager['warnOnceForLegacyElementField']('Legacy', 0, 'name');
+        }
+        expect(ensembleManager['legacyElementFieldWarnings'].size).toBe(MAX_LEGACY_FIELD_WARNINGS);
+        namespace = 'first';
+        ensembleManager['warnOnceForLegacyElementField']('Legacy', 0, 'name');
+        expect(warn).toHaveBeenCalledTimes(MAX_LEGACY_FIELD_WARNINGS + 2);
+      } finally {
+        scope.mockRestore();
+        warn.mockRestore();
+      }
     });
 
     it('should not re-warn for the same legacy fields across create and parse paths', async () => {

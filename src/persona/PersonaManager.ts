@@ -34,7 +34,6 @@ import type { TriggerValidationService } from '../services/validation/TriggerVal
 import type { ValidationService } from '../services/validation/ValidationService.js';
 import type { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
-import { getActiveElementLimitConfig } from '../config/active-element-limits.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 // STDIO_DEFAULT_USER_ID guard removed in Phase 3 (Issue #1946) — SessionContext is now the identity authority
 import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
@@ -620,6 +619,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #843: Now async — uses findPersonaAsync() to recover from cache eviction
    */
   async activatePersona(identifier: string): Promise<{ success: boolean; message: string; persona?: Persona; notices?: string[] }> {
+    const notices = await this.reportActiveSetPressure();
     const persona = await this.findPersonaAsync(identifier);
 
     if (!persona) {
@@ -640,9 +640,6 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         persona
       };
     }
-
-    // Issue #83: Check if cleanup is needed before adding
-    const notices = this.reportActiveSetPressure();
 
     this.getActivationSet().add(persona.filename);
 
@@ -1486,33 +1483,13 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     super.dispose();
   }
 
-  /** Report capacity pressure and retain references missing from the disposable cache. */
-  private reportActiveSetPressure(): string[] {
-    const { max, cleanupThreshold } = getActiveElementLimitConfig('personas');
-    if (this.getActivationSet().size < cleanupThreshold) return [];
-    const notices: string[] = [];
-    if (this.getActivationSet().size >= max) {
-      const notice = `Active personas limit reached (${max}). ` +
-        'Consider deactivating unused personas or setting DOLLHOUSE_MAX_ACTIVE_PERSONAS to a higher value.';
-      notices.push(notice);
-      logger.warn(notice);
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_CREATED', severity: 'MEDIUM',
-        source: 'PersonaManager.reportActiveSetPressure',
-        details: `Active personas limit reached: ${this.getActivationSet().size}/${max}`,
-      });
-    }
-    return [...notices, ...this.collectRetainedReferenceNotices()];
+  /** Report capacity pressure and references that cannot currently be loaded. */
+  private reportActiveSetPressure(): Promise<string[]> {
+    return this.reportActivationPressure('personas', 'PersonaManager.reportActiveSetPressure', () => this.collectRetainedReferenceNotices());
   }
 
-  private collectRetainedReferenceNotices(): string[] {
-    const notices: string[] = [];
-    for (const reference of this.getActivationSet()) {
-      if (!this.findPersona(reference)) {
-        notices.push(this.activationMetricsTracker.retain('persona', reference));
-      }
-    }
-    return notices;
+  private collectRetainedReferenceNotices(): Promise<string[]> {
+    return this.retainedReferenceNotices('persona', async key => !!await this.findPersonaAsync(key), this.activationMetricsTracker);
   }
 
   private notifyPersonaChange(

@@ -1085,10 +1085,12 @@ export class DollhouseContainer {
     }
   }
 
-  private resolveCrudCallerOptions(memoryProvider?: TenantMemoryOperationProvider): Pick<ElementCRUDHandlerOptions, 'memoryProvider' | 'forkOnEditStrategy'> {
+  private resolveCrudCallerOptions(memoryProvider?: TenantMemoryOperationProvider): Pick<ElementCRUDHandlerOptions, 'memoryProvider' | 'forkOnEditStrategy' | 'policyCollectorFactory'> {
     const forkOnEditStrategy = this.hasRegistration('ForkOnEditStrategy')
       ? this.resolve<import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy>('ForkOnEditStrategy') : undefined;
-    return { ...(memoryProvider ? { memoryProvider } : {}), forkOnEditStrategy };
+    return { ...(memoryProvider ? { memoryProvider } : {}), forkOnEditStrategy,
+      ...(this.hasRegistration('ActivePolicyCollectorFactory')
+        ? { policyCollectorFactory: this.resolve('ActivePolicyCollectorFactory') } : {}) };
   }
 
   /**

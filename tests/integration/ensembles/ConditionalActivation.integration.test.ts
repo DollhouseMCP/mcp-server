@@ -17,6 +17,7 @@
  * @see src/elements/ensembles/Ensemble.ts - activateEnsemble() and activateConditional()
  */
 
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { Ensemble } from '../../../src/elements/ensembles/Ensemble.js';
 import { EnsembleManager } from '../../../src/elements/ensembles/EnsembleManager.js';
@@ -107,6 +108,7 @@ describe('Ensemble Conditional Activation Integration', () => {
     );
     portfolioManager = new PortfolioManager(fileOperations, { baseDir: testDir });
     _ensembleManager = new EnsembleManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager,
       fileLockManager,
       fileOperationsService: fileOperations,

@@ -437,3 +437,11 @@ describe('Memory manager upgrade obligations', () => {
     // MemorySaveHandler separately retains its mutated non-ACK candidate.
   }));
 });
+
+it('rejects an expired lease before starting a guarded memory update', async () => {
+  await owned(async (manager, _lifecycle, memory) => {
+    const lease = manager['withCachePublication'](authority => authority);
+    await expect(manager['saveGuardedMemoryAndCache'](memory, lease, 'memory.yaml'))
+      .rejects.toThrow('active lease');
+  });
+});

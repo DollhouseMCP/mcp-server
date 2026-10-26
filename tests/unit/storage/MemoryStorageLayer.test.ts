@@ -2,6 +2,7 @@
  * Unit tests for MemoryStorageLayer
  */
 
+import { MAX_CACHED_DIRECTORY_STATES } from '../../../src/storage/DirectoryStateCache.js';
 import path from 'path';
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { MemoryStorageLayer } from '../../../src/storage/MemoryStorageLayer.js';
@@ -134,6 +135,30 @@ describe('MemoryStorageLayer', () => {
   afterEach(() => {
     // Prevent timers from leaking
     layer.dispose();
+  });
+
+  it('reads cold index status without scanning', async () => {
+    expect(await layer.readIndexedPath(['Baseline'])).toEqual({ path: undefined, indexComplete: false, authoritative: false });
+    expect(backend.statMany).not.toHaveBeenCalled();
+    expect(await layer.findIndexedPath(['Baseline'])).toBe('system/baseline.yaml');
+    expect(await layer.readIndexedPath(['Baseline'])).toEqual({ path: 'system/baseline.yaml', indexComplete: true, authoritative: true });
+  });
+
+  it.each([false, true])('leaves warm modified diffs for refresh (invalidated: %s)', async invalidate => {
+    await layer.scan();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000);
+    try {
+      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+        ['system/baseline.yaml', makeMeta('system/baseline.yaml', 3000)],
+      ]));
+      if (invalidate) layer.invalidate();
+      expect(await layer.findIndexedPath(['Baseline'])).toBe('system/baseline.yaml');
+      expect(await layer.readIndexedPath(['Baseline'])).toMatchObject({ indexComplete: true, authoritative: !invalidate });
+      const diff = await layer.scan();
+      expect(diff.modified).toContain('system/baseline.yaml');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   // ----------------------------------------------------------------
@@ -453,6 +478,32 @@ entries:
           priority: 2,
         }),
       ]);
+    });
+
+    it('keeps auto-load reads on the scanned state while other directories are retained', async () => {
+      layer.dispose();
+      layer = new MemoryStorageLayer(fileOps, {
+        memoriesDir: MEMORIES_DIR, storageBackend: backend,
+        retainDirectoryState: dir => dir !== MEMORIES_DIR,
+      });
+      (fileOps.readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(makeIndexData({
+        'hand-written.yaml': { name: 'Core', mtimeMs: 1000, autoLoad: true, priority: 1 },
+      })));
+      (backend.listFiles as jest.Mock<any>).mockResolvedValue(['hand-written.yaml']);
+      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+        ['hand-written.yaml', makeMeta('hand-written.yaml', 1000)],
+      ]));
+      for (let index = 0; index <= MAX_CACHED_DIRECTORY_STATES; index++) {
+        layer['getState'](`/retained/${index}`);
+      }
+      // More than the cap are non-idle: even the caller's MRU state is evicted after scan.
+      await layer.scan();
+      expect(layer.hasCompletedScan()).toBe(false);
+      const entries = await layer.scanAutoLoadEntries();
+      expect(entries).toEqual([expect.objectContaining({
+        filePath: 'hand-written.yaml', name: 'Core', autoLoad: true, priority: 1,
+      })]);
+      expect(layer.hasCompletedScan()).toBe(false);
     });
 
     it('should return empty array when no entries have autoLoad === true', async () => {
@@ -951,4 +1002,118 @@ describe('guarded fresh metadata discovery', () => {
       expect(fileOps.writeFile).not.toHaveBeenCalled();
     } finally { await layer.dispose(); }
   });
+});
+
+describe('bounded directory state', () => {
+  it('bounds idle churn, rebuilds evicted directories and retains a flat directory', async () => {
+    let dir = '/users/original';
+    const backend = createMockBackend();
+    const fileOps = makeMockFileOps();
+    const layer = new MemoryStorageLayer(fileOps, { memoriesDir: dir, memoriesDirResolver: () => dir, storageBackend: backend, indexDebounceMs: 60000 });
+    const original = layer['getState']();
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) await layer.scan();
+    expect(layer['dirStates'].size).toBe(1);
+    expect(layer['getState']()).toBe(original);
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) {
+      dir = `/users/${i}`;
+      await layer.scan();
+    }
+    expect(layer['dirStates'].size).toBe(MAX_CACHED_DIRECTORY_STATES);
+    dir = '/users/original';
+    expect(layer['getState']()).not.toBe(original);
+    await layer.scan();
+    expect(layer.hasCompletedScan()).toBe(true);
+    const rebuilt = layer['getState']();
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) await layer.scan();
+    expect(layer['getState']()).toBe(rebuilt);
+    await layer.dispose();
+  });
+  it('pins a scan and its trailing waiter while other directories churn', async () => {
+    let dir = '/users/busy';
+    let release!: (exists: boolean) => void;
+    const waiting = new Promise<boolean>(resolve => { release = resolve; });
+    const backend = createMockBackend({ directoryExists: jest.fn<any>().mockImplementation((location: string) => location === '/users/busy' ? waiting : Promise.resolve(false)) });
+    const fileOps = makeMockFileOps();
+    const layer = new MemoryStorageLayer(fileOps, { memoriesDir: dir, memoriesDirResolver: () => dir, storageBackend: backend, indexDebounceMs: 60000 });
+    const busy = layer['getState']();
+    const scan = layer.scan();
+    const trailing = layer.scan({ freshAfterInFlight: true });
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) {
+      dir = `/users/${i}`;
+      await layer.scan();
+    }
+    dir = '/users/busy';
+    expect(layer['getState']()).toBe(busy);
+    release(false);
+    await Promise.all([scan, trailing]);
+    expect(layer['getState']()).toBe(busy);
+    expect(layer['dirStates'].size).toBe(MAX_CACHED_DIRECTORY_STATES);
+    await layer.dispose();
+  });
+});
+
+it('protects pending and flushing memory indexes until the write completes', async () => {
+  let dir = '/users/writing';
+  const fileOps = makeMockFileOps();
+  let release!: () => void;
+  const writing = new Promise<void>(resolve => { release = resolve; });
+  (fileOps.writeFile as jest.Mock<any>).mockReturnValue(writing);
+  const layer = new MemoryStorageLayer(fileOps, { memoriesDir: dir, memoriesDirResolver: () => dir, indexDebounceMs: 60000 });
+  const state = layer['getState']();
+  state.indexFile.scheduleWrite([]);
+  const churn = () => {
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) {
+      dir = `/users/${i}`;
+      layer['getState']();
+    }
+    dir = '/users/writing';
+    expect(layer['getState']()).toBe(state);
+  };
+  churn();
+  const flush = state.indexFile.flush();
+  churn();
+  release();
+  await flush;
+  for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) {
+    dir = `/finished/${i}`;
+    layer['getState']();
+  }
+  dir = '/users/writing';
+  expect(layer['getState']()).not.toBe(state);
+  await layer.dispose();
+});
+
+it.each(['save', 'delete'])('does not persist a partial cold index after %s', async operation => {
+  let dir = MEMORIES_DIR;
+  const fileOps = makeMockFileOps();
+  (fileOps.readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(makeIndexData({
+    'existing.yaml': { name: 'Existing', mtimeMs: 1000 },
+    'changed.yaml': { name: 'Changed', mtimeMs: 1000 },
+  })));
+  const paths = operation === 'save' ? ['existing.yaml', 'changed.yaml'] : ['existing.yaml'];
+  const backend = createMockBackend({
+    listFiles: jest.fn<any>().mockImplementation((directory: string) => Promise.resolve(directory === MEMORIES_DIR ? paths : [])),
+    statMany: jest.fn<any>().mockResolvedValue(new Map(paths.map(file => [file, makeMeta(file, file === 'changed.yaml' ? 2000 : 1000)]))),
+    readFile: jest.fn<any>().mockResolvedValue(makeYaml('Updated')),
+  });
+  const layer = new MemoryStorageLayer(fileOps, { memoriesDir: dir, memoriesDirResolver: () => dir, storageBackend: backend });
+  const original = layer['getState']();
+  for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES; i++) {
+    dir = `/idle/${i}`;
+    layer['getState']();
+  }
+  dir = MEMORIES_DIR;
+  expect(layer['getState']()).not.toBe(original);
+  if (operation === 'save') await layer.notifySaved('changed.yaml', `${dir}/changed.yaml`);
+  else layer.notifyDeleted('changed.yaml');
+  await layer['getState']().indexFile.flush();
+  expect(fileOps.writeFile).not.toHaveBeenCalled();
+  expect((await layer['getState']().indexFile.read())?.entryCount).toBe(2);
+  await layer.scan();
+  await layer['getState']().indexFile.flush();
+  const calls = (fileOps.writeFile as jest.Mock<any>).mock.calls;
+  const persisted = JSON.parse(calls.at(-1)![1] as string) as MemoryIndexData;
+  expect(persisted.entryCount).toBe(paths.length);
+  expect(persisted.entries['existing.yaml'].name).toBe('Existing');
+  await layer.dispose();
 });
