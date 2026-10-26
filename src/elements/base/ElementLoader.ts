@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
+import { BoundedDiagnosticMap } from './BoundedDiagnosticMap.js';
 import { IElement } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
@@ -18,7 +19,7 @@ import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { InvalidElementRecord } from './BaseElementManager.js';
-import type { ElementCache } from './ElementCache.js';
+import type { ElementCache, CachePublicationLease } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 
 /** Partial type alias for the static ELEMENT_TYPE_TO_CONTEXT map passed in from the base class. */
@@ -43,14 +44,18 @@ export interface ElementLoaderHost<T extends IElement> {
   normalizeAndValidatePath(filePath: string): Promise<{ relativePath: string; absolutePath: string }>;
 }
 
+// Diagnostic buckets are reconstructible: an evicted caller's next failed load
+// records the failure again. Bound namespace churn without retaining every user.
+export const MAX_LOAD_FAILURE_NAMESPACES = 128;
+
 export class ElementLoader<T extends IElement> {
   /** Elements that exist on disk but failed validation during load. */
-  private readonly invalidElements = new Map<string, InvalidElementRecord>();
+  private readonly invalidElements = new BoundedDiagnosticMap<Map<string, InvalidElementRecord>>(MAX_LOAD_FAILURE_NAMESPACES);
   /**
    * Tracks file paths whose load failure has already been logged at error level.
    * Repeated failures with the same reason are demoted to debug.
    */
-  private readonly suppressedLoadPaths = new Set<string>();
+  private readonly suppressedLoadPaths = new BoundedDiagnosticMap<Set<string>>(MAX_LOAD_FAILURE_NAMESPACES);
 
   constructor(
     private readonly host: ElementLoaderHost<T>,
@@ -66,14 +71,14 @@ export class ElementLoader<T extends IElement> {
    * because it was a repeat of an already-logged error.
    */
   isLoadErrorSuppressed(filePath: string): boolean {
-    return this.suppressedLoadPaths.has(filePath);
+    return this.suppressedLoadPaths.get(this.cache.getNamespace())?.has(filePath) ?? false;
   }
 
   /**
    * Returns elements that exist on disk but failed validation during load.
    */
   getInvalidElements(): InvalidElementRecord[] {
-    return [...this.invalidElements.values()];
+    return [...(this.invalidElements.get(this.cache.getNamespace())?.values() ?? [])];
   }
 
   /**
@@ -81,7 +86,8 @@ export class ElementLoader<T extends IElement> {
    * Used by get_element to distinguish "not found" from "invalid".
    */
   getInvalidElement(name: string, getFileExtension: () => string, normalizeFilename: (n: string) => string): InvalidElementRecord | undefined {
-    for (const [filePath, record] of this.invalidElements) {
+    for (const record of this.getInvalidElements()) {
+      const { filePath } = record;
       if (filePath === name) return record;
       const basename = path.basename(filePath, getFileExtension());
       if (basename === name || normalizeFilename(basename) === normalizeFilename(name)) {
@@ -96,8 +102,22 @@ export class ElementLoader<T extends IElement> {
    * Called on successful load or when an external change is detected.
    */
   clearInvalidRecord(relativePath: string): void {
-    this.invalidElements.delete(relativePath);
-    this.suppressedLoadPaths.delete(relativePath);
+    const namespace = this.cache.getNamespace();
+    this.deleteScopedPath(this.invalidElements, namespace, relativePath);
+    this.deleteScopedPath(this.suppressedLoadPaths, namespace, relativePath);
+  }
+
+  clear(): void {
+    this.invalidElements.clear();
+    this.suppressedLoadPaths.clear();
+  }
+
+  private deleteScopedPath<S extends { delete(key: string): boolean; readonly size: number }>(
+    scopes: Map<string, S>, namespace: string, relativePath: string,
+  ): void {
+    const paths = scopes.get(namespace);
+    paths?.delete(relativePath);
+    if (paths?.size === 0) scopes.delete(namespace);
   }
 
   /**
@@ -105,6 +125,10 @@ export class ElementLoader<T extends IElement> {
    * Identical to the former BaseElementManager.load() body.
    */
   async load(filePath: string): Promise<T> {
+    return this.cache.withDirectoryPin(lease => this.loadAndCache(filePath, lease));
+  }
+
+  private async loadAndCache(filePath: string, lease: CachePublicationLease): Promise<T> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
     const correlationId = randomUUID();
 
@@ -125,10 +149,9 @@ export class ElementLoader<T extends IElement> {
         await this.host.afterLoad(element, relativePath, parsed);
       }
 
-      this.cache.cacheElement(element, relativePath);
+      this.cache.cacheElement(element, relativePath, lease);
 
-      this.invalidElements.delete(relativePath);
-      this.suppressedLoadPaths.delete(relativePath);
+      this.clearInvalidRecord(relativePath);
 
       logger.info(`${this.host.getElementLabelCapitalized()} loaded: ${element.metadata.name}`);
 
@@ -192,15 +215,20 @@ export class ElementLoader<T extends IElement> {
     absolutePath: string,
     correlationId: string,
   ): void {
+    const namespace = this.cache.getNamespace();
     const isFileNotFound = (error as NodeJS.ErrnoException).code === 'ENOENT';
     let isRepeatError = false;
 
-    if (!isFileNotFound) {
+    if (isFileNotFound) {
+      this.clearInvalidRecord(relativePath);
+    } else {
       const reason = error instanceof Error ? error.message : String(error);
-      const existing = this.invalidElements.get(relativePath);
+      const records = this.invalidElements.get(namespace) ?? new Map<string, InvalidElementRecord>();
+      this.invalidElements.set(namespace, records);
+      const existing = records.get(relativePath);
       isRepeatError = existing?.reason === reason;
 
-      this.invalidElements.set(relativePath, {
+      records.set(relativePath, {
         filePath: relativePath,
         reason,
         failedAt: isRepeatError ? existing!.failedAt : new Date().toISOString(),
@@ -208,10 +236,12 @@ export class ElementLoader<T extends IElement> {
     }
 
     if (isRepeatError) {
-      this.suppressedLoadPaths.add(relativePath);
+      const suppressed = this.suppressedLoadPaths.get(namespace) ?? new Set<string>();
+      suppressed.add(relativePath);
+      this.suppressedLoadPaths.set(namespace, suppressed);
       logger.debug(`Suppressed repeated load error for ${this.host.getElementLabel()} ${relativePath}`);
     } else {
-      this.suppressedLoadPaths.delete(relativePath);
+      this.deleteScopedPath(this.suppressedLoadPaths, namespace, relativePath);
       this.events.eventDispatcher.emitAsync(
         'element:load:error',
         this.events.createEventPayload({ correlationId, filePath: relativePath, error }),
@@ -229,7 +259,7 @@ export class ElementLoader<T extends IElement> {
 
   /**
    * Load an element snapshot from file for validation (e.g., canDelete guard).
-   * Uses a direct file read rather than going through the full load() pipeline.
+   * Newly read validation snapshots are not published into the shared cache.
    */
   async loadElementSnapshot(absolutePath: string, relativePath: string): Promise<T> {
     const cached = this.cache.getCachedByAbsolutePath(absolutePath);
@@ -243,7 +273,6 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content);
-    this.cache.cacheElement(element, relativePath);
     return element;
   }
 
@@ -259,7 +288,6 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content);
-    this.cache.cacheElement(element, relativePath);
     return element;
   }
 }

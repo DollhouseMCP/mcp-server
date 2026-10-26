@@ -38,24 +38,24 @@ export class ElementResolver<T extends IElement> {
    * Identical to the former BaseElementManager.findByName() body.
    */
   async findByName(identifier: string): Promise<T | undefined> {
-    const cachedElement = await this.findInCache(identifier);
+    const cachedElement = this.findInCache(identifier);
     if (cachedElement) return cachedElement;
 
     const isDatabaseBacked = isWritableStorageLayer(this.storageLayer);
 
-    let indexedPath = this.storageLayer.getPathByName(identifier);
+    let indexed = await this.storageLayer.readIndexedPath([identifier]);
 
     // In DB mode, if the index is empty (no scan yet), trigger a scan
     // to populate the name→UUID map before falling back to filename-based
     // lookup (which cannot work with UUIDs).
-    if (!indexedPath && isDatabaseBacked && !this.storageLayer.hasCompletedScan()) {
+    if (!indexed.path && isDatabaseBacked && !indexed.authoritative) {
       await this.storageLayer.scan();
-      indexedPath = this.storageLayer.getPathByName(identifier);
+      indexed = await this.storageLayer.readIndexedPath([identifier]);
     }
 
-    if (indexedPath) {
+    if (indexed.path) {
       try {
-        return await this.host.load(indexedPath);
+        return await this.host.load(indexed.path);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
@@ -68,7 +68,7 @@ export class ElementResolver<T extends IElement> {
       if (directLoadAttempt) return directLoadAttempt;
     }
 
-    if (this.storageLayer.hasCompletedScan()) {
+    if (indexed.authoritative) {
       return undefined;
     }
 
@@ -84,7 +84,7 @@ export class ElementResolver<T extends IElement> {
   /**
    * Search cache for element by name or ID.
    */
-  async findInCache(identifier: string): Promise<T | undefined> {
+  findInCache(identifier: string): T | undefined {
     const possibleFilenames = [
       identifier,
       `${identifier}${this.host.getFileExtension()}`,

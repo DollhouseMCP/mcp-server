@@ -23,7 +23,11 @@ export interface ElementCacheHost {
   resolveAbsolutePath(filePath: string): string;
   readonly elementDir: string;
   getCacheNamespace(): string;
+  onClear?(): void;
 }
+
+declare const publicationLease: unique symbol;
+export interface CachePublicationLease { readonly [publicationLease]: true }
 
 export class ElementCache<T extends IElement> {
   /** Primary cache: namespace + runtime ID + storage path → Element. */
@@ -49,7 +53,10 @@ export class ElementCache<T extends IElement> {
   /** Primary key → scoped runtime ID, used for O(1) eviction cleanup. */
   private readonly elementKeyToId = new Map<string, string>();
   private readonly elementGenerations = new Map<string, number>();
+  private readonly directoryCounts = new Map<string, number>();
+  private readonly elementDirectories = new Map<string, string>();
   private cacheGenerationCounter = 0;
+  private readonly publicationLeases = new WeakMap<CachePublicationLease, { directory: string; namespace: string }>();
   private readonly memoryBudget?: CacheMemoryBudget;
 
   private static readonly MAX_ELEMENT_CACHE_SIZE = 1000;
@@ -93,12 +100,21 @@ export class ElementCache<T extends IElement> {
     }
   }
 
-  private key(rawKey: string): string {
-    return `${this.host.getCacheNamespace()}:${rawKey}`;
+  /** Prefix the key with the ambient namespace; see getNamespace for context requirements. */
+  key(rawKey: string): string {
+    return `${this.getNamespace()}:${rawKey}`;
+  }
+
+  /**
+   * Resolve inside the request context (otherwise the default is system).
+   * Snapshot once per operation when subsequent bookkeeping must share the caller.
+   */
+  getNamespace(): string {
+    return this.host.getCacheNamespace();
   }
 
   private keyPrefix(): string {
-    return `${this.host.getCacheNamespace()}:`;
+    return `${this.getNamespace()}:`;
   }
 
   private elementKey(elementId: string, absolutePath: string): string {
@@ -109,6 +125,7 @@ export class ElementCache<T extends IElement> {
     const pathKeys = this.elementKeyToPaths.get(elementKey);
     this.elementKeyToPaths.delete(elementKey);
     this.elementGenerations.delete(elementKey);
+    this.releaseElementDirectory(elementKey);
     if (this.elementToKey.get(element) === elementKey) {
       this.elementToKey.delete(element);
     }
@@ -201,6 +218,54 @@ export class ElementCache<T extends IElement> {
     this.pathToElementKey.set(pathKey, elementKey);
   }
 
+  private changeDirectoryCount(directory: string, delta: number): void {
+    const count = (this.directoryCounts.get(directory) ?? 0) + delta;
+    if (count > 0) this.directoryCounts.set(directory, count);
+    else this.directoryCounts.delete(directory);
+  }
+
+  private releaseElementDirectory(elementKey: string): void {
+    const directory = this.elementDirectories.get(elementKey);
+    if (directory) this.changeDirectoryCount(directory, -1);
+    this.elementDirectories.delete(elementKey);
+  }
+
+  private bindElementDirectory(elementKey: string, absolutePath: string): void {
+    this.releaseElementDirectory(elementKey);
+    const directory = path.resolve(this.host.elementDir);
+    const relative = path.relative(directory, absolutePath);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
+    this.elementDirectories.set(elementKey, directory);
+    this.changeDirectoryCount(directory, 1);
+  }
+
+  hasDirectoryEntries(directory: string): boolean {
+    // Expiry is lazy; cleanup is O(1) until the next TTL deadline is due.
+    this.elements.cleanup();
+    return this.directoryCounts.has(path.resolve(directory));
+  }
+
+  /** Acquire before reading or writing bytes that will be published into this cache. */
+  withDirectoryPin<R>(operation: (lease: CachePublicationLease) => R): R {
+    const directory = path.resolve(this.host.elementDir);
+    const lease = {} as CachePublicationLease;
+    this.publicationLeases.set(lease, { directory, namespace: this.getNamespace() });
+    this.changeDirectoryCount(directory, 1);
+    const release = () => {
+      this.publicationLeases.delete(lease);
+      this.changeDirectoryCount(directory, -1);
+    };
+    try {
+      const result = operation(lease);
+      if (result instanceof Promise) return result.finally(release) as R;
+      release();
+      return result;
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+
   private bindElementId(element: T, elementKey: string): void {
     this.elementToKey.set(element, elementKey);
     const elementIdKey = this.key(element.id);
@@ -210,11 +275,21 @@ export class ElementCache<T extends IElement> {
     this.elementKeyToId.set(elementKey, elementIdKey);
   }
 
+  /** Reject invalid publication authority before persistence or cache mutation. */
+  assertPublicationLease(lease: CachePublicationLease): void {
+    const authority = this.publicationLeases.get(lease);
+    if (authority?.directory !== path.resolve(this.host.elementDir) ||
+      authority.namespace !== this.getNamespace()) {
+      throw new Error('Cache publication requires an active lease for the current directory and namespace');
+    }
+  }
+
   /**
    * Adds an element to both caches (bidirectional mapping).
    * Also stamps `filename` and `filePath` onto the element object.
    */
-  cacheElement(element: T, filePath: string): void {
+  cacheElement(element: T, filePath: string, lease: CachePublicationLease): void {
+    this.assertPublicationLease(lease);
     const absolutePath = this.host.resolveAbsolutePath(filePath);
 
     const relativePath = path.isAbsolute(filePath)
@@ -231,6 +306,7 @@ export class ElementCache<T extends IElement> {
     this.retireConflictingEntries(element, pathKey, elementKey);
     this.bindElementPath(elementKey, pathKey);
     this.bindElementId(element, elementKey);
+    this.bindElementDirectory(elementKey, absolutePath);
     this.elements.set(elementKey, element);
     if (!this.elements.has(elementKey)) return;
     this.filePathToId.set(pathKey, elementKey);
@@ -326,6 +402,7 @@ export class ElementCache<T extends IElement> {
     this.elementIdToKeys.clear();
     this.elementKeyToId.clear();
     this.elementGenerations.clear();
+    this.host.onClear?.();
   }
 
   /**

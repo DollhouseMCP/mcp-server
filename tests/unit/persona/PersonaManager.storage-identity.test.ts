@@ -1,3 +1,4 @@
+import { publishCachedElement } from '../../helpers/cache-publication.js';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { createIntegrationContainer } from '../../helpers/integration-container.js';
 import { PersonaManager } from '../../../src/persona/PersonaManager.js';
@@ -75,7 +76,7 @@ describe('PersonaManager lookup order with mocked lookups', () => {
     const personas = ['first', 'second', 'third'].map(name => {
       const persona = new PersonaElement({ name }, `${name} instructions.`, `${name}.md`,
         env.container.resolve('MetadataService'));
-      manager['cacheElement'](persona, persona.filename);
+      publishCachedElement(manager, persona, persona.filename);
       return persona;
     });
     await manager.activatePersona('first');

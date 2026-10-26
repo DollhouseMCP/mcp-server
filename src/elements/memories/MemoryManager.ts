@@ -1,5 +1,3 @@
-import { assertHydratedMemoryReadFidelity } from '../../storage/MemoryHydrationReadFidelity.js';
-import { matchesPortfolioName } from '../../utils/portfolioName.js';
 /**
  * MemoryManager - Implementation of IElementManager for Memory elements
  * Handles CRUD operations and lifecycle management for memories implementing IElement
@@ -12,6 +10,10 @@ import { matchesPortfolioName } from '../../utils/portfolioName.js';
  * 5. MEDIUM: Path validation prevents directory traversal attacks
  */
 
+import { visitSequentially } from '../../utils/visitSequentially.js';
+import type { CachePublicationLease } from '../base/ElementCache.js';
+import { assertHydratedMemoryReadFidelity } from '../../storage/MemoryHydrationReadFidelity.js';
+import { matchesPortfolioName } from '../../utils/portfolioName.js';
 import type { MemoryEntry, MemoryMetadata, MemoryAppendSnapshot } from './Memory.js';
 import { Memory } from './Memory.js';
 import type { MemoryHeadUpdateAdapter, MemoryUpdateCandidate, PendingMemoryUpdate } from '../../storage/MemoryHeadUpdateAdapter.js';
@@ -38,7 +40,7 @@ import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
-import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
+import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, SEED_MEMORY_FILENAME } from './constants.js';
 import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
 import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
@@ -404,12 +406,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Post-load hook: populate memory-specific fields (entries, instructions, markdown body)
    * from the YAML already parsed by super.load(). Avoids re-reading the file/DB record.
    */
-  protected override async afterLoad(
+  protected override afterLoad(
     memory: Memory,
     _filePath: string,
     parsedData?: { data: Record<string, unknown>; content: string },
     options?: { suppressLoadPolicy?: boolean },
   ): Promise<void> {
+    this.populateLoadedMemory(memory, parsedData, options);
+    return Promise.resolve();
+  }
+
+  private populateLoadedMemory(
+    memory: Memory,
+    parsedData?: { data: Record<string, unknown>; content: string },
+    options?: { suppressLoadPolicy?: boolean },
+  ): void {
     if (!parsedData) return; // Defensive — base always supplies it, but the hook is optional.
 
     // Fix #918: Read instructions from root-level YAML
@@ -491,7 +502,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Delete oldest backups (keep the last N)
       const toDelete = memoryBackups.slice(0, memoryBackups.length - maxBackups);
-      for (const file of toDelete) {
+      await visitSequentially(toDelete.values(), async (file) => {
         try {
           await this.fileOperations.deleteFile(
             path.join(backupDir, file),
@@ -501,7 +512,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         } catch (error) {
           logger.debug(`[MemoryManager] Failed to prune backup ${file}:`, error);
         }
-      }
+      });
 
       if (toDelete.length > 0) {
         logger.info(`[MemoryManager] Issue #654: Pruned ${toDelete.length} excess backups for ${baseName} (kept ${maxBackups})`);
@@ -587,9 +598,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       path.join(this.memoriesDir, 'adapters')
     ];
 
-    for (const folder of folders) {
+    await visitSequentially(folders.values(), async (folder) => {
       await this.fileOperations.createDirectory(folder);
-    }
+    });
   }
 
   /**
@@ -832,13 +843,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.upgradeSaveOperations.size > 0 || (this.memoryUpgrade?.hasRetainedWrites(this) ?? false);
   }
 
-  async flushPendingSaves(): Promise<void> {
-    // Preflight/FIFO work is retained too, but a definite pre-write rejection
-    // does not become a failed publication obligation.
-    while (this.upgradeSaveOperations.size) await Promise.allSettled(this.upgradeSaveOperations);
-    // A manager cannot blindly replay a failed publication. The originating
-    // handler may reconcile its exact candidate through the normal save path.
-    if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
+  flushPendingSaves(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const step = (): void => {
+        try {
+          // Include preflight/FIFO work and any saves arriving during this batch.
+          if (this.upgradeSaveOperations.size) {
+            void Promise.allSettled(this.upgradeSaveOperations).then(step, reject);
+            return;
+          }
+          // Only the originating handler can reconcile a failed publication.
+          if (this.hasRetainedMemoryWork()) throw new MemoryDrainRefusedError();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      step();
+    });
   }
 
   /** Existing legacy repair must precede the frozen retry target and payload. */
@@ -1124,6 +1146,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
   private async saveGuardedMemory(element: Memory, filePath?: string, options?: ElementSaveOptions,
     attempt?: MemoryWriteAttempt): Promise<void> {
+    return this.withCachePublication(lease => this.saveGuardedMemoryAndCache(element, lease, filePath, options, attempt));
+  }
+
+  private async saveGuardedMemoryAndCache(element: Memory, lease: CachePublicationLease, filePath?: string,
+    options?: ElementSaveOptions, attempt?: MemoryWriteAttempt): Promise<void> {
+    this.assertPublicationLease(lease);
     const adapter = this.guardedUpdateAdapter!;
     const tenant = adapter.captureTenant();
     if (options?.expectedIdentity !== undefined || options?.expectedStorageRevision !== undefined || options?.expectedFileSnapshot !== undefined) throw new Error('Caller preconditions are unsupported by the dormant memory adapter');
@@ -1148,6 +1176,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       } };
       this.validateSerializedContent(content);
       this.requireGuardedContext(tenant, contextRoot);
+      this.assertPublicationLease(lease);
       if (attempt) attempt.phase = 'started';
       const outcome = await adapter.write(element, tenant, candidate);
       if (outcome.status !== 'committed') throw outcome.cause;
@@ -1163,7 +1192,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
           await this.storageLayer.notifySaved(locator!, path.join(contextRoot, locator!));
           this.requireGuardedContext(tenant, contextRoot);
         }
-        this.cacheElement(publication, locator!);
+        this.cacheElement(publication, locator!, lease);
         await this.afterSave(publication, locator!);
       };
       if (this.deferredGuardedPublications.has(element)) await publish();
@@ -1509,7 +1538,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const failedLoads: Array<{ file: string; error: string }> = [];
     const memories: Memory[] = [];
 
-    for (const relativePath of indexedPaths) {
+    await visitSequentially(indexedPaths.values(), async (relativePath) => {
       try {
         const memory = await this.load(relativePath);
         const memoryMeta = memory.metadata as MemoryMetadata;
@@ -1520,7 +1549,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       } catch (error) {
         this.handleLoadFailure(relativePath, error, failedLoads);
       }
-    }
+    });
 
     if (failedLoads.length > 0) {
       logger.warn(`[MemoryManager] Failed to load ${failedLoads.length} memories:`,
@@ -1544,11 +1573,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   private async applyActivationStatus(memories: Memory[]): Promise<void> {
-    for (const memory of memories) {
+    await visitSequentially(memories.values(), async (memory) => {
       if (this.getActivationSet().has(memory.metadata.name)) {
         await memory.activate();
       }
-    }
+    });
   }
 
   /**
@@ -1682,7 +1711,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       result.scanned = memories.length;
 
       let processed = 0;
-      for (const memory of memories) {
+      await visitSequentially(memories.values(), async (memory) => {
         const currentName = memory.metadata.name;
         processed++;
 
@@ -1721,7 +1750,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
             logger.error(`[MemoryManager] Issue #39: Failed to repair '${currentName}':`, error);
           }
         }
-      }
+      });
 
       logger.info(
         `[MemoryManager] Issue #39: Repair scan complete. ` +
@@ -1782,10 +1811,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const backupGroups = this.groupVersionedBackups(files);
       this.recordKeptBackups(files, backupGroups, result);
       const versionedFiles = Array.from(backupGroups.values()).flat();
-      for (const [index, versionedFile] of versionedFiles.entries()) {
+      await visitSequentially(versionedFiles.entries(), async ([index, versionedFile]) => {
         onProgress?.(index + 1, versionedFiles.length, versionedFile);
         await this.removeVersionedBackup(dir, versionedFile, dryRun, result);
-      }
+      });
 
       logger.info(
         `[MemoryManager] Issue #39: Backup cleanup complete${dryRun ? ' (DRY RUN)' : ''}. ` +
@@ -1908,14 +1937,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
       .then(files => files.filter(f => f.endsWith('.yaml')))
       .catch(() => []);
 
-    for (const file of rootFiles) {
+    await visitSequentially(rootFiles.values(), async (file) => {
       try {
         await this.load(file);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         failures.push({ file, error: errorMsg });
       }
-    }
+    });
 
     return rootFiles.length;
   }
@@ -1933,14 +1962,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
       .then(files => files.filter(f => f.endsWith('.yaml')))
       .catch(() => []);
 
-    for (const file of files) {
+    await visitSequentially(files.values(), async (file) => {
       try {
         await this.load(path.join(dateFolder, file));
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         failures.push({ file: `${dateFolder}/${file}`, error: errorMsg });
       }
-    }
+    });
 
     return files.length;
   }
@@ -1965,9 +1994,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       totalFiles += await this.checkRootFiles(failures);
 
       // Check date folders
-      for (const dateFolder of dateFolders) {
+      await visitSequentially(dateFolders.values(), async (dateFolder) => {
         totalFiles += await this.checkDateFolderFiles(dateFolder, failures);
-      }
+      });
 
       return {
         total: totalFiles,
@@ -1997,18 +2026,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
         return memories.filter(memory => (memory.metadata as MemoryMetadata).autoLoad === true)
           .sort((a, b) => ((a.metadata as MemoryMetadata).priority ?? 999) - ((b.metadata as MemoryMetadata).priority ?? 999));
       }
-      // Ensure index is populated
-      await this.storageLayer.scan();
-
-      // Phase 2: Query index for autoLoad entries — does NOT load all files
+      // Phase 2: scan, then query the index for autoLoad entries — does NOT load all files
       const memStorageLayer = this.storageLayer as MemoryStorageLayer;
-      const autoLoadEntries = memStorageLayer.getAutoLoadEntries();
+      const autoLoadEntries = await memStorageLayer.scanAutoLoadEntries();
 
       logger.info(`[MemoryManager] getAutoLoadMemories: Found ${autoLoadEntries.length} auto-load entries in index`);
 
       // Load only matching memories (typically 3-5)
       const autoLoadMemories: Memory[] = [];
-      for (const entry of autoLoadEntries) {
+      await visitSequentially(autoLoadEntries.values(), async (entry) => {
         try {
           const memory = await this.load(entry.filePath);
           autoLoadMemories.push(memory);
@@ -2016,7 +2042,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         } catch (error) {
           logger.warn(`[MemoryManager] Failed to load auto-load memory ${entry.filePath}: ${error}`);
         }
-      }
+      });
 
       // Sort by priority (already sorted from getAutoLoadEntries, but ensure consistency)
       autoLoadMemories.sort((a, b) => {
@@ -2048,7 +2074,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     try {
       if (this.guardedUpdateAdapter) throw new Error('Seed installation is unavailable for guarded memory updates; no seeds were changed.');
       // Define the seed file
-      const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
+      const seedFileName = SEED_MEMORY_FILENAME;
       logger.debug(`[MemoryManager] Step 1: Target seed file: ${seedFileName}`);
 
       const locator = _packageLocator;
@@ -2910,10 +2936,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
       logger.info(`[MemoryManager] Found ${autoLoadMemories.length} auto-load memories`);
 
       // Complete each activation and its binding checks before starting the next.
-      for (const memory of autoLoadMemories) {
+      await visitSequentially(autoLoadMemories.values(), async (memory) => {
         await this.activateAutoLoadMemory(memory, errors, counts, assertCurrent);
         assertCurrent?.();
-      }
+      });
 
       const { loaded, skipped, totalTokens } = counts;
       const elapsedTime = Date.now() - startTime;

@@ -4,6 +4,7 @@
  * or relationships when using the database storage layers.
  */
 
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { eq, sql } from 'drizzle-orm';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
@@ -390,6 +391,7 @@ describe('RLS visibility — public elements', () => {
     );
     const { DatabaseStorageLayerFactory } = await import('../../../src/storage/DatabaseStorageLayerFactory.js');
     const skillManager = new SkillManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager,
       fileLockManager,
       fileOperationsService: fileOperations,

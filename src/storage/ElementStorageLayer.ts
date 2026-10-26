@@ -5,10 +5,12 @@
  * diff-based incremental index updates, and notifications from save/delete.
  */
 
-import * as path from 'path';
+import { findFileIndexedPath, readFileIndex } from './FileIndexReader.js';
+import { DirectoryStateCache } from './DirectoryStateCache.js';
+import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
 import type { IStorageBackend } from './IStorageBackend.js';
-import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
+import { type IndexedPathResult, type IStorageLayer, type StorageScanOptions } from './IStorageLayer.js';
 import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
 import { MetadataIndex } from './MetadataIndex.js';
@@ -26,6 +28,7 @@ export interface ElementStorageLayerOptions {
   scanCooldownMs?: number;
   /** Override the storage backend (useful for testing) */
   storageBackend?: IStorageBackend;
+  retainDirectoryState?: (dir: string) => boolean;
   /**
    * Dynamic per-user directory resolver. When present, overrides the static
    * `elementDir` at call time. Used in HTTP multi-user mode where each
@@ -50,11 +53,14 @@ interface DirScanState {
   manifest: StorageManifest;
   index: MetadataIndex;
   lastScanTimestamp: number;
+  /** Completion survives cooldown invalidation; only clear/new state makes it cold. */
+  hasScanned: boolean;
   scanInProgress: Promise<ManifestDiffResult> | null;
 }
 
 export class ElementStorageLayer implements IStorageLayer {
   private readonly backend: IStorageBackend;
+  private readonly retainDirectoryState?: (dir: string) => boolean;
   private readonly staticElementDir: string;
   private readonly elementDirResolver?: () => string;
   private readonly fileExtension: string;
@@ -66,17 +72,17 @@ export class ElementStorageLayer implements IStorageLayer {
    * manifest, index, cooldown, and in-flight scan promise — fully
    * independent, no race conditions across users.
    *
-   * Growth: bounded by unique users who have connected (not sessions).
-   * Each entry holds ~1-2KB of metadata per file in the dir. For the
-   * target deployment scale (10-50 users), total footprint is small.
-   * purgeDirState(dir) exists for future eviction if scale demands it.
+   * Idle states are bounded by DirectoryStateCache; active operations are pinned.
    */
-  private readonly dirStates = new Map<string, DirScanState>();
+  private readonly dirStates = new DirectoryStateCache<DirScanState>(
+    (_state, dir) => !this.retainDirectoryState?.(dir),
+  );
 
   constructor(
     fileOperationsService: FileOperationsService,
     options: ElementStorageLayerOptions
   ) {
+    this.retainDirectoryState = options.retainDirectoryState;
     this.staticElementDir = options.elementDir;
     this.elementDirResolver = options.elementDirResolver;
     this.fileExtension = options.fileExtension;
@@ -102,6 +108,7 @@ export class ElementStorageLayer implements IStorageLayer {
         manifest: new StorageManifest(),
         index: new MetadataIndex(),
         lastScanTimestamp: 0,
+        hasScanned: false,
         scanInProgress: null,
       };
       this.dirStates.set(dir, state);
@@ -119,6 +126,10 @@ export class ElementStorageLayer implements IStorageLayer {
     const currentDir = this.elementDir;
     const state = this.getState(currentDir);
 
+    return this.dirStates.use(state, () => this.scanState(currentDir, state, options));
+  }
+
+  private async scanState(currentDir: string, state: DirScanState, options: StorageScanOptions): Promise<ManifestDiffResult> {
     const existingScan = state.scanInProgress;
     if (existingScan) {
       if (!options.freshAfterInFlight) return existingScan;
@@ -147,13 +158,9 @@ export class ElementStorageLayer implements IStorageLayer {
   }
 
   private async startScan(currentDir: string, state: DirScanState): Promise<ManifestDiffResult> {
-    const scanPromise = this.performScanForDir(currentDir, state);
-    state.scanInProgress = scanPromise;
-    try {
-      return await scanPromise;
-    } finally {
-      if (state.scanInProgress === scanPromise) state.scanInProgress = null;
-    }
+    const diff = await this.dirStates.runScan(state, () => this.performScanForDir(currentDir, state));
+    state.hasScanned = true;
+    return diff;
   }
 
   /**
@@ -165,13 +172,27 @@ export class ElementStorageLayer implements IStorageLayer {
    * grow a union-enumeration of the current user's subtree plus `shared/`.
    */
   async listSummaries(_options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
+    const state = this.getState();
     await this.scan();
-    return this.getState().index.getAll();
+    return state.index.getAll();
   }
 
   async getIndexedPaths(): Promise<string[]> {
+    const state = this.getState();
     await this.scan();
-    return this.getState().index.getPaths();
+    return state.index.getPaths();
+  }
+
+  findIndexedPath(names: readonly string[]): Promise<string | undefined> {
+    const dir = this.elementDir;
+    const state = this.getState(dir);
+    // A cold manifest is empty, so its diff is only additions; no cached invalidations are lost.
+    // Warm reads must leave modified/removed diffs for scanAndEvict, even after invalidate().
+    return findFileIndexedPath(this.dirStates, state, names, () => this.scanState(dir, state, {}));
+  }
+
+  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult> {
+    return readFileIndex(this.dirStates, this.getState(), names);
   }
 
   getPathByName(name: string): string | undefined {
@@ -180,11 +201,15 @@ export class ElementStorageLayer implements IStorageLayer {
   }
 
   hasCompletedScan(): boolean {
-    return this.getState().lastScanTimestamp > 0;
+    return this.dirStates.hasCompletedScan(this.elementDir);
   }
 
   async notifySaved(relativePath: string, absolutePath: string): Promise<void> {
     const state = this.getState();
+    return this.dirStates.use(state, () => this.indexSavedFile(state, relativePath, absolutePath));
+  }
+
+  private async indexSavedFile(state: DirScanState, relativePath: string, absolutePath: string): Promise<void> {
     try {
       const meta = await this.backend.stat(absolutePath);
       const content = await this.backend.readFile(absolutePath);
@@ -206,7 +231,7 @@ export class ElementStorageLayer implements IStorageLayer {
         relativePath,
         error: error instanceof Error ? error.message : String(error),
       });
-      this.invalidate();
+      state.lastScanTimestamp = 0;
     }
   }
 
@@ -227,16 +252,8 @@ export class ElementStorageLayer implements IStorageLayer {
       state.index.clear();
       state.manifest.clear();
       state.lastScanTimestamp = 0;
+      state.hasScanned = false;
     }
-  }
-
-  /**
-   * Remove cached scan state for a specific directory. Called during
-   * session cleanup to prevent unbounded growth of the per-dir cache
-   * in long-running multi-user deployments.
-   */
-  purgeDirState(dir: string): void {
-    this.dirStates.delete(dir);
   }
 
   // ---- private ----
