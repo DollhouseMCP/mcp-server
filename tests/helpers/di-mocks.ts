@@ -465,6 +465,7 @@ export function createHandlerMocks() {
  * Common dependencies shared across all managers
  */
 export interface CommonManagerDependencies {
+  activationMetricsTracker?: ActivationMetricsTracker;
   storageLayerFactory?: IStorageLayerFactory;
   portfolioManager?: PortfolioManager;
   fileLockManager?: FileLockManager;
@@ -515,6 +516,7 @@ export function createRealSkillManager(
   );
 
   return new SkillManager({
+    activationMetricsTracker: overrides?.activationMetricsTracker ?? new ActivationMetricsTracker(() => 'local-user'),
     portfolioManager,
     fileLockManager,
     fileOperationsService: fileOperations,
@@ -626,6 +628,7 @@ export function createRealEnsembleManager(
   );
 
   return new EnsembleManager({
+    activationMetricsTracker: overrides?.activationMetricsTracker ?? new ActivationMetricsTracker(() => 'local-user'),
     portfolioManager,
     fileLockManager,
     fileOperationsService: fileOperations,

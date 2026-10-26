@@ -4,6 +4,7 @@
  * to 3-part semver format before incrementing
  */
 
+import { ActivationMetricsTracker } from '../../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { editElement } from '../../../../src/handlers/element-crud/editElement.js';
 import { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
@@ -71,6 +72,7 @@ describe('autoIncrementVersion in editElement', () => {
 
     // Initialize SkillManager
     skillManager = new SkillManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager,
       fileLockManager,
       fileOperationsService,

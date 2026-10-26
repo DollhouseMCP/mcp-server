@@ -38,6 +38,11 @@ import {
 } from '../../helpers/httpTransportHelper.js';
 import { preConfirmAllOperations } from '../../helpers/portfolioTestHelper.js';
 
+import { BaseElementManager } from '../../../src/elements/base/BaseElementManager.js';
+import type { IElement } from '../../../src/types/elements/IElement.js';
+import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
+import { SessionContainerRegistry } from '../../../src/di/SessionContainerRegistry.js';
+
 const ENV_STARTUP_TIMEOUT = 20_000;
 const TEST_TIMEOUT = 45_000;
 
@@ -100,6 +105,52 @@ describe('Per-user filesystem isolation (HTTP multi-user)', () => {
   // We use DISTINCT element names per user here so the test exercises
   // filesystem isolation cleanly, without entanglement with the cache
   // leak.
+
+  it.each(['skill', 'memory'] as const)('isolates %s scan indexes and external edits across HTTP sessions', async type => {
+    const plural = type === 'skill' ? 'skills' : 'memories';
+    const service = type === 'skill' ? 'SkillManager' : 'MemoryManager';
+    const names = [`alice-directory-${type}`, `bob-directory-${type}`];
+    const handles = [handleA, handleB];
+    for (const [index, handle] of handles.entries()) {
+      const response = await create(handle.client, { operation: 'create_element', params: {
+        element_type: type, element_name: names[index], description: 'Original directory description',
+        content: 'These are valid storage isolation instructions.',
+      } });
+      expect(response).not.toContain('❌');
+    }
+    const tracker = env.container.resolve<ContextTracker>('ContextTracker');
+    const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const inspectIndex = async (index: number) => {
+      const session = env.sessionContexts[index];
+      return tracker.runAsync(tracker.createSessionContext('llm-request', session), async () => {
+        const manager = registry.get(session.sessionId)!.resolve<BaseElementManager<IElement>>(service);
+        const directory = path.join(portfolioRoot, 'users', session.userId, 'portfolio', plural);
+        expect(manager['elementDir']).toBe(directory);
+        const storage = manager['storageLayer'];
+        await manager['scanAndEvict']();
+        const relative = storage.getPathByName(names[index]);
+        expect(relative).toBeDefined();
+        expect(storage.getPathByName(names[1 - index])).toBeUndefined();
+        return path.join(directory, relative!);
+      });
+    };
+    const files = await Promise.all([inspectIndex(0), inspectIndex(1)]);
+    for (const [index, file] of files.entries()) {
+      const body = await fs.readFile(file, 'utf8');
+      await fs.writeFile(file, body.replace('Original directory description', `Edited by user ${index}`));
+      await fs.utimes(file, new Date(), new Date(Date.now() + 2000));
+    }
+    await Promise.all([inspectIndex(0), inspectIndex(1)]);
+    await Promise.all(handles.map(async (handle, index) => {
+      // Read through MCP after each manager refreshed only its own cached definitions.
+      await read(handle.client, { operation: 'list_elements', params: { element_type: type } });
+      const response = await read(handle.client, { operation: 'get_element_details',
+        params: { element_type: type, element_name: names[index] } });
+      expect(response).toContain(`Edited by user ${index}`);
+      expect(response).not.toContain(`Edited by user ${1 - index}`);
+    }));
+    await Promise.all([inspectIndex(0), inspectIndex(1)]);
+  }, TEST_TIMEOUT);
 
   it('user A creates a persona; user B does NOT see it in list_elements', async () => {
     await create(handleA.client, {

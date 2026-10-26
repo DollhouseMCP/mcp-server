@@ -1,3 +1,4 @@
+import { ActivationMetricsTracker } from '../../../src/metrics/ActivationMetricsTracker.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import matter from '../../../src/security/frontmatter.js';
@@ -43,6 +44,7 @@ describe('SkillManager (BaseElementManager integration)', () => {
     );
 
     manager = new SkillManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,

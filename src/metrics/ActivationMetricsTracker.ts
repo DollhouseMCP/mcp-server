@@ -10,11 +10,11 @@ export class ActivationMetricsTracker {
 
   constructor(private readonly resolveUserId: UserIdResolver) {}
 
-  retain(elementType: string, reference: string): string {
+  retain(elementType: string, reference: string, consequence = ''): string {
     const userId = this.resolveUserId();
     const key = JSON.stringify([userId, elementType, reference]);
-    const notice = `Retained stale ${elementType} reference ${JSON.stringify(reference)}. ` +
-      'Explicitly deactivate that exact reference to clear it.';
+    const notice = `Active ${elementType} reference ${JSON.stringify(reference)} could not be loaded and is kept. ` +
+      (consequence ? `${consequence} ` : '') + 'Check its definition and storage, or deactivate this exact reference if it was deleted or is no longer needed.';
     if (!this.warned.has(key)) {
       // Oldest-first eviction bounds deduplication. An evicted key may warn/count again.
       if (this.warned.size >= MAX_RETAINED_ACTIVATION_WARNINGS) {
@@ -23,7 +23,7 @@ export class ActivationMetricsTracker {
       }
       this.warned.add(key);
       this.retainedTotal++;
-      logger.warn('[Activation] Retained stale activation reference; explicitly deactivate the exact reference to clear it.',
+      logger.warn('[Activation] Retained stale activation reference (could not be loaded; kept).',
         { userId, elementType, reference });
     }
     return notice;

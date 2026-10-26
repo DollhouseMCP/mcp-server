@@ -20,6 +20,7 @@ export interface MemoryIndexData {
 
 export interface MemoryIndexFileOptions {
   debounceMs?: number;
+  onIdle?: () => void;
 }
 
 const DEFAULT_DEBOUNCE_MS = 2000;
@@ -29,6 +30,9 @@ export class MemoryIndexFile {
   private readonly fileOps: FileOperationsService;
   private readonly debounceMs: number;
 
+  private activeWrites = 0;
+  private readonly onIdle?: () => void;
+
   private pendingEntries: ElementIndexEntry[] | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -37,6 +41,7 @@ export class MemoryIndexFile {
     fileOps: FileOperationsService,
     options?: MemoryIndexFileOptions,
   ) {
+    this.onIdle = options?.onIdle;
     this.indexPath = indexPath;
     this.fileOps = fileOps;
     this.debounceMs = options?.debounceMs ?? DEFAULT_DEBOUNCE_MS;
@@ -66,20 +71,7 @@ export class MemoryIndexFile {
         return this.handleCorruptIndex('entries field is not a Record');
       }
 
-      // Entry-level validation: every entry must have filePath and name
-      const validEntries: Record<string, ElementIndexEntry> = {};
-      let skippedCount = 0;
-      for (const [key, entry] of Object.entries(parsed.entries)) {
-        if (
-          typeof entry === 'object' && entry !== null &&
-          typeof entry.filePath === 'string' && entry.filePath.length > 0 &&
-          typeof entry.name === 'string' && entry.name.length > 0
-        ) {
-          validEntries[key] = entry;
-        } else {
-          skippedCount++;
-        }
-      }
+      const { validEntries, skippedCount } = this.validateEntries(parsed.entries);
 
       if (skippedCount > 0) {
         logger.warn(
@@ -110,6 +102,24 @@ export class MemoryIndexFile {
     }
   }
 
+  private validateEntries(entries: Record<string, ElementIndexEntry>) {
+    const validEntries: Record<string, ElementIndexEntry> = {};
+    let skippedCount = 0;
+    for (const [key, entry] of Object.entries(entries)) {
+      if (
+        typeof entry === 'object' && entry !== null &&
+        typeof entry.filePath === 'string' && entry.filePath.length > 0 &&
+        typeof entry.name === 'string' && entry.name.length > 0
+      ) {
+        validEntries[key] = entry;
+      } else {
+        skippedCount++;
+      }
+    }
+
+    return { validEntries, skippedCount };
+  }
+
   /**
    * Handle a corrupt or malformed index file: log a warning and delete it
    * so the next scan builds a clean index from disk.
@@ -126,12 +136,27 @@ export class MemoryIndexFile {
     return null;
   }
 
+  /** Whether a scheduled or active index write still needs to finish. */
+  hasPendingWrite(): boolean {
+    return this.pendingEntries !== null || this.activeWrites > 0;
+  }
+
   /**
    * Write the index to disk immediately.
    * Converts the entries array to a Record keyed by `entry.filePath`.
    * Catches ENOSPC gracefully (logs warning, does not throw).
    */
   async write(entries: ElementIndexEntry[]): Promise<void> {
+    this.activeWrites++;
+    try {
+      await this.writeEntries(entries);
+    } finally {
+      this.activeWrites--;
+      if (!this.hasPendingWrite()) this.onIdle?.();
+    }
+  }
+
+  private async writeEntries(entries: ElementIndexEntry[]): Promise<void> {
     const entriesRecord: Record<string, ElementIndexEntry> = {};
     for (const entry of entries) {
       entriesRecord[entry.filePath] = entry;

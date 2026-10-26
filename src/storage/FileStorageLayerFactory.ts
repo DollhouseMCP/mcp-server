@@ -36,7 +36,8 @@ export function defaultMemoryFileFilter(filename: string): boolean {
  * Optional resolver for per-user directory scoping. When provided,
  * ElementStorageLayer resolves the element directory dynamically at
  * call time (via ContextTracker userId) instead of using the static
- * `elementDir` from the caller. Absent in single-user (stdio) mode.
+ * `elementDir` from the caller. Production supplies it for both stdio and HTTP;
+ * standalone storage consumers may omit it to use an explicit fixed directory.
  */
 export type ElementDirResolverFactory = (elementType: string) => (() => string);
 
@@ -53,6 +54,7 @@ export class FileStorageLayerFactory implements IStorageLayerFactory {
     if (elementType === 'memories') {
       return new MemoryStorageLayer(this.fileOps, {
         memoriesDir: options.elementDir,
+        retainDirectoryState: options.retainDirectoryState,
         memoriesDirResolver: resolver,
         scanCooldownMs: options.scanCooldownMs,
         indexDebounceMs: this.memoryConfig.indexDebounceMs,

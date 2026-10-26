@@ -13,6 +13,8 @@ import { FileMemoryOwnerSnapshots, type CreatePublication } from '../../../src/s
 import { FileMemoryCreateScanBudget } from '../../../src/storage/FileMemoryCreateScanBudget.js';
 import { FileMemoryOwnedCreate, commitCreateDirectory } from '../../../src/storage/FileMemoryOwnedCreate.js';
 
+import { fileMetadataProof } from './helpers/fileProof.js';
+
 const USER = '11111111-1111-4111-8111-111111111111';
 const roots: string[] = [];
 async function fixture(locator = 'Notes/Created.yaml') {
@@ -58,9 +60,9 @@ describe('exclusive owned CREATE', () => {
   it('preserves an existing same-content target and never reconstructs a creation receipt', async () => {
     const f = await fixture();
     const token = await f.store().createOwned(f.request);
-    const before = await fs.stat(f.head, { bigint: true });
+    const before = fileMetadataProof(await fs.stat(f.head, { bigint: true }));
     await expect(f.store().createOwned(f.request)).rejects.toMatchObject({ code: 'EHEADCONFLICT' });
-    expect(await fs.stat(f.head, { bigint: true })).toEqual(before);
+    expect(fileMetadataProof(await fs.stat(f.head, { bigint: true }))).toEqual(before);
     expect((await f.store().readHeadSnapshot(f.request.locator)).token).toEqual(token);
   });
   it('refuses an orphan content stage before creating ownership directories', async () => {
