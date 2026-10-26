@@ -2,6 +2,7 @@
  * Unit tests for ElementStorageLayer
  */
 
+import { MAX_CACHED_DIRECTORY_STATES } from '../../../src/storage/DirectoryStateCache.js';
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
 import { ElementStorageLayer } from '../../../src/storage/ElementStorageLayer.js';
 import type { IStorageBackend } from '../../../src/storage/IStorageBackend.js';
@@ -53,6 +54,31 @@ describe('ElementStorageLayer', () => {
       scanCooldownMs: 100,
       storageBackend: backend,
     });
+  });
+
+  it('reads cold index status without scanning', async () => {
+    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: undefined, indexComplete: false, authoritative: false });
+    expect(backend.statMany).not.toHaveBeenCalled();
+    expect(await layer.findIndexedPath(['Alpha'])).toBe('alpha.md');
+    expect(await layer.readIndexedPath(['Alpha'])).toEqual({ path: 'alpha.md', indexComplete: true, authoritative: true });
+  });
+
+  it.each([false, true])('leaves warm modified diffs for refresh (invalidated: %s)', async invalidate => {
+    await layer.scan();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 2000);
+    try {
+      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+        ['alpha.md', makeMeta('alpha.md', 3000)],
+        ['beta.md', makeMeta('beta.md', 2000)],
+      ]));
+      if (invalidate) layer.invalidate();
+      expect(await layer.findIndexedPath(['Alpha'])).toBe('alpha.md');
+      expect(await layer.readIndexedPath(['Alpha'])).toMatchObject({ indexComplete: true, authoritative: !invalidate });
+      const diff = await layer.scan();
+      expect(diff.modified).toContain('alpha.md');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   describe('cold start scan', () => {
@@ -350,5 +376,49 @@ describe('ElementStorageLayer', () => {
       expect(diff.added).toEqual([]);
       expect(diff.removed).toEqual([]);
     });
+  });
+});
+
+describe('bounded directory state', () => {
+  it('bounds idle churn, rebuilds evicted directories and retains a flat directory', async () => {
+    let dir = '/users/original';
+    const backend = createMockBackend();
+    const layer = new ElementStorageLayer(dummyFileOps, { elementDir: dir, elementDirResolver: () => dir, fileExtension: '.md', storageBackend: backend });
+    const original = layer['getState']();
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) await layer.scan();
+    expect(layer['dirStates'].size).toBe(1);
+    expect(layer['getState']()).toBe(original);
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) {
+      dir = `/users/${i}`;
+      await layer.scan();
+    }
+    expect(layer['dirStates'].size).toBe(MAX_CACHED_DIRECTORY_STATES);
+    dir = '/users/original';
+    expect(layer['getState']()).not.toBe(original);
+    await layer.scan();
+    expect(layer.hasCompletedScan()).toBe(true);
+    const rebuilt = layer['getState']();
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) await layer.scan();
+    expect(layer['getState']()).toBe(rebuilt);
+  });
+  it('pins a scan and its trailing waiter while other directories churn', async () => {
+    let dir = '/users/busy';
+    let release!: (exists: boolean) => void;
+    const waiting = new Promise<boolean>(resolve => { release = resolve; });
+    const backend = createMockBackend({ directoryExists: jest.fn<any>().mockImplementation((location: string) => location === '/users/busy' ? waiting : Promise.resolve(false)) });
+    const layer = new ElementStorageLayer(dummyFileOps, { elementDir: dir, elementDirResolver: () => dir, fileExtension: '.md', storageBackend: backend });
+    const busy = layer['getState']();
+    const scan = layer.scan();
+    const trailing = layer.scan({ freshAfterInFlight: true });
+    for (let i = 0; i < MAX_CACHED_DIRECTORY_STATES + 5; i++) {
+      dir = `/users/${i}`;
+      await layer.scan();
+    }
+    dir = '/users/busy';
+    expect(layer['getState']()).toBe(busy);
+    release(false);
+    await Promise.all([scan, trailing]);
+    expect(layer['getState']()).toBe(busy);
+    expect(layer['dirStates'].size).toBe(MAX_CACHED_DIRECTORY_STATES);
   });
 });

@@ -62,7 +62,7 @@ export class LRUCache<T> {
   private readonly onSet?: () => void;
   private readonly sizeEstimationMode: SizeEstimationMode;
 
-  private cache = new Map<string, CacheNode<T>>();
+  private readonly cache = new Map<string, CacheNode<T>>();
   private head: CacheNode<T> | null = null;
   private tail: CacheNode<T> | null = null;
   private currentMemoryBytes = 0;
@@ -448,6 +448,7 @@ export class LRUCache<T> {
     }
 
     const now = Date.now();
+    if (now < this.nextExpiryTimestamp) return 0;
     const keysToDelete: string[] = [];
     let earliestRemaining = Infinity;
 
@@ -492,9 +493,7 @@ export class LRUCache<T> {
     
     this.head = node;
 
-    if (!this.tail) {
-      this.tail = node;
-    }
+    this.tail ??= node;
   }
 
   private removeNode(node: CacheNode<T>): void {
@@ -546,9 +545,10 @@ export class LRUCache<T> {
     this.currentMemoryBytes -= evicted.size;
     this.evictionCount++;
 
+    // Keys are not logged: element cache keys carry another caller's
+    // namespace and path, and this log is attributed to the current request.
     LRUCache.logListener?.('debug', 'Evict entry', {
       cacheName: this.name,
-      key: evicted.key,
       size: evicted.size,
       cacheSize: this.cache.size,
     });

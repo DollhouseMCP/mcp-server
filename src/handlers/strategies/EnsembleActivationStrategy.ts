@@ -5,6 +5,7 @@
  * Ensembles coordinate multiple elements and require all managers for activation.
  */
 
+import { ActivationLookupError } from './ActivationLookupError.js';
 import { EnsembleManager } from '../../elements/ensembles/EnsembleManager.js';
 import { SkillManager } from '../../elements/skills/index.js';
 import { TemplateManager } from '../../elements/templates/TemplateManager.js';
@@ -86,6 +87,8 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
         details.push(gatekeeperWarning);
       }
 
+      if (activationResult.notices?.length) details.push('', ...activationResult.notices);
+
       return {
         content: [{
           type: "text",
@@ -117,6 +120,7 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
     const deactivationResult = await this.ensembleManager.deactivateEnsemble(name);
 
     if (!deactivationResult.success) {
+      if (deactivationResult.lookupFailed) throw new ActivationLookupError(deactivationResult.message);
       this.throwNotFoundError(name, 'Ensemble');
     }
 
@@ -124,7 +128,8 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
       await this.deactivateMembers(deactivationResult.ensemble);
     }
 
-    return this.createSuccessResponse(`✅ Ensemble '${name}' deactivated`);
+    return this.createSuccessResponse(deactivationResult.ensemble
+      ? `✅ Ensemble '${name}' deactivated` : deactivationResult.message);
   }
 
   private getManagers(): ElementManagers {

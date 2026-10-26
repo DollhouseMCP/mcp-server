@@ -19,8 +19,10 @@ import { elements, elementTags } from '../database/schema/elements.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import { isSerializationFailure, type DrizzleTx } from '../database/db-utils.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
+import { firstIndexedPath } from './IStorageLayer.js';
 import type {
   DatabaseStorageIdentity,
+  IndexedPathResult,
   IWritableStorageLayer,
   ElementWriteMetadata,
   StorageScanOptions,
@@ -234,8 +236,24 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     return Array.from(state.nameToIdMap.values());
   }
 
-  getPathByName(name: string): string | undefined {
+  findIndexedPath(names: readonly string[]): Promise<string | undefined> {
+    return Promise.resolve(firstIndexedPath(names, name => this.getPathByName(name)));
+  }
+
+  readIndexedPath(names: readonly string[]): Promise<IndexedPathResult> {
     const state = this.getState();
+    return Promise.resolve({
+      path: firstIndexedPath(names, name => this.getPathByNameInState(state, name)),
+      indexComplete: state.scanCompleted,
+      authoritative: state.scanCompleted,
+    });
+  }
+
+  getPathByName(name: string): string | undefined {
+    return this.getPathByNameInState(this.getState(), name);
+  }
+
+  private getPathByNameInState(state: DatabaseIndexState, name: string): string | undefined {
     // Preserve exact, case-sensitive row identity first. PostgreSQL's unique
     // index permits case/canonical variants (for example `Agent_Name` and
     // `agent-name`), so a folded lookup must never choose one arbitrarily.

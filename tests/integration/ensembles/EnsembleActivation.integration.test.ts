@@ -72,6 +72,7 @@ describe('Ensemble Activation Integration Tests', () => {
 
     // Initialize real managers with proper DI
     ensembleManager = new EnsembleManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,
@@ -83,6 +84,7 @@ describe('Ensemble Activation Integration Tests', () => {
       storageLayerFactory: createTestStorageFactory(fileOperationsService),
     });
     skillManager = new SkillManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,

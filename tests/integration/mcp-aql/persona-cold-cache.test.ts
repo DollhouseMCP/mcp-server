@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { unlink, writeFile } from 'node:fs/promises';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { IActivationStateStore } from '../../../src/state/IActivationStateStore.js';
 import { logger } from '../../../src/utils/logger.js';
@@ -99,12 +99,27 @@ describe('Persona lookup after cache eviction (Issue #2800)', () => {
     expect(store.getActivations('persona')).toEqual([]);
   });
 
+  async function retainTemporarilyUnreadableReference(): Promise<void> {
+    const file = path.join(env.testDir, 'personas', `${name}.md`);
+    const content = await readFile(file, 'utf8');
+    await writeFile(file, '---\nname: [invalid\n---');
+    manager.clearCache();
+    try {
+      expect(await manager['collectRetainedReferenceNotices']()).toHaveLength(1);
+    } finally {
+      await writeFile(file, content);
+      manager.clearCache();
+    }
+  }
+
   it('restores activation and preserves warning suppression after a real delete veto', async () => {
     const filename = `${name}.md`;
     await manager.activatePersona(name);
     manager.clearCache();
     const warn = jest.spyOn(logger, 'warn');
-    manager['collectRetainedReferenceNotices']();
+    expect(await manager['collectRetainedReferenceNotices']()).toEqual([]);
+    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(0);
+    await retainTemporarilyUnreadableReference();
     const authorization = manager as unknown as {
       canDelete(): Promise<{ allowed: boolean; reason?: string }>;
     };
@@ -113,7 +128,8 @@ describe('Persona lookup after cache eviction (Issue #2800)', () => {
     expect(veto).toHaveBeenCalledTimes(1);
     expect(manager['getActivationSet']().has(filename)).toBe(true);
     manager.clearCache();
-    manager['collectRetainedReferenceNotices']();
+    expect(await manager['collectRetainedReferenceNotices']()).toEqual([]);
+    await retainTemporarilyUnreadableReference();
     expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(1);
   });
 
@@ -121,11 +137,13 @@ describe('Persona lookup after cache eviction (Issue #2800)', () => {
     await manager.activatePersona(name);
     manager.clearCache();
     const warn = jest.spyOn(logger, 'warn');
-    manager['collectRetainedReferenceNotices']();
+    expect(await manager['collectRetainedReferenceNotices']()).toEqual([]);
+    expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(0);
+    await retainTemporarilyUnreadableReference();
     await manager.delete(`${name}.md`);
     expect(manager['getActivationSet']().has(`${name}.md`)).toBe(false);
     manager['getActivationSet']().add(`${name}.md`);
-    manager['collectRetainedReferenceNotices']();
+    await manager['collectRetainedReferenceNotices']();
     expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation]'))).toHaveLength(2);
   });
 });

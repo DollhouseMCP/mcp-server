@@ -9,6 +9,7 @@
  * @see Issue #696 - element quality: YAML-only serialization gap
  */
 
+import { ActivationMetricsTracker } from '../../../../src/metrics/ActivationMetricsTracker.js';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as path from 'path';
 import * as os from 'os';
@@ -63,6 +64,7 @@ describe('SkillManager — element quality: markdown body (#713)', () => {
     );
 
     skillManager = new SkillManager({
+      activationMetricsTracker: new ActivationMetricsTracker(() => 'local-user'),
       portfolioManager: mockPortfolioManager as any,
       fileLockManager,
       fileOperationsService,
