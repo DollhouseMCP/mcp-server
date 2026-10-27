@@ -38,6 +38,25 @@ async function fixture(name: string) {
 }
 
 required('required PostgreSQL admitted conditional UPDATE seam', () => {
+  it('rejects invalid admitted candidates without changing the qualified head', async () => {
+    const f = await fixture('invalid-candidates'); const before = await f.snapshot();
+    const snapshot = await f.layer.readHeadSnapshot(f.memoryId); const capture = await f.gate.capture();
+    const document = (entries?: unknown[]) => JSON.stringify({ name: f.name, ...(entries && { entries }) });
+    for (const invalid of ['', '   ', 'entries: [', 'entries: bad-shape', document(),
+      document([{ id: 'duplicate', content: 'First' }, { id: 'duplicate', content: 'Second' }]),
+      document([{ id: 'bad-date', content: 'Bad', timestamp: 'not-a-date' }]),
+      document([{ id: 'bad-expiry', content: 'Bad', expiresAt: 'impossible' }]),
+      document([{ id: 'numeric-date', content: 'Bad', timestamp: 123 }]),
+      document([{ id: 'object-expiry', content: 'Bad', expiresAt: { unexpected: 'object' } }]),
+    ]) {
+      const outcome = await f.gate.withAdmittedWrite(capture, authority =>
+        f.layer.prepareHeadWriteInAdmission(authority, snapshot.token, f.name, invalid, f.metadata));
+      expect(outcome).toMatchObject({ status: 'refused', cause: { code: 'EINVALIDHEAD' } });
+      expect(await f.snapshot()).toEqual(before);
+      expect(await f.layer.readHeadSnapshot(f.memoryId)).toEqual(snapshot);
+    }
+  });
+
   it('rolls back all head/tag/child writes and refuses escaped prospective publication', async () => {
     const f = await fixture('outer-rollback'); const before = await f.snapshot();
     const snapshot = await f.layer.readHeadSnapshot(f.memoryId); const capture = await f.gate.capture();

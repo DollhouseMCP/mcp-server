@@ -1,8 +1,8 @@
 /**
- * Unit tests for MetadataIndex
+ * Unit tests for FileStateTable
  */
 
-import { MetadataIndex } from '../../../src/storage/MetadataIndex.js';
+import { FileStateTable } from '../../../src/storage/FileStateTable.js';
 import type { ElementIndexEntry } from '../../../src/storage/types.js';
 
 function makeEntry(filePath: string, name: string): ElementIndexEntry {
@@ -18,37 +18,37 @@ function makeEntry(filePath: string, name: string): ElementIndexEntry {
   };
 }
 
-describe('MetadataIndex', () => {
-  let index: MetadataIndex;
+describe('FileStateTable', () => {
+  let index: FileStateTable;
 
   beforeEach(() => {
-    index = new MetadataIndex();
+    index = new FileStateTable();
   });
 
   describe('set and get', () => {
     it('should store and retrieve an entry by path', () => {
       const entry = makeEntry('alpha.md', 'Alpha');
-      index.set(entry);
+      index.applySaved(entry.filePath, entry.mtimeMs, entry);
 
       const retrieved = index.get('alpha.md');
-      expect(retrieved).toEqual(entry);
+      expect(retrieved).toMatchObject({ status: 'indexed', entry });
     });
 
     it('should overwrite existing entry for same path', () => {
       const v1 = makeEntry('alpha.md', 'Alpha V1');
       const v2 = makeEntry('alpha.md', 'Alpha V2');
 
-      index.set(v1);
-      index.set(v2);
+      index.applySaved(v1.filePath, v1.mtimeMs, v1);
+      index.applySaved(v2.filePath, v2.mtimeMs, v2);
 
-      expect(index.get('alpha.md')?.name).toBe('Alpha V2');
-      expect(index.size).toBe(1);
+      expect(index.entries()[0].name).toBe('Alpha V2');
+      expect(index.entries()).toHaveLength(1);
     });
   });
 
   describe('name lookup', () => {
     it('should find path by name (case-insensitive)', () => {
-      index.set(makeEntry('creative-writer.md', 'Creative Writer'));
+      index.applySaved('creative-writer.md', 1, makeEntry('creative-writer.md', 'Creative Writer'));
 
       expect(index.getPathByName('Creative Writer')).toBe('creative-writer.md');
       expect(index.getPathByName('creative writer')).toBe('creative-writer.md');
@@ -60,8 +60,8 @@ describe('MetadataIndex', () => {
     });
 
     it('should update name mapping when entry name changes', () => {
-      index.set(makeEntry('alpha.md', 'Old Name'));
-      index.set(makeEntry('alpha.md', 'New Name'));
+      index.applySaved('alpha.md', 1, makeEntry('alpha.md', 'Old Name'));
+      index.applySaved('alpha.md', 1, makeEntry('alpha.md', 'New Name'));
 
       expect(index.getPathByName('New Name')).toBe('alpha.md');
       expect(index.getPathByName('Old Name')).toBeUndefined();
@@ -70,60 +70,57 @@ describe('MetadataIndex', () => {
 
   describe('remove', () => {
     it('should remove entry from both maps', () => {
-      index.set(makeEntry('alpha.md', 'Alpha'));
-      index.remove('alpha.md');
+      index.applySaved('alpha.md', 1, makeEntry('alpha.md', 'Alpha'));
+      index.applyDeleted('alpha.md');
 
       expect(index.get('alpha.md')).toBeUndefined();
       expect(index.getPathByName('Alpha')).toBeUndefined();
-      expect(index.size).toBe(0);
+      expect(index.entries()).toHaveLength(0);
     });
 
     it('should be a no-op for non-existent path', () => {
-      index.set(makeEntry('alpha.md', 'Alpha'));
-      index.remove('nonexistent.md');
+      index.applySaved('alpha.md', 1, makeEntry('alpha.md', 'Alpha'));
+      index.applyDeleted('nonexistent.md');
 
-      expect(index.size).toBe(1);
+      expect(index.entries()).toHaveLength(1);
     });
 
     it('should not remove name mapping if another entry uses it', () => {
-      // Edge case: two files had same normalized name at different times
-      index.set(makeEntry('old.md', 'Shared'));
-      index.set(makeEntry('new.md', 'Shared'));
-      // Now nameToPath points to 'new.md'
-      index.remove('old.md');
+      index.applySaved('old.md', 1, makeEntry('old.md', 'Shared'));
+      index.applySaved('new.md', 2, makeEntry('new.md', 'Shared'));
+      index.applyDeleted('old.md');
 
-      // Name mapping should still exist for new.md
       expect(index.getPathByName('Shared')).toBe('new.md');
     });
   });
 
   describe('getAll and getPaths', () => {
     it('should return all entries', () => {
-      index.set(makeEntry('a.md', 'A'));
-      index.set(makeEntry('b.md', 'B'));
+      index.applySaved('a.md', 1, makeEntry('a.md', 'A'));
+      index.applySaved('b.md', 1, makeEntry('b.md', 'B'));
 
-      const all = index.getAll();
+      const all = index.entries();
       expect(all).toHaveLength(2);
       expect(all.map(e => e.name).sort()).toEqual(['A', 'B']);
     });
 
     it('should return all paths', () => {
-      index.set(makeEntry('a.md', 'A'));
-      index.set(makeEntry('b.md', 'B'));
+      index.applySaved('a.md', 1, makeEntry('a.md', 'A'));
+      index.applySaved('b.md', 1, makeEntry('b.md', 'B'));
 
-      const paths = index.getPaths();
+      const paths = index.entries().map(entry => entry.filePath);
       expect(paths.sort()).toEqual(['a.md', 'b.md']);
     });
   });
 
   describe('clear', () => {
     it('should reset both maps', () => {
-      index.set(makeEntry('a.md', 'A'));
-      index.set(makeEntry('b.md', 'B'));
+      index.applySaved('a.md', 1, makeEntry('a.md', 'A'));
+      index.applySaved('b.md', 1, makeEntry('b.md', 'B'));
       index.clear();
 
-      expect(index.size).toBe(0);
-      expect(index.getAll()).toEqual([]);
+      expect(index.entries()).toHaveLength(0);
+      expect(index.entries()).toEqual([]);
       expect(index.getPathByName('A')).toBeUndefined();
     });
   });

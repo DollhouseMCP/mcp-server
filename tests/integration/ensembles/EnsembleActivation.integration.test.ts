@@ -134,13 +134,13 @@ describe('Ensemble Activation Integration Tests', () => {
   afterAll(async () => {
     // Dispose managers to clean up file watchers and other resources
     if (ensembleManager) {
-      ensembleManager.dispose();
+      await ensembleManager.dispose();
     }
     if (skillManager) {
-      skillManager.dispose();
+      await skillManager.dispose();
     }
     if (personaManager) {
-      personaManager.dispose();
+      await personaManager.dispose();
     }
 
     // Clean up test environment

@@ -102,10 +102,10 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
       const manager = new ObservedManager(deps, adapter); managers.push(manager);
       return { manager, adapter };
     };
-    const cleanup = async () => { for (const manager of managers) manager.dispose(); await fs.rm(root, { recursive: true, force: true }); };
+    const cleanup = async () => { for (const manager of managers) await manager.dispose(); await fs.rm(root, { recursive: true, force: true }); };
     return { root, tenantRoot, owners, fence, ordinary, makeManager, setTenant: (value: string) => { tenant = value; }, cleanup };
   } catch (cause) {
-    for (const manager of managers) manager.dispose();
+    for (const manager of managers) await manager.dispose();
     await fs.rm(root, { recursive: true, force: true });
     throw cause;
   }

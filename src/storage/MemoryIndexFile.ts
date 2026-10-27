@@ -1,51 +1,28 @@
 /**
- * MemoryIndexFile - Persistent _index.json manager with debounced writes.
+ * MemoryIndexFile - Validated _index.json file format and I/O.
  *
  * On server restart the MemoryStorageLayer can load cached metadata from
  * _index.json instead of re-scanning every memory file on disk.  This class
- * handles reading, writing (with validation), and debounced scheduling of
- * index persistence to avoid excessive I/O during rapid mutations.
+ * handles reading, validation, and writing. Scheduling belongs to MemoryIndexPersistence.
  */
 
+import * as path from 'node:path';
 import { logger } from '../utils/logger.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
+import type { BlockedFile } from './FileStateTable.js';
 import type { ElementIndexEntry } from './types.js';
 
 export interface MemoryIndexData {
-  version: 1;
+  version: 2;
   generatedAt: string;
   entryCount: number;
   entries: Record<string, ElementIndexEntry>;
+  blocked?: Record<string, BlockedFile>;
 }
-
-export interface MemoryIndexFileOptions {
-  debounceMs?: number;
-  onIdle?: () => void;
-}
-
-const DEFAULT_DEBOUNCE_MS = 2000;
 
 export class MemoryIndexFile {
-  private readonly indexPath: string;
-  private readonly fileOps: FileOperationsService;
-  private readonly debounceMs: number;
-
-  private activeWrites = 0;
-  private readonly onIdle?: () => void;
-
-  private pendingEntries: ElementIndexEntry[] | null = null;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-  constructor(
-    indexPath: string,
-    fileOps: FileOperationsService,
-    options?: MemoryIndexFileOptions,
-  ) {
-    this.onIdle = options?.onIdle;
-    this.indexPath = indexPath;
-    this.fileOps = fileOps;
-    this.debounceMs = options?.debounceMs ?? DEFAULT_DEBOUNCE_MS;
-  }
+  constructor(private readonly indexPath: string, private readonly fileOps: FileOperationsService,
+    private readonly platform: NodeJS.Platform = process.platform) {}
 
   /**
    * Read the index from disk.
@@ -62,7 +39,7 @@ export class MemoryIndexFile {
         return this.handleCorruptIndex('top-level value is not an object');
       }
 
-      if (parsed.version !== 1) {
+      if (parsed.version !== 2) {
         logger.warn(`MemoryIndexFile: unsupported version ${(parsed as any).version}, ignoring`);
         return null;
       }
@@ -72,6 +49,7 @@ export class MemoryIndexFile {
       }
 
       const { validEntries, skippedCount } = this.validateEntries(parsed.entries);
+      const blocked = this.validateBlocked(parsed.blocked);
 
       if (skippedCount > 0) {
         logger.warn(
@@ -88,7 +66,7 @@ export class MemoryIndexFile {
       }
 
       // Return with validated entries and corrected count
-      return { ...parsed, entries: validEntries, entryCount: actualCount };
+      return { ...parsed, entries: validEntries, blocked, entryCount: actualCount };
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
@@ -102,13 +80,37 @@ export class MemoryIndexFile {
     }
   }
 
+  private isRelativeIndexPath(value: string): boolean {
+    const validPlatformPath = this.platform !== 'win32' || (!value.includes('\\') && !value.includes(':'));
+    return value.length > 0 && validPlatformPath && !value.includes('\0') &&
+      !path.posix.isAbsolute(value) && !path.win32.isAbsolute(value) &&
+      value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..') &&
+      path.posix.normalize(value) === value;
+  }
+
+  private validateBlocked(value: unknown): Record<string, BlockedFile> {
+    const blocked: Record<string, BlockedFile> = {};
+    if (value === undefined) return blocked;
+    let skipped = 0;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) skipped++;
+    else for (const [path, item] of Object.entries(value)) {
+      if (this.isRelativeIndexPath(path) && typeof item?.nameKey === 'string' && item.nameKey.trim().length &&
+          typeof item.mtimeMs === 'number' && Number.isFinite(item.mtimeMs)) {
+        blocked[path] = { nameKey: item.nameKey, mtimeMs: item.mtimeMs };
+      } else skipped++;
+    }
+    if (skipped) logger.warn(`MemoryIndexFile: skipped ${skipped} malformed blocked entries during load`);
+    return blocked;
+  }
+
   private validateEntries(entries: Record<string, ElementIndexEntry>) {
     const validEntries: Record<string, ElementIndexEntry> = {};
     let skippedCount = 0;
     for (const [key, entry] of Object.entries(entries)) {
       if (
         typeof entry === 'object' && entry !== null &&
-        typeof entry.filePath === 'string' && entry.filePath.length > 0 &&
+        typeof entry.filePath === 'string' && this.isRelativeIndexPath(key) && key === entry.filePath &&
+        typeof entry.mtimeMs === 'number' && Number.isFinite(entry.mtimeMs) &&
         typeof entry.name === 'string' && entry.name.length > 0
       ) {
         validEntries[key] = entry;
@@ -136,98 +138,25 @@ export class MemoryIndexFile {
     return null;
   }
 
-  /** Whether a scheduled or active index write still needs to finish. */
-  hasPendingWrite(): boolean {
-    return this.pendingEntries !== null || this.activeWrites > 0;
+  /** Write a complete index; failures must reach the persistence owner. */
+  async write(entries: ElementIndexEntry[], blocked: Record<string, BlockedFile> = {}): Promise<void> {
+    await this.writeEntries(entries, blocked);
   }
 
-  /**
-   * Write the index to disk immediately.
-   * Converts the entries array to a Record keyed by `entry.filePath`.
-   * Catches ENOSPC gracefully (logs warning, does not throw).
-   */
-  async write(entries: ElementIndexEntry[]): Promise<void> {
-    this.activeWrites++;
-    try {
-      await this.writeEntries(entries);
-    } finally {
-      this.activeWrites--;
-      if (!this.hasPendingWrite()) this.onIdle?.();
-    }
-  }
-
-  private async writeEntries(entries: ElementIndexEntry[]): Promise<void> {
+  private async writeEntries(entries: ElementIndexEntry[], blocked: Record<string, BlockedFile>): Promise<void> {
     const entriesRecord: Record<string, ElementIndexEntry> = {};
     for (const entry of entries) {
       entriesRecord[entry.filePath] = entry;
     }
 
     const data: MemoryIndexData = {
-      version: 1,
+      version: 2,
       generatedAt: new Date().toISOString(),
       entryCount: entries.length,
       entries: entriesRecord,
+      blocked,
     };
 
-    try {
-      await this.fileOps.writeFile(this.indexPath, JSON.stringify(data, null, 2));
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOSPC') {
-        logger.warn('MemoryIndexFile: disk full (ENOSPC), skipping index write');
-        return;
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * Schedule a debounced write.  Multiple calls within the debounce window
-   * coalesce into a single write using the most recent entries.
-   */
-  scheduleWrite(entries: ElementIndexEntry[]): void {
-    this.pendingEntries = entries;
-
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
-    }
-
-    this.debounceTimer = setTimeout(() => {
-      this.debounceTimer = null;
-      const toWrite = this.pendingEntries;
-      this.pendingEntries = null;
-      if (toWrite) {
-        this.write(toWrite).catch((err) => {
-          logger.error('MemoryIndexFile: scheduled write failed', err);
-        });
-      }
-    }, this.debounceMs);
-  }
-
-  /**
-   * If there are pending entries, write immediately and clear the timer.
-   */
-  async flush(): Promise<void> {
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
-      this.debounceTimer = null;
-    }
-
-    if (this.pendingEntries !== null) {
-      const toWrite = this.pendingEntries;
-      this.pendingEntries = null;
-      await this.write(toWrite);
-    }
-  }
-
-  /**
-   * Cancel any pending timer.  Does NOT flush (fire-and-forget cleanup).
-   */
-  dispose(): void {
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
-      this.debounceTimer = null;
-    }
-    this.pendingEntries = null;
+    await this.fileOps.writeFile(this.indexPath, JSON.stringify(data, null, 2));
   }
 }
