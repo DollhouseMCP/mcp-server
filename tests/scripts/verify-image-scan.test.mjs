@@ -94,6 +94,11 @@ test('offline local DB import requires bound Python manifest, image and actual i
   const proof = {
     runner_ref: 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66',
     runner_image_id: 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f',
+    capacity_admission: { target_uncompressed_size_bytes: 712633849,
+      target_and_scratch_required_bytes: 4294967296 + 2 * 712633849, memory_limit_bytes: 8589934592,
+      work_tmpfs_bytes: 6442450944, available_memory_bytes: 12 * 1024 ** 3,
+      free_disk_bytes: 6 * 1024 ** 3, disk_required_bytes: 4 * 1024 ** 3 },
+    database_payload: { declared_payload_bytes: 2541993984 },
     image_id: image, image_archive_sha256: 'b'.repeat(64),
     scanner_archive: { sha256: '64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519' },
     database: { url: 'https://grype.anchore.io/databases/v6/owned.tar.zst', sha256: 'a'.repeat(64),
@@ -103,12 +108,14 @@ test('offline local DB import requires bound Python manifest, image and actual i
       runner_image_id: 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f', user: '65532:65532', working_dir: '/work', healthcheck: { Test: ['NONE'] },
       mounts: Array.from({ length: 5 }, () => ({ Type: 'bind', RW: false })),
       host_config: { NetworkMode: 'none', ReadonlyRootfs: true, Privileged: false, CapDrop: ['ALL'],
-        SecurityOpt: ['no-new-privileges=true'], NanoCpus: 2000000000, Memory: 3221225472,
-        MemorySwap: 3221225472, PidsLimit: 64 } },
+        SecurityOpt: ['no-new-privileges=true'], NanoCpus: 2000000000, Memory: 8589934592,
+        MemorySwap: 8589934592, PidsLimit: 64, Tmpfs: { '/work': 'rw,noexec,nosuid,nodev,size=6g,mode=1777' } } },
   };
   assert.deepEqual(verifyImageScan(value, image, now, cache, proof), { Low: 1 });
   for (const mutate of [
     p => { p.runner_image_id = image; p.isolation.runner_image_id = image; },
+    p => { p.capacity_admission.target_uncompressed_size_bytes = 2 * 1024 ** 3; },
+    p => { p.capacity_admission.available_memory_bytes = 3 * 1024 ** 3; },
     p => { p.database.sha256 = 'c'.repeat(64); },
     p => { p.isolation.host_config.NetworkMode = 'bridge'; },
     p => { p.isolation.mounts[0].RW = true; },

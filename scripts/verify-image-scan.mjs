@@ -47,6 +47,8 @@ export function verifyOfflineProvenance(provenance, database) {
   const record = provenance.database;
   const isolation = provenance.isolation;
   const policy = isolation?.host_config;
+  const capacity = provenance.capacity_admission;
+  const rawDb = provenance.database_payload?.declared_payload_bytes;
   if (!record?.manifest || record.manifest.status !== 'active' ||
       record.manifest.schemaVersion !== 'v6.1.10' ||
       record.manifest.checksum !== `sha256:${record.sha256}` ||
@@ -58,13 +60,23 @@ export function verifyOfflineProvenance(provenance, database) {
       provenance.runner_ref !== 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66' ||
       provenance.runner_image_id !== 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f' ||
       isolation?.runner_ref !== provenance.runner_ref || isolation?.runner_image_id !== provenance.runner_image_id ||
+      !capacity || !Number.isInteger(capacity.target_uncompressed_size_bytes) ||
+      capacity.target_uncompressed_size_bytes <= 0 || capacity.target_uncompressed_size_bytes > 1073741824 ||
+      !Number.isInteger(rawDb) || rawDb <= 0 || rawDb > 2684354560 ||
+      capacity.memory_limit_bytes !== 8589934592 || capacity.work_tmpfs_bytes !== 6442450944 ||
+      !Number.isSafeInteger(capacity.available_memory_bytes) || capacity.available_memory_bytes < 9663676416 ||
+      !Number.isSafeInteger(capacity.free_disk_bytes) || !Number.isSafeInteger(capacity.disk_required_bytes) ||
+      capacity.disk_required_bytes <= 0 || capacity.free_disk_bytes < capacity.disk_required_bytes ||
+      capacity.target_and_scratch_required_bytes !== 4294967296 + 2 * capacity.target_uncompressed_size_bytes ||
+      capacity.target_and_scratch_required_bytes > 6442450944 ||
       isolation?.working_dir !== '/work' || !isDeepStrictEqual(isolation?.healthcheck?.Test, ['NONE']) ||
       isolation?.user !== '65532:65532' || policy?.NetworkMode !== 'none' ||
       policy?.ReadonlyRootfs !== true || policy?.Privileged !== false ||
       !isDeepStrictEqual(policy.CapDrop, ['ALL']) ||
       !policy.SecurityOpt?.includes('no-new-privileges=true') ||
-      policy.NanoCpus !== 2000000000 || policy.Memory !== 3221225472 ||
-      policy.MemorySwap !== 3221225472 || policy.PidsLimit !== 64 ||
+      policy.NanoCpus !== 2000000000 || policy.Memory !== 8589934592 ||
+      policy.MemorySwap !== 8589934592 || policy.PidsLimit !== 64 ||
+      policy.Tmpfs?.['/work'] !== 'rw,noexec,nosuid,nodev,size=6g,mode=1777' ||
       isolation.mounts?.length !== 5 || isolation.mounts.some(mount => mount.Type !== 'bind' || mount.RW !== false)) {
     throw new Error('Offline database/archive/isolation provenance is missing or inconsistent');
   }

@@ -127,8 +127,8 @@ class OfflineBoundaryTests(unittest.TestCase):
                              "Source": str(inputs / name), "RW": False} for name in names],
                  "HostConfig": {"NetworkMode": "none", "ReadonlyRootfs": True, "Privileged": False,
                  "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges=true"], "NanoCpus": 2000000000,
-                 "Memory": 3221225472, "MemorySwap": 3221225472, "PidsLimit": 64,
-                 "Tmpfs": {"/work": "rw,noexec,nosuid,nodev,size=2g,mode=1777",
+                 "Memory": 8589934592, "MemorySwap": 8589934592, "PidsLimit": 64,
+                 "Tmpfs": {"/work": "rw,noexec,nosuid,nodev,size=6g,mode=1777",
                            "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}}}
         plan = scanner.isolated_container_command("fixture", inputs)
         value["Config"]["Cmd"] = plan[plan.index(scanner.RUNNER_REF) + 1:]
@@ -164,6 +164,25 @@ class BoundedCaptureTests(unittest.TestCase):
         status, stdout, stderr, error = scanner.bounded_process(
             [sys.executable, "-c", "import sys;print('finding');sys.exit(2)"], 5)
         self.assertEqual((status, stdout, stderr, error), (2, b"finding\n", b"", None))
+
+
+class McpScannerCapacityTests(unittest.TestCase):
+    def test_measured_payload_fits_proposed_public_runner_but_4g_vm_is_refused(self):
+        admission = scanner.capacity_admission(712633849, 12 * scanner.GIB, 6 * scanner.GIB)
+        self.assertLess(admission["target_and_scratch_required_bytes"], 6 * scanner.GIB)
+        self.assertEqual(admission["memory_limit_bytes"], 8 * scanner.GIB)
+        for size, ram, disk in [(2 * scanner.GIB, 12 * scanner.GIB, 6 * scanner.GIB),
+                                (712633849, 3 * scanner.GIB, 6 * scanner.GIB),
+                                (712633849, 12 * scanner.GIB, scanner.GIB)]:
+            with self.assertRaises(ValueError): scanner.capacity_admission(size, ram, disk)
+
+    def test_database_header_bounds_raw_payload_before_import(self):
+        header = tarfile.TarInfo("vulnerability.db"); header.size = 2541993984
+        self.assertEqual(scanner.db_payload_header(header.tobuf()), 2541993984)
+        header.size = 3 * scanner.GIB
+        with self.assertRaises(ValueError): scanner.db_payload_header(header.tobuf())
+        header.size = 1024; header.name = "unexpected-payload"
+        with self.assertRaises(ValueError): scanner.db_payload_header(header.tobuf())
 
 
 if __name__ == "__main__":

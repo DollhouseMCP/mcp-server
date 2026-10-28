@@ -7,6 +7,17 @@ for (const path of [directory, '/work/tmp', '/work/home']) fs.mkdirSync(path, { 
 const files = {};
 let outcome = 1;
 const deadline = Date.now() + 90000;
+function resources() {
+  const observation = {};
+  for (const name of ['memory.current', 'memory.peak', 'memory.max', 'memory.swap.max', 'cpu.max', 'pids.max']) {
+    try { observation[name] = fs.readFileSync(`/sys/fs/cgroup/${name}`, 'utf8').trim(); }
+    catch (error) { observation[name] = `unavailable: ${error.code}`; }
+  }
+  try { observation.hydrated_db_bytes = fs.statSync('/work/db/6/vulnerability.db').size; }
+  catch { observation.hydrated_db_bytes = null; }
+  return observation;
+}
+
 function run(name, args, timeout = 120000) {
   const command = ['/inputs/grype', '--config', '/inputs/grype.yaml', ...args];
   const started = new Date().toISOString();
@@ -20,7 +31,7 @@ function run(name, args, timeout = 120000) {
   files[`${name}-receipt.json`] = JSON.stringify({
     command, started_utc: started, finished_utc: new Date().toISOString(),
     timeout_ms: timeout, exit_code: child.status, signal: child.signal,
-    error: child.error?.message ?? null,
+    error: child.error?.message ?? null, resources_after: resources(),
   });
   return child.status;
 }
@@ -32,6 +43,9 @@ try {
     ['db-status', ['db', 'status', '-o', 'json']],
   ]) {
     if (run(name, args) !== 0) throw new Error(`${name} failed; offline scan unavailable`);
+  }
+  if (fs.statSync('/work/db/6/vulnerability.db').size > 3.5 * 1024 ** 3) {
+    throw new Error('Hydrated database exceeds its admitted 3.5 GiB reserve; target scan refused');
   }
   outcome = run('scan', ['docker-archive:/inputs/image.tar', '--output', 'json',
     '--file', `${directory}/application-image-vulnerabilities.json`, '--fail-on', 'high']);

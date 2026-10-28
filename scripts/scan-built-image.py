@@ -55,6 +55,15 @@ RUNNER_REF = "node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df
 RUNNER_IMAGE_ID = "sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f"
 SUPPORTED_DB_SCHEMA = "v6.1.10"  # Inspected official manifest and existing validated DB.
 
+GIB = 1024 ** 3
+TARGET_MAX_BYTES = GIB
+RAW_DB_MAX_BYTES = 5 * GIB // 2
+HYDRATED_DB_RESERVE_BYTES = 7 * GIB // 2
+SCRATCH_RESERVE_BYTES = GIB // 2
+WORK_TMPFS_BYTES = 6 * GIB
+CONTAINER_MEMORY_BYTES = 8 * GIB
+HOST_MEMORY_HEADROOM_BYTES = GIB
+
 
 class TrustedRedirects(urllib.request.HTTPRedirectHandler):
     def __init__(self, hosts):
@@ -122,12 +131,58 @@ def image_archive_identity(archive):
         return "sha256:" + hashlib.sha256(bundle.extractfile(config).read()).hexdigest()
 
 
+def capacity_admission(target_size, available_memory, free_disk):
+    if type(target_size) is not int or not 0 < target_size <= TARGET_MAX_BYTES:
+        raise ValueError("Job-built image uncompressed Size exceeds the explicit 1 GiB admission cap")
+    work_required = HYDRATED_DB_RESERVE_BYTES + 2 * target_size + SCRATCH_RESERVE_BYTES
+    # Inputs: Docker archive plus metadata, compressed DB, binary, reports and disk margin.
+    disk_required = target_size + 128 * 1024 ** 2 + GIB + 100 * 1024 ** 2 + 64 * 1024 ** 2 + GIB
+    if work_required > WORK_TMPFS_BYTES or available_memory < CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES or free_disk < disk_required:
+        raise ValueError("Host RAM/disk or bounded work-space prerequisites are insufficient; scanner will not start")
+    return {"target_uncompressed_size_bytes": target_size, "target_max_bytes": TARGET_MAX_BYTES,
+            "hydrated_db_reserve_bytes": HYDRATED_DB_RESERVE_BYTES,
+            "target_and_scratch_required_bytes": work_required,
+            "work_tmpfs_bytes": WORK_TMPFS_BYTES, "memory_limit_bytes": CONTAINER_MEMORY_BYTES,
+            "available_memory_bytes": available_memory, "memory_required_bytes": CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES,
+            "free_disk_bytes": free_disk, "disk_required_bytes": disk_required}
+
+
+def db_payload_header(header):
+    entry = tarfile.TarInfo.frombuf(header, "utf-8", "strict")
+    if entry.name != "vulnerability.db" or not entry.isfile() or not 0 < entry.size <= RAW_DB_MAX_BYTES:
+        raise ValueError("DB archive payload is unexpected or exceeds its explicit 2.5 GiB admission cap")
+    return entry.size
+
+
+def database_payload_bytes(archive):
+    # Existing Ubuntu system zstd only; no installation or network/Go execution.
+    command = ["/usr/bin/zstd", "--decompress", "--stdout", str(archive)]
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as child:
+        try:
+            data = bytearray()
+            with selectors.DefaultSelector() as ready:
+                ready.register(child.stdout, selectors.EVENT_READ)
+                deadline = time.monotonic() + 5
+                while len(data) < 512:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not ready.select(remaining):
+                        raise ValueError("DB payload header probe exceeded its five-second bound")
+                    chunk = os.read(child.stdout.fileno(), 512 - len(data))
+                    if not chunk: raise ValueError("DB payload header is missing")
+                    data.extend(chunk)
+            return {"command": command, "declared_payload_bytes": db_payload_header(bytes(data)),
+                    "terminated_after_header": True, "maximum_probe_seconds": 5}
+        finally:
+            child.kill()
+            child.wait(timeout=5)
+
+
 def isolated_container_command(name, inputs):
     command = ["docker", "create", "--name", name, "--pull", "never", "--platform", "linux/amd64",
                "--network", "none", "--read-only", "--no-healthcheck", "--workdir", "/work", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges=true", "--user", "65532:65532",
-               "--cpus", "2", "--memory", "3g", "--memory-swap", "3g", "--pids-limit", "64",
-               "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=2g,mode=1777",
+               "--cpus", "2", "--memory", "8g", "--memory-swap", "8g", "--pids-limit", "64",
+               "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=6g,mode=1777",
                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777"]
     for source, target in [("grype", "grype"), ("grype.yaml", "grype.yaml"),
                            ("database.tar.zst", "database.tar.zst"), ("image.tar", "image.tar"),
@@ -146,13 +201,13 @@ def isolation_evidence(value, inputs):
     targets = {"/inputs/" + name for name in ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]}
     plan = isolated_container_command("review-only", inputs)
     expected_command = plan[plan.index(RUNNER_REF) + 1:]
-    expected_tmpfs = {"/work": "rw,noexec,nosuid,nodev,size=2g,mode=1777",
+    expected_tmpfs = {"/work": "rw,noexec,nosuid,nodev,size=6g,mode=1777",
                       "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}
     if (value["Image"] != RUNNER_IMAGE_ID or value["Config"]["Image"] != RUNNER_REF or value["Config"]["User"] != "65532:65532" or
             host["NetworkMode"] != "none" or host["ReadonlyRootfs"] is not True or host["Privileged"] or
             host.get("CapDrop") != ["ALL"] or "no-new-privileges=true" not in host.get("SecurityOpt", []) or
-            host["NanoCpus"] != 2000000000 or host["Memory"] != 3221225472 or
-            host["MemorySwap"] != 3221225472 or host["PidsLimit"] != 64 or
+            host["NanoCpus"] != 2000000000 or host["Memory"] != CONTAINER_MEMORY_BYTES or
+            host["MemorySwap"] != CONTAINER_MEMORY_BYTES or host["PidsLimit"] != 64 or
             host.get("Tmpfs") != expected_tmpfs or host.get("CapAdd") or
             host.get("PidMode") or host.get("Devices") or host.get("DeviceRequests") or
             value["Config"]["WorkingDir"] != "/work" or
@@ -223,6 +278,24 @@ def main():
         (reports / (name + "-receipt.json")).write_text(json.dumps(receipts[name], indent=2))
         return status, stdout
 
+    status, stdout = run(["docker", "image", "inspect", "--format",
+        '{"image_id":{{json .Id}},"size_bytes":{{.Size}},"architecture":{{json .Architecture}}}',
+        "dollhousemcp:latest-linux-amd64"], "image-identity-size")
+    target = json.loads(stdout)
+    image_id, target_size = target["image_id"], target["size_bytes"]
+    if status != 0 or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id) or target["architecture"] != "amd64":
+        raise ValueError("The exact job-built amd64 image identity/size is unavailable")
+    memory = {line.split(":", 1)[0]: int(line.split()[1]) * 1024
+              for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))}
+    disk_free = shutil.disk_usage(root).free
+    (reports / "host-capacity-observation.json").write_text(json.dumps({
+        "target_size_bytes": target_size, "host_total_memory_bytes": memory["MemTotal"],
+        "host_available_memory_bytes": memory["MemAvailable"], "disk_free_bytes": disk_free,
+        "required_available_memory_bytes": CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES,
+    }, indent=2))
+    admission = capacity_admission(target_size, memory["MemAvailable"], disk_free)
+    admission["host_total_memory_bytes"] = memory["MemTotal"]
+    (reports / "capacity-admission.json").write_text(json.dumps(admission, indent=2))
     binary_archive = inputs / ARCHIVE_NAME
     binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256)
     extract_verified_binary(binary_archive, inputs / "grype")
@@ -231,21 +304,21 @@ def main():
     manifest = json.loads((reports / "database-manifest.json").read_text())
     url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
     db_receipt = download(url, inputs / "database.tar.zst", 1024 * 1024 * 1024, checksum)
+    status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
+    if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
+    payload = database_payload_bytes(inputs / "database.tar.zst")
+    (reports / "database-payload-probe.json").write_text(json.dumps(payload, indent=2))
     for source, target in [(Path(".github/grype-image-scan.yaml"), "grype.yaml"),
                            (Path("scripts/grype-offline-runner.mjs"), "grype-offline-runner.mjs")]:
         shutil.copyfile(source, inputs / target)
-    status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", "dollhousemcp:latest-linux-amd64"], "image-id")
-    image_id = stdout.decode().strip()
-    if status != 0 or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
-        raise ValueError("The job-built image ID is unavailable")
     status, _ = run(["docker", "image", "save", "--output", str(inputs / "image.tar"), image_id], "image-save")
-    if status != 0 or (inputs / "image.tar").stat().st_size > 2 * 1024 ** 3 or image_archive_identity(inputs / "image.tar") != image_id:
+    if status != 0 or (inputs / "image.tar").stat().st_size > target_size + 128 * 1024 ** 2 or image_archive_identity(inputs / "image.tar") != image_id:
         raise ValueError("Saved Docker archive does not identify the exact job-built image")
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
     with (inputs / "image.tar").open("rb") as stream:
         image_archive_hash = hashlib.file_digest(stream, "sha256").hexdigest()
-    provenance = {"scanner_archive": binary_receipt, "database": {**db_receipt, "manifest": manifest},
+    provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt, "database": {**db_receipt, "manifest": manifest},
                   "image_id": image_id, "image_archive_sha256": image_archive_hash}
     status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", RUNNER_REF], "runner-image-id", 30)
     if status != 0:
