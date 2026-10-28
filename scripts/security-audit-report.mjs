@@ -37,6 +37,20 @@ export function toSarif(result, cwd = process.cwd()) {
   }] };
 }
 
+export function isAuditComplete(result, { auditFailed, auditOutcome, sarifOutcome }) {
+  if (auditFailed || auditOutcome !== 'success' || sarifOutcome !== 'success') return false;
+  try { toSarif(result); return true; } catch { return false; }
+}
+
+export async function preserveFailedAudit(input) {
+  try {
+    if ((await readFile(input, 'utf8')).length) return;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  await writeFile(input, JSON.stringify({ error: 'Audit failed to complete' }));
+}
+
 export async function writeSarif(input, output) {
   const result = JSON.parse(await readFile(input, 'utf8'));
   const sarif = toSarif(result);
@@ -45,7 +59,11 @@ export async function writeSarif(input, output) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    await writeSarif(process.argv[2] ?? 'security-audit-result.json', process.argv[3] ?? 'security-audit.sarif');
+    if (process.argv[2] === 'preserve-failure') {
+      await preserveFailedAudit(process.argv[3] ?? 'security-audit-result.json');
+    } else {
+      await writeSarif(process.argv[2] ?? 'security-audit-result.json', process.argv[3] ?? 'security-audit.sarif');
+    }
   } catch (error) {
     console.error('Security audit SARIF generation failed:', error.message);
     process.exitCode = 1;

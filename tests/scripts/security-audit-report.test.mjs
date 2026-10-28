@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { toSarif } from '../../scripts/security-audit-report.mjs';
+import { toSarif, isAuditComplete } from '../../scripts/security-audit-report.mjs';
 
 const finding = { ruleId: 'DMCP-SEC-006', severity: 'low', message: 'Missing audit event',
   file: '/owned/repo/src/file name.ts', line: 12 };
@@ -42,4 +42,45 @@ test('CLI exits nonzero for malformed audit and leaves original findings untouch
     assert.equal(await readFile(input, 'utf8'), original);
     await assert.rejects(readFile(output), { code: 'ENOENT' });
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('completion requires successful audit, successful conversion and a valid actual result', () => {
+  const success = { auditFailed: false, auditOutcome: 'success', sarifOutcome: 'success' };
+  assert.equal(isAuditComplete({ findings: [finding] }, success), true);
+  for (const state of [{ ...success, auditFailed: true }, { ...success, auditOutcome: 'skipped' },
+    { ...success, auditOutcome: 'failure' }, { ...success, sarifOutcome: 'failure' }]) {
+    assert.equal(isAuditComplete({ findings: [] }, state), false);
+  }
+  for (const result of [undefined, {}, { error: 'Unavailable', findings: [] }]) {
+    assert.equal(isAuditComplete(result, success), false);
+  }
+});
+
+test('actual workflow shell preserves high findings when the auditor exits one', async () => {
+  const project = process.cwd();
+  const workflow = await readFile(join(project, '.github/workflows/security-audit.yml'), 'utf8');
+  const start = workflow.indexOf('          # Run the audit with error handling');
+  const end = workflow.indexOf('\n      - name: Upload audit results', start);
+  assert.ok(start >= 0 && end > start);
+  const wrapper = workflow.slice(start, end).split('\n').map(line => line.replace(/^ {10}/, '')).join('\n');
+  for (const withFinding of [true, false]) {
+    const dir = await mkdtemp(join(tmpdir(), 'audit-wrapper-'));
+    try {
+      await mkdir(join(dir, 'scripts'));
+      await copyFile(join(project, 'scripts/security-audit-report.mjs'), join(dir, 'scripts/security-audit-report.mjs'));
+      const original = JSON.stringify({ findings: [{ ...finding, severity: 'high' }] });
+      await writeFile(join(dir, 'run-audit.js'), (withFinding
+        ? `require('fs').writeFileSync('security-audit-result.json', ${JSON.stringify(original)});` : '') + 'process.exitCode=1;');
+      const envPath = join(dir, 'github-env');
+      const child = spawnSync('/bin/bash', ['-e', '-o', 'pipefail', '-c', wrapper], {
+        cwd: dir, env: { ...process.env, GITHUB_ENV: envPath }, encoding: 'utf8',
+      });
+      assert.equal(child.status, 0, child.stderr);
+      assert.match(await readFile(envPath, 'utf8'), /AUDIT_FAILED=true/);
+      const kept = await readFile(join(dir, 'security-audit-result.json'), 'utf8');
+      if (withFinding) assert.equal(kept, original);
+      else assert.deepEqual(JSON.parse(kept), { error: 'Audit failed to complete' });
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
 });

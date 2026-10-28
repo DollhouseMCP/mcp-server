@@ -98,9 +98,7 @@ jobs:
             echo "::warning::Security audit encountered errors but workflow will continue"
             # High/critical results may already exist. Preserve the actual findings.
             # A missing result is unavailable, never a fabricated clean audit.
-            if [ ! -s security-audit-result.json ]; then
-              echo '{"error":"Audit failed to complete"}' > security-audit-result.json
-            fi
+            node scripts/security-audit-report.mjs preserve-failure security-audit-result.json
           fi
 
       - name: Upload audit results
@@ -114,6 +112,7 @@ jobs:
             security-audit-result.json
 
       - name: Generate SARIF report
+        id: sarif
         if: always()
         shell: bash
         run: |
@@ -133,6 +132,9 @@ jobs:
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
+        env:
+          AUDIT_STEP_OUTCOME: ${{ steps['security-audit'].outcome }}
+          SARIF_STEP_OUTCOME: ${{ steps.sarif.outcome }}
         uses: actions/github-script@v7
         with:
           # Retry transient report transport only; exhausted retries still fail.
@@ -158,12 +160,19 @@ jobs:
             }
 
             // Add status badge
-            const failed = process.env.AUDIT_FAILED === 'true';
-            if (failed) {
-              report = '### ❌ Security Audit Failed\n\n' + report;
-            } else {
-              report = '### Security Audit Completed — see finding counts below\n\n' + report;
-            }
+            const { isAuditComplete } = await import(`${require('url').pathToFileURL(
+              require('path').resolve('scripts/security-audit-report.mjs'))}`);
+            let actualResult;
+            try { actualResult = JSON.parse(fs.readFileSync('security-audit-result.json', 'utf8')); }
+            catch { actualResult = undefined; }
+            const completed = isAuditComplete(actualResult, {
+              auditFailed: process.env.AUDIT_FAILED === 'true',
+              auditOutcome: process.env.AUDIT_STEP_OUTCOME,
+              sarifOutcome: process.env.SARIF_STEP_OUTCOME,
+            });
+            report = (completed
+              ? '### Security Audit Completed — see finding counts below\n\n'
+              : '### ❌ Security Audit Failed or Unavailable\n\n') + report;
 
             // Truncate if too long
             if (report.length > MAX_COMMENT_LENGTH) {
