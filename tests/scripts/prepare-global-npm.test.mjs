@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, cp, readFile, writeFile, rm, realpath, access, mkdir, chmod, symlink, link } from 'node:fs/promises';
+import { mkdtemp, cp, readFile, writeFile, rm, realpath, access, mkdir, chmod, symlink, link, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { createRequire } from 'node:module';
 import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
@@ -64,7 +64,7 @@ test('compressed and expanded bounds refuse before extraction', async () => {
 
 // Synthetic exact-contract fixture. Actual npm11.19 artifact/consumer proof is
 // separate: the Docker build runs the fixed preparer and real offline smoke.
-async function fixture() {
+async function fixture(inheritedIdentity) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'npm-patch-test-')));
   const root = join(directory, 'npm'); await cp(npmRoot, root, { recursive: true });
   const manifest = structuredClone(fixedManifest); const vendor = structuredClone(fixedVendor); const payloads = new Map();
@@ -72,7 +72,26 @@ async function fixture() {
   await update('package.json', j => { j.version = manifest.npmVersion; j.dependencies.tar = '^7.5.22'; });
   await update('node_modules/tar/package.json', j => { j.version = '7.5.22'; });
   await update(vendor.callerPackage.path, j => { j.version = vendor.callerPackage.version; });
-  for (const [path, bytes] of vendorPreimages) if (!path.includes('/http-cache-semantics/')) await writeFile(join(root, path), bytes);
+  const identityTargets = [];
+  for (const [path, bytes] of vendorPreimages) {
+    if (path.includes('/http-cache-semantics/')) continue;
+    const file = join(root, path);
+    if (inheritedIdentity === 'executable') {
+      await rm(file);
+      await writeFile(file, 'owned executable fixture identity', { flag: 'wx', mode: 0o755 });
+    }
+    if (inheritedIdentity === 'symlink' || inheritedIdentity === 'hardlink') {
+      const other = join(directory, basename(path));
+      await writeFile(other, 'untouched synthetic identity target');
+      identityTargets.push(other);
+      await rm(file);
+      if (inheritedIdentity === 'symlink') await symlink(other, file); else await link(other, file);
+    }
+    // These are synthetic exact-contract preimages, not the runner's installed
+    // npm files. Materialize fresh identities as well as qualified source bytes.
+    await rm(file);
+    await writeFile(file, bytes, { flag: 'wx', mode: 0o644 });
+  }
   for (const patch of manifest.patches) {
     await update(`node_modules/${patch.name}/package.json`, j => { j.version = patch.from; j.dependencies = patch.runtimeDependencies; });
     for (const [consumer, range] of Object.entries(patch.consumers)) await update(consumer, j => { j.dependencies[patch.name] = range; });
@@ -80,12 +99,19 @@ async function fixture() {
     const payload = archive([{ path: 'package/package.json', bytes: JSON.stringify({ name: patch.name, version: patch.to, dependencies: patch.runtimeDependencies }) }, { path: 'package/index.js', bytes: index }]);
     patch.sha256 = createHash('sha256').update(payload).digest('hex'); patch.integrity = `sha512-${createHash('sha512').update(payload).digest('base64')}`; payloads.set(patch.name, payload);
   }
-  return { root, directory, manifest, vendor, payloads, close: () => rm(directory, { recursive: true, force: true }) };
+  return { root, directory, manifest, vendor, payloads, identityTargets, close: () => rm(directory, { recursive: true, force: true }) };
 }
-test('publication changes only five leaves and two declared callers; npm core, tar, bins and other files stay exact', async () => {
-  const f = await fixture();
+for (const inheritedIdentity of ['installed', 'executable', 'symlink', 'hardlink']) {
+test(`publication from ${inheritedIdentity} fixture changes only five leaves and two declared callers; other files stay exact`, async () => {
+  const f = await fixture(inheritedIdentity);
   try {
-    const result = await prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name), f.vendor);
+    for (const path of vendorPreimages.keys()) {
+      if (path.includes('/http-cache-semantics/')) continue;
+      const stat = await lstat(join(f.root, path));
+      assert.equal(stat.isFile(), true); assert.equal(stat.nlink, 1); assert.equal(stat.mode & 0o777, 0o644);
+    }
+    const result = await prepareGlobalNpm(f.root, f.manifest, f.vendor, patch => f.payloads.get(patch.name));
+    for (const target of f.identityTargets) assert.equal(await readFile(target, 'utf8'), 'untouched synthetic identity target');
     const allowed = name => f.vendor.patches.some(p => p.path === name) || f.manifest.patches.some(p => name === `node_modules/${p.name}` || name.startsWith(`node_modules/${p.name}/`));
     for (const [name, entry] of Object.entries(result.before)) if (!allowed(name)) assert.deepEqual(result.after[name], entry);
     assert.deepEqual(result.after['bin/npm-cli.js'], result.before['bin/npm-cli.js']);
@@ -93,9 +119,10 @@ test('publication changes only five leaves and two declared callers; npm core, t
     assert.deepEqual(result.after['node_modules/tar/package.json'], result.before['node_modules/tar/package.json']);
     assert.equal(result.vendorPatches.patches.length, 3);
     for (const p of f.vendor.patches) assert.equal(result.after[p.path].sha256, p.afterSha256);
-    await assert.rejects(prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name), f.vendor), /already patched|original npm leaf/);
+    await assert.rejects(prepareGlobalNpm(f.root, f.manifest, f.vendor, patch => f.payloads.get(patch.name)), /already patched|original npm leaf/);
   } finally { await f.close(); }
 });
+}
 for (const kind of ['wrong original', 'integrity', 'changed closure', 'consumer range', 'unsafe last payload', 'payload dependency change', 'payload optional dependency', 'duplicate leaf', 'staging collision', 'caller bytes', 'caller mode', 'caller symlink', 'caller hardlink', 'caller package', 'caller staging collision', 'vendor after hash', 'last vendor anchor']) {
   test(`${kind} refuses with the entire original bundle unchanged`, async () => {
     const f = await fixture();
@@ -131,7 +158,7 @@ for (const kind of ['wrong original', 'integrity', 'changed closure', 'consumer 
       if (kind === 'vendor after hash') f.vendor.patches[0].afterSha256 = '0'.repeat(64);
       if (kind === 'last vendor anchor') f.vendor.patches.at(-1).replacements[0].before = 'missing exact anchor';
       const before = await inventory(f.root);
-      await assert.rejects(prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name), f.vendor));
+      await assert.rejects(prepareGlobalNpm(f.root, f.manifest, f.vendor, patch => f.payloads.get(patch.name)));
       assert.deepEqual(await inventory(f.root), before);
     } finally { await f.close(); }
   });

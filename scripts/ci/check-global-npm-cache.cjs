@@ -22,14 +22,14 @@ function policy(control, shared = false, ageSeconds = 2, extra = {}) {
   return value;
 }
 
-for (const [name, control, shared, extra] of [
-  ['private no-cache', 'no-cache, stale-while-revalidate=100, stale-if-error=100', false, {}],
-  ['shared no-cache', 'no-cache, stale-while-revalidate=100, stale-if-error=100', true, {}],
-  ['nonstorable', 'no-store, stale-while-revalidate=100, stale-if-error=100', false, {}],
-  ['stale must-revalidate', 'max-age=1, must-revalidate, stale-while-revalidate=100, stale-if-error=100', false, {}],
-  ['shared proxy-revalidate', 'max-age=1, proxy-revalidate, stale-while-revalidate=100, stale-if-error=100', true, {}],
-  ['shared s-maxage', 'max-age=600, s-maxage=1, stale-while-revalidate=100, stale-if-error=100', true, {}],
-  ['shared cookie safeguard', 'max-age=600, stale-while-revalidate=100, stale-if-error=100', true, { 'set-cookie': 'synthetic=test' }],
+for (const { name, control, shared, extra } of [
+  { name: 'private no-cache', control: 'no-cache, stale-while-revalidate=100, stale-if-error=100', shared: false, extra: {} },
+  { name: 'shared no-cache', control: 'no-cache, stale-while-revalidate=100, stale-if-error=100', shared: true, extra: {} },
+  { name: 'nonstorable', control: 'no-store, stale-while-revalidate=100, stale-if-error=100', shared: false, extra: {} },
+  { name: 'stale must-revalidate', control: 'max-age=1, must-revalidate, stale-while-revalidate=100, stale-if-error=100', shared: false, extra: {} },
+  { name: 'shared proxy-revalidate', control: 'max-age=1, proxy-revalidate, stale-while-revalidate=100, stale-if-error=100', shared: true, extra: {} },
+  { name: 'shared s-maxage', control: 'max-age=600, s-maxage=1, stale-while-revalidate=100, stale-if-error=100', shared: true, extra: {} },
+  { name: 'shared cookie safeguard', control: 'max-age=600, stale-while-revalidate=100, stale-if-error=100', shared: true, extra: { 'set-cookie': 'synthetic=test' } },
 ]) {
   test(`mandatory policy: ${name} cannot be revived by max-stale/SWR/SIE`, () => {
     const value = policy(control, shared, 2, extra);
@@ -40,14 +40,14 @@ for (const [name, control, shared, extra] of [
   });
 }
 
-for (const [name, control, shared, extra] of [
-  ['ordinary fresh', 'max-age=600', false, {}],
-  ['fresh must-revalidate', 'max-age=600, must-revalidate', false, {}],
-  ['private proxy equivalent', 'max-age=600, proxy-revalidate', false, {}],
-  ['private s-maxage equivalent', 'max-age=600, s-maxage=1', false, {}],
-  ['public cookie', 'public, max-age=600', true, { 'set-cookie': 'synthetic=test' }],
-  ['immutable cookie', 'immutable, max-age=600', true, { 'set-cookie': 'synthetic=test' }],
-  ['private cookie', 'max-age=600', false, { 'set-cookie': 'synthetic=test' }],
+for (const { name, control, shared, extra } of [
+  { name: 'ordinary fresh', control: 'max-age=600', shared: false, extra: {} },
+  { name: 'fresh must-revalidate', control: 'max-age=600, must-revalidate', shared: false, extra: {} },
+  { name: 'private proxy equivalent', control: 'max-age=600, proxy-revalidate', shared: false, extra: {} },
+  { name: 'private s-maxage equivalent', control: 'max-age=600, s-maxage=1', shared: false, extra: {} },
+  { name: 'public cookie', control: 'public, max-age=600', shared: true, extra: { 'set-cookie': 'synthetic=test' } },
+  { name: 'immutable cookie', control: 'immutable, max-age=600', shared: true, extra: { 'set-cookie': 'synthetic=test' } },
+  { name: 'private cookie', control: 'max-age=600', shared: false, extra: { 'set-cookie': 'synthetic=test' } },
 ]) {
   test(`permitted policy: ${name} remains reusable`, () => {
     assert.equal(policy(control, shared, 2, extra).satisfiesWithoutRevalidation(request), true);
@@ -117,7 +117,7 @@ for (const scenario of scenarios) {
       try {
         second = await fetch(url, { ...opts, ...scenario.options, headers: scenario.headers || {}, ...(integrity ? { integrity } : {}) });
         result = await second.json();
-      } catch (failure) { error = failure.code || failure.name; }
+      } catch (error_) { error = error_.code || error_.name; }
       const entries = await cacache.ls(cache);
       const metadataCookie = Object.values(entries).some(entry => Object.hasOwn(entry.metadata?.resHeaders || {}, 'set-cookie'));
       observations.push({ name: scenario.name, serverRequests: count, sequence: result?.sequence, error, cacheStatus: second?.headers.get('x-local-cache-status'), initialMetadataCookie, initialCacheEntries: Object.keys(initialEntries).length, metadataCookie, cacheEntries: Object.keys(entries).length });

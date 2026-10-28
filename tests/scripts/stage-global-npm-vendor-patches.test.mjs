@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { stageVendorPatches } from '../../scripts/ci/stage-global-npm-vendor-patches.mjs';
+import { stageVendorPatches, inSequence } from '../../scripts/ci/stage-global-npm-vendor-patches.mjs';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const { patches } = JSON.parse(await readFile(new URL('../../docker/global-npm-vendor-patches.json', import.meta.url), 'utf8'));
 const preimages = {
@@ -39,3 +39,30 @@ for (const name of ['missing path', 'duplicate path', 'outside path', 'wrong bef
     for (const [path, bytes] of source) assert.equal(hash(bytes), original.get(path));
   });
 }
+
+
+test('serial operations wait for each predecessor to settle', async () => {
+  const events = [];
+  await inSequence([1, 2, 3], async value => {
+    events.push(`start${value}`);
+    await new Promise(resolve => setImmediate(resolve));
+    events.push(`finish${value}`);
+  });
+  assert.deepEqual(events, ['start1', 'finish1', 'start2', 'finish2', 'start3', 'finish3']);
+});
+
+test('serial rejection starts no later operation and leaves no pending mutation', async () => {
+  const events = [];
+  let active = 0;
+  await assert.rejects(inSequence([1, 2, 3], async value => {
+    active++; events.push(`start${value}`);
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      if (value === 2) throw new Error('owned serial refusal');
+      events.push(`finish${value}`);
+    } finally { active--; }
+  }), /owned serial refusal/);
+  assert.equal(active, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, ['start1', 'finish1', 'start2']);
+});
