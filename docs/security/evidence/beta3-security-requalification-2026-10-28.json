@@ -6726,5 +6726,77 @@
       "verdict": "No blocking findings; finalcommit/docs andfreshmatchingheadCI/Sonar required",
       "reviewerMutations": 0
     }
+  },
+  "frozenBetaRefresh": {
+    "head": "17eb721f1f68805e677a476b50840b7390eb28a6",
+    "orderedParents": [
+      "68a9d8f91648066bb7a124980a3dcf8d6e1ae2a0",
+      "88efb60caedab9937dfe901c903b8e9132691cc9"
+    ],
+    "tree": "9c124fd7e85fbf5cd0177881eea7b0c323b89c8c",
+    "matchesPriorTestedSynthetic": "7320916f630a0329a8ca84a82d53ed66ef7516e4",
+    "packageInputsUnchanged": true,
+    "betaMutated": false,
+    "refUpdateForce": false,
+    "independentTreeReview": "PASS",
+    "headChecks": {
+      "success": 43,
+      "failure": 4,
+      "actualPrimaryFailure": 1,
+      "dependentGuardFailures": 3
+    },
+    "freshCodexClaude": "no findings",
+    "freshSonar": {
+      "issues": 0,
+      "hotspots": 0,
+      "qualityGate": "OK"
+    }
+  },
+  "nativePasswordWorkTestCorrection": {
+    "issue": "https://github.com/DollhouseMCP/mcp-server/issues/2798#issuecomment-6477336128",
+    "failure": {
+      "job": 123015675464,
+      "head": "17eb721f1f68805e677a476b50840b7390eb28a6",
+      "unknownMs": 46,
+      "minimumMs": 47,
+      "otherTestsPassed": 10005
+    },
+    "scope": "one existing LocalAccountMethod test case; production, native-verification gate suite and all package inputs unchanged",
+    "realNativeAssertions": [
+      "exactly one real argon2.verify mismatch in each branch",
+      "encoded Argon2id v19 memory19456 time2 parallelism1",
+      "stored vs distinct valid dummy hash selection",
+      "identical supplied password",
+      "native returns false rather than malformed-hash rejection",
+      "uniform generic denial and real rate-limit failure accounting"
+    ],
+    "existingAwaitGate": "unchanged LocalAccountNativeVerification.test.ts delays delivery after REAL native computation; each branch must remain pending until release",
+    "doesNotClaim": "equal end-to-end latency or absence of every timing side channel",
+    "mutationProof": {
+      "temporaryChange": "omit unknown-account argon2.verify",
+      "replacementFailure": "expected one native call, observed zero",
+      "existingGateFailure": "login returned before native verification completed",
+      "productionRestored": true,
+      "logSha256": "93d75b64c9f32be391044d8d3f1e01ef0498e15129e2118735916be35308c54c"
+    },
+    "restoredGreen": {
+      "suites": 11,
+      "testsPassed": 190,
+      "localNode": "v24.16.0",
+      "logSha256": "cfb61d554215be78ea0faf87c04963116e702c64c153828b7cf402413b664317",
+      "scopedEslintExit": 0,
+      "diffCheckExit": 0
+    },
+    "independentSecurityReview": "PASS/no blockers",
+    "packageInputSha256": {
+      "package.json": "73ca4dda8d3926bfb9c745aefc334aa934f78876a39a278df572eca441804711",
+      "package-lock.json": "ab9de16bf3857312e0e341cb350b4681abd4abf6594e9be9c24f7fbd6a1f7b21",
+      "packages/safety/package.json": "e0dbac6d5de40ef7156e46cc9d3e3b306db1c6284b8d06d897e9641c69c89828",
+      "packages/safety/package-lock.json": "73c2c4aae0ebd9a5c405bf8e0b715a29eb328ace1c483d3bb54d8c4ad5f50c5c"
+    },
+    "productionSourceSha256": "7fbad72b587000b1c1c39c0932ad850864afbdb1f3c2ad2f4afd3eb1bf1d0f21",
+    "nativeGateSuiteSha256": "4a7fb7722be693bfa1b46aeafaaa98e6a570a05f855273397fd37263d3131529",
+    "retryAllowance": "one prior Windows timing retry remains spent across heads; no extra rerun",
+    "newMatchingHeadChecksRequired": true
   }
 }
