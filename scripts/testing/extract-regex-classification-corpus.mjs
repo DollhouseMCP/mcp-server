@@ -17,13 +17,24 @@ const checker = program.getTypeChecker();
 const entries = [];
 const dynamic = [];
 
+function isAliasSymbol(symbol) {
+  return symbol.declarations?.some(declaration =>
+    ts.isImportSpecifier(declaration)
+    || (ts.isImportClause(declaration) && declaration.name !== undefined)
+    || ts.isNamespaceImport(declaration)
+    || ts.isExportSpecifier(declaration)
+    || ts.isImportEqualsDeclaration(declaration)
+    || ts.isNamespaceExport(declaration)
+    || ts.isNamespaceExportDeclaration(declaration)) ?? false;
+}
+
 function constantText(node, seen = new Set()) {
   if (!node || seen.has(node)) return undefined;
   seen.add(node);
   if (ts.isStringLiteralLike(node)) return node.text;
   if (ts.isIdentifier(node)) {
     let symbol = checker.getSymbolAtLocation(node);
-    if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) symbol = checker.getAliasedSymbol(symbol);
+    if (symbol && isAliasSymbol(symbol)) symbol = checker.getAliasedSymbol(symbol);
     return constantText(symbol?.valueDeclaration?.initializer, seen);
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
