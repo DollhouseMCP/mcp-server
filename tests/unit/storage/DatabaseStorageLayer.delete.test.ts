@@ -202,11 +202,22 @@ describe('DatabaseStorageLayer indexed reads', () => {
     expect((await layer.readIndexedPath([name])).path).toBe(expected);
   });
 
+  it('rejects a query failure without advancing the last successful scan timestamp', async () => {
+    const { layer, transaction } = fixture();
+    await layer.scan();
+    const previous = layer['getState']().lastScanTimestamp;
+    const failure = new Error('query unavailable');
+    transaction.mockRejectedValueOnce(failure);
+    await expect(layer.scan()).rejects.toBe(failure);
+    expect(layer['getState']().lastScanTimestamp).toBe(previous);
+    expect((await layer.readIndexedPath(['Meeting Notes'])).path).toBe('canonical-id');
+  });
+
   it('reports scan completion without scanning or querying during indexed reads', async () => {
     const { layer, transaction, select, execute } = fixture();
     const scan = jest.spyOn(layer, 'scan');
     expect(await layer.readIndexedPath(['Meeting Notes'])).toEqual({
-      path: undefined, indexComplete: false, authoritative: false,
+      path: undefined, indexComplete: false, authoritative: false, unindexed: [],
     });
     expect(await layer.findIndexedPath(['Meeting Notes'])).toBeUndefined();
     expect(scan).not.toHaveBeenCalled();
@@ -220,7 +231,7 @@ describe('DatabaseStorageLayer indexed reads', () => {
     select.mockClear();
     execute.mockClear();
     expect(await layer.readIndexedPath(['Meeting Notes'])).toEqual({
-      path: 'canonical-id', indexComplete: true, authoritative: true,
+      path: 'canonical-id', indexComplete: true, authoritative: true, unindexed: [],
     });
     expect(await layer.findIndexedPath(['Meeting Notes'])).toBe('canonical-id');
     expect(await layer.findIndexedPath(['missing'])).toBeUndefined();

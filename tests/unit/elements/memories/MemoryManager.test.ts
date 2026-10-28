@@ -98,6 +98,40 @@ describe('MemoryManager', () => {
     manager.clearCache();
   });
 
+  it('propagates a denied system probe without trying later memory locations', async () => {
+    const denied = Object.assign(new Error('system access denied'), { code: 'EACCES' });
+    const fileOperations = container.resolve<FileOperationsService>('FileOperationsService');
+    const exists = jest.spyOn(fileOperations, 'exists').mockRejectedValue(denied);
+    const dates = jest.spyOn(manager as unknown as { getDateFolders(): Promise<string[]> }, 'getDateFolders');
+    try {
+      await expect(manager['resolveMemoryPath']('missing.yaml')).rejects.toBe(denied);
+      expect(exists).toHaveBeenCalledTimes(1);
+      expect(exists).toHaveBeenCalledWith(path.join(memoriesDir, 'system', 'missing.yaml'));
+      expect(dates).not.toHaveBeenCalled();
+    } finally {
+      exists.mockRestore();
+      dates.mockRestore();
+    }
+  });
+
+  it('audits the stored parse reason without reloading an unindexed memory', async () => {
+    await fs.writeFile(path.join(memoriesDir, 'parse-reason.yaml'), 'metadata: [unfinished');
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+    const load = jest.spyOn(manager, 'load');
+    try {
+      expect(await manager.list()).toEqual([]);
+      expect(load).not.toHaveBeenCalled();
+      const failures = audit.mock.calls.filter(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_LIST_ITEM_FAILED);
+      expect(failures).toHaveLength(1);
+      expect(failures[0][0].details).toContain('parse-reason.yaml');
+      expect(failures[0][0].details).toMatch(/unexpected end|flow collection/);
+      expect(failures[0][0].details).not.toContain(memoriesDir);
+    } finally {
+      load.mockRestore();
+      audit.mockRestore();
+    }
+  });
+
   it('emits a memory-list failure once for each caller sharing a path', async () => {
     await fs.writeFile(path.join(memoriesDir, 'broken.yaml'), 'metadata: [unfinished');
     let namespace = 'alice';

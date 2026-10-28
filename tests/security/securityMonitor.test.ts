@@ -3,6 +3,8 @@
  */
 
 import { jest } from '@jest/globals';
+import { BestEffortDelivery } from '../../src/logging/BestEffortDelivery.js';
+import { logger } from '../../src/utils/logger.js';
 import { SecurityMonitor } from '../../src/security/securityMonitor.js';
 
 const RUNTIME_REQUEST_SOURCE = 'runtime-request';
@@ -100,6 +102,29 @@ describe('SecurityMonitor', () => {
           details: 'Request completed after attribution teardown',
         }),
       ]);
+    });
+
+    it('reports attribution and critical alert delivery failures independently', () => {
+      const monitor = new SecurityMonitor(() => { throw new Error('unavailable context'); });
+      const report = jest.fn();
+      for (const guard of Object.values(monitor)) {
+        if (guard instanceof BestEffortDelivery) Object.defineProperty(guard, 'report', { value: report });
+      }
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => { throw new Error('warn unavailable'); });
+      const error = jest.spyOn(logger, 'error').mockImplementation(() => { throw new TypeError('alert unavailable'); });
+      try {
+        monitor.instanceLogSecurityEvent({
+          type: 'INTEGRATION_SECURITY_DECISION', severity: 'CRITICAL',
+          source: RUNTIME_REQUEST_SOURCE, details: 'Delivery isolation',
+        });
+        expect(report).toHaveBeenCalledTimes(2);
+        expect(report).toHaveBeenCalledWith('SecurityMonitor attribution', 0, 'Error');
+        expect(report).toHaveBeenCalledWith('SecurityMonitor alert', 0, 'TypeError');
+        expect(monitor.instanceGetRecentEvents()).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+        error.mockRestore();
+      }
     });
 
     it('does not clear a newer DI monitor when an older container is disposed', () => {

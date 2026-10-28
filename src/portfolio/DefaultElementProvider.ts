@@ -6,19 +6,18 @@
  * It ensures users have example content to work with immediately after installation.
  */
 
-// NOTE: fsSync is intentionally kept for synchronous development mode detection at module load time.
-// The IS_DEVELOPMENT_MODE check runs during module initialization before async operations are available.
-// All other file operations use FileOperationsService for centralized, secure file handling.
-import * as fsSync from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { createHash } from 'crypto';
+import { visitSequentially } from '../utils/visitSequentially.js';
+import * as fsSync from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { readFrontmatter } from '../security/readFrontmatter.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
-import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { IFileOperationsService, isAbsentPathError, directoryExists } from '../services/FileOperationsService.js';
 import { ContentValidator } from '../security/contentValidator.js';
 
 // File operation constants
@@ -33,6 +32,9 @@ export const FILE_CONSTANTS = {
   CHUNK_SIZE: 64 * 1024 // 64KB chunks for reading large files
 } as const;
 
+// NOTE: fsSync is intentionally kept for synchronous development mode detection at module load time.
+// The IS_DEVELOPMENT_MODE check runs during module initialization before async operations are available.
+// Bundled hash verification also uses synchronous reads; runtime operations use FileOperationsService.
 // Development mode detection
 // When running from a git clone, we don't want to auto-load test data
 const IS_DEVELOPMENT_MODE = (() => {
@@ -70,7 +72,7 @@ interface MetadataCacheEntry {
 export class DefaultElementProvider {
   private readonly __dirname: string;
   private static cachedDataDir: string | null = null;
-  private static populateInProgress: Map<string, Promise<void>> = new Map();
+  private static readonly populateInProgress: Map<string, Promise<void>> = new Map();
   private readonly config: DefaultElementProviderConfig;
   private readonly fileOperations?: IFileOperationsService;
   private static logListener?: (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void;
@@ -81,7 +83,7 @@ export class DefaultElementProvider {
   }
 
   // PERFORMANCE OPTIMIZATION: Cache metadata with file mtime for invalidation
-  private static metadataCache: Map<string, MetadataCacheEntry> = new Map();
+  private static readonly metadataCache: Map<string, MetadataCacheEntry> = new Map();
   private static readonly MAX_CACHE_SIZE = 20; // MEMORY LEAK FIX: Further reduced cache size to prevent accumulation during performance tests
 
   constructor(config?: DefaultElementProviderConfig) {
@@ -126,7 +128,7 @@ export class DefaultElementProvider {
       useDefaultPaths: true,
       ...config,
       // Apply final loadTestData logic - environment variables and development mode take precedence
-      loadTestData: loadTestDataFromEnv ? true : disableTestDataFromEnv ? false : computedLoadTestData
+      loadTestData: computedLoadTestData
     };
     
     if (isDevMode && !this.config.loadTestData) {
@@ -202,7 +204,7 @@ export class DefaultElementProvider {
       return this.fileOperations.stat(filePath);
     }
     // Fallback: import fs/promises dynamically for backward compatibility
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     return fs.stat(filePath);
   }
 
@@ -210,7 +212,7 @@ export class DefaultElementProvider {
     if (this.fileOperations) {
       return this.fileOperations.listDirectory(dirPath);
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     return fs.readdir(dirPath);
   }
 
@@ -218,12 +220,13 @@ export class DefaultElementProvider {
     if (this.fileOperations) {
       return this.fileOperations.exists(filePath);
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     try {
       await fs.access(filePath);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isAbsentPathError(error)) return false;
+      throw error;
     }
   }
 
@@ -231,7 +234,7 @@ export class DefaultElementProvider {
     if (this.fileOperations) {
       return this.fileOperations.createDirectory(dirPath);
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     await fs.mkdir(dirPath, { recursive: true });
   }
 
@@ -241,7 +244,7 @@ export class DefaultElementProvider {
         source: 'DefaultElementProvider.copyFileOp'
       });
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     await fs.copyFile(sourcePath, destPath);
   }
 
@@ -251,7 +254,7 @@ export class DefaultElementProvider {
         source: 'DefaultElementProvider.chmodFile'
       });
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     await fs.chmod(filePath, mode);
   }
 
@@ -261,7 +264,7 @@ export class DefaultElementProvider {
         source: 'DefaultElementProvider.deleteFileOp'
       });
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     await fs.unlink(filePath);
   }
 
@@ -271,7 +274,7 @@ export class DefaultElementProvider {
         source: 'DefaultElementProvider.readFileContent'
       });
     }
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     return fs.readFile(filePath, 'utf-8');
   }
 
@@ -312,8 +315,8 @@ export class DefaultElementProvider {
         '/usr/lib/node_modules/@dollhousemcp/mcp-server/data',
         
         // NPM installations - Windows
-        'C:\\Program Files\\nodejs\\node_modules\\@dollhousemcp\\mcp-server\\data',
-        'C:\\Program Files (x86)\\nodejs\\node_modules\\@dollhousemcp\\mcp-server\\data',
+        String.raw`C:\Program Files\nodejs\node_modules\@dollhousemcp\mcp-server\data`,
+        String.raw`C:\Program Files (x86)\nodejs\node_modules\@dollhousemcp\mcp-server\data`,
         
         // NPM installations - Windows with nvm
         path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@dollhousemcp', 'mcp-server', 'data')
@@ -325,7 +328,7 @@ export class DefaultElementProvider {
   
   /**
    * Find the bundled data directory by checking each search path
-   * Uses Promise.allSettled for better performance and caches the result
+   * Uses concurrent probes for better performance and caches the result
    */
   private async findDataDirectory(): Promise<string | null> {
     // Return cached value if available
@@ -333,34 +336,16 @@ export class DefaultElementProvider {
       return DefaultElementProvider.cachedDataDir;
     }
     
-    // Check all paths in parallel for better performance
-    const checkPromises = this.dataSearchPaths.map(async (searchPath) => {
-      try {
-        const stats = await this.statFile(searchPath);
-        if (stats.isDirectory()) {
-          // Verify it contains expected subdirectories
-          const hasPersonas = await this.directoryExists(path.join(searchPath, 'personas'));
-          const hasSkills = await this.directoryExists(path.join(searchPath, 'skills'));
-          if (hasPersonas || hasSkills) {
-            return searchPath;
-          }
-        }
-      } catch {
-        // Directory doesn't exist or can't be accessed
-        return null;
-      }
-      return null;
-    });
-    
-    const results = await Promise.allSettled(checkPromises);
-    
+    const candidates = this.dataSearchPaths;
+    const results = await Promise.all(candidates.map(searchPath => this.inspectDataDirectory(searchPath)));
+
     // Find the first successful result
     for (const result of results) {
-      if (result.status === 'fulfilled' && result.value !== null) {
-        logger.info(`[DefaultElementProvider] Found data directory at: ${result.value}`);
+      if (result !== null) {
+        logger.info(`[DefaultElementProvider] Found data directory at: ${result}`);
         // Cache the result
-        DefaultElementProvider.cachedDataDir = result.value;
-        return result.value;
+        DefaultElementProvider.cachedDataDir = result;
+        return result;
       }
     }
     
@@ -368,16 +353,35 @@ export class DefaultElementProvider {
     return null;
   }
   
+  private async inspectDataDirectory(candidate: string): Promise<string | null> {
+    let directory = candidate;
+    try {
+      if (!(await this.statFile(candidate)).isDirectory()) return null;
+      directory = path.join(candidate, 'personas');
+      const hasPersonas = await this.directoryExists(directory);
+      directory = path.join(candidate, 'skills');
+      const hasSkills = await this.directoryExists(directory);
+      return hasPersonas || hasSkills ? candidate : null;
+    } catch (error) {
+      this.reportDataDirectoryFailure(candidate, directory, error);
+      return null;
+    }
+  }
+
+  private reportDataDirectoryFailure(candidate: string, directory: string, error: unknown): void {
+    if (isAbsentPathError(error)) return;
+    logger.warn('[DefaultElementProvider] Cannot inspect bundled data candidate', {
+      candidate, directory, code: (error as NodeJS.ErrnoException)?.code,
+      error: error instanceof Error ? error.name : typeof error,
+    });
+  }
+
   /**
    * Helper to check if a directory exists
    */
   private async directoryExists(dirPath: string): Promise<boolean> {
-    try {
-      const stats = await this.statFile(dirPath);
-      return stats.isDirectory();
-    } catch {
-      return false;
-    }
+    if (this.fileOperations) return this.fileOperations.directoryExists(dirPath);
+    return directoryExists(dirPath, filePath => this.statFile(filePath));
   }
 
   /**
@@ -434,64 +438,11 @@ export class DefaultElementProvider {
     }
   }
 
-  // DEPRECATED: Commented out filename pattern detection - replaced with metadata-based detection
-  /**
-   * Cached compiled regex patterns for performance optimization
-   * @deprecated Use metadata-based detection instead
-   */
-  // private static compiledTestPatterns: RegExp[] | null = null;
-
-  /**
-   * Get compiled test patterns with caching for better performance
-   * @deprecated Use metadata-based detection instead
-   * @returns Array of compiled regex patterns
-   */
-  // private getCompiledTestPatterns(): RegExp[] {
-  //   // Use cached patterns if available
-  //   if (DefaultElementProvider.compiledTestPatterns) {
-  //     return DefaultElementProvider.compiledTestPatterns;
-  //   }
-  //   
-  //   // Compile and cache patterns on first use
-  //   // CRITICAL FIX: Removed overly broad /^test-/i pattern that was blocking legitimate use
-  //   // Users should be able to create personas like "test-driven-developer" or "test-automation-expert"
-  //   // We only block specific test patterns that are clearly from our test suite
-  //   DefaultElementProvider.compiledTestPatterns = [
-  //     /^testpersona/i,              // Our test suite pattern
-  //     /^yamltest/i,                 // Security test pattern
-  //     /^yamlbomb/i,                 // Security test pattern
-  //     /^memory-test-/i,             // Performance test pattern
-  //     /^perf-test-/i,               // Performance test pattern
-  //     /^test-fixture-/i,            // Test fixture pattern (more specific)
-  //     /^test-data-/i,               // Test data pattern (more specific)
-  //     /bin-sh|rm-rf|pwned/i,        // Malicious patterns
-  //     /concurrent-\d+/i,            // Concurrent test pattern
-  //     /legacy\.md$/i,               // Legacy test pattern
-  //     /performance-test/i,          // Performance test pattern
-  //     /-\d{13}-[a-z0-9]+\.md$/i,    // Timestamp-based test files
-  //     /^unittest-/i,                // Unit test pattern
-  //     /^integrationtest-/i,         // Integration test pattern
-  //   ];
-  //   
-  //   return DefaultElementProvider.compiledTestPatterns;
-  // }
-
-  /**
-   * Check if a filename matches test data patterns that should never be copied to production
-   * @deprecated Use isDollhouseMCPTestElement() for metadata-based detection instead
-   * @param filename The filename to check
-   * @returns true if the filename matches test patterns that should be blocked
-   */
-  // private isTestDataPattern(filename: string): boolean {
-  //   const patterns = this.getCompiledTestPatterns();
-  //   return patterns.some(pattern => pattern.test(filename));
-  // }
-
   /**
    * Read metadata from YAML frontmatter only (never reads content body)
-   * Uses a small buffer to safely extract only the frontmatter between --- markers
+   * Uses reusable chunks to extract frontmatter up to the parser limit
    * @param filePath Path to the file to read metadata from
-   * @returns Parsed metadata object or null if no frontmatter found
+   * @returns Parsed metadata, undefined if absent, or null if unavailable
    */
   // PERFORMANCE OPTIMIZATION: Reusable buffer pool to reduce allocations
   private static readonly bufferPool: Buffer[] = [];
@@ -593,7 +544,7 @@ export class DefaultElementProvider {
   }
 
   /**
-   * Read only the YAML frontmatter metadata from a file (first 4KB)
+   * Read YAML frontmatter metadata up to the parser limit
    *
    * SECURITY NOTE (Issue #1228): This method MUST use validateContent: true when calling
    * SecureYamlParser.parse() to ensure Unicode security validation runs. Setting validateContent
@@ -602,9 +553,9 @@ export class DefaultElementProvider {
    *
    * @param filePath - Absolute path to the file to read
    * @param retries - Number of retries for transient failures (default: 2)
-   * @returns Parsed metadata object or null if no valid frontmatter found
+   * @returns Parsed metadata, undefined if absent, or null if unavailable
    */
-  private async readMetadataOnly(filePath: string, retries = 2): Promise<any | null> {
+  private async readMetadataOnly(filePath: string, retries = 2): Promise<any> {
     // PERFORMANCE: Check cache first before reading file
     try {
       const stats = await this.statFile(filePath);
@@ -622,26 +573,16 @@ export class DefaultElementProvider {
     }
     
     try {
-      // NOTE: Using direct fs.open for partial file read (first 4KB only).
-      // FileOperationsService doesn't support partial reads with file handles.
-      // This is intentionally kept as a direct fs call for performance-critical
-      // metadata extraction that only needs the YAML frontmatter.
-      const { promises: fs } = await import('fs');
+      // Read in pooled chunks without loading the full content body.
+      const { promises: fs } = await import('node:fs');
       const fd = await fs.open(filePath, 'r');
       // PERFORMANCE: Use buffer pool instead of allocating new buffer each time
       const buffer = this.getBuffer();
       
       try {
-        const result = await fd.read(buffer, 0, 4096, 0);
-        const header = buffer.subarray(0, result.bytesRead).toString('utf-8');
-        
-        // Look for YAML frontmatter between --- markers
-        // Support both Unix (\n) and Windows (\r\n) line endings
-        const match = header.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-        if (!match) {
-          return null; // No frontmatter found
-        }
-        
+        const frontmatter = await readFrontmatter(fd, buffer);
+        if (frontmatter === null || frontmatter === undefined) return frontmatter;
+
         // Parse the YAML frontmatter safely
         try {
           // SECURITY FIX (Issue #1228): Enable validateContent to block zero-width Unicode and other security threats
@@ -649,7 +590,7 @@ export class DefaultElementProvider {
           // It expects full YAML with --- markers, so we reconstruct the frontmatter block
           // We disable field-specific validation as this is general metadata parsing, not persona-specific
           // but we MUST keep validateContent: true to ensure Unicode security validation runs
-          const fullYaml = `---\n${match[1]}\n---`;
+          const fullYaml = `---\n${frontmatter}\n---`;
           const parseResult = SecureYamlParser.parse(fullYaml, {
             // REQUIRED: validateContent must be true to enable Unicode security validation including
             // zero-width character detection (U+200B-U+200F, U+FEFF, etc.). Setting this to false
@@ -662,39 +603,7 @@ export class DefaultElementProvider {
           
           // PERFORMANCE: Cache the metadata with file stats for future reads
           if (typeof metadata === 'object' && metadata !== null) {
-            try {
-              const stats = await this.statFile(filePath);
-              const cacheEntry: MetadataCacheEntry = {
-                metadata,
-                mtime: stats.mtimeMs,
-                size: stats.size
-              };
-              
-              // CRITICAL MEMORY LEAK FIX: More aggressive cache management to prevent unbounded growth
-              // Check if this entry already exists and just update it instead of adding new
-              if (DefaultElementProvider.metadataCache.has(filePath)) {
-                // Update existing entry - no eviction needed
-                DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
-                logger.debug(`[DefaultElementProvider] Updated existing cache entry for ${filePath}`);
-              } else {
-                // New entry - check if we need to evict first
-                // Use > instead of >= to ensure we never exceed MAX_CACHE_SIZE
-                if (DefaultElementProvider.metadataCache.size >= DefaultElementProvider.MAX_CACHE_SIZE) {
-                  // More aggressive eviction: remove enough entries to stay well under limit
-                  const entriesToEvict = Math.max(1, Math.floor(DefaultElementProvider.MAX_CACHE_SIZE * 0.4));
-                  const keysToEvict = Array.from(DefaultElementProvider.metadataCache.keys()).slice(0, entriesToEvict);
-                  for (const key of keysToEvict) {
-                    DefaultElementProvider.metadataCache.delete(key);
-                  }
-                  logger.debug(`[DefaultElementProvider] Evicted ${keysToEvict.length} cache entries to manage memory (cache size was ${DefaultElementProvider.metadataCache.size + keysToEvict.length})`);
-                }
-                
-                DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
-                logger.debug(`[DefaultElementProvider] Added new cache entry for ${filePath} (cache size now: ${DefaultElementProvider.metadataCache.size})`);
-              }
-            } catch {
-              // Ignore cache errors, return metadata anyway
-            }
+            await this.cacheMetadata(filePath, metadata);
             return metadata;
           }
           return null;
@@ -732,23 +641,55 @@ export class DefaultElementProvider {
     }
   }
 
+  private async cacheMetadata(filePath: string, metadata: object): Promise<void> {
+    try {
+      const stats = await this.statFile(filePath);
+      const cacheEntry: MetadataCacheEntry = {
+        metadata,
+        mtime: stats.mtimeMs,
+        size: stats.size
+      };
+
+      // CRITICAL MEMORY LEAK FIX: More aggressive cache management to prevent unbounded growth
+      // Check if this entry already exists and just update it instead of adding new
+      if (DefaultElementProvider.metadataCache.has(filePath)) {
+        // Update existing entry - no eviction needed
+        DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
+        logger.debug(`[DefaultElementProvider] Updated existing cache entry for ${filePath}`);
+      } else {
+        // New entry - check if we need to evict first
+        // Use > instead of >= to ensure we never exceed MAX_CACHE_SIZE
+        if (DefaultElementProvider.metadataCache.size >= DefaultElementProvider.MAX_CACHE_SIZE) {
+          // More aggressive eviction: remove enough entries to stay well under limit
+          const entriesToEvict = Math.max(1, Math.floor(DefaultElementProvider.MAX_CACHE_SIZE * 0.4));
+          const keysToEvict = Array.from(DefaultElementProvider.metadataCache.keys()).slice(0, entriesToEvict);
+          for (const key of keysToEvict) {
+            DefaultElementProvider.metadataCache.delete(key);
+          }
+          logger.debug(`[DefaultElementProvider] Evicted ${keysToEvict.length} cache entries to manage memory (cache size was ${DefaultElementProvider.metadataCache.size + keysToEvict.length})`);
+        }
+
+        DefaultElementProvider.metadataCache.set(filePath, cacheEntry);
+        logger.debug(`[DefaultElementProvider] Added new cache entry for ${filePath} (cache size now: ${DefaultElementProvider.metadataCache.size})`);
+      }
+    } catch {
+      // Ignore cache errors, return metadata anyway
+    }
+  }
+
   /**
    * Check if a file is a DollhouseMCP test element based on metadata
    * This replaces filename pattern detection with accurate metadata-based detection
    * @param filePath Path to the file to check
-   * @returns true if the file contains _dollhouseMCPTest: true metadata
+   * @returns Whether the file is a test element, or null if metadata is unavailable
    */
-  private async isDollhouseMCPTestElement(filePath: string): Promise<boolean> {
+  private async isDollhouseMCPTestElement(filePath: string): Promise<boolean | null> {
     try {
       const metadata = await this.readMetadataOnly(filePath);
-      const isTest = !!(metadata && metadata._dollhouseMCPTest === true);
-      
-      
-      return isTest;
-    } catch (error) {
-      // If we can't read the metadata, assume it's not a test file
-      logger.debug(`[DefaultElementProvider] Error checking test metadata for ${filePath}: ${error}`);
-      return false;
+      return metadata === null ? null : metadata?._dollhouseMCPTest === true;
+    } catch {
+      // Error inspection or diagnostics in the reader can still reject; admission stays closed.
+      return null;
     }
   }
 
@@ -816,6 +757,48 @@ export class DefaultElementProvider {
     return score >= 3;
   }
   
+  private async shouldBlockTestElement(sourcePath: string, filename: string, elementType: string): Promise<boolean> {
+    // Production safety check: Block DollhouseMCP test elements in production environments
+    // Skip this check if loadTestData is explicitly enabled (for testing scenarios)
+    if (!this.config.loadTestData && this.isProductionEnvironment()) {
+      const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
+
+      if (isDollhouseTest === null) {
+        logger.warn('[DefaultElementProvider] Skipping file because metadata is unavailable');
+        return true;
+      }
+
+      if (isDollhouseTest) {
+        logger.warn(
+          `[DefaultElementProvider] SECURITY: Blocking DollhouseMCP test element in production: ${filename}`,
+          {
+            file: filename,
+            reason: 'DollhouseMCP test element detected in production environment',
+            elementType
+          }
+        );
+
+        // Log security event for blocked test data
+        SecurityMonitor.logSecurityEvent({
+          type: 'TEST_DATA_BLOCKED',
+          severity: 'MEDIUM',
+          source: 'DefaultElementProvider.copyElementFiles',
+          details: `Blocked DollhouseMCP test element in production: ${filename}`,
+          metadata: {
+            filename,
+            elementType,
+            reason: 'DollhouseMCP test element detected in production environment',
+            detectionMethod: 'metadata-based'
+          }
+        });
+
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   /**
    * Copy all files from source directory to destination directory
    * Skips files that already exist to preserve user modifications
@@ -832,18 +815,18 @@ export class DefaultElementProvider {
       const files = await this.listDir(sourceDir);
       
       
-      for (const file of files) {
+      await visitSequentially(files.values(), async file => {
         
         // Only copy markdown files
         if (!file.endsWith(FILE_CONSTANTS.ELEMENT_EXTENSION)) {
-          continue;
+          return;
         }
         
         // Normalize filename for security
         const normalizedFile = UnicodeValidator.normalize(file);
         if (!normalizedFile.isValid) {
           logger.warn(`[DefaultElementProvider] Skipping file with invalid Unicode: ${file}`);
-          continue;
+          return;
         }
 
         const sourcePath = path.join(sourceDir, normalizedFile.normalizedContent);
@@ -860,47 +843,17 @@ export class DefaultElementProvider {
             `[DefaultElementProvider] Skipping file with invalid path: ${normalizedFile.normalizedContent}`,
             { sourcePath, destPath, elementType }
           );
-          continue;
+          return;
         }
         
-        // Production safety check: Block DollhouseMCP test elements in production environments
-        // Skip this check if loadTestData is explicitly enabled (for testing scenarios)
-        if (!this.config.loadTestData && this.isProductionEnvironment()) {
-          const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
-          
-          if (isDollhouseTest) {
-            logger.warn(
-              `[DefaultElementProvider] SECURITY: Blocking DollhouseMCP test element in production: ${normalizedFile.normalizedContent}`,
-              { 
-                file: normalizedFile.normalizedContent,
-                reason: 'DollhouseMCP test element detected in production environment',
-                elementType
-              }
-            );
-            
-            // Log security event for blocked test data
-            SecurityMonitor.logSecurityEvent({
-              type: 'TEST_DATA_BLOCKED',
-              severity: 'MEDIUM',
-              source: 'DefaultElementProvider.copyElementFiles',
-              details: `Blocked DollhouseMCP test element in production: ${normalizedFile.normalizedContent}`,
-              metadata: {
-                filename: normalizedFile.normalizedContent,
-                elementType,
-                reason: 'DollhouseMCP test element detected in production environment',
-                detectionMethod: 'metadata-based'
-              }
-            });
-            
-            continue;
-          }
-        }
-        
+        if (await this.shouldBlockTestElement(sourcePath, normalizedFile.normalizedContent, elementType)) return;
+
         // Check if destination file already exists
+        // Destination probe failures must propagate so unreadable files cannot be overwritten.
         const destExists = await this.fileExists(destPath);
         if (destExists) {
           logger.debug(`[DefaultElementProvider] Skipping existing file: ${normalizedFile.normalizedContent}`);
-          continue;
+          return;
         }
         
         try {
@@ -919,7 +872,7 @@ export class DefaultElementProvider {
                 elementType 
               }
             );
-            continue;
+            return;
           }
           
           // Copy the file with verification
@@ -956,7 +909,7 @@ export class DefaultElementProvider {
           );
           // Continue with other files instead of failing completely
         }
-      }
+      });
       
       if (copiedCount > 0) {
         logger.info(`[DefaultElementProvider] Copied ${copiedCount} ${elementType} file(s)`);
@@ -984,21 +937,22 @@ export class DefaultElementProvider {
     // FileOperationsService doesn't support file handles for chunked reading.
     // This is intentionally kept as a direct fs call for memory-efficient
     // checksum calculation on potentially large files.
-    const { promises: fs } = await import('fs');
+    const { promises: fs } = await import('node:fs');
     const stream = await fs.open(filePath, 'r');
 
     try {
       const buffer = Buffer.alloc(FILE_CONSTANTS.CHUNK_SIZE);
-      let bytesRead: number;
-
-      do {
-        const result = await stream.read(buffer, 0, FILE_CONSTANTS.CHUNK_SIZE);
-        bytesRead = result.bytesRead;
-
-        if (bytesRead > 0) {
-          hash.update(buffer.subarray(0, bytesRead));
-        }
-      } while (bytesRead > 0);
+      const chunks: AsyncIterable<Buffer> = {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => {
+            const { bytesRead } = await stream.read(buffer, 0, FILE_CONSTANTS.CHUNK_SIZE);
+            return { done: bytesRead === 0, value: buffer.subarray(0, bytesRead) };
+          },
+        }),
+      };
+      for await (const chunk of chunks) {
+        hash.update(chunk);
+      }
 
       return hash.digest('hex');
     } finally {
@@ -1013,9 +967,10 @@ export class DefaultElementProvider {
    * @throws Error if copy fails after all retry attempts
    */
   private async copyFileWithVerification(sourcePath: string, destPath: string): Promise<void> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= COPY_RETRY_ATTEMPTS; attempt++) {
+    const outcome: { copied: boolean; lastError: Error | null } = { copied: false, lastError: null };
+    const attempts = Array.from({ length: COPY_RETRY_ATTEMPTS }, (_, index) => index + 1);
+    await visitSequentially(attempts.values(), async attempt => {
+      if (outcome.copied) return;
       try {
         // Copy the file
         await this.copyFileOp(sourcePath, destPath);
@@ -1061,10 +1016,11 @@ export class DefaultElementProvider {
           `[DefaultElementProvider] Successfully copied and verified: ${path.basename(sourcePath)}`,
           { size: sourceStats.size, checksum: sourceChecksum.substring(0, 8) }
         );
+        outcome.copied = true;
         return;
 
       } catch (error) {
-        lastError = error as Error;
+        outcome.lastError = error as Error;
 
         // Clean up failed copy
         try {
@@ -1076,17 +1032,18 @@ export class DefaultElementProvider {
         if (attempt < COPY_RETRY_ATTEMPTS) {
           logger.debug(
             `[DefaultElementProvider] Copy attempt ${attempt} failed, retrying...`,
-            { error: lastError.message, sourcePath, destPath }
+            { error: outcome.lastError.message, sourcePath, destPath }
           );
           await new Promise(resolve => setTimeout(resolve, COPY_RETRY_DELAY * attempt));
         }
       }
-    }
+    });
+    if (outcome.copied) return;
     
     // All attempts failed
     throw new Error(
       `Failed to copy ${path.basename(sourcePath)} after ${COPY_RETRY_ATTEMPTS} attempts: ` +
-      `${lastError?.message || 'Unknown error'}`
+      `${outcome.lastError?.message || 'Unknown error'}`
     );
   }
   
@@ -1173,26 +1130,23 @@ export class DefaultElementProvider {
     const copiedCounts: Record<string, number> = {};
     
     // Copy each element type - directories now match enum values (all plural)
-    for (const elementType of Object.values(ElementType)) {
+    await visitSequentially(Object.values(ElementType).values(), async elementType => {
       const sourceDir = path.join(dataDir, elementType);
       const destDir = path.join(portfolioBaseDir, elementType);
 
-      // Check if source directory exists
-      const sourceDirExists = await this.fileExists(sourceDir);
-      if (!sourceDirExists) {
-        // Source directory doesn't exist, skip
-        logger.debug(`[DefaultElementProvider] No ${elementType} directory in bundled data`);
-        continue;
-      }
-
       try {
+        // Bundled sources are optional: report unreadable types and continue seeding others.
+        if (!await this.fileExists(sourceDir)) {
+          logger.debug(`[DefaultElementProvider] No ${elementType} directory in bundled data`);
+          return;
+        }
         const copiedCount = await this.copyElementFiles(sourceDir, destDir, elementType);
         copiedCounts[elementType] = copiedCount;
         totalCopied += copiedCount;
       } catch (error) {
         logger.error(`[DefaultElementProvider] Error copying ${elementType} elements:`, error);
       }
-    }
+    });
     
     if (totalCopied > 0) {
       logger.info(

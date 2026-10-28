@@ -29,6 +29,7 @@
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
 import { FileLockManager } from '../security/fileLockManager.js';
+import type { Memory, MemoryMetadata } from '../elements/memories/Memory.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
@@ -45,12 +46,12 @@ export interface StartupOptions {
 }
 
 export class ServerStartup {
-  private portfolioManager: PortfolioManager;
-  private migrationManager: MigrationManager;
-  private fileLockManager: FileLockManager;
-  private memoryManager: MemoryManager;
-  private configManager: ConfigManager;
-  private operationalTelemetry: OperationalTelemetry;
+  private readonly portfolioManager: PortfolioManager;
+  private readonly migrationManager: MigrationManager;
+  private readonly fileLockManager: FileLockManager;
+  private readonly memoryManager: MemoryManager;
+  private readonly configManager: ConfigManager;
+  private readonly operationalTelemetry: OperationalTelemetry;
 
   constructor(
     portfolioManager: PortfolioManager,
@@ -124,7 +125,7 @@ export class ServerStartup {
    * @private
    */
   private async processAutoLoadMemory(
-    memory: any,
+    memory: Memory & { metadata: MemoryMetadata },
     memoryManager: any,
     options: {
       totalTokens: number;
@@ -473,7 +474,7 @@ export class ServerStartup {
    */
   async dispose(): Promise<void> {
     // Dispose MemoryManager (cleans up file watchers)
-    this.memoryManager.dispose();
+    await this.memoryManager.dispose();
 
     // Shutdown telemetry (flushes PostHog events)
     await this.operationalTelemetry.shutdown();

@@ -1397,3 +1397,22 @@ describe('LogHooks', () => {
     });
   });
 });
+
+describe('LogHooks delivery isolation', () => {
+  it('isolates translation failures from source callbacks', () => {
+    const manager = makeMockLogManager();
+    const context = { getSessionContext() { throw new Error('context unavailable'); }, getCorrelationId: () => undefined };
+    let listener: ((entry: { timestamp: Date; level: string; message: string }) => void) | undefined;
+    const cleanups = wireLogHooks(manager, makeMockContainer({
+      ContextTracker: context,
+      MCPLogger: { addLogListener(fn: typeof listener) { listener = fn; return () => {}; } },
+    }));
+    try {
+      expect(listener).toBeDefined();
+      expect(() => listener!({ timestamp: new Date(), level: 'info', message: 'sample' })).not.toThrow();
+      expect(() => getTriggerMetricsLogListener(manager, context)('info', 'sample')).not.toThrow();
+      expect(() => getSecurityAuditorLogListener(manager, context)('info', 'sample')).not.toThrow();
+      expect(manager.logCalls).toHaveLength(0);
+    } finally { cleanups.forEach(cleanup => cleanup()); }
+  });
+});

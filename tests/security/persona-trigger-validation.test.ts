@@ -42,7 +42,7 @@ describe('PersonaManager - Trigger Validation Security', () => {
   });
 
   afterEach(async () => {
-    personaManager.dispose();
+    await personaManager.dispose();
     rmSync(testDir, { recursive: true, force: true });
     delete process.env.DISABLE_ELEMENT_FILTERING;
   });

@@ -43,7 +43,7 @@ describe.each(['skill', 'ensemble'] as const)('%s DB activation reporting', type
       await writer.deleteContent(`${type}s`, 'report-1');
       expect((await activate('report-4')).message).toContain('reference "report-1" could not be loaded');
     } finally {
-      manager.dispose();
+      await manager.dispose();
       if (original === undefined) delete process.env[envKey]; else process.env[envKey] = original;
       await rm(dir, { recursive: true, force: true });
       await cleanupAllTestData();

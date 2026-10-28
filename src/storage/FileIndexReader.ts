@@ -1,19 +1,18 @@
 import type { DirectoryStateCache, ScanState } from './DirectoryStateCache.js';
 import { firstIndexedPath, type IndexedPathResult } from './IStorageLayer.js';
-import type { MetadataIndex } from './MetadataIndex.js';
+import type { FileStateTable } from './FileStateTable.js';
 import type { ManifestDiffResult } from './types.js';
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 interface FileIndexState extends ScanState {
-  index: MetadataIndex;
-  hasScanned: boolean;
+  table: FileStateTable;
 }
 
 function snapshot(state: FileIndexState, names: readonly string[]): IndexedPathResult {
   return {
-    path: firstIndexedPath(names, name => state.index.getPathByName(UnicodeValidator.normalize(name).normalizedContent)),
-    indexComplete: state.hasScanned,
-    authoritative: state.lastScanTimestamp > 0,
+    path: firstIndexedPath(names, name => state.table.getPathByName(name)),
+    indexComplete: state.table.everSucceeded,
+    authoritative: state.table.isAuthoritative(),
+    unindexed: [...state.table.unindexed().keys()],
   };
 }
 
@@ -28,6 +27,6 @@ export function readFileIndex<T extends FileIndexState>(
 export function findFileIndexedPath<T extends FileIndexState>(
   cache: DirectoryStateCache<T>, state: T, names: readonly string[], scan: () => Promise<ManifestDiffResult>,
 ): Promise<string | undefined> {
-  if (state.hasScanned) return readFileIndex(cache, state, names).then(result => result.path);
+  if (state.table.everSucceeded) return readFileIndex(cache, state, names).then(result => result.path);
   return cache.scanAndRead(state, scan, () => snapshot(state, names).path);
 }

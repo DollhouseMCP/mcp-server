@@ -27,6 +27,16 @@ function createMockFileOperationsService() {
 }
 
 describe('FileTokenStore', () => {
+  it.each(['retrieveToken', 'deleteToken'] as const)('propagates a denied probe from %s', async method => {
+    const files = createMockFileOperationsService();
+    const denied = Object.assign(new Error('access denied'), { code: 'EACCES' });
+    files.exists.mockRejectedValue(denied);
+    const store = new FileTokenStore(files as any, { getUserAuthDir: () => path.join(tmpdir(), 'denied-token') });
+    await expect(store[method]('alice')).rejects.toBe(denied);
+    expect(files.readFile).not.toHaveBeenCalled();
+    expect(files.deleteFile).not.toHaveBeenCalled();
+  });
+
   it('does not capture a path-like string at construction', () => {
     const store = new FileTokenStore(createMockFileOperationsService() as any, {
       getUserAuthDir: (userId?: string) => `/tmp/auth/${userId}`,
