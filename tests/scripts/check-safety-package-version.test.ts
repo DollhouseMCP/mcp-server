@@ -39,7 +39,12 @@ const helperUrl = pathToFileURL(
 const { checkSafetyPackageVersion, compareRecordedSafetyTree } = await import(helperUrl) as SafetyVersionModule;
 
 function git(repo: string, args: string[]): string {
-  return execFileSync('git', args, {
+  return execFileSync('git', [
+    '-c', 'user.name=Safety Check Test',
+    '-c', 'user.email=safety-check@example.test',
+    '-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
+    ...args,
+  ], {
     cwd: repo,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -63,27 +68,29 @@ describe('check-safety-package-version', () => {
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'safety-version-check-'));
     git(repo, ['init', '--initial-branch=main', '--object-format=sha1']);
-    git(repo, ['config', 'user.name', 'Safety Check Test']);
-    git(repo, ['config', 'user.email', 'safety-check@example.test']);
-    // Prevent detached Git maintenance as a precaution; the macOS cleanup cause is unproven.
-    git(repo, ['config', 'gc.auto', '0']);
-    git(repo, ['config', 'maintenance.auto', 'false']);
-
-    await mkdir(join(repo, 'packages', 'safety', 'src'), { recursive: true });
-    await writeFile(
-      join(repo, 'packages', 'safety', 'package.json'),
-      JSON.stringify({ name: '@dollhousemcp/safety', version: '1.0.2' })
-    );
-    await writeFile(join(repo, 'packages', 'safety', 'src', 'index.ts'), 'export const safe = true;\n');
-    git(repo, ['add', '.']);
-    git(repo, ['commit', '-m', 'publish safety package']);
-    publishedGitHead = git(repo, ['rev-parse', 'HEAD']);
-
-    await writeFile(join(repo, 'README.md'), 'trusted main history\n');
-    git(repo, ['add', 'README.md']);
-    git(repo, ['commit', '-m', 'advance trusted main']);
-    trustedMainHead = git(repo, ['rev-parse', 'HEAD']);
-    git(repo, ['update-ref', 'refs/remotes/origin/main', trustedMainHead]);
+    // Build the same two real commits in one Git process. Repeated Windows
+    // config/add/commit subprocess startup was consuming the 10s setup hook
+    // before any comparison ran. No timeout, comparison or trust gate changes.
+    const data = (text: string) => `data ${Buffer.byteLength(text)}\n${text}\n`;
+    const identity = 'committer Safety Check Test <safety-check@example.test> 1700000000 +0000\n';
+    const imported = [
+      'blob\nmark :1\n',
+      data(JSON.stringify({ name: '@dollhousemcp/safety', version: '1.0.2' })),
+      'blob\nmark :2\n', data('export const safe = true;\n'),
+      'commit refs/heads/main\nmark :3\n', identity, data('publish safety package\n'),
+      'M 100644 :1 packages/safety/package.json\nM 100644 :2 packages/safety/src/index.ts\n\n',
+      'blob\nmark :4\n', data('trusted main history\n'),
+      'commit refs/heads/main\nmark :5\n', identity, data('advance trusted main\n'),
+      'from :3\nM 100644 :4 README.md\n\n',
+      'reset refs/remotes/origin/main\nfrom :5\n\n',
+    ].join('');
+    execFileSync('git', ['fast-import', '--quiet'], {
+      cwd: repo, input: imported, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    [trustedMainHead, publishedGitHead] = git(repo, ['rev-parse', 'HEAD', 'HEAD~1']).split(/\r?\n/);
+    // fast-import owns the objects/refs; materialize the working tree for tests
+    // which intentionally mutate files and commit later revisions.
+    git(repo, ['reset', '--hard', 'HEAD']);
   });
 
   afterEach(async () => {
