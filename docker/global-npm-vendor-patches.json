@@ -1,0 +1,63 @@
+{
+  "status": "Explicit first-party local vendor patch; exact image age approved, runtime qualification required",
+  "ageApproval": "https://github.com/DollhouseMCP/mcp-server/issues/2452#issuecomment-6481615082",
+  "npmVersion": "11.19.1",
+  "callerPackage": { "path": "node_modules/make-fetch-happen/package.json", "name": "make-fetch-happen", "version": "15.0.6" },
+  "base": "frozen beta88efb60caedab9937dfe901c903b8e9132691cc9 image-security proposal",
+  "npmCore": "11.19.1 unchanged; actual signedNode/OCI baseline",
+  "upstreamHttpCacheVersion": "4.3.0 with verified registry SRI/source; locally patched, not an official upstream fix release",
+  "upstreamReference": "https://github.com/kornelski/http-cache-semantics/pull/63",
+  "upstreamHead": "c84e0e37652b5762d6bdd28af65d6f42e2825224",
+  "licenses": [
+    "http-cache-semantics BSD-2-Clause retained",
+    "make-fetch-happen ISC retained"
+  ],
+  "scope": "mandatory reuse validation only; no parser/HEAD/numeric boundary changes; fresh must-revalidate remains reusable",
+  "patches": [
+    {
+      "path": "node_modules/http-cache-semantics/index.js",
+      "beforeSha256": "ede1cc404a492fa348eb9d97a3007a0d72aa717bd22cd86a56bd0824c19729ca",
+      "afterSha256": "c1cd904be7a28ae841a2632230eae2fcb94b7ad7ed7eba529fd3bf3ab57bd94e",
+      "replacements": [
+        {
+          "before": "    /**\n     * @param {{headers: Record<string, string>, synchronous: boolean}|undefined} revalidation",
+          "after": "    // Dollhouse local vendor guard, derived from upstream PR #63 (BSD-2-Clause).\n    // Mandatory validation is separate from ordinary expiration/offline reuse.\n    _allowsReuse() {\n        if (!this.storable() || this._rescc['no-cache']) {\n            return false;\n        }\n        if (this._isShared && this._resHeaders['set-cookie'] &&\n            !this._rescc.public && !this._rescc.immutable) {\n            return false;\n        }\n        if (this.stale() && (this._rescc['must-revalidate'] ||\n            (this._isShared && (this._rescc['proxy-revalidate'] ||\n                's-maxage' in this._rescc)))) {\n            return false;\n        }\n        return true;\n    }\n\n    /**\n     * @param {{headers: Record<string, string>, synchronous: boolean}|undefined} revalidation"
+        },
+        {
+          "before": "        // In all circumstances, a cache MUST NOT ignore the must-revalidate directive\n        if (this._rescc['must-revalidate']) {",
+          "after": "        // Mandatory response validation cannot be bypassed by stale extensions.\n        if (!this._allowsReuse()) {"
+        },
+        {
+          "before": "        return this.maxAge() + toNumberOrZero(this._rescc['stale-if-error']) > this.age();",
+          "after": "        return this._allowsReuse() && this.maxAge() + toNumberOrZero(this._rescc['stale-if-error']) > this.age();"
+        },
+        {
+          "before": "        return swr > 0 && this.maxAge() + swr > this.age();",
+          "after": "        return this._allowsReuse() && swr > 0 && this.maxAge() + swr > this.age();"
+        }
+      ]
+    },
+    {
+      "path": "node_modules/make-fetch-happen/lib/cache/policy.js",
+      "beforeSha256": "2014cf549fceb8808cba81e8760315b9060f502b6c62b7cb79e1b024abde54c3",
+      "afterSha256": "ecbf5fce87a4db73d83b34795fd547c8a4486d232855447aaa27ba30dcc6c3bb",
+      "replacements": [
+        {
+          "before": "  // NOTE: this is a hack to avoid parsing the cache-control\n  // header ourselves, it returns true if the response's\n  // cache-control contains must-revalidate\n  get mustRevalidate () {\n    return !!this.policy._rescc['must-revalidate']\n  }",
+          "after": "  // Dollhouse local vendor guard (ISC): mandatory validation also applies\n  // to no-cache. must-revalidate applies only after freshness expires.\n  // Keep this distinct from ordinary staleness so offline cache still works.\n  get mustRevalidate () {\n    return !!(this.policy._rescc['no-cache'] ||\n      (this.policy._rescc['must-revalidate'] && this.policy.stale()))\n  }"
+        }
+      ]
+    },
+    {
+      "path": "node_modules/make-fetch-happen/lib/cache/index.js",
+      "beforeSha256": "b9a47e604b9d6ec9211e5129636ba7366c408c074ea1d4b8c859cf221c347071",
+      "afterSha256": "24242113398750394d8348cae21752582c5ee4c404c549cb1dc7592101eb21fd",
+      "replacements": [
+        {
+          "before": "  // if the cached entry is not stale, or if the cache mode is",
+          "after": "  // Dollhouse local vendor guard (ISC): explicit cache modes cannot bypass\n  // mandatory validation. Ordinary stale offline reuse remains unchanged.\n  if (entry.policy.mustRevalidate) {\n    if (options.cache === 'only-if-cached') {\n      throw new NotCachedError(request.url)\n    }\n    return entry.revalidate(request, options)\n  }\n\n  // if the cached entry is not stale, or if the cache mode is"
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, cp, readFile, writeFile, rm, realpath, access, mkdir } from 'node:fs/promises';
+import { mkdtemp, cp, readFile, writeFile, rm, realpath, access, mkdir, chmod, symlink, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -19,6 +19,12 @@ const npmRoot = await installedNpm();
 const require = createRequire(join(npmRoot, 'package.json'));
 const { Parser } = require('tar');
 const fixedManifest = JSON.parse(await readFile(resolve('docker/global-npm-security-patches.json'), 'utf8'));
+const fixedVendor = JSON.parse(await readFile(resolve('docker/global-npm-vendor-patches.json'), 'utf8'));
+const vendorPreimages = new Map(await Promise.all([
+  ['node_modules/http-cache-semantics/index.js', 'http-cache-semantics-index.js.txt'],
+  ['node_modules/make-fetch-happen/lib/cache/policy.js', 'make-fetch-cache-policy.js.txt'],
+  ['node_modules/make-fetch-happen/lib/cache/index.js', 'make-fetch-cache-index.js.txt'],
+].map(async ([path, file]) => [path, await readFile(resolve('tests/fixtures/global-npm-vendor', file))])));
 function archive(entries) {
   const blocks = [];
   for (const entry of entries) {
@@ -61,29 +67,36 @@ test('compressed and expanded bounds refuse before extraction', async () => {
 async function fixture() {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'npm-patch-test-')));
   const root = join(directory, 'npm'); await cp(npmRoot, root, { recursive: true });
-  const manifest = structuredClone(fixedManifest); const payloads = new Map();
+  const manifest = structuredClone(fixedManifest); const vendor = structuredClone(fixedVendor); const payloads = new Map();
   const update = async (path, change) => { const p = join(root, path); const j = JSON.parse(await readFile(p, 'utf8')); change(j); await writeFile(p, JSON.stringify(j)); };
-  await update('package.json', j => { j.version = manifest.npmVersion; });
+  await update('package.json', j => { j.version = manifest.npmVersion; j.dependencies.tar = '^7.5.22'; });
+  await update('node_modules/tar/package.json', j => { j.version = '7.5.22'; });
+  await update(vendor.callerPackage.path, j => { j.version = vendor.callerPackage.version; });
+  for (const [path, bytes] of vendorPreimages) if (!path.includes('/http-cache-semantics/')) await writeFile(join(root, path), bytes);
   for (const patch of manifest.patches) {
     await update(`node_modules/${patch.name}/package.json`, j => { j.version = patch.from; j.dependencies = patch.runtimeDependencies; });
     for (const [consumer, range] of Object.entries(patch.consumers)) await update(consumer, j => { j.dependencies[patch.name] = range; });
-    const payload = archive([{ path: 'package/package.json', bytes: JSON.stringify({ name: patch.name, version: patch.to, dependencies: patch.runtimeDependencies }) }, { path: 'package/index.js', bytes: 'module.exports = "synthetic";' }]);
+    const index = patch.name === 'http-cache-semantics' ? vendorPreimages.get('node_modules/http-cache-semantics/index.js') : 'module.exports = "synthetic";';
+    const payload = archive([{ path: 'package/package.json', bytes: JSON.stringify({ name: patch.name, version: patch.to, dependencies: patch.runtimeDependencies }) }, { path: 'package/index.js', bytes: index }]);
     patch.sha256 = createHash('sha256').update(payload).digest('hex'); patch.integrity = `sha512-${createHash('sha512').update(payload).digest('base64')}`; payloads.set(patch.name, payload);
   }
-  return { root, directory, manifest, payloads, close: () => rm(directory, { recursive: true, force: true }) };
+  return { root, directory, manifest, vendor, payloads, close: () => rm(directory, { recursive: true, force: true }) };
 }
-test('full publication changes only five leaves; npm core, bins, other files and links stay exact', async () => {
+test('publication changes only five leaves and two declared callers; npm core, tar, bins and other files stay exact', async () => {
   const f = await fixture();
   try {
-    const result = await prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name));
-    const allowed = name => f.manifest.patches.some(p => name === `node_modules/${p.name}` || name.startsWith(`node_modules/${p.name}/`));
+    const result = await prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name), f.vendor);
+    const allowed = name => f.vendor.patches.some(p => p.path === name) || f.manifest.patches.some(p => name === `node_modules/${p.name}` || name.startsWith(`node_modules/${p.name}/`));
     for (const [name, entry] of Object.entries(result.before)) if (!allowed(name)) assert.deepEqual(result.after[name], entry);
     assert.deepEqual(result.after['bin/npm-cli.js'], result.before['bin/npm-cli.js']);
     assert.deepEqual(result.after['bin/npx-cli.js'], result.before['bin/npx-cli.js']);
-    await assert.rejects(prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name)), /already patched|original npm leaf/);
+    assert.deepEqual(result.after['node_modules/tar/package.json'], result.before['node_modules/tar/package.json']);
+    assert.equal(result.vendorPatches.patches.length, 3);
+    for (const p of f.vendor.patches) assert.equal(result.after[p.path].sha256, p.afterSha256);
+    await assert.rejects(prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name), f.vendor), /already patched|original npm leaf/);
   } finally { await f.close(); }
 });
-for (const kind of ['wrong original', 'integrity', 'changed closure', 'consumer range', 'unsafe last payload', 'payload dependency change', 'payload optional dependency', 'duplicate leaf', 'staging collision']) {
+for (const kind of ['wrong original', 'integrity', 'changed closure', 'consumer range', 'unsafe last payload', 'payload dependency change', 'payload optional dependency', 'duplicate leaf', 'staging collision', 'caller bytes', 'caller mode', 'caller symlink', 'caller hardlink', 'caller package', 'caller staging collision', 'vendor after hash', 'last vendor anchor']) {
   test(`${kind} refuses with the entire original bundle unchanged`, async () => {
     const f = await fixture();
     try {
@@ -105,8 +118,20 @@ for (const kind of ['wrong original', 'integrity', 'changed closure', 'consumer 
       }
       if (kind === 'duplicate leaf') { const p = join(f.root, 'node_modules/extra/node_modules/undici'); await mkdir(p, { recursive: true }); await writeFile(join(p, 'package.json'), '{"name":"undici","version":"6.27.0"}'); }
       if (kind === 'staging collision') await mkdir(join(f.root, 'node_modules/.dollhouse-undici'));
+      const caller = join(f.root, 'node_modules/make-fetch-happen/lib/cache/index.js');
+      if (kind === 'caller bytes') await writeFile(caller, 'changed source');
+      if (kind === 'caller mode') await chmod(caller, 0o600);
+      if (kind === 'caller symlink' || kind === 'caller hardlink') {
+        const other = join(f.directory, 'other.js'); await writeFile(other, vendorPreimages.get('node_modules/make-fetch-happen/lib/cache/index.js'));
+        await rm(caller);
+        if (kind === 'caller symlink') await symlink(other, caller); else await link(other, caller);
+      }
+      if (kind === 'caller package') { const p = join(f.root, f.vendor.callerPackage.path); const j = JSON.parse(await readFile(p, 'utf8')); j.version = '0.0.0'; await writeFile(p, JSON.stringify(j)); }
+      if (kind === 'caller staging collision') await writeFile(join(dirname(caller), '.dollhouse-index.js'), 'occupied');
+      if (kind === 'vendor after hash') f.vendor.patches[0].afterSha256 = '0'.repeat(64);
+      if (kind === 'last vendor anchor') f.vendor.patches.at(-1).replacements[0].before = 'missing exact anchor';
       const before = await inventory(f.root);
-      await assert.rejects(prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name)));
+      await assert.rejects(prepareGlobalNpm(f.root, f.manifest, patch => f.payloads.get(patch.name), f.vendor));
       assert.deepEqual(await inventory(f.root), before);
     } finally { await f.close(); }
   });
