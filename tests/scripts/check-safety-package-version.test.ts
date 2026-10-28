@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -38,11 +38,12 @@ const helperUrl = pathToFileURL(
 ).href;
 const { checkSafetyPackageVersion, compareRecordedSafetyTree } = await import(helperUrl) as SafetyVersionModule;
 
-function git(repo: string, args: string[]): string {
+function git(repo: string, args: string[], input?: string): string {
   return execFileSync('git', args, {
     cwd: repo,
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    input,
   }).trim();
 }
 
@@ -55,40 +56,94 @@ function registryResult(payload: unknown, status = 0, stream: 'stdout' | 'stderr
 }
 
 describe('check-safety-package-version', () => {
+  let template: string;
+  let templatePublishedGitHead: string;
+  let repoRoot: string;
   let repo: string;
   let publishedGitHead: string;
-  let trustedMainHead: string;
   let recordedFiles: RecordedFile[];
 
+  beforeAll(async () => {
+    template = await mkdtemp(join(tmpdir(), 'safety-version-template-'));
+    git(template, ['init', '--initial-branch=main', '--object-format=sha1']);
+    // Preserve deterministic authorship and disable detached maintenance for later mutations.
+    await appendFile(join(template, '.git', 'config'),
+      '\n[user]\n\tname = Safety Check Test\n\temail = safety-check@example.test\n' +
+      '[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n');
+    const data = (value: string): string => `data ${Buffer.byteLength(value, 'utf8')}\n${value}\n`;
+    // Build our two real commits in one Git process, without hooks or project history.
+    git(template, ['fast-import', '--quiet', '--export-marks=.git/fixture-marks'], [
+      'commit refs/heads/main\nmark :1\n',
+      'committer Safety Check Test <safety-check@example.test> 1700000000 +0000\n',
+      data('publish safety package'),
+      'M 100644 inline packages/safety/package.json\n',
+      data(JSON.stringify({ name: '@dollhousemcp/safety', version: '1.0.2' })),
+      'M 100644 inline packages/safety/src/index.ts\n',
+      data('export const safe = true;\n'),
+      '\ncommit refs/heads/main\nmark :2\n',
+      'committer Safety Check Test <safety-check@example.test> 1700000001 +0000\n',
+      data('advance trusted main'),
+      'from :1\nM 100644 inline README.md\n',
+      data('trusted main history\n'),
+      '\nreset refs/remotes/origin/main\nfrom :2\n\ndone\n',
+    ].join(''));
+    const marks = new Map((await readFile(join(template, '.git', 'fixture-marks'), 'utf8'))
+      .trim().split(/\r?\n/).map(line => {
+        const match = /^(:[12]) ([0-9a-f]{40})$/.exec(line);
+        if (!match) throw new Error('Fixture import returned an invalid commit mark');
+        return [match[1], match[2]] as const;
+      }));
+    const published = marks.get(':1');
+    const trusted = marks.get(':2');
+    if (marks.size !== 2 || !published || !trusted) {
+      throw new Error('Fixture import did not create both owned commits');
+    }
+    templatePublishedGitHead = published;
+    git(template, ['reset', '--hard', 'HEAD']);
+  });
+
   beforeEach(async () => {
-    repo = await mkdtemp(join(tmpdir(), 'safety-version-check-'));
-    git(repo, ['init', '--initial-branch=main', '--object-format=sha1']);
-    git(repo, ['config', 'user.name', 'Safety Check Test']);
-    git(repo, ['config', 'user.email', 'safety-check@example.test']);
-    // Prevent detached Git maintenance as a precaution; the macOS cleanup cause is unproven.
-    git(repo, ['config', 'gc.auto', '0']);
-    git(repo, ['config', 'maintenance.auto', 'false']);
-
-    await mkdir(join(repo, 'packages', 'safety', 'src'), { recursive: true });
-    await writeFile(
-      join(repo, 'packages', 'safety', 'package.json'),
-      JSON.stringify({ name: '@dollhousemcp/safety', version: '1.0.2' })
-    );
-    await writeFile(join(repo, 'packages', 'safety', 'src', 'index.ts'), 'export const safe = true;\n');
-    git(repo, ['add', '.']);
-    git(repo, ['commit', '-m', 'publish safety package']);
-    publishedGitHead = git(repo, ['rev-parse', 'HEAD']);
-
-    await writeFile(join(repo, 'README.md'), 'trusted main history\n');
-    git(repo, ['add', 'README.md']);
-    git(repo, ['commit', '-m', 'advance trusted main']);
-    trustedMainHead = git(repo, ['rev-parse', 'HEAD']);
-    git(repo, ['update-ref', 'refs/remotes/origin/main', trustedMainHead]);
+    repoRoot = await mkdtemp(join(tmpdir(), 'safety-version-check-'));
+    repo = join(repoRoot, 'repo');
+    // Copy complete object files, never hardlinks or alternates shared with another case.
+    await cp(template, repo, { recursive: true, errorOnExist: true, force: false });
+    publishedGitHead = templatePublishedGitHead;
+    recordedFiles = [];
   });
 
   afterEach(async () => {
     // Bounded retries tolerate transient ENOTEMPTY; exhaustion still rejects cleanup.
-    await rm(repo, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    if (repoRoot) await rm(repoRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  afterAll(async () => {
+    if (template) await rm(template, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  });
+
+  it('owns independent Git objects in every fixture copy', async () => {
+    let object = join(templatePublishedGitHead.slice(0, 2), templatePublishedGitHead.slice(2));
+    try {
+      await readFile(join(repo, '.git', 'objects', object));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const pack = (await readdir(join(repo, '.git', 'objects', 'pack')))
+        .find(file => file.endsWith('.pack'));
+      if (!pack) throw new Error('Owned fixture import did not produce its commit object');
+      object = join('pack', pack);
+    }
+    const copyPath = join(repo, '.git', 'objects', object);
+    const templatePath = join(template, '.git', 'objects', object);
+    const original = await readFile(templatePath);
+    expect(await readFile(copyPath)).toEqual(original);
+    await expect(readFile(join(repo, '.git', 'objects', 'info', 'alternates')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+
+    const changed = Buffer.from(original);
+    changed[0] ^= 0xff;
+    await chmod(copyPath, 0o600);
+    await writeFile(copyPath, changed);
+    expect(await readFile(templatePath)).toEqual(original);
+    expect(git(template, ['cat-file', '-t', templatePublishedGitHead])).toBe('commit');
   });
 
   async function prepareRecordedTree(): Promise<void> {
