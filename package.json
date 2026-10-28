@@ -23,8 +23,6 @@
     "start:http": "node dist/index.js --streamable-http",
     "dev": "tsx watch src/index.ts",
     "dev:http": "tsx watch src/index.ts -- --streamable-http",
-    "inspector": "mcp-inspector node dist/index.js",
-    "inspector:dev": "mcp-inspector tsx src/index.ts",
     "db:setup": "tsx scripts/setup-database.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -237,12 +235,12 @@
     "undici": "6.29.1",
     "uuid": "^11.1.1",
     "yauzl": "3.2.1",
-    "zod": "^4.6.7"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.38.0",
     "@jest/globals": "^30.3.0",
-    "@modelcontextprotocol/inspector": "^0.21.1",
+    "@modelcontextprotocol/inspector-cli": "0.21.1",
     "@playwright/test": "^1.61.1",
     "@types/archiver": "^7.0.0",
     "@types/dompurify": "^3.2.0",
@@ -304,7 +302,7 @@
       "path-to-regexp": "8.4.2"
     },
     "form-data": "4.0.6",
-    "qs": "6.16.0",
+    "qs": "6.16.1",
     "proxy-addr": "2.0.8",
     "shell-quote": "1.11.0",
     "ws": "8.21.0",

@@ -15,6 +15,7 @@ import request from 'supertest';
 import fastUri from 'fast-uri';
 import { Address4, Address6 } from 'ip-address';
 import qs from 'qs';
+import { z } from 'zod';
 import { getQueryParam, getQueryStrings } from 'hono/utils/url';
 import { parse as parseToml } from 'smol-toml';
 
@@ -80,6 +81,20 @@ describe('application dependency security boundaries', () => {
   it('round-trips attacker-controlled constructor keys without calling them', () => {
     const parsed = qs.parse('x%5Bconstructor%5D%5BisBuffer%5D=y', { plainObjects: true });
     expect(qs.stringify(parsed)).toBe('x%5Bconstructor%5D%5BisBuffer%5D=y');
+  });
+
+  it('serializes comma arrays with non-callable own toString values without throwing', () => {
+    expect(qs.stringify({ x: [{ toString: 0 }] }, { arrayFormat: 'comma' }))
+      .toBe('x=%5Bobject%20Object%5D');
+    expect(qs.stringify({ x: ['one', 'two'] }, { arrayFormat: 'comma' })).toBe('x=one%2Ctwo');
+  });
+
+  it('rejects oversized constrained v4 arrays before constructing per-element errors', () => {
+    const result = z.array(z.string()).max(1).safeParse(Array(20).fill(0));
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Oversized constrained array was accepted');
+    expect(result.error.issues).toHaveLength(1);
+    expect(result.error.issues[0]).toMatchObject({ code: 'too_big', maximum: 1 });
   });
 
   it('enforces comma array limits for both flat and bracket query keys', () => {

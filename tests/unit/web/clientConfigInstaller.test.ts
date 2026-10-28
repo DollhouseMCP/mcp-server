@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { load } from 'js-yaml';
 import { parse as parseJsonc, visit } from 'jsonc-parser';
 import { parse as parseToml } from 'smol-toml';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { clientConfigTarget, installClientConfig } from '../../../src/web/routes/clientConfigInstaller.js';
 
 let home: string;
@@ -224,5 +226,65 @@ describe('config-only installer', () => {
     await installClientConfig('cursor', 'latest', environment);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(JSON.parse(await readFile(target.path, 'utf8')).__proto__).toEqual({ polluted: true });
+  });
+});
+
+describe('client configuration audit trail', () => {
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  it('records success only after the config has been written without logging its contents or path', async () => {
+    const environment = { home, platform: 'linux', env: {} };
+    const target = clientConfigTarget('cursor', environment);
+    await mkdir(dirname(target.path), { recursive: true });
+    await writeFile(target.path, JSON.stringify({ secret: 'retained-private-value' }));
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(event => {
+      expect(JSON.parse(readFileSync(target.path, 'utf8')).mcpServers.dollhousemcp).toBeDefined();
+      expect(JSON.stringify(event)).not.toContain(home);
+      expect(JSON.stringify(event)).not.toContain('retained-private-value');
+    });
+    await installClientConfig('cursor', 'beta', environment);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'CONFIG_UPDATED', source: 'clientConfigInstaller',
+      metadata: { client: 'cursor', version: 'beta', outcome: 'written' },
+    }));
+  });
+
+  it('records a bounded failure without including invalid config or request values', async () => {
+    const environment = { home, env: {} };
+    const target = clientConfigTarget('cursor', environment);
+    await mkdir(dirname(target.path), { recursive: true });
+    const source = '{"private-key":"secret-value", invalid';
+    await writeFile(target.path, source);
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    await expect(installClientConfig('cursor', 'latest', environment)).rejects.toThrow();
+    await expect(installClientConfig('secret-client', 'secret-version', environment)).rejects.toThrow();
+    expect(await readFile(target.path, 'utf8')).toBe(source);
+    expect(audit).toHaveBeenCalledTimes(2);
+    for (const [event] of audit.mock.calls) {
+      expect(event).toEqual({ type: 'OPERATION_FAILED', severity: 'LOW', source: 'clientConfigInstaller',
+        details: expect.stringMatching(/^MCP client configuration installation failed \([a-f0-9-]{36}\)$/), metadata: { outcome: 'failed' } });
+    }
+  });
+
+  it('retains consecutive write events within the monitor deduplication window', async () => {
+    const monitor = new SecurityMonitor();
+    SecurityMonitor.setInstance(monitor);
+    try {
+      const environment = { home, env: {} };
+      await installClientConfig('cursor', 'latest', environment);
+      await installClientConfig('cursor', 'latest', environment);
+      const events = monitor.instanceGetEventsByType('CONFIG_UPDATED');
+      expect(events).toHaveLength(2);
+      expect(events[0].details).not.toBe(events[1].details);
+    } finally {
+      SecurityMonitor.clearInstance(monitor);
+    }
+  });
+
+  it('does not report a config write for manual Warp instructions', async () => {
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    await installClientConfig('warp', 'latest', { home });
+    expect(audit).not.toHaveBeenCalled();
   });
 });
