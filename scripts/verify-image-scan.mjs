@@ -43,9 +43,19 @@ export function verifyOwnedScanPolicy(configuration, database, expectedDbCache, 
   }
 }
 
+function identityRoleMatches(graph) {
+  const digest = value => /^sha256:[a-f0-9]{64}$/.test(value ?? '');
+  if (!graph || !digest(graph.store_id) || !digest(graph.config_digest)) return false;
+  if (graph.store_id_role === 'config') return graph.store_id === graph.config_digest;
+  if (graph.store_id_role === 'manifest') return digest(graph.manifest_digest) && graph.store_id === graph.manifest_digest;
+  if (graph.store_id_role === 'index') return digest(graph.root_digest) && graph.store_id === graph.root_digest;
+  return false;
+}
+
 export function verifyOfflineProvenance(provenance, database) {
   const record = provenance.database;
   const isolation = provenance.isolation;
+  const runner = provenance.runner;
   const policy = isolation?.host_config;
   const capacity = provenance.capacity_admission;
   const rawDb = provenance.database_payload?.declared_payload_bytes;
@@ -57,9 +67,22 @@ export function verifyOfflineProvenance(provenance, database) {
       database.schemaVersion !== record.manifest.schemaVersion ||
       provenance.scanner_archive?.sha256 !== '0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d' ||
       !/^[a-f0-9]{64}$/.test(provenance.image_archive_sha256 ?? '') ||
-      provenance.runner_ref !== 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66' ||
-      provenance.runner_image_id !== 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f' ||
-      isolation?.runner_ref !== provenance.runner_ref || isolation?.runner_image_id !== provenance.runner_image_id ||
+      runner?.reference !== 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66' ||
+      runner.index_digest !== 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66' ||
+      runner.manifest_digest !== 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63' ||
+      runner.config_digest !== 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f' ||
+      !identityRoleMatches(runner.archive) || runner.archive.config_digest !== runner.config_digest ||
+      !['classic-docker', 'oci-with-docker-manifest'].includes(runner.archive.format) ||
+      (runner.archive.format === 'oci-with-docker-manifest' &&
+        (runner.archive.manifest_digest !== runner.manifest_digest ||
+         ![runner.index_digest, runner.manifest_digest].includes(runner.archive.root_digest))) ||
+      runner.execution_reference !== runner.reference || runner.container_image_id !== runner.archive.store_id ||
+      isolation?.runner_ref !== runner.reference || isolation?.runner_execution_reference !== runner.reference ||
+      isolation?.runner_container_image_id !== runner.container_image_id ||
+      (runner.archive.format === 'oci-with-docker-manifest' &&
+        (!runner.archive.manifest_descriptor || !['digest', 'size', 'mediaType'].every(key =>
+          isolation?.runner_manifest_descriptor?.[key] === runner.archive.manifest_descriptor[key]) ||
+         runner.archive.manifest_descriptor.digest !== runner.manifest_digest)) ||
       !capacity || !Number.isInteger(capacity.target_uncompressed_size_bytes) ||
       capacity.target_uncompressed_size_bytes <= 0 || capacity.target_uncompressed_size_bytes > 1073741824 ||
       !Number.isInteger(rawDb) || rawDb <= 0 || rawDb > 2684354560 ||
@@ -82,7 +105,7 @@ export function verifyOfflineProvenance(provenance, database) {
   }
 }
 
-export function verifyImageScan(result, expectedImageId, now = Date.now(), expectedDbCache, offline) {
+export function verifyImageScan(result, expectedStoreId, now = Date.now(), expectedDbCache, offline) {
   const descriptor = result?.descriptor;
   const database = descriptor?.db?.status;
   const built = Date.parse(database?.built);
@@ -92,12 +115,16 @@ export function verifyImageScan(result, expectedImageId, now = Date.now(), expec
     throw new Error('Image scan unavailable: expected scanner and fresh valid database required');
   }
   verifyOwnedScanPolicy(descriptor.configuration, database, expectedDbCache, offline);
-  if (offline && (offline.image_id !== expectedImageId || offline.runner_image_id === expectedImageId)) {
-    throw new Error('Offline image archive differs from the job-built image');
+  const target = offline?.target;
+  if (offline && (target?.store_id !== expectedStoreId || target?.store_id === offline.runner.container_image_id ||
+      !identityRoleMatches(target) ||
+      target.unpacked_layer_bytes !== offline.capacity_admission.target_uncompressed_size_bytes)) {
+    throw new Error('Offline target store/manifest/config identity roles do not match their verified graph');
   }
-  if (!/^sha256:[a-f0-9]{64}$/.test(expectedImageId ?? '') ||
-      result?.source?.type !== 'image' || result.source.target?.imageID !== expectedImageId) {
-    throw new Error('Image scan does not identify the exact image built by this job');
+  const expectedConfig = offline ? target.config_digest : expectedStoreId;
+  if (!/^sha256:[a-f0-9]{64}$/.test(expectedStoreId ?? '') ||
+      result?.source?.type !== 'image' || result.source.target?.imageID !== expectedConfig) {
+    throw new Error('Image scan does not identify the exact validated image config');
   }
   const severities = new Set(['Negligible', 'Low', 'Medium', 'High', 'Critical', 'Unknown']);
   if ((result.ignoredMatches !== undefined &&
@@ -112,7 +139,7 @@ export function verifyImageScan(result, expectedImageId, now = Date.now(), expec
     counts[vulnerability.severity] = (counts[vulnerability.severity] ?? 0) + 1;
   }
   // Lower and unknown severities remain visible in the complete uploaded JSON.
-  console.log(JSON.stringify({ imageId: expectedImageId, database, findings: result.matches.length, counts }));
+  console.log(JSON.stringify({ storeId: expectedStoreId, configDigest: expectedConfig, database, findings: result.matches.length, counts }));
   if (counts.Critical || counts.High) {
     throw new Error('Application image has unresolved high or critical vulnerability matches');
   }

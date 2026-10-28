@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Scan the job's local application image with exact reviewed release bytes."""
 import datetime
+import contextlib
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import shutil
 import time
 import urllib.parse
 import uuid
+from image_archive_identity import verify_saved_image, verify_fixed_runner
 from pathlib import Path
 import subprocess
 import sys
@@ -52,7 +54,7 @@ def scanner_environment(inherited, root):
 DB_MANIFEST_URL = "https://grype.anchore.io/databases/v6/latest.json"
 # Protected beta88efb60c docker/Dockerfile:5, not candidate-controlled Dockerfile input.
 RUNNER_REF = "node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66"
-RUNNER_IMAGE_ID = "sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f"
+RUNNER_CONFIG_DIGEST = "sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f"
 SUPPORTED_DB_SCHEMA = "v6.1.10"  # Inspected official manifest and existing validated DB.
 
 GIB = 1024 ** 3
@@ -117,26 +119,12 @@ def database_manifest(document, now):
     return "https://grype.anchore.io/databases/v6/" + name, checksum[7:]
 
 
-def image_archive_identity(archive):
-    with tarfile.open(archive) as bundle:
-        member = bundle.getmember("manifest.json")
-        if not member.isfile() or member.size > 1024 * 1024:
-            raise ValueError("Docker archive manifest is not a bounded regular file")
-        manifest = json.load(bundle.extractfile(member))
-        if len(manifest) != 1:
-            raise ValueError("Expected exactly the job-built image in its Docker archive")
-        config = bundle.getmember(manifest[0]["Config"])
-        if not config.isfile() or config.size > 10 * 1024 * 1024:
-            raise ValueError("Docker archive image configuration is not a bounded regular file")
-        return "sha256:" + hashlib.sha256(bundle.extractfile(config).read()).hexdigest()
-
-
 def capacity_admission(target_size, available_memory, free_disk):
     if type(target_size) is not int or not 0 < target_size <= TARGET_MAX_BYTES:
         raise ValueError("Job-built image uncompressed Size exceeds the explicit 1 GiB admission cap")
     work_required = HYDRATED_DB_RESERVE_BYTES + 2 * target_size + SCRATCH_RESERVE_BYTES
     # Inputs: Docker archive plus metadata, compressed DB, binary, reports and disk margin.
-    disk_required = target_size + 128 * 1024 ** 2 + GIB + 100 * 1024 ** 2 + 64 * 1024 ** 2 + GIB
+    disk_required = target_size + 128 * 1024 ** 2 + TARGET_MAX_BYTES + 128 * 1024 ** 2 + GIB + 100 * 1024 ** 2 + 64 * 1024 ** 2 + GIB
     if work_required > WORK_TMPFS_BYTES or available_memory < CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES or free_disk < disk_required:
         raise ValueError("Host RAM/disk or bounded work-space prerequisites are insufficient; scanner will not start")
     return {"target_uncompressed_size_bytes": target_size, "target_max_bytes": TARGET_MAX_BYTES,
@@ -177,7 +165,7 @@ def database_payload_bytes(archive):
             child.wait(timeout=5)
 
 
-def isolated_container_command(name, inputs):
+def isolated_container_command(name, inputs, runner):
     command = ["docker", "create", "--name", name, "--pull", "never", "--platform", "linux/amd64",
                "--network", "none", "--read-only", "--no-healthcheck", "--workdir", "/work", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges=true", "--user", "65532:65532",
@@ -190,20 +178,25 @@ def isolated_container_command(name, inputs):
         command += ["--mount", f"type=bind,src={inputs / source},dst=/inputs/{target},readonly"]
     env = scanner_environment({}, Path("/work"))
     env.update(PATH="/usr/local/bin:/usr/bin:/bin", HOME="/work/home", TMPDIR="/work/tmp")
-    return command + ["--entrypoint", "/usr/bin/env", RUNNER_REF, "-i"] + [
+    return command + ["--entrypoint", "/usr/bin/env", runner["execution_reference"], "-i"] + [
         f"{key}={value}" for key, value in sorted(env.items())
     ] + ["/usr/local/bin/node", "/inputs/grype-offline-runner.mjs"]
 
 
-def isolation_evidence(value, inputs):
+def isolation_evidence(value, inputs, runner):
     host = value["HostConfig"]
     mounts = value["Mounts"]
     targets = {"/inputs/" + name for name in ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]}
-    plan = isolated_container_command("review-only", inputs)
-    expected_command = plan[plan.index(RUNNER_REF) + 1:]
+    plan = isolated_container_command("review-only", inputs, runner)
+    expected_command = plan[plan.index(runner["execution_reference"]) + 1:]
     expected_tmpfs = {"/work": "rw,noexec,nosuid,nodev,size=6g,mode=1777",
                       "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}
-    if (value["Image"] != RUNNER_IMAGE_ID or value["Config"]["Image"] != RUNNER_REF or value["Config"]["User"] != "65532:65532" or
+    expected_manifest = runner.get("archive", {}).get("manifest_descriptor")
+    actual_manifest = value.get("ImageManifestDescriptor")
+    if expected_manifest and (not actual_manifest or any(
+            actual_manifest.get(key) != expected_manifest.get(key) for key in ["digest", "mediaType", "size"])):
+        raise ValueError("Container selected manifest differs from the verified runner graph")
+    if (value["Image"] != runner["container_image_id"] or value["Config"]["Image"] != runner["execution_reference"] or value["Config"]["User"] != "65532:65532" or
             host["NetworkMode"] != "none" or host["ReadonlyRootfs"] is not True or host["Privileged"] or
             host.get("CapDrop") != ["ALL"] or "no-new-privileges=true" not in host.get("SecurityOpt", []) or
             host["NanoCpus"] != 2000000000 or host["Memory"] != CONTAINER_MEMORY_BYTES or
@@ -217,45 +210,42 @@ def isolation_evidence(value, inputs):
             any(m["Type"] != "bind" or m["RW"] is not False or
                 m["Source"] != str(inputs / Path(m["Destination"]).name) for m in mounts)):
         raise ValueError("Actual container isolation does not match the owned offline plan")
-    return {"runner_ref": RUNNER_REF, "runner_image_id": value["Image"], "user": value["Config"]["User"],
+    return {"runner_ref": RUNNER_REF, "runner_container_image_id": value["Image"],
+            "runner_execution_reference": value["Config"]["Image"], "runner_manifest_descriptor": actual_manifest, "user": value["Config"]["User"],
             "working_dir": value["Config"]["WorkingDir"], "healthcheck": value["Config"]["Healthcheck"],
             "entrypoint": value["Config"]["Entrypoint"], "command": value["Config"]["Cmd"],
             "host_config": {key: host[key] for key in ["NetworkMode", "ReadonlyRootfs", "Privileged", "CapDrop", "SecurityOpt", "NanoCpus", "Memory", "MemorySwap", "PidsLimit", "Tmpfs"]},
             "mounts": mounts}
 
 
-def bounded_process(command, timeout, maximum=64 * 1024 * 1024):
+def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None):
     buffers = [bytearray(), bytearray()]
-    error = None
+    error = None; count = 0
     limit = time.monotonic() + timeout
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
-        with selectors.DefaultSelector() as ready:
-            ready.register(child.stdout, selectors.EVENT_READ, 0)
-            ready.register(child.stderr, selectors.EVENT_READ, 1)
-            while ready.get_map():
-                remaining = limit - time.monotonic()
-                if remaining <= 0:
-                    error = "process deadline exceeded"
-                    child.kill()
-                    break
-                for event, _ in ready.select(min(remaining, 1)):
-                    chunk = os.read(event.fd, 65536)
-                    if not chunk:
-                        ready.unregister(event.fileobj)
-                    elif sum(map(len, buffers)) + len(chunk) > maximum:
-                        error = "combined stdout/stderr exceeds bounded capture size"
-                        child.kill()
-                        break
-                    else:
-                        buffers[event.data].extend(chunk)
-                if error: break
-            try:
-                child.wait(timeout=max(0.1, limit - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                error = "process deadline exceeded"
-                child.kill()
-                child.wait()
-        return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
+    with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink:
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            with selectors.DefaultSelector() as ready:
+                ready.register(child.stdout, selectors.EVENT_READ, 0)
+                ready.register(child.stderr, selectors.EVENT_READ, 1)
+                while ready.get_map():
+                    remaining = limit - time.monotonic()
+                    if remaining <= 0:
+                        error = "process deadline exceeded"; child.kill(); break
+                    for event, _ in ready.select(min(remaining, 1)):
+                        chunk = os.read(event.fd, 65536)
+                        if not chunk:
+                            ready.unregister(event.fileobj)
+                        elif count + len(chunk) > maximum:
+                            error = "combined stdout/stderr exceeds bounded capture size"; child.kill(); break
+                        else:
+                            count += len(chunk)
+                            if sink and event.data == 0: sink.write(chunk)
+                            else: buffers[event.data].extend(chunk)
+                    if error: break
+                try: child.wait(timeout=max(0.1, limit - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    error = "process deadline exceeded"; child.kill(); child.wait()
+            return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
 
 
 def main():
@@ -266,44 +256,75 @@ def main():
     receipts = {}
     deadline = time.monotonic() + 240
 
-    def run(command, name, timeout=180, retain_stdout=True):
+    def run(command, name, timeout=180, retain_stdout=True, stdout_path=None, maximum=64 * 1024 * 1024):
         if name != "container-cleanup":
             timeout = min(timeout, max(1, int(deadline - time.monotonic())))
         started = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        status, stdout, stderr, capture_error = bounded_process(command, timeout)
+        status, stdout, stderr, capture_error = bounded_process(command, timeout, maximum, stdout_path)
         if retain_stdout: (reports / (name + ".stdout")).write_bytes(stdout)
         (reports / (name + ".stderr")).write_bytes(stderr)
         receipts[name] = {"command": command, "started_utc": started, "exit_code": status,
-                          "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "timeout_seconds": timeout, "capture_error": capture_error, "capture_max_bytes": 64 * 1024 * 1024}
+                          "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "timeout_seconds": timeout, "capture_error": capture_error, "capture_max_bytes": maximum, "streamed_archive_bytes": stdout_path.stat().st_size if stdout_path else None}
         (reports / (name + "-receipt.json")).write_text(json.dumps(receipts[name], indent=2))
         return status, stdout
 
-    status, stdout = run(["docker", "image", "inspect", "--format",
-        '{"image_id":{{json .Id}},"size_bytes":{{.Size}},"architecture":{{json .Architecture}}}',
-        "dollhousemcp:latest-linux-amd64"], "image-identity-size")
-    target = json.loads(stdout)
-    image_id, target_size = target["image_id"], target["size_bytes"]
-    if status != 0 or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id) or target["architecture"] != "amd64":
-        raise ValueError("The exact job-built amd64 image identity/size is unavailable")
+    def inspect_image(reference, label):
+        status, stdout = run(["docker", "image", "inspect", reference], label, 30, retain_stdout=False)
+        if status != 0: return None
+        value = json.loads(stdout)[0]
+        selected = {"store_id": value["Id"], "descriptor": value.get("Descriptor"),
+                    "architecture": value.get("Architecture"), "os": value.get("Os"),
+                    "inspect_size_hint_bytes": value.get("Size")}
+        (reports / (label + "-selected.json")).write_text(json.dumps(selected, indent=2))
+        return selected
+
+    target = inspect_image("dollhousemcp:latest-linux-amd64", "target-inspect")
+    if not target or target["architecture"] != "amd64" or target["os"] != "linux":
+        raise ValueError("The exact job-built linux/amd64 target is unavailable")
+    image_id = target["store_id"]
     memory = {line.split(":", 1)[0]: int(line.split()[1]) * 1024
               for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))}
     disk_free = shutil.disk_usage(root).free
     (reports / "host-capacity-observation.json").write_text(json.dumps({
-        "target_size_bytes": target_size, "host_total_memory_bytes": memory["MemTotal"],
-        "host_available_memory_bytes": memory["MemAvailable"], "disk_free_bytes": disk_free,
-        "required_available_memory_bytes": CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES,
+        **target, "inspect_size_is_not_admission_size": True,
+        "host_total_memory_bytes": memory["MemTotal"], "host_available_memory_bytes": memory["MemAvailable"],
+        "disk_free_bytes": disk_free, "required_available_memory_bytes": CONTAINER_MEMORY_BYTES + HOST_MEMORY_HEADROOM_BYTES,
     }, indent=2))
-    admission = capacity_admission(target_size, memory["MemAvailable"], disk_free)
+    # Admit worst-case bounded export first; later replace with cryptographically counted layer bytes.
+    capacity_admission(TARGET_MAX_BYTES, memory["MemAvailable"], disk_free)
+
+    def save_verified(reference, selected, label):
+        destination = inputs / ("image.tar" if label == "target" else "runner.tar")
+        status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
+                        stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
+        if status != 0:
+            raise ValueError(label + " archive export exceeded budget or failed; inspect export receipt")
+        observations = {**selected, "archive_bytes": destination.stat().st_size}
+        (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
+        try:
+            evidence = verify_saved_image(destination, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
+        except Exception as error:
+            (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
+                **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
+                "complete_graph_verified": False, "error": str(error)}, indent=2))
+            raise
+        (reports / (label + "-archive-identity.json")).write_text(json.dumps(evidence, indent=2))
+        return evidence
+
+    target_graph = save_verified(image_id, target, "target")
+    admission = capacity_admission(target_graph["unpacked_layer_bytes"], memory["MemAvailable"], shutil.disk_usage(root).free)
     admission["host_total_memory_bytes"] = memory["MemTotal"]
     (reports / "capacity-admission.json").write_text(json.dumps(admission, indent=2))
     binary_archive = inputs / ARCHIVE_NAME
     binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256)
+    (reports / "scanner-download.json").write_text(json.dumps(binary_receipt, indent=2))
     extract_verified_binary(binary_archive, inputs / "grype")
     (inputs / "grype").chmod(0o555)
     download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024)
     manifest = json.loads((reports / "database-manifest.json").read_text())
     url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
     db_receipt = download(url, inputs / "database.tar.zst", 1024 * 1024 * 1024, checksum)
+    (reports / "database-download.json").write_text(json.dumps(db_receipt, indent=2))
     status, _ = run(["/usr/bin/zstd", "--version"], "db-payload-tool-version", 5)
     if status != 0: raise ValueError("Existing system zstd is unavailable; DB payload cannot be admitted")
     payload = database_payload_bytes(inputs / "database.tar.zst")
@@ -311,36 +332,34 @@ def main():
     for source, target in [(Path(".github/grype-image-scan.yaml"), "grype.yaml"),
                            (Path("scripts/grype-offline-runner.mjs"), "grype-offline-runner.mjs")]:
         shutil.copyfile(source, inputs / target)
-    status, _ = run(["docker", "image", "save", "--output", str(inputs / "image.tar"), image_id], "image-save")
-    if status != 0 or (inputs / "image.tar").stat().st_size > target_size + 128 * 1024 ** 2 or image_archive_identity(inputs / "image.tar") != image_id:
-        raise ValueError("Saved Docker archive does not identify the exact job-built image")
+    selected_runner = inspect_image(RUNNER_REF, "runner-inspect")
+    if selected_runner is None:
+        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
+        if status != 0: raise ValueError("Exact protected runner base is unavailable")
+        selected_runner = inspect_image(RUNNER_REF, "runner-inspect-after-pull")
+    if not selected_runner: raise ValueError("Unable to inspect exact runner reference")
+    runner_graph = save_verified(RUNNER_REF, selected_runner, "runner")
+    runner = verify_fixed_runner(runner_graph, Path(".github/grype-runner-reference"))
+    (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
     with (inputs / "image.tar").open("rb") as stream:
         image_archive_hash = hashlib.file_digest(stream, "sha256").hexdigest()
-    provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt, "database": {**db_receipt, "manifest": manifest},
-                  "image_id": image_id, "image_archive_sha256": image_archive_hash}
-    status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", RUNNER_REF], "runner-image-id", 30)
-    if status != 0:
-        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
-        if status != 0: raise ValueError("Exact protected runner base is unavailable")
-        status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", RUNNER_REF], "runner-image-id-after-pull", 30)
-    if status != 0 or stdout.decode().strip() != RUNNER_IMAGE_ID:
-        raise ValueError("Runner base does not identify the independent exact protected amd64 image")
-    provenance["runner_ref"] = RUNNER_REF
-    provenance["runner_image_id"] = RUNNER_IMAGE_ID
+    provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt,
+                  "database": {**db_receipt, "manifest": manifest}, "target": target_graph,
+                  "image_archive_sha256": image_archive_hash, "runner": runner}
     name = "beta-offline-scan-" + uuid.uuid4().hex[:12]
     container = None
     if deadline - time.monotonic() < 125:
         raise ValueError("Insufficient bounded job budget; no scanner container will be created")
     try:
-        status, stdout = run(isolated_container_command(name, inputs), "container-create", 30)
+        status, stdout = run(isolated_container_command(name, inputs, runner), "container-create", 30)
         if status != 0: raise ValueError("Unable to create the owned isolated scanner")
         container = stdout.decode().strip()
         status, stdout = run(["docker", "inspect", container], "container-inspect", 30, retain_stdout=False)
         if status != 0: raise ValueError("Unable to inspect actual scanner isolation")
         # Persist only selected isolation fields; never image environment/credentials.
-        provenance["isolation"] = isolation_evidence(json.loads(stdout)[0], inputs)
+        provenance["isolation"] = isolation_evidence(json.loads(stdout)[0], inputs, runner)
         status, stdout = run(["docker", "start", "--attach", container], "container-start", 120)
         envelope = json.loads(stdout)
         if envelope.get("kind") != "grype-offline-envelope-v1" or envelope.get("exit_code") != status:

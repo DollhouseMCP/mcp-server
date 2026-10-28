@@ -11,6 +11,8 @@ import tempfile
 import unittest
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+
 spec = importlib.util.spec_from_file_location(
     "scan_built_image", Path(__file__).resolve().parents[2] / "scripts/scan-built-image.py")
 scanner = importlib.util.module_from_spec(spec)
@@ -106,22 +108,12 @@ class OfflineBoundaryTests(unittest.TestCase):
             with self.subTest(url=bad), self.assertRaises(ValueError):
                 scanner.validate_public_url(bad)
 
-    def test_image_archive_id_comes_from_actual_config_bytes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            archive = Path(directory) / "image.tar"
-            config = b'{"architecture":"amd64","rootfs":{"type":"layers","diff_ids":[]}}'
-            manifest = json.dumps([{"Config": "owned.json", "Layers": []}]).encode()
-            with tarfile.open(archive, "w") as bundle:
-                for name, data in [("manifest.json", manifest), ("owned.json", config)]:
-                    member = tarfile.TarInfo(name); member.size = len(data)
-                    bundle.addfile(member, io.BytesIO(data))
-            self.assertEqual(scanner.image_archive_identity(archive), "sha256:" + hashlib.sha256(config).hexdigest())
-
     def test_actual_isolation_rejects_network_socket_mounts_and_inherited_app_startup(self):
         inputs = Path("/owned/inputs")
         image = "sha256:" + "a" * 64
         names = ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]
-        value = {"Image": scanner.RUNNER_IMAGE_ID, "Config": {"Image": scanner.RUNNER_REF, "User": "65532:65532", "Entrypoint": ["/usr/bin/env"],
+        runner = {"execution_reference": scanner.RUNNER_REF, "container_image_id": scanner.RUNNER_CONFIG_DIGEST}
+        value = {"Image": scanner.RUNNER_CONFIG_DIGEST, "Config": {"Image": scanner.RUNNER_REF, "User": "65532:65532", "Entrypoint": ["/usr/bin/env"],
                  "Cmd": ["-i"], "WorkingDir": "/work", "Healthcheck": {"Test": ["NONE"]}},
                  "Mounts": [{"Type": "bind", "Destination": "/inputs/" + name,
                              "Source": str(inputs / name), "RW": False} for name in names],
@@ -130,9 +122,9 @@ class OfflineBoundaryTests(unittest.TestCase):
                  "Memory": 8589934592, "MemorySwap": 8589934592, "PidsLimit": 64,
                  "Tmpfs": {"/work": "rw,noexec,nosuid,nodev,size=6g,mode=1777",
                            "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}}}
-        plan = scanner.isolated_container_command("fixture", inputs)
-        value["Config"]["Cmd"] = plan[plan.index(scanner.RUNNER_REF) + 1:]
-        self.assertEqual(scanner.isolation_evidence(value, inputs)["user"], "65532:65532")
+        plan = scanner.isolated_container_command("fixture", inputs, runner)
+        value["Config"]["Cmd"] = plan[plan.index(runner["execution_reference"]) + 1:]
+        self.assertEqual(scanner.isolation_evidence(value, inputs, runner)["user"], "65532:65532")
         mutations = [lambda x: x.update(Image=image),
                      lambda x: x["Config"].update(Image="mutable-candidate-base"),
                      lambda x: x["HostConfig"].update(NetworkMode="bridge"),
@@ -143,10 +135,20 @@ class OfflineBoundaryTests(unittest.TestCase):
                      lambda x: x["Config"].update(Healthcheck={"Test": ["CMD", "node", "app.js"]})]
         for mutate in mutations:
             changed = copy.deepcopy(value); mutate(changed)
-            with self.assertRaises(ValueError): scanner.isolation_evidence(changed, inputs)
-        command = scanner.isolated_container_command("owned-container", inputs)
+            with self.assertRaises(ValueError): scanner.isolation_evidence(changed, inputs, runner)
+        modern_runner = {**runner, "container_image_id": "sha256:" + "b" * 64,
+                         "archive": {"manifest_descriptor": {"digest": "sha256:" + "c" * 64,
+                            "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 123}}}
+        modern = copy.deepcopy(value); modern["Image"] = modern_runner["container_image_id"]
+        modern["ImageManifestDescriptor"] = copy.deepcopy(modern_runner["archive"]["manifest_descriptor"])
+        scanner.isolation_evidence(modern, inputs, modern_runner)
+        for change in [lambda x: x.update(Image=scanner.RUNNER_CONFIG_DIGEST),
+                       lambda x: x["ImageManifestDescriptor"].update(digest=scanner.RUNNER_CONFIG_DIGEST)]:
+            invalid = copy.deepcopy(modern); change(invalid)
+            with self.assertRaises(ValueError): scanner.isolation_evidence(invalid, inputs, modern_runner)
+        command = scanner.isolated_container_command("owned-container", inputs, runner)
         self.assertNotIn(image, command)
-        self.assertIn(scanner.RUNNER_REF, command)
+        self.assertIn(runner["execution_reference"], command)
         self.assertIn("--no-healthcheck", command)
         self.assertNotIn("/var/run/docker.sock", " ".join(command))
         self.assertEqual(command.count("--mount"), 5)
@@ -159,6 +161,17 @@ class BoundedCaptureTests(unittest.TestCase):
         self.assertIsNone(status)
         self.assertIn("bounded capture", error)
         self.assertLessEqual(len(stdout) + len(stderr), 1024)
+
+    def test_streamed_archive_output_is_bounded_on_disk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "image.tar"
+            status, stdout, stderr, error = scanner.bounded_process(
+                [sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'x'*100000)"], 5,
+                maximum=1024, stdout_path=destination)
+            self.assertIsNone(status)
+            self.assertIn("bounded capture", error)
+            self.assertLessEqual(destination.stat().st_size, 1024)
+            self.assertEqual(stdout, b"")
 
     def test_normal_nonzero_exit_keeps_actual_output_and_status(self):
         status, stdout, stderr, error = scanner.bounded_process(

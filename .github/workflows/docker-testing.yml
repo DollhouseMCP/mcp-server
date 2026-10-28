@@ -331,6 +331,7 @@ jobs:
         shell: bash
         run: |
           python3 tests/scripts/test_scan_built_image.py
+          python3 tests/scripts/test_image_archive_identity.py
           node --test tests/scripts/verify-image-scan.test.mjs
           image_id=$(docker image inspect --format '{{.Id}}' dollhousemcp:latest-linux-amd64)
           node scripts/verify-image-scan.mjs "$RUNNER_TEMP/image-security/reports/application-image-vulnerabilities.json" "$image_id"
