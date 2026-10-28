@@ -318,7 +318,7 @@ retention are separate production/beta concerns.
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
-The generated Compose file pins the proxy service to `caddy:2.8` because edge proxy support uses Caddy's `trusted_proxies_strict` directive. The helper pulls that Caddy image before starting or recreating the proxy during install, update, and rollback so an older cached floating Caddy 2 image is not reused after edge CIDRs are enabled.
+The generated Compose file pins the proxy service to `caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489` for the patched Caddy/quic-go release; it also supports the edge proxy `trusted_proxies_strict` directive. The helper pulls that Caddy image before starting or recreating the proxy during install, update, and rollback so an older cached floating Caddy 2 image is not reused after edge CIDRs are enabled.
 
 The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. The remote wrapper applies the same check before opening SSH. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
 
