@@ -15,6 +15,7 @@ import request from 'supertest';
 import fastUri from 'fast-uri';
 import { Address4, Address6 } from 'ip-address';
 import qs from 'qs';
+import { z } from 'zod';
 import { getQueryParam, getQueryStrings } from 'hono/utils/url';
 import { parse as parseToml } from 'smol-toml';
 
@@ -82,6 +83,20 @@ describe('application dependency security boundaries', () => {
     expect(qs.stringify(parsed)).toBe('x%5Bconstructor%5D%5BisBuffer%5D=y');
   });
 
+  it('serializes comma arrays with non-callable own toString values without throwing', () => {
+    expect(qs.stringify({ x: [{ toString: 0 }] }, { arrayFormat: 'comma' }))
+      .toBe('x=%5Bobject%20Object%5D');
+    expect(qs.stringify({ x: ['one', 'two'] }, { arrayFormat: 'comma' })).toBe('x=one%2Ctwo');
+  });
+
+  it('rejects oversized constrained v4 arrays before constructing per-element errors', () => {
+    const result = z.array(z.string()).max(1).safeParse(Array(20).fill(0));
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Oversized constrained array was accepted');
+    expect(result.error.issues).toHaveLength(1);
+    expect(result.error.issues[0]).toMatchObject({ code: 'too_big', maximum: 1 });
+  });
+
   it('enforces comma array limits for both flat and bracket query keys', () => {
     const options = { comma: true, arrayLimit: 3, throwOnLimitExceeded: true };
     expect(() => qs.parse('a=1,2,3,4', options)).toThrow(RangeError);
@@ -108,12 +123,12 @@ describe('server and active browser sanitizer copies', () => {
     expect(bytes.equals(installed)).toBe(true);
     const manifest = JSON.parse(readFileSync(source('src/web-console/ui/vendor/manifest.json'), 'utf8'));
     const asset = manifest.assets.find((item: { package: string }) => item.package === 'dompurify');
-    expect(asset.packageVersion).toBe('3.4.16');
+    expect(asset.packageVersion).toBe('3.4.17');
     expect(asset.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
     const document = new JSDOM(readFileSync(html, 'utf8'));
     try {
       const tag = document.window.document.querySelector('script[src*="/dompurify@"]');
-      expect(tag?.getAttribute('src')).toBe('https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js');
+      expect(tag?.getAttribute('src')).toBe('https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js');
       expect(tag?.getAttribute('integrity')).toBe(`sha384-${createHash('sha384').update(bytes).digest('base64')}`);
     } finally { document.window.close(); }
   });

@@ -11,9 +11,7 @@
 import fetch from 'node-fetch';
 import { writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
-import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { existsSync } from 'fs';
 import { 
   discoverAvailableTools, 
   validateToolExists, 
@@ -65,85 +63,9 @@ class MCPTestRunner {
   }
 
   async startMCPServer() {
-    console.log('🚀 Starting MCP Inspector for QA testing...');
-    const serverStartTime = Date.now();
-    
-    // Check if dist/index.js exists
-    const serverPath = 'dist/index.js';
-    if (!existsSync(serverPath)) {
-      throw new Error('MCP server build not found at dist/index.js. Run "npm run build" first.');
-    }
-    
-    // Start the MCP Inspector process (which wraps the server) with auth disabled for testing
-    this.mcpProcess = spawn('npx', ['@modelcontextprotocol/inspector', 'node', serverPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { 
-        ...process.env, 
-        TEST_MODE: 'true',
-        NODE_ENV: 'test',
-        DANGEROUSLY_OMIT_AUTH: 'true'  // WARNING: Test-only configuration - NEVER use in production
-      }
-    });
-    
-    // Set up process event handlers
-    this.mcpProcess.on('error', (error) => {
-      console.error('❌ Failed to start MCP Inspector:', error.message);
-      throw error;
-    });
-    
-    this.mcpProcess.on('exit', (code, signal) => {
-      if (code !== 0 && code !== null) {
-        console.warn(`⚠️ MCP Inspector exited with code ${code}`);
-      }
-    });
-    
-    // Capture output to extract session token and port
-    let output = '';
-    this.mcpProcess.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      output += chunk;
-      
-      // Look for session token in output
-      const tokenMatch = chunk.match(/🔑 Session token: ([a-f0-9]+)/);
-      if (tokenMatch) {
-        SESSION_TOKEN = tokenMatch[1];
-        console.log('🔑 Extracted session token from Inspector');
-      }
-      
-      // Look for port in output
-      const portMatch = chunk.match(/Proxy server listening on localhost:(\d+)/);
-      if (portMatch) {
-        const port = portMatch[1];
-        INSPECTOR_URL = `http://localhost:${port}`;
-        console.log(`📡 Inspector running on port ${port}`);
-        
-        // Give the Inspector a moment to fully initialize the HTTP server
-        setTimeout(() => {
-          console.log('   Inspector HTTP server should be ready now');
-        }, 3000);
-      }
-    });
-    
-    this.mcpProcess.stderr.on('data', (data) => {
-      const stderr = data.toString();
-      console.warn('Inspector stderr:', stderr);
-      
-      // If there's a critical error, fail fast
-      if (stderr.includes('Failed to connect to MCP server') || 
-          stderr.includes('Server process exited') ||
-          stderr.includes('ENOENT')) {
-        console.error('❌ Critical Inspector error detected');
-        throw new Error(`Inspector startup failed: ${stderr.trim()}`);
-      }
-    });
-    
-    // Wait for server to be ready
-    await this.waitForServerReady();
-    const serverEndTime = Date.now();
-    this.metricsCollector.recordServerStartup(serverStartTime, serverEndTime);
-    console.log('✅ MCP Inspector started and ready');
+    throw new Error('The legacy GUI Inspector QA runner is retired because its browser bundle contains vulnerable Zod. Run npm run qa:all for direct and external Inspector CLI QA.');
   }
-  
+
   async waitForServerReady(maxRetries = 20, delay = 2000) {
     console.log('⏳ Waiting for MCP Inspector to be ready...');
     

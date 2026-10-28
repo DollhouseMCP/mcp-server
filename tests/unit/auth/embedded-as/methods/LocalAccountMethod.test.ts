@@ -165,19 +165,12 @@ describe('LocalAccountMethod', () => {
     expect(result.kind).toBe('denied');
   });
 
-  it('unknown-account login pays the same argon2 cost as wrong-password (CWE-208 timing parity)', async () => {
-    // Pin the rationale of the reference-hash: an earlier shape called
-    // argon2.verify with a malformed hash string, which throws in
-    // microseconds and leaks username existence by latency. The fix
-    // verifies against a real argon2 hash so both branches pay ~30 ms.
-    // A malformed dummy would give unknownMs <1 ms while wrongPasswordMs
-    // stays ~30 ms; the assertion catches that regression.
-    //
-    // No separate warmup login: dropping it saves ~30 ms of argon2.verify
-    // work per run (matters for jest parallel-worker CPU pressure across
-    // the rest of the suite) and any lazy-init cost on the unknown branch
-    // only makes the `unknownMs >= wrongPasswordMs/2` assertion easier
-    // to satisfy.
+  it('unknown-account and wrong-password login perform the configured native argon2 work (CWE-208)', async () => {
+    // A malformed dummy hash rejects before doing KDF work and can expose
+    // account existence. Observe the real native verifier and encoded work
+    // factors instead of comparing two scheduler-sensitive wall-clock samples
+    // (#2798). LocalAccountNativeVerification.test.ts gates result delivery to
+    // prove both login branches await that real work before returning.
     const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     const setup = await method.completeInteraction(CTX, {
@@ -186,29 +179,37 @@ describe('LocalAccountMethod', () => {
 
     expect(setup.kind).toBe('authenticated');
     const stored = await storage.getAccount('local_alice');
-    // Check the encoded work factor without logging a credential on failure.
-    expect(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/.test(
+    const expectedWork = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/;
+    // Boolean assertions avoid printing credential hashes/salts on failure.
+    expect(expectedWork.test(
       stored?.credentials?.passwordHash ?? '',
     )).toBe(true);
     expect(await storage.getAccount('local_nobody')).toBeNull();
 
-    const wrongPasswordStart = Date.now();
-    const wrongPassword = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'alice', password: 'incorrect' }, ip: CLIENT_SECONDARY,
-    });
-    const wrongPasswordMs = Date.now() - wrongPasswordStart;
-
-    const unknownStart = Date.now();
-    const unknown = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'nobody', password: 'whatever' }, ip: CLIENT_TERTIARY,
-    });
-    const unknownMs = Date.now() - unknownStart;
-
-    expect(wrongPassword).toEqual({ kind: 'denied', reason: 'invalid credentials' });
-    expect(unknown).toEqual({ kind: 'denied', reason: 'invalid credentials' });
-
-    // Both branches should be in the same order of magnitude.
-    expect(unknownMs).toBeGreaterThanOrEqual(Math.floor(wrongPasswordMs / 2));
+    const verify = jest.spyOn(argon2, 'verify'); // Calls the real native API.
+    const failure = jest.spyOn(rateLimiter, 'noteFailure'); // Also calls through.
+    try {
+      for (const [username, ip] of [['alice', CLIENT_SECONDARY], ['nobody', CLIENT_TERTIARY]]) {
+        verify.mockClear();
+        failure.mockClear();
+        const denied = await method.completeInteraction(CTX, {
+          formBody: { action: 'login', username, password: 'incorrect' }, ip,
+        });
+        expect(verify).toHaveBeenCalledTimes(1);
+        const [digest, password] = verify.mock.calls[0];
+        expect(expectedWork.test(digest)).toBe(true);
+        expect(digest === stored?.credentials?.passwordHash).toBe(username === 'alice');
+        expect(password).toBe('incorrect');
+        // A malformed PHC throws rather than returning the native mismatch.
+        await expect(verify.mock.results[0].value).resolves.toBe(false);
+        expect(denied).toEqual({ kind: 'denied', reason: 'invalid credentials' });
+        expect(failure).toHaveBeenCalledTimes(1);
+        expect(failure).toHaveBeenCalledWith(`local_${username}`, ip);
+      }
+    } finally {
+      failure.mockRestore();
+      verify.mockRestore();
+    }
   }, 30_000);
 
   describe('consumeInvite (out-of-band CLI invite redemption)', () => {

@@ -1,10 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { load } from 'js-yaml';
 import { parse as parseJsonc, visit } from 'jsonc-parser';
 import { parse as parseToml } from 'smol-toml';
+import { LogManager } from '../../../src/logging/LogManager.js';
+import { wireLogHooks } from '../../../src/logging/LogHooks.js';
+import { FileLogSink } from '../../../src/logging/sinks/FileLogSink.js';
+import { MemoryLogSink } from '../../../src/logging/sinks/MemoryLogSink.js';
+import { JsonlFormatter } from '../../../src/logging/formatters/JsonlFormatter.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { clientConfigTarget, installClientConfig } from '../../../src/web/routes/clientConfigInstaller.js';
 
 let home: string;
@@ -224,5 +231,119 @@ describe('config-only installer', () => {
     await installClientConfig('cursor', 'latest', environment);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(JSON.parse(await readFile(target.path, 'utf8')).__proto__).toEqual({ polluted: true });
+  });
+});
+
+describe('client configuration audit trail', () => {
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  it('records success only after the config has been written without logging its contents or path', async () => {
+    const environment = { home, platform: 'linux', env: {} };
+    const target = clientConfigTarget('cursor', environment);
+    await mkdir(dirname(target.path), { recursive: true });
+    await writeFile(target.path, JSON.stringify({ secret: 'retained-private-value' }));
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(event => {
+      expect(JSON.parse(readFileSync(target.path, 'utf8')).mcpServers.dollhousemcp).toBeDefined();
+      expect(JSON.stringify(event)).not.toContain(home);
+      expect(JSON.stringify(event)).not.toContain('retained-private-value');
+    });
+    await installClientConfig('cursor', 'beta', environment);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'CONFIG_UPDATED', source: 'clientConfigInstaller',
+      additionalData: { client: 'cursor', version: 'beta', outcome: 'written' },
+    }));
+  });
+
+  it('records a bounded failure without including invalid config or request values', async () => {
+    const environment = { home, env: {} };
+    const target = clientConfigTarget('cursor', environment);
+    await mkdir(dirname(target.path), { recursive: true });
+    const source = '{"private-key":"secret-value", invalid';
+    await writeFile(target.path, source);
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    await expect(installClientConfig('cursor', 'latest', environment)).rejects.toThrow();
+    await expect(installClientConfig('secret-client', 'secret-version', environment)).rejects.toThrow();
+    expect(await readFile(target.path, 'utf8')).toBe(source);
+    expect(audit).toHaveBeenCalledTimes(2);
+    for (const [event] of audit.mock.calls) {
+      expect(event).toEqual({ type: 'OPERATION_FAILED', severity: 'LOW', source: 'clientConfigInstaller',
+        details: expect.stringMatching(/^MCP client configuration installation failed \([a-f0-9-]{36}\)$/), additionalData: { outcome: 'failed' } });
+    }
+  });
+
+  it('retains consecutive write events within the monitor deduplication window', async () => {
+    const monitor = new SecurityMonitor();
+    SecurityMonitor.setInstance(monitor);
+    try {
+      const environment = { home, env: {} };
+      await installClientConfig('cursor', 'latest', environment);
+      await installClientConfig('cursor', 'latest', environment);
+      const events = monitor.instanceGetEventsByType('CONFIG_UPDATED');
+      expect(events).toHaveLength(2);
+      expect(events[0].details).not.toBe(events[1].details);
+    } finally {
+      SecurityMonitor.clearInstance(monitor);
+    }
+  });
+
+  it('persists installer details and distinct attempts through the actual unified logging pipeline', async () => {
+    const logDir = join(home, 'logs');
+    const manager = new LogManager({
+      logDir, logFormat: 'jsonl', retentionDays: 1, securityRetentionDays: 1,
+      flushIntervalMs: 0, bufferSize: 100, memoryCapacity: 100,
+      memoryAppCapacity: 100, memorySecurityCapacity: 100,
+      memoryPerfCapacity: 100, memoryTelemetryCapacity: 100,
+      maxEntrySize: 16384, immediateFlushRate: 50, fileMaxSize: 1048576,
+      maxDirSizeBytes: 1048576, maxFilesPerCategory: 10, logLevel: 'debug',
+    });
+    const memory = new MemoryLogSink({ appCapacity: 100, securityCapacity: 100, perfCapacity: 100, telemetryCapacity: 100 });
+    manager.registerSink(memory);
+    manager.registerSink(new FileLogSink({ logDir, formatter: new JsonlFormatter(),
+      maxFileSize: 1048576, retentionDays: 1, securityRetentionDays: 1,
+      maxDirSizeBytes: 1048576, maxFilesPerCategory: 10 }));
+    const monitor = new SecurityMonitor();
+    SecurityMonitor.setInstance(monitor);
+    const cleanups = wireLogHooks(manager, { resolve: () => { throw new Error('No optional fixture service'); } });
+    try {
+      const environment = { home, platform: 'linux', env: {} };
+      const target = clientConfigTarget('cursor', environment);
+      await mkdir(dirname(target.path), { recursive: true });
+      await writeFile(target.path, JSON.stringify({ secret: 'private-config-value' }));
+      await installClientConfig('cursor', 'beta', environment);
+      await installClientConfig('cursor', 'beta', environment);
+      await installClientConfig('codex', 'rc', environment);
+      await expect(installClientConfig('private-client', 'private-version', environment)).rejects.toThrow();
+      await installClientConfig('warp', 'latest', environment);
+      await manager.flush();
+      const entries = memory.query({ category: 'security', limit: 100 }).entries;
+      expect(entries).toHaveLength(4);
+      expect(entries.filter(entry => entry.data?.client === 'cursor' && entry.data?.version === 'beta')).toHaveLength(2);
+      const files = (await readdir(logDir)).filter(file => file.startsWith('security-'));
+      const persisted = (await Promise.all(files.map(file => readFile(join(logDir, file), 'utf8'))))
+        .join('').trim().split('\n').map(line => JSON.parse(line));
+      expect(persisted).toHaveLength(4);
+      expect(persisted.slice(0, 3).map(entry => entry.data)).toEqual([
+        { client: 'cursor', version: 'beta', outcome: 'written', eventType: 'CONFIG_UPDATED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' },
+        { client: 'cursor', version: 'beta', outcome: 'written', eventType: 'CONFIG_UPDATED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' },
+        { client: 'codex', version: 'rc', outcome: 'written', eventType: 'CONFIG_UPDATED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' },
+      ]);
+      expect(persisted[0].msg).not.toBe(persisted[1].msg);
+      expect(persisted[3].data).toEqual({ outcome: 'failed', eventType: 'OPERATION_FAILED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' });
+      for (const privateValue of [home, 'private-config-value', 'private-client', 'private-version']) {
+        expect(JSON.stringify(entries)).not.toContain(privateValue);
+        expect(JSON.stringify(persisted)).not.toContain(privateValue);
+      }
+    } finally {
+      cleanups.forEach(cleanup => cleanup());
+      SecurityMonitor.clearInstance(monitor);
+      await manager.close();
+    }
+  });
+
+  it('does not report a config write for manual Warp instructions', async () => {
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    await installClientConfig('warp', 'latest', { home });
+    expect(audit).not.toHaveBeenCalled();
   });
 });
