@@ -2,6 +2,7 @@
  * Unit tests for MemoryIndexFile
  */
 
+import * as path from 'node:path';
 import { jest } from '@jest/globals';
 import { MemoryIndexFile } from '../../../src/storage/MemoryIndexFile.js';
 import type { MemoryIndexData } from '../../../src/storage/MemoryIndexFile.js';
@@ -42,7 +43,7 @@ function makeMockFileOps() {
   } as unknown as FileOperationsService;
 }
 
-const INDEX_PATH = '/data/memories/_index.json';
+const INDEX_PATH = path.resolve('data', 'memories', '_index.json');
 
 describe('MemoryIndexFile', () => {
   let fileOps: FileOperationsService;
@@ -53,8 +54,41 @@ describe('MemoryIndexFile', () => {
     indexFile = new MemoryIndexFile(INDEX_PATH, fileOps);
   });
 
-  afterEach(() => {
-    indexFile.dispose();
+
+  it('roundtrips blocked name slots without including them in the entry count', async () => {
+    const blocked = { 'new.yaml': { nameKey: 'shared', mtimeMs: 2 } };
+    await indexFile.write([makeEntry('old.yaml', 'Shared')], blocked);
+    const serialized = jest.mocked(fileOps.writeFile).mock.calls[0][1];
+    jest.mocked(fileOps.readFile).mockResolvedValue(serialized);
+    expect(await indexFile.read()).toMatchObject({ entryCount: 1, blocked });
+  });
+
+  it('skips malformed blocked entries and accepts a missing blocked field', async () => {
+    const data = { version: 2, entryCount: 0, entries: {}, blocked: {
+      'good.yaml': { nameKey: 'shared', mtimeMs: 2 },
+      '': { nameKey: 'shared', mtimeMs: 2 },
+      'empty.yaml': { nameKey: ' ', mtimeMs: 2 },
+      'bad.yaml': { nameKey: 'shared', mtimeMs: '2' },
+      'null.yaml': null,
+      'infinite.yaml': { nameKey: 'shared', mtimeMs: Infinity },
+    } };
+    jest.mocked(fileOps.readFile).mockResolvedValue(JSON.stringify(data));
+    expect((await indexFile.read())?.blocked).toEqual({ 'good.yaml': { nameKey: 'shared', mtimeMs: 2 } });
+    jest.mocked(fileOps.readFile).mockResolvedValue(JSON.stringify({ version: 2, entryCount: 0, entries: {} }));
+    expect((await indexFile.read())?.blocked).toEqual({});
+  });
+
+  it('skips entries whose path or mtime cannot identify a valid observation', async () => {
+    const entries = {
+      'good.yaml': makeEntry('good.yaml', 'Good'),
+      'wrong.yaml': makeEntry('other.yaml', 'Wrong'),
+      'infinite.yaml': { ...makeEntry('infinite.yaml', 'Bad'), mtimeMs: Infinity },
+      'missing.yaml': { ...makeEntry('missing.yaml', 'Bad'), mtimeMs: undefined },
+    };
+    jest.mocked(fileOps.readFile).mockResolvedValue(JSON.stringify({ version: 2, entryCount: 4, entries }));
+    const result = await indexFile.read();
+    expect(Object.keys(result!.entries)).toEqual(['good.yaml']);
+    expect(result!.entryCount).toBe(1);
   });
 
   describe('read()', () => {
@@ -64,7 +98,7 @@ describe('MemoryIndexFile', () => {
         '2025-01-01/notes.yaml': makeEntry('2025-01-01/notes.yaml', 'Notes'),
       };
       const data: MemoryIndexData = {
-        version: 1,
+        version: 2,
         generatedAt: '2025-06-01T00:00:00.000Z',
         entryCount: 2,
         entries,
@@ -74,7 +108,7 @@ describe('MemoryIndexFile', () => {
 
       const result = await indexFile.read();
       expect(result).not.toBeNull();
-      expect(result!.version).toBe(1);
+      expect(result!.version).toBe(2);
       expect(result!.entryCount).toBe(2);
       expect(Object.keys(result!.entries)).toHaveLength(2);
     });
@@ -97,7 +131,7 @@ describe('MemoryIndexFile', () => {
 
     it('should return null when entryCount does not match actual entries', async () => {
       const data: MemoryIndexData = {
-        version: 1,
+        version: 2,
         generatedAt: '2025-06-01T00:00:00.000Z',
         entryCount: 99, // mismatch
         entries: {
@@ -112,7 +146,7 @@ describe('MemoryIndexFile', () => {
 
     it('should return null for wrong version number', async () => {
       const data = {
-        version: 2,
+        version: 3,
         generatedAt: '2025-06-01T00:00:00.000Z',
         entryCount: 0,
         entries: {},
@@ -148,20 +182,19 @@ describe('MemoryIndexFile', () => {
       expect(writtenPath).toBe(INDEX_PATH);
 
       const parsed = JSON.parse(writtenContent as string) as MemoryIndexData;
-      expect(parsed.version).toBe(1);
+      expect(parsed.version).toBe(2);
       expect(parsed.entryCount).toBe(2);
       expect(parsed.entries['system/core.yaml'].name).toBe('Core');
       expect(parsed.entries['2025-01-01/notes.yaml'].name).toBe('Notes');
       expect(parsed.generatedAt).toBeDefined();
     });
 
-    it('should catch ENOSPC gracefully without throwing', async () => {
+    it('reports ENOSPC to the persistence owner', async () => {
       const err = new Error('no space left') as NodeJS.ErrnoException;
       err.code = 'ENOSPC';
       (fileOps.writeFile as jest.Mock<any>).mockRejectedValue(err);
 
-      // Should not throw
-      await expect(indexFile.write([makeEntry('a.yaml', 'A')])).resolves.toBeUndefined();
+      await expect(indexFile.write([makeEntry('a.yaml', 'A')])).rejects.toBe(err);
     });
 
     it('should re-throw non-ENOSPC write errors', async () => {
@@ -170,111 +203,6 @@ describe('MemoryIndexFile', () => {
       (fileOps.writeFile as jest.Mock<any>).mockRejectedValue(err);
 
       await expect(indexFile.write([makeEntry('a.yaml', 'A')])).rejects.toThrow('permission denied');
-    });
-  });
-
-  describe('scheduleWrite() debouncing', () => {
-    beforeEach(() => {
-      jest.useFakeTimers();
-      (fileOps.writeFile as jest.Mock<any>).mockResolvedValue(undefined);
-    });
-
-    afterEach(() => {
-      jest.useRealTimers();
-    });
-
-    it('should coalesce multiple calls into a single write', () => {
-      const indexWithDebounce = new MemoryIndexFile(INDEX_PATH, fileOps, { debounceMs: 500 });
-
-      indexWithDebounce.scheduleWrite([makeEntry('a.yaml', 'A')]);
-      indexWithDebounce.scheduleWrite([makeEntry('b.yaml', 'B')]);
-      indexWithDebounce.scheduleWrite([makeEntry('c.yaml', 'C')]);
-
-      // Before timer fires, no write
-      expect(fileOps.writeFile).not.toHaveBeenCalled();
-
-      jest.advanceTimersByTime(500);
-
-      // Only one write should happen, with the last entries
-      expect(fileOps.writeFile).toHaveBeenCalledTimes(1);
-      const writtenContent = (fileOps.writeFile as jest.Mock<any>).mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenContent) as MemoryIndexData;
-      expect(parsed.entries['c.yaml']).toBeDefined();
-      expect(parsed.entries['a.yaml']).toBeUndefined();
-
-      indexWithDebounce.dispose();
-    });
-
-    it('should reset timer on each scheduleWrite call', () => {
-      const indexWithDebounce = new MemoryIndexFile(INDEX_PATH, fileOps, { debounceMs: 500 });
-
-      indexWithDebounce.scheduleWrite([makeEntry('a.yaml', 'A')]);
-
-      // Advance 400ms (not yet fired)
-      jest.advanceTimersByTime(400);
-      expect(fileOps.writeFile).not.toHaveBeenCalled();
-
-      // Schedule again, resets timer
-      indexWithDebounce.scheduleWrite([makeEntry('b.yaml', 'B')]);
-
-      // Advance another 400ms (800ms total, but only 400ms since last schedule)
-      jest.advanceTimersByTime(400);
-      expect(fileOps.writeFile).not.toHaveBeenCalled();
-
-      // Advance remaining 100ms to reach 500ms since last schedule
-      jest.advanceTimersByTime(100);
-      expect(fileOps.writeFile).toHaveBeenCalledTimes(1);
-
-      indexWithDebounce.dispose();
-    });
-  });
-
-  describe('flush()', () => {
-    it('should write immediately when there are pending entries', async () => {
-      jest.useFakeTimers();
-      (fileOps.writeFile as jest.Mock<any>).mockResolvedValue(undefined);
-
-      const indexWithDebounce = new MemoryIndexFile(INDEX_PATH, fileOps, { debounceMs: 5000 });
-
-      indexWithDebounce.scheduleWrite([makeEntry('a.yaml', 'A')]);
-
-      // Flush before timer fires
-      await indexWithDebounce.flush();
-
-      expect(fileOps.writeFile).toHaveBeenCalledTimes(1);
-
-      // Advancing the timer should NOT cause another write
-      jest.advanceTimersByTime(5000);
-      expect(fileOps.writeFile).toHaveBeenCalledTimes(1);
-
-      indexWithDebounce.dispose();
-      jest.useRealTimers();
-    });
-
-    it('should be a no-op when there are no pending entries', async () => {
-      (fileOps.writeFile as jest.Mock<any>).mockResolvedValue(undefined);
-
-      await indexFile.flush();
-
-      expect(fileOps.writeFile).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('dispose()', () => {
-    it('should cancel pending timer without writing', () => {
-      jest.useFakeTimers();
-      (fileOps.writeFile as jest.Mock<any>).mockResolvedValue(undefined);
-
-      const indexWithDebounce = new MemoryIndexFile(INDEX_PATH, fileOps, { debounceMs: 500 });
-
-      indexWithDebounce.scheduleWrite([makeEntry('a.yaml', 'A')]);
-      indexWithDebounce.dispose();
-
-      // Advancing past debounce window should NOT trigger write
-      jest.advanceTimersByTime(1000);
-      expect(fileOps.writeFile).not.toHaveBeenCalled();
-
-      jest.useRealTimers();
     });
   });
 

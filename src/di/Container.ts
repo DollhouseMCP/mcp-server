@@ -572,33 +572,21 @@ export class DollhouseContainer {
       portfolioManager.exists()
     ]);
 
-    const checkErrors: Array<{ check: string; error: Error }> = [];
-    const needsMigration = DollhouseContainer.extractBooleanCheck(results[0], 'migration', checkErrors);
-    const portfolioExists = DollhouseContainer.extractBooleanCheck(results[1], 'portfolio', checkErrors);
-
-    if (checkErrors.length === 2) {
-      const errorMessages = checkErrors.map(e => `${e.check}: ${e.error.message}`).join('; ');
-      throw new Error(`Portfolio preparation failed - all checks failed: ${errorMessages}`);
-    }
-    if (checkErrors.length === 1) {
-      logger.warn(`Portfolio check failed but continuing: ${checkErrors[0].check} - ${checkErrors[0].error.message}`);
+    if (results[0].status === 'fulfilled' && results[1].status === 'fulfilled') {
+      timer.endPhase('config_checks');
+      return { needsMigration: results[0].value, portfolioExists: results[1].value };
     }
 
-    timer.endPhase('config_checks');
-    return { needsMigration, portfolioExists };
-  }
-
-  private static extractBooleanCheck(
-    result: PromiseSettledResult<boolean>,
-    label: string,
-    errorSink: Array<{ check: string; error: Error }>,
-  ): boolean {
-    if (result.status === 'fulfilled') return result.value;
-    errorSink.push({
-      check: label,
-      error: result.reason instanceof Error ? result.reason : new Error(String(result.reason)),
-    });
-    return false;
+    const checks = [
+      { name: 'migration', result: results[0] },
+      { name: 'portfolio', result: results[1] },
+    ];
+    const failures = checks.flatMap(({ name, result }) => result.status === 'rejected'
+      ? [{ name, reason: result.reason as unknown }]
+      : []);
+    const messages = failures.map(({ name, reason }) =>
+      `${name}: ${reason instanceof Error ? reason.message : String(reason)}`).join('; ');
+    throw new Error(`Portfolio preparation checks failed: ${messages}`, { cause: failures[0].reason });
   }
 
   private async runMigrationPhaseIfNeeded(

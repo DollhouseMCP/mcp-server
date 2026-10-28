@@ -27,7 +27,7 @@ function load(serialized: string, suppressLoadPolicy = false) {
 }
 
 describe('Memory retention without an append (Issue #3136)', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => { jest.restoreAllMocks(); });
 
   it.each([
     [3, 'evict_oldest'],

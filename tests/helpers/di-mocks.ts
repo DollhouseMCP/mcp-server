@@ -174,6 +174,7 @@ export function createMockFileOperationsService(overrides: Partial<any> = {}) {
     listDirectoryWithTypes: jest.fn().mockResolvedValue([]),
     renameFile: jest.fn().mockResolvedValue(undefined),
     exists: jest.fn().mockResolvedValue(false),
+    directoryExists: jest.fn().mockResolvedValue(false),
     stat: jest.fn().mockResolvedValue({} as any),
     resolvePath: jest.fn().mockReturnValue(''),
     validatePath: jest.fn().mockReturnValue(true),

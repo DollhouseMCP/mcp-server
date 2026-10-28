@@ -391,15 +391,20 @@ export class TemplateManager extends BaseElementManager<Template> {
     return result.isValid && result.sanitizedValue ? result.sanitizedValue : undefined;
   }
 
+  private sanitizeMetadataText(value: unknown, maxLength: number): string {
+    const normalized = UnicodeValidator.normalize(value).normalizedContent;
+    return sanitizeInput(typeof normalized === 'string' ? normalized : '', maxLength);
+  }
+
   private sanitizeMetadata(data: any): Partial<TemplateMetadata> {
     const metadata: Partial<TemplateMetadata> = {};
 
     if (data.name) {
-      metadata.name = sanitizeInput(UnicodeValidator.normalize(data.name).normalizedContent, 100);
+      metadata.name = this.sanitizeMetadataText(data.name, 100);
     }
 
     if (data.description) {
-      metadata.description = sanitizeInput(UnicodeValidator.normalize(data.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      metadata.description = this.sanitizeMetadataText(data.description, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
     }
 
     metadata.category = this.sanitizeCategory(data.category);

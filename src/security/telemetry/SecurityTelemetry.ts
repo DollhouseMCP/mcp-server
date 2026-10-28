@@ -11,6 +11,7 @@
  * Security Telemetry is now a singleton service managed by the DI container.
  */
 
+import { BestEffortListeners } from '../../logging/BestEffortDelivery.js';
 import { SecurityEvent } from '../securityMonitor.js';
 import { EvictingQueue } from '../../utils/EvictingQueue.js';
 import { EventDeduplicator } from '../../utils/EventDeduplicator.js';
@@ -68,22 +69,14 @@ const DEDUP_MAX_SIZE = 500;
  * Tracks security events, attack patterns, and generates metrics.
  */
 export class SecurityTelemetry {
-  private attackHistory = new EvictingQueue<AttackTelemetryEntry>(10000);
+  private readonly attackHistory = new EvictingQueue<AttackTelemetryEntry>(10000);
   private readonly METRIC_WINDOW_HOURS = 24; // Track last 24 hours
   private readonly attackVectorMap: Map<string, AttackVector> = new Map();
-  private logListener?: (entry: AttackTelemetryEntry) => void;
+  private readonly logListeners = new BestEffortListeners<[AttackTelemetryEntry]>('SecurityTelemetry');
   private readonly logDedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
 
   addLogListener(fn: (entry: AttackTelemetryEntry) => void): () => void {
-    this.logListener = fn;
-    return () => { this.logListener = undefined; };
-  }
-
-  /**
-   * Create a new SecurityTelemetry instance
-   */
-  constructor() {
-    // Instance initialization
+    return this.logListeners.add(fn).remove;
   }
 
   /**
@@ -112,7 +105,7 @@ export class SecurityTelemetry {
 
     // Deduplicate log listener calls — same attackType+pattern within 60s = suppress
     if (!this.logDedup.shouldSuppress(`${attackType}\0${pattern}`)) {
-      this.logListener?.(entry);
+      this.logListeners.emit(entry);
     }
 
     // Update attack vector map
@@ -359,8 +352,9 @@ ${metrics.attacksPerHour.map((count, i) =>
    * Dispose of the telemetry service and clean up resources
    * Implements cleanup for proper DI lifecycle management
    */
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
     this.attackHistory.clear();
     this.attackVectorMap.clear();
+    return Promise.resolve();
   }
 }

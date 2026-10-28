@@ -321,18 +321,13 @@ describe('UnicodeValidator', () => {
   });
 
   describe('Error Handling', () => {
-    test('should handle normalization errors gracefully', () => {
+    test('propagates normalization errors', () => {
       // Mock normalize to throw an error
       const originalNormalize = String.prototype.normalize;
       String.prototype.normalize = () => { throw new Error('Normalization failed'); };
       
       try {
-        const result = UnicodeValidator.normalize('test content');
-        
-        expect(result.isValid).toBe(false);
-        expect(result.normalizedContent).toBe('test content'); // Fallback to original
-        expect(result.detectedIssues).toContain('Unicode validation failed');
-        expect(result.severity).toBe('high');
+        expect(() => UnicodeValidator.normalize('test content')).toThrow('Normalization failed');
       } finally {
         // Restore original method
         String.prototype.normalize = originalNormalize;

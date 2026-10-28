@@ -22,6 +22,9 @@
 /** Filename installed into the system memory directory. */
 export const SEED_MEMORY_FILENAME = 'dollhousemcp-baseline-knowledge.yaml';
 
+/** Display name used when loaded memory metadata omits a name. */
+export const DEFAULT_MEMORY_NAME = 'Unnamed Memory';
+
 // Memory size limits
 export const MEMORY_CONSTANTS = {
   // String size limits use JavaScript UTF-16 code units, not encoded bytes.

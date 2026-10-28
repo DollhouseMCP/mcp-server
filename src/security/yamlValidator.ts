@@ -81,26 +81,25 @@ export class YamlValidator {
       throw new Error('Dangerous nested YAML tag combination detected');
     }
     
+    let rawData: unknown;
     try {
       // Use safe load with restricted schema
-      const rawData = yaml.load(yamlContent, {
+      rawData = yaml.load(yamlContent, {
         schema: yaml.CORE_SCHEMA, // No functions, only basic types
         onWarning: (warning) => {
           logger.warn('YAML parsing warning:', warning);
         }
       });
       
-      // Validate against schema
-      const validatedData = PersonaMetadataSchema.parse(rawData);
-      
-      // Additional sanitization
-      return this.sanitizeMetadata(validatedData);
     } catch (error) {
-      if (error instanceof Error && error.name === 'YAMLException') {
-        throw new Error(`Invalid YAML syntax: ${error.message}`);
-      }
-      throw new Error(`Invalid persona metadata: ${error instanceof Error ? error.message : String(error)}`);
+      if (!(error instanceof yaml.YAMLException)) throw error;
+      throw new Error(`Invalid YAML syntax: ${error.message}`, { cause: error });
     }
+    const result = PersonaMetadataSchema.safeParse(rawData);
+    if (!result.success) {
+      throw new Error(`Invalid persona metadata: ${result.error.message}`, { cause: result.error });
+    }
+    return this.sanitizeMetadata(result.data);
   }
 
   private static sanitizeMetadata(data: any): any {
