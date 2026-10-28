@@ -1,3 +1,4 @@
+import { env } from '../../../src/config/env.js';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -40,6 +41,18 @@ function wrapHandle(handle: FileHandle, overrides: Partial<FileHandle>): FileHan
 
 // The operator CLI requires POSIX uid/permissions, O_NOFOLLOW and directory sync.
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
+it('refuses database-mode recovery before reading or changing files', async () => {
+  const f = await fixture();
+  const originalBackend = env.DOLLHOUSE_STORAGE_BACKEND;
+  const read = jest.spyOn(fs, 'lstat');
+  try {
+    env.DOLLHOUSE_STORAGE_BACKEND = 'database';
+    await expect(new DangerZoneOfflineRecovery(f.options).run(token, 'agent')).rejects.toThrow('database mode');
+    expect(read).not.toHaveBeenCalled();
+    expect(await fs.readFile(f.filename, 'utf8')).toBe(snapshot);
+  } finally { env.DOLLHOUSE_STORAGE_BACKEND = originalBackend; }
+});
+
 describePosix('Authenticated offline one-block recovery (external exclusion is a prerequisite)', () => {
   it('refuses root cross-owner replacement before confirmation while retaining exact target bytes', async () => {
     const f = await fixture(); const confirm = jest.fn(f.options.confirm);
@@ -236,5 +249,26 @@ describePosix('Authenticated offline one-block recovery (external exclusion is a
     expect(result.status).toBe('committed-audit-incomplete'); expect(result.cause).toBe(cause);
     expect(Object.hasOwn(JSON.parse(await fs.readFile(f.filename, 'utf8')).blocks, target)).toBe(false);
     expect(await fs.readFile(result.backupPath!, 'utf8')).toBe(snapshot);
+  });
+});
+it('refuses the database-mode CLI before terminal or file access', async () => {
+  const { runOfflineRecoveryCli } = await import('../../../scripts/dangerzone-offline-recovery.js');
+  const backend = env.DOLLHOUSE_STORAGE_BACKEND;
+  env.DOLLHOUSE_STORAGE_BACKEND = 'database';
+  try { await expect(runOfflineRecoveryCli([])).rejects.toThrow('administrator reset'); }
+  finally { env.DOLLHOUSE_STORAGE_BACKEND = backend; }
+});
+
+describePosix('retained migration evidence', () => {
+  it.each(['imported', 'unattributed'])('refuses a namespace with %s evidence', async label => {
+    const f = await fixture();
+    await fs.writeFile(path.join(f.namespace, `blocked-agents.json.${label}-fixture`), '{}');
+    const backend = env.DOLLHOUSE_STORAGE_BACKEND;
+    env.DOLLHOUSE_STORAGE_BACKEND = 'file';
+    try {
+      await expect(new DangerZoneOfflineRecovery(f.options).run(token, target)).rejects.toThrow('administrator reset');
+      expect(await fs.readFile(f.filename, 'utf8')).toBe(snapshot);
+      expect((await fs.readdir(f.namespace)).some(name => name.startsWith('offline-recovery-'))).toBe(false);
+    } finally { env.DOLLHOUSE_STORAGE_BACKEND = backend; }
   });
 });

@@ -29,19 +29,14 @@ export async function withRetry(
   maxRetries: number = PERSIST_MAX_RETRIES,
   delayMs: number = PERSIST_RETRY_DELAY_MS,
 ): Promise<void> {
-  let attempt = 0;
-  while (true) {
-    try {
-      await operation();
-      return;
-    } catch (error) {
-      if (attempt < maxRetries) {
-        attempt++;
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      } else {
-        throw error;
-      }
+  try {
+    await operation();
+  } catch (error) {
+    if (maxRetries > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+      return withRetry(operation, maxRetries - 1, delayMs);
     }
+    throw error;
   }
 }
 
@@ -72,32 +67,64 @@ export function fireAndForgetPersist(
   });
 }
 
-/**
- * Standard error handler for file-backed store initialization.
- * Handles ENOENT (no file yet) and other errors (corruption, permissions).
- *
- * @param error - The caught error
- * @param storeName - Store class name for logging
- * @param stateType - Human-readable state type (e.g., 'activation', 'confirmation')
- * @param sessionId - Session ID for log attribution
- */
-export function handleInitializeError(
-  error: unknown,
-  storeName: string,
-  stateType: string,
-  sessionId: string,
-): void {
-  if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-    logger.debug(`[${storeName}] No ${stateType} file found for session '${sessionId}', starting fresh`);
-  } else {
-    logger.warn(`[${storeName}] Failed to load ${stateType} file for session '${sessionId}', starting fresh`, { error });
+/** A read result carries facts; each store owns its recovery policy. */
+export type PersistedStateRead<T> =
+  | { status: 'absent' }
+  | { status: 'loaded'; value: T }
+  | { status: 'unreadable'; cause: unknown }
+  | { status: 'unsupportedVersion' }
+  | { status: 'invalid'; cause: unknown };
 
-    SecurityMonitor.logSecurityEvent({
-      type: 'OPERATION_FAILED',
-      severity: 'MEDIUM',
-      source: `${storeName}.initialize`,
-      details: `Failed to load ${stateType} file for session '${sessionId}' — starting fresh (possible data corruption)`,
-      additionalData: { error: String(error), sessionId },
-    });
+export function isStateObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+export async function readPersistedState<T>(
+  read: () => Promise<string>,
+  validate: (value: unknown) => T,
+  version?: number,
+): Promise<PersistedStateRead<T>> {
+  let content: string;
+  try {
+    content = await read();
+  } catch (cause) {
+    return (cause as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+      ? { status: 'absent' } : { status: 'unreadable', cause };
   }
+  try {
+    const value: unknown = JSON.parse(content);
+    if (version !== undefined) {
+      if (!isStateObject(value) || typeof value.version !== 'number') {
+        throw new Error('Persisted state requires a version');
+      }
+      if (value.version !== version) return { status: 'unsupportedVersion' };
+    }
+    return { status: 'loaded', value: validate(value) };
+  } catch (cause) {
+    return { status: 'invalid', cause };
+  }
+}
+
+/** Read an object snapshot, reporting rejected state while treating absence as empty. */
+export async function readValidatedState<T>(
+  read: () => Promise<string>,
+  validate: (value: Record<string, unknown>) => T,
+  onIssue: (status: string) => void,
+): Promise<T | undefined> {
+  const result = await readPersistedState(read, value => {
+    if (!isStateObject(value)) throw new Error('Invalid state object');
+    return validate(value);
+  }, 1);
+  if (result.status === 'loaded') return result.value;
+  if (result.status !== 'absent') onIssue(result.status);
+  return undefined;
+}
+
+/** Report a rejected snapshot without choosing a store's fallback behavior. */
+export function logPersistedStateIssue(status: string, storeName: string, sessionId: string): void {
+  logger.warn(`[${storeName}] Persisted state is ${status}`, { sessionId });
+  SecurityMonitor.logSecurityEvent({
+    type: 'OPERATION_FAILED', severity: 'MEDIUM', source: `${storeName}.initialize`,
+    details: `Persisted state is ${status}`, additionalData: { sessionId },
+  });
 }

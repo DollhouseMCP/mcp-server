@@ -1,5 +1,6 @@
 /** Operator-only offline recovery. External writer exclusion is a prerequisite, not inferred here. */
 import fs from 'node:fs/promises';
+import { env } from '../config/env.js';
 import { constants, type Stats } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -101,16 +102,17 @@ export class DangerZoneOfflineRecovery {
     } catch (cause) { failure = { cause }; }
     await this.close(handle, failure);
   }
+  private async writeChunks(handle: Awaited<ReturnType<typeof fs.open>>, bytes: Buffer, offset = 0, append = false): Promise<void> {
+    if (offset >= bytes.length) return;
+    const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, append ? null : offset);
+    if (bytesWritten <= 0) refuse();
+    await this.writeChunks(handle, bytes, offset + bytesWritten, append);
+  }
   private async writeExclusive(filename: string, bytes: Buffer): Promise<void> {
     const handle = await this.io.open(filename, 'wx', 0o600);
     let failure: { cause: unknown } | undefined;
     try {
-      let offset = 0;
-      while (offset < bytes.length) {
-        const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, offset);
-        if (bytesWritten <= 0) refuse();
-        offset += bytesWritten;
-      }
+      await this.writeChunks(handle, bytes);
       await handle.sync();
     } catch (cause) { failure = { cause }; }
     await this.close(handle, failure);
@@ -153,8 +155,15 @@ export class DangerZoneOfflineRecovery {
     }
   }
   async run(providedAdminToken: string, agentName: string): Promise<OfflineRecoveryResult> {
+    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
+      throw new Error('Offline recovery changes only the file backend. In database mode, use the administrator reset.');
+    }
     const namespace = path.resolve(this.options.securityDir);
     const parent = await this.directory(namespace);
+    const siblings = await this.io.readdir(namespace);
+    if (siblings.some(name => name.startsWith('blocked-agents.json.imported-') || name.startsWith('blocked-agents.json.unattributed-'))) {
+      throw new Error('Offline recovery changes only the file backend. In database mode, use the administrator reset.');
+    }
     const invocationId = randomUUID();
     const artifacts = path.join(namespace, `offline-recovery-${invocationId}`);
     await this.io.mkdir(artifacts, { mode: 0o700 });
@@ -172,13 +181,7 @@ export class DangerZoneOfflineRecovery {
       if (!sameIdentity(named, await audit.stat()) || !named.isFile() || named.nlink !== 1) refuse();
       this.requireOwner(named);
       const bytes = Buffer.from(JSON.stringify({ version: 1, invocationId, occurredAt: new Date().toISOString(), outcome, ...binding })+'\n');
-      let offset = 0;
-      while (offset < bytes.length) {
-        // null advances this descriptor's cursor; iterations depend on bytesWritten.
-        const { bytesWritten } = await audit.write(bytes, offset, bytes.length-offset, null);
-        if (bytesWritten <= 0) refuse();
-        offset += bytesWritten;
-      }
+      await this.writeChunks(audit, bytes, 0, true);
       await audit.sync(); await this.syncDirectory(artifacts);
     };
     try {

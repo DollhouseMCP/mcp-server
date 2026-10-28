@@ -128,7 +128,7 @@ interface SafetyTierResult {
   /** The evaluated safety tier. */
   tier?: SafetyTier;
   /** Verification challenge info when tier requires human verification. */
-  verification?: AutonomyDirective['verification'];
+  verification?: NonNullable<AutonomyDirective['verification']>;
   /** True when the agent must be hard-stopped (danger zone). */
   stopped?: boolean;
 }
@@ -403,112 +403,8 @@ export function evaluateAutonomy(context: AutonomyContext): AutonomyDirective {
   }
 
   // Check 4: Safety tier evaluation
-  if (context.nextActionHint || context.riskScore !== undefined) {
-    const safetyResult = checkSafetyTier(
-      context.nextActionHint || context.currentStepDescription,
-      context.riskScore || 0,
-      config.riskTolerance,
-      config.verificationTimeoutMinutes
-    );
-    factors.push(...safetyResult.factors);
-
-    if (safetyResult.stopped) {
-      // Issue #142: Create verification challenge for danger zone unblocking
-      const dzChallenge = createVerificationChallenge(
-        `Danger zone verification: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
-        'display_code',
-        config.verificationTimeoutMinutes
-      );
-
-      // Store the code server-side and show via OS dialog (Issue #142)
-      storeAndDisplayChallenge(dzChallenge, context);
-
-      // Programmatic enforcement: block the agent from further execution
-      // This prevents a compromised LLM from ignoring the danger zone warning
-      // Issue #402: Use DI-injected enforcer instead of singleton
-      context.dangerZoneEnforcer?.block(
-        context.agentName,
-        safetyResult.reason || 'Danger zone operation detected',
-        safetyResult.factors,
-        dzChallenge.challengeId,
-        {
-          stepNumber: context.stepCount,
-          currentStepDescription: context.currentStepDescription,
-          currentStepOutcome: context.currentStepOutcome,
-          nextActionHint: context.nextActionHint,
-          riskScore: context.riskScore,
-          goalDescription: context.goalDescription,
-          goalId: context.goalId,
-          safetyFactors: factors,
-        },
-        context.sessionId,
-      );
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'DANGER_ZONE_TRIGGERED',
-        severity: 'HIGH',
-        source: 'AutonomyEvaluator.evaluateAutonomy',
-        details: `Agent '${context.agentName}' blocked: danger zone verification required — ${safetyResult.reason ?? 'danger zone operation detected'}`,
-        additionalData: {
-          agentName: context.agentName,
-          factors,
-          nextActionHint: context.nextActionHint,
-          stepCount: context.stepCount,
-          riskScore: context.riskScore,
-          currentStepDescription: context.currentStepDescription,
-          goalDescription: context.goalDescription?.substring(0, 200),
-          challengeId: dzChallenge.challengeId,
-        },
-      });
-      autonomyMetrics.recordPause(safetyResult.reason || 'danger_zone', context.stepCount);
-      autonomyMetrics.recordDangerZone();
-      autonomyMetrics.recordVerification();
-      return buildDirective(false, safetyResult.reason, factors, {
-        stopped: true,
-        nextStepRisk: 'danger_zone',
-        // Issue #142: Include verification info (without displayCode) so LLM knows how to unblock
-        verification: {
-          verificationId: dzChallenge.challengeId,
-          prompt: dzChallenge.prompt,
-          // displayCode intentionally omitted — shown via OS dialog only
-          challengeType: dzChallenge.challengeType,
-          expiresAt: dzChallenge.expiresAt,
-        },
-      });
-    }
-
-    if (safetyResult.verification) {
-      // Issue #142: Store code server-side, show via OS dialog, strip displayCode
-      storeAndDisplayChallenge(
-        {
-          challengeId: safetyResult.verification.verificationId,
-          displayCode: safetyResult.verification.displayCode,
-          reason: `Verify action: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
-          expiresAt: safetyResult.verification.expiresAt,
-        },
-        context
-      );
-      autonomyMetrics.recordPause(safetyResult.reason || 'verification_required', context.stepCount);
-      autonomyMetrics.recordVerification();
-      return buildDirective(false, safetyResult.reason, factors, {
-        verification: {
-          verificationId: safetyResult.verification.verificationId,
-          prompt: safetyResult.verification.prompt,
-          // displayCode intentionally omitted — shown via OS dialog only (Issue #142)
-          challengeType: safetyResult.verification.challengeType,
-          expiresAt: safetyResult.verification.expiresAt,
-        },
-        nextStepRisk: safetyResult.tier,
-      });
-    }
-
-    if (!safetyResult.continue) {
-      autonomyMetrics.recordPause(safetyResult.reason || 'safety_tier', context.stepCount);
-      return buildDirective(false, safetyResult.reason, factors, {
-        nextStepRisk: safetyResult.tier,
-      });
-    }
-  }
+  const safetyDirective = evaluateSafetyDirective(context, config, factors);
+  if (safetyDirective) return safetyDirective;
 
   // Check 5: Risk score vs tolerance threshold
   if (context.riskScore !== undefined) {
@@ -538,6 +434,123 @@ export function evaluateAutonomy(context: AutonomyContext): AutonomyDirective {
   autonomyMetrics.recordContinue();
 
   return buildDirective(true, undefined, factors, { stepsRemaining });
+}
+
+/** Evaluate safety and produce a pause directive when the tier requires one. */
+function evaluateSafetyDirective(
+  context: AutonomyContext,
+  config: Required<AgentAutonomyConfig>,
+  factors: string[],
+): AutonomyDirective | undefined {
+  if (!context.nextActionHint && context.riskScore === undefined) return undefined;
+  const safetyResult = checkSafetyTier(
+    context.nextActionHint || context.currentStepDescription,
+    context.riskScore || 0,
+    config.riskTolerance,
+    config.verificationTimeoutMinutes
+  );
+  factors.push(...safetyResult.factors);
+
+  if (safetyResult.stopped) {
+    // Issue #142: Create verification challenge for danger zone unblocking
+    const dzChallenge = createVerificationChallenge(
+      `Danger zone verification: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
+      'display_code',
+      config.verificationTimeoutMinutes
+    );
+
+    // Store the code server-side and show via OS dialog (Issue #142)
+    storeAndDisplayChallenge(dzChallenge, context);
+
+    // Programmatic enforcement: block the agent from further execution
+    // This prevents a compromised LLM from ignoring the danger zone warning
+    // Issue #402: Use DI-injected enforcer instead of singleton
+    // The in-memory block is immediate; write failure makes the enforcer unavailable.
+    void Promise.resolve(context.dangerZoneEnforcer?.block(
+      context.agentName,
+      safetyResult.reason || 'Danger zone operation detected',
+      safetyResult.factors,
+      dzChallenge.challengeId,
+      {
+        stepNumber: context.stepCount,
+        currentStepDescription: context.currentStepDescription,
+        currentStepOutcome: context.currentStepOutcome,
+        nextActionHint: context.nextActionHint,
+        riskScore: context.riskScore,
+        goalDescription: context.goalDescription,
+        goalId: context.goalId,
+        safetyFactors: factors,
+      },
+      context.sessionId,
+    )).catch(error => {
+      logger.error('Agent block persistence failed', { agentName: context.agentName, error });
+    });
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'DANGER_ZONE_TRIGGERED',
+      severity: 'HIGH',
+      source: 'AutonomyEvaluator.evaluateAutonomy',
+      details: `Agent '${context.agentName}' blocked: danger zone verification required — ${safetyResult.reason ?? 'danger zone operation detected'}`,
+      additionalData: {
+        agentName: context.agentName,
+        factors,
+        nextActionHint: context.nextActionHint,
+        stepCount: context.stepCount,
+        riskScore: context.riskScore,
+        currentStepDescription: context.currentStepDescription,
+        goalDescription: context.goalDescription?.substring(0, 200),
+        challengeId: dzChallenge.challengeId,
+      },
+    });
+    autonomyMetrics.recordPause(safetyResult.reason || 'danger_zone', context.stepCount);
+    autonomyMetrics.recordDangerZone();
+    autonomyMetrics.recordVerification();
+    return buildDirective(false, safetyResult.reason, factors, {
+      stopped: true,
+      nextStepRisk: 'danger_zone',
+      // Issue #142: Include verification info (without displayCode) so LLM knows how to unblock
+      verification: {
+        verificationId: dzChallenge.challengeId,
+        prompt: dzChallenge.prompt,
+        // displayCode intentionally omitted — shown via OS dialog only
+        challengeType: dzChallenge.challengeType,
+        expiresAt: dzChallenge.expiresAt,
+      },
+    });
+  }
+
+  if (safetyResult.verification) {
+    // Issue #142: Store code server-side, show via OS dialog, strip displayCode
+    storeAndDisplayChallenge(
+      {
+        challengeId: safetyResult.verification.verificationId,
+        displayCode: safetyResult.verification.displayCode,
+        reason: `Verify action: ${(context.nextActionHint || context.currentStepDescription).substring(0, 100)}`,
+        expiresAt: safetyResult.verification.expiresAt,
+      },
+      context
+    );
+    autonomyMetrics.recordPause(safetyResult.reason || 'verification_required', context.stepCount);
+    autonomyMetrics.recordVerification();
+    return buildDirective(false, safetyResult.reason, factors, {
+      verification: {
+        verificationId: safetyResult.verification.verificationId,
+        prompt: safetyResult.verification.prompt,
+        // displayCode intentionally omitted — shown via OS dialog only (Issue #142)
+        challengeType: safetyResult.verification.challengeType,
+        expiresAt: safetyResult.verification.expiresAt,
+      },
+      nextStepRisk: safetyResult.tier,
+    });
+  }
+
+  if (!safetyResult.continue) {
+    autonomyMetrics.recordPause(safetyResult.reason || 'safety_tier', context.stepCount);
+    return buildDirective(false, safetyResult.reason, factors, {
+      nextStepRisk: safetyResult.tier,
+    });
+  }
+  return undefined;
 }
 
 /**
@@ -671,8 +684,7 @@ function checkSafetyTier(
     };
   }
 
-  factors.push(`Safety tier: ${tierResult.tier}`);
-  factors.push(...tierResult.factors.map((f) => `  - ${f}`));
+  factors.push(`Safety tier: ${tierResult.tier}`, ...tierResult.factors.map((f) => `  - ${f}`));
 
   switch (tierResult.tier) {
     case 'advisory':

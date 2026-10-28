@@ -30,6 +30,7 @@ jest.unstable_mockModule('../../../../src/security/securityMonitor.js', () => ({
   },
 }));
 
+const { FileDangerZoneBlockStore } = await import('../../../../src/state/FileDangerZoneBlockStore.js');
 const { Gatekeeper } = await import('../../../../src/handlers/mcp-aql/Gatekeeper.js');
 const { GatekeeperSession } = await import('../../../../src/handlers/mcp-aql/GatekeeperSession.js');
 const { ContextTracker } = await import('../../../../src/security/encryption/ContextTracker.js');
@@ -287,85 +288,95 @@ describe('DangerZoneEnforcer session guard', () => {
     DangerZoneEnforcer = mod.DangerZoneEnforcer;
   });
 
-  it('rejects cross-session unblock', () => {
+  it('rejects cross-session unblock', async () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
-    const enforcer = new DangerZoneEnforcer(mockFileOps);
+    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps));
+    await enforcer.initialize();
 
     // Block from Session A
     enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
     // Try to unblock from Session B — should be rejected
-    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-b');
+    const result = (await enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-b'));
     expect(result).toBe(false);
 
     // Verify still blocked
-    const check = enforcer.check('agent-1');
+    const check = (await enforcer.check('agent-1'));
     expect(check.blocked).toBe(true);
     expect(check.sessionId).toBe('session-a');
   });
 
-  it('allows unblock from same session', () => {
+  it('allows unblock from same session', async () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
-    const enforcer = new DangerZoneEnforcer(mockFileOps);
+    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps));
+    await enforcer.initialize();
 
     enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
-    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-a');
+    const result = (await enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-a'));
     expect(result).toBe(true);
 
-    const check = enforcer.check('agent-1');
+    const check = (await enforcer.check('agent-1'));
     expect(check.blocked).toBe(false);
   });
 
-  it('allows unblock when block has no sessionId (backward compat)', () => {
+  it('allows unblock when block has no sessionId (backward compat)', async () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
-    const enforcer = new DangerZoneEnforcer(mockFileOps);
+    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps));
+    await enforcer.initialize();
 
     // Block without sessionId (old format)
     enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID);
 
     // Any session can unblock
-    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-b');
+    const result = (await enforcer.unblock('agent-1', TEST_CHALLENGE_ID, 'session-b'));
     expect(result).toBe(true);
   });
 
-  it('rejects unblock when block has sessionId but caller has none', () => {
+  it('rejects unblock when block has sessionId but caller has none', async () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
-    const enforcer = new DangerZoneEnforcer(mockFileOps);
+    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps));
+    await enforcer.initialize();
 
     enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
     // Caller with no sessionId — should be rejected because block has one
-    const result = enforcer.unblock('agent-1', TEST_CHALLENGE_ID);
+    const result = (await enforcer.unblock('agent-1', TEST_CHALLENGE_ID));
     expect(result).toBe(false);
   });
 
-  it('check() returns sessionId in BlockCheckResult', () => {
+  it('check() returns sessionId in BlockCheckResult', async () => {
     const mockFileOps = {
       readFile: jest.fn<() => Promise<string>>().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
       writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
+      createDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(),
     } as any;
 
-    const enforcer = new DangerZoneEnforcer(mockFileOps);
+    const enforcer = new DangerZoneEnforcer(new FileDangerZoneBlockStore(mockFileOps));
+    await enforcer.initialize();
     enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], TEST_CHALLENGE_ID, undefined, 'session-a');
 
-    const check = enforcer.check('agent-1');
+    const check = (await enforcer.check('agent-1'));
     expect(check.sessionId).toBe('session-a');
   });
 });

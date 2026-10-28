@@ -535,7 +535,7 @@ export interface DangerZoneBlocker {
     },
     /** Issue #1947: Session that created this block. */
     sessionId?: string,
-  ): void;
+  ): Promise<boolean> | void;
 }
 
 /**

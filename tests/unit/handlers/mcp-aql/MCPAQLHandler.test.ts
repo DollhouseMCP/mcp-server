@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { MCPAQLHandler } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
+import { GatekeeperHandler } from '../../../../src/handlers/mcp-aql/GatekeeperHandler.js';
 import { PermissionLevel } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import type { OperationInput, ResponseMeta } from '../../../../src/handlers/mcp-aql/types.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
@@ -2001,6 +2002,9 @@ describe('MCPAQLHandler', () => {
       block: jest.Mock;
       unblock: jest.Mock;
       getBlockedAgents: jest.Mock;
+      refresh: jest.Mock;
+      releaseChallenge: jest.Mock;
+      flush: jest.Mock;
       hasBlockedAgents: jest.Mock;
       clearAll: jest.Mock;
       getMetrics: jest.Mock;
@@ -2022,6 +2026,9 @@ describe('MCPAQLHandler', () => {
         block: jest.fn(),
         unblock: jest.fn().mockReturnValue(true),
         getBlockedAgents: jest.fn().mockReturnValue([]),
+        refresh: jest.fn().mockResolvedValue(undefined),
+        releaseChallenge: jest.fn().mockResolvedValue({ released: true }),
+        flush: jest.fn().mockResolvedValue(undefined),
         hasBlockedAgents: jest.fn().mockReturnValue(false),
         clearAll: jest.fn().mockReturnValue(true),
         getMetrics: jest.fn().mockReturnValue({}),
@@ -2036,13 +2043,44 @@ describe('MCPAQLHandler', () => {
       verifyHandler = new MCPAQLHandler(registry);
     });
 
+    it.each([[false, true], [true, false]])('reports trigger storage failure for receipts %s/%s', async (blocked, flushed) => {
+      const dispatch = jest.spyOn(GatekeeperHandler.prototype, 'dispatch');
+      try {
+      mockDangerZoneEnforcer.block.mockResolvedValue(blocked);
+      mockDangerZoneEnforcer.flush.mockResolvedValue(flushed);
+      const result = await verifyHandler.handleCreate({ operation: 'beetlejuice_beetlejuice_beetlejuice', params: { agent_name: 'receipt-agent' } });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('block-state storage');
+      await expect(dispatch.mock.results[0].value).rejects.toMatchObject({ name: 'VerificationError', errorCode: 'VERIFICATION_FAILED' });
+      expect(mockVerificationStore.set).not.toHaveBeenCalled();
+      } finally { dispatch.mockRestore(); }
+    });
+
     // --- Core verification flow ---
+
+    it.each([
+      ['unavailable', 'retry later'],
+      ['admin-only', 'Contact an administrator'],
+      ['session', 'session that triggered'],
+      ['declined', 'already released or replaced'],
+    ])('explains a failed release: %s', async (reason, message) => {
+      const challenge = { code: 'XYZ789', expiresAt: Date.now() + 300000, reason: 'Review required' };
+      mockVerificationStore.get.mockReturnValue(challenge);
+      mockVerificationStore.verify.mockReturnValue(true);
+      mockDangerZoneEnforcer.releaseChallenge.mockResolvedValue({ released: false, reason, agentName: 'agent' });
+      const result = await verifyHandler.handleCreate({
+        operation: 'verify_challenge', params: { challenge_id: VALID_CHALLENGE_ID, code: 'XYZ789' },
+      });
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining(message) });
+      expect(mockVerificationStore.set).toHaveBeenCalledWith(VALID_CHALLENGE_ID, challenge);
+    });
 
     it('should succeed with valid code and unblock agent', async () => {
       const storedChallenge = { code: 'XYZ789', expiresAt: Date.now() + 300000, reason: 'test' };
       mockVerificationStore.get.mockReturnValue(storedChallenge);
       mockVerificationStore.verify.mockReturnValue(true);
       mockDangerZoneEnforcer.getBlockedAgents.mockReturnValue(['code-reviewer']);
+      mockDangerZoneEnforcer.releaseChallenge.mockResolvedValue({ released: true, agentName: 'code-reviewer' });
       mockDangerZoneEnforcer.check.mockReturnValue({
         blocked: true,
         verificationId: VALID_CHALLENGE_ID,
@@ -2062,7 +2100,7 @@ describe('MCPAQLHandler', () => {
       }
       expect(mockVerificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'XYZ789');
       // Issue #1947: unblock now receives sessionId as third arg (undefined in tests without session context)
-      expect(mockDangerZoneEnforcer.unblock).toHaveBeenCalledWith('code-reviewer', VALID_CHALLENGE_ID, undefined);
+      expect(mockDangerZoneEnforcer.releaseChallenge).toHaveBeenCalledWith(VALID_CHALLENGE_ID, undefined);
     });
 
     it('should fail with incorrect code', async () => {

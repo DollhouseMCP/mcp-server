@@ -396,6 +396,32 @@ describe('AutonomyEvaluator', () => {
         expect(result.nextStepRisk).toBe('danger_zone');
       });
 
+      it.each([false, new Error('Storage unavailable')])('observes an unsuccessful block receipt: %s', async outcome => {
+        mockDetermineSafetyTier.mockReturnValue({ tier: 'danger_zone', factors: ['Review required'] });
+        const block = jest.fn<() => Promise<boolean>>().mockImplementation(() =>
+          outcome === false ? Promise.resolve(false) : Promise.reject(outcome));
+        const result = evaluateAutonomy({ ...baseContext, nextActionHint: 'Review operation', dangerZoneEnforcer: { block } });
+        expect(result.stopped).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+        if (outcome === false) {
+          expect(loggerModule.warn).not.toHaveBeenCalledWith('Agent block was not confirmed', expect.anything());
+        } else {
+          expect(mockLoggerError).toHaveBeenCalledWith('Agent block persistence failed', { agentName: 'test-agent', error: outcome });
+        }
+      });
+
+      it('handles a rejected agent name through the real enforcer promise', async () => {
+        const { DangerZoneEnforcer } = await import('../../../../src/security/DangerZoneEnforcer.js');
+        const enforcer = new DangerZoneEnforcer({ location: 'fixture', load: async () => ({ status: 'absent' }),
+          apply: async () => true, reset: async () => '' });
+        mockDetermineSafetyTier.mockReturnValue({ tier: 'danger_zone', factors: ['Review required'] });
+        const result = evaluateAutonomy({ ...baseContext, agentName: 'invalid/name', nextActionHint: 'Review operation', dangerZoneEnforcer: enforcer });
+        expect(result.stopped).toBe(true);
+        await Promise.resolve();
+        expect(mockLoggerError).toHaveBeenCalledWith('Agent block persistence failed', { agentName: 'invalid/name', error: expect.any(Error) });
+      });
+
       it('should pass audit context to dangerZoneEnforcer.block() (Issue #404)', () => {
         mockDetermineSafetyTier.mockReturnValue({
           tier: 'danger_zone',
@@ -1543,7 +1569,7 @@ describe('AutonomyEvaluator', () => {
 
       const metrics = getAutonomyMetrics();
       expect(metrics.pauseCount).toBe(2);
-      expect(Object.keys(metrics.pauseReasons).length).toBe(2);
+      expect(Object.keys(metrics.pauseReasons)).toHaveLength(2);
     });
 
     it('should track danger zone trigger count', () => {

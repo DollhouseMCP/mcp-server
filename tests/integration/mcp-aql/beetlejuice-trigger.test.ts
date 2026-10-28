@@ -1,3 +1,5 @@
+import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
+import { join as joinPath } from 'node:path';
 /**
  * Integration tests for Beetlejuice Safe-Trigger (Issue #503, #522)
  *
@@ -36,8 +38,10 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
   beforeEach(async () => {
     env = await createPortfolioTestEnvironment('mcp-aql-beetlejuice');
     container = new DollhouseContainer();
+    container.register('DangerZoneBlockStore', () => new FileDangerZoneBlockStore(container.resolve('FileOperationsService'), joinPath(env.testDir, 'security')), { override: true });
     server = new DollhouseMCPServer(container);
-    await server.listPersonas(); // Initialize server
+    await server.listPersonas();
+    await container.resolve<import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer>('DangerZoneEnforcer').initialize(); // Initialize server
     preConfirmAllOperations(container);
 
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
@@ -52,7 +56,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
 
   afterEach(async () => {
     verificationStore.clear();
-    dangerZoneEnforcer.clearAll(TEST_ADMIN_TOKEN);
+    await dangerZoneEnforcer.clearAll(TEST_ADMIN_TOKEN);
     await server.dispose();
     await env.cleanup();
   });
@@ -99,7 +103,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as Record<string, unknown>;
-        const blockCheck = dangerZoneEnforcer.check(data.agent_name as string);
+        const blockCheck = (await dangerZoneEnforcer.check(data.agent_name as string));
         expect(blockCheck.blocked).toBe(true);
         expect(blockCheck.verificationId).toBe(data.challenge_id);
       }
@@ -157,7 +161,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
       const triggerData = (triggerResult as { success: true; data: Record<string, unknown> }).data;
 
       // Verify agent is blocked
-      const beforeCheck = dangerZoneEnforcer.check(triggerData.agent_name as string);
+      const beforeCheck = (await dangerZoneEnforcer.check(triggerData.agent_name as string));
       expect(beforeCheck.blocked).toBe(true);
 
       // Issue #522: Read code from VerificationStore (simulates human reading OS dialog)
@@ -182,7 +186,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
       }
 
       // Agent should now be unblocked
-      const afterCheck = dangerZoneEnforcer.check(triggerData.agent_name as string);
+      const afterCheck = (await dangerZoneEnforcer.check(triggerData.agent_name as string));
       expect(afterCheck.blocked).toBe(false);
     });
 
@@ -207,7 +211,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
       expect(verifyResult.success).toBe(false);
 
       // Agent should still be blocked
-      const check = dangerZoneEnforcer.check(triggerData.agent_name as string);
+      const check = (await dangerZoneEnforcer.check(triggerData.agent_name as string));
       expect(check.blocked).toBe(true);
     });
 
@@ -224,7 +228,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
       expect(triggerData.agent_name).toBe(customName);
 
       // Verify agent is blocked
-      expect(dangerZoneEnforcer.check(customName).blocked).toBe(true);
+      expect((await dangerZoneEnforcer.check(customName)).blocked).toBe(true);
 
       // Issue #522: Read code from VerificationStore
       const stored = verificationStore.get(triggerData.challenge_id as string);
@@ -245,7 +249,7 @@ describe('Beetlejuice Safe-Trigger Integration (Issue #503, #522)', () => {
       }
 
       // Agent should be unblocked
-      expect(dangerZoneEnforcer.check(customName).blocked).toBe(false);
+      expect((await dangerZoneEnforcer.check(customName)).blocked).toBe(false);
     });
   });
 });

@@ -195,8 +195,8 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
 
     expect(storeA.get(challengeId)).toBeDefined();
     expect(storeB.get(challengeId)).toBeUndefined();
-    expect(enforcerA.check('session-a-danger-agent').blocked).toBe(true);
-    expect(enforcerB.check('session-a-danger-agent').blocked).toBe(false);
+    expect((await enforcerA.check('session-a-danger-agent')).blocked).toBe(true);
+    expect((await enforcerB.check('session-a-danger-agent')).blocked).toBe(false);
   }, TEST_TIMEOUT);
 
   it('autonomy danger-zone challenges carry session ownership and cannot be verified cross-session', async () => {
@@ -270,11 +270,11 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     }
     expect(storeB.get(challengeId)).toBeUndefined();
 
-    const blockA = enforcerA.check(agentName);
+    const blockA = await enforcerA.check(agentName);
     expect(blockA.blocked).toBe(true);
     expect(blockA.verificationId).toBe(challengeId);
     expect(blockA.sessionId).toBe(env.sessionContexts[0].sessionId);
-    expect(enforcerB.check(agentName).blocked).toBe(false);
+    expect((await enforcerB.check(agentName)).blocked).toBe(false);
 
     const bobResult = await create(handleB.client, {
       operation: 'verify_challenge',
@@ -285,7 +285,7 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     });
 
     expect(bobResult).toMatch(/not found|expired|failed|error/i);
-    expect(enforcerA.check(agentName).blocked).toBe(true);
+    expect((await enforcerA.check(agentName)).blocked).toBe(true);
     expect(storeA.get(challengeId)).toBeDefined();
   }, TEST_TIMEOUT);
 });

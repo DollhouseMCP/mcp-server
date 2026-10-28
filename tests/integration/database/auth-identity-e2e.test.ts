@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../helpers/isolated-server-env.cjs';
 /**
  * Auth Identity E2E Integration Tests
  *
@@ -53,7 +54,7 @@ function spawnAuthServer(
 ): Promise<{ child: ChildProcessWithoutNullStreams; url: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['dist/index.js', '--http', '--port=0'], { // NOSONAR — E2E test spawns server
-      env: { ...env },
+      env: isolatedServerEnv(env.DOLLHOUSE_PORTFOLIO_DIR, { ...env }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

@@ -187,7 +187,15 @@ The `DangerZoneEnforcer` provides programmatic blocking for the highest-risk saf
 
 ### 2.2 Persistence
 
-Blocks are persisted to `~/.dollhouse/security/blocked-agents.json` using fire-and-forget writes. Blocks survive server restarts. The in-memory Map is the hot path; disk is the durable backing store. Disk failure does not prevent enforcement.
+**Blocked-agent persistence**
+
+Block state uses the selected storage backend: file snapshots in file mode, and user-scoped `danger_zone_blocks` rows in database mode. The enforcer reconciles current state before decisions and denies execution while storage is unavailable. Administrative releases report completion only after persistence confirms them.
+
+Before database-mode startup accepts sessions, legacy block snapshots are imported through the database store's newer-wins writes. Per-user files belong to their existing user UUID. The historical `~/.dollhouse/security/blocked-agents.json` and any distinct flat-layout security file are attributed to the bootstrapped user only when that account is the sole non-internal user. A shared file that cannot be attributed to a single user is kept as `blocked-agents.json.unattributed-<uuid>` (mode 0600) for operator review and a HIGH security event is raised. For a per-user layout, move the retained file to `<portfolio>/users/<uuid>/security/blocked-agents.json` for the intended user and restart; startup imports it under that user with the normal receipt. For a flat layout, keep the file for operator review and use the administrator reset.
+
+Successful imports retain the source as `blocked-agents.json.imported-<uuid>` with mode 0600. A PostgreSQL advisory lock serializes each source import across processes. Each import commits a source-path and SHA-256 receipt in the per-user evidence table alongside the block rows. A restart before retention uses that receipt to finish the rename without repeating the writes. Invalid or unreadable attributable snapshots stop startup and remain in place for operator review. Each source that writes a new import receipt logs its count and agent names with one MEDIUM security event; retention-only retries do not repeat that event. File-mode startup continues to read its configured snapshots in place.
+
+**If database-mode start-up stops on a blocked-agent file:** the error names the source path or setup step, a reason, and a recovery action. Invalid block state means malformed JSON, an unsupported version or shape, an invalid or duplicate agent name, or a file exceeding the size limit. Fix or replace the file, or move it out of the security directory for review, then restart. A non-regular or multiply linked file must be replaced with a regular, singly linked file; a changed file requires checking for concurrent writers. For read, inspection, chmod, or rename failures, use the reported errno to correct file permissions or the reported file condition. When an unattributed file cannot be set aside for review, preserve it, check permissions on the security directory, and restart; no import was attempted. When the message says the import itself was recorded, preserve the file and restart after correction to retry only retention; database writes are not repeated. Database or user-list failures require checking database availability and migration permissions; users-directory failures require checking directory access; setup or discovery failures require checking database-mode configuration and required services. Each failure records one error log and one HIGH security event, “Legacy block state import failed”, with safe reason and code fields.
 
 ### 2.3 Security Properties
 
@@ -555,7 +563,7 @@ Persistence can be disabled via `DOLLHOUSE_ACTIVATION_PERSISTENCE=false` for eph
 | Brute force token validation | 7 | Rate-limited validation operations | `src/security/tokenManager.ts` |
 | ReDoS (regex denial of service) | 4 | `SafeRegex` with timeouts, input length limits, pattern caching | `src/security/dosProtection.ts` |
 | Unauthorized agent execution | 1 | `execute_agent` is `CONFIRM_SINGLE_USE` + `canBeElevated: false` | `src/handlers/mcp-aql/policies/OperationPolicies.ts` |
-| Compromised LLM ignoring safety warnings | 2 | `DangerZoneEnforcer` programmatic blocking, file-backed persistence | `src/security/DangerZoneEnforcer.ts` |
+| Compromised LLM ignoring safety warnings | 2 | `DangerZoneEnforcer` programmatic blocking, backend-selected persistence | `src/security/DangerZoneEnforcer.ts` |
 | Verification code theft by LLM | 3 | Display code shown via OS dialog only, never in LLM-facing response | `src/elements/agents/autonomyEvaluator.ts` |
 | Element policy escalation | 1 | `canBeElevated: false` on destructive ops, deny > confirm > allow hierarchy | `src/handlers/mcp-aql/policies/ElementPolicies.ts` |
 | Cascading confirmation loops | 1 | Infrastructure operations skip element policy layer (Issue #758) | `src/handlers/mcp-aql/policies/ElementPolicies.ts` |

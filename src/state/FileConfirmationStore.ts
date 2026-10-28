@@ -26,7 +26,7 @@ import { APPROVAL_SEARCH_ROW_LIMIT } from './DatabaseConfirmationStore.js';
 import type { ApprovalRef, ApprovalSearchFilter, IConfirmationStore } from './IConfirmationStore.js';
 import { approvalMatches, toApprovalRef } from './approvalSearch.js';
 import { validateExternalSessionId } from './FileActivationStateStore.js';
-import { handleInitializeError, withRetry } from './persistence-utils.js';
+import { logPersistedStateIssue, readValidatedState, withRetry } from './persistence-utils.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -87,9 +87,11 @@ export class FileConfirmationStore implements IConfirmationStore {
 
   async initialize(): Promise<void> {
     try {
-      const content = await this.fileOps.readFile(this.persistPath);
-      const data = JSON.parse(content) as PersistedConfirmationState;
-      if (data.version !== 1) return;
+      const data = await readValidatedState(() => this.fileOps.readFile(this.persistPath), value => {
+        if (!(['confirmations', 'cliApprovals', 'cliSessionApprovals'].every(key => value[key] === undefined || Array.isArray(value[key])))) throw new Error('Invalid confirmation state');
+        return value as unknown as PersistedConfirmationState;
+      }, status => logPersistedStateIssue(status, STORE_NAME, this.sessionId));
+      if (!data) return;
 
       this.restoreConfirmations(data.confirmations);
       await this.restoreCliApprovals(data.cliApprovals);
@@ -103,8 +105,8 @@ export class FileConfirmationStore implements IConfirmationStore {
       if (totalCount > 0) {
         logger.info(`[${STORE_NAME}] Restored ${totalCount} record(s) for session '${this.sessionId}'`);
       }
-    } catch (error) {
-      handleInitializeError(error, STORE_NAME, 'confirmation', this.sessionId);
+    } catch {
+      logPersistedStateIssue('invalid', STORE_NAME, this.sessionId);
     }
   }
 
@@ -121,25 +123,25 @@ export class FileConfirmationStore implements IConfirmationStore {
   private async restoreCliApprovals(entries: unknown): Promise<void> {
     if (!Array.isArray(entries)) return;
     const now = Date.now();
-    for (const entry of entries) {
-      if (!isEntry(entry)) continue;
+    await entries.reduce<Promise<void>>((previous, entry) => previous.then(async () => {
+      if (!isEntry(entry)) return;
       const [requestId, record] = entry as [string, PersistedCliApprovalRecord];
       const age = now - new Date(record.requestedAt).getTime();
       const ttl = record.ttlMs ?? 300_000;
-      if (age > ttl && record.consumed) continue;
-      if (isExpiredTerminal(record, now)) continue;
+      if (age > ttl && record.consumed) return;
+      if (isExpiredTerminal(record, now)) return;
       this.cliApprovals.set(requestId, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
-    }
+    }), Promise.resolve());
   }
 
   private async restoreCliSessionApprovals(entries: unknown): Promise<void> {
     if (!Array.isArray(entries)) return;
-    for (const entry of entries) {
-      if (!isEntry(entry)) continue;
+    await entries.reduce<Promise<void>>((previous, entry) => previous.then(async () => {
+      if (!isEntry(entry)) return;
       const [toolName, record] = entry as [string, PersistedCliApprovalRecord];
-      if (isExpiredTerminal(record, Date.now())) continue;
+      if (isExpiredTerminal(record, Date.now())) return;
       this.cliSessionApprovals.set(toolName, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
-    }
+    }), Promise.resolve());
   }
 
   persist(): Promise<void> {
@@ -280,9 +282,9 @@ export class FileConfirmationStore implements IConfirmationStore {
       const data = JSON.parse(content) as PersistedConfirmationState;
       const approvals = new Map<string, CliApprovalRecord>();
       if (!Array.isArray(data.cliApprovals)) return approvals;
-      for (const [approvalId, record] of data.cliApprovals) {
+      await data.cliApprovals.reduce<Promise<void>>((previous, [approvalId, record]) => previous.then(async () => {
         approvals.set(approvalId, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
-      }
+      }), Promise.resolve());
       return approvals;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

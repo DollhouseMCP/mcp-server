@@ -1,3 +1,5 @@
+import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
+import { join as joinPath } from 'node:path';
 /**
  * Integration tests for Agent Gatekeeper Policy Enforcement (Issue #449)
  *
@@ -29,8 +31,10 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
   beforeEach(async () => {
     env = await createPortfolioTestEnvironment('agent-policy');
     container = new DollhouseContainer();
+    container.register('DangerZoneBlockStore', () => new FileDangerZoneBlockStore(container.resolve('FileOperationsService'), joinPath(env.testDir, 'security')), { override: true });
     server = new DollhouseMCPServer(container);
-    await server.listPersonas(); // Initialize server
+    await server.listPersonas();
+    await container.resolve<import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer>('DangerZoneEnforcer').initialize(); // Initialize server
     preConfirmAllOperations(container);
 
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
@@ -583,7 +587,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
         });
 
         expect(recovery.success).toBe(true);
-        expect(dangerZoneEnforcer.check('danger-zone-stale-agent').blocked).toBe(true);
+        expect((await dangerZoneEnforcer.check('danger-zone-stale-agent')).blocked).toBe(true);
 
         const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
           operation: 'delete_element',
@@ -592,7 +596,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
         });
         expect(deleteAfterRecovery.success).toBe(true);
       } finally {
-        dangerZoneEnforcer.unblock('danger-zone-stale-agent');
+        (await dangerZoneEnforcer.unblock('danger-zone-stale-agent'));
       }
     });
 
@@ -617,9 +621,9 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
         });
 
         expect(abort.success).toBe(true);
-        expect(dangerZoneEnforcer.check('danger-zone-active-agent').blocked).toBe(true);
+        expect((await dangerZoneEnforcer.check('danger-zone-active-agent')).blocked).toBe(true);
       } finally {
-        dangerZoneEnforcer.unblock('danger-zone-active-agent');
+        (await dangerZoneEnforcer.unblock('danger-zone-active-agent'));
       }
     });
 

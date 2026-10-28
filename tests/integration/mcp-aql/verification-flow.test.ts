@@ -1,3 +1,5 @@
+import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
+import { join as joinPath } from 'node:path';
 /**
  * Integration tests for Danger Zone Verification Flow (Issue #142)
  *
@@ -11,7 +13,7 @@
  * (showVerificationDialog) since integration tests run headless.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -33,8 +35,10 @@ describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
   beforeEach(async () => {
     env = await createPortfolioTestEnvironment('mcp-aql-verification');
     container = new DollhouseContainer();
+    container.register('DangerZoneBlockStore', () => new FileDangerZoneBlockStore(container.resolve('FileOperationsService'), joinPath(env.testDir, 'security')), { override: true });
     server = new DollhouseMCPServer(container);
-    await server.listPersonas(); // Initialize server
+    await server.listPersonas();
+    await container.resolve<import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer>('DangerZoneEnforcer').initialize(); // Initialize server
     preConfirmAllOperations(container);
 
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
@@ -44,10 +48,62 @@ describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     verificationStore.clear();
-    dangerZoneEnforcer.clearAll(TEST_ADMIN_TOKEN);
+    await dangerZoneEnforcer.clearAll(TEST_ADMIN_TOKEN);
     await server.dispose();
     await env.cleanup();
+  });
+
+  it('retains a verified challenge when storage cannot release the agent', async () => {
+    const challengeId = crypto.randomUUID();
+    const challenge = { code: 'ABC123', expiresAt: Date.now() + 300000, reason: 'Review required' };
+    verificationStore.set(challengeId, challenge);
+    await dangerZoneEnforcer.block('agent', 'Review required', [], challengeId);
+    const backing = container.resolve<FileDangerZoneBlockStore>('DangerZoneBlockStore');
+    jest.spyOn(backing, 'apply').mockRejectedValueOnce(new Error('storage unavailable'));
+    const result = await mcpAqlHandler.handleCreate({ operation: 'verify_challenge', params: { challenge_id: challengeId, code: challenge.code } });
+    expect(result.success).toBe(false);
+    expect(verificationStore.get(challengeId)).toEqual(challenge);
+    expect((await dangerZoneEnforcer.check('agent')).blocked).toBe(true);
+    await dangerZoneEnforcer.initialize();
+    expect(await dangerZoneEnforcer.check('agent')).toMatchObject({ blocked: true, verificationId: challengeId });
+    const retried = await mcpAqlHandler.handleCreate({ operation: 'verify_challenge', params: { challenge_id: challengeId, code: challenge.code } });
+    expect(retried.success).toBe(true);
+    expect((await dangerZoneEnforcer.check('agent')).blocked).toBe(false);
+  });
+
+  it('verifies an ordinary challenge while an unrelated agent remains blocked', async () => {
+    const challengeId = crypto.randomUUID();
+    verificationStore.set(challengeId, { code: 'ABC123', expiresAt: Date.now() + 300000, reason: 'Review required' });
+    await dangerZoneEnforcer.block('other-agent', 'Separate review', [], 'other-code');
+    const result = await mcpAqlHandler.handleCreate({ operation: 'verify_challenge', params: { challenge_id: challengeId, code: 'ABC123' } });
+    expect(result.success).toBe(true);
+    expect(verificationStore.get(challengeId)).toBeUndefined();
+    expect(await dangerZoneEnforcer.check('other-agent')).toMatchObject({ blocked: true, verificationId: 'other-code' });
+  });
+
+  it('completes verification while a healthy refresh is in progress', async () => {
+    const challengeId = crypto.randomUUID();
+    verificationStore.set(challengeId, { code: 'ABC123', expiresAt: Date.now() + 300000, reason: 'Review required' });
+    await dangerZoneEnforcer.block('agent', 'Review required', [], challengeId);
+    const backing = container.resolve<FileDangerZoneBlockStore>('DangerZoneBlockStore');
+    const originalLoad = backing.load.bind(backing);
+    const originalUnblock = dangerZoneEnforcer.unblock.bind(dangerZoneEnforcer);
+    jest.spyOn(dangerZoneEnforcer, 'unblock').mockImplementationOnce(async (...args) => {
+      let finish!: () => void;
+      const held = new Promise<void>(resolve => { finish = resolve; });
+      jest.spyOn(backing, 'load').mockImplementationOnce(async () => { await held; return originalLoad(); });
+      const checking = dangerZoneEnforcer.check('other');
+      const releasing = originalUnblock(...args);
+      finish();
+      await checking;
+      return releasing;
+    });
+    const result = await mcpAqlHandler.handleCreate({ operation: 'verify_challenge', params: { challenge_id: challengeId, code: 'ABC123' } });
+    expect(result.success).toBe(true);
+    expect((await dangerZoneEnforcer.check('agent')).blocked).toBe(false);
+    expect(verificationStore.get(challengeId)).toBeUndefined();
   });
 
   describe('Full verification round-trip', () => {
@@ -71,7 +127,7 @@ describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
       );
 
       // Verify agent is blocked
-      const blockCheck = dangerZoneEnforcer.check('test-agent');
+      const blockCheck = (await dangerZoneEnforcer.check('test-agent'));
       expect(blockCheck.blocked).toBe(true);
       expect(blockCheck.verificationId).toBe(challengeId);
 
@@ -91,7 +147,7 @@ describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
       }
 
       // Agent should now be unblocked
-      const afterCheck = dangerZoneEnforcer.check('test-agent');
+      const afterCheck = (await dangerZoneEnforcer.check('test-agent'));
       expect(afterCheck.blocked).toBe(false);
     });
 
@@ -118,7 +174,7 @@ describe('Danger Zone Verification Flow Integration (Issue #142)', () => {
       }
 
       // Agent should still be blocked
-      const check = dangerZoneEnforcer.check('test-agent');
+      const check = (await dangerZoneEnforcer.check('test-agent'));
       expect(check.blocked).toBe(true);
     });
 

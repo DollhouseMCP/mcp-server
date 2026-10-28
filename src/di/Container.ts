@@ -1,3 +1,4 @@
+import { DangerZoneBlockMigrationError, reportBlockMigrationFailure } from '../storage/migration/DangerZoneBlockMigrationError.js';
 import { visitSequentially } from '../utils/visitSequentially.js';
 import type { ActivationMetricsTracker } from '../metrics/ActivationMetricsTracker.js';
 import { ActivationMetricsCollector } from '../metrics/collectors/ActivationMetricsCollector.js';
@@ -59,6 +60,7 @@ import { BuildInfoService } from "../services/BuildInfoService.js";
 import type { InitializationService } from "../services/InitializationService.js";
 import { PersonaIndicatorService } from "../services/PersonaIndicatorService.js";
 import { ElementEventDispatcher } from "../events/ElementEventDispatcher.js";
+import type { DangerZoneBlockStoreFactory } from "../state/IDangerZoneBlockStore.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
 import type { IActivationStateStore , PersistedActivation } from "../state/IActivationStateStore.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
@@ -210,6 +212,7 @@ interface ServiceRecord<T = unknown> {
 const DEFAULT_REGISTER_OPTIONS: RegisterOptions = { singleton: true };
 
 export class DollhouseContainer {
+  private readonly userDangerZoneEnforcers = new Map<string, Promise<DangerZoneEnforcer>>();
   private readonly services = new Map<string, ServiceRecord>();
   private readonly memoryUpgradeLifecycle = new MemoryUpgradeLifecycle();
   private personasDir: string | null = null;
@@ -394,6 +397,7 @@ export class DollhouseContainer {
     await this.bootstrapDatabaseIfEnabled();
     await this.bootstrapStorageAndSecurity();
     await this.runLegacyConfigMigrationIfEnabled();
+    await this.runLegacyDangerZoneMigrationIfEnabled();
     await this.bootstrapAuthAndSharedPool();
     if (this.hasRegistration('DatabaseTenantMemoryRegistry')) {
       await new DatabaseServiceRegistrar().qualifyRegisteredMemoryTenants(this);
@@ -451,6 +455,33 @@ export class DollhouseContainer {
     // mode (which would skip the "existing audit data, retention is changing"
     // operator warning on hosted deployments).
     await new SecurityServiceRegistrar().runPostDbWarnings(this);
+  }
+
+  private dangerZoneMigration: Promise<void> | undefined;
+
+  private async runLegacyDangerZoneMigrationIfEnabled(): Promise<void> {
+    if (env.DOLLHOUSE_STORAGE_BACKEND !== 'database') return;
+    this.dangerZoneMigration ??= this.migrateLegacyDangerZoneBlocks();
+    await this.dangerZoneMigration;
+  }
+
+  private async migrateLegacyDangerZoneBlocks(): Promise<void> {
+    let setupStep = 'loading migration module';
+    try {
+      const { runDangerZoneBlocksToDatabaseMigration } = await import('../storage/migration/dangerZoneBlocksToDatabase.js');
+      setupStep = 'resolving DatabaseInstance';
+      const database = this.resolve<import('../database/connection.js').DatabaseInstance>('DatabaseInstance');
+      setupStep = 'resolving SystemDatabaseInstance';
+      const systemDatabase = this.resolve<import('../database/connection.js').DatabaseInstance>('SystemDatabaseInstance');
+      setupStep = 'resolving BootstrappedUserId';
+      const userId = this.resolve<string>('BootstrappedUserId');
+      setupStep = 'resolving UserPathResolver';
+      const pathResolver = this.resolve<import('../paths/LegacyDetectingPathResolver.js').LegacyDetectingPathResolver>('UserPathResolver');
+      await runDangerZoneBlocksToDatabaseMigration({ database, systemDatabase, userId, pathResolver });
+    } catch (cause) {
+      if (cause instanceof DangerZoneBlockMigrationError) throw cause;
+      throw reportBlockMigrationFailure({ stage: 'setup', setupStep }, cause);
+    }
   }
 
   private async runLegacyConfigMigrationIfEnabled(): Promise<void> {
@@ -933,6 +964,7 @@ export class DollhouseContainer {
   }
 
   private async deferredDangerZoneInit(timer?: StartupTimer): Promise<void> {
+    await this.runLegacyDangerZoneMigrationIfEnabled();
     timer?.startPhase('danger_zone_init', false);
     try {
       const dangerZoneEnforcer = this.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
@@ -1418,6 +1450,18 @@ export class DollhouseContainer {
     return this.httpRootHandlerBundle;
   }
 
+  private async getUserDangerZoneEnforcer(userId: string, securityDir: string): Promise<DangerZoneEnforcer> {
+    await this.runLegacyDangerZoneMigrationIfEnabled();
+    let pending = this.userDangerZoneEnforcers.get(userId);
+    if (!pending) {
+      const store = this.resolve<DangerZoneBlockStoreFactory>('DangerZoneBlockStoreFactory')(userId, securityDir);
+      const enforcer = new DangerZoneEnforcer(store);
+      pending = enforcer.initialize().then(() => enforcer);
+      this.userDangerZoneEnforcers.set(userId, pending);
+    }
+    return pending;
+  }
+
   /**
    * Create a per-session MCP Server wired to the shared handler bundle.
    *
@@ -1433,6 +1477,7 @@ export class DollhouseContainer {
     server: LowLevelMcpServer;
     dispose: () => Promise<void>;
   }> {
+    await this.runLegacyDangerZoneMigrationIfEnabled();
     if (!this.httpRootHandlerBundle) {
       throw new Error(
         'HTTP handler bundle not initialized. Call bootstrapHttpHandlers() before creating sessions.'
@@ -1558,9 +1603,8 @@ export class DollhouseContainer {
         enabled: STORAGE_LAYER_CONFIG.BACKUPS_ENABLED,
       }
     ));
-    child.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
-      this.resolve('FileOperationsService'), userSecurityDir
-    ));
+    const userEnforcer = await this.getUserDangerZoneEnforcer(httpUserId, userSecurityDir);
+    child.register('DangerZoneEnforcer', () => userEnforcer);
 
     // ── Per-session GitHub/portfolio coordinators ───────────────────
     // These services hold user-attributable state or capture TokenManager.
@@ -2382,6 +2426,13 @@ export class DollhouseContainer {
       cleanups.forEach(fn => fn());
     } catch { /* hooks not yet wired */ }
 
+    const blockReceipts = await Promise.all(Array.from(this.userDangerZoneEnforcers.values(), async pending => (await pending).flush()));
+    this.userDangerZoneEnforcers.clear();
+    const rootEnforcer = this.services.get('DangerZoneEnforcer')?.instance as DangerZoneEnforcer | undefined;
+    if (rootEnforcer) blockReceipts.push(await rootEnforcer.flush());
+    if (blockReceipts.some(saved => !saved)) {
+      logger.error('Block-state storage did not finish saving before shutdown');
+    }
     const disposalPromises = this.buildDisposalPromises();
     const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
     this.reportDisposalFailures(disposalPromises, results);

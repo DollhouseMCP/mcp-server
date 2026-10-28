@@ -435,6 +435,13 @@
       "when": 1791504001000,
       "tag": "0061_memory_candidate_handoff",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1791504001001,
+      "tag": "0062_agent_block_state",
+      "breakpoints": true
     }
   ]
 }

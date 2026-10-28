@@ -121,6 +121,7 @@ export class DatabaseServiceRegistrar {
     const { DatabaseStorageLayerFactory } = await import('../../storage/DatabaseStorageLayerFactory.js');
     const { DatabaseActivationStateStore } = await import('../../state/DatabaseActivationStateStore.js');
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
+    const { DatabaseDangerZoneBlockStore } = await import('../../state/DatabaseDangerZoneBlockStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
     const { DatabaseAgentStateStore } = await import('../../storage/DatabaseAgentStateStore.js');
     const { findRecordedRuntimePresenceWithTx } = await import(
@@ -129,6 +130,7 @@ export class DatabaseServiceRegistrar {
 
     container.register('DatabaseActivationStateStoreClass', () => DatabaseActivationStateStore);
     container.register('DatabaseConfirmationStoreClass', () => DatabaseConfirmationStore);
+    container.register('DatabaseDangerZoneBlockStoreClass', () => DatabaseDangerZoneBlockStore);
     container.register('DatabaseChallengeStoreClass', () => DatabaseChallengeStore);
 
     // The bootstrapped DB UUID is the identity every session binds to by default.
@@ -267,8 +269,26 @@ export class DatabaseServiceRegistrar {
     }
     const tracker = container.resolve<ContextTracker>('ContextTracker');
     let last: string | null = null;
+    const qualifyTenant = async (row: Record<string, unknown>): Promise<void> => {
+      const tenant = row.tenant;
+      if (typeof tenant !== 'string' || last !== null && tenant <= last) throw new Error('Invalid tenant boot order');
+      const session = Object.freeze({ userId: tenant, sessionId: `memory-boot-${tenant}`, tenantId: null,
+        transport: 'stdio' as const, createdAt: Date.now() });
+      await tracker.runAsync(tracker.createSessionContext('background-task', session), async () => {
+        const capture = registry.capture(tenant);
+        const manager = await registry.resolve(capture);
+        const checkpoint = () => registry.assertCurrent(capture);
+        await registry.qualify(capture, async identity => {
+          checkpoint();
+          if (identity.tenant !== tenant || identity.backend !== 'database') throw new Error('Memory boot identity changed');
+          await qualifyDatabaseMemoryTenant({ appDb, systemDb, tenant, manager, checkpoint });
+          checkpoint();
+        });
+      });
+      last = tenant;
+    };
     try {
-      for (;;) {
+      const qualifyPage = async (): Promise<void> => {
         // Settle the bounded mode page before acquiring either pool for the
         // owner qualifier. This remains safe when each pool has size one.
         // Cold all-replica mode/writer exclusion is independently required;
@@ -280,27 +300,12 @@ export class DatabaseServiceRegistrar {
             WHERE backend='database' AND mode IN ('guarded','read_only')
               AND (${last}::uuid IS NULL OR user_id > ${last}::uuid) ORDER BY user_id LIMIT 100`);
         });
-        if (!page.length) break;
+        if (!page.length) return;
         if (page.length > 100) throw new Error('Invalid protected tenant boot page');
-        for (const row of page) {
-          const tenant = row.tenant;
-          if (typeof tenant !== 'string' || last !== null && tenant <= last) throw new Error('Invalid tenant boot order');
-          const session = Object.freeze({ userId: tenant, sessionId: `memory-boot-${tenant}`, tenantId: null,
-            transport: 'stdio' as const, createdAt: Date.now() });
-          await tracker.runAsync(tracker.createSessionContext('background-task', session), async () => {
-            const capture = registry.capture(tenant);
-            const manager = await registry.resolve(capture);
-            const checkpoint = () => registry.assertCurrent(capture);
-            await registry.qualify(capture, async identity => {
-              checkpoint();
-              if (identity.tenant !== tenant || identity.backend !== 'database') throw new Error('Memory boot identity changed');
-              await qualifyDatabaseMemoryTenant({ appDb, systemDb, tenant, manager, checkpoint });
-              checkpoint();
-            });
-          });
-          last = tenant;
-        }
-      }
+        await page.reduce<Promise<void>>((previous, row) => previous.then(() => qualifyTenant(row)), Promise.resolve());
+        return qualifyPage();
+      };
+      await qualifyPage();
       // Unknown/malformed or mismatched database state still refuses startup.
       // Newly observed protected slots remain closed; no on-request adoption.
       await requireDatabaseMemoryStartupAdmission(appDb, systemDb, true);

@@ -59,7 +59,7 @@ export class AgentExecutionHandler {
     this.assertBoundMemory();
     const manager = this.handlers.agentManager;
     const elementName = validateExecutionElementName(method, params);
-    this.ensureNotDangerZoneBlocked(method, elementName);
+    await this.ensureNotDangerZoneBlocked(method, elementName);
     const target = await this.resolveDispatchTarget(method, manager, elementName);
     this.assertBoundMemory();
 
@@ -175,11 +175,11 @@ export class AgentExecutionHandler {
     await this.ensureNoAbortedGoals(manager, target);
   }
 
-  private ensureNotDangerZoneBlocked(method: string, elementName: string): void {
+  private async ensureNotDangerZoneBlocked(method: string, elementName: string): Promise<void> {
     if (method === 'getState' || method === 'abort' || !this.handlers.dangerZoneEnforcer) {
       return;
     }
-    const blockCheck = this.handlers.dangerZoneEnforcer.check(elementName);
+    const blockCheck = await this.handlers.dangerZoneEnforcer.check(elementName);
     if (!blockCheck.blocked) {
       return;
     }
@@ -464,7 +464,7 @@ export class AgentExecutionHandler {
     });
 
     const finalResult = this.evaluateResilience(target, updateResult, params.outcome as string) ?? updateResult;
-    this.attachNotifications(target, ownedGoalId, finalResult);
+    await this.attachNotifications(target, ownedGoalId, finalResult);
     return { _type: 'StepResult', ...finalResult };
   }
 
@@ -488,16 +488,16 @@ export class AgentExecutionHandler {
     return value;
   }
 
-  private attachNotifications(
+  private async attachNotifications(
     target: ResolvedExecutionTarget,
     goalId: string,
     result: Record<string, unknown>,
-  ): void {
+  ): Promise<void> {
     const autonomy = result.autonomy as Record<string, unknown> | undefined;
     if (!autonomy) {
       return;
     }
-    const notifications = this.collectNotifications(target, goalId, autonomy);
+    const notifications = await this.collectNotifications(target, goalId, autonomy);
     if (notifications.length > 0) {
       autonomy.notifications = notifications;
     }
@@ -640,7 +640,7 @@ export class AgentExecutionHandler {
 
       this.assertExecutionUnchanged(manager, target, executionPolicyAtStart, generation.token);
 
-      for (const goalId of ownedGoalIds) {
+      await ownedGoalIds.reduce<Promise<void>>((previous, goalId) => previous.then(async () => {
         await manager.completeAgentGoalForRecovery({
           agentName: target.name,
           goalId,
@@ -649,7 +649,7 @@ export class AgentExecutionHandler {
           executionIdentity: target.identity,
         });
         this.abortedGoals.add(this.sessionKey(goalId));
-      }
+      }), Promise.resolve());
 
       const remainingGoalIds = await this.getActiveGoalIds(
         manager,
@@ -926,15 +926,15 @@ export class AgentExecutionHandler {
     };
   }
 
-  private collectNotifications(
+  private async collectNotifications(
     target: ResolvedExecutionTarget,
     goalId: string,
     autonomy: Record<string, unknown>,
-  ): AgentNotification[] {
+  ): Promise<AgentNotification[]> {
     return [
       ...this.collectGatekeeperNotifications(target.key),
       ...this.collectAutonomyNotifications(autonomy),
-      ...this.collectDangerZoneNotifications(target.name, goalId),
+      ...await this.collectDangerZoneNotifications(target.name, goalId),
     ];
   }
 
@@ -979,13 +979,13 @@ export class AgentExecutionHandler {
     }] : [];
   }
 
-  private collectDangerZoneNotifications(agentName: string, goalId: string): AgentNotification[] {
+  private async collectDangerZoneNotifications(agentName: string, goalId: string): Promise<AgentNotification[]> {
     const enforcer = this.handlers.dangerZoneEnforcer;
     if (!enforcer) {
       return [];
     }
 
-    const blockCheck = enforcer.check(agentName);
+    const blockCheck = await enforcer.check(agentName);
     const sessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
     // Execution responses are not a global operator feed: only return the block
     // created for this agent's active goal in this exact session. Undefined

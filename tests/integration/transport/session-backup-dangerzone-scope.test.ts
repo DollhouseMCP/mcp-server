@@ -144,7 +144,7 @@ describe('HTTP session BackupService and DangerZoneEnforcer scoping', () => {
 
     expect(alicePersisted).toContain('step-four-danger-agent');
     expect(bobPersisted).not.toContain('step-four-danger-agent');
-    expect(childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer').check('step-four-danger-agent').blocked).toBe(true);
-    expect(childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer').check('step-four-danger-agent').blocked).toBe(false);
+    expect((await childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer').check('step-four-danger-agent')).blocked).toBe(true);
+    expect((await childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer').check('step-four-danger-agent')).blocked).toBe(false);
   }, TEST_TIMEOUT);
 });

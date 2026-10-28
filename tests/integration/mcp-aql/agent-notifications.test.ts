@@ -1,3 +1,5 @@
+import { FileDangerZoneBlockStore } from '../../../src/state/FileDangerZoneBlockStore.js';
+import { join as joinPath } from 'node:path';
 /**
  * Integration tests for Agent Notification System
  *
@@ -37,8 +39,10 @@ describe('Agent Notification System', () => {
   beforeEach(async () => {
     env = await createPortfolioTestEnvironment('agent-notifications');
     container = new DollhouseContainer();
+    container.register('DangerZoneBlockStore', () => new FileDangerZoneBlockStore(container.resolve('FileOperationsService'), joinPath(env.testDir, 'security')), { override: true });
     server = new DollhouseMCPServer(container);
     await server.listPersonas();
+    await container.resolve<import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer>('DangerZoneEnforcer').initialize();
     preConfirmAllOperations(container);
 
     mcpAqlHandler = container.resolve<MCPAQLHandler>('mcpAqlHandler');
@@ -48,7 +52,7 @@ describe('Agent Notification System', () => {
     try {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
       dangerZone.setAdminToken(TEST_ADMIN_TOKEN);
-      dangerZone.clearAll(TEST_ADMIN_TOKEN);
+      await dangerZone.clearAll(TEST_ADMIN_TOKEN);
     } catch {
       // Non-fatal: enforcer may not be registered
     }
@@ -59,7 +63,7 @@ describe('Agent Notification System', () => {
     try {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
       dangerZone.setAdminToken(TEST_ADMIN_TOKEN);
-      dangerZone.clearAll(TEST_ADMIN_TOKEN);
+      await dangerZone.clearAll(TEST_ADMIN_TOKEN);
     } catch {
       // Non-fatal: enforcer may not be registered
     }
@@ -372,7 +376,7 @@ describe('Agent Notification System', () => {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
 
       // Ensure no stale blocks from prior runs
-      dangerZone.clearAll(TEST_ADMIN_TOKEN);
+      await dangerZone.clearAll(TEST_ADMIN_TOKEN);
 
       // Create two agents
       await createAgent(DZ_BLOCKED_AGENT_NAME, {
@@ -408,10 +412,10 @@ describe('Agent Notification System', () => {
           (n: Record<string, unknown>) => n.type === 'danger_zone'
         );
         expect(dangerNotification).toBeUndefined();
-        expect(dangerZone.check(DZ_BLOCKED_AGENT_NAME).blocked).toBe(true);
+        expect((await dangerZone.check(DZ_BLOCKED_AGENT_NAME)).blocked).toBe(true);
       } finally {
         // Always clean up the block regardless of test outcome
-        dangerZone.unblock(DZ_BLOCKED_AGENT_NAME, 'verify-test-123');
+        (await dangerZone.unblock(DZ_BLOCKED_AGENT_NAME, 'verify-test-123'));
       }
     });
 
@@ -443,7 +447,7 @@ describe('Agent Notification System', () => {
           throw new Error('Expected a danger-zone notification');
         }
 
-        const blockCheck = dangerZone.check(DZ_CURRENT_AGENT_NAME);
+        const blockCheck = (await dangerZone.check(DZ_CURRENT_AGENT_NAME));
         const metadata = dangerNotification.metadata as Record<string, unknown>;
         const resultData = stepResult.data as Record<string, unknown>;
         const decision = resultData.decision as Record<string, unknown>;
@@ -455,7 +459,7 @@ describe('Agent Notification System', () => {
         expect(metadata.verificationId).toBe(blockCheck.verificationId);
       } finally {
         recordSpy.mockRestore();
-        dangerZone.unblock(DZ_CURRENT_AGENT_NAME, 'beetlejuice-verification-id');
+        (await dangerZone.unblock(DZ_CURRENT_AGENT_NAME, 'beetlejuice-verification-id'));
       }
     });
 
@@ -475,10 +479,10 @@ describe('Agent Notification System', () => {
         );
         expect(stepResult.success).toBe(true);
         expect(dangerNotification).toBeUndefined();
-        expect(dangerZone.check(DZ_GOAL_SCOPE_AGENT_NAME).blocked).toBe(true);
+        expect((await dangerZone.check(DZ_GOAL_SCOPE_AGENT_NAME)).blocked).toBe(true);
       } finally {
         recordSpy.mockRestore();
-        dangerZone.unblock(DZ_GOAL_SCOPE_AGENT_NAME, 'beetlejuice-verification-id');
+        (await dangerZone.unblock(DZ_GOAL_SCOPE_AGENT_NAME, 'beetlejuice-verification-id'));
       }
     });
 
@@ -498,14 +502,14 @@ describe('Agent Notification System', () => {
         );
         expect(stepResult.success).toBe(true);
         expect(dangerNotification).toBeUndefined();
-        expect(dangerZone.check(DZ_SESSION_SCOPE_AGENT_NAME).blocked).toBe(true);
+        expect((await dangerZone.check(DZ_SESSION_SCOPE_AGENT_NAME)).blocked).toBe(true);
       } finally {
         recordSpy.mockRestore();
-        dangerZone.unblock(
+        (await dangerZone.unblock(
           DZ_SESSION_SCOPE_AGENT_NAME,
           'beetlejuice-verification-id',
           'another-session',
-        );
+        ));
       }
     });
   });

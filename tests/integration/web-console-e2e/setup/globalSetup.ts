@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 /**
  * Global setup for the web-console e2e suite. Self-contained on purpose: jest
  * loads globalSetup outside its module registry, so it can only import node
@@ -58,7 +59,7 @@ async function waitForHealth(baseUrl: string, timeoutMs: number): Promise<void> 
     } catch (err) {
       lastErr = err;
     }
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 500)); // NOSONAR S9382: health checks intentionally poll sequentially.
   }
   const detail = lastErr instanceof Error ? lastErr.message : 'unknown health-check failure';
   throw new Error(`[console-e2e] app at ${baseUrl} did not become healthy in ${timeoutMs}ms: ${detail}`);
@@ -201,7 +202,7 @@ export default async function globalSetup(): Promise<void> {
   const tsxCliPath = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
   const child = spawn(process.execPath, [tsxCliPath, path.join(root, 'src/index.ts'), '--streamable-http'], {
     cwd: path.join(runDir, 'cwd'),
-    env: buildAppEnv(secrets, runDir),
+    env: isolatedServerEnv(runDir, buildAppEnv(secrets, runDir)),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });

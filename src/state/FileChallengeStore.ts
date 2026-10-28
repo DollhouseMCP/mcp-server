@@ -19,7 +19,7 @@ import type { FileOperationsService } from '../services/FileOperationsService.js
 import type { StoredChallenge } from '@dollhousemcp/safety';
 import type { IChallengeStore } from './IChallengeStore.js';
 import { validateExternalSessionId } from './FileActivationStateStore.js';
-import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
+import { fireAndForgetPersist, logPersistedStateIssue, readValidatedState } from './persistence-utils.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -75,8 +75,11 @@ export class FileChallengeStore implements IChallengeStore {
    */
   async initialize(): Promise<void> {
     try {
-      const content = await this.fileOps.readFile(this.persistPath);
-      const data = JSON.parse(content) as PersistedChallengeState;
+      const data = await readValidatedState(() => this.fileOps.readFile(this.persistPath), value => {
+        if (!Array.isArray(value.challenges)) throw new Error('Invalid challenge state');
+        return value as unknown as PersistedChallengeState;
+      }, status => logPersistedStateIssue(status, STORE_NAME, this.sessionId));
+      if (!data) return;
 
       if (data.version === 1 && Array.isArray(data.challenges)) {
         const now = Date.now();
@@ -93,8 +96,8 @@ export class FileChallengeStore implements IChallengeStore {
           );
         }
       }
-    } catch (error) {
-      handleInitializeError(error, STORE_NAME, 'challenge', this.sessionId);
+    } catch {
+      logPersistedStateIssue('invalid', STORE_NAME, this.sessionId);
     }
   }
 

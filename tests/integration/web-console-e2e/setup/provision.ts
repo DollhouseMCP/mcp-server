@@ -1,3 +1,4 @@
+import { isolatedServerEnv } from '../../../helpers/isolated-server-env.cjs';
 /**
  * Importable provision + boot helpers, shared by the Playwright real-auth config.
  *
@@ -56,7 +57,7 @@ export async function waitForHealth(baseUrl: string, timeoutMs: number): Promise
     } catch (err) {
       lastErr = err;
     }
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 500)); // NOSONAR S9382: health checks intentionally poll sequentially.
   }
   const detail = lastErr instanceof Error ? lastErr.message : 'unknown health-check failure';
   throw new Error(`[console-e2e/pw] app at ${baseUrl} not healthy in ${timeoutMs}ms: ${detail}`);
@@ -156,7 +157,7 @@ export function bootApp(runDir: string): BootedApp {
     ? [path.resolve(process.cwd(), 'node_modules/tsx/dist/cli.mjs'), resolvedEntry, '--streamable-http']
     : [resolvedEntry, '--streamable-http'];
   const child = spawn(command, args, {
-    cwd: path.join(runDir, 'cwd'), env, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    cwd: path.join(runDir, 'cwd'), env: isolatedServerEnv(runDir, env), stdio: ['ignore', 'pipe', 'pipe'], detached: true,
   });
   child.stdout.pipe(logStream);
   child.stderr.pipe(logStream);

@@ -94,3 +94,5 @@ export type {
   RuntimeTerminationRequesterKind,
   RuntimeTerminationAckResult,
 } from './webConsole.js';
+
+export { dangerZoneBlocks, dangerZoneBlockEvidence } from './dangerZoneBlocks.js';

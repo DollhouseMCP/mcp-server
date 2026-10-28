@@ -7,6 +7,8 @@ import {
   authKv,
   consoleLoginTransactions,
   consoleSessions,
+  dangerZoneBlocks,
+  dangerZoneBlockEvidence,
   elements,
   integrationProviderDescriptors,
   portfolioSyncJobs,
@@ -53,6 +55,8 @@ export async function purgeUserScopedData(tx: DrizzleTx, userId: string): Promis
   await tx.delete(approvalAuditEvents).where(eq(approvalAuditEvents.userId, userId));
   await tx.delete(consoleLoginTransactions).where(eq(consoleLoginTransactions.userId, userId));
   await tx.delete(consoleSessions).where(eq(consoleSessions.userId, userId));
+  await tx.delete(dangerZoneBlocks).where(eq(dangerZoneBlocks.userId, userId));
+  await tx.delete(dangerZoneBlockEvidence).where(eq(dangerZoneBlockEvidence.userId, userId));
   await tx.delete(sessions).where(eq(sessions.userId, userId));
   await tx.delete(userSettings).where(eq(userSettings.userId, userId));
   // elements last: cascades element_tags, element_relationships, memory_entries,
@@ -73,6 +77,8 @@ export const USER_SCOPED_CASCADE_PURGE_TABLES: readonly string[] = [
   'approval_audit_events',
   'console_login_transactions',
   'console_sessions',
+  'danger_zone_blocks',
+  'danger_zone_block_evidence',
   'sessions',
   'user_settings',
   'elements',
@@ -227,7 +233,7 @@ export async function purgeNonCascadeUserIdentity(
   await lockAuthPrincipalsWithTx(tx, identity.subs);
   const tombstones = identity.accountAllowlistIdentities;
   await lockAuthAllowlistIdentitiesWithTx(tx, tombstones);
-  for (const sub of identity.subs) {
+  await identity.subs.reduce<Promise<void>>((previous, sub) => previous.then(async () => {
     // The bootstrap claim is an authorization grant keyed outside the user
     // tables. Clear it atomically with principal deletion so the deleted
     // bootstrap identity cannot pass the allowlist gate and recreate itself.
@@ -236,8 +242,8 @@ export async function purgeNonCascadeUserIdentity(
       eq(authKv.id, 'state'),
       sql`${authKv.payload}->>'adminSub' = ${sub}`,
     ));
-  }
-  for (const sub of identity.subs) {
+  }), Promise.resolve());
+  await identity.subs.reduce<Promise<void>>((previous, sub) => previous.then(async () => {
     // OIDC storage: a Grant carries the subject as payload.accountId, while tokens/sessions/codes
     // are linked to it via payload.grantId (this mirrors the adapter's own revokeByGrantId). Purge
     // both, so no token or session survives even if it does not itself carry accountId. Pre-auth
@@ -245,11 +251,11 @@ export async function purgeNonCascadeUserIdentity(
     // subjects, each with a handful of grants.
     const grants = await tx.select({ id: authKv.id }).from(authKv)
       .where(and(eq(authKv.model, 'Grant'), sql`${authKv.payload}->>'accountId' = ${sub}`));
-    for (const grant of grants) {
+    await grants.reduce<Promise<void>>((previous, grant) => previous.then(async () => {
       await tx.delete(authKv).where(sql`${authKv.payload}->>'grantId' = ${grant.id}`);
-    }
+    }), Promise.resolve());
     await tx.delete(authKv).where(sql`${authKv.payload}->>'accountId' = ${sub}`);
-  }
+  }), Promise.resolve());
   if (identity.subs.length > 0) {
     await tx.delete(authIdentityEvents).where(inArray(authIdentityEvents.sub, [...identity.subs]));
   }
