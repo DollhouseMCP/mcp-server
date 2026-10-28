@@ -29,6 +29,7 @@
 import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
 import { MigrationManager } from '../portfolio/MigrationManager.js';
 import { FileLockManager } from '../security/fileLockManager.js';
+import type { Memory, MemoryMetadata } from '../elements/memories/Memory.js';
 import { MemoryManager } from '../elements/memories/MemoryManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
@@ -124,7 +125,7 @@ export class ServerStartup {
    * @private
    */
   private async processAutoLoadMemory(
-    memory: any,
+    memory: Memory & { metadata: MemoryMetadata },
     memoryManager: any,
     options: {
       totalTokens: number;

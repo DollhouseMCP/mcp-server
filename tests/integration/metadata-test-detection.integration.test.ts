@@ -40,7 +40,7 @@ function removeTestMetadata(content: string): string {
     const trimmed = line.trim();
     return !trimmed.startsWith('_dollhouseMCPTest:') &&
            !trimmed.startsWith('_testMetadata:') &&
-           !trimmed.match(/^\s+(suite|purpose|created|version|migrated|originalPath):/);
+           !/^\s+(suite|purpose|created|version|migrated|originalPath):/.test(line);
   }).join('\n');
 }
 
@@ -182,6 +182,8 @@ type: persona
       content = await fs.readFile(testFile, 'utf-8');
       const rolledBackContent = removeTestMetadata(content);
       await fs.writeFile(testFile, rolledBackContent);
+
+      expect(await (provider as any).readMetadataOnly(testFile)).toMatchObject({ name: 'Test Element', type: 'persona' });
 
       // Verify metadata was removed
       expect(await (provider as any).isDollhouseMCPTestElement(testFile)).toBe(false);
@@ -417,7 +419,7 @@ _testMetadata:
       
       // All should be detected as test files
       expect(results.every(result => result === true)).toBe(true);
-      expect(results.length).toBe(fileCount);
+      expect(results).toHaveLength(fileCount);
     });
   });
 

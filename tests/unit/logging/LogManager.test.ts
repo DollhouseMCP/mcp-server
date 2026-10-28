@@ -326,7 +326,7 @@ describe('LogManager', () => {
       (e) => e.source === 'LogManager' && e.message.includes('evicted'),
     );
 
-    expect(dropReports2.length).toBe(dropReports1.length);
+    expect(dropReports2).toHaveLength(dropReports1.length);
   });
 
   // --- Graceful shutdown ---
@@ -438,5 +438,41 @@ describe('buildLogManagerConfig', () => {
     expect(config.immediateFlushRate).toBe(25);
     expect(config.fileMaxSize).toBe(52428800);
     expect(config.logLevel).toBe('warn');
+  });
+});
+
+describe('LogManager delivery isolation', () => {
+  it('delivers ordinary, size and backpressure entries despite a failing sink', async () => {
+    const manager = new LogManager(makeConfig({ maxEntrySize: 250, bufferSize: 1 }));
+    const healthy = makeMockSink();
+    manager.registerSink({
+      write() { throw new Error('write unavailable'); },
+      flush() { throw new Error('flush unavailable'); },
+      close() { throw new Error('close unavailable'); },
+    });
+    manager.registerSink(healthy);
+    try {
+      expect(() => {
+        for (let i = 0; i < 8; i++) manager.log(makeEntry({ data: { value: 'x'.repeat(300) } }));
+      }).not.toThrow();
+      await expect(manager.flush()).resolves.toBeUndefined();
+      expect(healthy.written.some(entry => entry.data?._truncated)).toBe(true);
+      expect(healthy.written.some(entry => entry.message.startsWith('Entry truncated'))).toBe(true);
+      expect(healthy.written.some(entry => entry.message.startsWith('Backpressure'))).toBe(true);
+    } finally { await manager.close(); }
+    expect(healthy.closeCount).toBe(1);
+  });
+
+  it.each(['bigint', 'circular'])('keeps entries deliverable with %s data', async kind => {
+    const manager = new LogManager(makeConfig());
+    const sink = makeMockSink();
+    manager.registerSink(sink);
+    const data: Record<string, unknown> = { value: BigInt(1) };
+    if (kind === 'circular') data.value = data;
+    try {
+      expect(() => manager.log(makeEntry({ data }))).not.toThrow();
+      expect(sink.written[0].data).toEqual({ _unavailable: true });
+      expect(() => JSON.stringify(sink.written[0])).not.toThrow();
+    } finally { await manager.close(); }
   });
 });
