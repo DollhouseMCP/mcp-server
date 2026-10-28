@@ -264,6 +264,8 @@
     "eslint": "^9.38.0",
     "globals": "^17.4.0",
     "jest": "30.3.0",
+    "open": "10.2.0",
+    "shell-quote": "1.11.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9",
     "ts-jest-resolver": "^2.0.1",
