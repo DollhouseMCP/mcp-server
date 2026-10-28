@@ -1,10 +1,10 @@
 {
-  "npmVersion": "11.19.0",
-  "scope": "Locally patched npm bundle; original core/version retained; no official patched npm release claim",
+  "npmVersion": "11.19.1",
+  "scope": "Locally patched actual Node24.22.1 npm bundle; original npm core/version retained; official leaf SRI plus explicit first-party mandatory-validation guards; no official patched npm release claim",
   "patches": [
     {
       "name": "brace-expansion",
-      "from": "5.0.7",
+      "from": "5.0.9",
       "to": "5.0.12",
       "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz",
       "integrity": "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==",
@@ -25,18 +25,39 @@
       ]
     },
     {
+      "name": "http-cache-semantics",
+      "from": "4.2.0",
+      "to": "4.3.0",
+      "url": "https://registry.npmjs.org/http-cache-semantics/-/http-cache-semantics-4.3.0.tgz",
+      "integrity": "sha512-M5t5LlJpS1UHMjvwRQVdFHvPISGeLAxNcrWuJkeGh0KxsqCHZ1O3NXZU/8x7cD0BDcGW8kapxMKTvwlqrNkHkA==",
+      "sha256": "d75e1e6a11587954da5e2f0e2b5c4b397a16d28cc2f7bdf64e9027fc2fe593ee",
+      "runtimeDependencies": {},
+      "consumers": {
+        "node_modules/make-fetch-happen/package.json": "^4.1.1"
+      },
+      "published": "2026-10-04T02:56:05.593Z",
+      "gitHead": "b1d4bd682fbab0252985de45219f4e7497c0067c",
+      "repository": "git+https://github.com/kornelski/http-cache-semantics.git",
+      "publisher": "kornel",
+      "registrySigningKeys": [
+        "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+        "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      ],
+      "securityScope": "Official4.3.0 Vary fix; NOT official max-stale remediation. First-party exact-source guard required."
+    },
+    {
       "name": "ip-address",
-      "from": "10.2.0",
-      "to": "10.7.1",
-      "url": "https://registry.npmjs.org/ip-address/-/ip-address-10.7.1.tgz",
-      "integrity": "sha512-4OUAqU9Z1i3vCnS05hzGiFnEMDpQ+62pAD/MVQOp83fYyNC8GleCqaS0QikQBmcWCrKFiUs/B8ztRRiYOAXuCA==",
-      "sha256": "7f99ac7abda701afe1fd1e36de462236fb4d1eb8c595d7ae0267bba7d8ee55f8",
+      "from": "10.5.0",
+      "to": "10.7.4",
+      "url": "https://registry.npmjs.org/ip-address/-/ip-address-10.7.4.tgz",
+      "integrity": "sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==",
+      "sha256": "f9e1d0dd369c002f43770c6ee35942c8078e76d080a1e18e89113eef865f26ff",
       "runtimeDependencies": {},
       "consumers": {
         "node_modules/socks/package.json": "^10.1.1"
       },
-      "published": "2026-09-15T04:14:13.929Z",
-      "gitHead": "f0c25dfd4fbf7886e45116ba0940207f81401e28",
+      "published": "2026-10-11T19:34:42.622Z",
+      "gitHead": "651c1dd35e55593b337d21c8e2a990b3743d1b3a",
       "repository": "git+https://github.com/beaugunderson/ip-address.git",
       "publisher": "GitHub Actions",
       "registrySigningKeys": [
@@ -68,46 +89,18 @@
       ]
     },
     {
-      "name": "tar",
-      "from": "7.5.19",
-      "to": "7.5.21",
-      "url": "https://registry.npmjs.org/tar/-/tar-7.5.21.tgz",
-      "integrity": "sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==",
-      "sha256": "bcedf25a21daecd1a18fb5e19ab855b7d79ec8ef1da175e8ba85cfc0ed0069d1",
-      "runtimeDependencies": {
-        "@isaacs/fs-minipass": "^4.0.0",
-        "chownr": "^3.0.0",
-        "minipass": "^7.1.2",
-        "minizlib": "^3.1.0",
-        "yallist": "^5.0.0"
-      },
-      "consumers": {
-        "package.json": "^7.5.19",
-        "node_modules/libnpmdiff/package.json": "^7.5.1",
-        "node_modules/pacote/package.json": "^7.4.3",
-        "node_modules/node-gyp/package.json": "^7.5.4"
-      },
-      "published": "2026-07-21T22:11:06.885Z",
-      "gitHead": "0cd9cc3c5814446d3c0cbea6a31d6c00c2c8a9d9",
-      "repository": "git+https://github.com/isaacs/node-tar.git",
-      "publisher": "isaacs",
-      "registrySigningKeys": [
-        "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
-      ]
-    },
-    {
       "name": "undici",
-      "from": "6.27.0",
-      "to": "6.28.1",
-      "url": "https://registry.npmjs.org/undici/-/undici-6.28.1.tgz",
-      "integrity": "sha512-zWpdTVD54H48CIybL0rWQ3ukpb9d23wM7eH5RtfdmeP70cWHNjtfo7P4vZX+5CoDcO53J4Pu5uXp7lNfjc6DRA==",
-      "sha256": "e18191aac9c0ff43dac7fe9b10b7041a22d07addb7b66a6e8ac14a52a5b69b74",
+      "from": "6.28.0",
+      "to": "6.29.1",
+      "url": "https://registry.npmjs.org/undici/-/undici-6.29.1.tgz",
+      "integrity": "sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==",
+      "sha256": "29c4b8e0b2d86cb8795571c1959012ce057a14ecfd34858335f47c31e770a04f",
       "runtimeDependencies": {},
       "consumers": {
         "node_modules/node-gyp/package.json": "^6.25.0"
       },
-      "published": "2026-09-04T14:23:45.648Z",
-      "gitHead": "ffc8aa0fdd4c54024f384e57784d5047c8b4085a",
+      "published": "2026-10-15T14:19:28.454Z",
+      "gitHead": "8c57f6c68c95465338ae97bfc991cb1513d2f76e",
       "repository": "git+https://github.com/nodejs/undici.git",
       "publisher": "GitHub Actions",
       "registrySigningKeys": [
@@ -115,5 +108,6 @@
         "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       ]
     }
-  ]
+  ],
+  "localPatchSource": "global-npm-vendor-patches.json"
 }
