@@ -55,6 +55,9 @@ export function verifyOfflineProvenance(provenance, database) {
       database.schemaVersion !== record.manifest.schemaVersion ||
       provenance.scanner_archive?.sha256 !== '64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519' ||
       !/^[a-f0-9]{64}$/.test(provenance.image_archive_sha256 ?? '') ||
+      provenance.runner_ref !== 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66' ||
+      provenance.runner_image_id !== 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f' ||
+      isolation?.runner_ref !== provenance.runner_ref || isolation?.runner_image_id !== provenance.runner_image_id ||
       isolation?.working_dir !== '/work' || !isDeepStrictEqual(isolation?.healthcheck?.Test, ['NONE']) ||
       isolation?.user !== '65532:65532' || policy?.NetworkMode !== 'none' ||
       policy?.ReadonlyRootfs !== true || policy?.Privileged !== false ||
@@ -77,7 +80,7 @@ export function verifyImageScan(result, expectedImageId, now = Date.now(), expec
     throw new Error('Image scan unavailable: expected scanner and fresh valid database required');
   }
   verifyOwnedScanPolicy(descriptor.configuration, database, expectedDbCache, offline);
-  if (offline && (offline.image_id !== expectedImageId || offline.isolation.image_id !== expectedImageId)) {
+  if (offline && (offline.image_id !== expectedImageId || offline.runner_image_id === expectedImageId)) {
     throw new Error('Offline image archive differs from the job-built image');
   }
   if (!/^sha256:[a-f0-9]{64}$/.test(expectedImageId ?? '') ||

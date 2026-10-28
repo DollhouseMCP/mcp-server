@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import shutil
 import time
 import urllib.parse
@@ -49,6 +50,9 @@ def scanner_environment(inherited, root):
 
 
 DB_MANIFEST_URL = "https://grype.anchore.io/databases/v6/latest.json"
+# Protected beta88efb60c docker/Dockerfile:5, not candidate-controlled Dockerfile input.
+RUNNER_REF = "node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66"
+RUNNER_IMAGE_ID = "sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f"
 SUPPORTED_DB_SCHEMA = "v6.1.10"  # Inspected official manifest and existing validated DB.
 
 
@@ -118,7 +122,7 @@ def image_archive_identity(archive):
         return "sha256:" + hashlib.sha256(bundle.extractfile(config).read()).hexdigest()
 
 
-def isolated_container_command(image_id, name, inputs):
+def isolated_container_command(name, inputs):
     command = ["docker", "create", "--name", name, "--pull", "never", "--platform", "linux/amd64",
                "--network", "none", "--read-only", "--no-healthcheck", "--workdir", "/work", "--cap-drop", "ALL",
                "--security-opt", "no-new-privileges=true", "--user", "65532:65532",
@@ -131,20 +135,20 @@ def isolated_container_command(image_id, name, inputs):
         command += ["--mount", f"type=bind,src={inputs / source},dst=/inputs/{target},readonly"]
     env = scanner_environment({}, Path("/work"))
     env.update(PATH="/usr/local/bin:/usr/bin:/bin", HOME="/work/home", TMPDIR="/work/tmp")
-    return command + ["--entrypoint", "/usr/bin/env", image_id, "-i"] + [
+    return command + ["--entrypoint", "/usr/bin/env", RUNNER_REF, "-i"] + [
         f"{key}={value}" for key, value in sorted(env.items())
     ] + ["/usr/local/bin/node", "/inputs/grype-offline-runner.mjs"]
 
 
-def isolation_evidence(value, image_id, inputs):
+def isolation_evidence(value, inputs):
     host = value["HostConfig"]
     mounts = value["Mounts"]
     targets = {"/inputs/" + name for name in ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]}
-    plan = isolated_container_command(image_id, "review-only", inputs)
-    expected_command = plan[plan.index(image_id) + 1:]
+    plan = isolated_container_command("review-only", inputs)
+    expected_command = plan[plan.index(RUNNER_REF) + 1:]
     expected_tmpfs = {"/work": "rw,noexec,nosuid,nodev,size=2g,mode=1777",
                       "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}
-    if (value["Image"] != image_id or value["Config"]["User"] != "65532:65532" or
+    if (value["Image"] != RUNNER_IMAGE_ID or value["Config"]["Image"] != RUNNER_REF or value["Config"]["User"] != "65532:65532" or
             host["NetworkMode"] != "none" or host["ReadonlyRootfs"] is not True or host["Privileged"] or
             host.get("CapDrop") != ["ALL"] or "no-new-privileges=true" not in host.get("SecurityOpt", []) or
             host["NanoCpus"] != 2000000000 or host["Memory"] != 3221225472 or
@@ -158,11 +162,45 @@ def isolation_evidence(value, image_id, inputs):
             any(m["Type"] != "bind" or m["RW"] is not False or
                 m["Source"] != str(inputs / Path(m["Destination"]).name) for m in mounts)):
         raise ValueError("Actual container isolation does not match the owned offline plan")
-    return {"image_id": value["Image"], "user": value["Config"]["User"],
+    return {"runner_ref": RUNNER_REF, "runner_image_id": value["Image"], "user": value["Config"]["User"],
             "working_dir": value["Config"]["WorkingDir"], "healthcheck": value["Config"]["Healthcheck"],
             "entrypoint": value["Config"]["Entrypoint"], "command": value["Config"]["Cmd"],
             "host_config": {key: host[key] for key in ["NetworkMode", "ReadonlyRootfs", "Privileged", "CapDrop", "SecurityOpt", "NanoCpus", "Memory", "MemorySwap", "PidsLimit", "Tmpfs"]},
             "mounts": mounts}
+
+
+def bounded_process(command, timeout, maximum=64 * 1024 * 1024):
+    buffers = [bytearray(), bytearray()]
+    error = None
+    limit = time.monotonic() + timeout
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        with selectors.DefaultSelector() as ready:
+            ready.register(child.stdout, selectors.EVENT_READ, 0)
+            ready.register(child.stderr, selectors.EVENT_READ, 1)
+            while ready.get_map():
+                remaining = limit - time.monotonic()
+                if remaining <= 0:
+                    error = "process deadline exceeded"
+                    child.kill()
+                    break
+                for event, _ in ready.select(min(remaining, 1)):
+                    chunk = os.read(event.fd, 65536)
+                    if not chunk:
+                        ready.unregister(event.fileobj)
+                    elif sum(map(len, buffers)) + len(chunk) > maximum:
+                        error = "combined stdout/stderr exceeds bounded capture size"
+                        child.kill()
+                        break
+                    else:
+                        buffers[event.data].extend(chunk)
+                if error: break
+            try:
+                child.wait(timeout=max(0.1, limit - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                error = "process deadline exceeded"
+                child.kill()
+                child.wait()
+        return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
 
 
 def main():
@@ -177,15 +215,11 @@ def main():
         if name != "container-cleanup":
             timeout = min(timeout, max(1, int(deadline - time.monotonic())))
         started = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        try:
-            child = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
-            stdout, stderr, status = child.stdout, child.stderr, child.returncode
-        except subprocess.TimeoutExpired as error:
-            stdout, stderr, status = error.stdout or b"", error.stderr or b"", None
+        status, stdout, stderr, capture_error = bounded_process(command, timeout)
         if retain_stdout: (reports / (name + ".stdout")).write_bytes(stdout)
         (reports / (name + ".stderr")).write_bytes(stderr)
         receipts[name] = {"command": command, "started_utc": started, "exit_code": status,
-                          "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "timeout_seconds": timeout}
+                          "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "timeout_seconds": timeout, "capture_error": capture_error, "capture_max_bytes": 64 * 1024 * 1024}
         (reports / (name + "-receipt.json")).write_text(json.dumps(receipts[name], indent=2))
         return status, stdout
 
@@ -213,18 +247,27 @@ def main():
         image_archive_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     provenance = {"scanner_archive": binary_receipt, "database": {**db_receipt, "manifest": manifest},
                   "image_id": image_id, "image_archive_sha256": image_archive_hash}
+    status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", RUNNER_REF], "runner-image-id", 30)
+    if status != 0:
+        status, _ = run(["docker", "pull", "--platform", "linux/amd64", RUNNER_REF], "runner-pull", 120)
+        if status != 0: raise ValueError("Exact protected runner base is unavailable")
+        status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", RUNNER_REF], "runner-image-id-after-pull", 30)
+    if status != 0 or stdout.decode().strip() != RUNNER_IMAGE_ID:
+        raise ValueError("Runner base does not identify the independent exact protected amd64 image")
+    provenance["runner_ref"] = RUNNER_REF
+    provenance["runner_image_id"] = RUNNER_IMAGE_ID
     name = "beta-offline-scan-" + uuid.uuid4().hex[:12]
     container = None
     if deadline - time.monotonic() < 125:
         raise ValueError("Insufficient bounded job budget; no scanner container will be created")
     try:
-        status, stdout = run(isolated_container_command(image_id, name, inputs), "container-create", 30)
+        status, stdout = run(isolated_container_command(name, inputs), "container-create", 30)
         if status != 0: raise ValueError("Unable to create the owned isolated scanner")
         container = stdout.decode().strip()
         status, stdout = run(["docker", "inspect", container], "container-inspect", 30, retain_stdout=False)
         if status != 0: raise ValueError("Unable to inspect actual scanner isolation")
         # Persist only selected isolation fields; never image environment/credentials.
-        provenance["isolation"] = isolation_evidence(json.loads(stdout)[0], image_id, inputs)
+        provenance["isolation"] = isolation_evidence(json.loads(stdout)[0], inputs)
         status, stdout = run(["docker", "start", "--attach", container], "container-start", 120)
         envelope = json.loads(stdout)
         if envelope.get("kind") != "grype-offline-envelope-v1" or envelope.get("exit_code") != status:

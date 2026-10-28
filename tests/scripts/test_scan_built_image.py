@@ -9,6 +9,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import sys
 
 spec = importlib.util.spec_from_file_location(
     "scan_built_image", Path(__file__).resolve().parents[2] / "scripts/scan-built-image.py")
@@ -120,7 +121,7 @@ class OfflineBoundaryTests(unittest.TestCase):
         inputs = Path("/owned/inputs")
         image = "sha256:" + "a" * 64
         names = ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]
-        value = {"Image": image, "Config": {"User": "65532:65532", "Entrypoint": ["/usr/bin/env"],
+        value = {"Image": scanner.RUNNER_IMAGE_ID, "Config": {"Image": scanner.RUNNER_REF, "User": "65532:65532", "Entrypoint": ["/usr/bin/env"],
                  "Cmd": ["-i"], "WorkingDir": "/work", "Healthcheck": {"Test": ["NONE"]}},
                  "Mounts": [{"Type": "bind", "Destination": "/inputs/" + name,
                              "Source": str(inputs / name), "RW": False} for name in names],
@@ -129,10 +130,12 @@ class OfflineBoundaryTests(unittest.TestCase):
                  "Memory": 3221225472, "MemorySwap": 3221225472, "PidsLimit": 64,
                  "Tmpfs": {"/work": "rw,noexec,nosuid,nodev,size=2g,mode=1777",
                            "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}}}
-        plan = scanner.isolated_container_command(image, "fixture", inputs)
-        value["Config"]["Cmd"] = plan[plan.index(image) + 1:]
-        self.assertEqual(scanner.isolation_evidence(value, image, inputs)["user"], "65532:65532")
-        mutations = [lambda x: x["HostConfig"].update(NetworkMode="bridge"),
+        plan = scanner.isolated_container_command("fixture", inputs)
+        value["Config"]["Cmd"] = plan[plan.index(scanner.RUNNER_REF) + 1:]
+        self.assertEqual(scanner.isolation_evidence(value, inputs)["user"], "65532:65532")
+        mutations = [lambda x: x.update(Image=image),
+                     lambda x: x["Config"].update(Image="mutable-candidate-base"),
+                     lambda x: x["HostConfig"].update(NetworkMode="bridge"),
                      lambda x: x["Mounts"][0].update(Source="/var/run/docker.sock"),
                      lambda x: x["Mounts"][0].update(RW=True),
                      lambda x: x["Config"]["Cmd"].insert(1, "GRYPE_EXCLUDE=**/*"),
@@ -140,11 +143,27 @@ class OfflineBoundaryTests(unittest.TestCase):
                      lambda x: x["Config"].update(Healthcheck={"Test": ["CMD", "node", "app.js"]})]
         for mutate in mutations:
             changed = copy.deepcopy(value); mutate(changed)
-            with self.assertRaises(ValueError): scanner.isolation_evidence(changed, image, inputs)
-        command = scanner.isolated_container_command(image, "owned-container", inputs)
+            with self.assertRaises(ValueError): scanner.isolation_evidence(changed, inputs)
+        command = scanner.isolated_container_command("owned-container", inputs)
+        self.assertNotIn(image, command)
+        self.assertIn(scanner.RUNNER_REF, command)
         self.assertIn("--no-healthcheck", command)
         self.assertNotIn("/var/run/docker.sock", " ".join(command))
         self.assertEqual(command.count("--mount"), 5)
+
+
+class BoundedCaptureTests(unittest.TestCase):
+    def test_child_output_is_stopped_before_host_capture_can_grow_unbounded(self):
+        status, stdout, stderr, error = scanner.bounded_process(
+            [sys.executable, "-c", "import sys;sys.stdout.write('x'*100000)"], 5, maximum=1024)
+        self.assertIsNone(status)
+        self.assertIn("bounded capture", error)
+        self.assertLessEqual(len(stdout) + len(stderr), 1024)
+
+    def test_normal_nonzero_exit_keeps_actual_output_and_status(self):
+        status, stdout, stderr, error = scanner.bounded_process(
+            [sys.executable, "-c", "import sys;print('finding');sys.exit(2)"], 5)
+        self.assertEqual((status, stdout, stderr, error), (2, b"finding\n", b"", None))
 
 
 if __name__ == "__main__":

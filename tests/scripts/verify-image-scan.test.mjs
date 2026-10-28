@@ -92,12 +92,15 @@ test('offline local DB import requires bound Python manifest, image and actual i
   value.descriptor.db.status.from = 'manual import';
   value.descriptor.db.status.schemaVersion = 'v6.1.10';
   const proof = {
+    runner_ref: 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66',
+    runner_image_id: 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f',
     image_id: image, image_archive_sha256: 'b'.repeat(64),
     scanner_archive: { sha256: '64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519' },
     database: { url: 'https://grype.anchore.io/databases/v6/owned.tar.zst', sha256: 'a'.repeat(64),
       manifest: { status: 'active', schemaVersion: 'v6.1.10', checksum: `sha256:${'a'.repeat(64)}`,
         path: 'owned.tar.zst', built: '2026-10-28T06:00:00Z' } },
-    isolation: { image_id: image, user: '65532:65532', working_dir: '/work', healthcheck: { Test: ['NONE'] },
+    isolation: { runner_ref: 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66',
+      runner_image_id: 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f', user: '65532:65532', working_dir: '/work', healthcheck: { Test: ['NONE'] },
       mounts: Array.from({ length: 5 }, () => ({ Type: 'bind', RW: false })),
       host_config: { NetworkMode: 'none', ReadonlyRootfs: true, Privileged: false, CapDrop: ['ALL'],
         SecurityOpt: ['no-new-privileges=true'], NanoCpus: 2000000000, Memory: 3221225472,
@@ -105,6 +108,7 @@ test('offline local DB import requires bound Python manifest, image and actual i
   };
   assert.deepEqual(verifyImageScan(value, image, now, cache, proof), { Low: 1 });
   for (const mutate of [
+    p => { p.runner_image_id = image; p.isolation.runner_image_id = image; },
     p => { p.database.sha256 = 'c'.repeat(64); },
     p => { p.isolation.host_config.NetworkMode = 'bridge'; },
     p => { p.isolation.mounts[0].RW = true; },
