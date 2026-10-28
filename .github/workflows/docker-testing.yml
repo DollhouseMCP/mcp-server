@@ -318,7 +318,7 @@ jobs:
           path: /tmp/memory-upgrade-engine-proof.json
           if-no-files-found: ignore
 
-      # Grype 0.121.0 adoption remains subject to the exact #2452 age exception.
+      # Exact aged Grype 0.120.1 still requires source/security/runtime qualification.
       - name: Scan Docker image for vulnerabilities
         id: image_scan
         timeout-minutes: 5

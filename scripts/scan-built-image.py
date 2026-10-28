@@ -16,9 +16,9 @@ import sys
 import tarfile
 import urllib.request
 
-ARCHIVE_NAME = "grype_0.121.0_linux_amd64.tar.gz"
-ARCHIVE_URL = "https://github.com/anchore/grype/releases/download/v0.121.0/" + ARCHIVE_NAME
-ARCHIVE_SHA256 = "64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519"
+ARCHIVE_NAME = "grype_0.120.1_linux_amd64.tar.gz"
+ARCHIVE_URL = "https://github.com/anchore/grype/releases/download/v0.120.1/" + ARCHIVE_NAME
+ARCHIVE_SHA256 = "0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d"
 
 
 def extract_verified_binary(archive, destination, expected_sha256=ARCHIVE_SHA256):

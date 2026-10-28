@@ -3,8 +3,8 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
-// Exact Grype0.121.0 defaults from cmd/grype/cli/commands/root.go at
-// afe2742527d98d822da06c9f32eed86fe3d193e0. No added ignore rules are accepted.
+// Exact Grype 0.120.1 defaults from cmd/grype/cli/commands/root.go at
+// 6f8d854af29d3a3086b11a84afa51554a2a245fe. No added ignore rules are accepted.
 export const defaultKernelIgnores = [
   ['kernel-headers', 'kernel', 'rpm'],
   ['linux(-.*)?-headers-.*', 'linux.*', 'deb'],
@@ -55,7 +55,7 @@ export function verifyOfflineProvenance(provenance, database) {
       record.url !== `https://grype.anchore.io/databases/v6/${record.manifest.path}` ||
       database.from !== 'manual import' || database.built !== record.manifest.built ||
       database.schemaVersion !== record.manifest.schemaVersion ||
-      provenance.scanner_archive?.sha256 !== '64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519' ||
+      provenance.scanner_archive?.sha256 !== '0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d' ||
       !/^[a-f0-9]{64}$/.test(provenance.image_archive_sha256 ?? '') ||
       provenance.runner_ref !== 'node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66' ||
       provenance.runner_image_id !== 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f' ||
@@ -86,7 +86,7 @@ export function verifyImageScan(result, expectedImageId, now = Date.now(), expec
   const descriptor = result?.descriptor;
   const database = descriptor?.db?.status;
   const built = Date.parse(database?.built);
-  if (descriptor?.name !== 'grype' || descriptor.version !== '0.121.0' ||
+  if (descriptor?.name !== 'grype' || descriptor.version !== '0.120.1' ||
       database?.valid !== true || !Number.isFinite(built) || built > now ||
       now - built > 120 * 60 * 60 * 1000) {
     throw new Error('Image scan unavailable: expected scanner and fresh valid database required');

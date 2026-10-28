@@ -7,7 +7,7 @@ const image = `sha256:${'a'.repeat(64)}`;
 const cache = '/owned/db';
 const now = Date.parse('2026-10-28T20:00:00Z');
 const result = () => ({
-  descriptor: { name: 'grype', version: '0.121.0', configuration: {
+  descriptor: { name: 'grype', version: '0.120.1', configuration: {
     'check-for-app-update': false, externalSources: { enable: false },
     distro: '', exclude: [], 'vex-documents': [], 'vex-add': [],
     'only-fixed': false, 'only-notfixed': false, 'ignore-wontfix': '',
@@ -100,7 +100,7 @@ test('offline local DB import requires bound Python manifest, image and actual i
       free_disk_bytes: 6 * 1024 ** 3, disk_required_bytes: 4 * 1024 ** 3 },
     database_payload: { declared_payload_bytes: 2541993984 },
     image_id: image, image_archive_sha256: 'b'.repeat(64),
-    scanner_archive: { sha256: '64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519' },
+    scanner_archive: { sha256: '0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d' },
     database: { url: 'https://grype.anchore.io/databases/v6/owned.tar.zst', sha256: 'a'.repeat(64),
       manifest: { status: 'active', schemaVersion: 'v6.1.10', checksum: `sha256:${'a'.repeat(64)}`,
         path: 'owned.tar.zst', built: '2026-10-28T06:00:00Z' } },
