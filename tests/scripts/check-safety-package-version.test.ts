@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -62,7 +62,6 @@ function registryResult(payload: unknown, status = 0, stream: 'stdout' | 'stderr
 describe('check-safety-package-version', () => {
   let repo: string;
   let publishedGitHead: string;
-  let trustedMainHead: string;
   let recordedFiles: RecordedFile[];
 
   beforeEach(async () => {
@@ -87,7 +86,7 @@ describe('check-safety-package-version', () => {
     execFileSync('git', ['fast-import', '--quiet'], {
       cwd: repo, input: imported, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
     });
-    [trustedMainHead, publishedGitHead] = git(repo, ['rev-parse', 'HEAD', 'HEAD~1']).split(/\r?\n/);
+    publishedGitHead = git(repo, ['rev-parse', 'HEAD~1']);
     // fast-import owns the objects/refs; materialize the working tree for tests
     // which intentionally mutate files and commit later revisions.
     git(repo, ['reset', '--hard', 'HEAD']);
