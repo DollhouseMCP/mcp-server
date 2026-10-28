@@ -764,6 +764,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // LOAD ERROR SUPPRESSION
   // ============================================
 
+  /** Record an element storage could not read as a load failure, with the loader's suppression rules. */
+  protected recordUnreadableElement(relativePath: string, error: Error): void {
+    this._loader.recordUnreadableElement(relativePath, error);
+  }
+
   /**
    * Returns true if the most recent load() failure for this path was suppressed
    * because it was a repeat of an already-logged error.
@@ -1154,10 +1159,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   // DISPOSE
   // ============================================
 
-  public dispose(): void {
+  public async dispose(): Promise<void> {
     this._cache.dispose();
     this._events.dispose();
     this.storageLayer.clear();
+    await this.storageLayer.dispose?.();
     logger.debug(`${this.getElementLabelCapitalized()}Manager disposed and caches cleared`);
   }
 

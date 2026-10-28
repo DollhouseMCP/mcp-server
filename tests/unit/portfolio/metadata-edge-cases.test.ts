@@ -126,8 +126,7 @@ _dollhouseMCPTest: true
           expect(metadata?.name).toBe('Standard');
           expect(isTest).toBe(true);
         } else {
-          // Non-standard formats should return null/false
-          expect(metadata).toBeNull();
+          expect(metadata).toBeUndefined();
           expect(isTest).toBe(false);
         }
       }
@@ -216,7 +215,7 @@ description: This file has no content after frontmatter
         const metadata = await (provider as any).readMetadataOnly(filePath);
         const isTest = await (provider as any).isDollhouseMCPTestElement(filePath);
 
-        expect(metadata).toBeNull();
+        expect(metadata).toBeUndefined();
         expect(isTest).toBe(false);
       }
     });
@@ -250,15 +249,8 @@ version: 1.0.0
         const metadata = await (provider as any).readMetadataOnly(testFile);
         const isTest = await (provider as any).isDollhouseMCPTestElement(testFile);
 
-        if (size <= 4096) {
-          // Should work for sizes within buffer limit
-          expect(metadata?.name).toBe(`Buffer Test ${size}`);
-          expect(isTest).toBe(true);
-        } else {
-          // May not work for sizes exceeding buffer limit
-          // (depends on exact position of closing ---)
-          expect(typeof isTest).toBe('boolean');
-        }
+        expect(metadata?.name).toBe(`Buffer Test ${size}`);
+        expect(isTest).toBe(true);
       }
     });
 
@@ -328,8 +320,7 @@ another_long_field: "${longLine}"
       const metadata = await (provider as any).readMetadataOnly(testFile);
       const isTest = await (provider as any).isDollhouseMCPTestElement(testFile);
 
-      // Should either work or fail gracefully
-      expect(typeof isTest).toBe('boolean');
+      expect(isTest).toBeNull();
       
       if (metadata) {
         expect(typeof metadata.name).toBe('string');
@@ -404,8 +395,8 @@ _dollhouseMCPTest: true
       const isTest = await (provider as any).isDollhouseMCPTestElement(testFile);
 
       // File descriptor should be handled properly
-      expect(typeof isTest).toBe('boolean');
-      // May return data if file was read before deletion, or null if after
+      // The read may complete before deletion; neither result authorizes a regular element.
+      expect([true, null]).toContain(isTest);
     });
 
     it('should handle filesystem errors gracefully', async () => {
@@ -417,7 +408,7 @@ _dollhouseMCPTest: true
       const isTest1 = await (provider as any).isDollhouseMCPTestElement(nonExistentFile);
 
       expect(metadata1).toBeNull();
-      expect(isTest1).toBe(false);
+      expect(isTest1).toBeNull();
 
       // Test invalid path (null bytes)
       try {
@@ -425,7 +416,7 @@ _dollhouseMCPTest: true
         const isTest2 = await (provider as any).isDollhouseMCPTestElement(invalidPath);
 
         expect(metadata2).toBeNull();
-        expect(isTest2).toBe(false);
+        expect(isTest2).toBeNull();
       } catch (error) {
         // Some systems may throw errors for invalid paths
         expect(error).toBeDefined();
@@ -494,7 +485,7 @@ _dollhouseMCPTest: true
         if (test.name === 'zero-width.md') {
           // Zero-width characters are blocked by security validator - this is expected behavior
           expect(metadata).toBeNull();
-          expect(isTest).toBe(false);
+          expect(isTest).toBeNull();
         } else {
           expect(metadata).toBeTruthy();
           expect(typeof metadata?.name).toBe('string');

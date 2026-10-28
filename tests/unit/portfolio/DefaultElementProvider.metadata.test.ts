@@ -6,6 +6,10 @@ import { jest } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import yaml from 'js-yaml';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
+import { matchFrontmatterFrame } from '../../../src/security/secureYamlParser.js';
+import { ElementType } from '../../../src/portfolio/types.js';
 import { DefaultElementProvider } from '../../../src/portfolio/DefaultElementProvider.js';
 
 describe('DefaultElementProvider - Metadata-based Test Detection', () => {
@@ -23,6 +27,44 @@ describe('DefaultElementProvider - Metadata-based Test Detection', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     // CRITICAL MEMORY LEAK FIX: Clean up static caches to prevent memory accumulation
     DefaultElementProvider.cleanup();
+  });
+
+  describe('bounded frontmatter admission', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it.each([5000, SECURITY_LIMITS.MAX_YAML_LENGTH + 1])('applies the parser limit to %s characters in production', async length => {
+      jest.replaceProperty(process, 'env', { ...process.env, FORCE_PRODUCTION_MODE: 'true', DOLLHOUSE_LOAD_TEST_DATA: 'false' });
+      provider = new DefaultElementProvider({ loadTestData: false });
+      const source = path.join(tempDir, 'source');
+      const destination = path.join(tempDir, 'destination');
+      await fs.mkdir(source);
+      const file = path.join(source, 'sample.md');
+      await fs.writeFile(file, `---\nname: Sample element\ndescription: "${'x'.repeat(length)}"\n---\nBody`);
+      const metadata = await provider['readMetadataOnly'](file);
+      const withinLimit = length < SECURITY_LIMITS.MAX_YAML_LENGTH;
+      if (withinLimit) expect(metadata).toMatchObject({ name: 'Sample element' });
+      else expect(metadata).toBeNull();
+      expect(await provider['copyElementFiles'](source, destination, 'personas')).toBe(withinLimit ? 1 : 0);
+      expect(await fs.readdir(destination)).toEqual(withinLimit ? ['sample.md'] : []);
+    });
+
+    it('classifies every bundled element with complete metadata', async () => {
+      let count = 0;
+      for (const type of Object.values(ElementType)) {
+        const directory = path.resolve('data', type);
+        for (const file of await fs.readdir(directory)) {
+          if (!['.md', '.yaml', '.yml'].includes(path.extname(file))) continue;
+          const filePath = path.join(directory, file);
+          const raw = await fs.readFile(filePath, 'utf8');
+          const frame = matchFrontmatterFrame(raw);
+          const expected = frame ? yaml.load(frame.frontmatter) as Record<string, unknown> : undefined;
+          expect({ file, metadata: await provider['readMetadataOnly'](filePath) }).not.toEqual({ file, metadata: null });
+          expect(await provider['isDollhouseMCPTestElement'](filePath)).toBe(expected?._dollhouseMCPTest === true);
+          count++;
+        }
+      }
+      expect(count).toBeGreaterThan(40);
+    });
   });
 
   describe('readMetadataOnly', () => {
@@ -48,7 +90,7 @@ This is the content body.`;
       });
     });
 
-    it('should return null for file without frontmatter', async () => {
+    it('returns undefined for file without frontmatter', async () => {
       const testFile = path.join(tempDir, 'no-metadata.md');
       const content = `# Regular Content
 This file has no frontmatter.`;
@@ -57,7 +99,7 @@ This file has no frontmatter.`;
 
       const metadata = await (provider as any).readMetadataOnly(testFile);
 
-      expect(metadata).toBeNull();
+      expect(metadata).toBeUndefined();
     });
 
     it('should return null for file with invalid YAML', async () => {
@@ -83,7 +125,7 @@ Content`;
       expect(metadata).toBeNull();
     });
 
-    it('should only read first 4KB of file', async () => {
+    it('reads metadata without parsing the content body', async () => {
       const testFile = path.join(tempDir, 'large-file.md');
       const frontmatter = `---
 name: Test
@@ -105,7 +147,7 @@ _dollhouseMCPTest: true
     it('should handle frontmatter that ends exactly at buffer boundary', async () => {
       const testFile = path.join(tempDir, 'boundary-test.md');
       // Create frontmatter that when combined with opening --- and newlines
-      // gets close to the 4KB buffer limit
+      // gets close to a read chunk boundary
       const largeFrontmatter = 'A'.repeat(4000);
       const content = `---
 description: ${largeFrontmatter}
@@ -182,12 +224,12 @@ No frontmatter here.`;
       expect(isTest).toBe(false);
     });
 
-    it('should return false for non-existent file', async () => {
+    it('returns unavailable for a non-existent file', async () => {
       const nonExistentFile = path.join(tempDir, 'does-not-exist.md');
 
       const isTest = await (provider as any).isDollhouseMCPTestElement(nonExistentFile);
 
-      expect(isTest).toBe(false);
+      expect(isTest).toBeNull();
     });
 
     it('should handle string values correctly', async () => {
@@ -346,9 +388,9 @@ Content`;
       const metadata = await (provider as any).readMetadataOnly(testFile);
       expect(metadata).toBeNull();
 
-      // Should return false for test detection
+      // Unavailable metadata remains distinct from a regular element
       const isTest = await (provider as any).isDollhouseMCPTestElement(testFile);
-      expect(isTest).toBe(false);
+      expect(isTest).toBeNull();
     });
   });
 });

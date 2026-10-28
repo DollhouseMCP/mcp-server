@@ -102,6 +102,15 @@ describe('ElementInstaller - Source Priority Support (Issue #1447)', () => {
     }
   });
 
+  it('propagates a denied existence probe instead of permitting installation', async () => {
+    const denied = Object.assign(new Error('access denied'), { code: 'EACCES' });
+    const files = installer['fileOperations'];
+    const exists = jest.spyOn(files, 'exists').mockRejectedValue(denied);
+    try {
+      await expect(installer['checkFileExists']('/denied/element.md', 'element.md')).rejects.toBe(denied);
+    } finally { exists.mockRestore(); }
+  });
+
   describe('Source Priority Behavior', () => {
     it('should check local first and prevent duplicate installation', async () => {
       const elementName = 'creative-writer';
@@ -821,7 +830,7 @@ category: "test"
       const agentsDir = path.join(testPortfolioDir, 'agents');
       const files = await fs.readdir(agentsDir);
       const tempFiles = files.filter(f => f.includes('.tmp.'));
-      expect(tempFiles.length).toBe(0);
+      expect(tempFiles).toHaveLength(0);
     });
   });
 

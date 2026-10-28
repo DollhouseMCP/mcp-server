@@ -33,7 +33,7 @@ describe('Metadata Detection Security Tests', () => {
   });
 
   describe('Buffer Limit Enforcement', () => {
-    it('should only read first 4KB of file content', async () => {
+    it('reads metadata independently of the content body', async () => {
       const testFile = path.join(tempDir, 'large-file.md');
       
       // Create frontmatter that fits in 4KB
@@ -105,7 +105,7 @@ description: `;
       expect(metadata._dollhouseMCPTest).toBe(true);
     });
 
-    it('should handle frontmatter that exceeds 4KB gracefully', async () => {
+    it('reads frontmatter across multiple chunks', async () => {
       const testFile = path.join(tempDir, 'oversized-frontmatter.md');
       
       // Create frontmatter larger than 4KB
@@ -115,17 +115,17 @@ name: Oversized Test
 description: "${largePadding}"
 _dollhouseMCPTest: true
 ---
-# This frontmatter is too large`;
+# Content`;
 
       await fs.writeFile(testFile, content);
 
-      // Should return null because frontmatter doesn't close within 4KB
+      // The closing fence is beyond the first read chunk.
       const metadata = await (provider as any).readMetadataOnly(testFile);
-      expect(metadata).toBeNull();
+      expect(metadata).toMatchObject({ name: 'Oversized Test' });
 
-      // Should not detect as test file
+      // Complete metadata retains its test marker.
       const isTest = await (provider as any).isDollhouseMCPTestElement(testFile);
-      expect(isTest).toBe(false);
+      expect(isTest).toBe(true);
     });
   });
 
@@ -222,7 +222,7 @@ _dollhouseMCPTest: true
 
         // Should not crash the detection process
         const isTest = await (provider as any).isDollhouseMCPTestElement(maliciousFile);
-        expect(typeof isTest).toBe('boolean');
+        expect(isTest).toBe(metadata === null ? null : true);
       }
     });
 
@@ -473,7 +473,7 @@ shortField: "normal"
         }
       } else {
         // If metadata parsing failed due to size limits, that's also acceptable
-        expect(isTest).toBe(false);
+        expect(isTest).toBeNull();
       }
     });
 
@@ -513,7 +513,7 @@ _dollhouseMCPTest: true
       if (metadata) {
         expect(metadata.name).toBe('Billion Laughs');
       }
-      expect(typeof isTest).toBe('boolean');
+      expect(isTest).toBeNull();
     });
   });
 
@@ -537,9 +537,9 @@ _dollhouseMCPTest: true
         const metadata = await (provider as any).readMetadataOnly(protectedFile);
         const isTest = await (provider as any).isDollhouseMCPTestElement(protectedFile);
 
-        // Should return null/false rather than throwing
+        // Unavailable metadata remains distinct from a regular element
         expect(metadata).toBeNull();
-        expect(isTest).toBe(false);
+        expect(isTest).toBeNull();
       } catch {
         // If chmod didn't work (e.g., on Windows), that's ok
         console.log('Permission test skipped on this platform');

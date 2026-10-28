@@ -102,10 +102,10 @@ async function fixture(seedMetadata: Partial<MemoryMetadata> = {}, tenantResolve
       const manager = new ObservedManager(deps, adapter); managers.push(manager);
       return { manager, adapter };
     };
-    const cleanup = async () => { for (const manager of managers) manager.dispose(); await fs.rm(root, { recursive: true, force: true }); };
+    const cleanup = async () => { for (const manager of managers) await manager.dispose(); await fs.rm(root, { recursive: true, force: true }); };
     return { root, tenantRoot, owners, fence, ordinary, makeManager, setTenant: (value: string) => { tenant = value; }, cleanup };
   } catch (cause) {
-    for (const manager of managers) manager.dispose();
+    for (const manager of managers) await manager.dispose();
     await fs.rm(root, { recursive: true, force: true });
     throw cause;
   }
@@ -1432,8 +1432,13 @@ posix('guarded memory classified refusal audit', () => {
     }
     return snapshot;
   }
-  it.each([{throwing: false, warningFailure: false}, {throwing: true, warningFailure: false}, {throwing: true, warningFailure: true}])(
-    'audits a real canonical fence refusal once with audit listener=$throwing warning listener=$warningFailure', async ({throwing, warningFailure}) => {
+  it.each([
+    {throwing: false, warningFailure: false, emitterFailure: false},
+    {throwing: true, warningFailure: false, emitterFailure: false},
+    {throwing: false, warningFailure: false, emitterFailure: true},
+    {throwing: false, warningFailure: true, emitterFailure: true},
+  ])(
+    'audits a canonical refusal with listener=$throwing warning=$warningFailure operation=$emitterFailure', async ({throwing, warningFailure, emitterFailure}) => {
     const f = await fixture();
     let stop = () => {}; let stopWarning = () => {};
     try {
@@ -1444,8 +1449,13 @@ posix('guarded memory classified refusal audit', () => {
       await fs.symlink(path.join(f.tenantRoot, '.memory-fences'), path.join(f.tenantRoot, 'volumes'), 'dir');
       const before = await durableTree(f.tenantRoot);
       SecurityMonitor.clearAllEventsForTesting();
+      const originalAudit = SecurityMonitor.logSecurityEvent;
       const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
       const warn = jest.spyOn(logger, 'warn');
+      if (emitterFailure) audit.mockImplementation(event => {
+        originalAudit.call(SecurityMonitor, event);
+        if (event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED) throw new Error('Audit operation unavailable');
+      });
       if (throwing) stop = SecurityMonitor.addLogListener(event => {
         if (event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED) throw new Error('Listener failure must not replace refusal');
       });
@@ -1460,7 +1470,7 @@ posix('guarded memory classified refusal audit', () => {
         expect(manager.getPendingHeadUpdate(memory)?.cause).toBe(result.cause);
         expect(write).toHaveBeenCalledTimes(1); expect(legacy).not.toHaveBeenCalled();
         expect(failed(audit)).toHaveLength(1);
-        expect(warn.mock.calls.filter(([message]) => message === 'Memory save failure audit hook threw; original refusal preserved')).toHaveLength(throwing ? 1 : 0);
+        expect(warn.mock.calls.filter(([message]) => message === 'Memory save failure audit hook threw; original refusal preserved')).toHaveLength(emitterFailure ? 1 : 0);
         expect(failed(audit)[0][0]).toMatchObject({severity: 'HIGH', source: 'MemoryManager.onSaveError'});
         expect(audit.mock.calls.some(([event]) => event.type === MEMORY_SECURITY_EVENTS.MEMORY_SAVED)).toBe(false);
         expect(await durableTree(f.tenantRoot)).toEqual(before);

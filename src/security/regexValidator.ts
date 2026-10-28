@@ -7,6 +7,7 @@
  * 3. Limiting execution based on calculated risk
  */
 
+import { analyzePatternRisks } from './PatternRiskAnalyzer.js';
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
 
@@ -105,43 +106,20 @@ export class RegexValidator {
     // Create a copy of the regex to avoid modifying the original
     const safeCopy = new RegExp(pattern.source, pattern.flags);
     
-    try {
-      // Track execution time for monitoring
-      const startTime = performance.now();
-      const result = safeCopy.test(content);
-      const elapsed = performance.now() - startTime;
-
-      // Log slow patterns
-      if (elapsed > 50 && logEvents) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'RATE_LIMIT_WARNING',
-          severity: 'MEDIUM',
-          source: 'RegexValidator',
-          details: `Slow regex execution: ${elapsed.toFixed(2)}ms`,
-          additionalData: {
-            pattern: pattern.source,
-            contentLength: content.length,
-            elapsed
-          }
-        });
-      }
-
-      return result;
-    } catch (error) {
-      // Handle any regex errors
-      if (logEvents) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'UPDATE_SECURITY_VIOLATION',
-          severity: 'HIGH',
-          source: 'RegexValidator',
-          details: 'Regex execution error',
-          additionalData: {
-            error: error instanceof Error ? error.message : 'Unknown error'
-          }
-        });
-      }
-      return false;
+    const startTime = performance.now();
+    // An unavailable evaluation propagates; callers require a completed check.
+    const result = safeCopy.test(content);
+    const elapsed = performance.now() - startTime;
+    if (elapsed > 50 && logEvents) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_WARNING',
+        severity: 'MEDIUM',
+        source: 'RegexValidator',
+        details: `Slow regex execution: ${elapsed.toFixed(2)}ms`,
+        additionalData: { pattern: pattern.source, contentLength: content.length, elapsed }
+      });
     }
+    return result;
   }
 
   /**
@@ -186,79 +164,14 @@ export class RegexValidator {
    * - Catastrophic patterns: (.+)+$
    */
   static analyzePattern(pattern: RegExp): PatternAnalysis {
-    const source = pattern.source;
-    const risks: string[] = [];
-    
-    // Nested quantifiers - extremely dangerous
-    if (/\([^)]+[+*]\)[+*]/.test(source) || 
-        /\([^)]+\{[^}]+\}\)[+*]/.test(source) ||
-        /\(\w+[+*]\)[+*]/.test(source)) {
-      risks.push('Nested quantifiers detected');
-    }
+    const { risks, quantifierCount } = analyzePatternRisks(pattern.source);
+    const complexity = this.patternComplexity(risks, quantifierCount);
+    return { safe: risks.length === 0, risks, complexity, maxSafeLength: this.COMPLEXITY_LIMITS[complexity] };
+  }
 
-    // Alternation with repetition
-    if (/\([^)]*\|[^)]*\)[+*]/.test(source)) {
-      risks.push('Quantified alternation detected');
-    }
-
-    // Alternation with overlap (e.g., (a|a)*)
-    const alternationMatch = source.match(/\(([^|)]+)\|([^)]+)\)/g);
-    if (alternationMatch) {
-      for (const match of alternationMatch) {
-        const parts = match.slice(1, -1).split('|');
-        if (parts.some((part, i) => parts.slice(i + 1).includes(part))) {
-          risks.push('Overlapping alternation detected');
-          break;
-        }
-      }
-    }
-
-    // Catastrophic backtracking patterns
-    // Check for patterns like (.+)+, (.*)+, etc. that can cause exponential backtracking
-    if (/\([^)]*\.\+[^)]*\)\+/.test(source) || /\([^)]*\.\*[^)]*\)\+/.test(source) || /\([^)]*\\w\+[^)]*\)\+/.test(source)) {
-      risks.push('Potential catastrophic backtracking');
-    }
-
-    // Unbounded lookahead/lookbehind with quantifiers
-    if (/\(\?[=!<].*[+*]/.test(source)) {
-      risks.push('Unbounded lookahead/lookbehind');
-    }
-
-    // Polynomial patterns (multiple quantifiers in sequence)
-    const quantifierCount = (source.match(/[+*?]|\{\d*,?\d*\}/g) || []).length;
-    if (quantifierCount > 3) {
-      risks.push('Multiple quantifiers detected');
-    }
-
-    // Determine complexity and safe content length
-    let complexity: 'low' | 'medium' | 'high';
-    let maxSafeLength: number;
-    
-    if (risks.length === 0) {
-      if (quantifierCount === 0) {
-        complexity = 'low';
-        maxSafeLength = this.COMPLEXITY_LIMITS.low;
-      } else if (quantifierCount <= 3) {
-        complexity = 'medium';
-        maxSafeLength = this.COMPLEXITY_LIMITS.medium;
-      } else {
-        complexity = 'high';
-        maxSafeLength = this.COMPLEXITY_LIMITS.high;
-      }
-    } else if (risks.length === 1) {
-      complexity = 'high';
-      maxSafeLength = this.COMPLEXITY_LIMITS.high;
-    } else {
-      complexity = 'high';
-      maxSafeLength = this.COMPLEXITY_LIMITS.high;
-    }
-
-    return {
-      safe: risks.length === 0,
-      risks,
-      complexity,
-      maxSafeLength
-    };
+  private static patternComplexity(risks: string[], quantifierCount: number): PatternAnalysis['complexity'] {
+    if (risks.length > 0) return 'high';
+    return quantifierCount === 0 ? 'low' : 'medium';
   }
 
   /**

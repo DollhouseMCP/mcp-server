@@ -93,8 +93,8 @@ describe('MemoryManager - Auto-Load Functionality', () => {
     memoryManager = createRealMemoryManager(testDir);
   });
 
-  afterEach(() => {
-    memoryManager.dispose();
+  afterEach(async () => {
+    await memoryManager.dispose();
   });
 
   describe('getAutoLoadMemories', () => {

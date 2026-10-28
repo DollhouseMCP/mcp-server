@@ -16,6 +16,13 @@
 
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 
+/** A per-file failure retained without losing its diagnostic identity. */
+export interface UnindexedEntry {
+  reason: string;
+  code?: string;
+  name: string;
+}
+
 export interface StorageScanOptions {
   /**
    * If this call joins an already-running scan, perform one serialized
@@ -41,12 +48,17 @@ export interface IndexedPathResult {
   indexComplete: boolean;
   /** The completed index has not been invalidated; a miss can skip the list fallback. */
   authoritative: boolean;
+  /** Paths whose metadata could not be read during the completed scan. */
+  unindexed: readonly string[];
 }
 
 export interface IStorageLayer {
   /**
    * Scan the filesystem for changes relative to the last snapshot.
    * Implementations should enforce cooldown and deduplicate concurrent calls.
+   * File paths retained as unindexed report modified on each retry or repair,
+   * even if an earlier reader discarded a diff. Only previously unseen paths
+   * report added; disappearance of an unindexed path is not an indexed removal.
    */
   scan(options?: StorageScanOptions): Promise<ManifestDiffResult>;
 
@@ -114,6 +126,9 @@ export interface IStorageLayer {
    */
   /** Clear all cached/indexed state owned by this storage-layer instance. */
   clear(): void;
+
+  /** Release resources at manager shutdown; persist what can be persisted; must not hang. */
+  dispose?(): Promise<void>;
 
   /**
    * Reverse lookup: element ID (UUID in DB mode) → element name.
