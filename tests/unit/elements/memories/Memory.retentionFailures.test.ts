@@ -25,14 +25,15 @@ describe('Retention failure boundaries', () => {
     failRetentionAudit(cause);
     expect(() => memory.deserialize(JSON.stringify({
       id: memory.id, type: memory.type, metadata: memory.metadata,
-      entries: [0, 1].map(i => ({ id: `entry-${i}`, timestamp: '2026-01-01T00:00:00.000Z', content: `Entry ${i}` })),
+      entries: [0, 1, 2].map(i => ({ id: `entry-${i}`, timestamp: '2026-01-01T00:00:00.000Z', content: `Entry ${i}` })),
     }))).toThrow('retention audit failed');
   });
 
   it('keeps public enforcement asynchronous while preserving immediate policy effects and exact rejection', async () => {
     const memory = new Memory({ maxEntries: 2, onFull: 'evict_oldest' }, metadata);
-    await memory.addEntry('First');
+    const first = await memory.addEntry('First');
     await memory.addEntry('Second');
+    first.expiresAt = new Date('2000-01-01T00:00:00.000Z');
     const cause = new Error('retention audit failed');
     failRetentionAudit(cause);
     let pending: Promise<number> | undefined;
