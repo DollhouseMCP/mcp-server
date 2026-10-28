@@ -8,12 +8,13 @@ const cache = '/owned/db';
 const now = Date.parse('2026-10-28T20:00:00Z');
 const result = () => ({
   descriptor: { name: 'grype', version: '0.121.0', configuration: {
+    'check-for-app-update': false, externalSources: { enable: false },
     distro: '', exclude: [], 'vex-documents': [], 'vex-add': [],
     'only-fixed': false, 'only-notfixed': false, 'ignore-wontfix': '',
     ignore: structuredClone(defaultKernelIgnores),
     search: { scope: 'squashed', 'unindexed-archives': false, 'indexed-archives': true },
     db: { 'cache-dir': cache, 'update-url': 'https://grype.anchore.io/databases',
-      'auto-update': false, 'validate-by-hash-on-start': true, 'validate-age': true,
+      'auto-update': false, 'require-update-check': false, 'validate-by-hash-on-start': true, 'validate-age': true,
       'max-allowed-built-age': 432000000000000 },
   }, db: { status: { valid: true, built: '2026-10-28T06:00:00Z',
     from: `https://grype.anchore.io/databases/v6/owned.tar.zst?checksum=sha256:${'a'.repeat(64)}` } } },
@@ -71,6 +72,8 @@ test('effective exclusions, distro, VEX and alternative database policy refuse q
     config => { config.distro = 'alpine:0.1'; },
     config => { config['vex-documents'] = ['/tmp/unreviewed-vex.json']; },
     config => { config['only-fixed'] = true; },
+    config => { config.externalSources.enable = true; },
+    config => { config.db['require-update-check'] = true; },
     config => { config.db['update-url'] = 'https://other.example/databases'; },
     config => { config.db['validate-age'] = false; },
     config => { config.db['cache-dir'] = '/runner/inherited-cache'; },
@@ -82,4 +85,32 @@ test('effective exclusions, distro, VEX and alternative database policy refuse q
   }
   const value = result(); value.descriptor.db.status.from = 'https://other.example/old-db';
   assert.throws(() => verifyImageScan(value, image, now, cache), /effective configuration/);
+});
+
+test('offline local DB import requires bound Python manifest, image and actual isolation evidence', () => {
+  const value = result();
+  value.descriptor.db.status.from = 'manual import';
+  value.descriptor.db.status.schemaVersion = 'v6.1.10';
+  const proof = {
+    image_id: image, image_archive_sha256: 'b'.repeat(64),
+    scanner_archive: { sha256: '64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519' },
+    database: { url: 'https://grype.anchore.io/databases/v6/owned.tar.zst', sha256: 'a'.repeat(64),
+      manifest: { status: 'active', schemaVersion: 'v6.1.10', checksum: `sha256:${'a'.repeat(64)}`,
+        path: 'owned.tar.zst', built: '2026-10-28T06:00:00Z' } },
+    isolation: { image_id: image, user: '65532:65532', working_dir: '/work', healthcheck: { Test: ['NONE'] },
+      mounts: Array.from({ length: 5 }, () => ({ Type: 'bind', RW: false })),
+      host_config: { NetworkMode: 'none', ReadonlyRootfs: true, Privileged: false, CapDrop: ['ALL'],
+        SecurityOpt: ['no-new-privileges=true'], NanoCpus: 2000000000, Memory: 3221225472,
+        MemorySwap: 3221225472, PidsLimit: 64 } },
+  };
+  assert.deepEqual(verifyImageScan(value, image, now, cache, proof), { Low: 1 });
+  for (const mutate of [
+    p => { p.database.sha256 = 'c'.repeat(64); },
+    p => { p.isolation.host_config.NetworkMode = 'bridge'; },
+    p => { p.isolation.mounts[0].RW = true; },
+    p => { p.isolation.healthcheck.Test = ['CMD', 'node', 'app.js']; },
+  ]) {
+    const changed = structuredClone(proof); mutate(changed);
+    assert.throws(() => verifyImageScan(value, image, now, cache, changed), /Offline/);
+  }
 });

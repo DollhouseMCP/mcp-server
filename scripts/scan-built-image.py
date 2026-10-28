@@ -4,6 +4,11 @@ import datetime
 import hashlib
 import json
 import os
+import re
+import shutil
+import time
+import urllib.parse
+import uuid
 from pathlib import Path
 import subprocess
 import sys
@@ -43,57 +48,197 @@ def scanner_environment(inherited, root):
     return env
 
 
+DB_MANIFEST_URL = "https://grype.anchore.io/databases/v6/latest.json"
+SUPPORTED_DB_SCHEMA = "v6.1.10"  # Inspected official manifest and existing validated DB.
+
+
+class TrustedRedirects(urllib.request.HTTPRedirectHandler):
+    def __init__(self, hosts):
+        self.hosts = hosts
+
+    def redirect_request(self, request, fp, code, message, headers, url):
+        validate_public_url(url, self.hosts)
+        return super().redirect_request(request, fp, code, message, headers, url)
+
+
+def validate_public_url(url, allowed_hosts=None):
+    value = urllib.parse.urlsplit(url)
+    if (value.scheme != "https" or value.port not in (None, 443) or value.username or
+            value.password or value.hostname not in (allowed_hosts or
+            {"github.com", "release-assets.githubusercontent.com", "grype.anchore.io"})):
+        raise ValueError("Download redirects must remain on the bounded trusted HTTPS origins")
+
+
+def download(url, destination, maximum, expected=None):
+    validate_public_url(url)
+    request = urllib.request.Request(url, headers={"User-Agent": "dollhouse-offline-scanner-review/2026-10-28"})
+    digest = hashlib.sha256()
+    count = 0
+    started = time.monotonic()
+    started_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    hosts = {"grype.anchore.io"} if urllib.parse.urlsplit(url).hostname == "grype.anchore.io" else {"github.com", "release-assets.githubusercontent.com"}
+    with urllib.request.build_opener(TrustedRedirects(hosts)).open(request, timeout=30) as response:
+        with destination.open("wb") as output:
+            while chunk := response.read(1024 * 1024):
+                count += len(chunk)
+                if count > maximum or time.monotonic() - started > 180:
+                    raise ValueError("Download exceeds bounded size or time")
+                digest.update(chunk)
+                output.write(chunk)
+    if expected and digest.hexdigest() != expected:
+        raise ValueError("Downloaded artifact does not match its reviewed checksum")
+    return {"url": url, "sha256": digest.hexdigest(), "bytes": count,
+            "started_utc": started_utc, "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+
+def database_manifest(document, now):
+    checksum = document.get("checksum", "")
+    name = document.get("path", "")
+    built = datetime.datetime.fromisoformat(document.get("built", "").replace("Z", "+00:00"))
+    age = (now - built).total_seconds()
+    if (document.get("status") != "active" or document.get("schemaVersion") != SUPPORTED_DB_SCHEMA or
+            not re.fullmatch(r"sha256:[a-f0-9]{64}", checksum) or
+            not re.fullmatch(r"vulnerability-db_v6[.]1[.]10_[A-Za-z0-9:_-]+[.]tar[.]zst", name) or
+            not 0 <= age <= 120 * 60 * 60):
+        raise ValueError("Official DB manifest is unsupported, malformed or stale")
+    return "https://grype.anchore.io/databases/v6/" + name, checksum[7:]
+
+
+def image_archive_identity(archive):
+    with tarfile.open(archive) as bundle:
+        member = bundle.getmember("manifest.json")
+        if not member.isfile() or member.size > 1024 * 1024:
+            raise ValueError("Docker archive manifest is not a bounded regular file")
+        manifest = json.load(bundle.extractfile(member))
+        if len(manifest) != 1:
+            raise ValueError("Expected exactly the job-built image in its Docker archive")
+        config = bundle.getmember(manifest[0]["Config"])
+        if not config.isfile() or config.size > 10 * 1024 * 1024:
+            raise ValueError("Docker archive image configuration is not a bounded regular file")
+        return "sha256:" + hashlib.sha256(bundle.extractfile(config).read()).hexdigest()
+
+
+def isolated_container_command(image_id, name, inputs):
+    command = ["docker", "create", "--name", name, "--pull", "never", "--platform", "linux/amd64",
+               "--network", "none", "--read-only", "--no-healthcheck", "--workdir", "/work", "--cap-drop", "ALL",
+               "--security-opt", "no-new-privileges=true", "--user", "65532:65532",
+               "--cpus", "2", "--memory", "3g", "--memory-swap", "3g", "--pids-limit", "64",
+               "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=2g,mode=1777",
+               "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777"]
+    for source, target in [("grype", "grype"), ("grype.yaml", "grype.yaml"),
+                           ("database.tar.zst", "database.tar.zst"), ("image.tar", "image.tar"),
+                           ("grype-offline-runner.mjs", "grype-offline-runner.mjs")]:
+        command += ["--mount", f"type=bind,src={inputs / source},dst=/inputs/{target},readonly"]
+    env = scanner_environment({}, Path("/work"))
+    env.update(PATH="/usr/local/bin:/usr/bin:/bin", HOME="/work/home", TMPDIR="/work/tmp")
+    return command + ["--entrypoint", "/usr/bin/env", image_id, "-i"] + [
+        f"{key}={value}" for key, value in sorted(env.items())
+    ] + ["/usr/local/bin/node", "/inputs/grype-offline-runner.mjs"]
+
+
+def isolation_evidence(value, image_id, inputs):
+    host = value["HostConfig"]
+    mounts = value["Mounts"]
+    targets = {"/inputs/" + name for name in ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]}
+    plan = isolated_container_command(image_id, "review-only", inputs)
+    expected_command = plan[plan.index(image_id) + 1:]
+    expected_tmpfs = {"/work": "rw,noexec,nosuid,nodev,size=2g,mode=1777",
+                      "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}
+    if (value["Image"] != image_id or value["Config"]["User"] != "65532:65532" or
+            host["NetworkMode"] != "none" or host["ReadonlyRootfs"] is not True or host["Privileged"] or
+            host.get("CapDrop") != ["ALL"] or "no-new-privileges=true" not in host.get("SecurityOpt", []) or
+            host["NanoCpus"] != 2000000000 or host["Memory"] != 3221225472 or
+            host["MemorySwap"] != 3221225472 or host["PidsLimit"] != 64 or
+            host.get("Tmpfs") != expected_tmpfs or host.get("CapAdd") or
+            host.get("PidMode") or host.get("Devices") or host.get("DeviceRequests") or
+            value["Config"]["WorkingDir"] != "/work" or
+            value["Config"].get("Healthcheck", {}).get("Test") != ["NONE"] or
+            value["Config"]["Entrypoint"] != ["/usr/bin/env"] or value["Config"]["Cmd"] != expected_command or
+            {m["Destination"] for m in mounts} != targets or len(mounts) != len(targets) or
+            any(m["Type"] != "bind" or m["RW"] is not False or
+                m["Source"] != str(inputs / Path(m["Destination"]).name) for m in mounts)):
+        raise ValueError("Actual container isolation does not match the owned offline plan")
+    return {"image_id": value["Image"], "user": value["Config"]["User"],
+            "working_dir": value["Config"]["WorkingDir"], "healthcheck": value["Config"]["Healthcheck"],
+            "entrypoint": value["Config"]["Entrypoint"], "command": value["Config"]["Cmd"],
+            "host_config": {key: host[key] for key in ["NetworkMode", "ReadonlyRootfs", "Privileged", "CapDrop", "SecurityOpt", "NanoCpus", "Memory", "MemorySwap", "PidsLimit", "Tmpfs"]},
+            "mounts": mounts}
+
+
 def main():
     root = Path(sys.argv[1]).resolve()
-    reports = root / "reports"
+    reports, inputs = root / "reports", root / "inputs"
     reports.mkdir(parents=True, exist_ok=True)
-    archive = root / ARCHIVE_NAME
-    binary = root / "grype"
-    config = Path(".github/grype-image-scan.yaml").resolve()
-    download = {"url": ARCHIVE_URL, "expected_sha256": ARCHIVE_SHA256,
-                "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-    with urllib.request.urlopen(ARCHIVE_URL, timeout=120) as response:
-        data = response.read(100 * 1024 * 1024 + 1)
-    if len(data) > 100 * 1024 * 1024:
-        raise ValueError("Grype archive exceeds bounded download size")
-    archive.write_bytes(data)
-    extract_verified_binary(archive, binary)
-    download["verified_sha256"] = hashlib.sha256(data).hexdigest()
-    (reports / "download.json").write_text(json.dumps(download, indent=2))
-    env = scanner_environment(os.environ, root)
+    inputs.mkdir(parents=True, exist_ok=True)
+    receipts = {}
+    deadline = time.monotonic() + 240
 
-    def run(args, name, timeout):
-        command = [str(binary), "--config", str(config)] + args
-        receipt = {"command": command, "timeout_seconds": timeout,
-                   "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    def run(command, name, timeout=180, retain_stdout=True):
+        if name != "container-cleanup":
+            timeout = min(timeout, max(1, int(deadline - time.monotonic())))
+        started = datetime.datetime.now(datetime.timezone.utc).isoformat()
         try:
-            child = subprocess.run(command, cwd=root, env=env, capture_output=True,
-                                   timeout=timeout, check=False)
-            stdout, stderr = child.stdout, child.stderr
-            receipt["exit_code"] = child.returncode
+            child = subprocess.run(command, capture_output=True, timeout=timeout, check=False)
+            stdout, stderr, status = child.stdout, child.stderr, child.returncode
         except subprocess.TimeoutExpired as error:
-            stdout, stderr = error.stdout or b"", error.stderr or b""
-            receipt.update(exit_code=None, timed_out=True)
-        (reports / (name + ".stdout")).write_bytes(stdout)
+            stdout, stderr, status = error.stdout or b"", error.stderr or b"", None
+        if retain_stdout: (reports / (name + ".stdout")).write_bytes(stdout)
         (reports / (name + ".stderr")).write_bytes(stderr)
-        receipt["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        (reports / (name + "-receipt.json")).write_text(json.dumps(receipt, indent=2))
-        print(json.dumps(receipt), flush=True)
-        return receipt["exit_code"], stdout
+        receipts[name] = {"command": command, "started_utc": started, "exit_code": status,
+                          "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "timeout_seconds": timeout}
+        (reports / (name + "-receipt.json")).write_text(json.dumps(receipts[name], indent=2))
+        return status, stdout
 
-    for args, name in [(["version", "-o", "json"], "version"), (["--help"], "help"),
-                       (["config", "--load"], "effective-config"),
-                       (["db", "update"], "db-update")]:
-        status, _ = run(args, name, 180)
-        if status != 0:
-            return 1
-    status, stdout = run(["db", "status", "-o", "json"], "db-status", 30)
-    if status != 0 or json.loads(stdout).get("valid") is not True:
-        raise ValueError("Fresh validated Grype database is unavailable")
-    status, _ = run(["docker:dollhousemcp:latest-linux-amd64", "--output", "json",
-                     "--file", str(reports / "application-image-vulnerabilities.json"),
-                     "--fail-on", "high"], "scan", 180)
-    return status if status in (0, 2) else 1
+    binary_archive = inputs / ARCHIVE_NAME
+    binary_receipt = download(ARCHIVE_URL, binary_archive, 100 * 1024 * 1024, ARCHIVE_SHA256)
+    extract_verified_binary(binary_archive, inputs / "grype")
+    (inputs / "grype").chmod(0o555)
+    download(DB_MANIFEST_URL, reports / "database-manifest.json", 1024 * 1024)
+    manifest = json.loads((reports / "database-manifest.json").read_text())
+    url, checksum = database_manifest(manifest, datetime.datetime.now(datetime.timezone.utc))
+    db_receipt = download(url, inputs / "database.tar.zst", 1024 * 1024 * 1024, checksum)
+    for source, target in [(Path(".github/grype-image-scan.yaml"), "grype.yaml"),
+                           (Path("scripts/grype-offline-runner.mjs"), "grype-offline-runner.mjs")]:
+        shutil.copyfile(source, inputs / target)
+    status, stdout = run(["docker", "image", "inspect", "--format", "{{.Id}}", "dollhousemcp:latest-linux-amd64"], "image-id")
+    image_id = stdout.decode().strip()
+    if status != 0 or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+        raise ValueError("The job-built image ID is unavailable")
+    status, _ = run(["docker", "image", "save", "--output", str(inputs / "image.tar"), image_id], "image-save")
+    if status != 0 or (inputs / "image.tar").stat().st_size > 2 * 1024 ** 3 or image_archive_identity(inputs / "image.tar") != image_id:
+        raise ValueError("Saved Docker archive does not identify the exact job-built image")
+    for path in inputs.iterdir():
+        if path.name != "grype": path.chmod(0o444)
+    with (inputs / "image.tar").open("rb") as stream:
+        image_archive_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+    provenance = {"scanner_archive": binary_receipt, "database": {**db_receipt, "manifest": manifest},
+                  "image_id": image_id, "image_archive_sha256": image_archive_hash}
+    name = "beta-offline-scan-" + uuid.uuid4().hex[:12]
+    container = None
+    if deadline - time.monotonic() < 125:
+        raise ValueError("Insufficient bounded job budget; no scanner container will be created")
+    try:
+        status, stdout = run(isolated_container_command(image_id, name, inputs), "container-create", 30)
+        if status != 0: raise ValueError("Unable to create the owned isolated scanner")
+        container = stdout.decode().strip()
+        status, stdout = run(["docker", "inspect", container], "container-inspect", 30, retain_stdout=False)
+        if status != 0: raise ValueError("Unable to inspect actual scanner isolation")
+        # Persist only selected isolation fields; never image environment/credentials.
+        provenance["isolation"] = isolation_evidence(json.loads(stdout)[0], image_id, inputs)
+        status, stdout = run(["docker", "start", "--attach", container], "container-start", 120)
+        envelope = json.loads(stdout)
+        if envelope.get("kind") != "grype-offline-envelope-v1" or envelope.get("exit_code") != status:
+            raise ValueError("Offline scanner output is missing or incomplete")
+        for filename, data in envelope["files"].items():
+            if not re.fullmatch(r"[a-z-]+[.](?:json|stdout|stderr)", filename) or not isinstance(data, str):
+                raise ValueError("Unexpected offline scanner output file")
+            (reports / filename).write_text(data)
+        return status if status in (0, 2) else 1
+    finally:
+        (reports / "offline-provenance.json").write_text(json.dumps(provenance, indent=2))
+        if container:
+            cleanup, _ = run(["docker", "rm", "--force", "--volumes", container], "container-cleanup", 30)
+            if cleanup != 0: raise ValueError("Owned scanner container cleanup failed; inspect retained receipt")
 
 
 if __name__ == "__main__":

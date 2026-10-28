@@ -1,5 +1,7 @@
 # Dedicated configuration; do not load repository/user exception files.
 check-for-app-update: false
+external-sources:
+  enable: false
 only-fixed: false
 only-notfixed: false
 ignore-wontfix: ''
@@ -13,7 +15,8 @@ search:
 ignore: []
 exclude: []
 db:
-  auto-update: true
+  auto-update: false
+  require-update-check: false
   validate-by-hash-on-start: true
   validate-age: true
   max-allowed-built-age: 120h

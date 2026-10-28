@@ -1,5 +1,8 @@
 """No network/execution: checksum and hostile archive extraction boundaries."""
 import hashlib
+import datetime
+import json
+import copy
 import importlib.util
 import io
 from pathlib import Path
@@ -78,6 +81,70 @@ class ScannerEnvironmentTests(unittest.TestCase):
         self.assertEqual(actual["PATH"], inherited["PATH"])
         self.assertEqual(actual["DOCKER_CONFIG"], inherited["DOCKER_CONFIG"])
         self.assertEqual(inherited["GRYPE_DB_VALIDATE_AGE"], "false")
+
+
+class OfflineBoundaryTests(unittest.TestCase):
+    def test_official_database_requires_reviewed_schema_checksum_name_and_freshness(self):
+        now = datetime.datetime(2026, 10, 28, 20, tzinfo=datetime.timezone.utc)
+        record = {"status": "active", "schemaVersion": "v6.1.10", "built": "2026-10-28T06:23:30Z",
+                  "path": "vulnerability-db_v6.1.10_2026-10-28T00:24:28Z_1793168610.tar.zst",
+                  "checksum": "sha256:" + "a" * 64}
+        url, checksum = scanner.database_manifest(record, now)
+        self.assertTrue(url.startswith("https://grype.anchore.io/databases/v6/"))
+        self.assertEqual(checksum, "a" * 64)
+        for key, bad in [("path", "../../private"), ("schemaVersion", "v7.0.0"),
+                         ("checksum", "sha256:bad"), ("built", "2026-10-01T00:00:00Z")]:
+            value = dict(record); value[key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                scanner.database_manifest(value, now)
+
+    def test_https_redirects_cannot_leave_bounded_origins(self):
+        scanner.validate_public_url("https://grype.anchore.io/databases/v6/latest.json")
+        for bad in ["http://grype.anchore.io/", "https://127.0.0.1/", "file:///private/key",
+                    "https://grype.anchore.io:8443/", "https://user:password@grype.anchore.io/"]:
+            with self.subTest(url=bad), self.assertRaises(ValueError):
+                scanner.validate_public_url(bad)
+
+    def test_image_archive_id_comes_from_actual_config_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "image.tar"
+            config = b'{"architecture":"amd64","rootfs":{"type":"layers","diff_ids":[]}}'
+            manifest = json.dumps([{"Config": "owned.json", "Layers": []}]).encode()
+            with tarfile.open(archive, "w") as bundle:
+                for name, data in [("manifest.json", manifest), ("owned.json", config)]:
+                    member = tarfile.TarInfo(name); member.size = len(data)
+                    bundle.addfile(member, io.BytesIO(data))
+            self.assertEqual(scanner.image_archive_identity(archive), "sha256:" + hashlib.sha256(config).hexdigest())
+
+    def test_actual_isolation_rejects_network_socket_mounts_and_inherited_app_startup(self):
+        inputs = Path("/owned/inputs")
+        image = "sha256:" + "a" * 64
+        names = ["grype", "grype.yaml", "database.tar.zst", "image.tar", "grype-offline-runner.mjs"]
+        value = {"Image": image, "Config": {"User": "65532:65532", "Entrypoint": ["/usr/bin/env"],
+                 "Cmd": ["-i"], "WorkingDir": "/work", "Healthcheck": {"Test": ["NONE"]}},
+                 "Mounts": [{"Type": "bind", "Destination": "/inputs/" + name,
+                             "Source": str(inputs / name), "RW": False} for name in names],
+                 "HostConfig": {"NetworkMode": "none", "ReadonlyRootfs": True, "Privileged": False,
+                 "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges=true"], "NanoCpus": 2000000000,
+                 "Memory": 3221225472, "MemorySwap": 3221225472, "PidsLimit": 64,
+                 "Tmpfs": {"/work": "rw,noexec,nosuid,nodev,size=2g,mode=1777",
+                           "/tmp": "rw,noexec,nosuid,nodev,size=128m,mode=1777"}}}
+        plan = scanner.isolated_container_command(image, "fixture", inputs)
+        value["Config"]["Cmd"] = plan[plan.index(image) + 1:]
+        self.assertEqual(scanner.isolation_evidence(value, image, inputs)["user"], "65532:65532")
+        mutations = [lambda x: x["HostConfig"].update(NetworkMode="bridge"),
+                     lambda x: x["Mounts"][0].update(Source="/var/run/docker.sock"),
+                     lambda x: x["Mounts"][0].update(RW=True),
+                     lambda x: x["Config"]["Cmd"].insert(1, "GRYPE_EXCLUDE=**/*"),
+                     lambda x: x["Config"].update(WorkingDir="/app"),
+                     lambda x: x["Config"].update(Healthcheck={"Test": ["CMD", "node", "app.js"]})]
+        for mutate in mutations:
+            changed = copy.deepcopy(value); mutate(changed)
+            with self.assertRaises(ValueError): scanner.isolation_evidence(changed, image, inputs)
+        command = scanner.isolated_container_command(image, "owned-container", inputs)
+        self.assertIn("--no-healthcheck", command)
+        self.assertNotIn("/var/run/docker.sock", " ".join(command))
+        self.assertEqual(command.count("--mount"), 5)
 
 
 if __name__ == "__main__":
