@@ -14,7 +14,10 @@ permissions:
 jobs:
   browser-qualification:
     name: Chrome and PostgreSQL
-    runs-on: ubuntu-latest
+    # Keep the browser dependency set on Playwright's supported stable image.
+    # ubuntu-latest moved to 26.04; its cold Firefox apt/font/media downloads
+    # consumed the entire job before either browser qualification could run.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       CI: true
