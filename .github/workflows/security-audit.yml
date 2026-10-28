@@ -96,8 +96,11 @@ jobs:
           if ! node run-audit.js; then
             echo "AUDIT_FAILED=true" >> $GITHUB_ENV
             echo "::warning::Security audit encountered errors but workflow will continue"
-            # Create minimal report if audit fails
-            echo '{"findings": [], "summary": {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}, "error": "Audit failed to complete"}' > security-audit-result.json
+            # High/critical results may already exist. Preserve the actual findings.
+            # A missing result is unavailable, never a fabricated clean audit.
+            if [ ! -s security-audit-result.json ]; then
+              echo '{"error":"Audit failed to complete"}' > security-audit-result.json
+            fi
           fi
 
       - name: Upload audit results
@@ -114,70 +117,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          # Convert our JSON report to SARIF format
-          cat > convert-to-sarif.js << 'EOF'
-          import { readFile, writeFile } from 'fs/promises';
-
-          async function convertToSarif() {
-            const result = JSON.parse(await readFile('security-audit-result.json', 'utf-8'));
-
-            const sarif = {
-              version: '2.1.0',
-              runs: [{
-                tool: {
-                  driver: {
-                    name: 'DollhouseMCP Security Audit',
-                    version: '1.0.0',
-                    rules: []
-                  }
-                },
-                results: result.findings.map(finding => ({
-                  ruleId: finding.ruleId,
-                  level: mapSeverityToLevel(finding.severity),
-                  message: {
-                    text: finding.message
-                  },
-                  locations: finding.file ? [{
-                    physicalLocation: {
-                      artifactLocation: {
-                        uri: finding.file
-                      },
-                      region: {
-                        startLine: finding.line || 1,
-                        startColumn: finding.column || 1
-                      }
-                    }
-                  }] : []
-                }))
-              }]
-            };
-
-            await writeFile('security-audit.sarif', JSON.stringify(sarif, null, 2));
-          }
-
-          function mapSeverityToLevel(severity) {
-            switch (severity) {
-              case 'critical':
-              case 'high':
-                return 'error';
-              case 'medium':
-                return 'warning';
-              default:
-                return 'note';
-            }
-          }
-
-          convertToSarif().catch(console.error);
-          EOF
-
-          # Convert with validation
-          if node convert-to-sarif.js; then
-            echo "✅ SARIF report generated successfully"
-          else
-            echo "::warning::Failed to generate SARIF report"
-            # Create minimal valid SARIF if conversion fails
-            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"DollhouseMCP Security Audit","version":"1.0.0"}},"results":[]}]}' > security-audit.sarif
-          fi
+          node --test tests/scripts/security-audit-report.test.mjs
+          node scripts/security-audit-report.mjs security-audit-result.json security-audit.sarif
 
       - name: Upload SARIF to GitHub
         if: always() && github.event.repository.private == false
@@ -194,6 +135,9 @@ jobs:
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
+          # Retry transient report transport only; exhausted retries still fail.
+          retries: 2
+          retry-exempt-status-codes: 400,401,403,404,422
           script: |
             const fs = require('fs');
 
@@ -218,7 +162,7 @@ jobs:
             if (failed) {
               report = '### ❌ Security Audit Failed\n\n' + report;
             } else {
-              report = '### ✅ Security Audit Passed\n\n' + report;
+              report = '### Security Audit Completed — see finding counts below\n\n' + report;
             }
 
             // Truncate if too long
