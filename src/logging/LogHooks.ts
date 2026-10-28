@@ -12,8 +12,9 @@
  *   cleanups.forEach(fn => fn());
  */
 
+import { BestEffortDelivery } from './BestEffortDelivery.js';
 import type { LogManager } from './LogManager.js';
-import type { LogLevel, UnifiedLogEntry } from './types.js';
+import type { LogCategory, LogLevel, UnifiedLogEntry } from './types.js';
 import type { SessionContext } from '../context/SessionContext.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { DefaultElementProvider } from '../portfolio/DefaultElementProvider.js';
@@ -83,19 +84,7 @@ export function getTriggerMetricsLogListener(
   logManager: LogManager,
   contextTracker?: RequestContextProvider,
 ): (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void {
-  return (level, message, data) => {
-    const entry: UnifiedLogEntry = {
-      id: logManager.generateId(),
-      timestamp: new Date().toISOString(),
-      category: 'telemetry',
-      level,
-      source: 'TriggerMetricsTracker',
-      message,
-      data,
-      ...getRequestAttribution(contextTracker ?? null),
-    };
-    logManager.log(entry);
-  };
+  return getMessageLogListener(logManager, 'telemetry', 'TriggerMetricsTracker', contextTracker);
 }
 
 // ---------------------------------------------------------------------------
@@ -106,19 +95,7 @@ export function getSecurityAuditorLogListener(
   logManager: LogManager,
   contextTracker?: RequestContextProvider,
 ): (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void {
-  return (level, message, data) => {
-    const entry: UnifiedLogEntry = {
-      id: logManager.generateId(),
-      timestamp: new Date().toISOString(),
-      category: 'security',
-      level,
-      source: 'SecurityAuditor',
-      message,
-      data,
-      ...getRequestAttribution(contextTracker ?? null),
-    };
-    logManager.log(entry);
-  };
+  return getMessageLogListener(logManager, 'security', 'SecurityAuditor', contextTracker);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +126,7 @@ export function wireLogHooks(
     const mcpLogger = container.resolve<{
       addLogListener(fn: (entry: { timestamp: Date; level: string; message: string; data?: any }) => void): () => void;
     }>('MCPLogger');
-    const unsub = mcpLogger.addLogListener((logEntry) => {
+    const unsub = mcpLogger.addLogListener(guardTranslation((logEntry) => {
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: logEntry.timestamp.toISOString(),
@@ -161,13 +138,13 @@ export function wireLogHooks(
         ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
-    });
+    }));
     cleanups.push(unsub);
   } catch { /* MCPLogger not registered */ }
 
   // --- SecurityMonitor (security, static) ---------------------------------
   {
-    const unsub = SecurityMonitor.addLogListener((logEntry, delivery) => {
+    const unsub = SecurityMonitor.addLogListener(guardTranslation((logEntry, delivery) => {
       const capturedAttribution = getCapturedSecurityAttribution(logEntry);
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
@@ -188,7 +165,7 @@ export function wireLogHooks(
         ...(capturedAttribution ?? (delivery.replayed ? {} : getRequestAttribution(contextTracker))),
       };
       logManager.log(entry);
-    }, { replayExisting: true });
+    }), { replayExisting: true });
     cleanups.push(unsub);
   }
 
@@ -200,7 +177,7 @@ export function wireLogHooks(
         severity: string; source: string; metadata?: Record<string, any>;
       }) => void): () => void;
     }>('SecurityTelemetry');
-    const unsub = secTelemetry.addLogListener((telEntry) => {
+    const unsub = secTelemetry.addLogListener(guardTranslation((telEntry) => {
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: telEntry.timestamp,
@@ -212,7 +189,7 @@ export function wireLogHooks(
         ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
-    });
+    }));
     cleanups.push(unsub);
   } catch { /* SecurityTelemetry not registered */ }
 
@@ -221,19 +198,7 @@ export function wireLogHooks(
     const perfMonitor = container.resolve<{
       addLogListener(fn: (level: string, message: string, data?: Record<string, unknown>) => void): () => void;
     }>('PerformanceMonitor');
-    const unsub = perfMonitor.addLogListener((level, message, data) => {
-      const entry: UnifiedLogEntry = {
-        id: logManager.generateId(),
-        timestamp: new Date().toISOString(),
-        category: 'performance',
-        level: level as LogLevel,
-        source: 'PerformanceMonitor',
-        message,
-        data,
-        ...getRequestAttribution(contextTracker),
-      };
-      logManager.log(entry);
-    });
+    const unsub = perfMonitor.addLogListener(getMessageLogListener(logManager, 'performance', 'PerformanceMonitor', contextTracker));
     cleanups.push(unsub);
   } catch { /* PerformanceMonitor not registered */ }
 
@@ -261,7 +226,7 @@ export function wireLogHooks(
     const loggedEvents = Object.keys(eventLevelMap);
 
     for (const eventName of loggedEvents) {
-      const unsub = dispatcher.on(eventName, (payload: any) => {
+      const unsub = dispatcher.on(eventName, guardTranslation((payload: any) => {
         const level = eventLevelMap[eventName] ?? 'debug';
         const requestAttribution = getRequestAttribution(contextTracker);
         const attribution = {
@@ -287,7 +252,7 @@ export function wireLogHooks(
           ...attribution,
         };
         logManager.log(entry);
-      });
+      }));
       cleanups.push(unsub);
     }
   } catch { /* ElementEventDispatcher not registered */ }
@@ -297,19 +262,7 @@ export function wireLogHooks(
     const opsTelemetry = container.resolve<{
       addLogListener(fn: (level: string, message: string, data?: Record<string, unknown>) => void): () => void;
     }>('OperationalTelemetry');
-    const unsub = opsTelemetry.addLogListener((level, message, data) => {
-      const entry: UnifiedLogEntry = {
-        id: logManager.generateId(),
-        timestamp: new Date().toISOString(),
-        category: 'telemetry',
-        level: level as LogLevel,
-        source: 'OperationalTelemetry',
-        message,
-        data,
-        ...getRequestAttribution(contextTracker),
-      };
-      logManager.log(entry);
-    });
+    const unsub = opsTelemetry.addLogListener(getMessageLogListener(logManager, 'telemetry', 'OperationalTelemetry', contextTracker));
     cleanups.push(unsub);
   } catch { /* OperationalTelemetry not registered */ }
 
@@ -318,55 +271,19 @@ export function wireLogHooks(
     const lockManager = container.resolve<{
       addLogListener(fn: (level: string, message: string, data?: Record<string, unknown>) => void): () => void;
     }>('FileLockManager');
-    const unsub = lockManager.addLogListener((level, message, data) => {
-      const entry: UnifiedLogEntry = {
-        id: logManager.generateId(),
-        timestamp: new Date().toISOString(),
-        category: 'performance',
-        level: level as LogLevel,
-        source: 'FileLockManager',
-        message,
-        data,
-        ...getRequestAttribution(contextTracker),
-      };
-      logManager.log(entry);
-    });
+    const unsub = lockManager.addLogListener(getMessageLogListener(logManager, 'performance', 'FileLockManager', contextTracker));
     cleanups.push(unsub);
   } catch { /* FileLockManager not registered */ }
 
   // --- DefaultElementProvider (performance, static) -----------------------
   {
-    const unsub = DefaultElementProvider.addLogListener((level, message, data) => {
-      const entry: UnifiedLogEntry = {
-        id: logManager.generateId(),
-        timestamp: new Date().toISOString(),
-        category: 'performance',
-        level: level as LogLevel,
-        source: 'DefaultElementProvider',
-        message,
-        data,
-        ...getRequestAttribution(contextTracker),
-      };
-      logManager.log(entry);
-    });
+    const unsub = DefaultElementProvider.addLogListener(getMessageLogListener(logManager, 'performance', 'DefaultElementProvider', contextTracker));
     cleanups.push(unsub);
   }
 
   // --- LRUCache (performance, static) ------------------------------------
   {
-    const unsub = LRUCache.addLogListener((level, message, data) => {
-      const entry: UnifiedLogEntry = {
-        id: logManager.generateId(),
-        timestamp: new Date().toISOString(),
-        category: 'performance',
-        level: level as LogLevel,
-        source: 'LRUCache',
-        message,
-        data,
-        ...getRequestAttribution(contextTracker),
-      };
-      logManager.log(entry);
-    });
+    const unsub = LRUCache.addLogListener(getMessageLogListener(logManager, 'performance', 'LRUCache', contextTracker));
     cleanups.push(unsub);
   }
 
@@ -376,7 +293,7 @@ export function wireLogHooks(
       on(event: string, handler: (...args: any[]) => void): any;
       removeListener(event: string, handler: (...args: any[]) => void): any;
     }>('StateChangeNotifier');
-    const handler = (event: { type: string; previousValue: string | null; newValue: string | null }) => {
+    const handler = guardTranslation((event: { type: string; previousValue: string | null; newValue: string | null }) => {
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: new Date().toISOString(),
@@ -388,10 +305,29 @@ export function wireLogHooks(
         ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
-    };
+    });
     notifier.on('state-change', handler);
     cleanups.push(() => notifier.removeListener('state-change', handler));
   } catch { /* StateChangeNotifier not registered */ }
 
   return cleanups;
+}
+
+function guardTranslation<Args extends unknown[]>(translate: (...args: Args) => void): (...args: Args) => void {
+  return new BestEffortDelivery('LogHooks').wrap(translate);
+}
+
+function getMessageLogListener(
+  logManager: LogManager,
+  category: LogCategory,
+  source: string,
+  contextTracker?: RequestContextProvider | null,
+): (level: string, message: string, data?: Record<string, unknown>) => void {
+  return guardTranslation((level, message, data) => {
+    logManager.log({
+      id: logManager.generateId(), timestamp: new Date().toISOString(),
+      category, level: level as LogLevel, source, message, data,
+      ...getRequestAttribution(contextTracker ?? null),
+    });
+  });
 }

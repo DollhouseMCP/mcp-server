@@ -174,7 +174,7 @@ describe('FailedScanRetries', () => {
     });
   }
 
-  it('retries a transient YAML warning listener failure on the next element scan', async () => {
+  it('indexes valid YAML independently of warning listener availability', async () => {
     const f = await fixture('element');
     await fs.writeFile(f.file, f.wrap('name: Valid Warning\nextra:\n  array: [\na, b]'));
     const monitor = new SecurityMonitor();
@@ -186,12 +186,11 @@ describe('FailedScanRetries', () => {
     const reads = jest.spyOn(f.backend, 'readFile');
     try {
       await f.layer.scan();
-      expect(f.layer['getState']().table.unindexed().get(f.relative)).toMatchObject({
-        name: 'Error', code: 'EIO', reason: expect.not.stringContaining(f.root),
-      });
+      expect(f.layer['getState']().table.unindexed().size).toBe(0);
+      expect((await f.layer.readIndexedPath(['Valid Warning'])).path).toBe(f.relative);
       remove();
       await f.layer.scan();
-      expect(reads).toHaveBeenCalledTimes(2);
+      expect(reads).toHaveBeenCalledTimes(1);
       expect((await f.layer.readIndexedPath(['Valid Warning'])).path).toBe(f.relative);
       expect(f.layer['getState']().table.unindexed().size).toBe(0);
     } finally { remove(); SecurityMonitor.clearInstance(monitor); }

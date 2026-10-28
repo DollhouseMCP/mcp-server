@@ -13,6 +13,7 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { MEMORY_CONSTANTS, DEFAULT_MEMORY_NAME } from '../elements/memories/constants.js';
 import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import type { ElementIndexEntry } from './types.js';
+import { YAMLException } from 'js-yaml';
 import { SecurityError } from '../errors/SecurityError.js';
 
 /** Metadata rejected by parsing or validation must not be indexed with defaults. */
@@ -96,6 +97,7 @@ export class MemoryMetadataExtractor {
       }
       return data;
     } catch (error) {
+      if (!(error instanceof SecurityError) && !(error instanceof YAMLException)) throw error;
       throw new MemoryMetadataExtractionError(relativePath, error);
     }
   }

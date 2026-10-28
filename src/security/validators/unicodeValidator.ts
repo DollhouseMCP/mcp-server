@@ -14,11 +14,13 @@
 import { SecurityMonitor } from '../securityMonitor.js';
 import { escalateSeverity } from '../constants.js';
 
-export interface UnicodeValidationResult {
+type UnicodeSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export interface UnicodeValidationResult<T = string> {
   isValid: boolean;
-  normalizedContent: string;
+  normalizedContent: T;
   detectedIssues?: string[];
-  severity?: 'low' | 'medium' | 'high' | 'critical';
+  severity?: UnicodeSeverity;
 }
 
 export class UnicodeValidator {
@@ -109,116 +111,104 @@ export class UnicodeValidator {
   /**
    * Normalize Unicode content to prevent bypass attacks
    */
-  static normalize(content: string): UnicodeValidationResult {
+  static normalize(content: string): UnicodeValidationResult;
+  static normalize(content: unknown): UnicodeValidationResult<unknown>;
+  static normalize(content: unknown): UnicodeValidationResult<unknown> {
+    // Preserve the input payload while rejecting non-text content.
+    if (typeof content !== 'string') {
+      return { isValid: false, normalizedContent: content, detectedIssues: ['Unicode validation failed'], severity: 'high' };
+    }
     const issues: string[] = [];
     let normalized = content;
-    let severity: 'low' | 'medium' | 'high' | 'critical' = 'low';
+    let severity: UnicodeSeverity = 'low';
 
-    try {
-      // 1. Detect and log suspicious Unicode patterns before normalization
-      const suspiciousPatterns = this.detectSuspiciousPatterns(content);
-      issues.push(...suspiciousPatterns.issues);
-      if (suspiciousPatterns.severity) {
-        severity = escalateSeverity(severity, suspiciousPatterns.severity);
-      }
+    // 1. Detect and log suspicious Unicode patterns before normalization
+    const suspiciousPatterns = this.detectSuspiciousPatterns(content);
+    issues.push(...suspiciousPatterns.issues);
+    if (suspiciousPatterns.severity) {
+      severity = escalateSeverity(severity, suspiciousPatterns.severity);
+    }
 
-      // 2. Remove direction override characters (prevents RLO/LRO attacks)
-      if (this.DIRECTION_OVERRIDE_CHARS.test(normalized)) {
-        issues.push('Direction override characters detected');
-        severity = escalateSeverity(severity, 'high');
-        normalized = normalized.replace(this.DIRECTION_OVERRIDE_CHARS, '');
-        
-        SecurityMonitor.logSecurityEvent({
-          type: 'UNICODE_DIRECTION_OVERRIDE',
-          severity: 'HIGH',
-          source: 'UnicodeValidator',
-          details: 'Direction override characters removed from content'
-        });
-      }
+    // 2. Remove direction override characters (prevents RLO/LRO attacks)
+    if (this.DIRECTION_OVERRIDE_CHARS.test(normalized)) {
+      issues.push('Direction override characters detected');
+      severity = escalateSeverity(severity, 'high');
+      normalized = normalized.replace(this.DIRECTION_OVERRIDE_CHARS, '');
 
-      // 3. Remove zero-width and non-printable characters
-      if (this.ZERO_WIDTH_CHARS.test(normalized) || this.NON_PRINTABLE_CHARS.test(normalized)) {
-        // Check if the zero-width chars include direction marks (U+200E, U+200F)
-        const hasDirectionMarks = /[\u200E\u200F]/.test(normalized);
-        if (hasDirectionMarks) {
-          issues.push('Direction marks (LRM/RLM) detected');
-          severity = escalateSeverity(severity, 'high');
-        } else {
-          issues.push('Zero-width or non-printable characters detected');
-          severity = escalateSeverity(severity, 'medium');
-        }
-        normalized = normalized
-          .replace(this.ZERO_WIDTH_CHARS, '')
-          .replace(this.NON_PRINTABLE_CHARS, '');
-      }
-
-      // 4. Apply Unicode normalization (NFC - Canonical Decomposition + Composition)
-      normalized = normalized.normalize('NFC');
-
-      // 5. Detect mixed script attacks BEFORE confusable replacement
-      const mixedScriptResult = this.detectMixedScripts(normalized);
-      if (mixedScriptResult.isSuspicious) {
-        issues.push(`Mixed script usage detected: ${mixedScriptResult.scripts.join(', ')}`);
-        severity = escalateSeverity(severity, 'high');
-        
-        SecurityMonitor.logSecurityEvent({
-          type: 'UNICODE_MIXED_SCRIPT',
-          severity: 'HIGH',
-          source: 'UnicodeValidator',
-          details: `Mixed scripts detected: ${mixedScriptResult.scripts.join(', ')}`
-        });
-      }
-
-      // 6. Always replace confusable characters with ASCII equivalents for security
-      // This prevents homograph attacks regardless of script mixing
-      const confusableResult = this.replaceConfusables(normalized);
-      if (confusableResult.hasConfusables) {
-        normalized = confusableResult.normalized;
-        issues.push('Confusable Unicode characters detected and normalized');
-        severity = escalateSeverity(severity, 'medium');
-        
-        // Log if this happens in legitimate multilingual context
-        if (!mixedScriptResult.isSuspicious) {
-          SecurityMonitor.logSecurityEvent({
-            type: 'UNICODE_VALIDATION_ERROR',
-            severity: 'LOW',
-            source: 'UnicodeValidator',
-            details: 'Confusable characters normalized in legitimate multilingual content'
-          });
-        }
-      }
-
-      return {
-        isValid: issues.length === 0,
-        normalizedContent: normalized,
-        detectedIssues: issues.length > 0 ? issues : undefined,
-        severity: issues.length > 0 ? severity : undefined
-      };
-
-    } catch (error) {
       SecurityMonitor.logSecurityEvent({
-        type: 'UNICODE_VALIDATION_ERROR',
+        type: 'UNICODE_DIRECTION_OVERRIDE',
         severity: 'HIGH',
         source: 'UnicodeValidator',
-        details: `Unicode validation failed: ${error instanceof Error ? error.message : String(error)}`
+        details: 'Direction override characters removed from content'
       });
-
-      // Fallback: return original content if normalization fails
-      return {
-        isValid: false,
-        normalizedContent: content,
-        detectedIssues: ['Unicode validation failed'],
-        severity: 'high'
-      };
     }
+
+    // 3. Remove zero-width and non-printable characters
+    if (this.ZERO_WIDTH_CHARS.test(normalized) || this.NON_PRINTABLE_CHARS.test(normalized)) {
+      // Check if the zero-width chars include direction marks (U+200E, U+200F)
+      const hasDirectionMarks = /[\u200E\u200F]/.test(normalized);
+      if (hasDirectionMarks) {
+        issues.push('Direction marks (LRM/RLM) detected');
+        severity = escalateSeverity(severity, 'high');
+      } else {
+        issues.push('Zero-width or non-printable characters detected');
+        severity = escalateSeverity(severity, 'medium');
+      }
+      normalized = normalized
+        .replace(this.ZERO_WIDTH_CHARS, '')
+        .replace(this.NON_PRINTABLE_CHARS, '');
+    }
+
+    // 4. Apply Unicode normalization (NFC - Canonical Decomposition + Composition)
+    normalized = normalized.normalize('NFC');
+
+    // 5. Detect mixed script attacks BEFORE confusable replacement
+    const mixedScriptResult = this.detectMixedScripts(normalized);
+    if (mixedScriptResult.isSuspicious) {
+      issues.push(`Mixed script usage detected: ${mixedScriptResult.scripts.join(', ')}`);
+      severity = escalateSeverity(severity, 'high');
+
+      SecurityMonitor.logSecurityEvent({
+        type: 'UNICODE_MIXED_SCRIPT',
+        severity: 'HIGH',
+        source: 'UnicodeValidator',
+        details: `Mixed scripts detected: ${mixedScriptResult.scripts.join(', ')}`
+      });
+    }
+
+    // 6. Always replace confusable characters with ASCII equivalents for security
+    // This prevents homograph attacks regardless of script mixing
+    const confusableResult = this.replaceConfusables(normalized);
+    if (confusableResult.hasConfusables) {
+      normalized = confusableResult.normalized;
+      issues.push('Confusable Unicode characters detected and normalized');
+      severity = escalateSeverity(severity, 'medium');
+
+      // Log if this happens in legitimate multilingual context
+      if (!mixedScriptResult.isSuspicious) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'UNICODE_VALIDATION_ERROR',
+          severity: 'LOW',
+          source: 'UnicodeValidator',
+          details: 'Confusable characters normalized in legitimate multilingual content'
+        });
+      }
+    }
+
+    return {
+      isValid: issues.length === 0,
+      normalizedContent: normalized,
+      detectedIssues: issues.length > 0 ? issues : undefined,
+      severity: issues.length > 0 ? severity : undefined
+    };
   }
 
   /**
    * Detect suspicious Unicode patterns that might indicate attacks
    */
-  private static detectSuspiciousPatterns(content: string): { issues: string[]; severity?: 'low' | 'medium' | 'high' | 'critical' } {
+  private static detectSuspiciousPatterns(content: string): { issues: string[]; severity?: UnicodeSeverity } {
     const issues: string[] = [];
-    let severity: 'low' | 'medium' | 'high' | 'critical' | undefined;
+    let severity: UnicodeSeverity | undefined;
 
     // Check for excessive Unicode escapes (possible encoding bypass)
     /**
@@ -304,7 +294,7 @@ export class UnicodeValidator {
    * Escape special regex characters for safe replacement
    */
   private static escapeRegex(string: string): string {
-    return string.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return string.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   }
 
   /**
@@ -332,28 +322,9 @@ export class UnicodeValidator {
    * Uses character-by-character validation instead of complex regex
    */
   private static hasMalformedSurrogates(content: string): boolean {
-    for (let i = 0; i < content.length; i++) {
-      // SONARCLOUD FALSE POSITIVE (S7758): Must use charCodeAt here, not codePointAt
-      // This code specifically checks for malformed surrogate pairs at the 16-bit code unit level.
-      // codePointAt() would automatically combine valid pairs, making malformed detection impossible.
-      const char = content.charCodeAt(i);
-
-      // High surrogate (U+D800-U+DBFF)
-      if (char >= 0xD800 && char <= 0xDBFF) {
-        // Check if it's followed by a low surrogate
-        if (i + 1 >= content.length) {
-          return true; // High surrogate at end of string
-        }
-        const nextChar = content.charCodeAt(i + 1);
-        if (nextChar < 0xDC00 || nextChar > 0xDFFF) {
-          return true; // High surrogate not followed by low surrogate
-        }
-        i++; // Skip the valid low surrogate
-      }
-      // Low surrogate (U+DC00-U+DFFF) without preceding high surrogate
-      else if (char >= 0xDC00 && char <= 0xDFFF) {
-        return true; // Unpaired low surrogate
-      }
+    for (const character of content) {
+      const codePoint = character.codePointAt(0)!;
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF) return true;
     }
     return false;
   }

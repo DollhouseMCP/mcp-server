@@ -15,6 +15,7 @@ import { logger } from '../utils/logger.js';
 import { ElementType } from './types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { readFrontmatter } from '../security/readFrontmatter.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { IFileOperationsService, isAbsentPathError, directoryExists } from '../services/FileOperationsService.js';
 import { ContentValidator } from '../security/contentValidator.js';
@@ -439,9 +440,9 @@ export class DefaultElementProvider {
 
   /**
    * Read metadata from YAML frontmatter only (never reads content body)
-   * Uses a small buffer to safely extract only the frontmatter between --- markers
+   * Uses reusable chunks to extract frontmatter up to the parser limit
    * @param filePath Path to the file to read metadata from
-   * @returns Parsed metadata object or null if no frontmatter found
+   * @returns Parsed metadata, undefined if absent, or null if unavailable
    */
   // PERFORMANCE OPTIMIZATION: Reusable buffer pool to reduce allocations
   private static readonly bufferPool: Buffer[] = [];
@@ -543,7 +544,7 @@ export class DefaultElementProvider {
   }
 
   /**
-   * Read only the YAML frontmatter metadata from a file (first 4KB)
+   * Read YAML frontmatter metadata up to the parser limit
    *
    * SECURITY NOTE (Issue #1228): This method MUST use validateContent: true when calling
    * SecureYamlParser.parse() to ensure Unicode security validation runs. Setting validateContent
@@ -552,7 +553,7 @@ export class DefaultElementProvider {
    *
    * @param filePath - Absolute path to the file to read
    * @param retries - Number of retries for transient failures (default: 2)
-   * @returns Parsed metadata object or null if no valid frontmatter found
+   * @returns Parsed metadata, undefined if absent, or null if unavailable
    */
   private async readMetadataOnly(filePath: string, retries = 2): Promise<any> {
     // PERFORMANCE: Check cache first before reading file
@@ -572,26 +573,16 @@ export class DefaultElementProvider {
     }
     
     try {
-      // NOTE: Using direct fs.open for partial file read (first 4KB only).
-      // FileOperationsService doesn't support partial reads with file handles.
-      // This is intentionally kept as a direct fs call for performance-critical
-      // metadata extraction that only needs the YAML frontmatter.
+      // Read in pooled chunks without loading the full content body.
       const { promises: fs } = await import('node:fs');
       const fd = await fs.open(filePath, 'r');
       // PERFORMANCE: Use buffer pool instead of allocating new buffer each time
       const buffer = this.getBuffer();
       
       try {
-        const result = await fd.read(buffer, 0, 4096, 0);
-        const header = buffer.subarray(0, result.bytesRead).toString('utf-8');
-        
-        // Look for YAML frontmatter between --- markers
-        // Support both Unix (\n) and Windows (\r\n) line endings
-        const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(header);
-        if (!match) {
-          return null; // No frontmatter found
-        }
-        
+        const frontmatter = await readFrontmatter(fd, buffer);
+        if (frontmatter === null || frontmatter === undefined) return frontmatter;
+
         // Parse the YAML frontmatter safely
         try {
           // SECURITY FIX (Issue #1228): Enable validateContent to block zero-width Unicode and other security threats
@@ -599,7 +590,7 @@ export class DefaultElementProvider {
           // It expects full YAML with --- markers, so we reconstruct the frontmatter block
           // We disable field-specific validation as this is general metadata parsing, not persona-specific
           // but we MUST keep validateContent: true to ensure Unicode security validation runs
-          const fullYaml = `---\n${match[1]}\n---`;
+          const fullYaml = `---\n${frontmatter}\n---`;
           const parseResult = SecureYamlParser.parse(fullYaml, {
             // REQUIRED: validateContent must be true to enable Unicode security validation including
             // zero-width character detection (U+200B-U+200F, U+FEFF, etc.). Setting this to false
@@ -690,19 +681,15 @@ export class DefaultElementProvider {
    * Check if a file is a DollhouseMCP test element based on metadata
    * This replaces filename pattern detection with accurate metadata-based detection
    * @param filePath Path to the file to check
-   * @returns true if the file contains _dollhouseMCPTest: true metadata
+   * @returns Whether the file is a test element, or null if metadata is unavailable
    */
-  private async isDollhouseMCPTestElement(filePath: string): Promise<boolean> {
+  private async isDollhouseMCPTestElement(filePath: string): Promise<boolean | null> {
     try {
       const metadata = await this.readMetadataOnly(filePath);
-      const isTest = metadata?._dollhouseMCPTest === true;
-      
-      
-      return isTest;
-    } catch (error) {
-      // If we can't read the metadata, assume it's not a test file
-      logger.debug(`[DefaultElementProvider] Error checking test metadata for ${filePath}: ${error}`);
-      return false;
+      return metadata === null ? null : metadata?._dollhouseMCPTest === true;
+    } catch {
+      // Error inspection or diagnostics in the reader can still reject; admission stays closed.
+      return null;
     }
   }
 
@@ -775,6 +762,11 @@ export class DefaultElementProvider {
     // Skip this check if loadTestData is explicitly enabled (for testing scenarios)
     if (!this.config.loadTestData && this.isProductionEnvironment()) {
       const isDollhouseTest = await this.isDollhouseMCPTestElement(sourcePath);
+
+      if (isDollhouseTest === null) {
+        logger.warn('[DefaultElementProvider] Skipping file because metadata is unavailable');
+        return true;
+      }
 
       if (isDollhouseTest) {
         logger.warn(

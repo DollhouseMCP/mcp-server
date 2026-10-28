@@ -24,15 +24,17 @@ export function validateMemoryControlFields(parsedYaml: Record<string, unknown>)
         );
       })
     : parsedYaml.entries;
+  let controlYaml: string;
   try {
-    const controlYaml = yaml.dump(
+    controlYaml = yaml.dump(
       { ...controlFields, entries },
       { schema: yaml.JSON_SCHEMA, noRefs: true, sortKeys: true }
     );
 
-    return ContentValidator.validateYamlContent(controlYaml, MEMORY_CONSTANTS.MAX_YAML_SIZE);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof yaml.YAMLException)) throw error;
     // Unsupported values must not disappear from the security validation input.
     return false;
   }
+  return ContentValidator.validateYamlContent(controlYaml, MEMORY_CONSTANTS.MAX_YAML_SIZE);
 }

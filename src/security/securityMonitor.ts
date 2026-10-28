@@ -10,6 +10,7 @@
  * instance, enabling future session-scoped monitoring in Phase 3.
  */
 
+import { BestEffortDelivery, BestEffortListeners } from '../logging/BestEffortDelivery.js';
 import { logger } from '../utils/logger.js';
 import { EvictingQueue } from '../utils/EvictingQueue.js';
 import { EventDeduplicator } from '../utils/EventDeduplicator.js';
@@ -102,7 +103,9 @@ export class SecurityMonitor {
   // ── Instance state (used when wired via DI) ──────────────────────────
   private _eventCount = 0;
   private readonly _events = new EvictingQueue<SecurityLogEntry>(1000);
-  private _logListener?: SecurityLogListener;
+  private readonly _listeners = new BestEffortListeners<Parameters<SecurityLogListener>>('SecurityMonitor');
+  private readonly _alertDelivery = new BestEffortDelivery('SecurityMonitor alert');
+  private readonly _attributionDelivery = new BestEffortDelivery('SecurityMonitor attribution');
   private readonly _dedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
   private _attributionWarningEmitted = false;
 
@@ -136,11 +139,11 @@ export class SecurityMonitor {
     options: { readonly replayExisting?: boolean } = {},
   ): () => void {
     const backlog = options.replayExisting ? this._events.toArray() : [];
-    this._logListener = fn;
+    const subscription = this._listeners.add(fn);
     for (const entry of backlog) {
-      fn(entry, { replayed: true });
+      subscription.deliver(entry, { replayed: true });
     }
-    return () => { this._logListener = undefined; };
+    return subscription.remove;
   }
 
   instanceLogSecurityEvent(event: SecurityEvent): void {
@@ -153,9 +156,9 @@ export class SecurityMonitor {
       return;
     }
 
-    const attributionContext = this.getAttributionContext();
-    const session = attributionContext?.getSessionContext();
-    const correlationId = attributionContext?.getCorrelationId();
+    const attribution = this.getAttributionContext();
+    const session = attribution?.session;
+    const correlationId = attribution?.correlationId;
     const logEntry: SecurityLogEntry = {
       ...event,
       timestamp: new Date().toISOString(),
@@ -166,15 +169,15 @@ export class SecurityMonitor {
     };
 
     this._events.push(logEntry);
-    this._logListener?.(logEntry, { replayed: false });
+    this._listeners.emit(logEntry, { replayed: false });
 
     if (event.severity === 'CRITICAL') {
-      logger.error('[CRITICAL SECURITY ALERT]', {
+      this._alertDelivery.run(() => logger.error('[CRITICAL SECURITY ALERT]', {
         type: event.type,
         details: event.details,
         timestamp: logEntry.timestamp,
         id: logEntry.id
-      });
+      }));
 
       if (process.env.DOLLHOUSE_SECURITY_ALERTS === 'true') {
         // Alert mechanism integration point (Slack, PagerDuty, SIEM)
@@ -182,13 +185,14 @@ export class SecurityMonitor {
     }
   }
 
-  private getAttributionContext(): SecurityAttributionContext | undefined {
+  private getAttributionContext(): { session?: SessionContext; correlationId?: string } | undefined {
     try {
-      return this._attributionContextProvider?.();
+      const context = this._attributionContextProvider?.();
+      return { session: context?.getSessionContext(), correlationId: context?.getCorrelationId() };
     } catch {
       if (!this._attributionWarningEmitted) {
         this._attributionWarningEmitted = true;
-        logger.warn('Security event attribution unavailable; recording without request context');
+        this._attributionDelivery.run(() => logger.warn('Security event attribution unavailable; recording without request context'));
       }
       return undefined;
     }
