@@ -58,5 +58,27 @@ class ExtractVerifiedBinaryTests(unittest.TestCase):
                 self.assertFalse((root / "verified").exists())
 
 
+class ScannerEnvironmentTests(unittest.TestCase):
+    def test_inherited_cataloger_exclusion_distro_and_database_controls_are_stripped(self):
+        inherited = {
+            "PATH": "/runner/existing/path", "DOCKER_CONFIG": "/runner/normal-docker-auth",
+            "GRYPE_EXCLUDE": "**/node_modules/**", "GRYPE_DISTRO": "alpine:0.1",
+            "GRYPE_DB_UPDATE_URL": "https://other.example/databases",
+            "GRYPE_DB_VALIDATE_AGE": "false", "GRYPE_VEX_DOCUMENTS": "unreviewed.json",
+            "SYFT_EXCLUDE": "**/*", "SYFT_SOURCE_NAME": "unreviewed-source",
+        }
+        actual = scanner.scanner_environment(inherited, Path("/owned/scanner"))
+        self.assertNotIn("GRYPE_EXCLUDE", actual)
+        self.assertNotIn("GRYPE_DISTRO", actual)
+        self.assertNotIn("GRYPE_VEX_DOCUMENTS", actual)
+        self.assertFalse(any(key.startswith("SYFT_") for key in actual))
+        self.assertEqual(actual["GRYPE_DB_UPDATE_URL"], "https://grype.anchore.io/databases")
+        self.assertEqual(actual["GRYPE_DB_VALIDATE_AGE"], "true")
+        self.assertEqual(actual["GRYPE_DB_CACHE_DIR"], "/owned/scanner/db")
+        self.assertEqual(actual["PATH"], inherited["PATH"])
+        self.assertEqual(actual["DOCKER_CONFIG"], inherited["DOCKER_CONFIG"])
+        self.assertEqual(inherited["GRYPE_DB_VALIDATE_AGE"], "false")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,14 @@
 check-for-app-update: false
 only-fixed: false
 only-notfixed: false
+ignore-wontfix: ''
+distro: ''
+vex-documents: []
+vex-add: []
+search:
+  scope: squashed
+  unindexed-archives: false
+  indexed-archives: true
 ignore: []
 exclude: []
 db:

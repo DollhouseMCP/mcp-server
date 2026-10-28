@@ -29,6 +29,20 @@ def extract_verified_binary(archive, destination, expected_sha256=ARCHIVE_SHA256
     destination.chmod(0o700)
 
 
+def scanner_environment(inherited, root):
+    # Neither Grype nor its embedded Syft cataloger may inherit suppression,
+    # distro, source or database policy from the runner environment.
+    env = {key: value for key, value in inherited.items()
+           if not key.startswith(("GRYPE_", "SYFT_"))}
+    env.update(GRYPE_DB_CACHE_DIR=str(root / "db"), GRYPE_DB_AUTO_UPDATE="false",
+               GRYPE_CHECK_FOR_APP_UPDATE="false", GRYPE_DB_VALIDATE_AGE="true",
+               GRYPE_DB_VALIDATE_BY_HASH_ON_START="true",
+               GRYPE_DB_MAX_ALLOWED_BUILT_AGE="120h",
+               GRYPE_DB_UPDATE_URL="https://grype.anchore.io/databases",
+               XDG_CACHE_HOME=str(root / "cache"))
+    return env
+
+
 def main():
     root = Path(sys.argv[1]).resolve()
     reports = root / "reports"
@@ -46,9 +60,7 @@ def main():
     extract_verified_binary(archive, binary)
     download["verified_sha256"] = hashlib.sha256(data).hexdigest()
     (reports / "download.json").write_text(json.dumps(download, indent=2))
-    env = os.environ.copy()
-    env.update(GRYPE_DB_CACHE_DIR=str(root / "db"), GRYPE_DB_AUTO_UPDATE="false",
-               GRYPE_CHECK_FOR_APP_UPDATE="false")
+    env = scanner_environment(os.environ, root)
 
     def run(args, name, timeout):
         command = [str(binary), "--config", str(config)] + args
@@ -70,6 +82,7 @@ def main():
         return receipt["exit_code"], stdout
 
     for args, name in [(["version", "-o", "json"], "version"), (["--help"], "help"),
+                       (["config", "--load"], "effective-config"),
                        (["db", "update"], "db-update")]:
         status, _ = run(args, name, 180)
         if status != 0:
