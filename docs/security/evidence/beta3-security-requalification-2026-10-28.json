@@ -6659,5 +6659,72 @@
     "packedTarballReceiptAndLockSriMatch": true,
     "openAndShellQuoteAbsentFromPackedProductionConsumer": true,
     "knownWindowsRetryAllowance": "consumed on prior5dhead; never reset for this source correction or later heads"
+  },
+  "auditPersistenceCorrection": {
+    "baseHead": "15bbd2796192bd05127b2ba740460aac3a50c31c",
+    "reviewComment": "https://github.com/DollhouseMCP/mcp-server/pull/3134#discussion_r4403970647",
+    "issue": "validated installer client/version/outcome were in SecurityEvent.metadata, but actual LogHooks maps only additionalData into UnifiedLogEntry.data",
+    "change": "only installer success/failure payload envelopes use canonical additionalData; global hooks unchanged; random attempt UUID remains in details dedup key",
+    "redProof": {
+      "expectedDistinctCursorEntriesWithClientVersion": 2,
+      "actualBeforeFix": 0,
+      "logSha256": "b747abae71fa3b7cfd0044d28a5cca752f3d6032a9597b95cfd875e2987dc1b3"
+    },
+    "greenProof": {
+      "suites": 7,
+      "testsPassed": 179,
+      "logSha256": "75b5a027bdd01f15dd8efe3a01e3b063f808360b2bbe168642cefdae6e2b7e57",
+      "pipeline": "actual SecurityMonitor -> wireLogHooks -> LogManager -> MemoryLogSink and flushed FileLogSink JSONL",
+      "assertions": [
+        "two identical client/version installs produce two distinct persisted attempt messages",
+        "different client/version fields preserved",
+        "failed request fixed outcome envelope only",
+        "no home path/config secret/unvalidated client or version in memory or JSONL",
+        "Warp manual instructions produce no write event"
+      ]
+    },
+    "compiledSmoke": "passes actual dist SecurityMonitor/LogHooks/LogManager/sink with two distinct writes and client/version/outcome preserved, no private path",
+    "buildAndScopedLint": "passed",
+    "packageInputsUnchangedSha256": {
+      "package.json": "73ca4dda8d3926bfb9c745aefc334aa934f78876a39a278df572eca441804711",
+      "package-lock.json": "ab9de16bf3857312e0e341cb350b4681abd4abf6594e9be9c24f7fbd6a1f7b21",
+      "packages/safety/package.json": "e0dbac6d5de40ef7156e46cc9d3e3b306db1c6284b8d06d897e9641c69c89828",
+      "packages/safety/package-lock.json": "73c2c4aae0ebd9a5c405bf8e0b715a29eb328ace1c483d3bb54d8c4ad5f50c5c"
+    },
+    "noNewDependencyAgeOrRiskDecision": true,
+    "independentPeerReview": {
+      "baseHead": "15bbd2796192bd05127b2ba740460aac3a50c31c",
+      "finding": "SecurityMonitor metadata is retained in monitor but omitted by LogHooks unified data mapping",
+      "fix": "Installer success/failure use canonical additionalData; no global LogHooks change",
+      "sourceChangeScope": "two payload property names only",
+      "dedup": "Per-attempt randomUUID remains in details on both outcomes; distinct repeatedwrites preserved",
+      "privacy": "Success whitelistedclient andvalidversion slice64; failure fixedoutcome only; no configcontents/localpaths/rawerrors orinvalidrequestvalues",
+      "realRegressionPath": [
+        "SecurityMonitor",
+        "wireLogHooks",
+        "LogManager",
+        "MemoryLogSink",
+        "FileLogSink",
+        "JsonlFormatter",
+        "flushed JSONL readback"
+      ],
+      "regressionCoverage": [
+        "two consecutive sameclient writes retain distinct events",
+        "differentclient+version persists",
+        "failure outcome persists withoutprivateinvalidrequestvalues",
+        "manualWarp instructions produce no falsewrite event",
+        "retainedconfigsecret/home absent in memoryanddisk entries"
+      ],
+      "redBeforeObserved": {
+        "expectedCursorEntries": 2,
+        "actualCursorEntries": 0
+      },
+      "greenAfterObserved": {
+        "suites": 7,
+        "passedTests": 179
+      },
+      "verdict": "No blocking findings; finalcommit/docs andfreshmatchingheadCI/Sonar required",
+      "reviewerMutations": 0
+    }
   }
 }

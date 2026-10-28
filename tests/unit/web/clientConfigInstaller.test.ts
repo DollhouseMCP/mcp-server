@@ -6,6 +6,11 @@ import { tmpdir } from 'node:os';
 import { load } from 'js-yaml';
 import { parse as parseJsonc, visit } from 'jsonc-parser';
 import { parse as parseToml } from 'smol-toml';
+import { LogManager } from '../../../src/logging/LogManager.js';
+import { wireLogHooks } from '../../../src/logging/LogHooks.js';
+import { FileLogSink } from '../../../src/logging/sinks/FileLogSink.js';
+import { MemoryLogSink } from '../../../src/logging/sinks/MemoryLogSink.js';
+import { JsonlFormatter } from '../../../src/logging/formatters/JsonlFormatter.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { clientConfigTarget, installClientConfig } from '../../../src/web/routes/clientConfigInstaller.js';
 
@@ -246,7 +251,7 @@ describe('client configuration audit trail', () => {
     expect(audit).toHaveBeenCalledTimes(1);
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       type: 'CONFIG_UPDATED', source: 'clientConfigInstaller',
-      metadata: { client: 'cursor', version: 'beta', outcome: 'written' },
+      additionalData: { client: 'cursor', version: 'beta', outcome: 'written' },
     }));
   });
 
@@ -263,7 +268,7 @@ describe('client configuration audit trail', () => {
     expect(audit).toHaveBeenCalledTimes(2);
     for (const [event] of audit.mock.calls) {
       expect(event).toEqual({ type: 'OPERATION_FAILED', severity: 'LOW', source: 'clientConfigInstaller',
-        details: expect.stringMatching(/^MCP client configuration installation failed \([a-f0-9-]{36}\)$/), metadata: { outcome: 'failed' } });
+        details: expect.stringMatching(/^MCP client configuration installation failed \([a-f0-9-]{36}\)$/), additionalData: { outcome: 'failed' } });
     }
   });
 
@@ -279,6 +284,60 @@ describe('client configuration audit trail', () => {
       expect(events[0].details).not.toBe(events[1].details);
     } finally {
       SecurityMonitor.clearInstance(monitor);
+    }
+  });
+
+  it('persists installer details and distinct attempts through the actual unified logging pipeline', async () => {
+    const logDir = join(home, 'logs');
+    const manager = new LogManager({
+      logDir, logFormat: 'jsonl', retentionDays: 1, securityRetentionDays: 1,
+      flushIntervalMs: 0, bufferSize: 100, memoryCapacity: 100,
+      memoryAppCapacity: 100, memorySecurityCapacity: 100,
+      memoryPerfCapacity: 100, memoryTelemetryCapacity: 100,
+      maxEntrySize: 16384, immediateFlushRate: 50, fileMaxSize: 1048576,
+      maxDirSizeBytes: 1048576, maxFilesPerCategory: 10, logLevel: 'debug',
+    });
+    const memory = new MemoryLogSink({ appCapacity: 100, securityCapacity: 100, perfCapacity: 100, telemetryCapacity: 100 });
+    manager.registerSink(memory);
+    manager.registerSink(new FileLogSink({ logDir, formatter: new JsonlFormatter(),
+      maxFileSize: 1048576, retentionDays: 1, securityRetentionDays: 1,
+      maxDirSizeBytes: 1048576, maxFilesPerCategory: 10 }));
+    const monitor = new SecurityMonitor();
+    SecurityMonitor.setInstance(monitor);
+    const cleanups = wireLogHooks(manager, { resolve: () => { throw new Error('No optional fixture service'); } });
+    try {
+      const environment = { home, platform: 'linux', env: {} };
+      const target = clientConfigTarget('cursor', environment);
+      await mkdir(dirname(target.path), { recursive: true });
+      await writeFile(target.path, JSON.stringify({ secret: 'private-config-value' }));
+      await installClientConfig('cursor', 'beta', environment);
+      await installClientConfig('cursor', 'beta', environment);
+      await installClientConfig('codex', 'rc', environment);
+      await expect(installClientConfig('private-client', 'private-version', environment)).rejects.toThrow();
+      await installClientConfig('warp', 'latest', environment);
+      await manager.flush();
+      const entries = memory.query({ category: 'security', limit: 100 }).entries;
+      expect(entries).toHaveLength(4);
+      expect(entries.filter(entry => entry.data?.client === 'cursor' && entry.data?.version === 'beta')).toHaveLength(2);
+      const files = (await readdir(logDir)).filter(file => file.startsWith('security-'));
+      const persisted = (await Promise.all(files.map(file => readFile(join(logDir, file), 'utf8'))))
+        .join('').trim().split('\n').map(line => JSON.parse(line));
+      expect(persisted).toHaveLength(4);
+      expect(persisted.slice(0, 3).map(entry => entry.data)).toEqual([
+        { client: 'cursor', version: 'beta', outcome: 'written', eventType: 'CONFIG_UPDATED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' },
+        { client: 'cursor', version: 'beta', outcome: 'written', eventType: 'CONFIG_UPDATED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' },
+        { client: 'codex', version: 'rc', outcome: 'written', eventType: 'CONFIG_UPDATED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' },
+      ]);
+      expect(persisted[0].msg).not.toBe(persisted[1].msg);
+      expect(persisted[3].data).toEqual({ outcome: 'failed', eventType: 'OPERATION_FAILED', severity: 'LOW', sourceComponent: 'clientConfigInstaller' });
+      for (const privateValue of [home, 'private-config-value', 'private-client', 'private-version']) {
+        expect(JSON.stringify(entries)).not.toContain(privateValue);
+        expect(JSON.stringify(persisted)).not.toContain(privateValue);
+      }
+    } finally {
+      cleanups.forEach(cleanup => cleanup());
+      SecurityMonitor.clearInstance(monitor);
+      await manager.close();
     }
   });
 

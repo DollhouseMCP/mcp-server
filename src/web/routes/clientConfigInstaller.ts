@@ -203,7 +203,7 @@ export async function installClientConfig(client: string, version = 'latest', en
       severity: 'LOW',
       source: 'clientConfigInstaller',
       details: `MCP client configuration installed (${attemptId})`,
-      metadata: { client, version: version.slice(0, 64), outcome: 'written' },
+      additionalData: { client, version: version.slice(0, 64), outcome: 'written' },
     });
     return `Config written to: ${target.path}`;
   } catch (error) {
@@ -213,7 +213,7 @@ export async function installClientConfig(client: string, version = 'latest', en
       severity: 'LOW',
       source: 'clientConfigInstaller',
       details: `MCP client configuration installation failed (${attemptId})`,
-      metadata: { outcome: 'failed' },
+      additionalData: { outcome: 'failed' },
     });
     throw error;
   }
