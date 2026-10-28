@@ -463,6 +463,37 @@ describe('LogManager delivery isolation', () => {
     expect(healthy.closeCount).toBe(1);
   });
 
+  it.each(['throw', 'reject'])('settles flush while sink writes continue to %s', async mode => {
+    const manager = new LogManager(makeConfig());
+    const healthy = makeMockSink();
+    let writes = 0;
+    let flushes = 0;
+    manager.registerSink({
+      write() {
+        writes++;
+        if (mode === 'throw') throw new Error('write unavailable');
+        return Promise.reject(new Error('write unavailable'));
+      },
+      async flush() {
+        flushes++;
+        await new Promise(resolve => setImmediate(resolve));
+        manager.log(makeEntry());
+      },
+      async close() {},
+    });
+    manager.registerSink(healthy);
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        manager.log(makeEntry());
+        await expect(manager.flush()).resolves.toBeUndefined();
+      }
+      expect(writes).toBe(6);
+      expect(flushes).toBe(3);
+      expect(healthy.written).toHaveLength(6);
+      expect(healthy.flushCount).toBe(3);
+    } finally { await manager.close(); }
+  }, 5000);
+
   it.each(['bigint', 'circular'])('keeps entries deliverable with %s data', async kind => {
     const manager = new LogManager(makeConfig());
     const sink = makeMockSink();

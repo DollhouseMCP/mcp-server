@@ -1,5 +1,8 @@
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+/** Repository inputs are read from the pinned base revision for reproducible regeneration. */
+import { writeFileSync } from 'node:fs';
 import ts from 'typescript';
+import { listAtBaseline, readAtBaseline, baselineCompilerHost } from './baseline-inputs.mjs';
+import { serializeAsciiJson } from './serialize-ascii-json.mjs';
 
 const testFiles = new Set([
   'tests/security/regexValidator.test.ts',
@@ -7,15 +10,9 @@ const testFiles = new Set([
   'tests/unit/handlers/mcp-aql/policies/ElementPolicies.externalRestrictions.test.ts',
   'tests/unit/handlers/element-crud/helpers.helper.test.ts',
 ]);
-function sourceFiles(directory) {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const file = `${directory}/${entry.name}`;
-    if (entry.isDirectory()) return sourceFiles(file);
-    return /\.(?:[cm]?js|tsx?)$/.test(file) ? [file] : [];
-  });
-}
-const files = [...sourceFiles('src').sort(), ...testFiles];
-const program = ts.createProgram(files, { allowJs: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext });
+const files = [...listAtBaseline('src').filter(file => /\.(?:[cm]?js|tsx?)$/.test(file)).sort(), ...testFiles];
+const options = { allowJs: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext };
+const program = ts.createProgram(files, options, baselineCompilerHost(ts, options));
 const checker = program.getTypeChecker();
 const entries = [];
 const dynamic = [];
@@ -26,7 +23,7 @@ function constantText(node, seen = new Set()) {
   if (ts.isStringLiteralLike(node)) return node.text;
   if (ts.isIdentifier(node)) {
     let symbol = checker.getSymbolAtLocation(node);
-    if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) symbol = checker.getAliasedSymbol(symbol);
+    if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) symbol = checker.getAliasedSymbol(symbol);
     return constantText(symbol?.valueDeclaration?.initializer, seen);
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
@@ -75,11 +72,11 @@ function capture(node, sf, file) {
 }
 
 for (const file of files) {
-  const sf = program.getSourceFile(file) ?? ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  const sf = program.getSourceFile(file) ?? ts.createSourceFile(file, readAtBaseline(file), ts.ScriptTarget.Latest, true);
   const visit = node => { capture(node, sf, file); ts.forEachChild(node, visit); };
   visit(sf);
 }
-const rows = values => values.map(value => '    ' + JSON.stringify(value)).join(',\n');
+const rows = values => values.map(value => '    ' + serializeAsciiJson(value)).join(',\n');
 const fixture = '{\n  "entries": [\n' + rows(entries) + '\n  ],\n  "dynamic": [\n' + rows(dynamic) + '\n  ]\n}\n';
 writeFileSync('tests/fixtures/security/regex-source-corpus.json', fixture);
 console.log(JSON.stringify({ entries: entries.length, dynamic: dynamic.length }));

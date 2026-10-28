@@ -37,6 +37,7 @@ export class BestEffortDelivery {
   run<T>(deliver: () => T): DeliveryResult<T> {
     try {
       const value = deliver();
+      // Promises/A+ thenables may be functions as well as objects.
       const then = value !== null && (typeof value === 'object' || typeof value === 'function')
         ? (value as { then?: unknown }).then : undefined;
       if (typeof then === 'function') {

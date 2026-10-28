@@ -1,16 +1,17 @@
+/** Repository inputs are read from the pinned base revision for reproducible regeneration. */
 import fs from 'node:fs';
-import cp from 'node:child_process';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { BASELINE_REVISION, readAtBaseline } from './baseline-inputs.mjs';
+import { serializeAsciiJson } from './serialize-ascii-json.mjs';
 
 const outputPath = process.argv[2];
 if (!outputPath) throw new Error('An explicit output path is required');
-const revision = '094b1823';
-const gitExecutable = process.platform === 'win32' ? String.raw`C:\Program Files\Git\cmd\git.exe` : '/usr/bin/git';
-const original = cp.execFileSync(gitExecutable, ['-c', 'safe.directory=' + process.cwd(), 'show', revision + ':src/security/regexValidator.ts'], {encoding: 'utf8'});
+const revision = BASELINE_REVISION;
+const original = readAtBaseline('src/security/regexValidator.ts');
 const sf = ts.createSourceFile('reference.ts', original, ts.ScriptTarget.Latest, true);
 let method = '';
 let limits = '';
@@ -49,7 +50,7 @@ try {
     testCases: entries.filter(e => e.group === 'test').length,
     generatedCases: 5000, constructedCases: 256,
   };
-  const output = '{\n  "header": ' + JSON.stringify(header) + ',\n  "entries": [\n' + entries.map(entry => '    ' + JSON.stringify(entry)).join(',\n') + '\n  ]\n}\n';
+  const output = '{\n  "header": ' + serializeAsciiJson(header) + ',\n  "entries": [\n' + entries.map(entry => '    ' + serializeAsciiJson(entry)).join(',\n') + '\n  ]\n}\n';
   fs.writeFileSync(outputPath, output);
   console.log(JSON.stringify({entries: entries.length, bytes: Buffer.byteLength(output), header}));
 } finally {
