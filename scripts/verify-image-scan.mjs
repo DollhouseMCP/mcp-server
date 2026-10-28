@@ -14,10 +14,13 @@ export function verifyImageScan(result, expectedImageId, now = Date.now()) {
       result?.source?.type !== 'image' || result.source.target?.imageID !== expectedImageId) {
     throw new Error('Image scan does not identify the exact image built by this job');
   }
-  if (!Array.isArray(result.matches) ||
+  const severities = new Set(['Negligible', 'Low', 'Medium', 'High', 'Critical', 'Unknown']);
+  if ((result.ignoredMatches !== undefined &&
+      (!Array.isArray(result.ignoredMatches) || result.ignoredMatches.length !== 0)) ||
+      !Array.isArray(result.matches) ||
       result.matches.some(match => !match?.vulnerability?.id ||
-        typeof match.vulnerability.severity !== 'string' || !match?.artifact?.name)) {
-    throw new Error('Image scan findings are missing or malformed');
+        !severities.has(match.vulnerability.severity) || !match?.artifact?.name)) {
+    throw new Error('Image scan findings are missing, suppressed or malformed');
   }
   const counts = {};
   for (const { vulnerability } of result.matches) {

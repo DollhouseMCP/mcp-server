@@ -321,36 +321,26 @@ jobs:
       # Grype 0.121.0 adoption remains subject to the exact #2452 age exception.
       - name: Scan Docker image for vulnerabilities
         id: image_scan
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.2
         timeout-minutes: 5
-        env:
-          GRYPE_DB_CACHE_DIR: ${{ runner.temp }}/grype-image-db
-        with:
-          image: dollhousemcp:latest-linux-amd64
-          grype-version: v0.121.0
-          config: .github/grype-image-scan.yaml
-          output-format: json
-          output-file: ${{ runner.temp }}/application-image-vulnerabilities.json
-          fail-build: true
-          severity-cutoff: high
-          only-fixed: false
-          cache-db: false
+        shell: bash
+        run: python3 scripts/scan-built-image.py "$RUNNER_TEMP/image-security"
         if: matrix.platform == 'linux/amd64' # Caddy requires separate exact-digest qualification.
 
       - name: Enforce fresh database and actual image findings
         if: always() && matrix.platform == 'linux/amd64'
         shell: bash
         run: |
+          python3 tests/scripts/test_scan_built_image.py
           node --test tests/scripts/verify-image-scan.test.mjs
           image_id=$(docker image inspect --format '{{.Id}}' dollhousemcp:latest-linux-amd64)
-          node scripts/verify-image-scan.mjs "$RUNNER_TEMP/application-image-vulnerabilities.json" "$image_id"
+          node scripts/verify-image-scan.mjs "$RUNNER_TEMP/image-security/reports/application-image-vulnerabilities.json" "$image_id"
 
       - name: Retain complete application image security findings
         if: always() && matrix.platform == 'linux/amd64'
         uses: actions/upload-artifact@v4
         with:
           name: application-image-security-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/application-image-vulnerabilities.json
+          path: ${{ runner.temp }}/image-security/reports
           if-no-files-found: error
 
       - name: 🚀 Test MCP server initialization - ULTRA VERBOSE

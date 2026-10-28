@@ -37,3 +37,20 @@ test('the command fails closed for an absent scanner output file', () => {
   const child = spawnSync(process.execPath, ['scripts/verify-image-scan.mjs', '/nonexistent/owned-scan.json', image], { encoding: 'utf8' });
   assert.equal(child.status, 1); assert.match(child.stderr, /ENOENT/);
 });
+
+test('unknown enum is retained; malformed severity labels fail closed', () => {
+  const value = result(); value.matches[0].vulnerability.severity = 'Unknown';
+  assert.deepEqual(verifyImageScan(value, image, now), { Unknown: 1 });
+  for (const severity of ['high', 'HIGH', '', 'Unrated', null, 1]) {
+    value.matches[0].vulnerability.severity = severity;
+    assert.throws(() => verifyImageScan(value, image, now), /malformed/);
+  }
+});
+test('suppressed findings cannot borrow a clean successful report', () => {
+  for (const ignoredMatches of [[{ vulnerability: { id: 'hidden-high' } }], {}]) {
+    const value = result(); value.ignoredMatches = ignoredMatches;
+    assert.throws(() => verifyImageScan(value, image, now), /suppressed/);
+  }
+  const value = result(); value.ignoredMatches = [];
+  assert.deepEqual(verifyImageScan(value, image, now), { Low: 1 });
+});
