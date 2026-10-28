@@ -80,7 +80,7 @@ async function isolated(label: string, body: (f: EquivalentFixture, makeManager:
   mark('cleanup-begin');
   const cleanupFailures: unknown[] = [];
   for (const manager of managers) {
-    try { manager.dispose(); } catch (cause) { cleanupFailures.push(cause); }
+    try { await manager.dispose(); } catch (cause) { cleanupFailures.push(cause); }
   }
   try { await f.cleanup(); } catch (cause) { cleanupFailures.push(cause); }
   for (const directory of directories) {

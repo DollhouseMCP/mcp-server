@@ -37,7 +37,7 @@ describe.each(['skill', 'ensemble'] as const)('%s uncertain activation cleanup',
   });
   afterEach(async () => {
     jest.restoreAllMocks();
-    manager.dispose();
+    await manager.dispose();
     if (originalLimit === undefined) delete process.env[envKey];
     else process.env[envKey] = originalLimit;
     await fs.rm(dir, { recursive: true, force: true });
@@ -88,7 +88,7 @@ describe.each(['skill', 'ensemble'] as const)('%s uncertain activation cleanup',
     expect(warn.mock.calls.filter(([message]) => message.startsWith('[Activation] Retained'))).toHaveLength(2);
   });
   it('retains every active reference when every lookup fails at the storage layer', async () => {
-    manager.dispose();
+    await manager.dispose();
     const fileFactory = createTestStorageFactory();
     // A writable storage test double exercises listFromDatabase's swallowed-error path.
     const storageLayerFactory = { createForElement: (...args: Parameters<typeof fileFactory.createForElement>) =>

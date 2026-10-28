@@ -41,6 +41,27 @@ function fixture() {
 }
 
 describe('ElementLoader namespace diagnostics', () => {
+  it('records storage-reported failures with the same scoped suppression as actual loads', async () => {
+    const { context, loader, emitAsync, fail, makeReadable } = fixture();
+    context.run('alice', () => {
+      loader.recordUnreadableElement('shared.md', new Error('Invalid definition'));
+      expect(loader.isLoadErrorSuppressed('shared.md')).toBe(false);
+    });
+    await context.run('alice', fail);
+    context.run('alice', () => expect(loader.isLoadErrorSuppressed('shared.md')).toBe(true));
+    context.run('bob', () => {
+      loader.recordUnreadableElement('shared.md', new Error('Invalid definition'));
+      expect(loader.isLoadErrorSuppressed('shared.md')).toBe(false);
+    });
+    expect(emitAsync).toHaveBeenCalledTimes(2);
+    context.run('alice', () => loader.recordUnreadableElement('shared.md', new Error('Changed reason')));
+    expect(emitAsync).toHaveBeenCalledTimes(3);
+    makeReadable();
+    await context.run('alice', () => loader.load('shared.md'));
+    context.run('alice', () => expect(loader.getInvalidElements()).toEqual([]));
+    context.run('bob', () => expect(loader.getInvalidElements()).toHaveLength(1));
+  });
+
   it('isolates the same path and repeated-error emission between callers', async () => {
     const { context, loader, emitAsync, fail, makeReadable } = fixture();
     await context.run('alice', async () => { await fail(); await fail(); });

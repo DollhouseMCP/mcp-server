@@ -161,6 +161,21 @@ describe('dormant final RESERVED adoption recovery', () => {
     await expect(store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING' });
     expect(JSON.parse(await fs.readFile(setup.sidecarPath, 'utf8')).state).toBe('RESERVED');
   });
+  it.each(['requested', 'known-adopted'])('keeps adoption independent of the %s listener', async outcome => {
+    const setup = await fixture();
+    SecurityMonitor.clearAllEventsForTesting();
+    const detach = SecurityMonitor.addLogListener(event => {
+      if (event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' && event.additionalData?.outcome === outcome) {
+        throw new Error('Optional observer unavailable');
+      }
+    });
+    try {
+      await expect(setup.store.recoverReservedAdoption(setup.request)).resolves.toMatchObject({ status: 'known-adopted' });
+      expect(JSON.parse(await fs.readFile(setup.sidecarPath, 'utf8')).state).toBe('ACTIVE');
+      expect(SecurityMonitor.getRecentEvents().some(event => event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' &&
+        event.additionalData?.outcome === outcome)).toBe(true);
+    } finally { detach(); }
+  });
   it.each(['after-rename', 'after-read'] as const)('retains a genuine token across nonthrowing substitutions at %s', async stop => {
     for (const target of ['headPath', 'registryPath', 'sidecarPath'] as const) {
       const setup = await fixture();
@@ -198,12 +213,15 @@ describe('dormant final RESERVED adoption recovery', () => {
       .rejects.toMatchObject({ code: 'EADOPTIONPENDING', cause: forged });
     expect(JSON.parse(await fs.readFile(setup.sidecarPath, 'utf8')).state).toBe('RESERVED');
   });
-  it('does not trust an adopted flag thrown by a requested audit listener', async () => {
+  it('does not trust an adopted flag thrown by an audit operation', async () => {
     const setup = await fixture();
     const forged = { adopted: true, token: setup.legacy.token };
-    const detach = SecurityMonitor.addLogListener(event => {
+    const original = SecurityMonitor.logSecurityEvent;
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(event => {
       if (event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' && event.additionalData?.outcome === 'requested') throw forged;
+      original.call(SecurityMonitor, event);
     });
+    const detach = () => audit.mockRestore();
     try {
       await expect(setup.store.recoverReservedAdoption(setup.request)).rejects.toMatchObject({ code: 'EADOPTIONPENDING', cause: forged });
       expect(JSON.parse(await fs.readFile(setup.sidecarPath, 'utf8')).state).toBe('RESERVED');
@@ -233,12 +251,15 @@ describe('dormant final RESERVED adoption recovery', () => {
       token: { ownerId: setup.request.ownerId, fileIdentity: setup.legacy.token.fileIdentity }, cause: { message: 'outer release fault' } });
     expect(failure.cause).toBe(releaseError);
   });
-  it('preserves the original synchronous committed-audit listener error as direct cause', async () => {
+  it('preserves the original committed-audit operation error as direct cause', async () => {
     const setup = await fixture();
     const auditError = new Error('audit listener failure');
-    const detach = SecurityMonitor.addLogListener(event => {
+    const original = SecurityMonitor.logSecurityEvent;
+    const audit = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(event => {
       if (event.source === 'FileMemoryOwnerSnapshots.adoption-recovery' && event.additionalData?.outcome === 'known-adopted') throw auditError;
+      original.call(SecurityMonitor, event);
     });
+    const detach = () => audit.mockRestore();
     try {
       const failure = await failureOf(setup.store.recoverReservedAdoption(setup.request));
       expect(failure.code).toBe('EHEADADOPTED');

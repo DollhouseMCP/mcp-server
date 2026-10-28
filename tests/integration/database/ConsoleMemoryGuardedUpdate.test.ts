@@ -75,7 +75,7 @@ async function isolated(label: string, body: (context: Context) => Promise<void>
   } catch (cause) { primary = { cause }; }
   mark('cleanup-begin');
   const cleanupFailures: unknown[] = [];
-  try { manager?.dispose(); } catch (cause) { cleanupFailures.push(cause); }
+  try { await manager?.dispose(); } catch (cause) { cleanupFailures.push(cause); }
   try { await f.cleanup(); } catch (cause) { cleanupFailures.push(cause); }
   if (directory) {
     try { await rm(directory, { recursive: true, force: true }); } catch (cause) { cleanupFailures.push(cause); }

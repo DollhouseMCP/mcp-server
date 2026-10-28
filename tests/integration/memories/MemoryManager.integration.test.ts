@@ -66,7 +66,7 @@ describe('MemoryManager integration', () => {
   afterAll(async () => {
     // Dispose manager to clean up file watchers
     if (manager) {
-      manager.dispose();
+      await manager.dispose();
     }
 
     await env.cleanup();
@@ -75,7 +75,7 @@ describe('MemoryManager integration', () => {
   afterEach(async () => {
     // Dispose current manager before creating a new one
     if (manager) {
-      manager.dispose();
+      await manager.dispose();
     }
 
     await fs.rm(memoriesDir, { recursive: true, force: true });

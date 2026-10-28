@@ -29,6 +29,7 @@ describe('Storage Layer I/O Reduction', () => {
     callCounts = { listFiles: 0, statMany: 0, readFile: 0, directoryExists: 0 };
 
     backend = {
+      listDirectories: jest.fn<any>().mockResolvedValue([]),
       listFiles: jest.fn<any>().mockImplementation(async () => {
         callCounts.listFiles++;
         return ['persona-a.md', 'persona-b.md', 'persona-c.md'];
@@ -42,7 +43,7 @@ describe('Storage Layer I/O Reduction', () => {
         for (const p of paths) {
           map.set(p, makeMeta(p, 1000)); // stable mtime
         }
-        return map;
+        return { stats: map, failures: new Map() };
       }),
       readFile: jest.fn<any>().mockImplementation(async (absPath: string) => {
         callCounts.readFile++;
@@ -114,7 +115,7 @@ describe('Storage Layer I/O Reduction', () => {
         const mtime = p === 'persona-b.md' ? 9999 : 1000; // only b changed
         map.set(p, makeMeta(p, mtime));
       }
-      return map;
+      return { stats: map, failures: new Map() };
     });
 
     await layer.scan();
