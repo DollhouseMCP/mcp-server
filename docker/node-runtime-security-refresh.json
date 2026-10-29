@@ -1,0 +1,37 @@
+{
+  "version": "24.22.1",
+  "fromVersion": "24.21.0",
+  "npmCore": "11.19.0",
+  "nodeModuleVersion": "137",
+  "baseImage": "node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66",
+  "scope": "Hybrid image: official signed Node binary/matching architecture headers; retained npm11.19.0 plus separately reviewed five leaf patches; unchanged inherited Debian/Yarn. No official Node24.22.1 image or npm11.19.1 claim.",
+  "signedChecksumsUrl": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt.asc",
+  "signerFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+  "signerKeysCommit": "481637f813e912c4aa3622d7964ab426c97b8e8d",
+  "artifacts": {
+    "amd64": {
+      "nodeArch": "x64",
+      "opensslArch": "linux-x86_64",
+      "filename": "node-v24.22.1-linux-x64.tar.gz",
+      "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz",
+      "bytes": 58290700,
+      "sha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+      "nodeSha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb",
+      "nodeBytes": 126879696,
+      "headerFiles": 458,
+      "headerTreeSha256": "939d1b60c0fd9af969dd618c8aa7cab931a5f7e6c2a8d65a1e72708d6eaaee7b"
+    },
+    "arm64": {
+      "nodeArch": "arm64",
+      "opensslArch": "linux-aarch64",
+      "filename": "node-v24.22.1-linux-arm64.tar.gz",
+      "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.gz",
+      "bytes": 58021129,
+      "sha256": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+      "nodeSha256": "c8c5721679d8d1a09e9987e345d5f9a64899bb85f7a384783ba8a93e6e62348a",
+      "nodeBytes": 123377224,
+      "headerFiles": 458,
+      "headerTreeSha256": "8b805d141a34bad858ed30108c766025d56a9b4ca0d1472c4f028af8c8ba2e8a"
+    }
+  }
+}

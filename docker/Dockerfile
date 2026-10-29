@@ -1,8 +1,25 @@
 # Multi-stage build for production efficiency and security
 # Using slim (Debian-based) instead of Alpine for better ARM64 compatibility
-# Exact official Node 24.21.0 multi-platform image; qualification: #3064.
+# Existing qualified Node24.21.0 base (#3064); signed24.22.1 runtime/headers
+# overlay proposal below requires its own exact-version age exception/review.
 # Apply supported Trixie fixes to every target, including the migration builder.
+# Inert official distribution inputs; ADD checksums bind signed reviewed bytes.
+# No new executable base or npm11.19.1 bundle is adopted by this hybrid recipe.
+FROM scratch AS node-runtime-distributions
+ADD --checksum=sha256:eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz /node-v24.22.1-linux-x64.tar.gz
+ADD --checksum=sha256:33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3 https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.gz /node-v24.22.1-linux-arm64.tar.gz
+
 FROM node@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS node-base
+ARG TARGETARCH
+RUN --network=none \
+    --mount=type=bind,from=node-runtime-distributions,source=/,target=/tmp/node-runtime-distributions,ro \
+    --mount=type=bind,source=docker,target=/tmp/node-refresh-recipe/docker,ro \
+    --mount=type=bind,source=scripts/ci/prepare-global-npm.mjs,target=/tmp/node-refresh-recipe/scripts/ci/prepare-global-npm.mjs,ro \
+    node /tmp/node-refresh-recipe/docker/refresh-node-runtime.mjs "$TARGETARCH"
+ENV NODE_VERSION=24.22.1
+LABEL org.dollhousemcp.node-runtime="24.22.1-signed-binary-hybrid" \
+      org.dollhousemcp.npm-core="11.19.0-retained" \
+      org.dollhousemcp.node-base="173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libc-bin=2.41-12+deb13u4 \
     libc6=2.41-12+deb13u4 \
