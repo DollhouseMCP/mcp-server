@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const shaPattern = /^[a-f0-9]{40}$/;
 const imagePattern = /^(?:sha256:)?[a-f0-9]{64}$/;
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const trustedExecutables = Object.freeze({ docker:'/usr/bin/docker', git:'/usr/bin/git' });
 
 export function bindSource(rawCommit, checkoutSha, checkoutTree, sourceHead, eventName) {
   for (const value of [checkoutSha, checkoutTree, sourceHead]) assert.match(value, shaPattern);
@@ -31,8 +32,31 @@ export function verifyRuntimeConfig(config, expected) {
   }
 }
 
+export function hardenedRuntimeConfig(base) {
+  return { ...base, User:'1001:1001' };
+}
+
 function command(program, args) {
-  return execFileSync(program, args, { encoding:'utf8', timeout:180_000, maxBuffer:4_000_000 }).trim();
+  assert.ok(Object.hasOwn(trustedExecutables, program));
+  return execFileSync(trustedExecutables[program], args, { encoding:'utf8', timeout:180_000, maxBuffer:4_000_000 }).trim();
+}
+
+export function waitForReady(request, options, controls = {}) {
+  const { attempts = 30, pause = () => new Promise(resolve => setTimeout(resolve, 1000)) } = controls;
+  assert.ok(Number.isInteger(attempts) && attempts > 0 && attempts <= 30);
+  let lastError;
+  function attempt(remaining) {
+    try {
+      const response = request(options);
+      if (response.status === 200) return Promise.resolve(response);
+      lastError = new Error(`isolated proxy returned status ${response.status}`);
+    } catch (error) { lastError = error; }
+    return pause().then(() => {
+      if (remaining === 1) throw new Error('isolated proxy did not become ready', { cause:lastError });
+      return attempt(remaining - 1);
+    });
+  }
+  return attempt(attempts);
 }
 
 async function hashFile(file) {
@@ -64,7 +88,7 @@ async function main() {
   const native = { aarch64:'arm64', arm64:'arm64', x86_64:'amd64', amd64:'amd64' }[reported];
   assert.equal(native, image.Architecture, 'artifact must have passed on a matching native daemon');
   const expected = JSON.parse(fs.readFileSync(path.join(root, 'docker/caddy/approved-runtime-config.json'), 'utf8'));
-  verifyRuntimeConfig(image.Config, expected);
+  verifyRuntimeConfig(image.Config, hardenedRuntimeConfig(expected));
   assert.equal(image.Config.Labels['org.opencontainers.image.revision'], checkoutSha);
   assert.equal(image.Config.Labels['org.dollhousemcp.caddy.distribution'], 'source-rebuilt-security-candidate');
   fs.mkdirSync(output, { mode:0o700 });

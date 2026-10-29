@@ -13,7 +13,7 @@ cp -a /root/.cache/go-build "$work/gocache"
 mkdir "$work/tmp"
 export GOCACHE="$work/gocache" GOTMPDIR="$work/tmp" GOMAXPROCS=2
 export XDG_DATA_HOME="$work/pki-data" XDG_CONFIG_HOME="$work/pki-config"
-sha256sum -c /tmp/qualified-module-locks.sha256
+sha256sum -c /src/.qualified-module-locks.sha256
 go mod verify
 # Upstream parser tests create and remove fixture files in their source
 # testdata directory. This container has its own writable overlay: neither
@@ -32,4 +32,4 @@ go test -json -count=1 -mod=readonly -tags=nobadger,nomysql,nopgx -p 2 -parallel
   github.com/go-jose/go-jose/v4/... \
   golang.org/x/net/http2
 go mod verify
-sha256sum -c /tmp/qualified-module-locks.sha256
+sha256sum -c /src/.qualified-module-locks.sha256

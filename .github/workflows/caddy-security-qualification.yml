@@ -26,10 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2, existing project pin
       - name: Guard and evidence controls
+        shell: bash
         run: |
           node --test tests/scripts/caddy-runtime-packages.test.mjs tests/scripts/caddy-image-evidence.test.mjs
           sh -n docker/caddy/remove-curl.sh scripts/ci/caddy-upstream-tests.sh
       - name: Build and test the qualified upstream module graph offline
+        shell: bash
         env:
           TARGET_ARCH: ${{ matrix.arch }}
         run: |
@@ -46,6 +48,7 @@ jobs:
             --entrypoint /bin/sh "localhost/dollhouse-caddy-builder:qualification-${TARGET_ARCH}" \
             /qualification/upstream-tests.sh
       - name: Build exact final Caddy candidate
+        shell: bash
         env:
           SOURCE_SHA: ${{ github.sha }}
           TARGET_ARCH: ${{ matrix.arch }}
@@ -58,12 +61,14 @@ jobs:
           [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
           printf 'CADDY_TEST_IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
       - name: Native renderer, HTTP, TLS, HTTP2, quiet stream and persistent PKI qualification
+        shell: bash
         run: |
           # Approved exact public Node fixture input; no app packages or installs.
           docker pull docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
           fixture_id=$(docker image inspect --format '{{.Id}}' docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea)
           node scripts/ci/caddy-image-runtime.mjs "$CADDY_TEST_IMAGE_ID" "$fixture_id"
       - name: Export exact tested final image and source metadata
+        shell: bash
         env:
           EVIDENCE_PLATFORM: linux/${{ matrix.arch }}
           EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
