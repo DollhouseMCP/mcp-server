@@ -16,6 +16,10 @@ spec = importlib.util.spec_from_file_location('reviewed_image_scanner', Path(__f
 scanner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scanner)
 
+# Hosted193d inventory:663 ELF files/196,374,524 bytes within existing scratch.
+# Admission count only; all process/time/output/scratch bounds remain unchanged.
+MAX_ELF_OBJECTS = 1024
+
 # Trusted host Python only sets resource/env boundaries, then replaces itself
 # with trusted /usr/bin/readelf. No target executable, loader or ldd is run.
 READELF_LAUNCHER = """import os,resource,sys
@@ -83,6 +87,61 @@ def persist_terminal_summary(path, summary):
         raise RuntimeError('Capture summary persistence failed; bounded terminal state emitted to stderr') from error
 
 
+
+def capture_elf_facts(elf, private, run, write, deadline):
+    """Retain conservative coverage even if optional trusted data parsing fails."""
+    results = [{'path': entry['path'], 'sha256': entry['sha256'],
+                'receipt': 'elf-' + str(number) + '-receipt.json',
+                'status': 'UNKNOWN-not-processed-or-bounded'}
+               for number, entry in enumerate(elf[:MAX_ELF_OBJECTS])]
+    index = {'objects': results, 'object_count': len(elf),
+             'overlimit_unknown_count': max(0, len(elf) - MAX_ELF_OBJECTS),
+             'processed_count': 0, 'unknown_count': len(elf),
+             'phase_status': 'UNKNOWN-not-completed',
+             'limits': {'object_count': MAX_ELF_OBJECTS, 'seconds': 60,
+                        'child_seconds': 5, 'child_output_bytes': 8 * 1024 ** 2},
+             'coverage': 'All paths/hashes remain in filesystem-inventory.json. Objects omitted by count or unprocessed after failure remain UNKNOWN.',
+             'boundary': 'No ldd/loader execution. Dynamic symbols/DT_NEEDED do not prove static code absence or runtime resolution.'}
+    # Persist before count/tool/deadline checks. A killed phase leaves a safe
+    # UNKNOWN ledger; the earlier package/alias/archive facts stay independent.
+    write('elf-index.json', index)
+    try:
+        if len(elf) > MAX_ELF_OBJECTS:
+            raise ValueError('Selected ELF object count exceeds ' + str(MAX_ELF_OBJECTS) + ' bound; unprocessed coverage UNKNOWN')
+        tool = Path('/usr/bin/readelf')
+        if not tool.exists() or not tool.is_file() or tool.stat().st_size > 16 * 1024 ** 2 or tool.stat().st_uid != 0 or tool.stat().st_mode & 0o022:
+            raise ValueError('Existing trusted host readelf is unavailable or unexpectedly writable')
+        tool_hash = hashlib.sha256(tool.read_bytes()).hexdigest()
+        home = private / 'empty-home'; home.mkdir(mode=0o700)
+        command = ['/usr/bin/python3', '-I', '-c', READELF_LAUNCHER, str(home)]
+        for label, args in [('tool-version', ['--version']), ('tool-help', ['--help'])]:
+            status, _ = run(command + args, label, 5)
+            if status != 0: raise ValueError('Host readelf tool metadata unavailable')
+        write('readelf-tool.json', {'path': str(tool), 'resolved_path': str(tool.resolve()), 'sha256': tool_hash,
+              'launcher_sha256': hashlib.sha256(READELF_LAUNCHER.encode()).hexdigest(),
+              'limits': {'address_space_bytes': 536870912, 'cpu_seconds': 5, 'open_files': 64},
+              'source_adoption': False, 'candidate_execution': False})
+        elf_deadline = min(deadline, time.monotonic() + 60)
+        for number, entry in enumerate(elf):
+            if time.monotonic() >= elf_deadline: raise ValueError('Total ELF phase deadline exceeded; unprocessed coverage UNKNOWN')
+            path = Path(entry['scratch_data'])
+            if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
+                raise ValueError('Selected ELF data hash changed')
+            status, _ = run(command + ['--file-header', '--program-headers', '--dynamic', '--notes', '--dyn-syms', '--wide', '--no-demangle', '--debug-dump=no-follow-links', '--debug-dump=do-not-use-debuginfod', str(path)],
+                            'elf-' + str(number), min(5, elf_deadline - time.monotonic()), 8 * 1024 ** 2)
+            results[number]['status'] = 'parsed-data' if status == 0 else 'UNKNOWN-parser-failed-or-bounded'
+            index['processed_count'] += 1
+        if any(row['status'] != 'parsed-data' for row in results):
+            raise ValueError('ELF parser failed or reached a child bound; affected objects UNKNOWN')
+        index['phase_status'] = 'all-admitted-parsed'
+    finally:
+        index['unknown_count'] = len(elf) - sum(row['status'] == 'parsed-data' for row in results)
+        # Replacement can fail closed on report exhaustion. The initial UNKNOWN
+        # ledger is already retained; never overwrite a prior scan or hide gaps.
+        write('elf-index.json', index)
+    return index
+
+
 def main():
     root = Path(sys.argv[1]).resolve()
     reports = root / 'reports/applicability'; reports.mkdir(parents=True, exist_ok=False)
@@ -93,7 +152,7 @@ def main():
                'finding_closure': False, 'runtime_execution': False, 'receipts': {}}
     def write(name, value):
         data = json.dumps(value, indent=2).encode()
-        if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
+        if sum(p.stat().st_size for p in reports.iterdir() if p.is_file() and p.name != name) + len(data) > raw_budget:
             raise ValueError('Complete capture report budget exhausted')
         (reports / name).write_bytes(data)
     def run(command, label, timeout=30, maximum=1024 * 1024, stream=None, cleanup=False, retain_stdout=True):
@@ -198,34 +257,10 @@ def main():
             'aliases': inventory['aliases'],
             'limits': 'Names identify candidate surfaces only; full file hashes support independent renamed-copy/reference comparison. Missing caps, unparsed archives, modified/compiled copies and actual runtime callers stay UNKNOWN.'})
         elf = [e for e in entries if e.get('format') == 'elf']
-        if len(elf) > 256: raise ValueError('Selected ELF object count exceeds 256 bound')
         archives = [e for e in entries if e.get('format', '').endswith('archive-candidate')]
         write('unresolved-archive-locations.json', {'archives': archives, 'status': 'UNKNOWN nested/packed contents not inspected'})
-        tool = Path('/usr/bin/readelf')
-        if not tool.exists() or not tool.is_file() or tool.stat().st_size > 16 * 1024 ** 2 or tool.stat().st_uid != 0 or tool.stat().st_mode & 0o022:
-            raise ValueError('Existing trusted host readelf is unavailable or unexpectedly writable')
-        tool_hash = hashlib.sha256(tool.read_bytes()).hexdigest()
-        home = private / 'empty-home'; home.mkdir(mode=0o700)
-        command = ['/usr/bin/python3', '-I', '-c', READELF_LAUNCHER, str(home)]
-        for label, args in [('tool-version', ['--version']), ('tool-help', ['--help'])]:
-            status, _ = run(command + args, label, 5)
-            if status != 0: raise ValueError('Host readelf tool metadata unavailable')
-        write('readelf-tool.json', {'path': str(tool), 'resolved_path': str(tool.resolve()), 'sha256': tool_hash,
-              'launcher_sha256': hashlib.sha256(READELF_LAUNCHER.encode()).hexdigest(),
-              'limits': {'address_space_bytes': 536870912, 'cpu_seconds': 5, 'open_files': 64},
-              'source_adoption': False, 'candidate_execution': False})
-        elf_deadline = min(deadline, time.monotonic() + 60)
-        results = []
-        for number, entry in enumerate(elf):
-            if time.monotonic() >= elf_deadline: raise ValueError('Total ELF phase deadline exceeded')
-            path = Path(entry['scratch_data'])
-            if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
-                raise ValueError('Selected ELF data hash changed')
-            status, _ = run(command + ['--file-header', '--program-headers', '--dynamic', '--notes', '--dyn-syms', '--wide', '--no-demangle', '--debug-dump=no-follow-links', '--debug-dump=do-not-use-debuginfod', str(path)],
-                            'elf-' + str(number), min(5, elf_deadline - time.monotonic()), 8 * 1024 ** 2)
-            results.append({'path': entry['path'], 'sha256': entry['sha256'], 'receipt': 'elf-' + str(number) + '-receipt.json',
-                            'status': 'parsed-data' if status == 0 else 'UNKNOWN-parser-failed-or-bounded'})
-        write('elf-index.json', {'objects': results, 'boundary': 'No ldd/loader execution. Dynamic symbols/DT_NEEDED do not prove static code absence or runtime resolution.'})
+        summary.update(export_sha256=export_hash, entry_count=len(entries), elf_count=len(elf),
+                       archive_candidate_count=len(archives))
         # Only exact whitelisted public package/module data; never upload rootfs,
         # ELF binaries, arbitrary application contents, image Env or credentials.
         for entry in entries:
@@ -236,9 +271,11 @@ def main():
                 if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
                     raise ValueError('Raw metadata aggregate exceeds report cap')
                 (reports / ('data-' + entry['sha256'] + '.raw')).write_bytes(data)
-        summary.update(status='facts-captured-with-explicit-unresolved-boundaries', export_sha256=export_hash,
-                       entry_count=len(entries), elf_count=len(elf), archive_candidate_count=len(archives),
-                       elf_parse_unknown_count=sum(x['status'] != 'parsed-data' for x in results))
+        summary['public_metadata_capture'] = 'retained-before-ELF-phase'
+        summary['elf_coverage_file'] = 'elf-index.json'
+        elf_index = capture_elf_facts(elf, private, run, write, deadline)
+        summary.update(status='facts-captured-with-explicit-unresolved-boundaries',
+                       elf_parse_unknown_count=elf_index['unknown_count'])
         return 0
     except Exception as error:
         summary['failure'] = str(error)

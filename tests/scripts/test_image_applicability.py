@@ -24,6 +24,19 @@ GRAPH = {'store_id': STORE, 'manifest_descriptor': DESC}
 CID = 'c' * 64
 
 
+class ToolFixture:
+    def exists(self): return True
+    def is_file(self): return True
+    def stat(self): return SimpleNamespace(st_size=16, st_uid=0, st_mode=0o100755)
+    def read_bytes(self): return b'trusted tool fixture'
+    def resolve(self): return '/usr/bin/readelf'
+    def __str__(self): return '/usr/bin/readelf'
+
+
+def capture_path(value):
+    return ToolFixture() if str(value) == '/usr/bin/readelf' else Path(value)
+
+
 def state():
     return {'Id': CID, 'Image': STORE, 'ImageManifestDescriptor': DESC, 'RestartCount': 0,
             'State': {'Status': 'created', 'Running': False, 'Pid': 0, 'StartedAt': '0001-01-01T00:00:00Z'},
@@ -117,6 +130,64 @@ class InventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'report'): self.inventory([('file', b'x', {})])
 
 
+class ElfCoverageTests(unittest.TestCase):
+    def phase(self, count, fail=None):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); data = root/'opaque.data'; data.write_bytes(b'\x7fELFdata')
+            digest = hashlib.sha256(data.read_bytes()).hexdigest()
+            rows = [{'path': '/native-' + str(n), 'sha256': digest, 'scratch_data': str(data)} for n in range(count)]
+            self.reports = {}; self.calls = []; clock = [100.0]
+            def write(name, value): self.reports[name] = copy.deepcopy(value)
+            def run(cmd, label, timeout=30, maximum=1024*1024):
+                self.calls.append((cmd, label, timeout, maximum))
+                if label.startswith('elf-'):
+                    self.assertLessEqual(timeout, 5)
+                    self.assertEqual(maximum, 8 * 1024 ** 2)
+                    if label == 'elf-0' and fail == 'deadline': clock[0] += 60
+                    if label == 'elf-1' and fail == 'output': raise ValueError('Capture raw report budget exhausted')
+                    if label == 'elf-1' and fail == 'parser': return None, b''
+                return 0, b'trusted mock output'
+            with patch.object(capture, 'Path', side_effect=capture_path), patch.object(capture.time, 'monotonic', side_effect=lambda: clock[0]):
+                return capture.capture_elf_facts(rows, root, run, write, 240.0)
+
+    def test_observed_663_objects_are_admitted_with_unchanged_child_and_phase_bounds(self):
+        result = self.phase(663)
+        self.assertEqual(result['processed_count'], 663)
+        self.assertEqual(result['unknown_count'], 0)
+        self.assertEqual(len(self.calls), 665)  # Two trusted metadata calls.
+        self.assertEqual(result['limits'], {'object_count': 1024, 'seconds': 60, 'child_seconds': 5,
+                                           'child_output_bytes': 8*1024**2})
+        self.assertIn('(536870912,536870912)', capture.READELF_LAUNCHER)
+        self.assertIn('(5,5)', capture.READELF_LAUNCHER)
+        self.assertTrue(all(cmd[0] == '/usr/bin/python3' for cmd, *_ in self.calls))
+        self.assertEqual(self.phase(1024)['processed_count'], 1024)
+
+    def test_over_count_keeps_bounded_ledger_and_every_omitted_object_unknown(self):
+        with self.assertRaisesRegex(ValueError, '1024 bound'): self.phase(1025)
+        index = self.reports['elf-index.json']
+        self.assertEqual(len(index['objects']), 1024)
+        self.assertEqual(index['overlimit_unknown_count'], 1)
+        self.assertEqual(index['unknown_count'], 1025)
+        self.assertEqual(self.calls, [])
+
+    def test_phase_deadline_retains_completed_and_unprocessed_unknown(self):
+        with self.assertRaisesRegex(ValueError, 'deadline'): self.phase(3, 'deadline')
+        index = self.reports['elf-index.json']
+        self.assertEqual(index['processed_count'], 1)
+        self.assertEqual(index['unknown_count'], 2)
+        self.assertEqual(index['objects'][0]['status'], 'parsed-data')
+        self.assertTrue(all('UNKNOWN' in row['status'] for row in index['objects'][1:]))
+
+    def test_aggregate_output_exception_and_child_parser_failure_remain_nonclean(self):
+        for failure in ['output', 'parser']:
+            with self.subTest(failure=failure), self.assertRaises(ValueError): self.phase(3, failure)
+            index = self.reports['elf-index.json']
+            self.assertEqual(index['phase_status'], 'UNKNOWN-not-completed')
+            self.assertEqual(index['unknown_count'], 2 if failure == 'output' else 1)
+            self.assertEqual(index['objects'][0]['status'], 'parsed-data')
+            self.assertIn('UNKNOWN', index['objects'][1]['status'])
+
+
 class ContainerTests(unittest.TestCase):
     def test_exact_created_container_roles_and_all_active_or_mounted_variants_refuse(self):
         self.assertEqual(validate_never_started(state(), GRAPH)['pid'], 0)
@@ -135,14 +206,18 @@ class ContainerTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError): validate_never_started(value, GRAPH)
 
     def test_orchestrator_exact_cleanup_on_export_failure_and_no_env_or_target_command(self):
-        for scenario in ['ok', 'create-failure-with-id', 'create-timeout-lost-id', 'create-malformed-id', 'receipt-persist-failure', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id', 'export-failure', 'wrong-engine', 'wrong-source', 'declared-volume', 'running', 'bad-export', 'cleanup-failure', 'elf-parser-failure']:
+        for scenario in ['ok', 'create-failure-with-id', 'create-timeout-lost-id', 'create-malformed-id', 'receipt-persist-failure', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id', 'export-failure', 'wrong-engine', 'wrong-source', 'declared-volume', 'running', 'bad-export', 'cleanup-failure', 'elf-parser-failure', 'elf-count-bound', 'elf-output-bound']:
             with tempfile.TemporaryDirectory() as d:
                 root = Path(d); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
                 (root / 'inputs/image.tar').write_bytes(b'verified archive fixture')
                 (root / 'reports/target-archive-identity.json').write_text(json.dumps(GRAPH))
                 (root / 'reports/application-image-vulnerabilities.json').write_bytes(b'raw findings sentinel')
                 export_entries = [('var/lib/dpkg/status', b'Package: fixture\n', {})]
-                if scenario == 'elf-parser-failure': export_entries.append(('native.node', b'\x7fELFfixture', {}))
+                if scenario in ['elf-parser-failure', 'elf-count-bound', 'elf-output-bound']:
+                    export_entries += [('native' + str(n) + '.node', b'\x7fELFfixture' + bytes([n]), {})
+                                       for n in range(3 if scenario == 'elf-count-bound' else 1)]
+                    export_entries += [('packed', b'PK\x03\x04unknown nested data', {}),
+                                       ('status-alias', b'', {'type': tarfile.SYMTYPE, 'linkname': 'var/lib/dpkg/status'})]
                 exported = bundle(root / 'fixture.tar', export_entries).read_bytes()
                 if scenario == 'bad-export': exported = b'malformed tar'
 
@@ -152,15 +227,6 @@ class ContainerTests(unittest.TestCase):
                     if scenario == 'receipt-persist-failure' and path.name == 'container-create.stdout':
                         raise OSError('simulated create receipt persistence failure')
                     return real_write(path, data)
-                class ToolFixture:
-                    def exists(self): return True
-                    def is_file(self): return True
-                    def stat(self): return SimpleNamespace(st_size=16, st_uid=0, st_mode=0o100755)
-                    def read_bytes(self): return b'trusted tool fixture'
-                    def resolve(self): return '/usr/bin/readelf'
-                    def __str__(self): return '/usr/bin/readelf'
-                def capture_path(value):
-                    return ToolFixture() if str(value) == '/usr/bin/readelf' else Path(value)
                 def process(cmd, timeout, maximum=0, stdout_path=None, stderr_maximum=None):
                     commands.append(cmd)
                     if cmd[:2] == ['docker', 'version']:
@@ -190,10 +256,12 @@ class ContainerTests(unittest.TestCase):
                         stdout_path.write_bytes(exported)
                         return (1 if scenario == 'export-failure' else 0), b'', b'', None
                     if cmd[:2] == ['docker', 'rm']: return (1 if scenario == 'cleanup-failure' else 0), CID.encode(), b'', None
-                    if cmd[0] == '/usr/bin/python3': return (1 if scenario == 'elf-parser-failure' and '--file-header' in cmd else 0), b'trusted readelf fixture output', b'', None
+                    if cmd[0] == '/usr/bin/python3':
+                        output = b'x'*(2*1024**2) if scenario == 'elf-output-bound' and '--file-header' in cmd else b'trusted readelf fixture output'
+                        return (1 if scenario == 'elf-parser-failure' and '--file-header' in cmd else 0), output, b'', None
                     raise AssertionError(cmd)
-                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40}), patch.object(capture, 'Path', side_effect=capture_path), patch.object(Path, 'write_bytes', write_bytes):
-                    self.assertEqual(capture.main(), 0 if scenario in ['ok', 'elf-parser-failure'] else 1)
+                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40}), patch.object(capture, 'Path', side_effect=capture_path), patch.object(Path, 'write_bytes', write_bytes), patch.object(capture, 'MAX_ELF_OBJECTS', 2 if scenario == 'elf-count-bound' else 1024), patch.object(capture, 'MAX_REPORT', 2*1024**2 if scenario == 'elf-output-bound' else 32*1024**2):
+                    self.assertEqual(capture.main(), 0 if scenario == 'ok' else 1)
                 self.assertEqual([x for x in commands if x[:2] == ['docker', 'rm']], [] if scenario in ['wrong-engine', 'wrong-source', 'declared-volume', 'running', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id'] else [['docker', 'rm', '--volumes', CID]])
                 self.assertFalse(any(x[:2] in [['docker', 'start'], ['docker', 'run'], ['docker', 'exec']] for x in commands))
                 report_bytes = b''.join(p.read_bytes() for p in (root / 'reports/applicability').iterdir())
@@ -205,8 +273,19 @@ class ContainerTests(unittest.TestCase):
                     self.assertEqual(json.loads((root/'reports/applicability/container-cleanup.json').read_text())['status'], 'verified-owned-container-removed')
                 if scenario in ['missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id', 'running']:
                     self.assertEqual(json.loads((root/'reports/applicability/container-cleanup.json').read_text())['status'], 'UNKNOWN')
-                if scenario == 'elf-parser-failure':
-                    self.assertIn('UNKNOWN', (root/'reports/applicability/elf-index.json').read_text())
+                if scenario in ['elf-parser-failure', 'elf-count-bound', 'elf-output-bound']:
+                    index = json.loads((root/'reports/applicability/elf-index.json').read_text())
+                    self.assertGreater(index['unknown_count'], 0)
+                    self.assertIn('UNKNOWN', index['phase_status'])
+                    reports = root/'reports/applicability'
+                    self.assertEqual(list(reports.glob('data-*.raw'))[0].read_bytes(), b'Package: fixture\n')
+                    self.assertEqual(len(json.loads((reports/'unresolved-archive-locations.json').read_text())['archives']), 1)
+                    self.assertEqual(len(json.loads((reports/'predicate-surfaces.json').read_text())['aliases']), 1)
+                    self.assertEqual(json.loads((reports/'capture-summary.json').read_text())['status'], 'incomplete')
+                    if scenario == 'elf-count-bound':
+                        self.assertEqual(index['overlimit_unknown_count'], 1)
+                        self.assertEqual(index['processed_count'], 0)
+                        self.assertFalse(any(cmd[0] == '/usr/bin/python3' for cmd in commands))
 
 
     def test_terminal_summary_disk_failure_emits_bounded_nonclean_state(self):
