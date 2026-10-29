@@ -218,7 +218,7 @@ def isolation_evidence(value, inputs, runner):
             "mounts": mounts}
 
 
-def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None):
+def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None):
     buffers = [bytearray(), bytearray()]
     error = None; count = 0
     limit = time.monotonic() + timeout
@@ -235,6 +235,8 @@ def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None
                         chunk = os.read(event.fd, 65536)
                         if not chunk:
                             ready.unregister(event.fileobj)
+                        elif event.data == 1 and stderr_maximum is not None and len(buffers[1]) + len(chunk) > stderr_maximum:
+                            error = "stderr exceeds bounded capture size"; child.kill(); break
                         elif count + len(chunk) > maximum:
                             error = "combined stdout/stderr exceeds bounded capture size"; child.kill(); break
                         else:

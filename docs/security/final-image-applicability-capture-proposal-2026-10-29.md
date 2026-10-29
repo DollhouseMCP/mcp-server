@@ -1,6 +1,6 @@
 # Proposed final-image applicability evidence capture
 
-This is a read-only capture design based on reviewed `940ad2a641571423d6bb74caa89e78f16290c313`, not an implemented capture, finding disposition, scanner-policy change, image qualification or adoption approval. All 14 OS advisory IDs remain OPEN. Preserve every raw finding and severity. Do not add suppressions, remove package metadata or use target commands to certify the target.
+This capture design and implementation proposal is based on reviewed `940ad2a641571423d6bb74caa89e78f16290c313`, not an executed capture, finding disposition, scanner-policy change, image qualification or adoption approval. All 14 OS advisory IDs remain OPEN. Preserve every raw finding and severity. Do not add suppressions, remove package metadata or use target commands to certify the target.
 
 ## Existing proof and missing facts
 
@@ -20,7 +20,7 @@ Docker source matching observed server `d3298094ac5111e5d67517a252d291d27543e408
 
 ## Data collection
 
-Parse the final tar as data with no archive extraction API. Require canonical image-relative paths, bounded regular-file sizes, unique entries, nonnegative numeric fields and expected supported tar/PAX forms. Retain special-file metadata but never create devices/FIFOs/links. Resolve symlink/hardlink chains only inside the virtual inventory with a depth bound; cycles, missing targets, unsupported sparse records, unexpected whiteouts, truncation or malformed metadata make the affected evidence incomplete. No host path follows an image link.
+Parse the final tar as data with no filesystem archive extraction API. Require canonical image-relative paths, bounded regular-file sizes, unique entries, nonnegative numeric fields and expected supported tar/PAX forms. Retain special-file metadata but never create devices/FIFOs/links. Resolve symlink/hardlink chains only inside the virtual inventory with a depth bound; cycles, missing targets, unsupported sparse records, unexpected whiteouts, truncation or malformed metadata make the affected evidence incomplete. No host path follows an image link.
 
 The full path inventory records type, mode including SUID/SGID, UID/GID, size, link target, positive capability/PAX provenance, regular-file SHA256 and first-byte format classification for every file. This captures same-name variants anywhere, hardlinks and byte-identical renamed copies. Compare all file hashes to reference hashes for removed original binaries from their typed historical layers or independently authenticated exact Debian packages. A modified/stripped/renamed binary is NOT excluded merely because it differs from a known hash. List all ELF and archive candidates. Uninspected nested archives, packed code, unsupported aliases or compiled/modified copies remain explicit gaps; filename or dynamic-symbol absence is never blanket code-absence proof.
 
@@ -44,7 +44,7 @@ Proposed conservative bounds: existing target admission1GiB unchanged; export â‰
 | 2026-95619 | Actual libstdc++ payload/buildID/symbols; Node/native linkage | Aligned operator new is runtime library code; compiler absence is insufficient |
 | 2026-102010 | Native object/source/build correspondence and stdc++ headers/library inventory | Binary-heap erase_if template may be compiled into native objects; dynamic imports alone insufficient |
 | 2026-19499,5435 | libc/libresolv payload/buildIDs/symbols and selected native imports | strfmon width formatting and deprecated TSIG record printing are distinct call paths |
-| 2026-85091 | Resolved libz payload/hash/buildID + dpkg MD5/source version | Exact authenticated Debian package comparison; static gz_vacate need not appear in dynsym |
+| 2026-85091 | Resolved libz payload/hash/buildID + dpkg MD5/source version | Exact authenticated Debian package comparison; old source can remain affected through failed direct writes â†’ gzclearerr â†’ gzprintf/gzvprintf even without gz_vacate. Retain gzclearerr/gzwrite/gzvprintf/gzprintf/gzdopen exports and open/fcntl caller evidence; static-symbol absence is not closure |
 | 2026-54369,54370 | libacl payload/buildID, ACL tools/callers, privileges/path metadata | Path-based library calls vs recursive tools; new2.4 ABI/walk_tree fix is not an assumed safe small backport |
 
 ## Minimal implementation/test delta to review next
@@ -56,3 +56,7 @@ Proposed conservative bounds: existing target admission1GiB unchanged; export â‰
 Independent source review must precede one explicitly authorized targeted hosted qualification. The capture itself cannot auto-close advisories or weaken scanner/release gates. A failed capture must preserve the earlier completed raw scan, not relabel it unavailable or clean.
 
 The live [cache GHSA](https://api.github.com/advisories/GHSA-ch52-4w7c-c8xp) was withdrawn2026-10-28T21:13:39Z, while [aliased CVE-2026-93748](https://cveawg.mitre.org/api/cve/CVE-2026-93748) remains PUBLISHED (last CVE metadata updateOctober14). Preserve both dated raw records and the older scanner match; record this disagreement, not a blanket closure or unreviewed suppression.
+
+Implementation prepared on the isolated940-based branch: `image_applicability.py` inventories bounded merged-export data; `capture-image-applicability.py` reuses the reviewed bounded-process helper and never-started binding; the workflow has a separate always-AMD64 capture step. The existing helper gains only an optional stderr cap for this streamed export so archive-size budgets do not allow equally large stderr buffering; scanner callers keep their prior default. Exact observed Engine29.4.2/server commitd329809 is required, rather than silently transferring exporter-source assumptions. No image action has run during preparation.
+
+Focused preparation checks:11 capture/mock/negative tests and12 existing scanner-wrapper tests pass;9 existing typed archive identity tests pass after copying the two tracked public reference fixtures missing from the fresh VM test directory. The failed setup attempt and corrected fixture-only result remain retained. Existing trusted `/usr/bin/readelf` parsed only a copied nonexecutable host `/usr/bin/true` fixture. No Docker image command, pull, build, export, target execution or scanner run occurred in these checks. Independent source review and actual hosted capture remain pending.

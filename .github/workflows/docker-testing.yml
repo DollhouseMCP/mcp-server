@@ -326,12 +326,18 @@ jobs:
         run: python3 scripts/scan-built-image.py "$RUNNER_TEMP/image-security"
         if: matrix.platform == 'linux/amd64' # Caddy requires separate exact-digest qualification.
 
+      - name: Capture final image applicability facts without target execution
+        if: always() && matrix.platform == 'linux/amd64'
+        timeout-minutes: 3
+        run: python3 scripts/capture-image-applicability.py "$RUNNER_TEMP/image-security"
+
       - name: Enforce fresh database and actual image findings
         if: always() && matrix.platform == 'linux/amd64'
         shell: bash
         run: |
           python3 tests/scripts/test_scan_built_image.py
           python3 tests/scripts/test_image_archive_identity.py
+          python3 tests/scripts/test_image_applicability.py
           node --test tests/scripts/verify-image-scan.test.mjs
           image_id=$(docker image inspect --format '{{.Id}}' dollhousemcp:latest-linux-amd64)
           node scripts/verify-image-scan.mjs "$RUNNER_TEMP/image-security/reports/application-image-vulnerabilities.json" "$image_id"
