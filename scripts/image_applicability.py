@@ -179,9 +179,13 @@ def resolve_alias(name, records):
     raise ValueError('Alias depth exceeds bound')
 
 
-def validate_never_started(value, graph):
+def validate_never_started(value, graph, owner=None):
     state, config, host = value['State'], value['Config'], value['HostConfig']
     descriptor = graph.get('manifest_descriptor')
+    if owner and (value.get('Name') != '/' + owner['name'] or
+            config.get('Labels', {}).get('org.dollhousemcp.applicability-owner') != owner['nonce'] or
+            config.get('Labels', {}).get('org.dollhousemcp.engine-proof-source') != owner['source_label']):
+        raise ValueError('Container name/nonce/source does not match pre-recorded ownership')
     if (value['Image'] != graph['store_id'] or config['Image'] != graph['store_id'] or
             config['Entrypoint'] != ['/bin/false'] or config['Cmd'] != ['capture-not-executed'] or
             config['User'] != '65532:65532' or config.get('Healthcheck', {}).get('Test') != ['NONE'] or
@@ -195,6 +199,8 @@ def validate_never_started(value, graph):
         raise ValueError('Container is not the exact never-started capture plan')
     if descriptor and any(value.get('ImageManifestDescriptor', {}).get(k) != descriptor.get(k) for k in ['digest', 'size', 'mediaType']):
         raise ValueError('Container selected manifest differs from typed target')
-    return {'container_id': value['Id'], 'image': value['Image'], 'selected_manifest': value.get('ImageManifestDescriptor'),
+    return {'container_id': value['Id'], 'name': value.get('Name'),
+            'owner_nonce': config.get('Labels', {}).get('org.dollhousemcp.applicability-owner'),
+            'source_label': config.get('Labels', {}).get('org.dollhousemcp.engine-proof-source'), 'image': value['Image'], 'selected_manifest': value.get('ImageManifestDescriptor'),
             'status': state['Status'], 'pid': state['Pid'], 'started_at': state['StartedAt'],
             'config_image': config['Image'], 'capture_user': config['User'], 'mounts': value.get('Mounts', [])}

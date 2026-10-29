@@ -26,11 +26,61 @@ os.execve('/usr/bin/readelf',['/usr/bin/readelf']+sys.argv[2:],{'PATH':'/usr/bin
 """
 
 
-def create_command(name, store_id):
-    return ['docker', 'create', '--name', name, '--pull', 'never', '--platform', 'linux/amd64',
+def create_command(name, store_id, nonce):
+    return ['docker', 'create', '--name', name, '--label', 'org.dollhousemcp.applicability-owner=' + nonce, '--pull', 'never', '--platform', 'linux/amd64',
             '--network', 'none', '--read-only', '--no-healthcheck', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges=true', '--user', '65532:65532',
             '--entrypoint', '/bin/false', store_id, 'capture-not-executed']
+
+
+def cleanup_owned_capture(owner, graph, expected_id=None):
+    """Resolve lost create receipts without guessing ownership or requiring disk I/O."""
+    report = {'status': 'UNKNOWN', 'owned_name': owner['name'], 'expected_id': expected_id,
+              'receipts': [], 'removal_invoked': False}
+    def call(command, timeout):
+        start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        status, out, err, error = scanner.bounded_process(command, timeout, 1024 * 1024,
+                                                        stderr_maximum=32768)
+        report['receipts'].append({'command': command, 'started_utc': start,
+            'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'timeout_seconds': timeout, 'exit_code': status, 'capture_error': error,
+            'stdout_sha256': hashlib.sha256(out).hexdigest(), 'stdout_bytes': len(out),
+            'stderr': err.decode('utf-8', 'replace')})
+        return status, out
+    try:
+        # One bounded read only: absent/late/ambiguous create remains UNKNOWN.
+        # No retry, prefix match, force removal or candidate execution.
+        status, raw = call(['docker', 'inspect', owner['name']], 10)
+        if status != 0: raise ValueError('Exact owned-name resolve failed; late/missing create cannot be declared clean')
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 1: raise ValueError('Owned name did not resolve exactly once')
+        value = values[0]; resolved_id = value.get('Id', '')
+        if len(resolved_id) != 64 or any(c not in '0123456789abcdef' for c in resolved_id):
+            raise ValueError('Owned-name resolve lacks exact full container ID')
+        if expected_id and resolved_id != expected_id: raise ValueError('Owned-name ID differs from successful create receipt')
+        report['verified_identity'] = validate_never_started(value, graph, owner)
+        report['resolved_id'] = resolved_id
+        report['removal_invoked'] = True
+        status, _ = call(['docker', 'rm', '--volumes', resolved_id], 20)
+        if status != 0: raise ValueError('Exact verified-ID removal failed')
+        report['status'] = 'verified-owned-container-removed'
+    except Exception as error:
+        report['reason'] = str(error)
+    return report
+
+
+def persist_terminal_summary(path, summary):
+    try:
+        path.write_text(json.dumps(summary, indent=2))
+    except OSError as error:
+        cleanup = summary.get('cleanup', {})
+        # Keep a bounded terminal record in CI logs if the artifact filesystem
+        # fails. Never print image Env/raw inspect or pretend reporting succeeded.
+        fallback = {'schema': summary['schema'], 'status': 'incomplete-summary-persistence',
+                    'finding_closure': False, 'cleanup': {key: cleanup.get(key) for key in
+                    ['status', 'owned_name', 'resolved_id', 'removal_invoked', 'reason']}}
+        print(json.dumps(fallback), file=sys.stderr, flush=True)
+        raise RuntimeError('Capture summary persistence failed; bounded terminal state emitted to stderr') from error
 
 
 def main():
@@ -96,8 +146,15 @@ def main():
         if (image.get('Architecture'), image.get('Os')) != ('amd64', 'linux'):
             raise ValueError('Capture is qualified only for linux/amd64 target')
         container = None
+        token = uuid.uuid4().hex
+        owner = {'name': 'beta-applicability-' + token[:12], 'nonce': token, 'source_label': source_label}
+        write('ownership-intent.json', {**owner, 'typed_store_id': graph['store_id'], 'creation_state': 'about-to-attempt',
+              'note': 'Persisted before create; not authority to remove without exact identity verification'})
+        create_attempted = False
         try:
-            status, raw = run(create_command('beta-applicability-' + uuid.uuid4().hex[:12], graph['store_id']), 'container-create')
+            create_attempted = True  # Before child or receipt persistence can fail.
+            summary['create_attempted'] = True
+            status, raw = run(create_command(owner['name'], graph['store_id'], token), 'container-create')
             identifier = raw.decode().strip()
             if len(identifier) != 64 or any(c not in '0123456789abcdef' for c in identifier):
                 raise ValueError('Invalid exact container ID; cleanup identity unavailable')
@@ -108,7 +165,7 @@ def main():
                 if status != 0: raise ValueError('Never-started container inspect failed')
                 value = json.loads(raw)[0]
                 if value['Id'] != container: raise ValueError('Container inspect identity mismatch')
-                write(phase + '-selected.json', validate_never_started(value, graph))
+                write(phase + '-selected.json', validate_never_started(value, graph, owner))
                 if phase == 'before-export':
                     exported = private / 'final-rootfs.tar'
                     status, _ = run(['docker', 'export', container], 'container-export', 60,
@@ -116,9 +173,14 @@ def main():
                     if status != 0: raise ValueError('Bounded final-rootfs export failed')
                     exported.chmod(0o400)
         finally:
-            if container:
-                status, _ = run(['docker', 'rm', '--volumes', container], 'container-cleanup', 30, cleanup=True)
-                if status != 0: raise ValueError('Exact capture container cleanup failed')
+            if create_attempted:
+                # Inspect/validate/remove happens BEFORE any diagnostics write.
+                # A full disk or lost/malformed create output cannot bypass it.
+                cleanup = cleanup_owned_capture(owner, graph, container)
+                summary['cleanup'] = cleanup
+                write('container-cleanup.json', cleanup)
+                if cleanup['status'] != 'verified-owned-container-removed':
+                    raise ValueError('Capture cleanup UNKNOWN; inspect retained exact ownership intent')
         with exported.open('rb') as source:
             export_hash = hashlib.file_digest(source, 'sha256').hexdigest()
         inventory = inventory_export(exported, private / 'selected-data', deadline=deadline)
@@ -183,7 +245,7 @@ def main():
         return 1
     finally:
         # Reserve a small terminal receipt even when raw evidence fills the cap.
-        (reports / 'capture-summary.json').write_text(json.dumps(summary, indent=2))
+        persist_terminal_summary(reports / 'capture-summary.json', summary)
 
 
 if __name__ == '__main__':

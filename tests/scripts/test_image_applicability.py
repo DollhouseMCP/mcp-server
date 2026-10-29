@@ -1,6 +1,8 @@
 """Pure fixtures; no candidate image or Docker command is executed."""
 import base64
 import copy
+from contextlib import redirect_stderr
+from types import SimpleNamespace
 import hashlib
 import importlib.util
 import io
@@ -133,7 +135,7 @@ class ContainerTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError): validate_never_started(value, GRAPH)
 
     def test_orchestrator_exact_cleanup_on_export_failure_and_no_env_or_target_command(self):
-        for scenario in ['ok', 'create-failure-with-id', 'export-failure', 'wrong-engine', 'wrong-source', 'declared-volume', 'running', 'bad-export', 'cleanup-failure', 'elf-parser-failure']:
+        for scenario in ['ok', 'create-failure-with-id', 'create-timeout-lost-id', 'create-malformed-id', 'receipt-persist-failure', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id', 'export-failure', 'wrong-engine', 'wrong-source', 'declared-volume', 'running', 'bad-export', 'cleanup-failure', 'elf-parser-failure']:
             with tempfile.TemporaryDirectory() as d:
                 root = Path(d); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
                 (root / 'inputs/image.tar').write_bytes(b'verified archive fixture')
@@ -144,7 +146,21 @@ class ContainerTests(unittest.TestCase):
                 exported = bundle(root / 'fixture.tar', export_entries).read_bytes()
                 if scenario == 'bad-export': exported = b'malformed tar'
 
-                commands = []
+                commands = []; owner = {}
+                real_write = Path.write_bytes
+                def write_bytes(path, data):
+                    if scenario == 'receipt-persist-failure' and path.name == 'container-create.stdout':
+                        raise OSError('simulated create receipt persistence failure')
+                    return real_write(path, data)
+                class ToolFixture:
+                    def exists(self): return True
+                    def is_file(self): return True
+                    def stat(self): return SimpleNamespace(st_size=16, st_uid=0, st_mode=0o100755)
+                    def read_bytes(self): return b'trusted tool fixture'
+                    def resolve(self): return '/usr/bin/readelf'
+                    def __str__(self): return '/usr/bin/readelf'
+                def capture_path(value):
+                    return ToolFixture() if str(value) == '/usr/bin/readelf' else Path(value)
                 def process(cmd, timeout, maximum=0, stdout_path=None, stderr_maximum=None):
                     commands.append(cmd)
                     if cmd[:2] == ['docker', 'version']:
@@ -153,9 +169,21 @@ class ContainerTests(unittest.TestCase):
                         value = {'Id': STORE, 'Descriptor': DESC, 'Architecture': 'amd64', 'Os': 'linux',
                                  'Config': {'Env': ['CANARY=never-retain'], 'User': '1001', 'Labels': {'org.dollhousemcp.engine-proof-source': ('f' if scenario == 'wrong-source' else 'e') * 40}, 'Volumes': {'/data': {}} if scenario == 'declared-volume' else None}}
                         return 0, json.dumps([value]).encode(), b'', None
-                    if cmd[:2] == ['docker', 'create']: return (1 if scenario == 'create-failure-with-id' else 0), CID.encode(), b'', None
+                    if cmd[:2] == ['docker', 'create']:
+                        owner['name'] = cmd[cmd.index('--name')+1]
+                        owner['nonce'] = cmd[cmd.index('--label')+1].split('=',1)[1]
+                        if scenario in ['create-timeout-lost-id', 'missing-late-create']: return None, b'', b'timeout', 'deadline'
+                        if scenario == 'create-malformed-id': return 0, b'malformed', b'', None
+                        if scenario == 'conflicting-create-id': return 0, ('d'*64).encode(), b'', None
+                        return (1 if scenario == 'create-failure-with-id' else 0), CID.encode(), b'', None
                     if cmd[:2] == ['docker', 'inspect']:
-                        value = copy.deepcopy(state())
+                        if scenario == 'missing-late-create': return 1, b'', b'No such object', None
+                        value = copy.deepcopy(state()); value['Name'] = '/' + owner['name']
+                        value['Config']['Labels'] = {'org.dollhousemcp.applicability-owner': owner['nonce'],
+                            'org.dollhousemcp.engine-proof-source': 'e'*40}
+                        if scenario == 'foreign-owner': value['Config']['Labels']['org.dollhousemcp.applicability-owner'] = 'foreign'
+                        if scenario == 'foreign-name': value['Name'] = '/foreign'
+                        if scenario == 'foreign-container-source': value['Config']['Labels']['org.dollhousemcp.engine-proof-source'] = 'foreign'
                         if scenario == 'running': value['State']['Running'] = True
                         return 0, json.dumps([value]).encode(), b'', None
                     if cmd[:2] == ['docker', 'export']:
@@ -164,18 +192,35 @@ class ContainerTests(unittest.TestCase):
                     if cmd[:2] == ['docker', 'rm']: return (1 if scenario == 'cleanup-failure' else 0), CID.encode(), b'', None
                     if cmd[0] == '/usr/bin/python3': return (1 if scenario == 'elf-parser-failure' and '--file-header' in cmd else 0), b'trusted readelf fixture output', b'', None
                     raise AssertionError(cmd)
-                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40}):
+                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40}), patch.object(capture, 'Path', side_effect=capture_path), patch.object(Path, 'write_bytes', write_bytes):
                     self.assertEqual(capture.main(), 0 if scenario in ['ok', 'elf-parser-failure'] else 1)
-                self.assertEqual([x for x in commands if x[:2] == ['docker', 'rm']], [] if scenario in ['wrong-engine', 'wrong-source', 'declared-volume'] else [['docker', 'rm', '--volumes', CID]])
+                self.assertEqual([x for x in commands if x[:2] == ['docker', 'rm']], [] if scenario in ['wrong-engine', 'wrong-source', 'declared-volume', 'running', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id'] else [['docker', 'rm', '--volumes', CID]])
                 self.assertFalse(any(x[:2] in [['docker', 'start'], ['docker', 'run'], ['docker', 'exec']] for x in commands))
                 report_bytes = b''.join(p.read_bytes() for p in (root / 'reports/applicability').iterdir())
                 self.assertNotIn(b'CANARY', report_bytes)
                 self.assertNotIn(b'never-retain', report_bytes)
                 self.assertIn(b'"finding_closure": false', report_bytes)
                 self.assertEqual((root / 'reports/application-image-vulnerabilities.json').read_bytes(), b'raw findings sentinel')
+                if scenario in ['create-timeout-lost-id', 'create-malformed-id', 'receipt-persist-failure']:
+                    self.assertEqual(json.loads((root/'reports/applicability/container-cleanup.json').read_text())['status'], 'verified-owned-container-removed')
+                if scenario in ['missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id', 'running']:
+                    self.assertEqual(json.loads((root/'reports/applicability/container-cleanup.json').read_text())['status'], 'UNKNOWN')
                 if scenario == 'elf-parser-failure':
                     self.assertIn('UNKNOWN', (root/'reports/applicability/elf-index.json').read_text())
 
+
+    def test_terminal_summary_disk_failure_emits_bounded_nonclean_state(self):
+        output = io.StringIO()
+        summary = {'schema': 'image-applicability-capture-v1', 'status': 'incomplete',
+                   'cleanup': {'status': 'UNKNOWN', 'owned_name': 'exact-owned', 'removal_invoked': False,
+                               'reason': 'late/missing create'}, 'receipts': {}}
+        with patch.object(Path, 'write_text', side_effect=OSError('disk full')), redirect_stderr(output):
+            with self.assertRaises(RuntimeError): capture.persist_terminal_summary(Path('/unused'), summary)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['status'], 'incomplete-summary-persistence')
+        self.assertEqual(result['cleanup']['status'], 'UNKNOWN')
+        self.assertFalse(result['finding_closure'])
+        self.assertLess(len(output.getvalue()), 4096)
 
     def test_streamed_export_stderr_is_separately_bounded(self):
         with tempfile.TemporaryDirectory() as d:
