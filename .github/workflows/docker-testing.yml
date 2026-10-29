@@ -23,7 +23,36 @@ env:
   BUILDKIT_PROGRESS: plain
 
 jobs:
+  node-runtime-harness-precheck:
+    name: Test-only Node harness precheck (no candidate execution)
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Verify bounded inert harness fixtures
+        shell: bash
+        env:
+          NODE_RUNTIME_MOCK_EVIDENCE: ${{ runner.temp }}/node-runtime-harness-precheck/attempts
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/node-runtime-harness-precheck"
+          python3 tests/qualification/node-runtime/test_evidence.py 2>&1 | tee "$RUNNER_TEMP/node-runtime-harness-precheck/evidence-tests.log"
+          python3 tests/qualification/node-runtime/test_orchestration.py 2>&1 | tee "$RUNNER_TEMP/node-runtime-harness-precheck/orchestration-tests.log"
+      - name: Preserve test-only harness precheck evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-runtime-harness-precheck-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-runtime-harness-precheck
+          if-no-files-found: error
+
   docker-build-test:
+    needs: node-runtime-harness-precheck
     name: Docker Build & Test (${{ matrix.platform }})
     permissions:
       contents: read
@@ -722,6 +751,7 @@ jobs:
           echo "All tests passed successfully"
 
   docker-compose-test:
+    needs: node-runtime-harness-precheck
     name: Docker Compose Test
     permissions:
       contents: read

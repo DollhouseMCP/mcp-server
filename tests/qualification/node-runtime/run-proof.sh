@@ -11,28 +11,50 @@ esac
 test "$(git rev-parse HEAD)" = "${GITHUB_SHA:?}"
 root="$(pwd)"
 proof="${RUNNER_TEMP:?}/node-runtime-qualification"
-mkdir -p "$proof/native"
+mkdir -m 0700 "$proof"
+mkdir -m 0777 "$proof/native"
 chmod 0777 "$proof/native"
 tag="${platform//\//-}"
 container="node-qualification-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-$tag"
-cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+evidence="$root/tests/qualification/node-runtime/evidence.py"
+phase=initialize
+finish() {
+  status=$?
+  trap - EXIT
+  set +e
+  timeout 25 python3 "$evidence" cleanup "$proof" "$platform" "$container" > "$proof/cleanup.log" 2>&1
+  cleanup_status=$?
+  timeout 15 python3 "$evidence" finalize "$proof" "$platform" "$status" "$phase" "$cleanup_status"
+  receipt_status=$?
+  if [ "$status" -eq 0 ] && { [ "$receipt_status" -ne 0 ] || [ "$cleanup_status" -ne 0 ]; }; then status=1; fi
+  exit "$status"
+}
+trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-python3 - "$proof" "$platform" <<'PY'
-import json,os,sys
-from pathlib import Path
-Path(sys.argv[1],'invocation.json').write_text(json.dumps({
-    'source':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],
-    'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'platform':sys.argv[2],
-    'security_scope':'PARTIAL runtime only; scanner authority absent; release HOLD'},indent=2)+'\n')
-PY
+run_phase() {
+  phase=$1; shift
+  python3 "$evidence" phase "$proof" "$platform" "$phase" started -
+  if "$@"; then phase_status=0; else phase_status=$?; fi
+  if ! python3 "$evidence" phase "$proof" "$platform" "$phase" finished "$phase_status"; then
+    if [ "$phase_status" -eq 0 ]; then phase_status=1; fi
+  fi
+  return "$phase_status"
+}
+python3 "$evidence" init "$proof" "$platform"
 base="dollhousemcp:qualification-base-$tag"
 builder="dollhousemcp:builder-$tag"
 production="dollhousemcp:latest-$tag"
+# Bind existing job-built images even if the additional base-stage load fails.
+run_phase bind-existing-images python3 "$evidence" bind "$proof" "$platform" "$builder" "$production"
 # Existing Buildx stage cache is reused; production recipes and pins are unchanged.
-timeout 120 docker buildx build --platform "$platform" --target node-base --load \
+run_phase node-base-build timeout 120 docker buildx build --platform "$platform" --target node-base --load \
   --tag "$base" --file docker/Dockerfile . > "$proof/node-base-build.log" 2>&1
+run_phase bind-all-images python3 "$evidence" bind "$proof" "$platform" "$builder" "$production" "$base"
+# All probes execute immutable captured IDs, never mutable tags.
+base_id=$(python3 "$evidence" image-id "$proof" "$platform" node-base)
+builder_id=$(python3 "$evidence" image-id "$proof" "$platform" builder)
+production_id=$(python3 "$evidence" image-id "$proof" "$platform" production)
 common=(--rm --name "$container" --platform "$platform" --network none --read-only --no-healthcheck
   --cap-drop ALL --security-opt no-new-privileges --user 1001:1001
   --pids-limit 64 --memory 512m --memory-swap 512m --cpus 1
@@ -42,36 +64,20 @@ common=(--rm --name "$container" --platform "$platform" --network none --read-on
   --mount "type=bind,src=$root/scripts/ci/prepare-global-npm.mjs,dst=/proof/inventory.mjs,readonly"
   --mount "type=bind,src=$root/docker/node-runtime-security-refresh.json,dst=/proof/recipe.json,readonly"
   --mount "type=bind,src=$root/tests/fixtures/tls/pinned-outbound,dst=/tls,readonly")
-timeout 60 docker run "${common[@]}" --entrypoint /usr/local/bin/node "$base" \
-  /qualification/runtime-proof.mjs node-base > "$proof/node-base-runtime.json"
-# Compile a minimal legacy ABI addon offline, using the candidate's actual headers.
-timeout 30 docker run "${common[@]}" \
-  --mount "type=bind,src=$proof/native,dst=/native" --entrypoint /usr/bin/g++ "$builder" \
-  -shared -fPIC -DNODE_GYP_MODULE_NAME=qualification -I/usr/local/include/node \
+run_phase node-base-runtime timeout 60 docker run "${common[@]}" --entrypoint /usr/local/bin/node "$base_id" \
+  /qualification/runtime-proof.mjs node-base > "$proof/node-base-runtime.json" 2> "$proof/node-base-runtime.stderr.log"
+# Node24 V8 headers require C++20; the distribution compiler's default is insufficient.
+run_phase native-compile timeout 30 docker run "${common[@]}" \
+  --mount "type=bind,src=$proof/native,dst=/native" --entrypoint /usr/bin/g++ "$builder_id" \
+  -std=c++20 -shared -fPIC -DNODE_GYP_MODULE_NAME=qualification -I/usr/local/include/node \
   /qualification/addon.cc -o /native/qualification.node > "$proof/native-compile.log" 2>&1
 for stage in builder production; do
-  image="$builder"; test "$stage" != production || image="$production"
-  timeout 60 docker run "${common[@]}" \
+  image="$builder_id"; test "$stage" != production || image="$production_id"
+  run_phase "$stage-runtime" timeout 60 docker run "${common[@]}" \
     --mount "type=bind,src=$proof/native,dst=/native,readonly" \
     --entrypoint /usr/local/bin/node "$image" /qualification/runtime-proof.mjs "$stage" \
-    > "$proof/$stage-runtime.json"
+    > "$proof/$stage-runtime.json" 2> "$proof/$stage-runtime.stderr.log"
 done
-timeout 20 docker run "${common[@]}" --entrypoint /usr/local/bin/node "$production" \
-  /qualification/application-proof.mjs > "$proof/application-runtime.json"
-# Capture selected facts only, never complete inspect Env or credentials.
-python3 - "$proof" "$platform" "$base" "$builder" "$production" <<'PY'
-import hashlib, json, os, subprocess, sys
-from pathlib import Path
-out=Path(sys.argv[1]); images={}
-for stage, image in zip(['node-base','builder','production'],sys.argv[3:]):
-    raw=subprocess.check_output(['docker','image','inspect',image],timeout=10)
-    value=json.loads(raw)[0]
-    images[stage]={k:value.get(k) for k in ['Id','Architecture','Os','Size','RootFS']}
-    images[stage]['labels']=value.get('Config',{}).get('Labels',{})
-    images[stage]['tag']=image
-files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in out.glob('*.json')}
-(out/'source-image-binding.json').write_text(json.dumps({'source':os.environ['GITHUB_SHA'],
-    'run_id':os.environ['GITHUB_RUN_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],
-    'platform':sys.argv[2],'images':images,'report_sha256':files,
-    'scope':'Runtime qualification only; independent artifact review and all security/release gates remain HOLD.'},indent=2)+'\n')
-PY
+run_phase application-runtime timeout 20 docker run "${common[@]}" --entrypoint /usr/local/bin/node "$production_id" \
+  /qualification/application-proof.mjs > "$proof/application-runtime.json" 2> "$proof/application-runtime.stderr.log"
+phase=complete
