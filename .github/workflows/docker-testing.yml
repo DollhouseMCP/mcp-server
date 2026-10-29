@@ -303,6 +303,21 @@ jobs:
 
           set -e  # Re-enable exit on error
 
+      # TEST-ONLY successor: collect candidate runtime proof before residual
+      # security findings can correctly block the later existing steps.
+      - name: Qualify exact signed Node runtime in isolated native containers
+        timeout-minutes: 5
+        shell: bash
+        run: bash tests/qualification/node-runtime/run-proof.sh '${{ matrix.platform }}'
+
+      - name: Preserve exact Node runtime qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-runtime-qualification-${{ matrix.runner }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/node-runtime-qualification
+          if-no-files-found: error
+
       - name: Verify private drain hold against native Docker restart manager
         if: matrix.platform == 'linux/amd64'
         shell: bash
@@ -318,6 +333,15 @@ jobs:
           name: memory-upgrade-engine-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/memory-upgrade-engine-proof.json
           if-no-files-found: ignore
+
+      - name: Require independent scanner authority before existing scan
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        run: |
+          # No scanner admission record was established in this proposal.
+          # Owner Node testing approval does not admit Grype or a Go runner.
+          echo '::error::PARTIAL qualification: existing scanner execution authority remains unestablished. All image-security/release gates stay HOLD.'
+          exit 1
 
       # Exact aged Grype 0.120.1 still requires source/security/runtime qualification.
       - name: Scan Docker image for vulnerabilities
