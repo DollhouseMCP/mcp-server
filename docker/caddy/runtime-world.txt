@@ -1,0 +1,9 @@
+alpine-baselayout
+alpine-keys
+alpine-release
+apk-tools
+busybox
+ca-certificates
+libcap
+mailcap
+musl-utils

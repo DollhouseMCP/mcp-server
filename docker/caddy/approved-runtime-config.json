@@ -1,0 +1,26 @@
+{
+  "Env": [
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "CADDY_VERSION=v2.11.7",
+    "XDG_CONFIG_HOME=/config",
+    "XDG_DATA_HOME=/data"
+  ],
+  "Cmd": [
+    "caddy",
+    "run",
+    "--config",
+    "/etc/caddy/Caddyfile",
+    "--adapter",
+    "caddyfile"
+  ],
+  "Entrypoint": null,
+  "WorkingDir": "/srv",
+  "ExposedPorts": {
+    "2019/tcp": {},
+    "443/tcp": {},
+    "443/udp": {},
+    "80/tcp": {}
+  },
+  "Volumes": null,
+  "User": null
+}

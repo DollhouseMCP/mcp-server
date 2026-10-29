@@ -1,0 +1,87 @@
+name: Caddy Security Qualification
+
+on:
+  pull_request:
+    branches: [beta]
+  push:
+    branches: [beta]
+
+permissions: {}
+
+jobs:
+  native-caddy:
+    name: Native Caddy (${{ matrix.arch }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2, existing project pin
+      - name: Guard and evidence controls
+        shell: bash
+        run: |
+          node --test tests/scripts/caddy-runtime-packages.test.mjs tests/scripts/caddy-image-evidence.test.mjs
+          sh -n docker/caddy/remove-curl.sh scripts/ci/caddy-upstream-tests.sh
+      - name: Build and test the qualified upstream module graph offline
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          docker build --platform "linux/${TARGET_ARCH}" --target builder \
+            --file docker/caddy/Dockerfile \
+            --tag "localhost/dollhouse-caddy-builder:qualification-${TARGET_ARCH}" docker/caddy
+          # Upstream tests need private writable fixture/PKI state. The
+          # builder image stays immutable; no host/shared cache is writable.
+          docker run --rm --pull=never --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 256 --memory 4g --cpus 2 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=2g \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/scripts/ci/caddy-upstream-tests.sh,dst=/qualification/upstream-tests.sh,readonly" \
+            --entrypoint /bin/sh "localhost/dollhouse-caddy-builder:qualification-${TARGET_ARCH}" \
+            /qualification/upstream-tests.sh
+      - name: Build exact final Caddy candidate
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          docker build --platform "linux/${TARGET_ARCH}" \
+            --file docker/caddy/Dockerfile \
+            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --tag "localhost/dollhouse-caddy:qualification-${TARGET_ARCH}" docker/caddy
+          image_id=$(docker image inspect --format '{{.Id}}' "localhost/dollhouse-caddy:qualification-${TARGET_ARCH}")
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'CADDY_TEST_IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
+      - name: Native renderer, HTTP, TLS, HTTP2, quiet stream and persistent PKI qualification
+        shell: bash
+        run: |
+          # Approved exact public Node fixture input; no app packages or installs.
+          docker pull docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+          fixture_id=$(docker image inspect --format '{{.Id}}' docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea)
+          node scripts/ci/caddy-image-runtime.mjs "$CADDY_TEST_IMAGE_ID" "$fixture_id"
+      - name: Export exact tested final image and source metadata
+        shell: bash
+        env:
+          EVIDENCE_PLATFORM: linux/${{ matrix.arch }}
+          EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          node scripts/ci/export-tested-caddy-image.mjs "$CADDY_TEST_IMAGE_ID" \
+            "localhost/dollhouse-caddy:qualification-${TARGET_ARCH}" \
+            "${RUNNER_TEMP}/caddy-production-evidence"
+      - name: Retain tested final image for qualification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, existing project pin
+        with:
+          name: tested-caddy-production-${{ matrix.arch }}
+          path: ${{ runner.temp }}/caddy-production-evidence/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
