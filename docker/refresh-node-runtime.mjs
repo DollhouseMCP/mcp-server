@@ -47,6 +47,16 @@ export function extractSelected(archive, stage, artifact) {
   if (result.error || result.status !== 0) throw new Error('Bounded existing tar data extraction failed');
 }
 
+// Call only after the complete staged binary/header checks below. Inherited
+// lower/merged directories can refuse rename with EXDEV on overlayfs. Remove
+// the old tree, then rename only the newly created staged tree. Errors still
+// reject the disposable Docker layer; this is not a transactional host installer.
+// The injectable operations are for synthetic inert filesystem fixtures only.
+export async function installValidatedHeaders(target, staged, io = { rm, rename }) {
+  await io.rm(target, { recursive: true });
+  await io.rename(staged, target);
+}
+
 export async function refreshNode(root, archiveRoot, recipe, arch, extract = extractSelected) {
   const artifact = artifactFor(recipe, arch);
   root = await realpath(root);
@@ -86,8 +96,7 @@ export async function refreshNode(root, archiveRoot, recipe, arch, extract = ext
     await chmod(join(stage, 'bin/node'), 0o755);
     // All candidate validation precedes replacement. A later error fails the
     // Docker build layer; never invoke this CLI against a host/global prefix.
-    await rename(join(root, 'include/node'), join(stage, 'old-headers'));
-    await rename(join(stage, 'include/node'), join(root, 'include/node'));
+    await installValidatedHeaders(join(root, 'include/node'), join(stage, 'include/node'));
     await rename(join(stage, 'bin/node'), join(root, 'bin/node'));
   } finally { await rm(stage, { recursive: true, force: true }); }
   const after = await inventory(root);

@@ -2,11 +2,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, realpath, mkdir, writeFile, readFile, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, mkdir, writeFile, readFile, symlink, rm, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { artifactFor, refreshNode } from '../../docker/refresh-node-runtime.mjs';
+import { artifactFor, refreshNode, installValidatedHeaders } from '../../docker/refresh-node-runtime.mjs';
 import { inventory } from '../../scripts/ci/prepare-global-npm.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -85,6 +85,58 @@ test('tampered archive is rejected before extraction or original tree mutation',
     await assert.rejects(refreshNode(f.root, f.artifacts, f.recipe, 'amd64', f.extract), /checksum/u);
     assert.equal(f.extracted(), 0);
     assert.deepEqual(await inventory(f.root), before);
+  });
+});
+
+test('validated header install avoids inherited-directory EXDEV and removes stale nested headers', async () => {
+  await fixture(async f => {
+    const target = join(f.root, 'include/node'); const staged = join(f.artifacts, 'upper-headers');
+    await mkdir(join(target, 'stale/nested'), { recursive: true });
+    await writeFile(join(target, 'stale/nested/old.h'), 'inherited old header');
+    await mkdir(staged); await writeFile(join(staged, 'node_version.h'), 'validated synthetic header');
+    const before = await inventory(f.root); const calls = [];
+    const io = { rm: async (...args) => { calls.push(['rm', ...args]); return rm(...args); },
+      rename: async (source, destination) => {
+        calls.push(['rename', source, destination]);
+        if (source === target) throw Object.assign(new Error('Mock inherited-directory rename'), { code: 'EXDEV' });
+        return rename(source, destination);
+      } };
+    await installValidatedHeaders(target, staged, io);
+    const after = await inventory(f.root);
+    assert.deepEqual(calls, [['rm', target, { recursive: true }], ['rename', staged, target]]);
+    assert.equal(after['include/node/old-only.h'], undefined);
+    assert.equal(after['include/node/stale'], undefined);
+    assert.equal(await readFile(join(target, 'node_version.h'), 'utf8'), 'validated synthetic header');
+    const outside = records => Object.fromEntries(Object.entries(records).filter(([name]) => name !== 'include/node' && !name.startsWith('include/node/')));
+    assert.deepEqual(outside(after), outside(before));
+  });
+});
+
+test('header removal failure stops replacement and preserves the original prefix', async () => {
+  await fixture(async f => {
+    const before = await inventory(f.root); let moved = false;
+    await assert.rejects(installValidatedHeaders(join(f.root, 'include/node'), '/synthetic-not-used', {
+      rm: async () => { throw Object.assign(new Error('Mock removal refusal'), { code: 'EACCES' }); },
+      rename: async () => { moved = true; }
+    }), { code: 'EACCES' });
+    assert.equal(moved, false);
+    assert.deepEqual(await inventory(f.root), before);
+  });
+});
+
+test('staged header move errors propagate and do not replace the binary or write a success receipt', async () => {
+  await fixture(async f => {
+    const before = await inventory(f.root);
+    await assert.rejects(installValidatedHeaders(join(f.root, 'include/node'), '/synthetic-not-used', {
+      rm,
+      rename: async () => { throw Object.assign(new Error('Mock staged move failure'), { code: 'EXDEV' }); }
+    }), { code: 'EXDEV' });
+    const after = await inventory(f.root);
+    assert.equal(after['include/node'], undefined);
+    assert.deepEqual(after['bin/node'], before['bin/node']);
+    assert.equal(after['.dollhouse-node-runtime-refresh.json'], undefined);
+    // Deliberately partial synthetic prefix: the actual disposable build layer
+    // must fail. No host transaction/old-header restoration is claimed.
   });
 });
 
