@@ -278,8 +278,14 @@ try {
   engine(['exec', proxy, 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile']);
   const caFile = path.join(work, 'qualification-ca.crt');
   engine(['cp', `${proxy}:/data/caddy/pki/authorities/local/root.crt`, caFile]);
-  engine(['cp', caFile, `${upstream}:/tmp/qualification-ca.crt`]);
-  const caSha = createHash('sha256').update(fs.readFileSync(caFile)).digest('hex');
+  const caBytes = fs.readFileSync(caFile);
+  const caSha = createHash('sha256').update(caBytes).digest('hex');
+  // Docker cp rejects a read-only container even for its writable tmpfs.
+  // Let the existing unprivileged fixture create only this public CA file.
+  const installedCaSha = engine(['exec', upstream, 'node', '-e',
+    'const fs=require("node:fs"),assert=require("node:assert/strict"),crypto=require("node:crypto");const p="/tmp/qualification-ca.crt";fs.writeFileSync(p,Buffer.from(process.argv[1],"base64"),{flag:"wx",mode:0o600});const s=fs.lstatSync(p);assert.ok(s.isFile());assert.equal(s.uid,65534);assert.equal(s.gid,65534);assert.equal(s.nlink,1);assert.equal(s.mode&0o777,0o600);process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex"));',
+    caBytes.toString('base64')]);
+  assert.equal(installedCaSha, caSha);
   const h2 = await waitForReady(request, { h2:true, path:'/tls' });
   assert.equal(h2.status, 200);
   assert.equal(JSON.parse(h2.body).headers['x-forwarded-proto'], 'https');

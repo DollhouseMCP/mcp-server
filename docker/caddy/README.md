@@ -104,7 +104,7 @@ archives remain required after the correction commit.
   permitted`, exit 1, stopped and not OOM-killed, **before binding**. This
   proves the kernel execution boundary, not a bare bind-call EACCES result.
 - Concurrent MCP-like **POST text/event-stream over TLS HTTP/1.1 and HTTP/2**
-  pass with complete-event quiet gaps of **76,027.92 ms** and **76,013.63 ms**.
+  pass with complete-event quiet gaps of **76,020.46 ms** and **76,024.16 ms**.
   Each exceeds 75 seconds; buffering both events until completion fails the
   assertions. The original 80-second request/90-second client bounds remain.
   Normal stop is exit 0, not running and not OOM-killed; restart preserves
@@ -141,6 +141,19 @@ external-network skip. Production image bytes/profile, module locks,
 resource bounds, assertions and test selection are unchanged by this
 bootstrap correction. Fresh head-specific CI/reviews/Sonar/artifacts remain
 required; `a9509bd6` clearance is historical after the next commit.
+
+At `da6405e5`, both native CI jobs passed the selected upstream suite and
+reached strict-profile HTTP/reload/redaction checks, but Docker refused
+`cp` of the public test CA into the read-only Node fixture before TLS tests.
+The harness now asks that existing UID/GID-65534 process to write only
+`/tmp/qualification-ca.crt` on its writable tmpfs, with exclusive `wx` and
+mode `0600`. It checks regular-file type, UID/GID, single link, mode and
+readback SHA before trusting the certificate. Rootfs, identity, network,
+capabilities and production image are unchanged. The complete native ARM
+runtime then passed again, including the H1/H2 POST gaps above, normal stop,
+restart and cleanup. This is a fixture portability fix, not permission
+relaxation. The clean `da6405e5` Codex/Claude/Sonar reviews become historical
+after this correction; fresh exact-head CI and native archives remain due.
 
 ## Security remains blocked
 
