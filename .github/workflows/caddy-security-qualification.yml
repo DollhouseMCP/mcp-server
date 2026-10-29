@@ -43,7 +43,7 @@ jobs:
           docker run --rm --pull=never --network none \
             --cap-drop ALL --security-opt no-new-privileges \
             --pids-limit 256 --memory 4g --cpus 2 \
-            --tmpfs /tmp:rw,nosuid,nodev,size=2g \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=2g \
             --mount "type=bind,src=${GITHUB_WORKSPACE}/scripts/ci/caddy-upstream-tests.sh,dst=/qualification/upstream-tests.sh,readonly" \
             --entrypoint /bin/sh "localhost/dollhouse-caddy-builder:qualification-${TARGET_ARCH}" \
             /qualification/upstream-tests.sh

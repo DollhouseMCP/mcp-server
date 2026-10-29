@@ -7,11 +7,15 @@ test "${CGO_ENABLED:-}" = 0
 test "${GOTOOLCHAIN:-}" = local
 test "${GOWORK:-}" = off
 work=$(mktemp -d /tmp/caddy-upstream.XXXXXXXX)
-trap 'rm -rf -- "$work"' EXIT
+exec_work=
+trap 'rm -rf -- "$work"; if test -n "$exec_work"; then rm -rf -- "$exec_work"; fi' EXIT
 trap 'exit 1' HUP INT TERM
+# Docker mounts /tmp noexec. Keep executable Go test scratch on this
+# container's private writable overlay, not a shared module/cache path.
+exec_work=$(mktemp -d /src/.caddy-go-test.XXXXXXXX)
+test "$(stat -c '%u:%g:%a' "$exec_work")" = 0:0:700
 cp -a /root/.cache/go-build "$work/gocache"
-mkdir "$work/tmp"
-export GOCACHE="$work/gocache" GOTMPDIR="$work/tmp" GOMAXPROCS=2
+export GOCACHE="$work/gocache" GOTMPDIR="$exec_work" GOMAXPROCS=2
 export XDG_DATA_HOME="$work/pki-data" XDG_CONFIG_HOME="$work/pki-config"
 sha256sum -c /src/.qualified-module-locks.sha256
 go mod verify

@@ -122,6 +122,26 @@ dependency-review gate. Several ordinary unit jobs actually ran; their
 workflow-validation failures are not merely downstream guard refusals.
 These local corrections do not establish fresh CI or Sonar success.
 
+The `a9509bd6` correction subsequently received matching-head Sonar zero
+issues/hotspots and a nonblocking Claude review. Both native CI jobs passed
+the 19 controls and checksum/module verification, then all 16 test packages
+failed to execute their generated binaries under `/tmp` with permission
+denied, before any test case ran. [Docker's tmpfs implementation](https://github.com/moby/moby/blob/master/daemon/oci_linux.go)
+includes `noexec` by default; the CI logs did not capture their effective mount table.
+A separate native kernel probe measured explicit `/tmp:noexec`, reproduced
+the same real Go test's execution refusal there, and passed the identical
+test using a fresh private `0700` scratch directory under `/src`.
+
+Only `GOTMPDIR` now uses that disposable builder-overlay directory; cache
+and PKI state stay under private `/tmp`. Cleanup covers both owned paths.
+The workflow explicitly preserves `/tmp:noexec` across Docker and Podman.
+The unchanged selected upstream suite then passed again with that exact
+profile: 1,630 tests, 16 packages, six no-test packages and one original
+external-network skip. Production image bytes/profile, module locks,
+resource bounds, assertions and test selection are unchanged by this
+bootstrap correction. Fresh head-specific CI/reviews/Sonar/artifacts remain
+required; `a9509bd6` clearance is historical after the next commit.
+
 ## Security remains blocked
 
 Against the same frozen Trivy DB as the approved base, the hardened ARM
