@@ -255,6 +255,8 @@ def verify_fixed_runner(evidence, reference_directory):
         raise ValueError('Protected runner index/manifest/config graph mismatch')
     if evidence['config_digest'] != config_digest:
         raise ValueError('Runner archive is not the protected independent config')
+    if evidence['format'] == 'classic-docker' and (evidence.get('store_id_role') != 'config' or evidence.get('store_id') != config_digest):
+        raise ValueError('Classic runner store identity must be the protected config')
     if evidence['format'] == 'oci-with-docker-manifest':
         if evidence['root_digest'] not in {root, manifest_digest} or evidence['manifest_digest'] != manifest_digest:
             raise ValueError('Runner selected manifest is not the exact protected platform')

@@ -208,6 +208,28 @@ class ImageGraphTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'independent config'):
             verify_fixed_runner(bad, reference)
 
+    def test_classic_runner_requires_exact_config_store_identity(self):
+        reference = Path(__file__).resolve().parents[2] / '.github/grype-runner-reference'
+        config = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+        evidence = {'format': 'classic-docker', 'store_id_role': 'config', 'store_id': config,
+                    'config_digest': config, 'root_digest': None, 'manifest_digest': None}
+        self.assertEqual(verify_fixed_runner(evidence, reference)['container_image_id'], config)
+        for key, bad in [('store_id', 'sha256:' + 'f' * 64), ('store_id_role', 'manifest')]:
+            changed = copy.deepcopy(evidence); changed[key] = bad
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'Classic runner store identity'):
+                verify_fixed_runner(changed, reference)
+
+    def test_fixed_oci_runner_retains_distinct_store_aliases(self):
+        reference = Path(__file__).resolve().parents[2] / '.github/grype-runner-reference'
+        root = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
+        manifest = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'
+        config = 'sha256:04f59b17d8d39a8fdeb138fecb8fcbaa6e208ed7b6db929c7e98ad9005e0a52f'
+        for role, identifier in [('index', root), ('manifest', manifest), ('config', config)]:
+            evidence = {'format': 'oci-with-docker-manifest', 'store_id_role': role, 'store_id': identifier,
+                        'root_digest': root, 'manifest_digest': manifest, 'config_digest': config}
+            with self.subTest(role=role):
+                self.assertEqual(verify_fixed_runner(evidence, reference)['container_image_id'], identifier)
+
 
 if __name__ == '__main__':
     unittest.main()
