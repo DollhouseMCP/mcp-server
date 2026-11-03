@@ -517,7 +517,8 @@ jobs:
           HELPER_OUTCOME: ${{ steps.helper_tests.outcome }}
           POLLING_OUTCOME: ${{ steps.polling_tests.outcome }}
         run: |
-          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$INSPECTION_OUTCOME" != "success" ] || [ "$ADOPTION_SCAN_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$ADOPTION_RECOVERY_OUTCOME" != "success" ] || [ "$VOLUME_LIST_OUTCOME" != "success" ] || [ "$DELETE_COLLISION_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ] || [ "$POLLING_OUTCOME" != "success" ]; then
+          readonly expected_outcome=success
+          if [ "$LIFECYCLE_OUTCOME" != "$expected_outcome" ] || [ "$ACCEPTANCE_OUTCOME" != "$expected_outcome" ] || [ "$CRASH_OUTCOME" != "$expected_outcome" ] || [ "$INSPECTION_OUTCOME" != "$expected_outcome" ] || [ "$ADOPTION_SCAN_OUTCOME" != "$expected_outcome" ] || [ "$CREATE_OUTCOME" != "$expected_outcome" ] || [ "$CLEANUP_OUTCOME" != "$expected_outcome" ] || [ "$RENAME_OUTCOME" != "$expected_outcome" ] || [ "$DELETE_OUTCOME" != "$expected_outcome" ] || [ "$ADOPTION_RECOVERY_OUTCOME" != "$expected_outcome" ] || [ "$VOLUME_LIST_OUTCOME" != "$expected_outcome" ] || [ "$DELETE_COLLISION_OUTCOME" != "$expected_outcome" ] || [ "$HELPER_OUTCOME" != "$expected_outcome" ] || [ "$POLLING_OUTCOME" != "$expected_outcome" ]; then
             echo "Every serial storage, hosted graceful stop and polling model suite must execute successfully."
             exit 1
           fi
