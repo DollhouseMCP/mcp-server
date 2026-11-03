@@ -63,6 +63,9 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_image_archive_identity.py
           node --test tests/scripts/verify-image-scan.test.mjs
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_scan_built_image.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_image_scan_intake.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/scripts/test_image_applicability.py
 
       - name: Set cross-platform TEST_PERSONAS_DIR
         shell: bash
