@@ -1,0 +1,17 @@
+{
+  "target_head": "4f20b5790d5a7b1c28a698e25796c7aa641c68b5",
+  "files": {
+    "src/collection/CollectionSearch.ts": "dbefdad7db07dfdf7a28d4a7df81c3fbadda4de79a0bf51293aff184173ec578",
+    "src/collection/InvertedIndex.ts": "786a68fb26b50379ad728e1b03abd45a0f8976d3cc9f48f7c26881b0e2bc9f5a",
+    "src/utils/searchUtils.ts": "e81a3d4435bb65f773cc8a934672d49c1b29f71ec0e17ae0ea607a59ee2c1f1b",
+    "src/security/validators/unicodeValidator.ts": "1e66ae59d4d0b1b2eebf7fb5e63626957df94089c9952ebcfcdcd5a98e76a1b8",
+    "tests/performance/collection-search-inverted-index.performance.test.ts": "907d8238e41715d14075477261639e8e39483ecd8b2a049391c924360087c301",
+    "tests/jest.performance.config.cjs": "e8883157d86ed255fc22ca8f07e2164444dcb462050ed275e674deeb87fa8973",
+    "tests/jest.config.cjs": "83a8de063f460ed4da47760fdef9d7ce1678e099543c170995636275cae68b90",
+    "tests/jest.setup.mjs": "2896091da06425d9f2fa1de675023018f9557e615daa66d93c63d6682ba0872b",
+    "tests/transforms/jestShared.cjs": "cefe2e56ab18f4eea44cf30ad03c53df69dbc483ee030e9b8d1587a052c7e2d6",
+    "package.json": "98e442e3d20ce1ec03b1a99905c847a976994ccb98ca1844515026f8da26ecad",
+    "package-lock.json": "537d93daf0da52c3e354c7cf3038a373afdfa4870b6234218132f2b3ceb76204",
+    ".github/workflows/core-build-test.yml": "4cbd154c4122bb8db906b301bb85eec346f056b5ec4dd6ad08a7064bed9e2907"
+  }
+}
