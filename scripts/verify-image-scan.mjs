@@ -210,7 +210,7 @@ export function readOwnedEvidence(reportArgument, runnerTemp, backend = fs, plat
     checkDirectories();
     return { report, provenance };
   } finally {
-    for (const fd of fds.reverse()) backend.closeSync(fd);
+    for (let i = fds.length - 1; i >= 0; i--) backend.closeSync(fds[i]);
   }
 }
 
