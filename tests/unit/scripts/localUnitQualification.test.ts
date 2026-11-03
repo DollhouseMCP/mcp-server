@@ -11,10 +11,33 @@ const inventory = [...serial, ...ordinary];
 describe('complete local unit qualification admission and evidence', () => {
   it.each(['core-build-test.yml', 'extended-node-compatibility.yml'])('matches mandatory %s whole-file commands and exclusions, refusing drift', file => {
     const workflow = readFileSync(`.github/workflows/${file}`, 'utf8');
-    expect(() => checkCoreSchedule(workflow)).not.toThrow();
+    const extended = file === 'extended-node-compatibility.yml';
+    expect(() => checkCoreSchedule(workflow, extended)).not.toThrow();
     expect(() => checkCoreSchedule(workflow.replace('run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts',
-      'run: npm test -- --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts'))).toThrow('differs');
-    expect(() => checkCoreSchedule(workflow.replace('FileMemoryVolumeStore|', ''))).toThrow('exclusions differ');
+      'run: npm test -- --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts'), extended)).toThrow('differs');
+    expect(() => checkCoreSchedule(workflow.replace('FileMemoryVolumeStore|', ''), extended)).toThrow('exclusions differ');
+  });
+
+  it('refuses missing, duplicate or weakened split-storage gates', () => {
+    const workflow = readFileSync('.github/workflows/extended-node-compatibility.yml', 'utf8');
+    const changed = [
+      workflow.replace('needs: [owner-erasure-capacity, serial-storage-tests, serial-storage-tests-tail]', 'needs: [owner-erasure-capacity, serial-storage-tests]'),
+      workflow.replace('\n  serial-storage-tests-tail:\n', '\n  serial-storage-tests:\n'),
+      workflow.replace('STORAGE_TAIL_MATRIX_RESULT: ${{ needs.serial-storage-tests-tail.result }}', 'STORAGE_TAIL_MATRIX_RESULT: ${{ needs.serial-storage-tests.result }}'),
+      workflow.replace(' || [ "$STORAGE_TAIL_MATRIX_RESULT" != "success" ]', ''),
+      workflow.replace(' || [ "$ADOPTION_SCAN_OUTCOME" != "$expected_outcome" ]', ''),
+      workflow.replace(' || [ "$POLLING_OUTCOME" != "$expected_outcome" ]', ''),
+      workflow.replace('name: Enforce every serial storage suite\n        if: always()', 'name: Enforce every serial storage suite\n        if: success()'),
+      workflow.replace('POLLING_OUTCOME: ${{ steps.polling_tests.outcome }}', 'POLLING_OUTCOME: ${{ steps.helper_tests.outcome }}'),
+      workflow.replace('os: [ubuntu-latest, windows-latest, macos-latest]', 'os: [ubuntu-latest, windows-latest]'),
+      workflow.replace("node-version: ['20.x', '22.x']", "node-version: ['20.x']"),
+      workflow.replace('name: Extended serial storage tail (${{ matrix.os }}, Node ${{ matrix.node-version }})\n    runs-on: ${{ matrix.os }}',
+        'name: Extended serial storage tail (${{ matrix.os }}, Node ${{ matrix.node-version }})\n    runs-on: ubuntu-latest'),
+    ];
+    for (const mutation of changed) {
+      expect(mutation).not.toBe(workflow);
+      expect(() => checkCoreSchedule(mutation, true)).toThrow();
+    }
   });
 
   it('requires a disjoint complete discovered inventory including spec files', () => {

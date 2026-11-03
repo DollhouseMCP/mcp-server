@@ -25,7 +25,7 @@ jobs:
     name: Extended (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    needs: [owner-erasure-capacity, serial-storage-tests]
+    needs: [owner-erasure-capacity, serial-storage-tests, serial-storage-tests-tail]
     if: ${{ always() }}
 
     strategy:
@@ -40,8 +40,9 @@ jobs:
         env:
           ERASURE_MATRIX_RESULT: ${{ needs.owner-erasure-capacity.result }}
           STORAGE_MATRIX_RESULT: ${{ needs.serial-storage-tests.result }}
+          STORAGE_TAIL_MATRIX_RESULT: ${{ needs.serial-storage-tests-tail.result }}
         run: |
-          if [ "$ERASURE_MATRIX_RESULT" != "success" ] || [ "$STORAGE_MATRIX_RESULT" != "success" ]; then
+          if [ "$ERASURE_MATRIX_RESULT" != "success" ] || [ "$STORAGE_MATRIX_RESULT" != "success" ] || [ "$STORAGE_TAIL_MATRIX_RESULT" != "success" ]; then
             echo "Every owner erasure and serial storage matrix job must succeed; failed, cancelled, skipped or missing results refuse this gate."
             exit 1
           fi
@@ -235,6 +236,47 @@ jobs:
         shell: bash
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryAdoptionRecoveryScanBudget.test.ts tests/unit/storage/AdoptionScanSetupOwnership.test.ts
         continue-on-error: true
+      - name: Enforce every serial storage suite
+        if: always()
+        shell: bash
+        env:
+          LIFECYCLE_OUTCOME: ${{ steps.lifecycle_tests.outcome }}
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance_tests.outcome }}
+          CRASH_OUTCOME: ${{ steps.crash_tests.outcome }}
+          INSPECTION_OUTCOME: ${{ steps.inspection_tests.outcome }}
+          ADOPTION_SCAN_OUTCOME: ${{ steps.adoption_scan_tests.outcome }}
+        run: |
+          readonly expected_outcome=success
+          if [ "$LIFECYCLE_OUTCOME" != "$expected_outcome" ] || [ "$ACCEPTANCE_OUTCOME" != "$expected_outcome" ] || [ "$CRASH_OUTCOME" != "$expected_outcome" ] || [ "$INSPECTION_OUTCOME" != "$expected_outcome" ] || [ "$ADOPTION_SCAN_OUTCOME" != "$expected_outcome" ]; then
+            echo "Every serial storage, hosted graceful stop and polling model suite must execute successfully."
+            exit 1
+          fi
+
+  serial-storage-tests-tail:
+    name: Extended serial storage tail (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: *extended-platforms
+    env:
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          fetch-tags: true
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies without scripts
+        run: npm ci --ignore-scripts
+      - name: Build project
+        run: npm run build
       - name: Run required adoption recovery capacity suites
         id: adoption_recovery_tests
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryAdoptionRecoveryCapacity.test.ts tests/unit/storage/FileMemoryReservedAdoptionRecovery.test.ts tests/unit/storage/FileMemoryAbsentRegistryRecovery.test.ts tests/unit/storage/FileMemoryMissingOwnersRecovery.test.ts
@@ -277,11 +319,6 @@ jobs:
         if: always()
         shell: bash
         env:
-          LIFECYCLE_OUTCOME: ${{ steps.lifecycle_tests.outcome }}
-          ACCEPTANCE_OUTCOME: ${{ steps.acceptance_tests.outcome }}
-          CRASH_OUTCOME: ${{ steps.crash_tests.outcome }}
-          INSPECTION_OUTCOME: ${{ steps.inspection_tests.outcome }}
-          ADOPTION_SCAN_OUTCOME: ${{ steps.adoption_scan_tests.outcome }}
           CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
           CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
           RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
@@ -293,7 +330,7 @@ jobs:
           POLLING_OUTCOME: ${{ steps.polling_tests.outcome }}
         run: |
           readonly expected_outcome=success
-          if [ "$LIFECYCLE_OUTCOME" != "$expected_outcome" ] || [ "$ACCEPTANCE_OUTCOME" != "$expected_outcome" ] || [ "$CRASH_OUTCOME" != "$expected_outcome" ] || [ "$INSPECTION_OUTCOME" != "$expected_outcome" ] || [ "$ADOPTION_SCAN_OUTCOME" != "$expected_outcome" ] || [ "$CREATE_OUTCOME" != "$expected_outcome" ] || [ "$CLEANUP_OUTCOME" != "$expected_outcome" ] || [ "$RENAME_OUTCOME" != "$expected_outcome" ] || [ "$DELETE_OUTCOME" != "$expected_outcome" ] || [ "$ADOPTION_RECOVERY_OUTCOME" != "$expected_outcome" ] || [ "$VOLUME_LIST_OUTCOME" != "$expected_outcome" ] || [ "$DELETE_COLLISION_OUTCOME" != "$expected_outcome" ] || [ "$HELPER_OUTCOME" != "$expected_outcome" ] || [ "$POLLING_OUTCOME" != "$expected_outcome" ]; then
+          if [ "$CREATE_OUTCOME" != "$expected_outcome" ] || [ "$CLEANUP_OUTCOME" != "$expected_outcome" ] || [ "$RENAME_OUTCOME" != "$expected_outcome" ] || [ "$DELETE_OUTCOME" != "$expected_outcome" ] || [ "$ADOPTION_RECOVERY_OUTCOME" != "$expected_outcome" ] || [ "$VOLUME_LIST_OUTCOME" != "$expected_outcome" ] || [ "$DELETE_COLLISION_OUTCOME" != "$expected_outcome" ] || [ "$HELPER_OUTCOME" != "$expected_outcome" ] || [ "$POLLING_OUTCOME" != "$expected_outcome" ]; then
             echo "Every serial storage, hosted graceful stop and polling model suite must execute successfully."
             exit 1
           fi

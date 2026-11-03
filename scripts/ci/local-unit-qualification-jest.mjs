@@ -61,7 +61,63 @@ export function checkPartition(inventory, ordinaryShards) {
   assert.deepEqual(unique(selected), full, 'Serial and ordinary union must equal actual discovery exactly');
 }
 
-export function checkCoreSchedule(workflow) {
+function checkExtendedStorageSplit(workflow) {
+  const job = name => {
+    const matches = [...workflow.matchAll(new RegExp(`\\n  ${name}:\\n[\\s\\S]*?(?=\\n  [a-z0-9-]+:\\n|$)`, 'g'))];
+    assert.equal(matches.length, 1, `Missing or duplicate ${name} job`);
+    return matches[0][0];
+  };
+  const parts = [
+    ['serial-storage-tests', ['LIFECYCLE', 'ACCEPTANCE', 'CRASH', 'INSPECTION', 'ADOPTION_SCAN']],
+    ['serial-storage-tests-tail', ['ADOPTION_RECOVERY', 'CREATE', 'CLEANUP', 'RENAME', 'DELETE', 'VOLUME_LIST', 'DELETE_COLLISION', 'HELPER', 'POLLING']],
+  ];
+  const platformMatrix = /matrix: &extended-platforms\n        os: \[ubuntu-latest, windows-latest, macos-latest\]\n        node-version: \['20\.x', '22\.x'\]/;
+  const runner = /runs-on: \$\{\{ matrix\.os \}\}/;
+  const ordinary = job('extended-compatibility');
+  assert.match(ordinary, platformMatrix);
+  assert.match(ordinary, runner);
+  assert.match(ordinary, /fail-fast: false\n/);
+  const owner = job('owner-erasure-capacity');
+  assert.match(owner, runner);
+  assert.match(owner, /matrix: \*extended-platforms\n/);
+  assert.match(owner, /fail-fast: false\n/);
+  for (const [name, expected] of parts) {
+    const section = job(name);
+    assert.match(section, /timeout-minutes: 15\n/);
+    assert.match(section, /matrix: \*extended-platforms\n/);
+    assert.match(section, runner);
+    assert.match(section, /fail-fast: false\n/);
+    const gateStart = section.indexOf('      - name: Enforce every serial storage suite\n');
+    assert.ok(gateStart >= 0, `Missing ${name} outcome gate`);
+    const gate = section.slice(gateStart);
+    assert.match(gate, /\n        if: always\(\)\n/);
+    assert.match(gate, /\n          readonly expected_outcome=success\n/);
+    const ids = [...section.slice(0, gateStart).matchAll(/^        id: (\w+)_tests$/gm)].map(m => m[1].toUpperCase());
+    assert.deepEqual(sort(ids), sort(expected), `Incorrect ${name} test steps`);
+    const bindings = [...gate.matchAll(/^          (\w+)_OUTCOME: \$\{\{ steps\.(\w+)_tests\.outcome \}\}$/gm)];
+    assert.deepEqual(sort(bindings.map(m => m[1])), sort(expected), `Incorrect ${name} outcome bindings`);
+    for (const match of bindings) assert.equal(match[1], match[2].toUpperCase(), 'Outcome bound to wrong test step');
+    const condition = gate.match(/^          if (.+); then$/m)?.[1];
+    assert.ok(condition, `Missing ${name} outcome condition`);
+    const predicates = [...condition.matchAll(/\[ "\$(\w+)_OUTCOME" != "\$expected_outcome" \]/g)];
+    assert.deepEqual(sort(predicates.map(m => m[1])), sort(expected), `Incorrect ${name} outcome predicates`);
+    assert.equal(condition, predicates.map(m => m[0]).join(' || '), 'Outcome gate must reject every non-success');
+    assert.match(gate, /\n            exit 1\n/);
+  }
+  assert.match(ordinary, /needs: \[owner-erasure-capacity, serial-storage-tests, serial-storage-tests-tail\]/);
+  assert.match(ordinary, /\n    if: \$\{\{ always\(\) \}\}\n/);
+  for (const [variable, dependency] of [['ERASURE_MATRIX_RESULT', 'owner-erasure-capacity'], ['STORAGE_MATRIX_RESULT', 'serial-storage-tests'], ['STORAGE_TAIL_MATRIX_RESULT', 'serial-storage-tests-tail']]) {
+    assert.ok(ordinary.includes(`${variable}: \${{ needs.${dependency}.result }}`), `Missing ${dependency} result binding`);
+  }
+  const gate = ordinary.slice(ordinary.indexOf('      - name: Enforce complete required storage matrices'), ordinary.indexOf('      - name: Checkout repository'));
+  const condition = gate.match(/^          if (.+); then$/m)?.[1];
+  const predicates = condition ? [...condition.matchAll(/\[ "\$(\w+)" != "success" \]/g)] : [];
+  assert.deepEqual(sort(predicates.map(m => m[1])), sort(['ERASURE_MATRIX_RESULT', 'STORAGE_MATRIX_RESULT', 'STORAGE_TAIL_MATRIX_RESULT']), 'Incomplete matrix outcome gate');
+  assert.equal(condition, predicates.map(m => m[0]).join(' || '), 'Matrix gate must reject every non-success');
+  assert.match(gate, /\n            exit 1\n/);
+}
+
+export function checkCoreSchedule(workflow, extended = false) {
   const start = workflow.indexOf('\n  owner-erasure-capacity:');
   const end = workflow.indexOf('\n  postgres-', start);
   assert.ok(start >= 0, 'Required storage jobs are missing');
@@ -75,6 +131,7 @@ export function checkCoreSchedule(workflow) {
     assert.ok(pattern.startsWith(prefix) && pattern.endsWith(suffix), 'Ordinary exclusion form differs');
     assert.deepEqual(sort(pattern.slice(prefix.length, -suffix.length).split('|')), sort(names), 'Ordinary exclusions differ from required whole files');
   }
+  if (extended) checkExtendedStorageSplit(workflow);
 }
 
 function relative(file) {
@@ -176,7 +233,7 @@ async function execute(owner) {
     return child.status ?? 1;
   }
   for (const file of ['core-build-test.yml', 'extended-node-compatibility.yml']) {
-    checkCoreSchedule(readFileSync(path.join(root, '.github/workflows', file), 'utf8'));
+    checkCoreSchedule(readFileSync(path.join(root, '.github/workflows', file), 'utf8'), file === 'extended-node-compatibility.yml');
   }
   const inventory = await discover(owner);
   const ordinaryArgs = shard => [`--shard=${shard}/2`, `--testPathPatterns=${ordinaryPattern}`];
