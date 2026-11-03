@@ -119,7 +119,7 @@ jobs:
           NODE_OPTIONS: '${{ env.NODE_OPTIONS }} --experimental-vm-modules --no-warnings'
           DOLLHOUSE_MODEL_PYTHON_CONTRACT: github-cache-cpython-3.12.10-x64
           npm_lifecycle_script: 'cross-env "NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings" jest --config tests/jest.config.cjs'
-        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop|ownedFixtureProcess|hostedGracefulStopPolling)[.]test[.]ts$).*'
+        run: node node_modules/jest/bin/jest.js --config tests/jest.config.cjs --testPathPatterns='^(?!.*(?:^|/)(?:FileMemoryOwnedCreate|FileMemoryArchiveCleanupCapacity|FileMemoryOwnedRename|FileMemoryOwnedDeleteCapacity|FileMemoryOwnedErasureCapacity|FileMemoryOwnedErasure|FileMemoryOwnedErasureAcceptance|FileMemoryOwnedErasureCrash|FileMemoryErasureInspection|FileMemoryErasureInspectionOwnership|FileMemoryAdoptionRecoveryCapacity|FileMemoryReservedAdoptionRecovery|FileMemoryAbsentRegistryRecovery|FileMemoryMissingOwnersRecovery|FileMemoryVolumeListCapacity|FileMemoryVolumeList|FileMemoryListProofBudget|FileMemoryOwnedDelete|FileMemoryVolumeStore|FileMemoryAdoptionRecoveryScanBudget|AdoptionScanSetupOwnership|hostedGracefulStop|ownedFixtureProcess|hostedGracefulStopPolling)[.]test[.]ts$).*'
         continue-on-error: true
 
       - name: Enforce all required test groups
@@ -226,10 +226,18 @@ jobs:
         shell: bash
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedErasureCrash.test.ts
         continue-on-error: true
+      - name: Run required erasure inspection capacity suite
+        id: inspection_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryErasureInspection.test.ts tests/unit/storage/FileMemoryErasureInspectionOwnership.test.ts
+        continue-on-error: true
       - name: Run required adoption recovery scan budget suite
         id: adoption_scan_tests
         shell: bash
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryAdoptionRecoveryScanBudget.test.ts tests/unit/storage/AdoptionScanSetupOwnership.test.ts
+        continue-on-error: true
+      - name: Run required adoption recovery capacity suites
+        id: adoption_recovery_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryAdoptionRecoveryCapacity.test.ts tests/unit/storage/FileMemoryReservedAdoptionRecovery.test.ts tests/unit/storage/FileMemoryAbsentRegistryRecovery.test.ts tests/unit/storage/FileMemoryMissingOwnersRecovery.test.ts
         continue-on-error: true
       - name: Run required CREATE capacity suite
         id: create_tests
@@ -246,6 +254,14 @@ jobs:
       - name: Run required head DELETE capacity suite
         id: delete_tests
         run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedDeleteCapacity.test.ts
+        continue-on-error: true
+      - name: Run required volume list capacity suites
+        id: volume_list_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryVolumeListCapacity.test.ts tests/unit/storage/FileMemoryVolumeList.test.ts tests/unit/storage/FileMemoryListProofBudget.test.ts
+        continue-on-error: true
+      - name: Run required delete and archive collision capacity suites
+        id: delete_collision_tests
+        run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedDelete.test.ts tests/unit/storage/FileMemoryVolumeStore.test.ts
         continue-on-error: true
       - name: Run required hosted graceful stop suite
         id: helper_tests
@@ -264,15 +280,19 @@ jobs:
           LIFECYCLE_OUTCOME: ${{ steps.lifecycle_tests.outcome }}
           ACCEPTANCE_OUTCOME: ${{ steps.acceptance_tests.outcome }}
           CRASH_OUTCOME: ${{ steps.crash_tests.outcome }}
+          INSPECTION_OUTCOME: ${{ steps.inspection_tests.outcome }}
           ADOPTION_SCAN_OUTCOME: ${{ steps.adoption_scan_tests.outcome }}
           CREATE_OUTCOME: ${{ steps.create_tests.outcome }}
           CLEANUP_OUTCOME: ${{ steps.cleanup_tests.outcome }}
           RENAME_OUTCOME: ${{ steps.rename_tests.outcome }}
           DELETE_OUTCOME: ${{ steps.delete_tests.outcome }}
+          ADOPTION_RECOVERY_OUTCOME: ${{ steps.adoption_recovery_tests.outcome }}
+          VOLUME_LIST_OUTCOME: ${{ steps.volume_list_tests.outcome }}
+          DELETE_COLLISION_OUTCOME: ${{ steps.delete_collision_tests.outcome }}
           HELPER_OUTCOME: ${{ steps.helper_tests.outcome }}
           POLLING_OUTCOME: ${{ steps.polling_tests.outcome }}
         run: |
-          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$ADOPTION_SCAN_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ] || [ "$POLLING_OUTCOME" != "success" ]; then
+          if [ "$LIFECYCLE_OUTCOME" != "success" ] || [ "$ACCEPTANCE_OUTCOME" != "success" ] || [ "$CRASH_OUTCOME" != "success" ] || [ "$INSPECTION_OUTCOME" != "success" ] || [ "$ADOPTION_SCAN_OUTCOME" != "success" ] || [ "$CREATE_OUTCOME" != "success" ] || [ "$CLEANUP_OUTCOME" != "success" ] || [ "$RENAME_OUTCOME" != "success" ] || [ "$DELETE_OUTCOME" != "success" ] || [ "$ADOPTION_RECOVERY_OUTCOME" != "success" ] || [ "$VOLUME_LIST_OUTCOME" != "success" ] || [ "$DELETE_COLLISION_OUTCOME" != "success" ] || [ "$HELPER_OUTCOME" != "success" ] || [ "$POLLING_OUTCOME" != "success" ]; then
             echo "Every serial storage, hosted graceful stop and polling model suite must execute successfully."
             exit 1
           fi

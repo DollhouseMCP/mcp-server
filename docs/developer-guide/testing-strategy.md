@@ -55,6 +55,27 @@ production inefficiency or arbitrary-host wall-clock guarantee was established.
 The local scheduler correction follows the existing CI isolation contract rather
 than changing the capacity limits. It needs its own complete qualifying run.
 
+The November 3 audit of all 101 discovered storage suites found 11 physical
+fanout files omitted from the original 13-file isolation schedule. Core, Extended
+and this local plan now require the same 24 whole files in 15 serial groups:
+inspection (including its real timeout ownership control), adoption-recovery
+capacity, volume-list capacity, and delete/archive collision capacity join the
+original groups. Ordinary worker settings and existing CI job limits are retained.
+Small filesystem cases and synthetic entry/byte/model vectors remain ordinary.
+The launcher refuses drift in either workflow's whole-file commands or exclusions,
+and still proves the serial/ordinary union against actual native Jest discovery.
+
+The first Extended macOS Node 22 inspection run failed its flat 4,095-entry case at
+its original 10-second limit; its slow phase was unobserved. Failure-only fixed-label
+phase output records future failures without paths or payloads. Independently,
+Core macOS RESERVED adoption recovery recorded a 13,982.790833ms setup hook before
+its body could run. Its fixture callback and admitted sibling I/O must settle
+before mocks or roots are removed; the existing 10-second setup/body and cleanup
+budgets, 4,096 simultaneous writes and all residual proofs remain intact. A timed-out
+hook stays failed even when cleanup drains safely. These corrections do not claim
+a production algorithm fix or erase either failed run. Full per-file evidence and
+unchanged-contract scope are recorded in issue #3172.
+
 Explicit Jest selections/options still pass through unchanged, for example
 `npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts`.
 A selected passing file is focused evidence, not complete qualification.

@@ -9,11 +9,12 @@ const ordinary = ['tests/unit/example.test.ts', 'tests/unit/example.spec.ts'];
 const inventory = [...serial, ...ordinary];
 
 describe('complete local unit qualification admission and evidence', () => {
-  it('matches the actual mandatory Core serial commands and refuses drift', () => {
-    const workflow = readFileSync('.github/workflows/core-build-test.yml', 'utf8');
+  it.each(['core-build-test.yml', 'extended-node-compatibility.yml'])('matches mandatory %s whole-file commands and exclusions, refusing drift', file => {
+    const workflow = readFileSync(`.github/workflows/${file}`, 'utf8');
     expect(() => checkCoreSchedule(workflow)).not.toThrow();
     expect(() => checkCoreSchedule(workflow.replace('run: npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts',
       'run: npm test -- --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts'))).toThrow('differs');
+    expect(() => checkCoreSchedule(workflow.replace('FileMemoryVolumeStore|', ''))).toThrow('exclusions differ');
   });
 
   it('requires a disjoint complete discovered inventory including spec files', () => {

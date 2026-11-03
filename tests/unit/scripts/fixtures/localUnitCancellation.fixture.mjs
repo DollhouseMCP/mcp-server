@@ -2,11 +2,11 @@ import { UnitSubprocessOwner } from '../../../../scripts/ci/local-unit-qualifica
 
 const owner = new UnitSubprocessOwner();
 try {
-  await owner.runNode(['-e', `
+  await owner.runNode(['-e', String.raw`
     process.on('SIGTERM', () => setTimeout(() => {
-      process.stdout.write('CHILD_SETTLED\\n'); process.exit(0);
+      process.stdout.write('CHILD_SETTLED\n'); process.exit(0);
     }, 100));
-    process.stdout.write('CHILD_READY '+process.pid+'\\n');
+    process.stdout.write('CHILD_READY '+process.pid+'\n');
     setInterval(() => {}, 1000);
   `]);
   throw new Error('Interrupted child returned as success');

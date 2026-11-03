@@ -188,7 +188,8 @@ describe('content-free erasure inspection', () => {
       expect(f.accounting.actual.recordReadBytes).toBe(0);
       phases.verification = performance.now() - started; phase = 'complete';
     } finally {
-      if (process.env.ERASURE_INSPECTION_PROFILE === '1') {
+      // Preserve fixed-label phase evidence on failure without paths or payloads.
+      if (phase !== 'complete' || process.env.ERASURE_INSPECTION_PROFILE === '1') {
         process.stderr.write(`ERASURE inspection phases ${JSON.stringify({ nested, phase, phases, elapsedMs: performance.now() - started,
           openCalls: open.mock.calls.length, lstatCalls: lstat.mock.calls.length, accounting: f.accounting.actual })}\n`);
       }

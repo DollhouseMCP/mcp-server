@@ -21,18 +21,28 @@ export const serialGroups = [
   ['erasure-lifecycle', [storage('FileMemoryOwnedErasure')]],
   ['erasure-acceptance', [storage('FileMemoryOwnedErasureAcceptance')]],
   ['erasure-crash', [storage('FileMemoryOwnedErasureCrash')]],
+  ['erasure-inspection', [storage('FileMemoryErasureInspection'), storage('FileMemoryErasureInspectionOwnership')]],
   ['adoption-scan', [storage('FileMemoryAdoptionRecoveryScanBudget'), storage('AdoptionScanSetupOwnership')]],
+  ['adoption-recovery-capacity', [storage('FileMemoryAdoptionRecoveryCapacity'), storage('FileMemoryReservedAdoptionRecovery'),
+    storage('FileMemoryAbsentRegistryRecovery'), storage('FileMemoryMissingOwnersRecovery')]],
   ['create', [storage('FileMemoryOwnedCreate')]],
   ['archive-cleanup', [storage('FileMemoryArchiveCleanupCapacity')]],
   ['rename', [storage('FileMemoryOwnedRename')]],
   ['delete', [storage('FileMemoryOwnedDeleteCapacity')]],
+  ['volume-list-capacity', [storage('FileMemoryVolumeListCapacity'), storage('FileMemoryVolumeList'), storage('FileMemoryListProofBudget')]],
+  ['delete-collision-capacity', [storage('FileMemoryOwnedDelete'), storage('FileMemoryVolumeStore')]],
   ['hosted-stop', [helper('hostedGracefulStop'), helper('ownedFixtureProcess')]],
   ['stop-polling', [helper('hostedGracefulStopPolling')]],
 ];
 const serialFiles = serialGroups.flatMap(([, files]) => files);
 const names = serialFiles.map(file => path.basename(file, '.test.ts'));
 export const ordinaryPattern = `^(?!.*(?:^|/)(?:${names.join('|')})[.]test[.]ts$).*`;
-const sort = files => [...files].sort();
+// Explicit string comparison preserves Array.sort's existing UTF-16 ordering.
+const sort = files => [...files].sort((left, right) => {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+});
 
 function unique(files) {
   assert.ok(Array.isArray(files) && files.length > 0, 'Missing or empty test inventory');
@@ -54,10 +64,17 @@ export function checkPartition(inventory, ordinaryShards) {
 export function checkCoreSchedule(workflow) {
   const start = workflow.indexOf('\n  owner-erasure-capacity:');
   const end = workflow.indexOf('\n  postgres-', start);
-  assert.ok(start >= 0 && end > start, 'Required Core storage jobs are missing');
-  const commands = [...workflow.slice(start, end).matchAll(/run: npm test -- --runInBand --runTestsByPath ([^\n]+)/g)]
+  assert.ok(start >= 0, 'Required storage jobs are missing');
+  const commands = [...workflow.slice(start, end < 0 ? undefined : end).matchAll(/run: npm test -- --runInBand --runTestsByPath ([^\n]+)/g)]
     .map(match => match[1].trim().split(/\s+/));
-  assert.deepEqual(commands, serialGroups.map(([, files]) => files), 'Local serial schedule differs from required Core steps');
+  assert.deepEqual(commands, serialGroups.map(([, files]) => files), 'Local serial schedule differs from required workflow steps');
+  const exclusions = [...workflow.matchAll(/--testPathPatterns='([^']+)'/g)];
+  assert.ok(exclusions.length > 0, 'Ordinary exclusions are missing');
+  for (const [, pattern] of exclusions) {
+    const prefix = '^(?!.*(?:^|/)(?:', suffix = ')[.]test[.]ts$).*';
+    assert.ok(pattern.startsWith(prefix) && pattern.endsWith(suffix), 'Ordinary exclusion form differs');
+    assert.deepEqual(sort(pattern.slice(prefix.length, -suffix.length).split('|')), sort(names), 'Ordinary exclusions differ from required whole files');
+  }
 }
 
 function relative(file) {
@@ -77,7 +94,7 @@ export class UnitSubprocessOwner {
         // A catchable parent-only signal must not abandon the active child.
         // Completion still awaits close below; cancellation never permits the
         // next group or converts a child's late exit0 into qualification.
-        if (this.active && this.active.exitCode === null && this.active.signalCode === null) this.active.kill(signal);
+        if (this.active?.exitCode === null && this.active.signalCode === null) this.active.kill(signal);
       };
       this.handlers.set(signal, handler); process.on(signal, handler);
     }
@@ -158,7 +175,9 @@ async function execute(owner) {
     assert.equal(child.signal, null, 'Targeted Jest run was interrupted');
     return child.status ?? 1;
   }
-  checkCoreSchedule(readFileSync(path.join(root, '.github/workflows/core-build-test.yml'), 'utf8'));
+  for (const file of ['core-build-test.yml', 'extended-node-compatibility.yml']) {
+    checkCoreSchedule(readFileSync(path.join(root, '.github/workflows', file), 'utf8'));
+  }
   const inventory = await discover(owner);
   const ordinaryArgs = shard => [`--shard=${shard}/2`, `--testPathPatterns=${ordinaryPattern}`];
   const ordinaryShards = [await discover(owner, ordinaryArgs(1)), await discover(owner, ordinaryArgs(2))];
