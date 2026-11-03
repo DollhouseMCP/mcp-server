@@ -14,6 +14,13 @@
 import { IndexEntry } from '../types/collection.js';
 import { normalizeSearchTerm } from '../utils/searchUtils.js';
 
+// Common English stop words that don't add search value.
+const STOP_WORDS: ReadonlySet<string> = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
+  'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
+  'that', 'the', 'to', 'was', 'will', 'with'
+]);
+
 /**
  * Single token entry in the inverted index
  */
@@ -153,14 +160,7 @@ export class InvertedIndex {
    * Stop words are filtered to reduce index size and improve relevance
    */
   private isStopWord(token: string): boolean {
-    // Common English stop words that don't add search value
-    const stopWords = new Set([
-      'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for',
-      'from', 'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on',
-      'that', 'the', 'to', 'was', 'will', 'with'
-    ]);
-
-    return stopWords.has(token);
+    return STOP_WORDS.has(token);
   }
 
   /**
