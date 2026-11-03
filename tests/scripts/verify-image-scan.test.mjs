@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { verifyImageScan, defaultKernelIgnores } from '../../scripts/verify-image-scan.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { verifyImageScan, defaultKernelIgnores, readOwnedEvidence } from '../../scripts/verify-image-scan.mjs';
 
 const image = `sha256:${'a'.repeat(64)}`;
 const cache = '/owned/db';
@@ -45,8 +48,8 @@ test('missing findings cannot be represented as a clean report', () => {
   assert.throws(() => verifyImageScan(value, image, now, cache), /findings are missing/);
 });
 test('the command fails closed for an absent scanner output file', () => {
-  const child = spawnSync(process.execPath, ['scripts/verify-image-scan.mjs', '/nonexistent/owned-scan.json', image], { encoding: 'utf8' });
-  assert.equal(child.status, 1); assert.match(child.stderr, /ENOENT/);
+  const child = spawnSync(process.execPath, ['scripts/verify-image-scan.mjs', '/nonexistent/owned-scan.json', image], { encoding: 'utf8', env: { ...process.env, RUNNER_TEMP: '' } });
+  assert.equal(child.status, 1); assert.match(child.stderr, /Trusted Linux runner path required/);
 });
 
 test('unknown enum is retained; malformed severity labels fail closed', () => {
@@ -149,4 +152,118 @@ test('offline local DB import requires bound Python manifest, image and actual i
     const changed = structuredClone(proof); mutate(changed);
     assert.throws(() => verifyImageScan(value, image, now, cache, changed), /Offline/);
   }
+});
+
+// Inject only the proc-fd path adapter on non-Linux hosts; real fixture FDs,
+// lstat, nofollow opens and bounded reads remain in use. Production has no fallback.
+function evidenceFixture() {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'owned-evidence-')));
+  const reports = path.join(root, 'image-security', 'reports'); fs.mkdirSync(reports, { recursive: true });
+  const report = path.join(reports, 'application-image-vulnerabilities.json');
+  const provenance = path.join(reports, 'offline-provenance.json');
+  fs.writeFileSync(report, JSON.stringify({ matches: [] })); fs.writeFileSync(provenance, JSON.stringify({ valid: true }));
+  const paths = new Map(); const closed = []; let onRead = null; let onOpen = null; let opened = 0;
+  const resolve = name => name.replace(/^\/proc\/self\/fd\/(\d+)(?=\/)/, (_, fd) => paths.get(Number(fd)));
+  const backend = { ...fs,
+    realpathSync: fs.realpathSync,
+    lstatSync: (name, opts) => fs.lstatSync(resolve(name), opts),
+    openSync: (name, flags) => { const resolved = path.normalize(resolve(name)); if (onOpen) onOpen(resolved); const fd = fs.openSync(resolved, flags); opened++; paths.set(fd, resolved); return fd; },
+    readSync: (...args) => { const count = fs.readSync(...args); if (onRead) onRead(); return count; },
+    closeSync: fd => { closed.push(fd); paths.delete(fd); fs.closeSync(fd); },
+  };
+  return { root, reports, report, provenance, backend, closed, openCount: () => opened, setRead: fn => { onRead = fn; }, setOpen: fn => { onOpen = fn; }, cleanup: () => fs.rmSync(root, { recursive:true, force:true }) };
+}
+
+test('fixed evidence accepts bounded fixture files and closes every descriptor', () => {
+  const f = evidenceFixture();
+  try {
+    assert.deepEqual(readOwnedEvidence(f.report, f.root, f.backend, 'linux'), { report: { matches: [] }, provenance: { valid: true } });
+    assert.equal(f.openCount(), f.closed.length);
+  } finally { f.cleanup(); }
+});
+
+test('trusted fixed location rejects path substitution and unsupported hosts', () => {
+  const f = evidenceFixture();
+  try {
+    for (const [report, root, platform] of [
+      [f.report, undefined, 'linux'], [f.report, f.root, 'darwin'], ['relative.json', f.root, 'linux'],
+      [f.report.replace('/reports/', '/reports/../reports/'), f.root, 'linux'],
+      [path.join(f.reports, 'other.json'), f.root, 'linux'], [f.report + '.other', f.root, 'linux'],
+      [path.join(f.root + '-lookalike', 'image-security/reports/application-image-vulnerabilities.json'), f.root, 'linux'],
+    ]) assert.throws(() => readOwnedEvidence(report, root, f.backend, platform));
+    assert.equal(f.closed.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('symlinks, nonregular files, oversize and malformed data fail closed', () => {
+  for (const scenario of ['report-link', 'parent-link', 'directory', 'oversize', 'provenance-oversize', 'malformed']) {
+    const f = evidenceFixture();
+    try {
+      if (scenario === 'report-link') { fs.unlinkSync(f.report); fs.symlinkSync(f.provenance, f.report); }
+      if (scenario === 'parent-link') { fs.renameSync(f.reports, f.reports + '-real'); fs.symlinkSync(f.reports + '-real', f.reports); }
+      if (scenario === 'directory') { fs.unlinkSync(f.report); fs.mkdirSync(f.report); }
+      if (scenario === 'oversize' || scenario === 'provenance-oversize') fs.truncateSync(scenario === 'oversize' ? f.report : f.provenance, scenario === 'oversize' ? 32 * 1024 ** 2 + 1 : 1024 ** 2 + 1);
+      if (scenario === 'malformed') fs.writeFileSync(f.report, '{');
+      assert.throws(() => readOwnedEvidence(f.report, f.root, f.backend, 'linux'));
+      assert.ok(f.closed.length > 0);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('replacement, growth and postread changes refuse and close descriptors', () => {
+  for (const scenario of ['replace', 'grow', 'mutate']) {
+    const f = evidenceFixture(); let changed = false;
+    try {
+      f.setRead(() => {
+        if (changed) return; changed = true;
+        if (scenario === 'replace') { fs.renameSync(f.report, f.report + '.old'); fs.writeFileSync(f.report, '{}'); }
+        if (scenario === 'grow') fs.appendFileSync(f.report, ' ');
+        if (scenario === 'mutate') fs.writeFileSync(f.report, '{"other":true}');
+      });
+      assert.throws(() => readOwnedEvidence(f.report, f.root, f.backend, 'linux'), /changed/);
+      assert.equal(f.openCount(), f.closed.length);
+    } finally { f.cleanup(); }
+  }
+});
+
+
+test('pre-open replacement and directory rename refuse and close all opened FDs', () => {
+  for (const scenario of ['pre-open', 'directory-rename']) {
+    const f = evidenceFixture(); let changed = false;
+    try {
+      if (scenario === 'pre-open') f.setOpen(name => {
+        if (name === f.report && !changed) { changed = true; fs.renameSync(f.report, f.report + '.old'); fs.writeFileSync(f.report, '{}'); }
+      });
+      if (scenario === 'directory-rename') f.setRead(() => {
+        if (!changed) { changed = true; fs.renameSync(f.reports, f.reports + '-old'); fs.mkdirSync(f.reports); }
+      });
+      assert.throws(() => readOwnedEvidence(f.report, f.root, f.backend, 'linux'));
+      assert.equal(f.openCount(), f.closed.length);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('native Linux proc-fd backend reads and rejects symlinks', { skip: process.platform !== 'linux' && 'Native /proc/self/fd backend requires Linux' }, () => {
+  const f = evidenceFixture();
+  try {
+    assert.deepEqual(readOwnedEvidence(f.report, f.root), { report: { matches: [] }, provenance: { valid: true } });
+    fs.unlinkSync(f.report); fs.symlinkSync(f.provenance, f.report);
+    assert.throws(() => readOwnedEvidence(f.report, f.root));
+    fs.unlinkSync(f.report); fs.writeFileSync(f.report, '{}');
+    let replaced = false;
+    const preopen = { ...fs, openSync(name, flags) {
+      if (!replaced && name.endsWith('/application-image-vulnerabilities.json')) {
+        replaced = true; fs.renameSync(f.report, f.report + '.old'); fs.writeFileSync(f.report, '{}');
+      }
+      return fs.openSync(name, flags);
+    } };
+    assert.throws(() => readOwnedEvidence(f.report, f.root, preopen, 'linux'), /changed/);
+    let moved = false;
+    const duringRead = { ...fs, readSync(...args) {
+      const count = fs.readSync(...args);
+      if (!moved) { moved = true; fs.renameSync(f.reports, f.reports + '-old'); fs.mkdirSync(f.reports); }
+      return count;
+    } };
+    assert.throws(() => readOwnedEvidence(f.report, f.root, duringRead, 'linux'));
+  } finally { f.cleanup(); }
 });

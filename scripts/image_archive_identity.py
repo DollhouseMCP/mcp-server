@@ -13,15 +13,19 @@ LAYER_TYPES = {'application/vnd.oci.image.layer.v1.tar', 'application/vnd.docker
                'application/vnd.oci.image.layer.v1.tar+gzip', 'application/vnd.docker.image.rootfs.diff.tar.gzip'}
 DIGEST = re.compile(r'sha256:[a-f0-9]{64}')
 METADATA_MAX = 10 * 1024 * 1024
+SHA_PREFIX = 'sha256:'
+BLOB_PREFIX = 'blobs/sha256/'
+INDEX_FILE = 'index.json'
+DEFAULT_PLATFORM = 'linux/amd64'
 
 
 def sha(data):
-    return 'sha256:' + hashlib.sha256(data).hexdigest()
+    return SHA_PREFIX + hashlib.sha256(data).hexdigest()
 
 
 class SavedImage:
-    def __init__(self, path, platform="linux/amd64"):
-        if platform not in {"linux/amd64", "linux/arm64"}:
+    def __init__(self, path, platform=DEFAULT_PLATFORM):
+        if platform not in {DEFAULT_PLATFORM, "linux/arm64"}:
             raise ValueError("Unsupported target platform")
         self.platform = tuple(platform.split("/"))
         self.path = path
@@ -61,7 +65,7 @@ class SavedImage:
         digest = descriptor.get('digest', '')
         if not DIGEST.fullmatch(digest) or descriptor.get('urls'):
             raise ValueError('Invalid/external OCI descriptor')
-        name = 'blobs/sha256/' + digest[7:]
+        name = BLOB_PREFIX + digest[7:]
         member = self.member(name)
         if type(descriptor.get('size')) is not int or member.size != descriptor['size']:
             raise ValueError('OCI descriptor size mismatch')
@@ -87,9 +91,6 @@ class SavedImage:
                 raise ValueError('Invalid OCI index')
             result = []
             for child in children:
-                platform = child.get('platform')
-                if platform and (platform.get('os'), platform.get('architecture')) != self.platform:
-                    continue
                 result.extend(self.candidates(child, depth + 1))
             return result
         if media not in MANIFEST_TYPES:
@@ -102,6 +103,15 @@ class SavedImage:
             return []
         return [(descriptor, value, config)]
 
+    def verify_layer_descriptor(self, descriptor, member, name, raw_digest):
+        if descriptor:
+            if descriptor.get('mediaType') not in LAYER_TYPES or descriptor.get('urls'):
+                raise ValueError('Unsupported/external OCI layer type')
+            if type(descriptor.get('size')) is not int or descriptor.get('digest') != raw_digest or descriptor.get('size') != member.size:
+                raise ValueError('OCI layer descriptor mismatch')
+        elif name.startswith(BLOB_PREFIX) and name != BLOB_PREFIX + raw_digest[7:]:
+            raise ValueError('Content-addressed Docker layer digest mismatch')
+
     def layer(self, name, expected_diff, remaining, descriptor=None):
         member = self.member(name)
         compressed = hashlib.sha256()
@@ -109,14 +119,8 @@ class SavedImage:
             for chunk in iter(lambda: source.read(65536), b''):
                 self.check_time()
                 compressed.update(chunk)
-        raw_digest = 'sha256:' + compressed.hexdigest()
-        if descriptor:
-            if descriptor.get('mediaType') not in LAYER_TYPES or descriptor.get('urls'):
-                raise ValueError('Unsupported/external OCI layer type')
-            if type(descriptor.get('size')) is not int or descriptor.get('digest') != raw_digest or descriptor.get('size') != member.size:
-                raise ValueError('OCI layer descriptor mismatch')
-        elif name.startswith('blobs/sha256/') and name != 'blobs/sha256/' + raw_digest[7:]:
-            raise ValueError('Content-addressed Docker layer digest mismatch')
+        raw_digest = SHA_PREFIX + compressed.hexdigest()
+        self.verify_layer_descriptor(descriptor, member, name, raw_digest)
         with self.tar.extractfile(member) as source:
             magic = source.read(2); source.seek(0)
             compressed_type = descriptor and descriptor['mediaType'].endswith(('gzip', '.gzip'))
@@ -130,80 +134,102 @@ class SavedImage:
                 if count > remaining:
                     raise ValueError(f'Validated unpacked layer bytes exceed admission cap: current_layer_bytes={count}, remaining_bytes={remaining}, compressed_bytes={member.size}')
                 digest.update(chunk)
-        diff = 'sha256:' + digest.hexdigest()
+        diff = SHA_PREFIX + digest.hexdigest()
         if not DIGEST.fullmatch(expected_diff) or diff != expected_diff:
             raise ValueError('Uncompressed layer diffID mismatch')
         return {'archive_path': name, 'compressed_digest': raw_digest, 'compressed_bytes': member.size,
                 'diff_id': diff, 'uncompressed_bytes': count}
 
 
-def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform="linux/amd64", expected_source=None):
+def select_oci_candidate(archive, store_id, descriptor, config_bytes, config_digest):
+    index = json.loads(archive.read(INDEX_FILE))
+    roots = index.get('manifests', [])
+    if index.get('schemaVersion') != 2 or len(roots) > 64:
+        raise ValueError('Invalid saved OCI index')
+    root_matches = [r for r in roots if r.get('digest') == store_id]
+    if not root_matches and descriptor:
+        root_matches = [r for r in roots if r.get('digest') == descriptor.get('digest')]
+    if not root_matches and store_id != config_digest:
+        raise ValueError('Observed store root is absent from OCI archive')
+    candidates = [(root, entry) for root in root_matches or roots for entry in archive.candidates(root)
+                  if entry[2] == config_bytes]
+    if len(candidates) != 1:
+        raise ValueError('OCI selected-platform graph is missing or ambiguous')
+    return candidates[0]
+
+
+def validate_selected_descriptor(archive, root, selected, descriptor, expected_source):
+    if expected_source is not None and (selected[0].get('platform', {}).get('os'), selected[0].get('platform', {}).get('architecture')) != archive.platform:
+        raise ValueError('Selected target descriptor platform is missing or mismatched')
+    if descriptor:
+        matching = next((d for d in (root, selected[0]) if d.get('digest') == descriptor.get('digest')), None)
+        if not matching or any(descriptor.get(k) != matching.get(k) for k in ['digest', 'mediaType', 'size']) or ('platform' in descriptor and descriptor['platform'] != matching.get('platform')):
+            raise ValueError('Inspect descriptor differs from saved graph')
+
+
+def store_role(store_id, root, selected, config_digest):
+    if store_id == root['digest']:
+        return 'index' if root['mediaType'] in INDEX_TYPES else 'manifest'
+    if store_id == selected[0]['digest']:
+        return 'manifest'
+    if store_id == config_digest:
+        return 'config'
+    raise ValueError('Store ID has no exact role in selected OCI graph')
+
+
+def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source):
+    root, selected = select_oci_candidate(archive, store_id, descriptor, config_bytes, config_digest)
+    validate_selected_descriptor(archive, root, selected, descriptor, expected_source)
+    role = store_role(store_id, root, selected, config_digest)
+    if selected[1]['config']['digest'] != config_digest:
+        raise ValueError('OCI and Docker config digest disagree')
+    descriptors = selected[1]['layers']
+    if [BLOB_PREFIX + d['digest'][7:] for d in descriptors] != docker['Layers']:
+        raise ValueError('Docker compatibility layers disagree with OCI selected manifest')
+    return root['digest'], selected, role, descriptors
+
+
+def saved_config(archive, expected_source):
+    docker = json.loads(archive.read('manifest.json'))
+    if not isinstance(docker, list) or len(docker) != 1:
+        raise ValueError('Expected exactly one Docker compatibility manifest')
+    docker = docker[0]
+    config_bytes = archive.read(docker['Config'])
+    config = json.loads(config_bytes)
+    if expected_source is not None and config.get('config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source') != expected_source:
+        raise ValueError('Saved target source label mismatch')
+    if (config.get('os'), config.get('architecture')) != archive.platform:
+        raise ValueError('Saved target platform mismatch')
+    return docker, config_bytes, config
+
+
+def verified_layers(archive, config, docker, descriptors, unpacked_cap):
+    diffs = config.get('rootfs', {}).get('diff_ids')
+    if config.get('rootfs', {}).get('type') != 'layers' or not isinstance(diffs, list) or not 0 < len(diffs) <= 256 or len(diffs) != len(docker['Layers']):
+        raise ValueError('Image rootfs/layer graph is invalid')
+    layers = []; total = 0
+    for name, diff, desc in zip(docker['Layers'], diffs, descriptors):
+        record = archive.layer(name, diff, unpacked_cap - total, desc)
+        total += record['uncompressed_bytes']; layers.append(record)
+    return layers, total
+
+
+def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
     archive = SavedImage(path, platform)
     try:
-        docker = json.loads(archive.read('manifest.json'))
-        if not isinstance(docker, list) or len(docker) != 1:
-            raise ValueError('Expected exactly one Docker compatibility manifest')
-        docker = docker[0]
-        config_bytes = archive.read(docker['Config'])
+        docker, config_bytes, config = saved_config(archive, expected_source)
         config_digest = sha(config_bytes)
-        config = json.loads(config_bytes)
-        if expected_source is not None and config.get('config', {}).get('Labels', {}).get('org.dollhousemcp.engine-proof-source') != expected_source:
-            raise ValueError('Saved target source label mismatch')
-        if (config.get('os'), config.get('architecture')) != archive.platform:
-            raise ValueError('Saved target platform mismatch')
-        selected = None; root_digest = None; role = None
-        if 'index.json' in archive.members:
-            index = json.loads(archive.read('index.json'))
-            roots = index.get('manifests', [])
-            if index.get('schemaVersion') != 2 or len(roots) > 64:
-                raise ValueError('Invalid saved OCI index')
-            # New stores identify the root manifest/index; classic stores identify config.
-            root_matches = [r for r in roots if r.get('digest') == store_id]
-            if descriptor and descriptor.get('digest') != store_id:
-                root_matches = [r for r in roots if r.get('digest') == descriptor.get('digest')]
-            if not root_matches and store_id != config_digest:
-                raise ValueError('Observed store root is absent from OCI archive')
-            candidates = []
-            for root in root_matches or roots:
-                for entry in archive.candidates(root):
-                    if entry[2] == config_bytes:
-                        candidates.append((root, entry))
-            if len(candidates) != 1:
-                raise ValueError('OCI selected-platform graph is missing or ambiguous')
-            root, selected = candidates[0]; root_digest = root['digest']
-            if expected_source is not None and (selected[0].get('platform', {}).get('os'), selected[0].get('platform', {}).get('architecture')) != archive.platform:
-                raise ValueError('Selected target descriptor platform is missing or mismatched')
-            if descriptor and (any(descriptor.get(key) != root.get(key) for key in ['digest', 'mediaType', 'size']) or
-                               ('platform' in descriptor and descriptor['platform'] != root.get('platform'))):
-                raise ValueError('Inspect descriptor differs from saved root')
-            if store_id == root_digest:
-                role = 'index' if root['mediaType'] in INDEX_TYPES else 'manifest'
-            elif store_id == selected[0]['digest']:
-                role = 'manifest'
-            elif store_id == config_digest:
-                role = 'config'
-            else:
-                raise ValueError('Store ID has no exact role in selected OCI graph')
-            if selected[1]['config']['digest'] != config_digest:
-                raise ValueError('OCI and Docker config digest disagree')
-            descriptors = selected[1]['layers']
-            names = ['blobs/sha256/' + d['digest'][7:] for d in descriptors]
-            if names != docker['Layers']:
-                raise ValueError('Docker compatibility layers disagree with OCI selected manifest')
+        selected = None; root_digest = None
+        if INDEX_FILE in archive.members:
+            root_digest, selected, role, descriptors = select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source)
         else:
             if descriptor or store_id != config_digest:
                 raise ValueError('Classic Docker config identity does not match observed store ID')
             role = 'config'; descriptors = [None] * len(docker['Layers'])
-        diffs = config.get('rootfs', {}).get('diff_ids')
-        if config.get('rootfs', {}).get('type') != 'layers' or not isinstance(diffs, list) or not 0 < len(diffs) <= 256 or len(diffs) != len(docker['Layers']):
-            raise ValueError('Image rootfs/layer graph is invalid')
-        layers = []; total = 0
-        for name, diff, desc in zip(docker['Layers'], diffs, descriptors):
-            record = archive.layer(name, diff, unpacked_cap - total, desc)
-            total += record['uncompressed_bytes']; layers.append(record)
+        layers, total = verified_layers(archive, config, docker, descriptors, unpacked_cap)
         return {'store_id': store_id, 'store_id_role': role, 'root_digest': root_digest,
                 'manifest_digest': selected[0]['digest'] if selected else None,
                 'manifest_descriptor': selected[0] if selected else None,
@@ -216,7 +242,7 @@ def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfor
 
 def verify_fixed_runner(evidence, reference_directory):
     """Anchor either archive format to the exact protected public reference graph."""
-    index_bytes = (reference_directory / 'index.json').read_bytes()
+    index_bytes = (reference_directory / INDEX_FILE).read_bytes()
     manifest_bytes = (reference_directory / 'linux-amd64-manifest.json').read_bytes()
     root = 'sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66'
     manifest_digest = 'sha256:c83040f7e24bacea68e58a0b96a484ba430bf24abb2973eab7ba4701144b7b63'

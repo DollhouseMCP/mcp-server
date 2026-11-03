@@ -59,7 +59,7 @@ export function verifyOfflineProvenance(provenance, database) {
   const policy = isolation?.host_config;
   const capacity = provenance.capacity_admission;
   const rawDb = provenance.database_payload?.declared_payload_bytes;
-  if (!record?.manifest || record.manifest.status !== 'active' ||
+  if (record?.manifest?.status !== 'active' ||
       record.manifest.schemaVersion !== 'v6.1.10' ||
       record.manifest.checksum !== `sha256:${record.sha256}` ||
       record.url !== `https://grype.anchore.io/databases/v6/${record.manifest.path}` ||
@@ -105,7 +105,8 @@ export function verifyOfflineProvenance(provenance, database) {
   }
 }
 
-export function verifyImageScan(result, expectedStoreId, now = Date.now(), expectedDbCache, offline) {
+export function verifyImageScan(result, expectedStoreId, now, expectedDbCache, offline) {
+  now ??= Date.now();
   const descriptor = result?.descriptor;
   const database = descriptor?.db?.status;
   const built = Date.parse(database?.built);
@@ -146,10 +147,77 @@ export function verifyImageScan(result, expectedStoreId, now = Date.now(), expec
   return counts;
 }
 
+// The workflow uses a trusted RUNNER_TEMP and fixed names. Linux /proc/self/fd
+// pins each directory during traversal; platforms lacking this backend refuse.
+export function readOwnedEvidence(reportArgument, runnerTemp, backend = fs, platform = process.platform) {
+  if (platform !== 'linux' || !runnerTemp || !path.isAbsolute(runnerTemp) ||
+      runnerTemp.split(path.sep).includes('..') || !reportArgument || !path.isAbsolute(reportArgument) ||
+      reportArgument.split(path.sep).includes('..')) throw new Error('Trusted Linux runner path required');
+  const expected = path.join(runnerTemp, 'image-security', 'reports', 'application-image-vulnerabilities.json');
+  if (reportArgument !== expected) throw new Error('Report path does not match the trusted fixed location');
+  const root = backend.realpathSync(runnerTemp);
+  const fds = []; const directories = [];
+  const flags = backend.constants.O_RDONLY | backend.constants.O_NOFOLLOW | backend.constants.O_NONBLOCK;
+  const sameIdentity = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode;
+  const sameFile = (a, b) => sameIdentity(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+  const stat = (pathname) => backend.lstatSync(pathname, { bigint: true });
+  const fstat = (fd) => backend.fstatSync(fd, { bigint: true });
+  function openDirectory(name) {
+    const before = stat(name);
+    if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('Evidence directory is not a real directory');
+    const fd = backend.openSync(name, flags | backend.constants.O_DIRECTORY); fds.push(fd);
+    if (!sameIdentity(before, fstat(fd))) throw new Error('Evidence directory changed during open');
+    directories.push({name, fd, before});
+    return fd;
+  }
+  function checkDirectories() {
+    if (backend.realpathSync(runnerTemp) !== root) throw new Error('Trusted runner root changed during read');
+    for (const dir of directories) {
+      if (!sameIdentity(dir.before, stat(dir.name)) || !sameIdentity(dir.before, fstat(dir.fd)))
+        throw new Error('Evidence directory changed during read');
+    }
+  }
+  function readFile(parent, name, cap) {
+    const pathname = `/proc/self/fd/${parent}/${name}`;
+    const before = stat(pathname);
+    if (!before.isFile() || before.isSymbolicLink() || before.size > BigInt(cap)) throw new Error('Evidence file is not a bounded regular file');
+    const fd = backend.openSync(pathname, flags); fds.push(fd);
+    const opened = fstat(fd);
+    if (!sameFile(before, opened)) throw new Error('Evidence file changed during open');
+    const chunks = []; let total = 0;
+    while (true) {
+      const buffer = Buffer.alloc(Math.min(65536, cap + 1 - total));
+      const count = backend.readSync(fd, buffer, 0, buffer.length, null);
+      if (!count) break;
+      total += count;
+      if (total > cap) throw new Error('Evidence file exceeds its size limit');
+      chunks.push(buffer.subarray(0, count));
+    }
+    if (BigInt(total) !== opened.size || !sameFile(opened, fstat(fd)) || !sameFile(opened, stat(pathname)))
+      throw new Error('Evidence file changed during read');
+    checkDirectories();
+    return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));
+  }
+  try {
+    let rootFd = openDirectory(path.parse(root).root);
+    for (const component of root.split(path.sep).filter(Boolean)) {
+      rootFd = openDirectory(`/proc/self/fd/${rootFd}/${component}`);
+    }
+    const securityFd = openDirectory(`/proc/self/fd/${rootFd}/image-security`);
+    const reportsFd = openDirectory(`/proc/self/fd/${securityFd}/reports`);
+    const report = readFile(reportsFd, 'application-image-vulnerabilities.json', 32 * 1024 ** 2);
+    const provenance = readFile(reportsFd, 'offline-provenance.json', 1024 ** 2);
+    checkDirectories();
+    return { report, provenance };
+  } finally {
+    for (const fd of fds.reverse()) backend.closeSync(fd);
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    verifyImageScan(JSON.parse(fs.readFileSync(process.argv[2], 'utf8')), process.argv[3], Date.now(),
-      '/work/db', JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[2]), 'offline-provenance.json'), 'utf8')));
+    const { report, provenance } = readOwnedEvidence(process.argv[2], process.env.RUNNER_TEMP);
+    verifyImageScan(report, process.argv[3], Date.now(), '/work/db', provenance);
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

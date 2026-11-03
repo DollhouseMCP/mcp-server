@@ -89,6 +89,38 @@ class ImageGraphTests(unittest.TestCase):
                 alias = verify_saved_image(path, config, size, desc)
                 self.assertEqual(alias['store_id_role'], 'config')
 
+    def test_index_store_accepts_only_its_selected_child_descriptor(self):
+        members, store, _, root_desc, size = fixture(True, True)
+        index = json.loads(members['blobs/sha256/' + store[7:]])
+        child = index['manifests'][0]
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            graph = verify_saved_image(path, store, size, child)
+            self.assertEqual((graph['store_id_role'], graph['root_digest'], graph['manifest_digest']), ('index', store, child['digest']))
+            for key, value in [('digest', 'sha256:' + 'f'*64), ('mediaType', 'wrong'), ('size', child['size'] + 1), ('platform', {'os':'linux', 'architecture':'arm64'})]:
+                bad = copy.deepcopy(child); bad[key] = value
+                with self.subTest(key=key), self.assertRaises(ValueError): verify_saved_image(path, store, size, bad)
+            with self.assertRaises(ValueError): verify_saved_image(path, 'sha256:' + 'f'*64, size, child)
+            verify_saved_image(path, store, size, root_desc)
+            alias = verify_saved_image(path, child['digest'], size, root_desc)
+            self.assertEqual((alias['store_id_role'], alias['root_digest']), ('manifest', store))
+            with self.assertRaises(ValueError): verify_saved_image(path, 'sha256:' + 'f'*64, size, root_desc)
+            unrelated = copy.deepcopy(root_desc); unrelated['digest'] = 'sha256:' + 'f'*64
+            with self.assertRaises(ValueError): verify_saved_image(path, child['digest'], size, unrelated)
+
+    def test_duplicate_index_child_is_ambiguous(self):
+        members, store, _, root_desc, size = fixture(True, True)
+        index = json.loads(members['blobs/sha256/' + store[7:]])
+        child = index['manifests'][0]; index['manifests'].append(copy.deepcopy(child))
+        content = encoded(index); new_store = sha(content)
+        members['blobs/sha256/' + new_store[7:]] = content
+        root_desc = {**root_desc, 'digest': new_store, 'size': len(content)}
+        members['index.json'] = encoded({'schemaVersion':2, 'manifests':[root_desc]})
+        with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
+            with self.assertRaisesRegex(ValueError, 'ambiguous'):
+                verify_saved_image(path, new_store, size, child)
+
     def test_mutated_blob_and_rehashed_wrong_diffid_are_both_refused(self):
         for wrong_diff in [False, True]:
             members, store, config, desc, size = fixture(True, wrong_diff=wrong_diff)
@@ -96,24 +128,27 @@ class ImageGraphTests(unittest.TestCase):
                 config_path = 'blobs/sha256/' + config[7:]
                 members[config_path] += b' '
             with tempfile.TemporaryDirectory() as d:
+                path = write_archive(Path(d), members)
                 with self.assertRaises(ValueError):
-                    verify_saved_image(write_archive(Path(d), members), store, size, desc)
+                    verify_saved_image(path, store, size, desc)
 
     def test_layer_digest_is_not_an_acceptable_store_identity(self):
         members, _, _, _, size = fixture(True)
         docker = json.loads(members['manifest.json'])
         fake_store = 'sha256:' + docker[0]['Layers'][0].split('/')[-1]
         with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
             with self.assertRaisesRegex(ValueError, 'store root'):
-                verify_saved_image(write_archive(Path(d), members), fake_store, size)
+                verify_saved_image(path, fake_store, size)
 
     def test_docker_compatibility_view_cannot_disagree_with_oci_graph(self):
         members, store, _, desc, size = fixture(True)
         docker = json.loads(members['manifest.json']); docker[0]['Layers'] = ['other/layer.tar']
         members['manifest.json'] = encoded(docker); members['other/layer.tar'] = layer()
         with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
             with self.assertRaisesRegex(ValueError, 'compatibility layers disagree'):
-                verify_saved_image(write_archive(Path(d), members), store, size, desc)
+                verify_saved_image(path, store, size, desc)
 
     def test_unchanged_metadata_cannot_hide_modified_layer_bytes(self):
         members, store, _, desc, size = fixture(True)
@@ -121,8 +156,9 @@ class ImageGraphTests(unittest.TestCase):
         name = docker[0]['Layers'][0]
         data = bytearray(members[name]); data[-1] ^= 1; members[name] = bytes(data)
         with tempfile.TemporaryDirectory() as d:
+            path = write_archive(Path(d), members)
             with self.assertRaisesRegex(ValueError, 'layer descriptor mismatch'):
-                verify_saved_image(write_archive(Path(d), members), store, size, desc)
+                verify_saved_image(path, store, size, desc)
 
     def test_root_metadata_digest_and_descriptor_size_must_match(self):
         for change in ['metadata', 'descriptor']:
@@ -133,8 +169,9 @@ class ImageGraphTests(unittest.TestCase):
             else:
                 desc['size'] += 1
             with tempfile.TemporaryDirectory() as d:
+                path = write_archive(Path(d), members)
                 with self.assertRaisesRegex(ValueError, 'descriptor.*mismatch|Inspect descriptor'):
-                    verify_saved_image(write_archive(Path(d), members), store, size, desc)
+                    verify_saved_image(path, store, size, desc)
 
     def test_inspect_descriptor_can_omit_platform_but_cannot_disagree(self):
         members, store, _, desc, size = fixture(True)
