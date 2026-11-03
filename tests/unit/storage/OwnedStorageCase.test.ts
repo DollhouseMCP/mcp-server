@@ -5,6 +5,25 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+import { ErasureCrashPhases } from './fixtures/erasureCrashPhases.js';
+
+it('retains bounded crash phases on failure without emitting them on ordinary success', () => {
+  const phases = new ErasureCrashPhases(1000);
+  phases.observe({ type: 'other', phase: 'script-entry', at: 1010 });
+  phases.observe({ type: 'erasure-profile', phase: 'unknown', at: 1010 });
+  phases.observe({ type: 'erasure-profile', phase: 'script-entry', at: Number.NaN });
+  for (const [index, phase] of ['script-entry', 'owners-imported', 'dependencies-imported', 'erase-start', 'barrier', 'barrier'].entries()) {
+    phases.observe({ type: 'erasure-profile', phase, at: 1000 + index });
+  }
+  expect(phases.report(false, false)).toEqual({});
+  const expected = { childPhases: [
+    { phase: 'script-entry', elapsedMs: 0 }, { phase: 'owners-imported', elapsedMs: 1 },
+    { phase: 'dependencies-imported', elapsedMs: 2 }, { phase: 'erase-start', elapsedMs: 3 }, { phase: 'barrier', elapsedMs: 4 },
+  ] };
+  expect(phases.report(true, false)).toEqual(expected);
+  expect(phases.report(false, true)).toEqual(expected);
+  expect(new ErasureCrashPhases(1000).report(true, false)).toEqual({ childPhases: [] });
+});
 
 it('preserves falsy original rejections', async () => {
   const owner = new OwnedStorageCase(); owner.begin();

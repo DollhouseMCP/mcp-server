@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { makeOwnedErasureFixture, captureErasureTree, captureErasureFiles } from './fixtures/ownedErasureFixture.js';
 
 import { OwnedStorageCase } from './fixtures/ownedStorageCase.js';
+import { ErasureCrashPhases } from './fixtures/erasureCrashPhases.js';
 
 const ownership = new OwnedStorageCase();
 let phase = 'idle';
@@ -23,7 +24,8 @@ afterEach(async () => {
 
 const it = process.platform === 'win32' || !process.getuid ? jestIt.skip : jestIt;
 async function cleanupWithCompletion(fixture: Awaited<ReturnType<typeof makeOwnedErasureFixture>>,
-  primary: { cause: unknown } | undefined, completion: Record<string, unknown> | undefined): Promise<void> {
+  primary: { cause: unknown } | undefined, completion: Record<string, unknown> | undefined,
+  phases?: { collector: ErasureCrashPhases; explicitlyRequested: boolean }): Promise<void> {
   let cleanup = 'completed';
   mark('cleanup');
   try { await fixture.cleanup(); }
@@ -32,12 +34,13 @@ async function cleanupWithCompletion(fixture: Awaited<ReturnType<typeof makeOwne
     if (primary) throw new AggregateError([primary.cause, cause], 'Crash assertion and fixture cleanup failed');
     throw cause;
   } finally {
-    if (completion) console.info('ERASURE child completion', JSON.stringify({ ...completion, cleanup, primaryFailure: !!primary }));
+    if (completion) console.info('ERASURE child completion', JSON.stringify({ ...completion, cleanup, primaryFailure: !!primary,
+      ...phases?.collector.report(!!primary || cleanup === 'failed', phases.explicitlyRequested) }));
   }
 }
 const childSource = `
 const [ownersUrl,coordinatorUrl,fenceUrl,root,user,requestRaw,stop]=process.argv.slice(1);
-const profile=phase=>{if(process.env.ERASURE_CHILD_PROFILE==='1'&&process.send)process.send({type:'erasure-profile',phase,at:performance.timeOrigin+performance.now()});};
+const profile=phase=>{try{if(process.env.ERASURE_CHILD_PROFILE==='1'&&process.send&&process.connected)process.send({type:'erasure-profile',phase,at:performance.timeOrigin+performance.now()},()=>{});}catch{/* Diagnostic failure cannot alter the crash operation. */}};
 profile('script-entry');
 const pause=()=>{profile('barrier');process.stdout.write('ERASURE_BARRIER\\n');process.stdin.resume();return new Promise(()=>{});};
 if(stop==='partial-segment-stage'){
@@ -164,19 +167,15 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       const before = await captureErasureTree(selected), foreign = await captureErasureFiles(fixture.foreignFiles);
       mark('child-operation');
       const childStarted = performance.now(), childStartedEpochMs = performance.timeOrigin + childStarted;
-      const profileEnabled = process.env.ERASURE_CHILD_PROFILE === '1';
-      const childPhases: { phase: string; elapsedMs: number }[] = [];
+      const profileRequested = process.env.ERASURE_CHILD_PROFILE === '1';
+      const childPhases = new ErasureCrashPhases(childStartedEpochMs);
+      // Five tiny IPC observations are collected even on success so a watchdog
+      // failure can retain them; only explicit profiling emits successful phases.
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules,
-        fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], { cwd: fixture.root, stdio: profileEnabled ? ['pipe', 'pipe', 'pipe', 'ipc'] : ['pipe', 'pipe', 'pipe'] });
-      child.on('message', message => {
-        if (!profileEnabled || !message || typeof message !== 'object' || childPhases.length >= 5) return;
-        const value = message as { type?: unknown; phase?: unknown; at?: unknown };
-        if (value.type === 'erasure-profile' && typeof value.phase === 'string' &&
-          ['script-entry', 'owners-imported', 'dependencies-imported', 'erase-start', 'barrier'].includes(value.phase) &&
-          typeof value.at === 'number' && Number.isFinite(value.at)) {
-          childPhases.push({ phase: value.phase, elapsedMs: value.at - childStartedEpochMs });
-        }
+        fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], {
+        cwd: fixture.root, env: { ...process.env, ERASURE_CHILD_PROFILE: '1' }, stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       });
+      child.on('message', message => childPhases.observe(message));
       let dead = false, signal: NodeJS.Signals | null = null, exitCode: number | null = null;
       let output = '', diagnostics = '', watchdogKillSent = false, barrierReached = false, lifetimeMs = 0;
       let primary: { cause: unknown } | undefined;
@@ -246,7 +245,8 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       finally {
         clearTimeout(timer); if (!dead) child.kill('SIGKILL'); await closed;
         await cleanupWithCompletion(fixture, primary, { stop, exitCode, signal, lifetimeMs, watchdogKillSent,
-          stdout: output.slice(0, 256), stderr: diagnostics, barrierReached, ...(profileEnabled ? { childPhases } : {}) });
+          stdout: output.slice(0, 256), stderr: diagnostics, barrierReached },
+        { collector: childPhases, explicitlyRequested: profileRequested });
       }
     }), 10_000);
 });
