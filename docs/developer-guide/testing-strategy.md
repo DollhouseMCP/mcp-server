@@ -28,6 +28,39 @@ npm test                  # Unit tests (~10-30s)
 
 ---
 
+## Full local unit qualification
+
+Argument-free `npm test` discovers the complete Jest inventory, runs the existing
+Core owner-erasure and serial-storage whole-file steps in fresh serial processes,
+then runs both ordinary native Jest shards in fresh processes. This matches the
+already mandatory schedule in `.github/workflows/core-build-test.yml`; ordinary
+worker settings, every case, operation workload, internal batch/concurrency,
+whole-case deadline and existing intentional skip stay unchanged. A missing,
+duplicate or extra file, nonzero subprocess exit, missing report or failed final
+assertion refuses the complete result. The runner retains private raw Jest JSON
+and a complete inventory/count/outcome receipt at the printed temporary path.
+Pending/todo cases remain visible separately and are never counted as passes.
+Catchable parent interruption is forwarded to the active direct Node/Jest child;
+the launcher awaits its close and refuses all subsequent subprocess admission.
+Cancellation remains failed even if that child later exits zero. Existing test
+fixture owners remain responsible for their own descendant/resource cleanup.
+
+The earlier default command put these capacity files in competition with unrelated
+suites across ordinary workers. On November 3 its corrected-Hono candidate still
+failed a populated nested RENAME final-durable case at the original 10-second
+limit: setup 1.482s, interrupted operation 7.876s and retry 1.235s, with owned
+settlement/cleanup complete at 10.889s. That result remains failed. Host evidence
+showed four logical CPUs saturated alongside WindowServer and the editor; no
+production inefficiency or arbitrary-host wall-clock guarantee was established.
+The local scheduler correction follows the existing CI isolation contract rather
+than changing the capacity limits. It needs its own complete qualifying run.
+
+Explicit Jest selections/options still pass through unchanged, for example
+`npm test -- --runInBand --runTestsByPath tests/unit/storage/FileMemoryOwnedRename.test.ts`.
+A selected passing file is focused evidence, not complete qualification.
+
+---
+
 ## 2. Core Test Suites
 
 | Command | What it covers | When to run |

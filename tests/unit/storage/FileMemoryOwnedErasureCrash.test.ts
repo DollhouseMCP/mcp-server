@@ -37,7 +37,9 @@ async function cleanupWithCompletion(fixture: Awaited<ReturnType<typeof makeOwne
 }
 const childSource = `
 const [ownersUrl,coordinatorUrl,fenceUrl,root,user,requestRaw,stop]=process.argv.slice(1);
-const pause=()=>{process.stdout.write('ERASURE_BARRIER\\n');process.stdin.resume();return new Promise(()=>{});};
+const profile=phase=>{if(process.env.ERASURE_CHILD_PROFILE==='1'&&process.send)process.send({type:'erasure-profile',phase,at:performance.timeOrigin+performance.now()});};
+profile('script-entry');
+const pause=()=>{profile('barrier');process.stdout.write('ERASURE_BARRIER\\n');process.stdin.resume();return new Promise(()=>{});};
 if(stop==='partial-segment-stage'){
  const {createRequire,syncBuiltinESMExports}=await import('node:module');
  const fs=createRequire(ownersUrl)('node:fs/promises'),open=fs.open.bind(fs);
@@ -81,12 +83,15 @@ if(stop.startsWith('gap-directory-')||stop.startsWith('gap-root-')){
  };syncBuiltinESMExports();
 }
 const {FileMemoryOwnerSnapshots}=await import(ownersUrl);
+profile('owners-imported');
 const {FileMemoryTransactionCoordinator}=await import(coordinatorUrl);
 const {FileMemoryFence}=await import(fenceUrl);
+profile('dependencies-imported');
 const coordinator=new FileMemoryTransactionCoordinator({tenantRoot:root,getCurrentUserId:()=>user,fence:new FileMemoryFence()});
 const owners=new FileMemoryOwnerSnapshots({coordinator,afterErasurePublication:phase=>{
  if(phase===stop)return pause();
 }});
+profile('erase-start');
 await owners.eraseOwned(JSON.parse(requestRaw));
 `;
 describe('actual process interruption of dormant owner erasure', () => {
@@ -158,9 +163,20 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       const selected = path.join(fixture.root, 'volumes/by-id', fixture.token.ownerId);
       const before = await captureErasureTree(selected), foreign = await captureErasureFiles(fixture.foreignFiles);
       mark('child-operation');
-      const childStarted = performance.now();
+      const childStarted = performance.now(), childStartedEpochMs = performance.timeOrigin + childStarted;
+      const profileEnabled = process.env.ERASURE_CHILD_PROFILE === '1';
+      const childPhases: { phase: string; elapsedMs: number }[] = [];
       const child = spawn(process.execPath, [...loader, '--input-type=module', '-e', childSource, ...modules,
-        fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], { cwd: fixture.root, stdio: ['pipe', 'pipe', 'pipe'] });
+        fixture.root, fixture.token.userId, JSON.stringify(fixture.request), stop], { cwd: fixture.root, stdio: profileEnabled ? ['pipe', 'pipe', 'pipe', 'ipc'] : ['pipe', 'pipe', 'pipe'] });
+      child.on('message', message => {
+        if (!profileEnabled || !message || typeof message !== 'object' || childPhases.length >= 5) return;
+        const value = message as { type?: unknown; phase?: unknown; at?: unknown };
+        if (value.type === 'erasure-profile' && typeof value.phase === 'string' &&
+          ['script-entry', 'owners-imported', 'dependencies-imported', 'erase-start', 'barrier'].includes(value.phase) &&
+          typeof value.at === 'number' && Number.isFinite(value.at)) {
+          childPhases.push({ phase: value.phase, elapsedMs: value.at - childStartedEpochMs });
+        }
+      });
       let dead = false, signal: NodeJS.Signals | null = null, exitCode: number | null = null;
       let output = '', diagnostics = '', watchdogKillSent = false, barrierReached = false, lifetimeMs = 0;
       let primary: { cause: unknown } | undefined;
@@ -230,7 +246,7 @@ await new Promise(resolve=>setTimeout(resolve,25));process.stdout.write('OBSERVE
       finally {
         clearTimeout(timer); if (!dead) child.kill('SIGKILL'); await closed;
         await cleanupWithCompletion(fixture, primary, { stop, exitCode, signal, lifetimeMs, watchdogKillSent,
-          stdout: output.slice(0, 256), stderr: diagnostics, barrierReached });
+          stdout: output.slice(0, 256), stderr: diagnostics, barrierReached, ...(profileEnabled ? { childPhases } : {}) });
       }
     }), 10_000);
 });
