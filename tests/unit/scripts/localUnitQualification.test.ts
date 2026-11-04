@@ -40,6 +40,30 @@ describe('complete local unit qualification admission and evidence', () => {
     }
   });
 
+  it('requires the exact workflow indentation used by the serial and matrix guards', () => {
+    const workflow = readFileSync('.github/workflows/extended-node-compatibility.yml', 'utf8');
+    const markers = [
+      "\n        os: [ubuntu-latest, windows-latest, macos-latest]",
+      "\n        node-version: ['20.x', '22.x']",
+      '\n        id: lifecycle_tests',
+      '\n        if: always()\n        shell: bash\n        env:\n          LIFECYCLE_OUTCOME:',
+      '\n          LIFECYCLE_OUTCOME: ${{ steps.lifecycle_tests.outcome }}',
+      '\n          readonly expected_outcome=success',
+      '\n          if [ "$LIFECYCLE_OUTCOME" != "$expected_outcome" ]',
+      '\n    if: ${{ always() }}',
+      '\n          if [ "$ERASURE_MATRIX_RESULT" != "success" ]',
+      '\n            exit 1\n          fi\n\n  serial-storage-tests-tail:',
+      '\n            exit 1\n          fi\n\n      - name: Checkout repository',
+    ];
+    expect(() => checkCoreSchedule(workflow, true)).not.toThrow();
+    for (const marker of markers) {
+      expect(workflow).toContain(marker);
+      const mutation = workflow.replace(marker, marker.replace(' ', ''));
+      expect(mutation).not.toBe(workflow);
+      expect(() => checkCoreSchedule(mutation, true)).toThrow();
+    }
+  });
+
   it('requires a disjoint complete discovered inventory including spec files', () => {
     expect(() => checkPartition(inventory, [[ordinary[0]], [ordinary[1]]])).not.toThrow();
     expect(() => checkPartition(inventory, [[ordinary[0]], [ordinary[0], ordinary[1]]])).toThrow('Duplicate');

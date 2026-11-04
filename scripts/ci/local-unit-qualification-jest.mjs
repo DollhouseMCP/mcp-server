@@ -63,7 +63,7 @@ export function checkPartition(inventory, ordinaryShards) {
 
 function checkExtendedStorageSplit(workflow) {
   const job = name => {
-    const matches = [...workflow.matchAll(new RegExp(`\\n  ${name}:\\n[\\s\\S]*?(?=\\n  [a-z0-9-]+:\\n|$)`, 'g'))];
+    const matches = [...workflow.matchAll(new RegExp(String.raw`\n  ${name}:\n[\s\S]*?(?=\n  [a-z0-9-]+:\n|$)`, 'g'))];
     assert.equal(matches.length, 1, `Missing or duplicate ${name} job`);
     return matches[0][0];
   };
@@ -71,7 +71,7 @@ function checkExtendedStorageSplit(workflow) {
     ['serial-storage-tests', ['LIFECYCLE', 'ACCEPTANCE', 'CRASH', 'INSPECTION', 'ADOPTION_SCAN']],
     ['serial-storage-tests-tail', ['ADOPTION_RECOVERY', 'CREATE', 'CLEANUP', 'RENAME', 'DELETE', 'VOLUME_LIST', 'DELETE_COLLISION', 'HELPER', 'POLLING']],
   ];
-  const platformMatrix = /matrix: &extended-platforms\n        os: \[ubuntu-latest, windows-latest, macos-latest\]\n        node-version: \['20\.x', '22\.x'\]/;
+  const platformMatrix = /matrix: &extended-platforms\n {8}os: \[ubuntu-latest, windows-latest, macos-latest\]\n {8}node-version: \['20\.x', '22\.x'\]/;
   const runner = /runs-on: \$\{\{ matrix\.os \}\}/;
   const ordinary = job('extended-compatibility');
   assert.match(ordinary, platformMatrix);
@@ -90,31 +90,31 @@ function checkExtendedStorageSplit(workflow) {
     const gateStart = section.indexOf('      - name: Enforce every serial storage suite\n');
     assert.ok(gateStart >= 0, `Missing ${name} outcome gate`);
     const gate = section.slice(gateStart);
-    assert.match(gate, /\n        if: always\(\)\n/);
-    assert.match(gate, /\n          readonly expected_outcome=success\n/);
-    const ids = [...section.slice(0, gateStart).matchAll(/^        id: (\w+)_tests$/gm)].map(m => m[1].toUpperCase());
+    assert.match(gate, /\n {8}if: always\(\)\n/);
+    assert.match(gate, /\n {10}readonly expected_outcome=success\n/);
+    const ids = [...section.slice(0, gateStart).matchAll(/^ {8}id: (\w+)_tests$/gm)].map(m => m[1].toUpperCase());
     assert.deepEqual(sort(ids), sort(expected), `Incorrect ${name} test steps`);
-    const bindings = [...gate.matchAll(/^          (\w+)_OUTCOME: \$\{\{ steps\.(\w+)_tests\.outcome \}\}$/gm)];
+    const bindings = [...gate.matchAll(/^ {10}(\w+)_OUTCOME: \$\{\{ steps\.(\w+)_tests\.outcome \}\}$/gm)];
     assert.deepEqual(sort(bindings.map(m => m[1])), sort(expected), `Incorrect ${name} outcome bindings`);
     for (const match of bindings) assert.equal(match[1], match[2].toUpperCase(), 'Outcome bound to wrong test step');
-    const condition = gate.match(/^          if (.+); then$/m)?.[1];
+    const condition = gate.match(/^ {10}if (.+); then$/m)?.[1];
     assert.ok(condition, `Missing ${name} outcome condition`);
     const predicates = [...condition.matchAll(/\[ "\$(\w+)_OUTCOME" != "\$expected_outcome" \]/g)];
     assert.deepEqual(sort(predicates.map(m => m[1])), sort(expected), `Incorrect ${name} outcome predicates`);
     assert.equal(condition, predicates.map(m => m[0]).join(' || '), 'Outcome gate must reject every non-success');
-    assert.match(gate, /\n            exit 1\n/);
+    assert.match(gate, /\n {12}exit 1\n/);
   }
   assert.match(ordinary, /needs: \[owner-erasure-capacity, serial-storage-tests, serial-storage-tests-tail\]/);
-  assert.match(ordinary, /\n    if: \$\{\{ always\(\) \}\}\n/);
+  assert.match(ordinary, /\n {4}if: \$\{\{ always\(\) \}\}\n/);
   for (const [variable, dependency] of [['ERASURE_MATRIX_RESULT', 'owner-erasure-capacity'], ['STORAGE_MATRIX_RESULT', 'serial-storage-tests'], ['STORAGE_TAIL_MATRIX_RESULT', 'serial-storage-tests-tail']]) {
     assert.ok(ordinary.includes(`${variable}: \${{ needs.${dependency}.result }}`), `Missing ${dependency} result binding`);
   }
   const gate = ordinary.slice(ordinary.indexOf('      - name: Enforce complete required storage matrices'), ordinary.indexOf('      - name: Checkout repository'));
-  const condition = gate.match(/^          if (.+); then$/m)?.[1];
+  const condition = gate.match(/^ {10}if (.+); then$/m)?.[1];
   const predicates = condition ? [...condition.matchAll(/\[ "\$(\w+)" != "success" \]/g)] : [];
   assert.deepEqual(sort(predicates.map(m => m[1])), sort(['ERASURE_MATRIX_RESULT', 'STORAGE_MATRIX_RESULT', 'STORAGE_TAIL_MATRIX_RESULT']), 'Incomplete matrix outcome gate');
   assert.equal(condition, predicates.map(m => m[0]).join(' || '), 'Matrix gate must reject every non-success');
-  assert.match(gate, /\n            exit 1\n/);
+  assert.match(gate, /\n {12}exit 1\n/);
 }
 
 export function checkCoreSchedule(workflow, extended = false) {
