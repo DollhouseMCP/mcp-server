@@ -24,7 +24,7 @@ jobs:
   extended-compatibility:
     name: Extended (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 20 || 15 }}
     needs: [owner-erasure-capacity, serial-storage-tests]
     if: ${{ always() }}
 
