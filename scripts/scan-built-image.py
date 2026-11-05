@@ -114,6 +114,17 @@ def download_contract(slot, url, maximum, expected):
     if not valid: raise ValueError('Download does not match the fixed approved input slot')
 
 
+def verify_download_readback(output, fd, count, digest, expected):
+    output.flush(); written = os.fstat(fd)
+    if written.st_size != count: raise ValueError('Downloaded output size differs from receipt')
+    output.seek(0); actual_hash = bounded_hash(output, count)
+    if actual_hash != digest.hexdigest() or (expected and actual_hash != expected):
+        raise ValueError('Downloaded artifact does not match its reviewed checksum or readback')
+    if stable_identity(written) != stable_identity(os.fstat(fd)):
+        raise ValueError('Downloaded output changed during readback')
+    return actual_hash, written
+
+
 def download_worker(slot, fd, url, maximum, expected):
     """Child writes only the inherited owned FD; no destination path is accepted."""
     download_contract(slot, url, maximum, expected)
@@ -130,13 +141,7 @@ def download_worker(slot, fd, url, maximum, expected):
             count += len(chunk)
             if count > maximum: raise ValueError('Download exceeds bounded size')
             digest.update(chunk); output.write(chunk)
-        output.flush(); written = os.fstat(fd)
-        if written.st_size != count: raise ValueError('Downloaded output size differs from receipt')
-        output.seek(0); actual_hash = bounded_hash(output, count)
-        if actual_hash != digest.hexdigest() or (expected and actual_hash != expected):
-            raise ValueError('Downloaded artifact does not match its reviewed checksum or readback')
-        if stable_identity(written) != stable_identity(os.fstat(fd)):
-            raise ValueError('Downloaded output changed during readback')
+        actual_hash, written = verify_download_readback(output, fd, count, digest, expected)
     return {'kind': 'download-worker-v1', 'url': url, 'sha256': actual_hash, 'bytes': count,
             'started_utc': started_utc, 'finished_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'identity': list(stable_identity(written))}
@@ -162,18 +167,23 @@ def check_download_identity(fd, parent, name, receipt):
         raise ValueError('Download output identity changed after child completion')
 
 
-def download(url, destination, maximum, expected=None, *, deadline=None):
-    """Supervise one trusted download child within the original wall ceiling."""
+def download_slot(destination):
     runner = os.environ.get('RUNNER_TEMP') or ''
     work = trusted_work_root(os.path.join(runner, 'image-security'))
     slots = {'scanner': ('inputs', ARCHIVE_NAME), 'manifest': ('reports', 'database-manifest.json'),
              'database': ('inputs', DATABASE_ARCHIVE)}
     matches = [key for key, (directory, name) in slots.items() if Path(destination) == work / directory / name]
     if len(matches) != 1: raise ValueError('Download destination is not a fixed trusted input slot')
-    slot = matches[0]; download_contract(slot, url, maximum, expected)
+    slot = matches[0]
+    return work, slot, *slots[slot]
+
+
+def download(url, destination, maximum, expected=None, *, deadline=None):
+    """Supervise one trusted download child within the original wall ceiling."""
+    work, slot, directory, name = download_slot(destination)
+    download_contract(slot, url, maximum, expected)
     end = min(time.monotonic() + 180, deadline if deadline is not None else float('inf'))
     if end <= time.monotonic(): raise ValueError('Scanner deadline exhausted before download')
-    directory, name = slots[slot]
     with TrustedTree(work) as tree:
         parent = tree.directory(tree.workfd, directory)
         if os.fstat(parent).st_uid != os.getuid(): raise ValueError('Download directory is not runner-owned')
