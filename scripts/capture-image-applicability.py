@@ -288,6 +288,14 @@ def capture_inventory_facts(exported, private, graph, container, deadline, repor
     summary.update(status='facts-captured-with-explicit-unresolved-boundaries',
                    elf_parse_unknown_count=elf_index['unknown_count'])
 
+def persist_raw_capture(reports, raw_budget, label, stdout, stderr, retain_stdout):
+    for suffix, data in [('stdout', stdout), ('stderr', stderr)]:
+        if suffix == 'stdout' and not retain_stdout: continue
+        if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
+            raise ValueError('Capture raw report budget exhausted')
+        (reports / (label + '.' + suffix)).write_bytes(data)
+
+
 def capture_report_functions(reports, raw_budget, deadline, summary):
     def write(name, value):
         data = json.dumps(value, indent=2).encode()
@@ -305,11 +313,7 @@ def capture_report_functions(reports, raw_budget, deadline, summary):
                    'exit_code': status, 'capture_error': error, 'timeout_seconds': actual_timeout,
                    'maximum_combined_bytes': maximum}
         summary['receipts'][label] = {'file': label + RECEIPT_SUFFIX, 'exit_code': status, 'capture_error': error}
-        for suffix, data in [('stdout', stdout), ('stderr', stderr)]:
-            if suffix == 'stdout' and not retain_stdout: continue
-            if sum(p.stat().st_size for p in reports.iterdir() if p.is_file()) + len(data) > raw_budget:
-                raise ValueError('Capture raw report budget exhausted')
-            (reports / (label + '.' + suffix)).write_bytes(data)
+        persist_raw_capture(reports, raw_budget, label, stdout, stderr, retain_stdout)
         write(label + RECEIPT_SUFFIX, receipt)
         return status, stdout
     return write, run
