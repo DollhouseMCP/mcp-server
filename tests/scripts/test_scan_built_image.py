@@ -137,14 +137,20 @@ class OfflineBoundaryTests(unittest.TestCase):
             archive = write_archive(inputs, members)
             graph = verify_saved_image(archive, child, size, root_descriptor, expected_source=source)
             target = {'architecture': 'amd64'}; args = SimpleNamespace(target_source=source)
+            admitted_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
             wrong = dict(root_descriptor); wrong['size'] += 1
             with patch.dict(scanner.os.environ, {'RUNNER_TEMP': str(runner)}):
                 for retained in (False, True):
                     with self.subTest(retained=retained):
-                        actual_hash = scanner.confirm_target_archive(root, child, graph, root_descriptor, target, args, retained)
+                        actual_hash = scanner.confirm_target_archive(root, child, graph, root_descriptor, target, args, retained, admitted_hash)
                         self.assertEqual(actual_hash, hashlib.sha256(archive.read_bytes()).hexdigest())
                         with self.assertRaises(ValueError):
-                            scanner.confirm_target_archive(root, child, graph, wrong, target, args, retained)
+                            scanner.confirm_target_archive(root, child, graph, wrong, target, args, retained, admitted_hash)
+                data = bytearray(archive.read_bytes()); data[-1] ^= 1; archive.write_bytes(data)
+                self.assertEqual(verify_saved_image(archive, child, size, root_descriptor, expected_source=source), graph)
+                for retained in (False, True):
+                    with self.subTest(mutated=True, retained=retained), self.assertRaisesRegex(ValueError, 'admitted bytes'):
+                        scanner.confirm_target_archive(root, child, graph, root_descriptor, target, args, retained, admitted_hash)
 
     def test_scanner_saved_image_graph_uses_fixed_fd_route(self):
         from unittest.mock import patch
@@ -154,10 +160,11 @@ class OfflineBoundaryTests(unittest.TestCase):
             def process(command, timeout, maximum, stdout_path):
                 stdout_path.write_bytes(b'inert export')
                 return 0, b'', b'', None
-            with patch.object(scanner, 'bounded_process', side_effect=process), patch.object(scanner, 'verify_trusted_image', return_value={'fixture': True}) as verified:
-                _, _, save = scanner.scanner_operations(reports, inputs, time.monotonic() + 240, {})
+            with patch.object(scanner, 'bounded_process', side_effect=process), patch.object(scanner, 'verify_trusted_image', return_value=({'fixture': True}, 'admitted-hash')) as verified:
+                hashes = {}; _, _, save = scanner.scanner_operations(reports, inputs, time.monotonic() + 240, {}, hashes)
                 self.assertEqual(save(selected['store_id'], selected, 'target'), {'fixture': True})
-                verified.assert_called_once_with(root, 'target', selected['store_id'], scanner.TARGET_MAX_BYTES, None)
+                verified.assert_called_once_with(root, 'target', selected['store_id'], scanner.TARGET_MAX_BYTES, None, include_hash=True)
+                self.assertEqual(hashes['target'], 'admitted-hash')
 
     def test_official_database_requires_reviewed_schema_checksum_name_and_freshness(self):
         now = datetime.datetime(2026, 10, 28, 20, tzinfo=datetime.timezone.utc)

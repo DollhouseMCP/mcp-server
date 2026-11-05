@@ -20,7 +20,7 @@ spec = importlib.util.spec_from_file_location('capture', Path(__file__).resolve(
 capture = importlib.util.module_from_spec(spec); spec.loader.exec_module(capture)
 STORE = 'sha256:' + 'a' * 64
 DESC = {'digest': STORE, 'mediaType': 'application/vnd.oci.image.manifest.v1+json', 'size': 123}
-GRAPH = {'store_id': STORE, 'manifest_descriptor': DESC}
+GRAPH = {'store_id': STORE, 'manifest_descriptor': DESC, 'admission_descriptor': DESC}
 CID = 'c' * 64
 
 
@@ -257,12 +257,53 @@ class ContainerTests(unittest.TestCase):
             value = copy.deepcopy(state()); mutate(value)
             with self.subTest(value=value), self.assertRaises(ValueError): validate_never_started(value, GRAPH)
 
+    def test_legacy_capture_preserves_admitted_root_for_fresh_child_inspection(self):
+        from test_image_archive_identity import fixture, write_archive
+        from image_archive_identity import verify_saved_image
+        source='e'*40; members, root_id, _, root_descriptor, size = fixture(True, True, source=source)
+        child=json.loads(members['blobs/sha256/'+root_id[7:]])['manifests'][0]
+        with tempfile.TemporaryDirectory() as directory:
+            runner=Path(directory).resolve(); root=runner/'image-security'; inputs=root/'inputs'; reports=root/'reports'
+            inputs.mkdir(parents=True); reports.mkdir(); archive=write_archive(inputs,members)
+            graph=verify_saved_image(archive,child['digest'],size,root_descriptor,expected_source=source)
+            (reports/'target-archive-identity.json').write_text(json.dumps(graph))
+            (reports/'offline-provenance.json').write_text(json.dumps({'target':graph,'image_archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}))
+            def exercise(inspection):
+                def run(cmd,label,*args,**kwargs):
+                    if label=='engine-source-identity':
+                        return 0,json.dumps({'Version':'29.4.2','GitCommit':'d329809','Os':'linux','Arch':'amd64'}).encode()
+                    if label=='image-inspect':
+                        value={'Id':child['digest'],'Descriptor':inspection,'Architecture':'amd64','Os':'linux',
+                               'Config':{'Volumes':None,'Labels':{'org.dollhousemcp.engine-proof-source':source}}}
+                        return 0,json.dumps([value]).encode()
+                    raise AssertionError(label)
+                return capture.admit_capture_target(root,[None],None,{},run,lambda *_: None)
+            with patch.dict(capture.os.environ, {'RUNNER_TEMP':str(runner),'GITHUB_SHA':source}):
+                self.assertEqual(exercise(child)[1],graph)
+                self.assertEqual(exercise(root_descriptor)[1],graph)
+                original_bytes=archive.read_bytes(); changed=bytearray(original_bytes); changed[-1] ^= 1; archive.write_bytes(changed)
+                self.assertEqual(verify_saved_image(archive,child['digest'],size,root_descriptor,expected_source=source),graph)
+                with self.assertRaisesRegex(ValueError, 'scanner provenance'): exercise(child)
+                archive.write_bytes(original_bytes)
+                wrong=copy.deepcopy(child); wrong['size']+=1
+                with self.assertRaises(ValueError): exercise(wrong)
+                wrong_admitted=copy.deepcopy(graph); wrong_admitted['admission_descriptor']['size'] += 1
+                (reports/'target-archive-identity.json').write_text(json.dumps(wrong_admitted))
+                with self.assertRaises(ValueError): exercise(child)
+                missing=dict(graph); missing.pop('admission_descriptor')
+                (reports/'target-archive-identity.json').write_text(json.dumps(missing))
+                with self.assertRaisesRegex(ValueError, 'admission descriptor unavailable'): exercise(child)
+
     def test_retained_arm_uses_fixed_amd_exporter_and_separate_target_source(self):
-        for mismatch in (False, True):
-            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as d:
+        for scenario in ('ok', 'wrong-source', 'wrong-provenance-hash', 'wrong-provenance-graph'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as d:
                 root = Path(d).resolve() / 'image-security'; root.mkdir(); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
                 (root / 'inputs/image.tar').write_bytes(b'inert')
                 (root / 'reports/target-archive-identity.json').write_text(json.dumps(GRAPH))
+                provenance = {'target':GRAPH, 'image_archive_sha256':hashlib.sha256(b'inert').hexdigest()}
+                if scenario == 'wrong-provenance-hash': provenance['image_archive_sha256'] = 'f' * 64
+                if scenario == 'wrong-provenance-graph': provenance['target'] = {'store_id':'wrong'}
+                (root / 'reports/offline-provenance.json').write_text(json.dumps(provenance))
                 target_source = 'a' * 40; scanner_head = 'b' * 40; calls = []
                 record = {'source': target_source, 'platform': 'linux/arm64', 'archive_sha256': hashlib.sha256(b'inert').hexdigest()}
                 def process(cmd, timeout, *args, **kwargs):
@@ -270,7 +311,7 @@ class ContainerTests(unittest.TestCase):
                     if cmd[:2] == ['docker', 'version']:
                         return 0, json.dumps({'Version':'29.4.2', 'GitCommit':'d329809', 'Os':'linux', 'Arch':'amd64'}).encode(), b'', None
                     if cmd[:3] == ['docker', 'image', 'inspect']:
-                        image = {'Id':STORE, 'Descriptor':DESC, 'Architecture':'arm64', 'Os':'linux', 'Config': {'Volumes':None, 'Labels': {'org.dollhousemcp.engine-proof-source': 'f'*40 if mismatch else target_source}}}
+                        image = {'Id':STORE, 'Descriptor':DESC, 'Architecture':'arm64', 'Os':'linux', 'Config': {'Volumes':None, 'Labels': {'org.dollhousemcp.engine-proof-source': 'f'*40 if scenario == 'wrong-source' else target_source}}}
                         return 0, json.dumps([image]).encode(), b'', None
                     if cmd[:2] == ['docker', 'create']: return None, b'', b'', 'fixture lost receipt'
                     if cmd[:2] == ['docker', 'inspect']: return 1, b'', b'', None
@@ -281,7 +322,7 @@ class ContainerTests(unittest.TestCase):
                 with patch.object(capture, 'validate_intake', return_value=(record, GRAPH)), patch.object(capture, 'verify_trusted_image', return_value=(GRAPH, hashlib.sha256(b'verified archive fixture').hexdigest())), patch.object(capture.scanner, 'bounded_process', side_effect=process), patch.object(sys, 'argv', argv), patch.dict(capture.os.environ, {'GITHUB_SHA':scanner_head, 'RUNNER_TEMP': str(root.parent)}):
                     self.assertEqual(capture.main(), 1)
                 creates = [c for c in calls if c[:2] == ['docker', 'create']]
-                self.assertEqual(len(creates), 0 if mismatch else 1)
+                self.assertEqual(len(creates), 1 if scenario == 'ok' else 0)
                 if creates:
                     self.assertEqual(creates[0][creates[0].index('--platform')+1], 'linux/arm64')
                     self.assertEqual(creates[0][creates[0].index('--entrypoint')+1], '/bin/false')
@@ -293,6 +334,7 @@ class ContainerTests(unittest.TestCase):
                 root = Path(d).resolve() / 'image-security'; root.mkdir(); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
                 (root / 'inputs/image.tar').write_bytes(b'verified archive fixture')
                 (root / 'reports/target-archive-identity.json').write_text(json.dumps(GRAPH))
+                (root / 'reports/offline-provenance.json').write_text(json.dumps({'target':GRAPH,'image_archive_sha256':hashlib.sha256(b'verified archive fixture').hexdigest()}))
                 (root / 'reports/application-image-vulnerabilities.json').write_bytes(b'raw findings sentinel')
                 export_entries = [('var/lib/dpkg/status', b'Package: fixture\n', {})]
                 if scenario in ['elf-parser-failure', 'elf-count-bound', 'elf-output-bound']:

@@ -398,15 +398,16 @@ def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runn
     (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
     return payload, binary_receipt, manifest, db_receipt, runner
 
-def confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained):
+def confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained, admitted_hash):
     final_graph, archive_hash = verify_trusted_image(root, "target", image_id, TARGET_MAX_BYTES, target_descriptor, include_hash=True,
                                                       platform="linux/" + target["architecture"],
                                                       expected_source=args.target_source if retained else None)
-    if final_graph != target_graph: raise ValueError("Target archive identity changed before scanner creation")
+    if final_graph != target_graph or archive_hash != admitted_hash:
+        raise ValueError("Target archive identity or admitted bytes changed before scanner creation")
     return archive_hash
 
 
-def scanner_operations(reports, inputs, deadline, receipts):
+def scanner_operations(reports, inputs, deadline, receipts, archive_hashes):
     def run(command, name, timeout=180, retain_stdout=True, stdout_path=None, maximum=64 * 1024 * 1024):
         if name != "container-cleanup":
             timeout = min(timeout, max(1, int(deadline - time.monotonic())))
@@ -438,7 +439,10 @@ def scanner_operations(reports, inputs, deadline, receipts):
         observations = {**selected, "archive_bytes": destination.stat().st_size}
         (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
         try:
-            evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
+            if label == "target":
+                evidence, archive_hashes[label] = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"], include_hash=True)
+            else:
+                evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
         except Exception as error:
             (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
                 **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
@@ -469,10 +473,10 @@ def main():
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
     root = trusted_work_root(args.root, create=True)
     reports, inputs = prepare_scanner_output(root)
-    receipts = {}
+    receipts = {}; archive_hashes = {}
     deadline = time.monotonic() + 240
 
-    run, inspect_image, save_verified = scanner_operations(reports, inputs, deadline, receipts)
+    run, inspect_image, save_verified = scanner_operations(reports, inputs, deadline, receipts, archive_hashes)
 
     retained, target, image_id, target_descriptor = select_scanner_target(supplied, args, source_root, approved_target, inspect_image)
     memory = {line.split(":", 1)[0]: int(line.split()[1]) * 1024
@@ -487,18 +491,20 @@ def main():
     capacity_admission(TARGET_MAX_BYTES, memory["MemAvailable"], disk_free)
 
     if retained:
-        _, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
+        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
                                                 args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target, stage=True)
         (reports / "target-archive-identity.json").write_text(json.dumps(target_graph, indent=2))
+        admitted_hash = record["archive_sha256"]
     else:
         target_graph = save_verified(image_id, target, "target")
+        admitted_hash = archive_hashes["target"]
     admission = capacity_admission(target_graph["unpacked_layer_bytes"], memory["MemAvailable"], shutil.disk_usage(root).free)
     admission["host_total_memory_bytes"] = memory["MemTotal"]
     (reports / "capacity-admission.json").write_text(json.dumps(admission, indent=2))
     payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified)
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
-    image_archive_hash = confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained)
+    image_archive_hash = confirm_target_archive(root, image_id, target_graph, target_descriptor, target, args, retained, admitted_hash)
     provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt,
                   "database": {**db_receipt, "manifest": manifest}, "target": target_graph,
                   "image_archive_sha256": image_archive_hash, "runner": runner}

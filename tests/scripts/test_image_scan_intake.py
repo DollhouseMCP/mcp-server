@@ -252,6 +252,10 @@ class IntakeTests(unittest.TestCase):
         with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'):
             for inspection in (child, root_descriptor):
                 with self.subTest(inspection=inspection): self.assertEqual(invoke(self.record,inspection)[1], graph)
+            original=staged.read_bytes(); changed=bytearray(original); changed[-1] ^= 1; staged.write_bytes(changed)
+            self.assertEqual(verify_saved_image(staged, child['digest'], size, root_descriptor, platform='linux/arm64', expected_source=self.approved['source']), graph)
+            with self.assertRaisesRegex(ValueError, 'Archive hash mismatch'): invoke(self.record,child)
+            staged.write_bytes(original)
             for key, value in [('digest','sha256:'+'f'*64),('mediaType','wrong'),('size',child['size']+1),('platform',{'os':'linux','architecture':'amd64'})]:
                 bad=copy.deepcopy(child); bad[key]=value
                 with self.subTest(key=key), self.assertRaises(ValueError): invoke(self.record,bad)

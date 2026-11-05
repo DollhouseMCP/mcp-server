@@ -218,6 +218,11 @@ def verified_layers(archive, config, docker, descriptors, unpacked_cap):
     return layers, total
 
 
+def normalized_admission_descriptor(descriptor):
+    if descriptor is None: return None
+    return {key: descriptor[key] for key in ('digest', 'mediaType', 'size', 'platform') if key in descriptor}
+
+
 def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
     if not DIGEST.fullmatch(store_id):
@@ -235,6 +240,7 @@ def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfo
             role = 'config'; descriptors = [None] * len(docker['Layers'])
         layers, total = verified_layers(archive, config, docker, descriptors, unpacked_cap)
         return {'store_id': store_id, 'store_id_role': role, 'root_digest': root_digest,
+                'admission_descriptor': normalized_admission_descriptor(descriptor),
                 'manifest_digest': selected[0]['digest'] if selected else None,
                 'manifest_descriptor': selected[0] if selected else None,
                 'config_digest': config_digest, 'layers': layers,

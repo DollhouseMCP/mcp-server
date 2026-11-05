@@ -7,7 +7,7 @@ from contextlib import ExitStack
 import re
 import subprocess
 from pathlib import Path
-from image_archive_identity import verify_saved_image_file
+from image_archive_identity import verify_saved_image_file, NO_INSPECTION_DESCRIPTOR
 
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 HEX = re.compile(r'[0-9a-f]{64}')
@@ -142,7 +142,7 @@ def write_failure_report(work_root, payload):
         tree.check_directories()
 
 
-def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=None, *, include_hash=False, platform='linux/amd64', expected_source=None):
+def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=None, *, include_hash=False, platform='linux/amd64', expected_source=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """Verify one literal output slot under the independently trusted runner root."""
     runner = os.environ.get('RUNNER_TEMP') or ''
     if Path(work_root) != trusted_work_root(os.path.join(runner, 'image-security')):
@@ -152,13 +152,27 @@ def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=Non
     with TrustedTree(Path(work_root)) as tree:
         parent = tree.directory(tree.workfd, 'inputs')
         stream, identity = tree.file(parent, names[kind], MAX_ARCHIVE)
-        graph = verify_saved_image_file(stream, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source)
+        graph = verify_saved_image_file(stream, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, inspection_descriptor=inspection_descriptor)
         tree.check_file(stream, identity, parent, names[kind])
         if not include_hash: return graph
         stream.seek(0)
         archive_hash = bounded_hash(stream, identity[5])
         tree.check_file(stream, identity, parent, names[kind])
         return graph, archive_hash
+
+
+def read_scanner_provenance(work_root):
+    """Read the fixed bounded scanner receipt under the trusted runner root."""
+    runner = os.environ.get('RUNNER_TEMP') or ''
+    if Path(work_root) != trusted_work_root(os.path.join(runner, 'image-security')):
+        raise ValueError('Provenance work root differs from trusted runner root')
+    with TrustedTree(Path(work_root)) as tree:
+        parent = tree.directory(tree.workfd, 'reports')
+        stream, identity = tree.file(parent, 'offline-provenance.json', 32 * 1024 * 1024)
+        data = stream.read(32 * 1024 * 1024 + 1)
+        tree.check_file(stream, identity, parent, 'offline-provenance.json')
+        if len(data) > 32 * 1024 * 1024: raise ValueError('Scanner provenance exceeds report limit')
+        return json.loads(data, object_pairs_hook=unique_object)
 
 
 def bounded_hash(stream, expected_size):

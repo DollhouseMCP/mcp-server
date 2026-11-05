@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import time
 import uuid
-from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output
+from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output, read_scanner_provenance
 from image_applicability import GIB, MAX_REPORT, inventory_export, validate_never_started
 
 spec = importlib.util.spec_from_file_location('reviewed_image_scanner', Path(__file__).with_name('scan-built-image.py'))
@@ -169,6 +169,7 @@ def validate_capture_engine(run):
 
 def admit_capture_target(root, supplied, args, approved_target, run, write):
     original = json.loads((root / 'reports/target-archive-identity.json').read_text())
+    if 'admission_descriptor' not in original: raise ValueError('Original archive admission descriptor unavailable')
     archive = root / 'inputs/image.tar'
     record = None
     if all(supplied):
@@ -196,8 +197,13 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
                                         inspect_descriptor=image.get('Descriptor'))
         archive_hash = record['archive_sha256']
     else:
-        graph, archive_hash = verify_trusted_image(root, 'target', image['Id'], GIB, image.get('Descriptor'), include_hash=True)
+        graph, archive_hash = verify_trusted_image(root, 'target', image['Id'], GIB, original['admission_descriptor'],
+                                                   include_hash=True, inspection_descriptor=image.get('Descriptor'))
     if graph != original: raise ValueError('Typed archive identity changed before capture')
+    provenance = read_scanner_provenance(root)
+    if (not isinstance(provenance, dict) or provenance.get('target') != graph or
+            provenance.get('image_archive_sha256') != archive_hash):
+        raise ValueError('Target archive differs from scanner provenance')
     write('target-binding.json', {'graph': graph, 'image_archive_sha256': archive_hash,
          'architecture': image.get('Architecture'), 'os': image.get('Os'),
          'original_image_user': image.get('Config', {}).get('User'),
