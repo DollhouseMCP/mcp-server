@@ -129,16 +129,22 @@ class OfflineBoundaryTests(unittest.TestCase):
         from unittest.mock import patch
         from test_image_archive_identity import fixture, write_archive
         from image_archive_identity import verify_saved_image
-        members, root_id, _, root_descriptor, size = fixture(True, True)
+        source = 'f' * 40
+        members, root_id, _, root_descriptor, size = fixture(True, True, source=source)
         child = json.loads(members['blobs/sha256/' + root_id[7:]])['manifests'][0]['digest']
         with tempfile.TemporaryDirectory() as directory:
             runner = Path(directory).resolve(); root = runner / 'image-security'; inputs = root / 'inputs'; inputs.mkdir(parents=True)
             archive = write_archive(inputs, members)
-            graph = verify_saved_image(archive, child, size, root_descriptor)
-            target = {'architecture': 'amd64'}; args = SimpleNamespace(target_source=None)
+            graph = verify_saved_image(archive, child, size, root_descriptor, expected_source=source)
+            target = {'architecture': 'amd64'}; args = SimpleNamespace(target_source=source)
+            wrong = dict(root_descriptor); wrong['size'] += 1
             with patch.dict(scanner.os.environ, {'RUNNER_TEMP': str(runner)}):
-                actual_hash = scanner.confirm_target_archive(root, child, graph, root_descriptor, target, args, False)
-            self.assertEqual(actual_hash, hashlib.sha256(archive.read_bytes()).hexdigest())
+                for retained in (False, True):
+                    with self.subTest(retained=retained):
+                        actual_hash = scanner.confirm_target_archive(root, child, graph, root_descriptor, target, args, retained)
+                        self.assertEqual(actual_hash, hashlib.sha256(archive.read_bytes()).hexdigest())
+                        with self.assertRaises(ValueError):
+                            scanner.confirm_target_archive(root, child, graph, wrong, target, args, retained)
 
     def test_scanner_saved_image_graph_uses_fixed_fd_route(self):
         from unittest.mock import patch

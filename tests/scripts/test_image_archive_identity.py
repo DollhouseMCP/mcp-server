@@ -25,10 +25,12 @@ def layer(data=b'owned content'):
     return out.getvalue()
 
 
-def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64"):
+def fixture(modern=False, indexed=False, wrong_diff=False, arch="amd64", source=None):
     raw = layer(); compressed = gzip.compress(raw, mtime=0) if modern else raw
-    config = encoded({'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
-                     'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}})
+    config_data = {'os': 'linux', 'architecture': arch, 'rootfs': {'type': 'layers',
+                   'diff_ids': [sha(b'wrong') if wrong_diff else sha(raw)]}}
+    if source is not None: config_data['config'] = {'Labels': {'org.dollhousemcp.engine-proof-source': source}}
+    config = encoded(config_data)
     config_id = sha(config); layer_id = sha(compressed)
     config_path = 'blobs/sha256/' + config_id[7:] if modern else config_id[7:] + '.json'
     layer_path = 'blobs/sha256/' + layer_id[7:] if modern else 'classic/layer.tar'

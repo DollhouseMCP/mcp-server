@@ -249,7 +249,7 @@ def validate_checkout(scanner_head, scanner_tree, github_sha, checkout):
         raise ValueError('Scanner checkout has modified or untracked files')
 
 
-def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, archive, staged, stage, inspect_descriptor):
+def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor):
     parent = tree.directory(tree.workfd, 'inputs') if staged else slot
     name = STAGED_ARCHIVE if staged else 'production-' + arch + '.docker.tar'
     stream, identity = tree.file(parent, name, MAX_ARCHIVE)
@@ -295,4 +295,4 @@ def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree
         record = validate_record(json.loads(raw, object_pairs_hook=unique_object), approved_target)
         if record['platform'] != 'linux/' + arch: raise ValueError('Intake platform differs from trusted slot')
         validate_checkout(scanner_head, scanner_tree, github_sha, checkout)
-        return verify_intake_archive(tree, slot, doc, doc_identity, arch, record, archive, staged, stage, inspect_descriptor)
+        return verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, stage, inspect_descriptor)
