@@ -348,6 +348,32 @@ class DownloadWorkerTests(unittest.TestCase):
 
 
 class BoundedCaptureTests(unittest.TestCase):
+    def test_selector_failure_and_cancellation_kill_and_reap_owned_child(self):
+        from unittest.mock import patch
+        import subprocess
+        for failure in (OSError('selector failure'), KeyboardInterrupt()):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                class BrokenSelector:
+                    def __enter__(self): return self
+                    def __exit__(self, *_): pass
+                    def register(self, *_args): pass
+                    def get_map(self): return True
+                    def select(self, _timeout): raise failure
+                original = subprocess.Popen; children = []
+                def spawn(*args, **kwargs):
+                    child = original(*args, **kwargs); children.append(child); return child
+                with patch.object(scanner.selectors, 'DefaultSelector', return_value=BrokenSelector()), \
+                        patch.object(scanner.subprocess, 'Popen', side_effect=spawn):
+                    with self.assertRaises(type(failure)) as raised:
+                        scanner.bounded_process([sys.executable, '-c',
+                                                 'import pathlib,sys,time; time.sleep(5); pathlib.Path(sys.argv[1]).write_text("late")',
+                                                 str(Path(directory) / 'late')], 2)
+                self.assertIs(raised.exception, failure)
+                self.assertEqual(len(children), 1)
+                self.assertIsNotNone(children[0].poll())
+                with self.assertRaises(ProcessLookupError): os.kill(children[0].pid, 0)
+                self.assertFalse((Path(directory) / 'late').exists())
+
     def test_child_output_is_stopped_before_host_capture_can_grow_unbounded(self):
         status, stdout, stderr, error = scanner.bounded_process(
             [sys.executable, "-c", "import sys;sys.stdout.write('x'*100000)"], 5, maximum=1024)

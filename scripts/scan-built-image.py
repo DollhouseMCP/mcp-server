@@ -353,27 +353,38 @@ def collect_process_chunk(event, chunk, ready, child, buffers, sink, count, maxi
     return count, None
 
 
+def capture_process(child, limit, maximum, stderr_maximum, sink, buffers):
+    error = None; count = 0
+    with selectors.DefaultSelector() as ready:
+        ready.register(child.stdout, selectors.EVENT_READ, 0)
+        ready.register(child.stderr, selectors.EVENT_READ, 1)
+        while ready.get_map():
+            remaining = limit - time.monotonic()
+            if remaining <= 0:
+                error = "process deadline exceeded"; child.kill(); break
+            for event, _ in ready.select(min(remaining, 1)):
+                chunk = os.read(event.fd, 65536)
+                count, error = collect_process_chunk(event, chunk, ready, child, buffers, sink, count, maximum, stderr_maximum)
+                if error: break
+            if error: break
+        try: child.wait(timeout=max(0.1, limit - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            error = "process deadline exceeded"; child.kill(); child.wait()
+    return error
+
+
 def bounded_process(command, timeout, maximum=64 * 1024 * 1024, stdout_path=None, stderr_maximum=None, pass_fds=()):
     buffers = [bytearray(), bytearray()]
-    error = None; count = 0
     limit = time.monotonic() + timeout
     with (stdout_path.open("wb") if stdout_path else contextlib.nullcontext(None)) as sink, \
             subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds) as child:
-        with selectors.DefaultSelector() as ready:
-            ready.register(child.stdout, selectors.EVENT_READ, 0)
-            ready.register(child.stderr, selectors.EVENT_READ, 1)
-            while ready.get_map():
-                remaining = limit - time.monotonic()
-                if remaining <= 0:
-                    error = "process deadline exceeded"; child.kill(); break
-                for event, _ in ready.select(min(remaining, 1)):
-                    chunk = os.read(event.fd, 65536)
-                    count, error = collect_process_chunk(event, chunk, ready, child, buffers, sink, count, maximum, stderr_maximum)
-                    if error: break
-                if error: break
-            try: child.wait(timeout=max(0.1, limit - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                error = "process deadline exceeded"; child.kill(); child.wait()
+        try:
+            error = capture_process(child, limit, maximum, stderr_maximum, sink, buffers)
+        except BaseException:
+            try: child.kill()
+            except ProcessLookupError: pass
+            child.wait()
+            raise
         return (None if error else child.returncode, bytes(buffers[0]), bytes(buffers[1]), error)
 
 
