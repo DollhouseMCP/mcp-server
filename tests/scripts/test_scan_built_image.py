@@ -351,9 +351,13 @@ class BoundedCaptureTests(unittest.TestCase):
     def test_cleanup_error_preserves_primary_and_fresh_cancellation_propagates(self):
         import io
         from unittest.mock import patch
-        for cleanup in (OSError('cleanup failure'), KeyboardInterrupt(), SystemExit()):
-            with self.subTest(cleanup=type(cleanup).__name__):
-                original = OSError('capture failure')
+        cases = ((OSError('capture failure'), OSError('cleanup failure')),
+                 (KeyboardInterrupt(), OSError('cleanup failure')),
+                 (SystemExit(), OSError('cleanup failure')),
+                 (OSError('capture failure'), KeyboardInterrupt()),
+                 (OSError('capture failure'), SystemExit()))
+        for original, cleanup in cases:
+            with self.subTest(original=type(original).__name__, cleanup=type(cleanup).__name__):
                 class Child:
                     def __init__(self): self.stdout = io.BytesIO(); self.stderr = io.BytesIO(); self.killed = False
                     def kill(self): self.killed = True
@@ -364,7 +368,7 @@ class BoundedCaptureTests(unittest.TestCase):
                 child = Child()
                 with patch.object(scanner.subprocess, 'Popen', return_value=child), \
                         patch.object(scanner, 'capture_process', side_effect=original):
-                    expected = OSError if isinstance(cleanup, Exception) else type(cleanup)
+                    expected = type(original) if isinstance(cleanup, Exception) else type(cleanup)
                     with self.assertRaises(expected) as raised:
                         scanner.bounded_process(['inert'], 0.01)
                 if isinstance(cleanup, Exception):
