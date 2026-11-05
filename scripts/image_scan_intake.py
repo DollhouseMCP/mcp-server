@@ -137,15 +137,10 @@ def stage_verified(tree, stream, expected_size, expected_hash, identity, parent,
             if stable_identity(actual) != stable_identity(os.fstat(target.fileno())) or stable_identity(actual) != stable_identity(os.stat('image.tar', dir_fd=inputs, follow_symlinks=False)):
                 raise ValueError('Staged archive changed during verification')
             tree.check_directories()
-    except BaseException as error:
-        try:
-            current = os.stat('image.tar', dir_fd=inputs, follow_symlinks=False)
-            if (current.st_dev, current.st_ino, current.st_uid) != owned:
-                raise ValueError('Staged cleanup UNKNOWN: destination identity changed') from error
-            os.unlink('image.tar', dir_fd=inputs)
-        except FileNotFoundError:
-            raise ValueError('Staged cleanup UNKNOWN: destination absent') from error
-        raise
+    except Exception as error:
+        # A name can be replaced between inspection and unlink. Leave any
+        # partial output in the private slot; a later exclusive create refuses.
+        raise ValueError('Staged cleanup UNKNOWN: partial output retained') from error
 
 
 def unique_object(pairs):

@@ -161,6 +161,34 @@ class IntakeTests(unittest.TestCase):
                 intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
         self.assertEqual(staged.read_bytes(),b'foreign'); self.assertEqual(moved.read_bytes(),b'inert archive')
 
+    def test_failed_staging_never_unlinks_or_deletes_replacement(self):
+        raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        staged=self.work/'inputs/image.tar'; moved=self.work/'inputs/original.tar'; real_check=intake.TrustedTree.check_file; changed=[]
+        def check(tree, stream, identity, parent, name):
+            if staged.exists() and not changed:
+                changed.append(True); staged.rename(moved); staged.write_bytes(b'foreign')
+                raise ValueError('fixture failure before cleanup')
+            return real_check(tree, stream, identity, parent, name)
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check), patch.object(intake.os,'unlink',side_effect=AssertionError('unlink must not run')) as unlink:
+            with self.assertRaisesRegex(ValueError, 'cleanup UNKNOWN'):
+                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+            unlink.assert_not_called()
+        self.assertEqual(staged.read_bytes(),b'foreign'); self.assertEqual(moved.read_bytes(),b'inert archive')
+
+    def test_staging_cancellation_propagates_and_retains_partial_file(self):
+        raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        staged=self.work/'inputs/image.tar'; real_check=intake.TrustedTree.check_file
+        def check(tree, stream, identity, parent, name):
+            if staged.exists(): raise KeyboardInterrupt()
+            return real_check(tree, stream, identity, parent, name)
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check), patch.object(intake.os,'unlink',side_effect=AssertionError('unlink must not run')) as unlink:
+            with self.assertRaises(KeyboardInterrupt):
+                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+            unlink.assert_not_called()
+        self.assertTrue(staged.is_file())
+
     def test_real_classic_archive_is_verified_and_staged_through_fd(self):
         raw_layer=b'inert layer bytes'; diff='sha256:'+hashlib.sha256(raw_layer).hexdigest()
         config=json.dumps({'os':'linux','architecture':'arm64','config':{'Labels':{'org.dollhousemcp.engine-proof-source':self.approved['source']}},'rootfs':{'type':'layers','diff_ids':[diff]}},separators=(',',':')).encode()
