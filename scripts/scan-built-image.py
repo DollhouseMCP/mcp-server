@@ -3,6 +3,7 @@
 import datetime
 import argparse
 import sys
+# Keep imports from creating untracked files in the validated scanner checkout.
 sys.dont_write_bytecode = True
 import contextlib
 import hashlib
@@ -18,7 +19,6 @@ from image_archive_identity import verify_fixed_runner
 from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_scanner_output, write_failure_report
 from pathlib import Path
 import subprocess
-import sys
 import tarfile
 import urllib.request
 

@@ -3,13 +3,13 @@
 import datetime
 import argparse
 import sys
+# Keep imports from creating untracked files in the validated scanner checkout.
 sys.dont_write_bytecode = True
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
 import time
 import uuid
 from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output
