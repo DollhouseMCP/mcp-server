@@ -265,8 +265,9 @@ def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, staged, s
     tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
     if inspect_descriptor is not NO_INSPECT_DESCRIPTOR:
         stream.seek(0)
-        inspected_graph = verify_saved_image_file(stream, record['store_id'], 1024**3, inspect_descriptor,
-                                             platform=record['platform'], expected_source=record['source'])
+        inspected_graph = verify_saved_image_file(stream, record['store_id'], 1024**3, record['descriptor'],
+                                             platform=record['platform'], expected_source=record['source'],
+                                             inspection_descriptor=inspect_descriptor)
         tree.check_file(stream, identity, parent, name)
         if inspected_graph != graph: raise ValueError('Materialized image descriptor differs from admitted graph')
     for field in ('store_id', 'store_id_role', 'root_digest', 'manifest_digest', 'config_digest'):

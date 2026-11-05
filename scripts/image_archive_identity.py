@@ -18,6 +18,7 @@ SHA_PREFIX = 'sha256:'
 BLOB_PREFIX = 'blobs/sha256/'
 INDEX_FILE = 'index.json'
 DEFAULT_PLATFORM = 'linux/amd64'
+NO_INSPECTION_DESCRIPTOR = object()
 
 
 def sha(data):
@@ -162,7 +163,7 @@ def select_oci_candidate(archive, store_id, descriptor, config_bytes, config_dig
 def validate_selected_descriptor(archive, root, selected, descriptor, expected_source):
     if expected_source is not None and (selected[0].get('platform', {}).get('os'), selected[0].get('platform', {}).get('architecture')) != archive.platform:
         raise ValueError('Selected target descriptor platform is missing or mismatched')
-    if descriptor:
+    if descriptor is not None:
         matching = next((d for d in (root, selected[0]) if d.get('digest') == descriptor.get('digest')), None)
         if not matching or any(descriptor.get(k) != matching.get(k) for k in ['digest', 'mediaType', 'size']) or ('platform' in descriptor and descriptor['platform'] != matching.get('platform')):
             raise ValueError('Inspect descriptor differs from saved graph')
@@ -178,9 +179,11 @@ def store_role(store_id, root, selected, config_digest):
     raise ValueError('Store ID has no exact role in selected OCI graph')
 
 
-def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source):
+def select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     root, selected = select_oci_candidate(archive, store_id, descriptor, config_bytes, config_digest)
     validate_selected_descriptor(archive, root, selected, descriptor, expected_source)
+    if inspection_descriptor is not NO_INSPECTION_DESCRIPTOR:
+        validate_selected_descriptor(archive, root, selected, inspection_descriptor, expected_source)
     role = store_role(store_id, root, selected, config_digest)
     if selected[1]['config']['digest'] != config_digest:
         raise ValueError('OCI and Docker config digest disagree')
@@ -215,7 +218,7 @@ def verified_layers(archive, config, docker, descriptors, unpacked_cap):
     return layers, total
 
 
-def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None):
+def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
@@ -225,9 +228,9 @@ def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfo
         config_digest = sha(config_bytes)
         selected = None; root_digest = None
         if INDEX_FILE in archive.members:
-            root_digest, selected, role, descriptors = select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source)
+            root_digest, selected, role, descriptors = select_oci_graph(archive, store_id, descriptor, config_bytes, config_digest, docker, expected_source, inspection_descriptor)
         else:
-            if descriptor or store_id != config_digest:
+            if descriptor is not None or (inspection_descriptor is not NO_INSPECTION_DESCRIPTOR and inspection_descriptor is not None) or store_id != config_digest:
                 raise ValueError('Classic Docker config identity does not match observed store ID')
             role = 'config'; descriptors = [None] * len(docker['Layers'])
         layers, total = verified_layers(archive, config, docker, descriptors, unpacked_cap)
@@ -246,9 +249,9 @@ def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfor
     return _verify_saved_image(path, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source)
 
 
-def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, inspection_descriptor=NO_INSPECTION_DESCRIPTOR):
     """Verify an already admitted open file object without reopening its name."""
-    return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, fileobj=stream)
+    return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, fileobj=stream, inspection_descriptor=inspection_descriptor)
 
 
 def verify_fixed_runner(evidence, reference_directory):

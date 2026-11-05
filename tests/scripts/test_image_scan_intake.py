@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -232,6 +233,32 @@ class IntakeTests(unittest.TestCase):
             unlink.assert_not_called()
         self.assertTrue(staged.is_file())
 
+    def test_staged_capture_preserves_admitted_root_and_checks_fresh_descriptor(self):
+        from test_image_archive_identity import fixture, write_archive
+        from image_archive_identity import verify_saved_image
+        members, root_id, config_id, root_descriptor, size = fixture(True, True, arch='arm64', source=self.approved['source'])
+        child = json.loads(members['blobs/sha256/' + root_id[7:]])['manifests'][0]
+        temporary_archive = write_archive(self.slot, members); temporary_archive.replace(self.archive)
+        staged = self.work/'inputs/image.tar'; shutil.copyfile(self.archive, staged)
+        graph = verify_saved_image(staged, child['digest'], size, root_descriptor, platform='linux/arm64', expected_source=self.approved['source'])
+        self.record.update(store_id=child['digest'], store_id_role='manifest', root_digest=root_id,
+                           manifest_digest=child['digest'], config_digest=config_id, descriptor=root_descriptor,
+                           diff_ids=[item['diff_id'] for item in graph['layers']], archive_bytes=staged.stat().st_size,
+                           archive_sha256=hashlib.sha256(staged.read_bytes()).hexdigest())
+        doc=self.slot/'intake.json'; checkout=Path(intake.__file__).resolve().parent.parent
+        def invoke(record, inspection):
+            raw=json.dumps(record).encode(); doc.write_bytes(raw); digest=hashlib.sha256(raw).hexdigest()
+            return intake.validate_intake(doc,digest,staged,self.head,self.tree,self.head,checkout,self.approved,staged=True,inspect_descriptor=inspection)
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'):
+            for inspection in (child, root_descriptor):
+                with self.subTest(inspection=inspection): self.assertEqual(invoke(self.record,inspection)[1], graph)
+            for key, value in [('digest','sha256:'+'f'*64),('mediaType','wrong'),('size',child['size']+1),('platform',{'os':'linux','architecture':'amd64'})]:
+                bad=copy.deepcopy(child); bad[key]=value
+                with self.subTest(key=key), self.assertRaises(ValueError): invoke(self.record,bad)
+            with self.assertRaises(ValueError): invoke(self.record,{})
+            wrong_record=copy.deepcopy(self.record); wrong_record['descriptor']['size'] += 1
+            with self.assertRaises(ValueError): invoke(wrong_record,child)
+
     def test_real_classic_archive_is_verified_and_staged_through_fd(self):
         raw_layer=b'inert layer bytes'; diff='sha256:'+hashlib.sha256(raw_layer).hexdigest()
         config=json.dumps({'os':'linux','architecture':'arm64','config':{'Labels':{'org.dollhousemcp.engine-proof-source':self.approved['source']}},'rootfs':{'type':'layers','diff_ids':[diff]}},separators=(',',':')).encode()
@@ -248,6 +275,11 @@ class IntakeTests(unittest.TestCase):
             record, graph = intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
         self.assertEqual(graph['config_digest'],config_id); self.assertEqual(graph['layers'][0]['diff_id'],diff)
         self.assertEqual(hashlib.sha256((self.work/'inputs/image.tar').read_bytes()).hexdigest(),record['archive_sha256'])
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'):
+            _, staged_graph = intake.validate_intake(doc,digest,self.work/'inputs/image.tar',self.head,self.tree,self.head,checkout,self.approved,staged=True,inspect_descriptor=None)
+            self.assertEqual(staged_graph, graph)
+            with self.assertRaises(ValueError):
+                intake.validate_intake(doc,digest,self.work/'inputs/image.tar',self.head,self.tree,self.head,checkout,self.approved,staged=True,inspect_descriptor={})
         with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}):
             staged_graph, staged_hash = intake.verify_trusted_image(self.work, 'target', config_id, 1024**3,
                                                                      include_hash=True, platform='linux/arm64', expected_source=self.approved['source'])
