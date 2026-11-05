@@ -260,11 +260,11 @@ class ContainerTests(unittest.TestCase):
     def test_retained_arm_uses_fixed_amd_exporter_and_separate_target_source(self):
         for mismatch in (False, True):
             with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as d:
-                root = Path(d); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
+                root = Path(d).resolve() / 'image-security'; root.mkdir(); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
                 (root / 'inputs/image.tar').write_bytes(b'inert')
                 (root / 'reports/target-archive-identity.json').write_text(json.dumps(GRAPH))
                 target_source = 'a' * 40; scanner_head = 'b' * 40; calls = []
-                record = {'source': target_source, 'platform': 'linux/arm64'}
+                record = {'source': target_source, 'platform': 'linux/arm64', 'archive_sha256': hashlib.sha256(b'inert').hexdigest()}
                 def process(cmd, timeout, *args, **kwargs):
                     calls.append(cmd)
                     if cmd[:2] == ['docker', 'version']:
@@ -278,7 +278,7 @@ class ContainerTests(unittest.TestCase):
                 argv = ['capture', str(root), '--retained-intake','fixture', '--intake-sha256','c'*64,
                         '--scanner-head',scanner_head, '--scanner-tree','d'*40, '--target-source',target_source,
                         '--target-tree','e'*40, '--target-run-id','1', '--target-attempt','1', '--runtime-receipt-sha256','f'*64]
-                with patch.object(capture, 'validate_intake', return_value=(record, GRAPH)), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(capture.scanner, 'bounded_process', side_effect=process), patch.object(sys, 'argv', argv), patch.dict(capture.os.environ, {'GITHUB_SHA':scanner_head}):
+                with patch.object(capture, 'validate_intake', return_value=(record, GRAPH)), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(capture.scanner, 'bounded_process', side_effect=process), patch.object(sys, 'argv', argv), patch.dict(capture.os.environ, {'GITHUB_SHA':scanner_head, 'RUNNER_TEMP': str(root.parent)}):
                     self.assertEqual(capture.main(), 1)
                 creates = [c for c in calls if c[:2] == ['docker', 'create']]
                 self.assertEqual(len(creates), 0 if mismatch else 1)
@@ -290,7 +290,7 @@ class ContainerTests(unittest.TestCase):
     def test_orchestrator_exact_cleanup_on_export_failure_and_no_env_or_target_command(self):
         for scenario in ['ok', 'create-failure-with-id', 'create-timeout-lost-id', 'create-malformed-id', 'receipt-persist-failure', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id', 'export-failure', 'wrong-engine', 'wrong-source', 'declared-volume', 'running', 'bad-export', 'cleanup-failure', 'elf-parser-failure', 'elf-count-bound', 'elf-output-bound']:
             with tempfile.TemporaryDirectory() as d:
-                root = Path(d); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
+                root = Path(d).resolve() / 'image-security'; root.mkdir(); (root / 'reports').mkdir(); (root / 'inputs').mkdir()
                 (root / 'inputs/image.tar').write_bytes(b'verified archive fixture')
                 (root / 'reports/target-archive-identity.json').write_text(json.dumps(GRAPH))
                 (root / 'reports/application-image-vulnerabilities.json').write_bytes(b'raw findings sentinel')
@@ -342,7 +342,7 @@ class ContainerTests(unittest.TestCase):
                         output = b'x'*(2*1024**2) if scenario == 'elf-output-bound' and '--file-header' in cmd else b'trusted readelf fixture output'
                         return (1 if scenario == 'elf-parser-failure' and '--file-header' in cmd else 0), output, b'', None
                     raise AssertionError(cmd)
-                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40}), patch.object(capture, 'Path', side_effect=capture_path), patch.object(Path, 'write_bytes', write_bytes), patch.object(capture, 'MAX_ELF_OBJECTS', 2 if scenario == 'elf-count-bound' else 1024), patch.object(capture, 'MAX_REPORT', 2*1024**2 if scenario == 'elf-output-bound' else 32*1024**2):
+                with patch.object(capture.scanner, 'bounded_process', process), patch.object(capture, 'verify_saved_image', return_value=GRAPH), patch.object(sys, 'argv', ['capture', str(root)]), patch.dict(capture.os.environ, {'GITHUB_SHA': 'e' * 40, 'RUNNER_TEMP': str(root.parent)}), patch.object(capture, 'Path', side_effect=capture_path), patch.object(Path, 'write_bytes', write_bytes), patch.object(capture, 'MAX_ELF_OBJECTS', 2 if scenario == 'elf-count-bound' else 1024), patch.object(capture, 'MAX_REPORT', 2*1024**2 if scenario == 'elf-output-bound' else 32*1024**2):
                     self.assertEqual(capture.main(), 0 if scenario == 'ok' else 1)
                 self.assertEqual([x for x in commands if x[:2] == ['docker', 'rm']], [] if scenario in ['wrong-engine', 'wrong-source', 'declared-volume', 'running', 'missing-late-create', 'foreign-owner', 'foreign-name', 'foreign-container-source', 'conflicting-create-id'] else [['docker', 'rm', '--volumes', CID]])
                 self.assertFalse(any(x[:2] in [['docker', 'start'], ['docker', 'run'], ['docker', 'exec']] for x in commands))

@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import uuid
 from image_archive_identity import verify_saved_image, verify_fixed_runner
-from image_scan_intake import validate_intake
+from image_scan_intake import validate_intake, trusted_work_root
 from pathlib import Path
 import subprocess
 import sys
@@ -414,7 +414,7 @@ def main():
     supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.retained_archive, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
     if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
-    root = Path(args.root).resolve()
+    root = trusted_work_root(args.root, create=True)
     reports, inputs = root / "reports", root / "inputs"
     reports.mkdir(parents=True, exist_ok=True)
     inputs.mkdir(parents=True, exist_ok=True)
@@ -474,9 +474,8 @@ def main():
         return evidence
 
     if retained:
-        shutil.copyfile(args.retained_archive, inputs / IMAGE_ARCHIVE)
-        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, inputs / IMAGE_ARCHIVE,
-                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
+        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
+                                                args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target, stage=True)
         (reports / "target-archive-identity.json").write_text(json.dumps(target_graph, indent=2))
     else:
         target_graph = save_verified(image_id, target, "target")
@@ -500,12 +499,15 @@ if __name__ == "__main__":
         sys.exit(main())
     except Exception as error:
         if len(sys.argv) > 1:
-            reports = Path(sys.argv[1]).resolve() / "reports"
-            reports.mkdir(parents=True, exist_ok=True)
-            (reports / "failure.json").write_text(json.dumps({
-                "error": str(error),
-                "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "status": "unavailable; no clean image-security claim",
-            }, indent=2))
+            try:
+                reports = trusted_work_root(sys.argv[1]) / "reports"
+                reports.mkdir(parents=True, exist_ok=True)
+                (reports / "failure.json").write_text(json.dumps({
+                    "error": str(error),
+                    "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "status": "unavailable; no clean image-security claim",
+                }, indent=2))
+            except (ValueError, OSError):
+                pass
         print(str(error), file=sys.stderr)
         sys.exit(1)

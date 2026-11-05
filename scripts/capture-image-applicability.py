@@ -13,7 +13,7 @@ import sys
 import time
 import uuid
 from image_archive_identity import verify_saved_image
-from image_scan_intake import validate_intake
+from image_scan_intake import validate_intake, trusted_work_root
 from image_applicability import GIB, MAX_REPORT, inventory_export, validate_never_started
 
 spec = importlib.util.spec_from_file_location('reviewed_image_scanner', Path(__file__).with_name('scan-built-image.py'))
@@ -164,7 +164,7 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
     record = None
     if all(supplied):
         record, admitted_graph = validate_intake(args.retained_intake, args.intake_sha256, archive,
-                                                   args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), Path(__file__).resolve().parent.parent, approved_target)
+                                                   args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), Path(__file__).resolve().parent.parent, approved_target, staged=True)
         if original != admitted_graph: raise ValueError('Stored archive identity differs from admitted graph')
     status, raw = run(['docker', 'version', '--format', '{{json .Server}}'], 'engine-source-identity')
     if status != 0: raise ValueError('Docker source identity unavailable')
@@ -186,10 +186,17 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
     if not record and os.environ.get('GITHUB_SHA') and source_label != os.environ['GITHUB_SHA']:
         raise ValueError('Target image source label differs from current qualification head')
     archive = root / 'inputs/image.tar'
-    graph = verify_saved_image(archive, image['Id'], GIB, image.get('Descriptor'), platform=record['platform'] if record else DEFAULT_PLATFORM, expected_source=record['source'] if record else None)
+    if record:
+        record, graph = validate_intake(args.retained_intake, args.intake_sha256, archive,
+                                        args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'),
+                                        Path(__file__).resolve().parent.parent, approved_target, staged=True,
+                                        inspect_descriptor=image.get('Descriptor'))
+        archive_hash = record['archive_sha256']
+    else:
+        graph = verify_saved_image(archive, image['Id'], GIB, image.get('Descriptor'))
+        with archive.open('rb') as source:
+            archive_hash = hashlib.file_digest(source, 'sha256').hexdigest()
     if graph != original: raise ValueError('Typed archive identity changed before capture')
-    with archive.open('rb') as source:
-        archive_hash = hashlib.file_digest(source, 'sha256').hexdigest()
     write('target-binding.json', {'graph': graph, 'image_archive_sha256': archive_hash,
          'architecture': image.get('Architecture'), 'os': image.get('Os'),
          'original_image_user': image.get('Config', {}).get('User'),
@@ -296,7 +303,7 @@ def main():
     supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
     if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
     approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
-    root = Path(args.root).resolve()
+    root = trusted_work_root(args.root, create=True)
     reports = root / 'reports/applicability'; reports.mkdir(parents=True, exist_ok=False)
     private = root / 'applicability-inputs'; private.mkdir(mode=0o700, exist_ok=False)
     deadline = time.monotonic() + 140  # Leave 30 seconds cleanup plus 10 seconds terminal receipt margin.

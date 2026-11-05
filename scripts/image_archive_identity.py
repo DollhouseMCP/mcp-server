@@ -2,6 +2,7 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import PurePosixPath
 import re
 import tarfile
@@ -24,13 +25,13 @@ def sha(data):
 
 
 class SavedImage:
-    def __init__(self, path, platform=DEFAULT_PLATFORM):
+    def __init__(self, path, platform=DEFAULT_PLATFORM, fileobj=None):
         if platform not in {DEFAULT_PLATFORM, "linux/arm64"}:
             raise ValueError("Unsupported target platform")
         self.platform = tuple(platform.split("/"))
         self.path = path
         self.deadline = time.monotonic() + 30
-        self.tar = tarfile.open(path, 'r:')
+        self.tar = tarfile.open(path if fileobj is None else None, 'r:', fileobj=fileobj)
         self.members = {}
         for member in self.tar:
             self.check_time()
@@ -214,11 +215,11 @@ def verified_layers(archive, config, docker, descriptors, unpacked_cap):
     return layers, total
 
 
-def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
-    archive = SavedImage(path, platform)
+    archive = SavedImage(path, platform, fileobj)
     try:
         docker, config_bytes, config = saved_config(archive, expected_source)
         config_digest = sha(config_bytes)
@@ -234,7 +235,7 @@ def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfor
                 'manifest_digest': selected[0]['digest'] if selected else None,
                 'manifest_descriptor': selected[0] if selected else None,
                 'config_digest': config_digest, 'layers': layers,
-                'archive_bytes': path.stat().st_size, 'unpacked_layer_bytes': total,
+                'archive_bytes': os.fstat(fileobj.fileno()).st_size if fileobj is not None else path.stat().st_size, 'unpacked_layer_bytes': total,
                 'format': 'oci-with-docker-manifest' if selected else 'classic-docker'}
     finally:
         archive.close()

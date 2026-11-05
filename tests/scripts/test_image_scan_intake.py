@@ -1,7 +1,10 @@
 """Inert retained-intake refusal and identity tests; no daemon or scanner runs."""
 import copy
 import hashlib
+import io
+import tarfile
 import json
+import os
 from pathlib import Path
 import sys
 import subprocess
@@ -15,7 +18,7 @@ import image_scan_intake as intake
 class IntakeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name); self.archive = self.root / 'target.tar'; self.archive.write_bytes(b'inert archive')
+        self.root = Path(self.temp.name).resolve(); self.work = self.root / 'image-security'; self.slot = self.work / 'retained/arm64'; self.slot.mkdir(parents=True); (self.work / 'inputs').mkdir(); self.archive = self.slot / 'production-arm64.docker.tar'; self.archive.write_bytes(b'inert archive')
         self.head = '1' * 40; self.tree = '2' * 40
         self.approved = {'source': '07bf8185cd8a63ab0202745a10213ebffaff070b', 'tree': 'd51c9caf78a4bd8257f2de9b58e42e5338dbfd3a', 'run_id': '40929259427', 'attempt': 1, 'runtime_receipt_sha256': '3'*64}
         self.record = {'schema': 'retained-image-intake-v1', **self.approved, 'archive_sha256': hashlib.sha256(self.archive.read_bytes()).hexdigest(),
@@ -27,12 +30,12 @@ class IntakeTests(unittest.TestCase):
 
     def invoke(self, record=None, approved=None, github=None, git_values=None, raw=None):
         raw = raw if raw is not None else json.dumps(record or self.record).encode()
-        path = self.root / 'intake.json'; path.write_bytes(raw)
+        path = self.slot / 'intake.json'; path.write_bytes(raw)
         outputs = iter(git_values or [self.head, self.tree, ''])
         def git(*args, **kwargs):
             class Result: pass
             result = Result(); result.stdout = next(outputs).encode(); return result
-        with patch.object(intake.subprocess, 'run', side_effect=git), patch.object(intake, 'verify_saved_image', return_value=self.graph) as verify:
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake.subprocess, 'run', side_effect=git), patch.object(intake, 'verify_saved_image', return_value=self.graph) as verify:
             result = intake.validate_intake(path, hashlib.sha256(raw).hexdigest(), self.archive, self.head, self.tree,
                                            self.head if github is None else github, Path(intake.__file__).resolve().parent.parent, approved or self.approved)
             self.assertEqual(verify.call_args.kwargs['platform'], 'linux/arm64')
@@ -50,16 +53,147 @@ class IntakeTests(unittest.TestCase):
         git('init', '-q'); git('add', 'scripts/image_scan_intake.py')
         git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
         head, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
-        path = self.root / 'intake.json'; raw = json.dumps(self.record).encode(); path.write_bytes(raw)
+        path = self.slot / 'intake.json'; raw = json.dumps(self.record).encode(); path.write_bytes(raw)
         digest = hashlib.sha256(raw).hexdigest()
-        with patch.object(intake, '__file__', str(helper)), patch.object(intake, 'verify_saved_image', return_value=self.graph):
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake, '__file__', str(helper)), patch.object(intake, 'verify_saved_image', return_value=self.graph):
             intake.validate_intake(path, digest, self.archive, head, tree, head, checkout, self.approved)
             helper.write_text('modified')
             with self.assertRaisesRegex(ValueError, 'modified or untracked'):
                 intake.validate_intake(path, digest, self.archive, head, tree, head, checkout, self.approved)
-        with patch.object(intake, '__file__', str(self.root / 'copied-helper.py')):
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake, '__file__', str(self.root / 'copied-helper.py')):
             with self.assertRaisesRegex(ValueError, 'does not belong'):
                 intake.validate_intake(path, digest, self.archive, head, tree, head, checkout, self.approved)
+
+    def test_paths_must_be_exact_trusted_slot_and_workroot(self):
+        raw = json.dumps(self.record).encode(); doc = self.slot / 'intake.json'; doc.write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest(); checkout = Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}):
+            for document, archive in [(self.root/'intake.json',self.archive), (doc,self.root/'target.tar'),
+                                      (str(self.slot/'..'/'arm64'/'intake.json'),self.archive), (doc,'relative.tar')]:
+                with self.subTest(document=document,archive=archive), self.assertRaises(ValueError):
+                    intake.validate_intake(document,digest,archive,self.head,self.tree,self.head,checkout,self.approved)
+            with self.assertRaises(ValueError): intake.trusted_work_root(self.root/'outside', create=True)
+            self.assertFalse((self.root/'outside').exists())
+        with patch.dict(os.environ, {'RUNNER_TEMP':''}):
+            with self.assertRaises(ValueError): intake.trusted_work_root(self.work)
+
+    def test_symlink_fifo_oversize_and_writable_inputs_refuse(self):
+        raw = json.dumps(self.record).encode(); doc = self.slot/'intake.json'; digest=hashlib.sha256(raw).hexdigest()
+        checkout=Path(intake.__file__).resolve().parent.parent
+        for case in ('doc-link','archive-link','fifo','doc-oversize','archive-oversize','writable','hardlink','parent-link'):
+            with self.subTest(case=case):
+                doc.write_bytes(raw); self.archive.write_bytes(b'inert archive'); self.archive.chmod(0o644)
+                if case=='doc-link': doc.unlink(); doc.symlink_to(self.archive)
+                if case=='archive-link': self.archive.unlink(); self.archive.symlink_to(doc)
+                if case=='fifo': self.archive.unlink(); os.mkfifo(self.archive)
+                if case=='doc-oversize': doc.write_bytes(b'x'*(1024*1024+1))
+                if case=='archive-oversize':
+                    with self.archive.open('r+b') as stream: stream.truncate(intake.MAX_ARCHIVE+1)
+                if case=='writable': self.archive.chmod(0o666)
+                if case=='hardlink': os.link(self.archive,self.root/'hardlink')
+                if case=='parent-link':
+                    moved=self.slot.with_name('arm64-real'); self.slot.rename(moved); self.slot.symlink_to(moved, target_is_directory=True)
+                try:
+                    with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), self.assertRaises((ValueError,OSError)):
+                        intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved)
+                finally:
+                    if case=='parent-link': self.slot.unlink(); moved.rename(self.slot)
+                    if case in ('doc-link',): doc.unlink()
+                    if case in ('archive-link','fifo','archive-oversize'): self.archive.unlink(); self.archive.write_bytes(b'inert archive')
+                    if case=='hardlink': (self.root/'hardlink').unlink()
+
+    def test_same_verified_descriptor_used_for_graph_and_staging(self):
+        raw = json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        observed = []; staged_fd = []; real_stage = intake.stage_verified
+        def stage(tree, stream, *args):
+            staged_fd.append(stream.fileno()); return real_stage(tree, stream, *args)
+        def graph(path, store, cap, descriptor, **kwargs):
+            stream=kwargs['fileobj']; observed.append((stream.fileno(),stream.read())); return self.graph
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',side_effect=graph), patch.object(intake,'stage_verified',side_effect=stage):
+            intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+        self.assertEqual(observed[0][1],b'inert archive')
+        self.assertEqual(staged_fd, [observed[0][0]])
+        self.assertEqual((self.work/'inputs/image.tar').read_bytes(),b'inert archive')
+        self.assertEqual((self.work/'inputs/image.tar').stat().st_mode & 0o777,0o600)
+
+    def test_path_replacement_during_graph_refuses_before_staging(self):
+        raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        def graph(*args,**kwargs):
+            self.archive.rename(self.slot/'old.tar'); self.archive.write_bytes(b'inert archive'); return self.graph
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',side_effect=graph):
+            with self.assertRaises(ValueError): intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+        self.assertFalse((self.work/'inputs/image.tar').exists())
+
+    def test_document_or_parent_replacement_during_graph_refuses(self):
+        for scenario in ('document', 'parent'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve(); work=root/'image-security'; slot=work/'retained/arm64'; slot.mkdir(parents=True); (work/'inputs').mkdir()
+                archive=slot/'production-arm64.docker.tar'; archive.write_bytes(b'inert archive')
+                raw=json.dumps(self.record).encode(); doc=slot/'intake.json'; doc.write_bytes(raw)
+                def graph(*args,**kwargs):
+                    if scenario=='document': doc.rename(slot/'old.json'); doc.write_bytes(raw)
+                    else: slot.rename(slot.with_name('old-slot')); slot.mkdir()
+                    return self.graph
+                checkout=Path(intake.__file__).resolve().parent.parent
+                with patch.dict(os.environ, {'RUNNER_TEMP':str(root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',side_effect=graph):
+                    with self.assertRaises((ValueError,OSError)):
+                        intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+                self.assertFalse((work/'inputs/image.tar').exists())
+
+    def test_bounded_hash_refuses_short_or_growing_input(self):
+        for data in (b'abc', b'abcde'):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                intake.bounded_hash(io.BytesIO(data), 4)
+        self.assertEqual(intake.bounded_hash(io.BytesIO(b'abcd'), 4), hashlib.sha256(b'abcd').hexdigest())
+
+    def test_staged_path_replacement_is_not_deleted(self):
+        raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        staged=self.work/'inputs/image.tar'; moved=self.work/'inputs/original.tar'; real_check=intake.TrustedTree.check_file; changed=[]
+        def check(tree, stream, identity, parent, name):
+            if staged.exists() and not changed:
+                changed.append(True); staged.rename(moved); staged.write_bytes(b'foreign')
+            return real_check(tree, stream, identity, parent, name)
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check):
+            with self.assertRaisesRegex(ValueError, 'cleanup UNKNOWN'):
+                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+        self.assertEqual(staged.read_bytes(),b'foreign'); self.assertEqual(moved.read_bytes(),b'inert archive')
+
+    def test_real_classic_archive_is_verified_and_staged_through_fd(self):
+        raw_layer=b'inert layer bytes'; diff='sha256:'+hashlib.sha256(raw_layer).hexdigest()
+        config=json.dumps({'os':'linux','architecture':'arm64','config':{'Labels':{'org.dollhousemcp.engine-proof-source':self.approved['source']}},'rootfs':{'type':'layers','diff_ids':[diff]}},separators=(',',':')).encode()
+        config_id='sha256:'+hashlib.sha256(config).hexdigest()
+        entries={'config.json':config,'layer.tar':raw_layer,'manifest.json':json.dumps([{'Config':'config.json','Layers':['layer.tar']}]).encode()}
+        with tarfile.open(self.archive,'w') as bundle:
+            for name,data in entries.items():
+                info=tarfile.TarInfo(name); info.size=len(data); bundle.addfile(info,io.BytesIO(data))
+        self.record.update(store_id=config_id,config_digest=config_id,diff_ids=[diff],archive_bytes=self.archive.stat().st_size,archive_sha256=hashlib.sha256(self.archive.read_bytes()).hexdigest())
+        raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'):
+            record, graph = intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+        self.assertEqual(graph['config_digest'],config_id); self.assertEqual(graph['layers'][0]['diff_id'],diff)
+        self.assertEqual(hashlib.sha256((self.work/'inputs/image.tar').read_bytes()).hexdigest(),record['archive_sha256'])
+
+    def test_run_id_remains_ascii_only(self):
+        record=copy.deepcopy(self.record); approved=copy.deepcopy(self.approved)
+        record['run_id']=approved['run_id']='1٢'
+        with self.assertRaises(ValueError): self.invoke(record, approved=approved)
+
+    def test_wrong_owned_archive_refuses(self):
+        raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
+        real_stat=os.stat
+        def fake_stat(path, *args, **kwargs):
+            value=real_stat(path, *args, **kwargs)
+            if path == 'production-arm64.docker.tar':
+                values=list(value); values[4]=os.getuid()+1; return os.stat_result(values)
+            return value
+        checkout=Path(intake.__file__).resolve().parent.parent
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake.os,'stat',side_effect=fake_stat):
+            with self.assertRaisesRegex(ValueError, 'Untrusted or oversized'):
+                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved)
 
     def test_bad_bindings_and_dirty_checkout_refuse(self):
         mutations = [('source','f'*40), ('tree','f'*40), ('run_id','1'), ('attempt',2), ('runtime_receipt_sha256','f'*64),
