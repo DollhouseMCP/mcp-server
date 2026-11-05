@@ -12,8 +12,7 @@ from pathlib import Path
 import sys
 import time
 import uuid
-from image_archive_identity import verify_saved_image
-from image_scan_intake import validate_intake, trusted_work_root
+from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_capture_output
 from image_applicability import GIB, MAX_REPORT, inventory_export, validate_never_started
 
 spec = importlib.util.spec_from_file_location('reviewed_image_scanner', Path(__file__).with_name('scan-built-image.py'))
@@ -158,6 +157,16 @@ def capture_elf_facts(elf, private, run, write, deadline):
     return index
 
 
+def validate_capture_engine(run):
+    status, raw = run(['docker', 'version', '--format', '{{json .Server}}'], 'engine-source-identity')
+    if status != 0: raise ValueError('Docker source identity unavailable')
+    engine = json.loads(raw)
+    if (engine.get('Version') != '29.4.2' or engine.get('GitCommit') not in
+            ['d329809', 'd3298094ac5111e5d67517a252d291d27543e408'] or
+            (engine.get('Os'), engine.get('Arch')) != ('linux', 'amd64')):
+        raise ValueError('Docker exporter source is not the exact reviewed engine; capture unavailable')
+
+
 def admit_capture_target(root, supplied, args, approved_target, run, write):
     original = json.loads((root / 'reports/target-archive-identity.json').read_text())
     archive = root / 'inputs/image.tar'
@@ -166,13 +175,7 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
         record, admitted_graph = validate_intake(args.retained_intake, args.intake_sha256, archive,
                                                    args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), Path(__file__).resolve().parent.parent, approved_target, staged=True)
         if original != admitted_graph: raise ValueError('Stored archive identity differs from admitted graph')
-    status, raw = run(['docker', 'version', '--format', '{{json .Server}}'], 'engine-source-identity')
-    if status != 0: raise ValueError('Docker source identity unavailable')
-    engine = json.loads(raw)
-    if (engine.get('Version') != '29.4.2' or engine.get('GitCommit') not in
-            ['d329809', 'd3298094ac5111e5d67517a252d291d27543e408'] or
-            (engine.get('Os'), engine.get('Arch')) != ('linux', 'amd64')):
-        raise ValueError('Docker exporter source is not the exact reviewed engine; capture unavailable')
+    validate_capture_engine(run)
 
     status, raw = run(['docker', 'image', 'inspect', original['store_id']], 'image-inspect', retain_stdout=False)
     if status != 0: raise ValueError('Exact target is unavailable')
@@ -193,9 +196,7 @@ def admit_capture_target(root, supplied, args, approved_target, run, write):
                                         inspect_descriptor=image.get('Descriptor'))
         archive_hash = record['archive_sha256']
     else:
-        graph = verify_saved_image(archive, image['Id'], GIB, image.get('Descriptor'))
-        with archive.open('rb') as source:
-            archive_hash = hashlib.file_digest(source, 'sha256').hexdigest()
+        graph, archive_hash = verify_trusted_image(root, 'target', image['Id'], GIB, image.get('Descriptor'), include_hash=True)
     if graph != original: raise ValueError('Typed archive identity changed before capture')
     write('target-binding.json', {'graph': graph, 'image_archive_sha256': archive_hash,
          'architecture': image.get('Architecture'), 'os': image.get('Os'),
@@ -221,7 +222,7 @@ def capture_export(container, graph, owner, private, run, write):
             exported.chmod(0o400)
     return exported
 
-def export_owned_capture(root, private, graph, record, source_label, run, write, summary):
+def export_owned_capture(private, graph, record, source_label, run, write, summary):
     container = None
     token = uuid.uuid4().hex
     owner = {'name': 'beta-applicability-' + token[:12], 'nonce': token, 'source_label': source_label}
@@ -287,29 +288,7 @@ def capture_inventory_facts(exported, private, graph, container, deadline, repor
     summary.update(status='facts-captured-with-explicit-unresolved-boundaries',
                    elf_parse_unknown_count=elf_index['unknown_count'])
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('root')
-    parser.add_argument('--retained-intake')
-    parser.add_argument('--intake-sha256')
-    parser.add_argument('--scanner-head')
-    parser.add_argument('--scanner-tree')
-    parser.add_argument('--target-source')
-    parser.add_argument('--target-tree')
-    parser.add_argument('--target-run-id')
-    parser.add_argument('--target-attempt', type=int)
-    parser.add_argument('--runtime-receipt-sha256')
-    args = parser.parse_args()
-    supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
-    if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
-    approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
-    root = trusted_work_root(args.root, create=True)
-    reports = root / 'reports/applicability'; reports.mkdir(parents=True, exist_ok=False)
-    private = root / 'applicability-inputs'; private.mkdir(mode=0o700, exist_ok=False)
-    deadline = time.monotonic() + 140  # Leave 30 seconds cleanup plus 10 seconds terminal receipt margin.
-    raw_budget = MAX_REPORT - 1024 * 1024  # Reserve terminal facts even on output exhaustion.
-    summary = {'schema': 'image-applicability-capture-v1', 'status': 'incomplete',
-               'finding_closure': False, 'runtime_execution': False, 'receipts': {}}
+def capture_report_functions(reports, raw_budget, deadline, summary):
     def write(name, value):
         data = json.dumps(value, indent=2).encode()
         if sum(p.stat().st_size for p in reports.iterdir() if p.is_file() and p.name != name) + len(data) > raw_budget:
@@ -333,9 +312,34 @@ def main():
             (reports / (label + '.' + suffix)).write_bytes(data)
         write(label + RECEIPT_SUFFIX, receipt)
         return status, stdout
+    return write, run
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('root')
+    parser.add_argument('--retained-intake')
+    parser.add_argument('--intake-sha256')
+    parser.add_argument('--scanner-head')
+    parser.add_argument('--scanner-tree')
+    parser.add_argument('--target-source')
+    parser.add_argument('--target-tree')
+    parser.add_argument('--target-run-id')
+    parser.add_argument('--target-attempt', type=int)
+    parser.add_argument('--runtime-receipt-sha256')
+    args = parser.parse_args()
+    supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
+    if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
+    approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
+    root = trusted_work_root(args.root, create=True)
+    reports, private = prepare_capture_output(root)
+    deadline = time.monotonic() + 140  # Leave 30 seconds cleanup plus 10 seconds terminal receipt margin.
+    raw_budget = MAX_REPORT - 1024 * 1024  # Reserve terminal facts even on output exhaustion.
+    summary = {'schema': 'image-applicability-capture-v1', 'status': 'incomplete',
+               'finding_closure': False, 'runtime_execution': False, 'receipts': {}}
+    write, run = capture_report_functions(reports, raw_budget, deadline, summary)
     try:
         record, graph, source_label = admit_capture_target(root, supplied, args, approved_target, run, write)
-        exported, container = export_owned_capture(root, private, graph, record, source_label, run, write, summary)
+        exported, container = export_owned_capture(private, graph, record, source_label, run, write, summary)
         capture_inventory_facts(exported, private, graph, container, deadline, reports, raw_budget, summary, run, write)
         return 0
     except Exception as error:

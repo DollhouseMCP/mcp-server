@@ -35,7 +35,7 @@ class IntakeTests(unittest.TestCase):
         def git(*args, **kwargs):
             class Result: pass
             result = Result(); result.stdout = next(outputs).encode(); return result
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake.subprocess, 'run', side_effect=git), patch.object(intake, 'verify_saved_image', return_value=self.graph) as verify:
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake.subprocess, 'run', side_effect=git), patch.object(intake, 'verify_saved_image_file', return_value=self.graph) as verify:
             result = intake.validate_intake(path, hashlib.sha256(raw).hexdigest(), self.archive, self.head, self.tree,
                                            self.head if github is None else github, Path(intake.__file__).resolve().parent.parent, approved or self.approved)
             self.assertEqual(verify.call_args.kwargs['platform'], 'linux/arm64')
@@ -55,7 +55,7 @@ class IntakeTests(unittest.TestCase):
         head, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
         path = self.slot / 'intake.json'; raw = json.dumps(self.record).encode(); path.write_bytes(raw)
         digest = hashlib.sha256(raw).hexdigest()
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake, '__file__', str(helper)), patch.object(intake, 'verify_saved_image', return_value=self.graph):
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake, '__file__', str(helper)), patch.object(intake, 'verify_saved_image_file', return_value=self.graph):
             intake.validate_intake(path, digest, self.archive, head, tree, head, checkout, self.approved)
             helper.write_text('modified')
             with self.assertRaisesRegex(ValueError, 'modified or untracked'):
@@ -63,6 +63,27 @@ class IntakeTests(unittest.TestCase):
         with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake, '__file__', str(self.root / 'copied-helper.py')):
             with self.assertRaisesRegex(ValueError, 'does not belong'):
                 intake.validate_intake(path, digest, self.archive, head, tree, head, checkout, self.approved)
+
+    def test_scanner_output_directories_are_owned_empty_and_nonsymlink(self):
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}):
+            reports, inputs = intake.prepare_scanner_output(self.work)
+            self.assertEqual((reports, inputs), (self.work/'reports', self.work/'inputs'))
+            (inputs/'existing').write_text('do not overwrite')
+            with self.assertRaisesRegex(ValueError, 'empty'): intake.prepare_scanner_output(self.work)
+            self.assertEqual((inputs/'existing').read_text(), 'do not overwrite')
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve(); work=root/'image-security'; work.mkdir(); outside=root/'outside'; outside.mkdir()
+            (work/'reports').symlink_to(outside,target_is_directory=True)
+            with self.assertRaises((ValueError,OSError)): intake.prepare_scanner_output(work)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_capture_requires_existing_parents_and_exclusive_private_directories(self):
+        (self.work/'reports').mkdir()
+        reports, private = intake.prepare_capture_output(self.work)
+        self.assertEqual((reports, private), (self.work/'reports/applicability', self.work/'applicability-inputs'))
+        self.assertEqual(reports.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o700)
+        with self.assertRaises(FileExistsError): intake.prepare_capture_output(self.work)
 
     def test_paths_must_be_exact_trusted_slot_and_workroot(self):
         raw = json.dumps(self.record).encode(); doc = self.slot / 'intake.json'; doc.write_bytes(raw)
@@ -107,23 +128,40 @@ class IntakeTests(unittest.TestCase):
         observed = []; staged_fd = []; real_stage = intake.stage_verified
         def stage(tree, stream, *args):
             staged_fd.append(stream.fileno()); return real_stage(tree, stream, *args)
-        def graph(path, store, cap, descriptor, **kwargs):
-            stream=kwargs['fileobj']; observed.append((stream.fileno(),stream.read())); return self.graph
+        def graph(stream, store, cap, descriptor, **kwargs):
+             observed.append((stream.fileno(),stream.read())); return self.graph
         checkout=Path(intake.__file__).resolve().parent.parent
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',side_effect=graph), patch.object(intake,'stage_verified',side_effect=stage):
-            intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+        digest=hashlib.sha256(raw).hexdigest()
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image_file',side_effect=graph), patch.object(intake,'stage_verified',side_effect=stage):
+            intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
         self.assertEqual(observed[0][1],b'inert archive')
         self.assertEqual(staged_fd, [observed[0][0]])
         self.assertEqual((self.work/'inputs/image.tar').read_bytes(),b'inert archive')
         self.assertEqual((self.work/'inputs/image.tar').stat().st_mode & 0o777,0o600)
+
+    def test_fixed_legacy_output_refuses_file_and_parent_replacement(self):
+        output=self.work/'inputs/image.tar'; output.write_bytes(b'inert archive')
+        store='sha256:'+'4'*64
+        def replace_file(*args,**kwargs):
+            output.rename(output.with_name('old.tar')); output.write_bytes(b'inert archive'); return self.graph
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'verify_saved_image_file',side_effect=replace_file):
+            with self.assertRaises(ValueError): intake.verify_trusted_image(self.work,'target',store,1024**3)
+        output.unlink(); output.symlink_to(self.archive)
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), self.assertRaises((ValueError,OSError)):
+            intake.verify_trusted_image(self.work,'target',store,1024**3)
+        output.unlink(); (self.work/'inputs/old.tar').unlink(); (self.work/'inputs').rmdir()
+        (self.work/'inputs').symlink_to(self.slot,target_is_directory=True)
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), self.assertRaises((ValueError,OSError)):
+            intake.verify_trusted_image(self.work,'target',store,1024**3)
 
     def test_path_replacement_during_graph_refuses_before_staging(self):
         raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
         def graph(*args,**kwargs):
             self.archive.rename(self.slot/'old.tar'); self.archive.write_bytes(b'inert archive'); return self.graph
         checkout=Path(intake.__file__).resolve().parent.parent
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',side_effect=graph):
-            with self.assertRaises(ValueError): intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+        digest=hashlib.sha256(raw).hexdigest()
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image_file',side_effect=graph):
+            with self.assertRaises(ValueError): intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
         self.assertFalse((self.work/'inputs/image.tar').exists())
 
     def test_document_or_parent_replacement_during_graph_refuses(self):
@@ -137,15 +175,17 @@ class IntakeTests(unittest.TestCase):
                     else: slot.rename(slot.with_name('old-slot')); slot.mkdir()
                     return self.graph
                 checkout=Path(intake.__file__).resolve().parent.parent
-                with patch.dict(os.environ, {'RUNNER_TEMP':str(root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',side_effect=graph):
+                digest=hashlib.sha256(raw).hexdigest()
+                with patch.dict(os.environ, {'RUNNER_TEMP':str(root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image_file',side_effect=graph):
                     with self.assertRaises((ValueError,OSError)):
-                        intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+                        intake.validate_intake(doc,digest,archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
                 self.assertFalse((work/'inputs/image.tar').exists())
 
     def test_bounded_hash_refuses_short_or_growing_input(self):
         for data in (b'abc', b'abcde'):
+            stream = io.BytesIO(data)
             with self.subTest(data=data), self.assertRaises(ValueError):
-                intake.bounded_hash(io.BytesIO(data), 4)
+                intake.bounded_hash(stream, 4)
         self.assertEqual(intake.bounded_hash(io.BytesIO(b'abcd'), 4), hashlib.sha256(b'abcd').hexdigest())
 
     def test_staged_path_replacement_is_not_deleted(self):
@@ -156,9 +196,10 @@ class IntakeTests(unittest.TestCase):
                 changed.append(True); staged.rename(moved); staged.write_bytes(b'foreign')
             return real_check(tree, stream, identity, parent, name)
         checkout=Path(intake.__file__).resolve().parent.parent
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check):
+        digest=hashlib.sha256(raw).hexdigest()
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image_file',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check):
             with self.assertRaisesRegex(ValueError, 'cleanup UNKNOWN'):
-                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+                intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
         self.assertEqual(staged.read_bytes(),b'foreign'); self.assertEqual(moved.read_bytes(),b'inert archive')
 
     def test_failed_staging_never_unlinks_or_deletes_replacement(self):
@@ -170,9 +211,10 @@ class IntakeTests(unittest.TestCase):
                 raise ValueError('fixture failure before cleanup')
             return real_check(tree, stream, identity, parent, name)
         checkout=Path(intake.__file__).resolve().parent.parent
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check), patch.object(intake.os,'unlink',side_effect=AssertionError('unlink must not run')) as unlink:
+        digest=hashlib.sha256(raw).hexdigest()
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image_file',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check), patch.object(intake.os,'unlink',side_effect=AssertionError('unlink must not run')) as unlink:
             with self.assertRaisesRegex(ValueError, 'cleanup UNKNOWN'):
-                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+                intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
             unlink.assert_not_called()
         self.assertEqual(staged.read_bytes(),b'foreign'); self.assertEqual(moved.read_bytes(),b'inert archive')
 
@@ -183,9 +225,10 @@ class IntakeTests(unittest.TestCase):
             if staged.exists(): raise KeyboardInterrupt()
             return real_check(tree, stream, identity, parent, name)
         checkout=Path(intake.__file__).resolve().parent.parent
-        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check), patch.object(intake.os,'unlink',side_effect=AssertionError('unlink must not run')) as unlink:
+        digest=hashlib.sha256(raw).hexdigest()
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake,'verify_saved_image_file',return_value=self.graph), patch.object(intake.TrustedTree,'check_file',check), patch.object(intake.os,'unlink',side_effect=AssertionError('unlink must not run')) as unlink:
             with self.assertRaises(KeyboardInterrupt):
-                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+                intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
             unlink.assert_not_called()
         self.assertTrue(staged.is_file())
 
@@ -200,10 +243,18 @@ class IntakeTests(unittest.TestCase):
         self.record.update(store_id=config_id,config_digest=config_id,diff_ids=[diff],archive_bytes=self.archive.stat().st_size,archive_sha256=hashlib.sha256(self.archive.read_bytes()).hexdigest())
         raw=json.dumps(self.record).encode(); doc=self.slot/'intake.json'; doc.write_bytes(raw)
         checkout=Path(intake.__file__).resolve().parent.parent
+        digest=hashlib.sha256(raw).hexdigest()
         with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'):
-            record, graph = intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
+            record, graph = intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved,stage=True)
         self.assertEqual(graph['config_digest'],config_id); self.assertEqual(graph['layers'][0]['diff_id'],diff)
         self.assertEqual(hashlib.sha256((self.work/'inputs/image.tar').read_bytes()).hexdigest(),record['archive_sha256'])
+        with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}):
+            staged_graph, staged_hash = intake.verify_trusted_image(self.work, 'target', config_id, 1024**3,
+                                                                     include_hash=True, platform='linux/arm64', expected_source=self.approved['source'])
+            self.assertEqual(staged_graph, graph); self.assertEqual(staged_hash, record['archive_sha256'])
+            with self.assertRaises(ValueError): intake.verify_trusted_image(self.root, 'target', config_id, 1024**3)
+            with self.assertRaises(ValueError): intake.verify_trusted_image(self.work, 'other', config_id, 1024**3)
+
 
     def test_run_id_remains_ascii_only(self):
         record=copy.deepcopy(self.record); approved=copy.deepcopy(self.approved)
@@ -219,9 +270,10 @@ class IntakeTests(unittest.TestCase):
                 values=list(value); values[4]=os.getuid()+1; return os.stat_result(values)
             return value
         checkout=Path(intake.__file__).resolve().parent.parent
+        digest=hashlib.sha256(raw).hexdigest()
         with patch.dict(os.environ, {'RUNNER_TEMP':str(self.root)}), patch.object(intake,'validate_checkout'), patch.object(intake.os,'stat',side_effect=fake_stat):
             with self.assertRaisesRegex(ValueError, 'Untrusted or oversized'):
-                intake.validate_intake(doc,hashlib.sha256(raw).hexdigest(),self.archive,self.head,self.tree,self.head,checkout,self.approved)
+                intake.validate_intake(doc,digest,self.archive,self.head,self.tree,self.head,checkout,self.approved)
 
     def test_bad_bindings_and_dirty_checkout_refuse(self):
         mutations = [('source','f'*40), ('tree','f'*40), ('run_id','1'), ('attempt',2), ('runtime_receipt_sha256','f'*64),

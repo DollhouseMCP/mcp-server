@@ -11,7 +11,16 @@ GIB = 1024 ** 3
 MAX_REPORT = 32 * 1024 ** 2
 MAX_OBJECT = 128 * 1024 ** 2
 MAX_OBJECTS = 256 * 1024 ** 2
-PACKAGES = re.compile(r'(?:zlib1g|perl-base|ncurses-bin|ncurses-base|util-linux|bsdutils|mount|login|gcc-14-base|lib(?:tinfo6|mount1|blkid1|uuid1|smartcols1|lastlog2-2|gcc-s1|stdc\+\+6|c6|c-bin|acl1))(?::[^/.]+)?\.(?:list|md5sums)$')
+PACKAGE_NAMES = frozenset({'zlib1g', 'perl-base', 'ncurses-bin', 'ncurses-base', 'libtinfo6',
+                           'util-linux', 'bsdutils', 'mount', 'login', 'libmount1', 'libblkid1',
+                           'libuuid1', 'libsmartcols1', 'liblastlog2-2', 'gcc-14-base', 'libgcc-s1',
+                           'libstdc++6', 'libc6', 'libc-bin', 'libacl1'})
+PACKAGE_METADATA = re.compile(r'([^:/.]+)(?::[^/.]+)?[.](?:list|md5sums)$')
+
+
+def package_metadata(filename):
+    match = PACKAGE_METADATA.fullmatch(filename)
+    return match if match and match.group(1) in PACKAGE_NAMES else None
 
 
 def canonical(name):
@@ -27,7 +36,7 @@ def canonical(name):
 
 def selected_text(path):
     return (path in ('var/lib/dpkg/status', 'etc/fstab') or
-            (path.startswith('var/lib/dpkg/info/') and PACKAGES.fullmatch(path.split('/')[-1])) or
+            (path.startswith('var/lib/dpkg/info/') and package_metadata(path.split('/')[-1])) or
             re.search(r'(?:^|/)Pod/Text(?:/(?:Color|Overstrike|Termcap))?\.pm(?:c)?$', path) or
             re.search(r'(?:^|/)Archive/Tar\.pm(?:c)?$', path))
 
@@ -143,6 +152,23 @@ def inventory_aliases(records):
                 aliases.append({'path': '/' + name, 'status': 'UNKNOWN', 'error': str(error)})
     return aliases
 
+def inventory_member(bundle, member, name, scratch, records, total, saved, check):
+    if not name:
+        if not member.isdir(): raise ValueError('Root entry is not a directory')
+        return total, saved
+    record = inventory_record(member, name, records)
+    if member.isfile():
+        if member.size > GIB - total: raise ValueError('Export payload exceeds 1 GiB')
+        total += member.size
+        saved = inventory_regular(bundle, member, name, scratch, records, saved, check, record)
+    elif member.issym() or member.islnk():
+        if member.size != 0: raise ValueError('Link with a payload is unsupported')
+    elif not (member.isdir() or member.ischr() or member.isblk() or member.isfifo()):
+        raise ValueError('Unsupported exported file type')
+    records[name] = record
+    return total, saved
+
+
 def inventory_export(path, scratch, deadline=None):
     deadline = min(deadline or float("inf"), time.monotonic() + 60)
     def check():
@@ -153,19 +179,7 @@ def inventory_export(path, scratch, deadline=None):
     with tarfile.open(path, 'r|', encoding='utf-8', errors='surrogateescape') as bundle:
         for member in bundle:
             check(); name = canonical(member.name)
-            if not name:
-                if not member.isdir(): raise ValueError('Root entry is not a directory')
-                continue
-            record = inventory_record(member, name, records)
-            if member.isfile():
-                if member.size > GIB - total: raise ValueError('Export payload exceeds 1 GiB')
-                total += member.size
-                saved = inventory_regular(bundle, member, name, scratch, records, saved, check, record)
-            elif member.issym() or member.islnk():
-                if member.size != 0: raise ValueError('Link with a payload is unsupported')
-            elif not (member.isdir() or member.ischr() or member.isblk() or member.isfifo()):
-                raise ValueError('Unsupported exported file type')
-            records[name] = record
+            total, saved = inventory_member(bundle, member, name, scratch, records, total, saved, check)
     if len(json.dumps(records).encode()) > MAX_REPORT:
         raise ValueError('Inventory report exceeds bound')
     aliases = inventory_aliases(records)
@@ -175,6 +189,14 @@ def inventory_export(path, scratch, deadline=None):
             'boundaries': ['No finding closed by capture', 'Missing capability header is UNKNOWN',
                            'Nested archives and modified/compiled renamed code are unresolved',
                            'Symbol absence and package names alone do not prove code absence']}
+
+
+def alias_link(parts, index, key, record, current, seen):
+    state = (key, tuple(parts[index + 1:]))
+    if state in seen: raise ValueError('Alias cycle')
+    seen.add(state); target = record['link_target']
+    prefix = [] if target.startswith('/') or record['type'] == '1' else current[:-1]
+    return prefix + target.split('/') + parts[index + 1:]
 
 
 def alias_pass(parts, records, seen):
@@ -188,11 +210,7 @@ def alias_pass(parts, records, seen):
         record = records.get(key)
         if record is None: raise ValueError('Alias target/parent is absent')
         if record.get('link_target') is not None:
-            state = (key, tuple(parts[index + 1:]))
-            if state in seen: raise ValueError('Alias cycle')
-            seen.add(state); target = record['link_target']
-            prefix = [] if target.startswith('/') or record['type'] == '1' else current[:-1]
-            return prefix + target.split('/') + parts[index + 1:], False
+            return alias_link(parts, index, key, record, current, seen), False
     return '/'.join(current), True
 
 

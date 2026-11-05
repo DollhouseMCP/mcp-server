@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import tarfile
 import tempfile
+import time
 import unittest
 import sys
 
@@ -110,6 +111,30 @@ class OfflineBoundaryTests(unittest.TestCase):
                     self.assertTrue(path.is_relative_to(source))
             finally:
                 os.chdir(original)
+
+    def test_retained_target_selection_uses_admitted_record(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        args = SimpleNamespace(retained_intake='doc', intake_sha256='digest', retained_archive='archive', scanner_head='head', scanner_tree='tree')
+        record = {'store_id': 'sha256:' + 'a' * 64, 'platform': 'linux/arm64'}
+        with patch.object(scanner, 'validate_intake', return_value=(record, {'fixture': True})):
+            retained, target, image_id = scanner.select_scanner_target([True], args, Path('/source'), {}, lambda *_: None)
+        self.assertTrue(retained)
+        self.assertEqual(target, {'store_id': record['store_id'], 'architecture': 'arm64', 'os': 'linux'})
+        self.assertEqual(image_id, record['store_id'])
+
+    def test_scanner_saved_image_graph_uses_fixed_fd_route(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); inputs = root / 'inputs'; reports = root / 'reports'
+            inputs.mkdir(); reports.mkdir(); selected = {'store_id': 'sha256:' + 'a' * 64, 'descriptor': None}
+            def process(command, timeout, maximum, stdout_path):
+                stdout_path.write_bytes(b'inert export')
+                return 0, b'', b'', None
+            with patch.object(scanner, 'bounded_process', side_effect=process), patch.object(scanner, 'verify_trusted_image', return_value={'fixture': True}) as verified:
+                _, _, save = scanner.scanner_operations(reports, inputs, time.monotonic() + 240, {})
+                self.assertEqual(save(selected['store_id'], selected, 'target'), {'fixture': True})
+                verified.assert_called_once_with(root, 'target', selected['store_id'], scanner.TARGET_MAX_BYTES, None)
 
     def test_official_database_requires_reviewed_schema_checksum_name_and_freshness(self):
         now = datetime.datetime(2026, 10, 28, 20, tzinfo=datetime.timezone.utc)

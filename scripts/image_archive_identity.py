@@ -215,7 +215,7 @@ def verified_layers(archive, config, docker, descriptors, unpacked_cap):
     return layers, total
 
 
-def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None):
+def _verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None, fileobj=None):
     """The opaque store ID must bind to its exact role, never an arbitrary digest."""
     if not DIGEST.fullmatch(store_id):
         raise ValueError('Invalid local store identifier')
@@ -239,6 +239,16 @@ def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platfor
                 'format': 'oci-with-docker-manifest' if selected else 'classic-docker'}
     finally:
         archive.close()
+
+
+def verify_saved_image(path, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+    """Verify a library caller's trusted path; CLI callers must use the FD API."""
+    return _verify_saved_image(path, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source)
+
+
+def verify_saved_image_file(stream, store_id, unpacked_cap, descriptor=None, *, platform=DEFAULT_PLATFORM, expected_source=None):
+    """Verify an already admitted open file object without reopening its name."""
+    return _verify_saved_image(None, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source, fileobj=stream)
 
 
 def verify_fixed_runner(evidence, reference_directory):

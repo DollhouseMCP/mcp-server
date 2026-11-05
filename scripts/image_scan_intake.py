@@ -7,7 +7,7 @@ from contextlib import ExitStack
 import re
 import subprocess
 from pathlib import Path
-from image_archive_identity import verify_saved_image
+from image_archive_identity import verify_saved_image_file
 
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 HEX = re.compile(r'[0-9a-f]{64}')
@@ -16,6 +16,8 @@ COMMIT = re.compile(r'[0-9a-f]{40}')
 
 MAX_ARCHIVE = 1024**3 + 128 * 1024**2
 NO_INSPECT_DESCRIPTOR = object()
+INTAKE_DOCUMENT = 'intake.json'
+STAGED_ARCHIVE = 'image.tar'
 
 def trusted_work_root(argument, *, create=False):
     runner = os.environ.get('RUNNER_TEMP')
@@ -94,10 +96,69 @@ class TrustedTree:
 
 def fixed_slot(document, archive, work_root, staged):
     for arch in ('amd64', 'arm64'):
-        doc = work_root / 'retained' / arch / 'intake.json'
-        data = work_root / ('inputs/image.tar' if staged else 'retained/' + arch + '/production-' + arch + '.docker.tar')
+        doc = work_root / 'retained' / arch / INTAKE_DOCUMENT
+        data = work_root / ('inputs/' + STAGED_ARCHIVE if staged else 'retained/' + arch + '/production-' + arch + '.docker.tar')
         if os.fspath(document) == str(doc) and os.fspath(archive) == str(data): return arch
     raise ValueError('Intake paths must match the trusted fixed slot')
+
+
+def owned_output_directory(tree, parent, name, *, exclusive=False, empty=False):
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent)
+    except FileExistsError:
+        if exclusive: raise
+    fd = tree.directory(parent, name)
+    if os.fstat(fd).st_uid != os.getuid(): raise ValueError('Output directory is not runner-owned')
+    if empty and os.listdir(fd): raise ValueError('Output directory must be empty')
+    return fd
+
+
+def prepare_scanner_output(work_root):
+    with TrustedTree(work_root) as tree:
+        owned_output_directory(tree, tree.workfd, 'reports', empty=True)
+        owned_output_directory(tree, tree.workfd, 'inputs', empty=True)
+        tree.check_directories()
+    return work_root / 'reports', work_root / 'inputs'
+
+
+def prepare_capture_output(work_root):
+    with TrustedTree(work_root) as tree:
+        reports = tree.directory(tree.workfd, 'reports')
+        inputs = tree.directory(tree.workfd, 'inputs')
+        if os.fstat(reports).st_uid != os.getuid() or os.fstat(inputs).st_uid != os.getuid():
+            raise ValueError('Capture parent directory is not runner-owned')
+        owned_output_directory(tree, reports, 'applicability', exclusive=True)
+        owned_output_directory(tree, tree.workfd, 'applicability-inputs', exclusive=True)
+        tree.check_directories()
+    return work_root / 'reports/applicability', work_root / 'applicability-inputs'
+
+
+def write_failure_report(work_root, payload):
+    with TrustedTree(work_root) as tree:
+        reports = tree.directory(tree.workfd, 'reports')
+        if os.fstat(reports).st_uid != os.getuid(): raise ValueError('Report directory is not runner-owned')
+        fd = os.open('failure.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=reports)
+        with os.fdopen(fd, 'w') as output: output.write(json.dumps(payload, indent=2))
+        tree.check_directories()
+
+
+def verify_trusted_image(work_root, kind, store_id, unpacked_cap, descriptor=None, *, include_hash=False, platform='linux/amd64', expected_source=None):
+    """Verify one literal output slot under the independently trusted runner root."""
+    runner = os.environ.get('RUNNER_TEMP') or ''
+    if Path(work_root) != trusted_work_root(os.path.join(runner, 'image-security')):
+        raise ValueError('Image work root differs from trusted runner root')
+    names = {'target': STAGED_ARCHIVE, 'runner': 'runner.tar'}
+    if kind not in names: raise ValueError('Unsupported fixed image slot')
+    with TrustedTree(Path(work_root)) as tree:
+        parent = tree.directory(tree.workfd, 'inputs')
+        stream, identity = tree.file(parent, names[kind], MAX_ARCHIVE)
+        graph = verify_saved_image_file(stream, store_id, unpacked_cap, descriptor, platform=platform, expected_source=expected_source)
+        tree.check_file(stream, identity, parent, names[kind])
+        if not include_hash: return graph
+        stream.seek(0)
+        archive_hash = bounded_hash(stream, identity[5])
+        tree.check_file(stream, identity, parent, names[kind])
+        return graph, archive_hash
 
 
 def bounded_hash(stream, expected_size):
@@ -112,7 +173,7 @@ def bounded_hash(stream, expected_size):
 
 def stage_verified(tree, stream, expected_size, expected_hash, identity, parent, name):
     inputs = tree.directory(tree.workfd, 'inputs')
-    fd = os.open('image.tar', os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
+    fd = os.open(STAGED_ARCHIVE, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=inputs)
     created = os.fstat(fd); owned = (created.st_dev, created.st_ino, created.st_uid)
     try:
         with os.fdopen(fd, 'w+b') as target:
@@ -127,14 +188,14 @@ def stage_verified(tree, stream, expected_size, expected_hash, identity, parent,
             if count != expected_size or digest.hexdigest() != expected_hash: raise ValueError('Staged archive changed')
             tree.check_file(stream, identity, parent, name)
             actual = os.fstat(target.fileno())
-            selected = os.stat('image.tar', dir_fd=inputs, follow_symlinks=False)
+            selected = os.stat(STAGED_ARCHIVE, dir_fd=inputs, follow_symlinks=False)
             if (not stat.S_ISREG(actual.st_mode) or (actual.st_dev, actual.st_ino, actual.st_uid) != owned or
                     actual.st_uid != os.getuid() or actual.st_nlink != 1 or stat.S_IMODE(actual.st_mode) != 0o600 or
                     actual.st_size != expected_size or stable_identity(actual) != stable_identity(selected)):
                 raise ValueError('Staged archive identity mismatch')
             target.seek(0)
             if bounded_hash(target, expected_size) != expected_hash: raise ValueError('Staged archive hash mismatch')
-            if stable_identity(actual) != stable_identity(os.fstat(target.fileno())) or stable_identity(actual) != stable_identity(os.stat('image.tar', dir_fd=inputs, follow_symlinks=False)):
+            if stable_identity(actual) != stable_identity(os.fstat(target.fileno())) or stable_identity(actual) != stable_identity(os.stat(STAGED_ARCHIVE, dir_fd=inputs, follow_symlinks=False)):
                 raise ValueError('Staged archive changed during verification')
             tree.check_directories()
     except Exception as error:
@@ -188,6 +249,35 @@ def validate_checkout(scanner_head, scanner_tree, github_sha, checkout):
         raise ValueError('Scanner checkout has modified or untracked files')
 
 
+def verify_intake_archive(tree, slot, doc, doc_identity, arch, record, archive, staged, stage, inspect_descriptor):
+    parent = tree.directory(tree.workfd, 'inputs') if staged else slot
+    name = STAGED_ARCHIVE if staged else 'production-' + arch + '.docker.tar'
+    stream, identity = tree.file(parent, name, MAX_ARCHIVE)
+    if os.fstat(stream.fileno()).st_size != record['archive_bytes']:
+        raise ValueError('Archive size mismatch')
+    if bounded_hash(stream, record['archive_bytes']) != record['archive_sha256']:
+        raise ValueError('Archive hash mismatch')
+    tree.check_file(stream, identity, parent, name)
+    stream.seek(0)
+    graph = verify_saved_image_file(stream, record['store_id'], 1024**3, record['descriptor'],
+                                    platform=record['platform'], expected_source=record['source'])
+    tree.check_file(stream, identity, parent, name)
+    tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
+    if inspect_descriptor is not NO_INSPECT_DESCRIPTOR:
+        stream.seek(0)
+        inspected_graph = verify_saved_image_file(stream, record['store_id'], 1024**3, inspect_descriptor,
+                                             platform=record['platform'], expected_source=record['source'])
+        tree.check_file(stream, identity, parent, name)
+        if inspected_graph != graph: raise ValueError('Materialized image descriptor differs from admitted graph')
+    for field in ('store_id', 'store_id_role', 'root_digest', 'manifest_digest', 'config_digest'):
+        if graph[field] != record[field]: raise ValueError('Typed archive identity mismatch: ' + field)
+    if [x['diff_id'] for x in graph['layers']] != record['diff_ids']:
+        raise ValueError('Ordered DiffIDs mismatch')
+    if stage:
+        stage_verified(tree, stream, record['archive_bytes'], record['archive_sha256'], identity, parent, name)
+    tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
+    return record, graph
+
 def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree, github_sha, checkout, approved_target, *, staged=False, stage=False, inspect_descriptor=NO_INSPECT_DESCRIPTOR):
     if not HEX.fullmatch(expected_hash) or (staged and stage):
         raise ValueError('Invalid independent intake binding')
@@ -197,38 +287,12 @@ def validate_intake(document, expected_hash, archive, scanner_head, scanner_tree
     with TrustedTree(work_root) as tree:
         retained = tree.directory(tree.workfd, 'retained')
         slot = tree.directory(retained, arch)
-        doc, doc_identity = tree.file(slot, 'intake.json', 1024 * 1024)
+        doc, doc_identity = tree.file(slot, INTAKE_DOCUMENT, 1024 * 1024)
         raw = doc.read(1024 * 1024 + 1)
-        tree.check_file(doc, doc_identity, slot, 'intake.json')
+        tree.check_file(doc, doc_identity, slot, INTAKE_DOCUMENT)
         if len(raw) > 1024 * 1024 or hashlib.sha256(raw).hexdigest() != expected_hash:
             raise ValueError('Intake hash or size mismatch')
         record = validate_record(json.loads(raw, object_pairs_hook=unique_object), approved_target)
         if record['platform'] != 'linux/' + arch: raise ValueError('Intake platform differs from trusted slot')
         validate_checkout(scanner_head, scanner_tree, github_sha, checkout)
-        parent = tree.directory(tree.workfd, 'inputs') if staged else slot
-        name = 'image.tar' if staged else 'production-' + arch + '.docker.tar'
-        stream, identity = tree.file(parent, name, MAX_ARCHIVE)
-        if os.fstat(stream.fileno()).st_size != record['archive_bytes']:
-            raise ValueError('Archive size mismatch')
-        if bounded_hash(stream, record['archive_bytes']) != record['archive_sha256']:
-            raise ValueError('Archive hash mismatch')
-        tree.check_file(stream, identity, parent, name)
-        stream.seek(0)
-        graph = verify_saved_image(Path(archive), record['store_id'], 1024**3, record['descriptor'],
-                                   platform=record['platform'], expected_source=record['source'], fileobj=stream)
-        tree.check_file(stream, identity, parent, name)
-        tree.check_file(doc, doc_identity, slot, 'intake.json')
-        if inspect_descriptor is not NO_INSPECT_DESCRIPTOR:
-            stream.seek(0)
-            inspected_graph = verify_saved_image(Path(archive), record['store_id'], 1024**3, inspect_descriptor,
-                                                platform=record['platform'], expected_source=record['source'], fileobj=stream)
-            tree.check_file(stream, identity, parent, name)
-            if inspected_graph != graph: raise ValueError('Materialized image descriptor differs from admitted graph')
-        for field in ('store_id', 'store_id_role', 'root_digest', 'manifest_digest', 'config_digest'):
-            if graph[field] != record[field]: raise ValueError('Typed archive identity mismatch: ' + field)
-        if [x['diff_id'] for x in graph['layers']] != record['diff_ids']:
-            raise ValueError('Ordered DiffIDs mismatch')
-        if stage:
-            stage_verified(tree, stream, record['archive_bytes'], record['archive_sha256'], identity, parent, name)
-        tree.check_file(doc, doc_identity, slot, 'intake.json')
-        return record, graph
+        return verify_intake_archive(tree, slot, doc, doc_identity, arch, record, archive, staged, stage, inspect_descriptor)

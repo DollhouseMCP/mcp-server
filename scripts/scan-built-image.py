@@ -14,8 +14,8 @@ import shutil
 import time
 import urllib.parse
 import uuid
-from image_archive_identity import verify_saved_image, verify_fixed_runner
-from image_scan_intake import validate_intake, trusted_work_root
+from image_archive_identity import verify_fixed_runner
+from image_scan_intake import validate_intake, trusted_work_root, verify_trusted_image, prepare_scanner_output, write_failure_report
 from pathlib import Path
 import subprocess
 import sys
@@ -356,7 +356,7 @@ def scanner_source_paths():
 def select_scanner_target(supplied, args, source_root, approved_target, inspect_image):
     retained = all(supplied)
     if retained:
-        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
+        record, _ = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
                                                 args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target)
         target = {"store_id": record['store_id'], "architecture": record['platform'].split('/')[1], "os": "linux"}
         image_id = target['store_id']
@@ -396,31 +396,7 @@ def prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runn
     (reports / "runner-reference-identity.json").write_text(json.dumps(runner, indent=2))
     return payload, binary_receipt, manifest, db_receipt, runner
 
-def main():
-    source_root, scanner_config, offline_runner, runner_reference = scanner_source_paths()
-    parser = argparse.ArgumentParser()
-    parser.add_argument('root')
-    parser.add_argument('--retained-intake')
-    parser.add_argument('--intake-sha256')
-    parser.add_argument('--scanner-head')
-    parser.add_argument('--scanner-tree')
-    parser.add_argument('--target-source')
-    parser.add_argument('--target-tree')
-    parser.add_argument('--target-run-id')
-    parser.add_argument('--target-attempt', type=int)
-    parser.add_argument('--runtime-receipt-sha256')
-    parser.add_argument('--retained-archive')
-    args = parser.parse_args()
-    supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.retained_archive, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
-    if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
-    approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
-    root = trusted_work_root(args.root, create=True)
-    reports, inputs = root / "reports", root / "inputs"
-    reports.mkdir(parents=True, exist_ok=True)
-    inputs.mkdir(parents=True, exist_ok=True)
-    receipts = {}
-    deadline = time.monotonic() + 240
-
+def scanner_operations(reports, inputs, deadline, receipts):
     def run(command, name, timeout=180, retain_stdout=True, stdout_path=None, maximum=64 * 1024 * 1024):
         if name != "container-cleanup":
             timeout = min(timeout, max(1, int(deadline - time.monotonic())))
@@ -443,6 +419,51 @@ def main():
         (reports / (label + "-selected.json")).write_text(json.dumps(selected, indent=2))
         return selected
 
+    def save_verified(reference, selected, label):
+        destination = inputs / (IMAGE_ARCHIVE if label == "target" else "runner.tar")
+        status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
+                        stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
+        if status != 0:
+            raise ValueError(label + " archive export exceeded budget or failed; inspect export receipt")
+        observations = {**selected, "archive_bytes": destination.stat().st_size}
+        (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
+        try:
+            evidence = verify_trusted_image(inputs.parent, label, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
+        except Exception as error:
+            (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
+                **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
+                "complete_graph_verified": False, "error": str(error)}, indent=2))
+            raise
+        (reports / (label + "-archive-identity.json")).write_text(json.dumps(evidence, indent=2))
+        return evidence
+
+    return run, inspect_image, save_verified
+
+def main():
+    source_root, scanner_config, offline_runner, runner_reference = scanner_source_paths()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('root')
+    parser.add_argument('--retained-intake')
+    parser.add_argument('--intake-sha256')
+    parser.add_argument('--scanner-head')
+    parser.add_argument('--scanner-tree')
+    parser.add_argument('--target-source')
+    parser.add_argument('--target-tree')
+    parser.add_argument('--target-run-id')
+    parser.add_argument('--target-attempt', type=int)
+    parser.add_argument('--runtime-receipt-sha256')
+    parser.add_argument('--retained-archive')
+    args = parser.parse_args()
+    supplied = [args.retained_intake, args.intake_sha256, args.scanner_head, args.scanner_tree, args.retained_archive, args.target_source, args.target_tree, args.target_run_id, args.target_attempt, args.runtime_receipt_sha256]
+    if any(supplied) and not all(supplied): raise ValueError('Complete retained intake arguments required')
+    approved_target = {'source': args.target_source, 'tree': args.target_tree, 'run_id': args.target_run_id, 'attempt': args.target_attempt, 'runtime_receipt_sha256': args.runtime_receipt_sha256}
+    root = trusted_work_root(args.root, create=True)
+    reports, inputs = prepare_scanner_output(root)
+    receipts = {}
+    deadline = time.monotonic() + 240
+
+    run, inspect_image, save_verified = scanner_operations(reports, inputs, deadline, receipts)
+
     retained, target, image_id = select_scanner_target(supplied, args, source_root, approved_target, inspect_image)
     memory = {line.split(":", 1)[0]: int(line.split()[1]) * 1024
               for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith(("MemTotal:", "MemAvailable:"))}
@@ -455,26 +476,8 @@ def main():
     # Admit worst-case bounded export first; later replace with cryptographically counted layer bytes.
     capacity_admission(TARGET_MAX_BYTES, memory["MemAvailable"], disk_free)
 
-    def save_verified(reference, selected, label):
-        destination = inputs / (IMAGE_ARCHIVE if label == "target" else "runner.tar")
-        status, _ = run(["docker", "image", "save", reference], label + "-save", 180,
-                        stdout_path=destination, maximum=TARGET_MAX_BYTES + 128 * 1024 ** 2)
-        if status != 0:
-            raise ValueError(label + " archive export exceeded budget or failed; inspect export receipt")
-        observations = {**selected, "archive_bytes": destination.stat().st_size}
-        (reports / (label + "-archive-observations.json")).write_text(json.dumps(observations, indent=2))
-        try:
-            evidence = verify_saved_image(destination, selected["store_id"], TARGET_MAX_BYTES, selected["descriptor"])
-        except Exception as error:
-            (reports / (label + "-archive-verification-failure.json")).write_text(json.dumps({
-                **observations, "unpacked_admission_cap_bytes": TARGET_MAX_BYTES,
-                "complete_graph_verified": False, "error": str(error)}, indent=2))
-            raise
-        (reports / (label + "-archive-identity.json")).write_text(json.dumps(evidence, indent=2))
-        return evidence
-
     if retained:
-        record, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
+        _, target_graph = validate_intake(args.retained_intake, args.intake_sha256, args.retained_archive,
                                                 args.scanner_head, args.scanner_tree, os.environ.get('GITHUB_SHA'), source_root, approved_target, stage=True)
         (reports / "target-archive-identity.json").write_text(json.dumps(target_graph, indent=2))
     else:
@@ -485,8 +488,10 @@ def main():
     payload, binary_receipt, manifest, db_receipt, runner = prepare_offline_inputs(inputs, reports, scanner_config, offline_runner, runner_reference, run, inspect_image, save_verified)
     for path in inputs.iterdir():
         if path.name != "grype": path.chmod(0o444)
-    with (inputs / IMAGE_ARCHIVE).open("rb") as stream:
-        image_archive_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+    final_target_graph, image_archive_hash = verify_trusted_image(root, "target", image_id, TARGET_MAX_BYTES, include_hash=True,
+                                                                  platform="linux/" + target["architecture"],
+                                                                  expected_source=args.target_source if retained else None)
+    if final_target_graph != target_graph: raise ValueError("Target archive identity changed before scanner creation")
     provenance = {"capacity_admission": admission, "database_payload": payload, "scanner_archive": binary_receipt,
                   "database": {**db_receipt, "manifest": manifest}, "target": target_graph,
                   "image_archive_sha256": image_archive_hash, "runner": runner}
@@ -500,13 +505,12 @@ if __name__ == "__main__":
     except Exception as error:
         if len(sys.argv) > 1:
             try:
-                reports = trusted_work_root(sys.argv[1]) / "reports"
-                reports.mkdir(parents=True, exist_ok=True)
-                (reports / "failure.json").write_text(json.dumps({
+                root = trusted_work_root(sys.argv[1])
+                write_failure_report(root, {
                     "error": str(error),
                     "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     "status": "unavailable; no clean image-security claim",
-                }, indent=2))
+                })
             except (ValueError, OSError):
                 pass
         print(str(error), file=sys.stderr)
